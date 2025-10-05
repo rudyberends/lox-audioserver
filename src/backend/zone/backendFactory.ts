@@ -16,6 +16,11 @@ const backendMap: Record<string, BackendFactoryEntry> = {
   DummyBackend: DummyBackend as BackendFactoryEntry,
 };
 
+/** Returns the list of available backend identifiers. */
+export function listBackends(): string[] {
+  return Object.keys(backendMap);
+}
+
 /**
  * Creates an instance of the specified backend class.
  *

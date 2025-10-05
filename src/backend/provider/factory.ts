@@ -2,17 +2,25 @@ import logger from '../../utils/troxorlogger';
 import { MediaProvider } from './types';
 import { DummyProvider } from './dummyProvider';
 import { MusicAssistantProvider } from './musicAssistant';
+import { BeolinkProvider } from './beoLink';
 
 type ProviderCtor = () => MediaProvider;
 
 const providers: Record<string, ProviderCtor> = {
   DummyProvider: () => new DummyProvider(),
   MusicAssistantProvider: () => new MusicAssistantProvider(),
+  BeolinkProvider: () => new BeolinkProvider(),
 };
 
 const providerAliases: Record<string, keyof typeof providers> = {
   MusicAssistantRadioProvider: 'MusicAssistantProvider',
+  BeoLinkProvider: 'BeolinkProvider',
 };
+
+/** Returns the canonical list of registered media provider keys. */
+export function listProviders(): string[] {
+  return Object.keys(providers);
+}
 
 let cachedProvider: MediaProvider | undefined;
 

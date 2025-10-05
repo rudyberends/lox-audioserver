@@ -1826,7 +1826,7 @@ function defaultConfig() {
 
 function defaultOptions() {
   return {
-    backends: ['BackendMusicAssistant', 'BackendBeolink', 'BackendSonos', 'BackendExample', 'DummyBackend'],
-    providers: ['DummyProvider', 'MusicAssistantProvider', 'MusicAssistantRadioProvider'],
+    backends: [],
+    providers: [],
   };
 }

@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { listBackends } from '../backend/zone/backendFactory';
+import { listProviders } from '../backend/provider/factory';
 
 /**
  * Responsible for persisting admin configuration to disk and translating raw JSON into runtime-safe structures.
@@ -36,8 +38,8 @@ export interface AdminConfig {
   };
 }
 
-export const BACKEND_OPTIONS = ['BackendMusicAssistant', 'BackendBeolink', 'BackendSonos', 'DummyBackend'];
-export const PROVIDER_OPTIONS = ['DummyProvider', 'MusicAssistantProvider'];
+export const BACKEND_OPTIONS = Object.freeze(listBackends());
+export const PROVIDER_OPTIONS = Object.freeze(listProviders());
 
 export const CONFIG_DIR = process.env.CONFIG_DIR || path.resolve(process.cwd(), 'data');
 export const CONFIG_FILE = process.env.CONFIG_FILE || path.join(CONFIG_DIR, 'config.json');
