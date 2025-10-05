@@ -22,7 +22,6 @@ The project currently ships with working Bang & Olufsen BeoLink and Music Assist
 - Node.js **20** or newer (the repo uses `@tsconfig/node20`).
 - npm (ships with Node) for dependency management.
 - A configured Loxone Miniserver if you want to pair with real hardware.
-- Optional: a Music Assistant instance if you plan to use the Music Assistant backend/provider.
 - Easiest deployment: use the published Docker image (see [Quick Start](#quick-start)).
 
 ## Quick Start
@@ -58,7 +57,7 @@ The project currently ships with working Bang & Olufsen BeoLink and Music Assist
 
 4. **Configure via the admin UI**
 
-   Visit `http://<proxy-ip>:7091/admin` to enter Miniserver credentials, pair the audio server,
+   Visit `http://<lox-audioserver-ip>:7091/admin` to enter Miniserver credentials, pair the audio server,
    assign backends/providers, and adjust logging levels. Configuration is stored in
    `data/config.json`.
 
@@ -72,8 +71,7 @@ The project currently ships with working Bang & Olufsen BeoLink and Music Assist
      -p 7091:7091 \
      -p 7095:7095 \
      -v $(pwd)/data:/data \
-     ghcr.io/rudyberends/rudyberends/lox-audioserver:LATEST
-  ```
+     ghcr.io/rudyberends/rudyberends/lox-audioserver:VERSION
 
    The workflow `.github/workflows/create-release-and-build.yml` bumps the version, builds,
    and pushes the image automatically whenever changes land on `main`.
@@ -83,22 +81,21 @@ The project currently ships with working Bang & Olufsen BeoLink and Music Assist
 1. **Add the Audio Server in Loxone Config** – You start with two stereo outputs. Right-click
    an output and choose **Split** if you want additional zones; Loxone will expose four mono
    outputs (the signal remains whatever your backend produces). Set the Audio Server parameters:
-   - `IP` → the address of the machine/container running this proxy.
+   - `IP` → the address of the machine/container running this lox-audioserver.
    - `SerialNumber` → `50:4F:94:FF:1B:B3` (expected hardware ID).
    Drag each output into your project to create Player blocks.
 2. **Collect Player IDs** – Each Player block shows a `Player-ID`. Note these numbers; you will
    map them to backends in the admin UI.
 3. **Deploy to the Miniserver** – After saving the project, reboot the Miniserver so the new
    Audio Server configuration is persisted. Once it’s back online, the Loxone config is
-   available at `http://<MINISERVER_IP>/dev/fsget/prog/Music.json`; the proxy downloads this
+   available at `http://<MINISERVER_IP>/dev/fsget/prog/Music.json`; the lox-audioserver downloads this
    file during startup to understand the Audio Server layout. **If either the IP or
    SerialNumber differs from the values above, this file will not populate and pairing will
    fail.** Initially the icon will show *“not fully configured”* until the pairing process has completed.
-4. **Configure the proxy** – Open the admin UI at `http://<proxy-ip>:7091/admin` and enter the
-   Miniserver credentials. Use the **Pair & Save** button to fetch `Music.json`. Once paired,
+4. **Configure the lox-audioserver** – Open the admin UI at `http://<lox-audioserver-ip>:7091/admin` and enter the
+   Miniserver credentials. Use the **Pair** button to pair with the MiniServer`. Once paired,
    assign each Player ID to a backend:
-   - `BackendMusicAssistant` – feature-rich integration with Music Assistant (radio, playlists,
-     library browsing, metadata). Requires a Music Assistant Player ID per zone.
+   - `BackendMusicAssistant` – control Music Assistant players. Requires a Music Assistant Player ID per zone.
    - `BackendBeolink` – control Bang & Olufsen devices via Beolink notifications/API (one device
      per zone).
    - `BackendSonos` / `BackendExample` – sample implementations illustrating how to integrate
@@ -107,16 +104,15 @@ The project currently ships with working Bang & Olufsen BeoLink and Music Assist
    backends must match; e.g. the Music Assistant provider requires `BackendMusicAssistant`
    zones.
 
-When the proxy starts successfully and the Miniserver pairs successfully with the proxy, the Audio Server icon in
+When the lox-audioserver starts successfully and the Miniserver pairs successfully with the lox-audioserver, the Audio Server icon in
 Loxone Config turns green.
 
 ## Web Administration
 
-An always-on admin UI ships with the server at `http://<proxy-ip>:7091/admin`.
+An always-on admin UI ships with the server at `http://<lox-audioserver-ip>:7091/admin`.
 
 - View and edit Miniserver credentials, zone/back-end mappings, and media provider settings.
-- Save updates directly to `data/config.json`; the service reloads the configuration automatically (no manual restart needed unless the underlying backend requires it). The Audio Server IP defaults to the host running the proxy if left blank.
-- When the audio server is unpaired, the admin UI shows only the Miniserver credentials along with a **Pair & Save** button that writes the config and retries pairing.
+- When the audio server is unpaired, the admin UI shows only the Miniserver credentials along with a **Pair** button that writes the config and retries pairing.
 - Refresh Music Assistant player lists when a zone is missing a player ID—the UI surfaces the
   available IDs reported by the backend instead of printing them to the console.
 
@@ -124,38 +120,6 @@ An always-on admin UI ships with the server at `http://<proxy-ip>:7091/admin`.
 
 All settings are stored in `data/config.json`. The
 admin UI reads and writes this file for you.
-
-```json
-{
-  "miniserver": {
-    "ip": "192.168.1.200",
-    "username": "username",
-    "password": "password"
-  },
-  "audioserver": {
-    "ip": "192.168.1.158"
-  },
-  "zones": [
-    {
-      "id": 15,
-      "backend": "BackendMusicAssistant",
-      "ip": "192.168.1.252",
-      "maPlayerId": "ap501e2d006e26"
-    }
-  ],
-  "mediaProvider": {
-    "type": "MusicAssistantProvider",
-    "options": {
-      "IP": "192.168.1.252",
-      "PORT": "8095"
-    }
-  },
-  "logging": {
-    "consoleLevel": "info",
-    "fileLevel": "none"
-  }
-}
-```
 
 - **Beolink/Sonos backends** expect a one-to-one mapping: each zone points to a dedicated
   device IP.
@@ -165,7 +129,7 @@ admin UI reads and writes this file for you.
 | Zone backend | Compatible provider(s)                   | Notes |
 | ------------ | ---------------------------------------- | ----- |
 | `BackendMusicAssistant` | `MusicAssistantProvider`, `DummyProvider` | Requires `maPlayerId`; multiple zones can share one MA host. |
-| `BackendBeolink`        | `DummyProvider`                           | One device per zone via its IP. |
+| `BackendBeolink`        | `BeolinkProvider`, `DummyProvider`                           | One device per zone via its IP. |
 | `BackendSonos` / `BackendExample` | `DummyProvider`                 | Stub/sample implementations; extend to add real provider support. |
 
 ## Code Structure
@@ -197,19 +161,6 @@ src/
   variables. Ensure the designated zone backends understand the provider’s playback semantics
   (e.g., Music Assistant provider pairs with `BackendMusicAssistant`). Mixing incompatible
   providers/backends is not supported.
-
-## Troubleshooting
-
-- **No media shown**: confirm the media provider is configured in the admin UI and that the
-  provider host/port are reachable from the proxy.
-- **Zones remain empty**: double-check the zone mappings in the admin UI (backend, IP, and any
-  required Music Assistant player IDs). Use logs to verify the backend is pushing track
-  updates.
-- **Secure pairing loops**: verify Miniserver credentials and watch logs for
-  `[RequestHandler]` messages to see which commands are being processed.
-- **`Music.json` missing**: make sure the Audio Server entry in Loxone Config uses the proxy's
-  IP and the required serial number `50:4F:94:FF:1B:B3` and the miniserver is restarted after the configuration is saved.
-  Without these, the Miniserver will not publish `http://<MINISERVER_IP>/dev/fsget/prog/Music.json`, so pairing cannot complete.
 
 ## Development Notes
 
