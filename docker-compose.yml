@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  loxoneaudioserver:
+    container_name: lox-audioserver
+    image: ghcr.io/rudyberends/rudyberends/lox-audioserver:latest
+    hostname: lox-audioserver
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    restart: always
+    ports:
+      - 7091:7091
+      - 7095:7095
