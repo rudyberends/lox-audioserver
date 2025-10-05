@@ -3,6 +3,11 @@ import Transport, { TransportStreamOptions } from 'winston-transport';
 import { EventEmitter } from 'events';
 import { getAdminConfig, updateAdminConfig } from '../config/config';
 
+/**
+ * Winston-based logger tailored for the Audio Server UI.
+ * Carries custom levels, exposes helper methods to adjust runtime log levels,
+ * and broadcasts log events to connected clients.
+ */
 interface TroxorLogger extends Logger {
   alert: LeveledLogMethod;
   setFileLogLevel(level: string): void;
@@ -17,14 +22,24 @@ const LOG_LEVELS: Record<string, number> = {
   debug: 4,
 };
 
+/**
+ * Unified formatter that tags each entry with a timestamp and level.
+ */
 const logFormat = winston.format.combine(
   winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss:ms' }),
   winston.format.printf((info) => `[${info.timestamp}][${info.level}]${info.message}`),
 );
 
+/**
+ * Shared emitter used by the websocket layer to stream live log updates.
+ */
 export const logStreamEmitter = new EventEmitter();
 logStreamEmitter.setMaxListeners(0);
 
+/**
+ * Winston transport that forwards log records through {@link logStreamEmitter}.
+ * Keeps UI clients in sync without affecting the primary logging pipeline.
+ */
 class NotificationTransport extends Transport {
   name: string;
 
@@ -58,6 +73,9 @@ class NotificationTransport extends Transport {
 
 const notificationTransport = new NotificationTransport();
 
+/**
+ * Reads persisted admin preferences and returns the startup log levels.
+ */
 function getInitialLogLevels() {
   const admin = getAdminConfig();
   const consoleLevel = admin.logging?.consoleLevel || 'info';
@@ -81,6 +99,9 @@ const logger = winston.createLogger({
   ] as winston.transport[],
 }) as unknown as TroxorLogger;
 
+/**
+ * Convenience helper that mirrors {@code logger.error} but maps onto the custom `alert` level.
+ */
 logger.alert = ((message: string | object, meta?: any) => {
   if (typeof message === 'string') {
     logger.log('alert', message, meta);
@@ -89,6 +110,9 @@ logger.alert = ((message: string | object, meta?: any) => {
   }
 }) as LeveledLogMethod;
 
+/**
+ * Updates the file transport's level and persists the selection.
+ */
 logger.setFileLogLevel = (level: string) => {
   const fileTransport = logger.transports.find((t) => t instanceof winston.transports.File);
   if (fileTransport) {
@@ -97,6 +121,9 @@ logger.setFileLogLevel = (level: string) => {
   }
 };
 
+/**
+ * Updates the console transport's level and persists the selection.
+ */
 logger.setConsoleLogLevel = (level: string) => {
   const consoleTransport = logger.transports.find((t) => t instanceof winston.transports.Console);
   if (consoleTransport) {
@@ -105,6 +132,9 @@ logger.setConsoleLogLevel = (level: string) => {
   }
 };
 
+/**
+ * Persists partial logging preferences while keeping existing settings intact.
+ */
 function persistLoggingConfig(partial: { consoleLevel?: string; fileLevel?: string }) {
   const current = getAdminConfig();
   const logging = {

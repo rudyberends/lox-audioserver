@@ -41,6 +41,7 @@ export class MusicAssistantPlaylistService {
     return undefined;
   }
 
+  /** Ensures playlists are fetched at least once per refresh interval. */
   private async ensureLoaded(): Promise<void> {
     const stale = Date.now() - this.lastRefresh > this.refreshIntervalMs;
     if (!this.loading && (stale || this.playlists.length === 0)) {
@@ -58,6 +59,7 @@ export class MusicAssistantPlaylistService {
     }
   }
 
+  /** Pulls fresh playlist data from Music Assistant and warms the lookup map. */
   private async refreshPlaylists(): Promise<void> {
     try {
       const rawPlaylists = await this.loadPlaylists();
@@ -76,6 +78,7 @@ export class MusicAssistantPlaylistService {
     }
   }
 
+  /** Executes the RPC call that retrieves playlist metadata. */
   private async loadPlaylists(): Promise<any[]> {
     try {
       const limit = Number(process.env.MUSICASSISTANT_PLAYLIST_LIMIT || 200);
@@ -99,6 +102,7 @@ export class MusicAssistantPlaylistService {
     return [];
   }
 
+  /** Normalizes Music Assistant playlist payloads into the shared PlaylistItem shape. */
   private toPlaylistItem(playlist: any, index: number): PlaylistItem {
     const uri = toStringValue(playlist?.uri ?? playlist?.item_id ?? playlist?.path ?? '');
     const id = uri ? uri : toStringValue(playlist?.item_id ?? playlist?.name ?? `playlist-${index}`);
@@ -120,6 +124,7 @@ export class MusicAssistantPlaylistService {
     };
   }
 
+  /** Resolves an artwork URL, falling back to the image proxy when necessary. */
   private extractCoverUrl(id: string, playlist: any): string {
     const metaImages = Array.isArray(playlist?.metadata?.images) ? playlist.metadata.images : [];
     const firstImage = metaImages.length > 0 ? toStringValue(metaImages[0]?.path || metaImages[0]?.url) : '';
@@ -136,6 +141,7 @@ export class MusicAssistantPlaylistService {
   }
 }
 
+/** Stringifies primitive/array values while stripping falsy entries. */
 function toStringValue(value: any): string {
   if (typeof value === 'string') return value;
   if (typeof value === 'number') return String(value);
@@ -145,6 +151,7 @@ function toStringValue(value: any): string {
   return '';
 }
 
+/** Builds a set of keys used to resolve cached playlists by id or canonical URI. */
 function normalizePlaylistKeys(value: string): string[] {
   if (!value) return [];
   const decoded = decodeURIComponent(value).trim();

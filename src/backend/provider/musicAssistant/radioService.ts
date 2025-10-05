@@ -75,6 +75,7 @@ export class MusicAssistantRadioService {
     return undefined;
   }
 
+  /** Ensures favorites are refreshed once per interval and caches stay warm. */
   private async ensureFavoritesLoaded(): Promise<void> {
     const stale = Date.now() - this.lastRefresh > this.refreshIntervalMs;
     if (!this.loading && (stale || this.favorites.length === 0)) {
@@ -92,6 +93,7 @@ export class MusicAssistantRadioService {
     }
   }
 
+  /** Pulls fresh favorites from Music Assistant and rebuilds the lookup caches. */
   private async refreshFavorites(): Promise<void> {
     try {
       const rawFavorites = await this.loadFavorites();
@@ -116,6 +118,7 @@ export class MusicAssistantRadioService {
     }
   }
 
+  /** Executes the RPC that lists radio favorites stored in Music Assistant. */
   private async loadFavorites(): Promise<any[]> {
     try {
       const limit = Number(process.env.MUSICASSISTANT_RADIO_LIMIT || 200);
@@ -138,6 +141,7 @@ export class MusicAssistantRadioService {
     return [];
   }
 
+  /** Fetches per-station metadata so we can expose icons/streams beyond the base listing. */
   private async enrichStations(stations: any[]): Promise<any[]> {
     const limit = Number(process.env.MUSICASSISTANT_RADIO_ENRICH_LIMIT || stations.length || 50);
     const slice = stations.slice(0, limit);
@@ -172,6 +176,7 @@ export class MusicAssistantRadioService {
     return detailed.concat(remainder);
   }
 
+  /** Builds the single radio category entry that points to the favorites folder. */
   private buildCategoryEntry(): RadioEntry {
     const iconHost =
       process.env.RADIO_ICON_HOST ||
@@ -189,6 +194,7 @@ export class MusicAssistantRadioService {
     };
   }
 
+  /** Normalizes a Music Assistant radio favorite into a folder item for the UI. */
   private toFolderItem(station: any, index: number): RadioFolderItem {
     const name = toStringValue(station?.name ?? station?.title ?? `Station ${index}`);
     const streamUri = this.resolveStream(station);
@@ -213,6 +219,7 @@ export class MusicAssistantRadioService {
     };
   }
 
+  /** Chooses the best available icon URL for a station, falling back to the proxy. */
   private extractStationIcon(station: any): string {
     const metaImages = Array.isArray(station?.detail?.metadata?.images)
       ? station.detail.metadata.images
@@ -234,6 +241,7 @@ export class MusicAssistantRadioService {
     return `http://${iconHost}:7091/imgcache/?item=${FAVORITES_CATEGORY.iconKey}&viaproxy=${proxyId}`;
   }
 
+  /** Determines which provider instance produced the station entry. */
   private resolveProviderInstance(station: any): string {
     const direct = toStringValue(station?.provider);
     if (direct) return direct;
@@ -249,6 +257,7 @@ export class MusicAssistantRadioService {
     return 'library';
   }
 
+  /** Attempts to find a playable stream URI for the station. */
   private resolveStream(station: any): string {
     const libraryUri = toStringValue(station?.uri ?? station?.item_id);
     if (libraryUri.startsWith('library://')) return libraryUri;
@@ -279,6 +288,7 @@ export class MusicAssistantRadioService {
     return '';
   }
 
+  /** Stores all normalized keys that should resolve back to the station. */
   private registerStationKeys(item: RadioFolderItem, station: any): void {
     const keys = this.collectStationKeys(item, station);
     keys.forEach((key) => {
@@ -286,6 +296,7 @@ export class MusicAssistantRadioService {
     });
   }
 
+  /** Collects raw and normalized identifiers used for station lookups. */
   private collectStationKeys(item: RadioFolderItem, station: any): string[] {
     const rawKeys: string[] = [
       item.id,

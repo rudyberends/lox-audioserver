@@ -9,6 +9,11 @@ import {
   AdminConfig,
 } from './configStore';
 
+/**
+ * Central configuration orchestrator. Persists admin settings, mirrors them into runtime state,
+ * and coordinates sync with the Loxone MiniServer and AudioServer.
+ */
+
 interface MiniServerConfig {
   ip: string;
   mac: string;
@@ -45,6 +50,9 @@ const config: Config = {
   },
 };
 
+/**
+ * Base AudioServer values used until a pairing payload arrives from the MiniServer.
+ */
 const DEFAULT_AUDIO_SERVER: AudioServerConfig = {
   name: 'Unconfigured',
   paired: false,
@@ -57,6 +65,9 @@ const DEFAULT_AUDIO_SERVER: AudioServerConfig = {
 
 applyAdminConfig();
 
+/**
+ * Normalizes axios errors and logs context-sensitive messages.
+ */
 const handleAxiosError = (error: unknown) => {
   if (axios.isAxiosError(error) && error.response) {
     const status = error.response.status;
@@ -77,6 +88,9 @@ const handleAxiosError = (error: unknown) => {
   }
 };
 
+/**
+ * Fetches the MiniServer Music.json payload that describes known AudioServers.
+ */
 const downloadAudioServerConfig = async (): Promise<any> => {
   if (!config.miniserver.ip) {
     logger.warn('[config][downloadAudioServerConfig] MINISERVER_IP not set; skipping download.');
@@ -103,6 +117,9 @@ const downloadAudioServerConfig = async (): Promise<any> => {
   }
 };
 
+/**
+ * Validates and merges the downloaded AudioServer definition into the runtime config.
+ */
 const processAudioServerConfig = async (audioServerConfigData: any): Promise<AudioServerConfig | null> => {
   try {
     const newMusicCRC = await asyncCrc32(JSON.stringify(audioServerConfigData));
@@ -155,6 +172,9 @@ const processAudioServerConfig = async (audioServerConfigData: any): Promise<Aud
   }
 };
 
+/**
+ * Notifies the MiniServer that the AudioServer finished bootstrapping.
+ */
 const informMiniServer = async (authorization: string): Promise<void> => {
   try {
     if (!config.audioserver?.uuid) return;
@@ -169,6 +189,9 @@ const informMiniServer = async (authorization: string): Promise<void> => {
   }
 };
 
+/**
+ * Bootstraps runtime configuration by downloading, processing, and persisting state.
+ */
 const initializeConfig = async () => {
   try {
     const audioServerConfigData = await downloadAudioServerConfig();
@@ -197,12 +220,18 @@ const initializeConfig = async () => {
   }
 };
 
+/**
+ * Reloads admin configuration from disk and reinitializes runtime state.
+ */
 const reloadConfiguration = async () => {
   adminConfig = loadAdminConfig();
   applyAdminConfig();
   await initializeConfig();
 };
 
+/**
+ * Applies persisted admin settings to the in-memory config and environment variables.
+ */
 function applyAdminConfig() {
   if (!adminConfig.logging) {
     adminConfig.logging = { consoleLevel: 'info', fileLevel: 'none' };
@@ -241,10 +270,16 @@ function applyAdminConfig() {
   });
 }
 
+/**
+ * Returns the last cached admin configuration.
+ */
 function getAdminConfig(): AdminConfig {
   return adminConfig;
 }
 
+/**
+ * Persists new admin settings and reapplies them to the runtime environment.
+ */
 function updateAdminConfig(newConfig: AdminConfig): void {
   adminConfig = newConfig;
   saveAdminConfig(adminConfig);

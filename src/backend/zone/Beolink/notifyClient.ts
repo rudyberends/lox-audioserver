@@ -18,11 +18,13 @@ export default class BeolinkNotifyClient {
 
   constructor(private readonly notifyUrl: string, private readonly reconnectDelayMs = 5000) {}
 
+  /** Starts listening to the BeoNotify endpoint and delivers events to {@link NotificationHandler}. */
   async subscribe(handler: NotificationHandler): Promise<void> {
     this.handler = handler;
     await this.openStream();
   }
 
+  /** Stops streaming notifications and clears any pending reconnect attempts. */
   async close(): Promise<void> {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -49,6 +51,7 @@ export default class BeolinkNotifyClient {
     }
   }
 
+  /** Tears down existing streams and establishes a fresh NDJSON subscription. */
   private async openStream(): Promise<void> {
     await this.close();
 
@@ -96,6 +99,7 @@ export default class BeolinkNotifyClient {
     }
   }
 
+  /** Schedules a reconnect attempt after the configured backoff. */
   private scheduleReconnect(): void {
     if (this.reconnectTimer || !this.handler) return;
 

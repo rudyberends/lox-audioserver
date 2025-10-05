@@ -191,6 +191,7 @@ export class MusicAssistantLibraryService {
     return this.emptyResponse(folderId, offset);
   }
 
+  /** Loads paginated album results from Music Assistant and caches them. */
   private async getAlbums(folderId: string, offset: number, limit: number): Promise<MediaFolderResponse> {
     try {
       const response = await this.client.rpc('music/albums/library_items', {
@@ -221,6 +222,7 @@ export class MusicAssistantLibraryService {
     }
   }
 
+  /** Fetches the tracks belonging to a given album, preferring API data over cached metadata. */
   private async getAlbumTracks(
     folderId: string,
     albumId: string,
@@ -271,6 +273,7 @@ export class MusicAssistantLibraryService {
     }
   }
 
+  /** Loads artists from the library and stores them in the folder cache for quick lookup. */
   private async getArtists(folderId: string, offset: number, limit: number): Promise<MediaFolderResponse> {
     try {
       const response = await this.client.rpc('music/artists/library_items', {
@@ -301,6 +304,7 @@ export class MusicAssistantLibraryService {
     }
   }
 
+  /** Fetches albums for a specific artist and keeps both artist and album caches warm. */
   private async getArtistAlbums(
     folderId: string,
     artistId: string,
@@ -341,6 +345,7 @@ export class MusicAssistantLibraryService {
     }
   }
 
+  /** Retrieves standalone track listings from the library view. */
   private async getTracks(folderId: string, offset: number, limit: number): Promise<MediaFolderResponse> {
     try {
       const response = await this.client.rpc('music/tracks/library_items', {
@@ -449,6 +454,9 @@ export class MusicAssistantLibraryService {
     return undefined;
   }
 
+  /**
+   * Attempts to locate an item by interpreting library URIs or fuzzy prefixes when no folder context exists.
+   */
   private async resolveItemByGuess(itemId: string): Promise<MediaFolderItem | undefined> {
     const cached = this.lookupItem('', itemId);
     if (cached) return cached;
@@ -482,6 +490,9 @@ export class MusicAssistantLibraryService {
     return undefined;
   }
 
+  /**
+   * Fetches album metadata to locate a track by ID or name, caching the match when found.
+   */
   private async resolveTrackFromAlbum(albumId: string, trackId: string): Promise<MediaFolderItem | undefined> {
     try {
       const albumMeta = this.lookupItem('albums', albumId);
@@ -519,6 +530,7 @@ export class MusicAssistantLibraryService {
     }
   }
 
+  /** Thin RPC wrapper around `music/albums/get_album`. */
   private async fetchAlbumMetadata(albumId: string, providerInstance: string): Promise<any | undefined> {
     try {
       return await this.client.rpc('music/albums/get_album', {
@@ -532,6 +544,7 @@ export class MusicAssistantLibraryService {
     }
   }
 
+  /** Queries the Music Assistant API for album tracks, normalizing different response shapes. */
   private async fetchAlbumTracks(albumId: string, providerInstance: string): Promise<any[] | undefined> {
     try {
       logger.debug(
@@ -554,6 +567,9 @@ export class MusicAssistantLibraryService {
     return undefined;
   }
 
+  /**
+   * Loads album metadata + tracks directly when the folder id already encodes provider/album information.
+   */
   private async getAlbumByDirectId(albumItemId: string, offset: number, limit: number): Promise<MediaFolderResponse> {
     try {
       const providerInstance = this.extractProviderFromItemId(albumItemId) || 'library';
@@ -601,6 +617,7 @@ export class MusicAssistantLibraryService {
     }
   }
 
+  /** Thin RPC wrapper around `music/artists/get_artist`. */
   private async fetchArtistMetadata(artistId: string, providerInstance: string): Promise<any | undefined> {
     try {
       return await this.client.rpc('music/artists/get_artist', {
@@ -614,6 +631,9 @@ export class MusicAssistantLibraryService {
     }
   }
 
+  /**
+   * Queries Music Assistant for albums owned by an artist, handling both array and object responses.
+   */
   private async fetchArtistAlbums(artistId: string, providerInstance: string): Promise<any[] | undefined> {
     try {
       logger.debug(
@@ -636,6 +656,9 @@ export class MusicAssistantLibraryService {
     return undefined;
   }
 
+  /**
+   * Loads artist metadata and albums using a direct item id, seeding caches for follow-up requests.
+   */
   private async getArtistByDirectId(artistItemId: string, offset: number, limit: number): Promise<MediaFolderResponse> {
     try {
       const providerInstance = this.extractProviderFromItemId(artistItemId) || 'library';
@@ -675,6 +698,7 @@ export class MusicAssistantLibraryService {
     }
   }
 
+  /** Adds media items to the folder cache under multiple lookup keys. */
   private storeFolderItems(folderId: string, items: MediaFolderItem[]): void {
     if (!items || items.length === 0) return;
     const folderKey = this.normalizeFolderKey(folderId);
@@ -685,6 +709,7 @@ export class MusicAssistantLibraryService {
     this.folderCache.set(folderKey, bucket);
   }
 
+  /** Retrieves a cached media item by checking folder scoping and several id variants. */
   private lookupItem(folderId: string, itemId: string): MediaFolderItem | undefined {
     if (!itemId) return undefined;
     const folderKeys = [this.normalizeFolderKey(folderId)];
@@ -707,6 +732,7 @@ export class MusicAssistantLibraryService {
     return undefined;
   }
 
+  /** Registers an item under the supplied cache bucket with encoded and decoded keys. */
   private registerItem(bucket: Map<string, MediaFolderItem>, item: MediaFolderItem): void {
     const keys = this.collectCacheKeys(item);
     for (const key of keys) {
@@ -727,6 +753,7 @@ export class MusicAssistantLibraryService {
     }
   }
 
+  /** Gathers identifiers that should map back to a cached media item. */
   private collectCacheKeys(item: MediaFolderItem): string[] {
     const keys = new Set<string>();
     const push = (value?: string) => {
@@ -742,10 +769,12 @@ export class MusicAssistantLibraryService {
     return Array.from(keys).filter(Boolean);
   }
 
+  /** Produces a normalized folder key (lowercase + decoded) for cache lookups. */
   private normalizeFolderKey(value: string): string {
     return decodeURIComponent(value ?? '').trim().toLowerCase();
   }
 
+  /** Pulls the provider instance prefix from an item id (e.g. `spotify:album:...`). */
   private extractProviderFromItemId(itemId: string): string | undefined {
     const markers = [':album:', ':artist:', ':track:'];
     for (const marker of markers) {
@@ -761,6 +790,9 @@ export class MusicAssistantLibraryService {
     return undefined;
   }
 
+  /**
+   * Transforms Music Assistant album metadata into the media folder item format expected by the UI.
+   */
   private mapAlbumToFolderItem(album: any): MediaFolderItem {
     const rawId = toStringValue(album?.item_id ?? album?.album_id ?? '');
     const uri = toStringValue(album?.uri ?? '');
@@ -814,6 +846,7 @@ export class MusicAssistantLibraryService {
     };
   }
 
+  /** Maps an artist entity from Music Assistant to the common folder representation. */
   private mapArtistToFolderItem(artist: any): MediaFolderItem {
     const rawId = toStringValue(artist?.item_id ?? artist?.artist_id ?? '');
     const uri = toStringValue(artist?.uri ?? '');
@@ -859,6 +892,7 @@ export class MusicAssistantLibraryService {
     };
   }
 
+  /** Maps a track entity, optionally using fallback metadata when the API omits certain fields. */
   private mapTrackToFolderItem(
     track: any,
     fallbackProvider?: string,
@@ -910,6 +944,7 @@ export class MusicAssistantLibraryService {
     };
   }
 
+  /** Shared helper returning an empty folder payload. */
   private emptyResponse(folderId: string, offset: number): MediaFolderResponse {
     return {
       id: folderId,

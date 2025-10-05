@@ -2,6 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
+/**
+ * Responsible for persisting admin configuration to disk and translating raw JSON into runtime-safe structures.
+ */
+
 export interface ZoneConfigEntry {
   id: number;
   backend: string;
@@ -38,6 +42,9 @@ export const PROVIDER_OPTIONS = ['DummyProvider', 'MusicAssistantProvider'];
 export const CONFIG_DIR = process.env.CONFIG_DIR || path.resolve(process.cwd(), 'data');
 export const CONFIG_FILE = process.env.CONFIG_FILE || path.join(CONFIG_DIR, 'config.json');
 
+/**
+ * Returns the first non-loopback IPv4 address to seed default configs.
+ */
 export function detectLocalIp(): string {
   const nets = os.networkInterfaces();
   for (const name of Object.keys(nets)) {
@@ -52,6 +59,9 @@ export function detectLocalIp(): string {
   return '127.0.0.1';
 }
 
+/**
+ * Produces a fully populated admin config with sensible defaults.
+ */
 export function defaultAdminConfig(): AdminConfig {
   return {
     miniserver: { ip: '', username: '', password: '', serial: '' },
@@ -62,6 +72,9 @@ export function defaultAdminConfig(): AdminConfig {
   };
 }
 
+/**
+ * Reads the on-disk admin config, rebuilding it with defaults when missing or invalid.
+ */
 export function loadAdminConfig(): AdminConfig {
   ensureConfigDir();
   if (!fs.existsSync(CONFIG_FILE)) {
@@ -82,18 +95,27 @@ export function loadAdminConfig(): AdminConfig {
   }
 }
 
+/**
+ * Persists a normalized admin config to disk.
+ */
 export function saveAdminConfig(config: AdminConfig): void {
   ensureConfigDir();
   const normalized = normalizeAdminConfig(config);
   fs.writeFileSync(CONFIG_FILE, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
 }
 
+/**
+ * Ensures the config directory exists before read/write operations.
+ */
 function ensureConfigDir() {
   if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
   }
 }
 
+/**
+ * Merges partial config payloads with defaults and strips unsafe values.
+ */
 function normalizeAdminConfig(raw: Partial<AdminConfig>): AdminConfig {
   const defaults = defaultAdminConfig();
   const miniserver = {

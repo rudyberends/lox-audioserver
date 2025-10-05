@@ -12,6 +12,13 @@ import { setMusicAssistantSuggestions } from '../config/adminState';
 import { resetMediaProvider } from '../backend/provider/factory';
 import logger, { logStreamEmitter } from '../utils/troxorlogger';
 
+/**
+ * HTTP layer powering the admin configuration UI and log streaming endpoints.
+ */
+
+/**
+ * Express-style handler signature consumed by the lightweight router.
+ */
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void> | void;
 
 interface Route {
@@ -38,9 +45,15 @@ const APP_VERSION = (() => {
     return '';
   }
 })();
+/**
+ * Active server-sent event clients mapped to their heartbeat timers.
+ */
 const LOG_STREAM_CLIENTS = new Map<http.ServerResponse, NodeJS.Timeout>();
 const LOG_STREAM_HEARTBEAT_MS = 15_000;
 
+/**
+ * Broadcasts log events to every connected SSE client.
+ */
 logStreamEmitter.on('log', (payload) => {
   const serialized = JSON.stringify(payload);
   const message = `data: ${serialized}\n\n`;
@@ -60,10 +73,16 @@ logStreamEmitter.on('log', (payload) => {
   }
 });
 
+/**
+ * Registers an admin route with the lightweight router used by {@link handleConfigRequest}.
+ */
 export function registerConfigRoute(method: string, routePath: string, handler: Handler) {
   routes.push({ method: method.toUpperCase(), path: routePath, handler });
 }
 
+/**
+ * Attempts to service an admin request and returns whether it was handled.
+ */
 export async function handleConfigRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
   const url = req.url || '';
   const [pathOnly] = url.split('?');
@@ -108,6 +127,9 @@ export async function handleConfigRequest(req: http.IncomingMessage, res: http.S
   return false;
 }
 
+/**
+ * Seeds the built-in admin routes and log endpoints for the SPA.
+ */
 function registerDefaultRoutes() {
   registerConfigRoute('GET', '/admin/api/config', (req, res) => {
     const adminConfig = JSON.parse(JSON.stringify(getAdminConfig())) as AdminConfig;
@@ -412,6 +434,9 @@ function registerDefaultRoutes() {
   });
 }
 
+/**
+ * Reads the incoming request body as UTF-8 without imposing size limits.
+ */
 async function readRequestBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -426,6 +451,9 @@ async function readRequestBody(req: http.IncomingMessage): Promise<string> {
 
 registerDefaultRoutes();
 
+/**
+ * Resolves the Content-Type header for static admin files.
+ */
 function getContentType(ext: string): string {
   switch (ext) {
     case '.html':

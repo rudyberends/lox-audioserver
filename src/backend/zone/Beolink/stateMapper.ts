@@ -1,6 +1,9 @@
 import { Track } from '../zonemanager';
 import { NotificationData } from './types';
 
+/**
+ * Converts remote image URLs into proxied cover art served via the AudioServer.
+ */
 function buildCoverUrl(audioServerIp?: string, originalUrl?: string, album?: string): string {
   if (!audioServerIp || !originalUrl) return '';
   const encodedUrl = encodeURIComponent(originalUrl);
@@ -8,6 +11,9 @@ function buildCoverUrl(audioServerIp?: string, originalUrl?: string, album?: str
   return `http://${audioServerIp}:7091/cors-proxy?url=${encodedUrl}&id=${cacheBust}`;
 }
 
+/**
+ * Maps Beolink notification payloads to the Loxone Track structure consumed by the UI.
+ */
 export function mapNotificationToTrack(
   type: string,
   data: NotificationData,

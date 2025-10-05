@@ -43,12 +43,14 @@ export class MusicAssistantProviderClient {
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
+  /** Disconnects and resets the lazily started Music Assistant client. */
   cleanup(): void {
     this.client.cleanup();
     this.started = false;
     this.connectPromise = undefined;
   }
 
+  /** Establishes the underlying socket connection once and memoizes the promise. */
   private async ensureStarted(): Promise<void> {
     if (this.started) return;
 
@@ -66,6 +68,7 @@ export class MusicAssistantProviderClient {
     await this.connectPromise;
   }
 
+  /** Small helper to back off between retry attempts. */
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }

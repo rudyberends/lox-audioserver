@@ -3,6 +3,9 @@ import logger from '../../../utils/troxorlogger';
 import MusicAssistantClient from './client';
 import { RepeatMode } from './types';
 
+/**
+ * Execution context supplied to every Music Assistant command handler invocation.
+ */
 export interface MusicAssistantCommandContext {
   client: MusicAssistantClient;
   maPlayerId: string;
@@ -11,6 +14,9 @@ export interface MusicAssistantCommandContext {
   pushTrackUpdate(update: Partial<Track>): void;
 }
 
+/**
+ * Translates Loxone command verbs into Music Assistant RPC calls.
+ */
 export async function handleMusicAssistantCommand(
   ctx: MusicAssistantCommandContext,
   command: string,
@@ -212,6 +218,7 @@ export async function handleMusicAssistantCommand(
 
 type CommandPayload = Record<string, any>;
 
+/** Attempts to normalise ad-hoc command parameters into a structured payload. */
 function parseCommandPayload(param: unknown): CommandPayload | undefined {
   if (param === undefined || param === null) return undefined;
 

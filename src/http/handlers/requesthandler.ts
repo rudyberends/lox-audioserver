@@ -18,6 +18,13 @@ import {
 } from './zoneCommands';
 import logger from '../../utils/troxorlogger';
 
+/**
+ * Central dispatcher translating Loxone HTTP command URLs into backend handler invocations.
+ */
+
+/**
+ * Produces a logging-safe summary of incoming URLs, trimming or redacting secrets.
+ */
 function summariseRequestUrl(url: string): string {
   const SECURE_INIT_PREFIX = 'secure/init/';
   if (url.startsWith(SECURE_INIT_PREFIX)) {
@@ -62,6 +69,9 @@ function summariseRequestUrl(url: string): string {
 }
 import { sendCommandToZone } from '../../backend/zone/zonemanager';
 
+/**
+ * Canonical Loxone command identifiers handled by this module.
+ */
 export const COMMANDS = {
   SECURE_INFO_PAIRING: 'secure/info/pairing',
   SECURE_HELLO: 'secure/hello',
@@ -95,6 +105,9 @@ export interface CommandResult {
   raw?: boolean;
 }
 
+/**
+ * Handler contract returning a command result (or undefined to fall back).
+ */
 type HandlerFn = (url: string) => CommandResult | Promise<CommandResult> | undefined;
 
 interface Route {
@@ -102,11 +115,17 @@ interface Route {
   handler: HandlerFn;
 }
 
+/**
+ * Route helper matching URLs by fixed prefix.
+ */
 const prefixRoute = (prefix: string, handler: HandlerFn): Route => ({
   test: (url: string) => url.startsWith(prefix),
   handler,
 });
 
+/**
+ * Route helper matching URLs via regular expressions.
+ */
 const regexRoute = (pattern: RegExp, handler: HandlerFn): Route => ({
   test: (url: string) => pattern.test(url),
   handler,
@@ -120,6 +139,9 @@ const AUDIO_LIBRARY_PLAY_RE = /^audio\/\d+\/library\/play\//;
 const AUDIO_COMMANDS_RE = /(?:^|\/)audio\/\d+\/(on|off|play|resume|pause|queueminus|queue|queueplus|volume|repeat|shuffle|test)(?:\/|$)/;
 const AUDIO_LIBRARY_ALIAS_RE = /^audio\/\d+\/(?:albums|artists|tracks):/;
 
+/**
+ * Ordered route table powering the incremental match within {@link handleLoxoneCommand}.
+ */
 const routes: Route[] = [
   prefixRoute(COMMANDS.SECURE_INFO_PAIRING, handleSecureInfoPairing),
   prefixRoute(COMMANDS.SECURE_HELLO, handleSecureHello),
@@ -176,6 +198,9 @@ function handleDynamicAudioCommand(url: string): CommandResult {
   return emptyCommand(url, []);
 }
 
+/**
+ * Rewrites friendly library alias URLs into the canonical library play command.
+ */
 async function handleLibraryAlias(url: string): Promise<CommandResult> {
   const segments = url.split('/');
   const zoneId = segments[1];
@@ -221,6 +246,9 @@ export function response(url: string, name: string, result: unknown): CommandRes
   };
 }
 
+/**
+ * Serializes a command response to the wire format expected by Loxone.
+ */
 function serializeResult(result: CommandResult): string {
   if (result.raw) {
     return typeof result.payload === 'string' ? result.payload : JSON.stringify(result.payload);

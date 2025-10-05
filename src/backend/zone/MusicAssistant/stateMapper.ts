@@ -1,5 +1,8 @@
 import { Track } from '../zonemanager';
 
+/**
+ * Combined queue payload returned to the ZoneManager after mapping Music Assistant state.
+ */
 interface QueueMappingResult {
   trackUpdate: Partial<Track>;
   items: {
@@ -18,6 +21,7 @@ interface QueueMappingResult {
   shuffleEnabled: number;
 }
 
+/** Maps player-level updates to the smaller Track diff ingested by the ZoneManager. */
 export function mapPlayerToTrack(loxoneZoneId: number, player: any): Partial<Track> {
   const isPlaying = player.state === 'playing';
 
@@ -29,6 +33,7 @@ export function mapPlayerToTrack(loxoneZoneId: number, player: any): Partial<Tra
   };
 }
 
+/** Coerces Music Assistant string-like values (objects/arrays) to display strings. */
 function ensureString(value: any): string {
   if (typeof value === 'string') return value;
   if (typeof value === 'number') return String(value);
@@ -45,6 +50,7 @@ function ensureString(value: any): string {
   return '';
 }
 
+/** Produces a comma-separated artist string from Music Assistant data. */
 function mapArtists(source: any): string {
   if (Array.isArray(source?.artists) && source.artists.length > 0) {
     return source.artists
@@ -57,6 +63,7 @@ function mapArtists(source: any): string {
   return ensureString(directArtist);
 }
 
+/** Returns the first truthy URL candidate, skipping empty values. */
 function firstValidUrl(...candidates: Array<string | undefined | null>): string {
   for (const candidate of candidates) {
     if (typeof candidate === 'string' && candidate.length > 0) {
@@ -66,6 +73,7 @@ function firstValidUrl(...candidates: Array<string | undefined | null>): string 
   return '';
 }
 
+/** Reads the first image URL from a standard metadata.images array. */
 function extractImageFromMetadata(metadata: any): string {
   if (!metadata) return '';
   if (Array.isArray(metadata.images)) {
@@ -77,6 +85,7 @@ function extractImageFromMetadata(metadata: any): string {
   return '';
 }
 
+/** Reads the first image URL from legacy list structures. */
 function extractImageFromList(list: any): string {
   if (!list) return '';
   if (Array.isArray(list)) {
@@ -88,6 +97,7 @@ function extractImageFromList(list: any): string {
   return '';
 }
 
+/** Derives a coarse audio type used by the UI based on URI/provider hints. */
 function determineAudioType(media: any, fallback: any): number {
   const uri: string = ensureString(media?.uri ?? fallback?.uri ?? '');
   if (uri.startsWith('library://')) {
@@ -110,6 +120,7 @@ function determineAudioType(media: any, fallback: any): number {
   return 2;
 }
 
+/** Chooses the best cover art URL from the provided media/queue item. */
 function mapCoverUrl(item: any): string {
   if (!item) return '';
 
@@ -131,6 +142,7 @@ function mapCoverUrl(item: any): string {
   return '';
 }
 
+/** Converts a queue entry into the simplified record used by the queue overlay. */
 function mapQueueItem(item: any, fallbackDuration: number, index: number) {
   const media = item?.media_item ?? item ?? {};
   const audioType = determineAudioType(media, item);
@@ -149,6 +161,9 @@ function mapQueueItem(item: any, fallbackDuration: number, index: number) {
   };
 }
 
+/**
+ * Applies Music Assistant queue updates to the structure expected by ZoneManager.
+ */
 export function mapQueueToState(
   loxoneZoneId: number,
   queue: any,
