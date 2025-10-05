@@ -1,0 +1,14 @@
+.git
+.gitignore
+.Dockerignore
+.editorconfig
+.eslintrc
+.eslintignore
+.vscode
+.devcontainer
+.github
+.prettierrc
+Dockerfile*
+log
+node_modules
+nodemon.json

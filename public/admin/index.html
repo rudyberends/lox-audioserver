@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>lox-audioserver Admin</title>
+    <link rel="stylesheet" href="/admin/style.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="hero-content">
+        <div class="hero-info">
+          <h1>lox-audioserver</h1>
+          <dl>
+            <div>
+              <dt>Name</dt>
+              <dd id="status-serial">—</dd>
+            </div>
+            <div>
+              <dt>Serial</dt>
+              <dd>504F94FF1BB3</dd>
+            </div>
+            <div>
+              <dt>Version</dt>
+              <dd id="status-version">—</dd>
+            </div>
+            <div>
+              <dt>Status</dt>
+              <dd id="status-firmware">—</dd>
+            </div>
+            <div>
+              <dt>Zones</dt>
+              <dd id="status-zones">—</dd>
+            </div>
+            <div>
+              <dt>Provider</dt>
+              <dd id="status-provider">Not configured</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+      <nav class="tabs" id="tabs">
+        <button class="tab active" data-tab="miniserver">Miniserver</button>
+        <button class="tab" data-tab="zones">Zones</button>
+        <button class="tab" data-tab="provider">Provider</button>
+        <button class="tab" data-tab="logs">Logs</button>
+        <div id="status" class="status-banner status-banner--hidden" role="status" aria-live="polite"></div>
+      </nav>
+    </header>
+    <main id="app">
+      <section>
+        <h2>Loading…</h2>
+        <p>If this message remains, refresh the page to load the admin interface.</p>
+      </section>
+    </main>
+    <script src="/admin/app.js?v=20241005" type="module"></script>
+  </body>
+</html>
