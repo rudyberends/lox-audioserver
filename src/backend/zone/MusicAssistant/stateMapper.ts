@@ -1,10 +1,11 @@
-import { Track } from '../zonemanager';
+import { PlayerStatus, AudioType, RepeatMode, FileType } from '../loxoneTypes';
+import { normalizeMediaUri } from '../../provider/musicAssistant/utils';
 
 /**
  * Combined queue payload returned to the ZoneManager after mapping Music Assistant state.
  */
 interface QueueMappingResult {
-  trackUpdate: Partial<Track>;
+  trackUpdate: Partial<PlayerStatus>;
   items: {
     album: string;
     artist: string;
@@ -18,11 +19,11 @@ interface QueueMappingResult {
     unique_id: string;
     user: string;
   }[];
-  shuffleEnabled: number;
+  shuffleEnabled: boolean;
 }
 
 /** Maps player-level updates to the smaller Track diff ingested by the ZoneManager. */
-export function mapPlayerToTrack(loxoneZoneId: number, player: any): Partial<Track> {
+export function mapPlayerToTrack(loxoneZoneId: number, player: any): Partial<PlayerStatus> {
   const isPlaying = player.state === 'playing';
 
   return {
@@ -99,25 +100,71 @@ function extractImageFromList(list: any): string {
 
 /** Derives a coarse audio type used by the UI based on URI/provider hints. */
 function determineAudioType(media: any, fallback: any): number {
-  const uri: string = ensureString(media?.uri ?? fallback?.uri ?? '');
-  if (uri.startsWith('library://')) {
-    return 2; // Local library / external source
+  const uriRaw: string = ensureString(media?.uri ?? fallback?.uri ?? '');
+  const uri = uriRaw.toLowerCase();
+
+  if (!uri) {
+    return AudioType.File;
   }
-  if (uri.startsWith('spotify:') || uri.startsWith('apple_music://') || uri.startsWith('tidal://')) {
-    return 5; // Streaming service
+
+  if (uri.startsWith('library://')) {
+    if (uri.includes('/playlist/')) {
+      return AudioType.Playlist;
+    }
+    return AudioType.File;
+  }
+
+  if (uri.startsWith('library:local:')) {
+    if (uri.includes(':playlist:')) {
+      return AudioType.Playlist;
+    }
+    return AudioType.File;
+  }
+
+  if (uri.startsWith('playlist://')) {
+    return AudioType.Playlist;
+  }
+
+  if (uri.startsWith('linein:')) {
+    return AudioType.LineIn;
+  }
+
+  if (uri.startsWith('airplay:')) {
+    return AudioType.AirPlay;
+  }
+
+  if (uri.startsWith('spotify:')) {
+    return AudioType.Spotify;
+  }
+
+  if (uri.startsWith('soundsuit@') || uri.startsWith('http://') || uri.startsWith('https://')) {
+    return AudioType.Radio;
+  }
+
+  if (uri.startsWith('apple_music://') || uri.startsWith('tidal://') || uri.startsWith('deezer://')) {
+    return AudioType.File;
   }
 
   const providerMappings = media?.provider_mappings;
   if (Array.isArray(providerMappings)) {
     for (const mapping of providerMappings) {
       const domain = String(mapping?.provider_domain ?? '').toLowerCase();
-      if (domain.includes('spotify') || domain.includes('apple') || domain.includes('tidal')) {
-        return 5;
+      if (domain.includes('spotify')) {
+        return AudioType.Spotify;
+      }
+      if (domain.includes('soundsuit')) {
+        return AudioType.Radio;
+      }
+      if (domain.includes('airplay')) {
+        return AudioType.AirPlay;
+      }
+      if (domain.includes('apple') || domain.includes('tidal') || domain.includes('deezer')) {
+        return AudioType.File;
       }
     }
   }
 
-  return 2;
+  return AudioType.File;
 }
 
 /** Chooses the best cover art URL from the provided media/queue item. */
@@ -146,10 +193,12 @@ function mapCoverUrl(item: any): string {
 function mapQueueItem(item: any, fallbackDuration: number, index: number) {
   const media = item?.media_item ?? item ?? {};
   const audioType = determineAudioType(media, item);
+  const rawPath = media.uri ?? '';
+  const audiopath = normalizeMediaUri(rawPath);
   return {
     album: ensureString(media.album ?? ''),
     artist: mapArtists(media),
-    audiopath: media.uri ?? '',
+    audiopath,
     audiotype: audioType,
     coverurl: mapCoverUrl(media) || mapCoverUrl(item),
     duration: Number(media.duration ?? item?.duration ?? fallbackDuration ?? 0),
@@ -179,13 +228,17 @@ export function mapQueueToState(
   const artist = mapArtists(mediaItem) || cur.artist || '';
 
   const repeat = (queue.repeat_mode ?? '').toString().toLowerCase();
-  const repeatNum = repeat === 'one' ? 1 : repeat === 'all' ? 2 : 0;
-  const shuffleEnabled = Number(Boolean(queue.shuffle_enabled));
+  const repeatMode = repeat === 'one'
+    ? RepeatMode.Track
+    : repeat === 'all'
+      ? RepeatMode.Queue
+      : RepeatMode.NoRepeat;
+  const shuffleEnabled = Boolean(queue.shuffle_enabled);
 
   const cover = mapCoverUrl(mediaItem) || mapCoverUrl(cur);
   const audioType = determineAudioType(mediaItem, cur);
 
-  const trackUpdate: Partial<Track> = {
+  const trackUpdate: Partial<PlayerStatus> = {
     playerid: loxoneZoneId,
     title: mediaItem.title ?? mediaItem.name ?? cur.name ?? '',
     artist,
@@ -193,50 +246,82 @@ export function mapQueueToState(
     coverurl: cover,
     duration: Number(mediaItem.duration ?? cur.duration ?? 0),
     time: Number(queue.elapsed_time ?? 0),
-    plrepeat: repeatNum,
+    plrepeat: repeatMode,
     plshuffle: shuffleEnabled,
     clientState: 'on',
-    type: 3,
+    type: FileType.Playlist,
     qid: cur.queue_item_id ?? '',
     qindex: 1,
     sourceName: 'Music Assistant',
     name: 'Music Assistant',
-    audiopath: mediaItem.uri ?? '',
+    audiopath: normalizeMediaUri(mediaItem.uri ?? ''),
     audiotype: audioType,
   };
 
   const cachedPrevCandidate = cachedPrevious?.queue_item_id === cur.queue_item_id ? undefined : cachedPrevious;
 
-  const previousCandidates = [
-    queue.previous_item,
-    Array.isArray(queue.previous_items) ? queue.previous_items.slice(-1)[0] : undefined,
-    Array.isArray(queue.history) ? queue.history.slice(-1)[0] : undefined,
-    cachedPrevCandidate,
-  ];
-  const previous = previousCandidates.find(Boolean);
-  const nextCandidates = [
-    queue.next_item,
-    Array.isArray(queue.next_items) ? queue.next_items[0] : undefined,
-    Array.isArray(queue.items)
-      ? queue.items.find((item: any) => item?.queue_item_id === queue.current_item?.queue_item_id)?.next
-      : undefined,
-  ];
-  const next = nextCandidates.find(Boolean);
+  const queueItemsRaw = Array.isArray(queue.items)
+    ? queue.items.filter((item: any) => Boolean(item))
+    : [];
 
-  const items = [] as QueueMappingResult['items'];
+  const items: QueueMappingResult['items'] = queueItemsRaw.length
+    ? queueItemsRaw.map((item: any, index: number) => {
+        const baseDuration = Number(item?.media_item?.duration ?? item?.duration ?? mediaItem.duration ?? 0);
+        return mapQueueItem(item, baseDuration, index);
+      })
+    : (() => {
+        const previousCandidates = [
+          queue.previous_item,
+          Array.isArray(queue.previous_items) ? queue.previous_items.slice(-1)[0] : undefined,
+          Array.isArray(queue.history) ? queue.history.slice(-1)[0] : undefined,
+          cachedPrevCandidate,
+        ];
+        const previous = previousCandidates.find(Boolean);
+        const nextCandidates = [
+          queue.next_item,
+          Array.isArray(queue.next_items) ? queue.next_items[0] : undefined,
+          Array.isArray(queue.items)
+            ? queue.items.find((item: any) => item?.queue_item_id === queue.current_item?.queue_item_id)?.next
+            : undefined,
+        ];
+        const next = nextCandidates.find(Boolean);
 
-  if (previous) {
-    items.push(mapQueueItem(previous, Number(previous?.duration ?? mediaItem.duration ?? 0), 0));
-  }
+        const fallbackItems: QueueMappingResult['items'] = [];
 
-  items.push(mapQueueItem(cur, Number(mediaItem.duration ?? 0), 1));
+        if (previous) {
+          fallbackItems.push(
+            mapQueueItem(previous, Number(previous?.duration ?? mediaItem.duration ?? 0), fallbackItems.length),
+          );
+        }
 
-  if (next) {
-    items.push(mapQueueItem(next, Number(next?.duration ?? 0), 2));
+        fallbackItems.push(
+          mapQueueItem(cur, Number(mediaItem.duration ?? 0), fallbackItems.length),
+        );
+
+        if (next) {
+          fallbackItems.push(
+            mapQueueItem(next, Number(next?.duration ?? 0), fallbackItems.length),
+          );
+        }
+
+        return fallbackItems;
+      })();
+
+  const currentQueueItemId = cur.queue_item_id ?? '';
+  let currentIndex = items.findIndex((item) => item.unique_id === currentQueueItemId);
+  if (currentIndex < 0) {
+    const fallbackIndex = queueItemsRaw.findIndex(
+      (item: any) =>
+        (item?.queue_item_id ?? item?.media_item?.queue_item_id ?? '') === currentQueueItemId,
+    );
+    currentIndex = fallbackIndex >= 0 ? fallbackIndex : 0;
   }
 
   return {
-    trackUpdate,
+    trackUpdate: {
+      ...trackUpdate,
+      qindex: currentIndex >= 0 ? currentIndex : 0,
+    },
     items,
     shuffleEnabled,
   };

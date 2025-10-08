@@ -20,8 +20,8 @@ export interface RadioFolderItem {
   station: string;
   audiopath: string;
   coverurl: string;
-  contentType: string;
-  sort: string;
+  contentType?: string;
+  sort?: string;
   type: number;
   provider?: string;
 }
@@ -29,28 +29,44 @@ export interface RadioFolderItem {
 export interface PlaylistItem {
   audiopath: string;
   coverurl: string;
-  id: string;
-  name: string;
-  items: number;
   type: number;
+  id?: string;
+  name?: string;
+  items?: number;
   provider?: string;
+  providerInstanceId?: string;
+  rawId?: string;
+  album?: string;
+  artist?: string;
+  title?: string;
+  uniqueId?: string;
+  playlistId?: string;
+  playlistName?: string;
+  playlistCover?: string;
+  thumbnail?: string;
+  playlistProviderInstanceId?: string;
+  playlistStartItem?: string;
+  playlistFriendlyPath?: string;
+  playlistCommandUri?: string;
 }
 
 export interface PlaylistResponse {
-  id: number;
+  id: number | string;
   name: string;
   totalitems: number;
   start: number;
   items: PlaylistItem[];
+  coverurl?: string;
+  thumbnail?: string;
 }
 
 export interface MediaFolderItem {
   id: string;
   name: string;
-  cmd: string;
+  cmd?: string;
   type: number;
-  contentType: string;
-  sort: string;
+  contentType?: string;
+  sort?: string;
   coverurl?: string;
   audiopath?: string;
   provider?: string;
@@ -65,6 +81,16 @@ export interface MediaFolderItem {
   owner?: string;
   title?: string;
   followed?: boolean;
+  playlistId?: string;
+  playlistName?: string;
+  playlistCover?: string;
+  playlistStartItem?: string;
+  playlistProviderInstanceId?: string;
+  playlistCommandUri?: string;
+  nas?: boolean;
+  usb?: boolean;
+  external?: boolean;
+  origin?: number;
 }
 
 export interface MediaFolderResponse {
@@ -97,10 +123,20 @@ export interface RadioProvider {
 
 export interface PlaylistProvider {
   getPlaylists(offset: number, limit: number): Promise<PlaylistResponse> | PlaylistResponse;
+  getPlaylistItems?(
+    playlistId: string,
+    offset: number,
+    limit: number,
+  ): Promise<PlaylistResponse | undefined> | PlaylistResponse | undefined;
 }
 
 export interface MediaProvider extends RadioProvider {
   getPlaylists(offset: number, limit: number): Promise<PlaylistResponse> | PlaylistResponse;
+  getPlaylistItems?(
+    playlistId: string,
+    offset: number,
+    limit: number,
+  ): Promise<PlaylistResponse | undefined> | PlaylistResponse | undefined;
   resolvePlaylist?(
     service: string,
     playlistId: string,

@@ -94,6 +94,26 @@ async function loadConfig(silent = false) {
       type: connectedProviderType,
       options: connectedProviderOptions,
     };
+    const cache = ensureMusicAssistantCache();
+    state.config.mediaProvider = state.config.mediaProvider || { type: '', options: {} };
+    const providerType = state.config.mediaProvider?.type || '';
+    const providerOptions = (state.config.mediaProvider?.options
+      && typeof state.config.mediaProvider.options === 'object')
+      ? state.config.mediaProvider.options
+      : (state.config.mediaProvider.options = {});
+    const providerHostRaw = typeof providerOptions.IP === 'string' ? providerOptions.IP : '';
+    const providerHost = providerHostRaw.trim();
+    if (isMusicAssistantProviderType(providerType)) {
+      if (providerHost) {
+        cache.providerHost = providerHost;
+        if (!cache.lastIP) cache.lastIP = providerHost;
+      } else {
+        const fallbackHost = cache.providerHost || cache.lastIP || '';
+        if (fallbackHost) {
+          providerOptions.IP = fallbackHost;
+        }
+      }
+    }
     state.suggestions = Object.fromEntries(
       (data.suggestions || []).map((suggestion) => [suggestion.zoneId, suggestion.players]),
     );
@@ -166,6 +186,7 @@ function renderPanels(config) {
             ${renderInput('miniserver-password', 'Password', config.miniserver.password, 'password')}
             ${miniserverSerialField}
           </div>
+          <p class="connection-hint">After updating the credentials, choose <strong>Pair</strong> in the Actions card to apply them.</p>
         </article>
         ${renderStatus(config)}
       </div>
@@ -185,13 +206,19 @@ function renderPanels(config) {
     </section>
   `;
 
+  const updatePanel = `
+    <section data-tabpanel="update" class="${panelClass('update')}">
+      ${renderUpdatePanel()}
+    </section>
+  `;
+
   const logsPanel = `
     <section data-tabpanel="logs" class="${panelClass('logs')}">
       ${renderLogs(config.logging)}
     </section>
   `;
 
-  return `${generalPanel}${zonesPanel}${providerPanel}${logsPanel}`;
+  return `${generalPanel}${zonesPanel}${providerPanel}${updatePanel}${logsPanel}`;
 }
 
 function setupTabs() {
@@ -230,6 +257,10 @@ function updateTabs() {
     }
     panel.classList.toggle('active', name === activeTab);
   });
+
+  if (activeTab !== 'logs') {
+    stopLogStream();
+  }
 
   if (activeTab !== 'logs' && state.logs?.fullscreen) {
     setLogFullscreen(false);
@@ -304,11 +335,14 @@ function renderStatus(config) {
           <p>${pairingHeaderSubtitle}</p>
         </header>
         ${pairingHelp}
-        <div class="pairing-info-actions">
-          <div class="pairing-actions">
-            <button type="button" id="trigger-pairing" class="primary pairing-action" ${audioserver.paired ? 'disabled aria-disabled="true"' : ''}>${audioserver.paired ? 'Paired' : 'Pair'}</button>
-            <button type="button" id="clear-config" class="danger">Reset config</button>
-          </div>
+      </article>
+      <article class="miniserver-card pairing-actions-card">
+        <header>
+          <h3>Actions</h3>
+        </header>
+        <div class="pairing-actions">
+          <button type="button" id="trigger-pairing" class="primary pairing-action" ${audioserver.paired ? 'disabled aria-disabled="true"' : ''}>${audioserver.paired ? 'Paired' : 'Pair now'}</button>
+          <button type="button" id="clear-config" class="danger">Reset config</button>
         </div>
       </article>
     </div>
@@ -374,7 +408,9 @@ function renderLogs(loggingConfig = {}) {
 
   const viewerContent = logsState.missing
     ? ''
-    : `<pre id="logs-output" class="logs-output" tabindex="0">${logsState.content ? escapeHtml(logsState.content) : 'No log entries yet.'}</pre>`;
+    : `<div id="logs-output" class="logs-output" tabindex="0"><pre class="logs-output__content">${escapeHtml(
+        logsState.content ? String(logsState.content) : 'No log entries yet.'
+      )}</pre></div>`;
 
   const logLevelControl = renderSelect(
     'log-level',
@@ -413,6 +449,26 @@ function renderLogs(loggingConfig = {}) {
   `;
 }
 
+function renderUpdatePanel() {
+  const version = typeof state.version === 'string' && state.version ? state.version : 'Unknown';
+  return `
+    <section class="updates-panel">
+      <header class="updates-panel__header">
+        <h2>Update</h2>
+        <p class="updates-panel__subtitle">Check the currently installed lox-audioserver version.</p>
+      </header>
+      <div class="updates-panel__body">
+        <dl class="updates-panel__meta">
+          <div>
+            <dt>Current version</dt>
+            <dd>${escapeHtml(version)}</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+  `;
+}
+
 function renderMiniserverBadge(config = {}) {
   const audioserver = config.audioserver ?? {};
   const isPaired = Boolean(audioserver?.paired);
@@ -435,7 +491,7 @@ function updateHeroSummary() {
   const zoneCount = zones.length;
 
   if (serialEl) serialEl.textContent = audioserver.name || audioserver.ip || '—';
-  if (versionEl) versionEl.textContent = state.version || '—';
+  if (versionEl) versionEl.textContent = state.version ? `v${state.version}` : 'v—';
   if (firmwareEl) firmwareEl.textContent = audioserver.paired ? 'Paired' : 'Unpaired';
   if (providerEl) {
     if (!audioserver.paired) {
@@ -464,7 +520,9 @@ function renderZonesPanel({ zones } = {}) {
       const safeStatusText = escapeHtml(statusText);
       const zoneNumber = typeof zone.id === 'number' ? zone.id : '—';
       const safeZoneId = escapeHtml(String(zoneNumber));
-      const connectionDetails = renderZoneConnectionDetails(zone, status, { isDummy, connected });
+      const zoneNameRaw = `${status?.name ?? zone.name ?? ''}`.trim();
+      const safeZoneName = zoneNameRaw ? escapeHtml(zoneNameRaw) : '';
+      const zoneTitle = safeZoneName ? safeZoneName : `#${safeZoneId}`;
       const metadataBlock = renderZoneMetadata(status, { isDummy });
       const isMusicAssistant = normalizeBackend(zone.backend) === 'BackendMusicAssistant';
       const hasPlayerSelection = Boolean((zone.maPlayerId || '').trim());
@@ -480,33 +538,43 @@ function renderZonesPanel({ zones } = {}) {
         connectHint = '<p class="zone-card-hint">Configure a Music Assistant player before connecting.</p>';
       }
 
+      const backendLabel = formatBackendLabel(rawBackend);
+      const zoneLabel = safeZoneName || `Zone ${safeZoneId}`;
+      const backendName = escapeHtml(backendLabel);
+      const zoneLabelAria = escapeHtml(zoneLabel);
+      let backendSubDetail = '';
+      if (isMusicAssistant) {
+        const playerId = (status?.maPlayerId ?? zone.maPlayerId ?? '').trim();
+        if (playerId) backendSubDetail = escapeHtml(playerId);
+      } else {
+        const ip = (status?.ip ?? zone.ip ?? '').trim();
+        if (ip) backendSubDetail = escapeHtml(ip);
+      }
+
       return `
         <article class="zone-card ${cardStateClass}" data-index="${zone.id}">
           <header class="zone-card-header">
             <div class="zone-card-heading">
-              <span class="zone-card-heading-label">Zone</span>
-              <h3 class="zone-card-title">#${safeZoneId}</h3>
+              <h3 class="zone-card-title">${zoneTitle}</h3>
             </div>
-            <div class="zone-card-status zone-card-status--${statusClass}">
-              <span class="status-pill status-pill--dot ${statusClass}" data-zone-status="${zone.id}" aria-hidden="true"></span>
-              <span class="zone-status-text" data-zone-status-text="${zone.id}">${safeStatusText}</span>
-            </div>
+            <div class="zone-card-status-dot zone-card-status-dot--${statusClass}" title="${safeStatusText}" data-zone-status="${zone.id}" aria-hidden="true"></div>
           </header>
-          <div class="zone-card-section zone-card-summary">
-            <div class="zone-card-pane zone-card-pane--connection">
-              <h4 class="zone-section-title">Connection</h4>
-              <div class="zone-card-details">${connectionDetails}</div>
+          <div class="zone-card-playback">
+            <div class="zone-card-nowplaying">${metadataBlock}</div>
+          </div>
+          <div class="zone-card-backend">
+            <span class="zone-backend-label">Zone backend</span>
+            <div class="zone-backend-info">
+              <span class="zone-backend-name">${backendName}</span>
             </div>
-            <div class="zone-card-pane zone-card-pane--playback">
-              <h4 class="zone-section-title">Playback</h4>
-              <div class="zone-card-nowplaying">${metadataBlock}</div>
-            </div>
+            ${backendSubDetail ? `<span class="zone-backend-sub">${backendSubDetail}</span>` : ''}
+          </div>
+          <div class="zone-card-divider" aria-hidden="true"></div>
+          <div class="zone-card-actions">
+            <button type="button" class="zone-backend-button" data-action="configure-zone" data-id="${zone.id}" aria-label="Configure ${zoneLabelAria}">Configure</button>
           </div>
           ${connectHint}
           ${connectError ? `<p class="zone-card-error">${escapeHtml(connectError)}</p>` : ''}
-          <div class="zone-card-actions">
-            <button type="button" class="secondary" data-action="configure-zone" data-id="${zone.id}">Configure…</button>
-          </div>
         </article>
       `;
     })
@@ -528,7 +596,7 @@ function renderZonesPanel({ zones } = {}) {
     <header class="zones-header">
       <div class="zones-header__copy">
         <h2>Imported Loxone Zones</h2>
-        <p>Monitor connections, assign backends, and check the now playing status for each Loxone zone.</p>
+        <p>These zones were imported from the Loxone configuration on your MiniServer. Please assign an appropriate backend to each zone.</p>
       </div>
       ${renderZonesOverview(stats)}
     </header>
@@ -590,6 +658,24 @@ function computeZoneStats(zones = []) {
   return stats;
 }
 
+function renderZonesMetricIcon(name) {
+  switch (name) {
+    case 'active-backends':
+      return `
+        <svg viewBox="0 0 24 24" role="presentation" aria-hidden="true">
+          <path d="M5 5h4v4H5zM10 10h4v4h-4zM15 5h4v4h-4zM15 15h4v4h-4zM5 15h4v4H5zM10 5h4v4h-4z" fill="currentColor"></path>
+        </svg>
+      `;
+    case 'total':
+    default:
+      return `
+        <svg viewBox="0 0 24 24" role="presentation" aria-hidden="true">
+          <path d="M4 5h16v3H4zM4 10h16v3H4zM4 15h16v3H4z" fill="currentColor"></path>
+        </svg>
+      `;
+  }
+}
+
 function renderZonesOverview(stats) {
   if (!stats) return '';
   const metrics = [
@@ -599,30 +685,19 @@ function renderZonesOverview(stats) {
       value: stats.total,
       tone: 'primary',
       note: stats.total ? `${stats.configured} configured` : 'Add zones to begin',
+      icon: renderZonesMetricIcon('total'),
     },
     {
-      id: 'connected',
-      label: 'Connected',
-      value: stats.connected,
-      tone: 'success',
-      note: stats.connected
-        ? `${stats.connected === 1 ? 'Zone online' : 'Zones online'}`
-        : 'Waiting for players',
-    },
-    {
-      id: 'awaiting',
-      label: 'Awaiting',
-      value: stats.awaiting,
-      tone: stats.awaiting ? 'warn' : 'neutral',
-      note: stats.awaiting
-        ? `${stats.awaiting === 1 ? 'Needs attention' : 'Need attention'}`
-        : 'All reachable',
+      id: 'active-backends',
+      label: 'Active backends',
+      value: stats.activeBackends,
+      tone: stats.activeBackends ? 'success' : 'neutral',
+      note: stats.activeBackends
+        ? `${stats.activeBackends === 1 ? 'Backend online' : 'Backends online'}`
+        : 'Add a backend to enable playback',
+      icon: renderZonesMetricIcon('active-backends'),
     },
   ];
-
-  const backendNote = stats.activeBackends
-    ? `${stats.activeBackends} active ${stats.activeBackends === 1 ? 'backend' : 'backends'}`
-    : 'No backends connected yet';
 
   return `
     <div class="zones-overview">
@@ -630,14 +705,16 @@ function renderZonesOverview(stats) {
         ${metrics
           .map((metric) => `
             <li class="zones-metric zones-metric--${metric.tone}">
-              <span class="zones-metric-label">${escapeHtml(metric.label)}</span>
-              <span class="zones-metric-value">${escapeHtml(String(metric.value))}</span>
-              <span class="zones-metric-note">${escapeHtml(metric.note)}</span>
+              <div class="zones-metric-icon" aria-hidden="true">${metric.icon}</div>
+              <div class="zones-metric-content">
+                <span class="zones-metric-label">${escapeHtml(metric.label)}</span>
+                <span class="zones-metric-value">${escapeHtml(String(metric.value))}</span>
+                <span class="zones-metric-note">${escapeHtml(metric.note)}</span>
+              </div>
             </li>
           `)
           .join('')}
       </ul>
-      <p class="zones-overview-note">${escapeHtml(backendNote)}</p>
     </div>
   `;
 }
@@ -671,6 +748,7 @@ function renderProviderContent(mediaProvider = {}) {
   }
 
   const providerType = mediaProvider.type || '';
+  const cache = ensureMusicAssistantCache();
   const providerLabel = formatProviderLabel(providerType) || 'None';
   const connectedProvider = state.connectedProvider || {};
   const connectedProviderType = typeof connectedProvider.type === 'string' ? connectedProvider.type : '';
@@ -680,7 +758,13 @@ function renderProviderContent(mediaProvider = {}) {
     : (mediaProvider.options = {});
   const requiresHost = providerType && providerType !== 'DummyProvider';
   const hostValueRaw = typeof options.IP === 'string' ? options.IP : '';
-  const hostValue = hostValueRaw.trim();
+  let hostValue = hostValueRaw.trim();
+  const musicAssistantProvider = isMusicAssistantProviderType(providerType);
+  const cachedProviderHost = cache.providerHost || cache.lastIP || '';
+  if (!hostValue && musicAssistantProvider && cachedProviderHost) {
+    hostValue = cachedProviderHost;
+    options.IP = cachedProviderHost;
+  }
   const portValueRaw =
     typeof options.PORT === 'string' || typeof options.PORT === 'number' ? String(options.PORT) : '';
   const portValue = portValueRaw.trim();
@@ -728,22 +812,21 @@ function renderProviderContent(mediaProvider = {}) {
     return '';
   })();
 
+  const hostPlaceholder = musicAssistantProvider && cachedProviderHost
+    ? cachedProviderHost
+    : '192.168.1.10';
+  const hostExtraAttrs = `placeholder="${escapeHtml(hostPlaceholder)}"`;
   const providerFields = requiresHost
-    ? renderInput('provider-ip', 'Provider IP/Host', hostValue || '', 'text', false, 'placeholder="192.168.1.10"') +
+    ? renderInput('provider-ip', 'Provider IP/Host', hostValue || '', 'text', false, hostExtraAttrs) +
       (showPortField
         ? renderInput('provider-port', 'Provider Port (optional)', portValue || '', 'text', false, 'placeholder="8095" inputmode="numeric" pattern="[0-9]*"')
         : '')
     : '';
 
-  const summaryMetrics = [
-    { id: 'provider-type', label: 'Selected provider', value: providerLabel || 'None' },
-    { id: 'provider-host', label: 'Host', value: hasHost ? hostValue : 'Not set' },
-    {
-      id: 'provider-port',
-      label: showPortField ? 'Port' : 'Port',
-      value: showPortField ? (hasPort ? portValue : 'Using default (8095)') : 'Not required',
-    },
-  ];
+  const providerDescription = describeProviderType(providerType);
+  const selectedHostDisplay = requiresHost ? (hasHost ? hostValue : 'Host not set yet') : 'Not required';
+  const selectedPortDisplay = showPortField ? (hasPort ? portValue : 'Default (8095)') : 'Not required';
+  const providerHasChanges = Boolean(statusLabel);
 
   const guidance = isDummyProvider
     ? 'Dummy provider is useful for testing and won’t expose any sources to Loxone.'
@@ -755,46 +838,91 @@ function renderProviderContent(mediaProvider = {}) {
         ? 'This provider does not require any connection details.'
         : 'Select a provider to begin configuration.';
 
+  const activeProviderType = connectedProviderType;
+  const activeProviderLabel = formatProviderLabel(activeProviderType) || 'None';
+  const activeRequiresHost = activeProviderType && activeProviderType !== 'DummyProvider';
+  const activeShowPortField = activeProviderType === 'MusicAssistantProvider' || activeProviderType === 'MusicAssistantRadioProvider';
+  const activeHostValue = activeRequiresHost ? (connectedHost ? connectedHost : 'Not set') : 'Not required';
+  const activePortValue = activeShowPortField ? (connectedPort ? connectedPort : 'Using default (8095)') : 'Not required';
+  let activeStatusTone = 'success';
+  let activeStatusMessage = 'Serving zones using this provider.';
+  if (!activeProviderType) {
+    activeStatusTone = 'warning';
+    activeStatusMessage = 'No provider connected.';
+  } else if (activeRequiresHost && !connectedHost) {
+    activeStatusTone = 'warning';
+    activeStatusMessage = 'Saved provider is missing a host.';
+  }
+  const activeDescription = activeProviderType
+    ? `${activeProviderLabel} (last saved)`
+    : 'None saved yet.';
+  const activeTile = `
+        <section class="provider-summary provider-summary--active">
+          <div class="provider-summary__title">
+            <h3 class="provider-summary__heading">Active provider</h3>
+            <p class="provider-summary__description">${escapeHtml(activeDescription)}</p>
+          </div>
+          <dl class="provider-meta provider-meta--dense">
+            <div>
+              <dt>Type</dt>
+              <dd>${escapeHtml(activeProviderLabel || 'None')}</dd>
+            </div>
+            <div>
+              <dt>Host</dt>
+              <dd>${escapeHtml(activeHostValue)}</dd>
+            </div>
+            <div>
+              <dt>Port</dt>
+              <dd>${escapeHtml(activePortValue)}</dd>
+            </div>
+          </dl>
+          <p class="provider-summary__hint provider-summary__hint--emph provider-summary__hint--tight">${escapeHtml(activeStatusMessage)}</p>
+        </section>
+      `;
+
+  const selectedInfoTile = `
+        <section class="provider-summary provider-summary--info">
+          <div class="provider-summary__header">
+            <span class="provider-summary__tag">${escapeHtml(providerType ? 'Editing' : 'No selection')}</span>
+            <strong class="provider-summary__name">${escapeHtml(providerLabel || 'Choose a provider')}</strong>
+            ${providerHasChanges ? `<span class="provider-change-chip">Unsaved</span>` : ''}
+          </div>
+          ${providerDescription ? `<p class="provider-info-copy">${escapeHtml(providerDescription)}</p>` : ''}
+          <dl class="provider-meta provider-meta--two provider-meta--dense">
+            <div>
+              <dt>Host</dt>
+              <dd>${escapeHtml(selectedHostDisplay)}</dd>
+            </div>
+            <div>
+              <dt>Port</dt>
+              <dd>${escapeHtml(selectedPortDisplay)}</dd>
+            </div>
+          </dl>
+          <p class="provider-summary__hint">${escapeHtml(guidance)}</p>
+        </section>
+      `;
+
   return `
     <div class="provider-layout">
-      <section class="provider-summary">
-        <div class="provider-summary__title">
-          <span class="provider-label">Provider</span>
-          <h3 class="provider-summary__heading">${escapeHtml(providerLabel || 'None')}</h3>
-          ${statusLabel ? `<p class="provider-summary__status provider-summary__status--${statusTone}">${escapeHtml(statusLabel)}</p>` : ''}
-        </div>
-        <ul class="provider-metrics" role="list">
-          ${summaryMetrics
-            .map((metric) => `
-              <li class="provider-metric">
-                <span class="provider-metric__label">${escapeHtml(metric.label)}</span>
-                <span class="provider-metric__value">${escapeHtml(String(metric.value || ''))}</span>
-              </li>
-            `)
-            .join('')}
-        </ul>
-        <p class="provider-summary__hint">${escapeHtml(guidance)}</p>
-      </section>
-      <div class="provider-card">
-        <header class="provider-card__header">
-          <div>
+      <div class="provider-overview">
+        ${activeTile}
+        ${selectedInfoTile}
+      </div>
+      <div class="provider-card provider-card--compact">
+        <div class="provider-card__form">
+          <div class="provider-card__header">
             <h2>Media Provider</h2>
-            <p>Select and configure the backend that exposes sources to your zones.</p>
+            <p>Pick a provider, adjust its details, then connect.</p>
+            ${connectedProviderLabel ? `<span class="provider-card__caption">Last connected: ${escapeHtml(connectedProviderLabel)}</span>` : ''}
           </div>
-          <div class="provider-status provider-status--${statusTone}">
-            <span class="status-label">Connected</span>
-            <span class="status-badge">${escapeHtml(connectedProviderLabel || 'None')}</span>
-          </div>
-        </header>
-        <div class="provider-card__body">
           ${renderSelect('provider-type', 'Provider', providerOptions, providerType, 'class="provider-select"')}
           <div id="provider-fields" class="provider-fields-grid ${requiresHost ? '' : 'hidden'}">
             ${providerFields}
           </div>
+          <div class="provider-card__actions">
+            <button type="button" id="provider-connect" class="primary">Connect provider</button>
+          </div>
         </div>
-        <footer class="provider-card__footer">
-          <button type="button" id="provider-connect" class="primary">Connect provider</button>
-        </footer>
       </div>
     </div>
   `;
@@ -806,6 +934,11 @@ function formatProviderLabel(value = '') {
   const withoutSuffix = normalized.replace(/Provider$/i, '');
   const withSpaces = withoutSuffix.replace(/([a-z])([A-Z])/g, '$1 $2');
   return withSpaces.replace(/\s+/g, ' ').trim() || normalized;
+}
+
+function isMusicAssistantProviderType(value = '') {
+  const normalized = String(value || '').trim();
+  return normalized === 'MusicAssistantProvider' || normalized === 'MusicAssistantRadioProvider';
 }
 
 function renderInput(id, label, value, type = 'text', inline = false, extraAttrs = '') {
@@ -931,10 +1064,10 @@ function renderZoneMetadata(status = {}, options = {}) {
   const lines = [];
   if (hasMedia) {
     if (title || artist) {
-      lines.push(
-        `<div class="zone-track-title">${escapeHtml(title || 'Unknown title')}</div>` +
-          (artist ? `<div class="zone-track-artist">${escapeHtml(artist)}</div>` : ''),
-      );
+      if (artist) {
+        lines.push(`<div class="zone-track-artist">${escapeHtml(artist)}</div>`);
+      }
+      lines.push(`<div class="zone-track-title">${escapeHtml(title || 'Unknown title')}</div>`);
     }
     if (state) {
       lines.push(`<div class="zone-track-state">${escapeHtml(state.charAt(0).toUpperCase() + state.slice(1))}</div>`);
@@ -950,62 +1083,6 @@ function renderZoneMetadata(status = {}, options = {}) {
     <div class="zone-track-nowplaying${hasMedia ? '' : ' zone-track-nowplaying--empty'}">
       ${coverHtml}
       <div class="zone-track-meta">${lines.join('')}</div>
-    </div>
-  `;
-}
-
-function renderZoneConnectionDetails(zone = {}, status = {}, options = {}) {
-  const { isDummy = false, connected = false } = options || {};
-  const rawBackend = status?.backend ?? zone?.backend ?? '';
-  const backendLabel = formatBackendLabel(rawBackend);
-  const ipValue = status?.ip ?? zone?.ip ?? '';
-  const isMusicAssistant = normalizeBackend(zone?.backend) === 'BackendMusicAssistant';
-  const showIp = !isMusicAssistant;
-  const showPendingState = isDummy || (showIp && !ipValue);
-  const detailsClass = [
-    'zone-connection-details',
-    showPendingState && !connected ? 'zone-connection-details--pending' : '',
-    connected ? 'zone-connection-details--connected' : '',
-  ]
-    .filter(Boolean)
-    .join(' ');
-  const safeBackend = escapeHtml(backendLabel || 'Unassigned');
-  const safeIp = escapeHtml(ipValue || 'Not set');
-  const maPlayerId = isMusicAssistant ? (zone?.maPlayerId || '').trim() : '';
-  const segments = [
-    `
-        <div class="zone-connection-row">
-          <span class="zone-connection-label">Backend</span>
-          <span class="zone-connection-value">${safeBackend}</span>
-        </div>
-      `,
-  ];
-
-  if (showIp) {
-    segments.push(`
-        <div class="zone-connection-divider" aria-hidden="true"></div>
-        <div class="zone-connection-row zone-connection-row--ip">
-          <span class="zone-connection-label">IP</span>
-          <span class="zone-connection-value zone-connection-value--ip">${safeIp}</span>
-        </div>
-      `);
-  }
-
-  if (maPlayerId) {
-    segments.push(`
-        <div class="zone-connection-divider" aria-hidden="true"></div>
-        <div class="zone-connection-row zone-connection-row--player">
-          <span class="zone-connection-label">Player</span>
-          <span class="zone-connection-value zone-connection-value--player">${escapeHtml(maPlayerId)}</span>
-        </div>
-      `);
-  }
-
-  return `
-    <div class="${detailsClass}">
-      <div class="zone-connection-tile">
-        ${segments.join('')}
-      </div>
     </div>
   `;
 }
@@ -1029,29 +1106,92 @@ function renderBackendModal() {
 
   const backendOptions = state.options?.backends || [];
   const backend = modalState.backend || zone.backend || backendOptions[0] || '';
-  const ipValue = modalState.ip ?? zone.ip ?? '';
-  const maSuggestions = modalState.maSuggestions?.length
-    ? modalState.maSuggestions
-    : state.suggestions?.[zone.id] || [];
+  const cache = ensureMusicAssistantCache();
+  const knownIps = Object.keys(cache.playersByIp || {});
+  const cacheFallbackIp = cache.lastIP || knownIps[0] || '';
+  const isLoopback = (value = '') => {
+    const trimmed = String(value || '').trim();
+    return trimmed === '127.0.0.1' || trimmed === 'localhost';
+  };
+  let ipValue = modalState.ip ?? zone.ip ?? '';
+  if (typeof ipValue === 'string') {
+    ipValue = ipValue.trim();
+  }
+  if (backend !== 'BackendMusicAssistant' && isLoopback(ipValue)) {
+    ipValue = '';
+    if (state.modal) state.modal.ip = '';
+  }
+
+  let maSuggestions = [];
+  if (Array.isArray(modalState.maSuggestions) && modalState.maSuggestions.length) {
+    maSuggestions = modalState.maSuggestions;
+  } else if (Array.isArray(state.suggestions?.[zone.id]) && state.suggestions[zone.id].length) {
+    maSuggestions = state.suggestions[zone.id];
+  } else if (backend === 'BackendMusicAssistant') {
+    const cachedPlayers = cache.playersByIp?.[ipValue] || [];
+    if (cachedPlayers.length) {
+      maSuggestions = cachedPlayers;
+    }
+  }
+  if (backend === 'BackendMusicAssistant' && maSuggestions.length && (!Array.isArray(modalState.maSuggestions) || !modalState.maSuggestions.length)) {
+    state.modal = {
+      ...(state.modal || {}),
+      maSuggestions,
+    };
+  }
   const maPlayerId = modalState.maPlayerId ?? zone.maPlayerId ?? '';
   const modalError = typeof modalState.error === 'string' ? modalState.error.trim() : '';
+  const zoneDisplayName = (zone.name ?? '').trim();
+  const summaryZoneName = zoneDisplayName || `Zone ${zone.id}`;
+  let backendDescription = describeBackend(backend);
+  if (backend === 'BackendMusicAssistant' && maSuggestions.length && cache.playersByIp?.[ipValue]) {
+    const reuseNote = ' Players previously discovered will remain available for other zones using this server.';
+    backendDescription = backendDescription ? backendDescription + reuseNote : reuseNote.trim();
+  }
 
-  const backendSelect = renderSelect('modal-backend', 'Backend', backendOptions, backend, 'class="backend-modal__select"');
+  const backendOptionsLabels = backendOptions.map((option) => {
+    const value = option;
+    const label = formatBackendLabel(option);
+    return { value, label };
+  });
+  const backendSelect = renderSelect('modal-backend', 'Backend', backendOptionsLabels, backend, 'class="backend-modal__select"');
   const ipAttrs = backend === 'DummyBackend' ? 'disabled aria-disabled="true"' : '';
-  const ipField = renderInput('modal-backend-ip', 'Backend IP', backend === 'DummyBackend' ? '' : ipValue, 'text', false, `${ipAttrs}`);
+  const ipPlaceholderValue = backend === 'BackendMusicAssistant' ? cacheFallbackIp : '';
+  const ipPlaceholder = ipPlaceholderValue ? `placeholder="${escapeHtml(ipPlaceholderValue)}"` : '';
+  const ipField = renderInput(
+    'modal-backend-ip',
+    backend === 'BackendMusicAssistant' ? 'Music Assistant Host' : 'Backend IP',
+    backend === 'DummyBackend' ? '' : ipValue,
+    'text',
+    false,
+    `${ipAttrs} ${ipPlaceholder}`.trim(),
+  );
 
   let maField = '';
   let maActions = '';
   if (backend === 'BackendMusicAssistant') {
-    if (maSuggestions.length) {
-      const suggestionsOptions = [{ value: '', label: 'Select a player' }, ...maSuggestions.map((player) => ({ value: player.id, label: `${player.name} (${player.id})` }))];
-      maField = renderSelect('modal-ma-player', 'Music Assistant Player', suggestionsOptions, maPlayerId, 'class="backend-modal__select"');
+    const hasSuggestions = maSuggestions.length > 0;
+    if (hasSuggestions) {
+      const maPlayerOptions = [{ value: '', label: 'Select a player' }, ...maSuggestions.map((player) => ({ value: player.id, label: `${player.name} (${player.id})` }))];
+      maField = renderSelect(
+        'modal-ma-player',
+        'Music Assistant Player',
+        maPlayerOptions,
+        hasSuggestions ? maPlayerId : '',
+        'class="backend-modal__select"',
+      );
     } else {
-      maField = renderInput('modal-ma-player', 'Music Assistant Player ID', maPlayerId, 'text');
+      maField = `
+        <div class="backend-modal__ma-empty" role="status">
+          <h4>Scan for players</h4>
+          <p>Launch a scan to discover Music Assistant players for this zone.</p>
+        </div>
+      `;
     }
+    const scanDisabledAttr = backend === 'BackendMusicAssistant' && !ipValue ? 'disabled aria-disabled="true"' : '';
     maActions = `
       <div class="backend-modal__ma-actions">
-        <button type="button" class="tertiary" data-action="modal-scan-zone" data-id="${zone.id}">Scan players</button>
+        <button type="button" class="tertiary" data-action="modal-scan-zone" data-id="${zone.id}" ${scanDisabledAttr}>${hasSuggestions ? 'Rescan players' : 'Scan players'}</button>
       </div>
     `;
   }
@@ -1066,17 +1206,28 @@ function renderBackendModal() {
       <div class="backend-modal__dialog">
         <header class="backend-modal__header">
           <div>
-            <h2 id="backend-modal-title">Configure Zone #${escapeHtml(String(zone.id))}</h2>
+            <h2 id="backend-modal-title">Configure ${escapeHtml(summaryZoneName)}</h2>
             <p class="backend-modal__subtitle">Adjust backend settings and connection details.</p>
           </div>
           <button type="button" class="backend-modal__close" data-modal-close="true" aria-label="Close">×</button>
         </header>
         <div class="backend-modal__body">
           ${errorHtml}
-          <div class="backend-modal__form">
-            ${backendSelect}
-            ${ipField}
-            ${backend === 'BackendMusicAssistant' ? `<div class="backend-modal__ma">${maField}${maActions}</div>` : ''}
+          <div class="backend-modal__layout">
+            <aside class="backend-modal__summary">
+              <h3 class="backend-modal__summary-title">${formatBackendLabel(backend)}</h3>
+              <p class="backend-modal__summary-text">${backendDescription || 'Select a backend to see configuration details and requirements.'}</p>
+              <div class="backend-modal__summary-zone">
+                <span class="backend-modal__summary-label">Zone</span>
+                <span class="backend-modal__summary-value">${escapeHtml(summaryZoneName)}</span>
+                <span class="backend-modal__summary-meta">ID ${escapeHtml(String(zone.id))}</span>
+              </div>
+            </aside>
+            <div class="backend-modal__form">
+              ${backendSelect}
+              ${ipField}
+              ${backend === 'BackendMusicAssistant' ? `<div class="backend-modal__ma">${maField}${maActions}</div>` : ''}
+            </div>
           </div>
         </div>
         <footer class="backend-modal__footer">
@@ -1093,16 +1244,41 @@ function openBackendModal(zoneId) {
   if (!zone) return;
   const backendOptions = state.options?.backends || [];
   const backend = zone.backend || backendOptions[0] || '';
-  const suggestions = state.suggestions?.[zone.id] || [];
+  const cache = ensureMusicAssistantCache();
+  const knownIps = Object.keys(cache.playersByIp || {});
+  const cacheFallbackIp = cache.lastIP || knownIps[0] || '';
+  const isLoopback = (value = '') => {
+    const trimmed = String(value || '').trim();
+    return trimmed === '127.0.0.1' || trimmed === 'localhost';
+  };
+  const originalIp = (zone.ip || '').trim();
+  let defaultIp = originalIp;
+  if (!defaultIp && backend === 'BackendMusicAssistant') {
+    defaultIp = cacheFallbackIp;
+  } else if (defaultIp && backend !== 'BackendMusicAssistant' && isLoopback(defaultIp)) {
+    defaultIp = '';
+  }
+  const suggestionKey = backend === 'BackendMusicAssistant' ? (defaultIp || cacheFallbackIp) : '';
+  const suggestions = state.suggestions?.[zone.id]
+    || (backend === 'BackendMusicAssistant' ? cache.playersByIp?.[suggestionKey] || [] : []);
   state.modal = {
     open: true,
     zoneId: zone.id,
     backend,
-    ip: zone.ip || '',
+    ip: defaultIp,
     maPlayerId: zone.maPlayerId || '',
     maSuggestions: suggestions,
     error: '',
   };
+  if (backend === 'BackendMusicAssistant') {
+    state.suggestions = state.suggestions || {};
+    if (suggestions.length) {
+      state.suggestions[zone.id] = suggestions;
+    }
+    if (!state.modal.maPlayerId && suggestions.length === 1) {
+      state.modal.maPlayerId = suggestions[0].id || '';
+    }
+  }
   render();
 }
 
@@ -1129,6 +1305,45 @@ function updateModalState(patch = {}) {
   };
 }
 
+function ensureMusicAssistantCache() {
+  if (!state.musicAssistantCache) {
+    state.musicAssistantCache = { lastIP: '', playersByIp: {}, providerHost: '' };
+  }
+  const cache = state.musicAssistantCache;
+  cache.playersByIp ||= {};
+  if (typeof cache.lastIP !== 'string') {
+    cache.lastIP = cache.lastIP ? String(cache.lastIP).trim() : '';
+  }
+  if (typeof cache.providerHost !== 'string') {
+    cache.providerHost = cache.providerHost ? String(cache.providerHost).trim() : '';
+  }
+  return cache;
+}
+
+const BACKEND_DESCRIPTIONS = {
+  DummyBackend: 'Use this placeholder when a zone should be ignored or remains unassigned.',
+  BackendMusicAssistant: 'Integrates with Music Assistant to expose players from your MA instance. Scan once to discover available players, then reuse them across zones.',
+  BackendSonos: 'Connects the zone to a Sonos player for playback control and metadata updates.',
+  BackendBeolink: 'Links the zone with a Bang & Olufsen Beolink player using the BeoApp middleware.',
+};
+
+const PROVIDER_DESCRIPTIONS = {
+  DummyProvider: 'Disables external media sources. Useful for testing or when no provider should be exposed to Loxone.',
+  MusicAssistantProvider: 'Connects directly to your Music Assistant server, exposing its full library, search, and playback features inside the Loxone AudioServer.',
+  MusicAssistantRadioProvider: 'Publishes radio presets from Music Assistant so you can tune curated stations from the AudioServer.',
+};
+
+function describeBackend(backendName = '') {
+  const normalized = String(backendName || '').trim();
+  return BACKEND_DESCRIPTIONS[normalized] || '';
+}
+
+function describeProviderType(providerName = '') {
+  const normalized = String(providerName || '').trim();
+  if (!normalized) return '';
+  return PROVIDER_DESCRIPTIONS[normalized] || 'Configure this provider to expose sources to the AudioServer.';
+}
+
 function bindModalEvents() {
   const modal = document.getElementById('backend-modal');
   if (!(modal instanceof HTMLElement)) return;
@@ -1147,6 +1362,37 @@ function bindModalEvents() {
       }
       if (event.target.value !== 'BackendMusicAssistant') {
         updateModalState({ maPlayerId: '' });
+      } else {
+        const cache = ensureMusicAssistantCache();
+        const updates = {};
+        const knownIps = Object.keys(cache.playersByIp || {});
+        const cacheFallbackIp = cache.lastIP || knownIps[0] || '';
+        const isLoopback = (value = '') => {
+          const trimmed = String(value || '').trim();
+          return trimmed === '127.0.0.1' || trimmed === 'localhost';
+        };
+
+        if ((!state.modal.ip || isLoopback(state.modal.ip)) && cacheFallbackIp) {
+          updates.ip = cacheFallbackIp;
+        }
+        const resolvedIp = (updates.ip || state.modal.ip || cacheFallbackIp || '').trim();
+        const cachedPlayers = cache.playersByIp?.[resolvedIp] || [];
+        if (cachedPlayers.length) {
+          updates.maSuggestions = cachedPlayers;
+          if (!state.modal.maPlayerId) {
+            updates.maPlayerId = cachedPlayers.length === 1 ? cachedPlayers[0].id : '';
+          }
+          state.suggestions = state.suggestions || {};
+          if (typeof state.modal?.zoneId === 'number') {
+            state.suggestions[state.modal.zoneId] = cachedPlayers;
+          }
+        } else {
+          updates.maSuggestions = [];
+          updates.maPlayerId = '';
+        }
+        if (Object.keys(updates).length) {
+          updateModalState(updates);
+        }
       }
       render();
     });
@@ -1155,17 +1401,36 @@ function bindModalEvents() {
   const ipInputEl = modal.querySelector('#modal-backend-ip');
   if (ipInputEl instanceof HTMLInputElement) {
     ipInputEl.addEventListener('input', (event) => {
-      updateModalState({ ip: event.target.value, error: '' });
+      const value = event.target.value;
+      const updates = { ip: value, error: '' };
+      if ((state.modal?.backend || '') === 'BackendMusicAssistant') {
+        const cache = ensureMusicAssistantCache();
+        const trimmed = value.trim();
+        const fallbackIp = cache.lastIP || Object.keys(cache.playersByIp || {})[0] || '';
+        const resolvedIp = trimmed || fallbackIp;
+        const cachedPlayers = cache.playersByIp?.[resolvedIp] || [];
+        updates.maSuggestions = cachedPlayers;
+        if (!cachedPlayers.length) {
+          updates.maPlayerId = '';
+        } else if (!state.modal.maPlayerId) {
+          updates.maPlayerId = cachedPlayers.length === 1 ? cachedPlayers[0].id : '';
+        }
+        state.suggestions = state.suggestions || {};
+        if (typeof state.modal?.zoneId === 'number') {
+          if (cachedPlayers.length) {
+            state.suggestions[state.modal.zoneId] = cachedPlayers;
+          } else {
+            delete state.suggestions[state.modal.zoneId];
+          }
+        }
+      }
+      updateModalState(updates);
     });
   }
 
   const maFieldEl = modal.querySelector('#modal-ma-player');
   if (maFieldEl instanceof HTMLSelectElement) {
     maFieldEl.addEventListener('change', (event) => {
-      updateModalState({ maPlayerId: event.target.value, error: '' });
-    });
-  } else if (maFieldEl instanceof HTMLInputElement) {
-    maFieldEl.addEventListener('input', (event) => {
       updateModalState({ maPlayerId: event.target.value, error: '' });
     });
   }
@@ -1212,14 +1477,20 @@ async function saveBackendModal() {
   const ipInputEl = document.getElementById('modal-backend-ip');
   const ipValue = ipInputEl instanceof HTMLInputElement ? ipInputEl.value.trim() : '';
 
+  if (backend === 'BackendMusicAssistant' && !ipValue) {
+    updateModalState({ error: 'Enter the Music Assistant host before saving.' });
+    render();
+    return;
+  }
+
   let maPlayerId = '';
   if (backend === 'BackendMusicAssistant') {
     const maFieldEl = document.getElementById('modal-ma-player');
-    if (maFieldEl instanceof HTMLSelectElement || maFieldEl instanceof HTMLInputElement) {
+    if (maFieldEl instanceof HTMLSelectElement) {
       maPlayerId = (maFieldEl.value || '').trim();
     }
     if (!maPlayerId) {
-      updateModalState({ error: 'Select or enter a Music Assistant player.' });
+      updateModalState({ error: 'Scan for players and choose one before saving.' });
       render();
       return;
     }
@@ -1238,6 +1509,9 @@ async function saveBackendModal() {
     if (state.modal.maSuggestions?.length) {
       state.suggestions = state.suggestions || {};
       state.suggestions[zone.id] = state.modal.maSuggestions;
+      const cache = ensureMusicAssistantCache();
+      cache.playersByIp[ipValue] = state.modal.maSuggestions;
+      cache.lastIP = ipValue;
     }
   } else if ('maPlayerId' in zone) {
     delete zone.maPlayerId;
@@ -1430,6 +1704,16 @@ function clearZoneErrorTimer(zoneId) {
 
 async function connectProvider() {
   if (!state.config) return;
+  const providerType = state.config.mediaProvider?.type || '';
+  if (isMusicAssistantProviderType(providerType)) {
+    const hostValue = state.config.mediaProvider?.options?.IP;
+    const trimmedHost = typeof hostValue === 'string' ? hostValue.trim() : '';
+    if (trimmedHost) {
+      const cache = ensureMusicAssistantCache();
+      cache.providerHost = trimmedHost;
+      cache.lastIP = trimmedHost;
+    }
+  }
   setStatus('Connecting provider…');
   try {
     const response = await fetch('/admin/api/config', {
@@ -1470,8 +1754,12 @@ async function fetchMusicAssistantPlayers(zone, button) {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`);
+    const trimmedIp = ip.trim();
     state.suggestions = state.suggestions || {};
     state.suggestions[zone.id] = data.players || [];
+    const cache = ensureMusicAssistantCache();
+    cache.playersByIp[trimmedIp] = data.players || [];
+    cache.lastIP = trimmedIp;
     if (state.modal?.open && state.modal.zoneId === zone.id) {
       state.modal.maSuggestions = data.players || [];
       if (!state.modal.maPlayerId && Array.isArray(data.players) && data.players.length === 1) {
@@ -1598,6 +1886,21 @@ function ensureLogStream() {
     logsState.streamError = `Failed to start live stream: ${error instanceof Error ? error.message : String(error)}`;
     scheduleRender();
   }
+}
+
+function stopLogStream() {
+  const logsState = state.logs;
+  if (!logsState) return;
+  if (logsState.stream instanceof EventSource) {
+    try {
+      logsState.stream.close();
+    } catch (error) {
+      console.warn('Failed to close log stream', error);
+    }
+  }
+  logsState.stream = null;
+  logsState.streaming = false;
+  logsState.streamError = '';
 }
 
 function maybeLoadLogs() {

@@ -13,6 +13,7 @@ export interface ZoneConfigEntry {
   backend: string;
   ip: string;
   maPlayerId?: string;
+  name?: string;
 }
 
 export interface MediaProviderConfig {
@@ -138,6 +139,7 @@ function normalizeAdminConfig(raw: Partial<AdminConfig>): AdminConfig {
           backend: String(zone?.backend ?? '').trim(),
           ip: String(zone?.ip ?? '').trim(),
           maPlayerId: zone?.maPlayerId ? String(zone.maPlayerId).trim() : undefined,
+          name: typeof zone?.name === 'string' ? zone.name.trim() : undefined,
         }))
         .filter((zone) => Number.isFinite(zone.id) && zone.backend)
     : [];

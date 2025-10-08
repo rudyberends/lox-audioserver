@@ -4,6 +4,8 @@ dist
 # Ignore Config files
 data
 
+client_code
+
 # ------------- Defaults ------------- #
 
 # Logs

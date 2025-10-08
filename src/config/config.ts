@@ -2,12 +2,9 @@ import axios from 'axios';
 import logger from '../utils/troxorlogger';
 import { asyncCrc32 } from '../utils/crc32utils';
 import { setupZones } from '../backend/zone/zonemanager';
-import {
-  loadAdminConfig,
-  saveAdminConfig,
-  detectLocalIp,
-  AdminConfig,
-} from './configStore';
+import { loadAdminConfig, saveAdminConfig, detectLocalIp, AdminConfig } from './configStore';
+import { computeAuthorizationHeader } from './auth';
+import { loadMusicCache } from './musicCache';
 
 /**
  * Central configuration orchestrator. Persists admin settings, mirrors them into runtime state,
@@ -31,6 +28,7 @@ interface AudioServerConfig {
   uuid?: string;
   musicCFG?: any;
   musicCRC?: string;
+  musicTimestamp?: number;
 }
 
 interface Config {
@@ -61,9 +59,11 @@ const DEFAULT_AUDIO_SERVER: AudioServerConfig = {
   macID: '504F94FF1BB3',
   musicCFG: '[]',
   musicCRC: 'd4cbb29',
+  musicTimestamp: undefined,
 };
 
 applyAdminConfig();
+seedAudioServerFromCache();
 
 /**
  * Normalizes axios errors and logs context-sensitive messages.
@@ -147,14 +147,16 @@ const processAudioServerConfig = async (audioServerConfigData: any): Promise<Aud
     config.audioserver = audioServer;
 
     for (const [, value] of Object.entries(audioServer.musicCFG)) {
-      const audioServerEntry = value as { [key: string]: { master: string; name: string; uuid: string } };
+      const audioServerEntry = value as { [key: string]: { master: string; ip: string, name: string; uuid: string } };
 
       if (audioServerEntry[audioServer.macID]) {
         const masterSerial = audioServerEntry[audioServer.macID].master;
+        config.miniserver.ip = audioServerEntry[audioServer.macID].ip;
         config.miniserver.mac = masterSerial;
         config.miniserver.serial = masterSerial;
         if (adminConfig.miniserver.serial !== masterSerial) {
           adminConfig.miniserver.serial = masterSerial;
+          adminConfig.miniserver.ip = audioServerEntry[audioServer.macID].ip;
           saveAdminConfig(adminConfig);
         }
         audioServer.name = audioServerEntry[audioServer.macID].name;
@@ -270,6 +272,22 @@ function applyAdminConfig() {
   });
 }
 
+function seedAudioServerFromCache(): void {
+  const cached = loadMusicCache();
+  if (!cached) {
+    return;
+  }
+
+  const existing = config.audioserver ?? { ...DEFAULT_AUDIO_SERVER };
+  config.audioserver = {
+    ...existing,
+    musicCFG: cached.musicCFG,
+    musicCRC: cached.crc32,
+    paired: true,
+    musicTimestamp: cached.timestamp ?? existing.musicTimestamp,
+  };
+}
+
 /**
  * Returns the last cached admin configuration.
  */
@@ -286,4 +304,12 @@ function updateAdminConfig(newConfig: AdminConfig): void {
   applyAdminConfig();
 }
 
-export { config, initializeConfig, reloadConfiguration, processAudioServerConfig, getAdminConfig, updateAdminConfig };
+export {
+  config,
+  initializeConfig,
+  reloadConfiguration,
+  processAudioServerConfig,
+  getAdminConfig,
+  updateAdminConfig,
+  computeAuthorizationHeader,
+};

@@ -14,10 +14,11 @@
  */
 
 import Backend, { BackendProbeOptions } from '../backendBaseClass';
+import type { PlayerStatus } from '../loxoneTypes';
 import logger from '../../../utils/troxorlogger';
 import { updateZoneQueue, updateZoneGroup } from '../zonemanager';
 import MusicAssistantClient from './client';
-import { EventMessage, RepeatMode } from './types';
+import { EventMessage } from './types';
 import { mapPlayerToTrack, mapQueueToState } from './stateMapper';
 import { handleMusicAssistantCommand, MusicAssistantCommandContext } from './commands';
 import { setMusicAssistantSuggestions, clearMusicAssistantSuggestion } from '../../../config/adminState';
@@ -94,7 +95,7 @@ export default class BackendMusicAssistant extends Backend {
 
     const queues = await this.client.rpc('player_queues/all');
     const myQueue = queues.find((q: any) => q.queue_id === this.maPlayerId || q.queue_id === me.active_source);
-    if (myQueue) this.updateFromQueue(myQueue);
+    if (myQueue) await this.updateFromQueue(myQueue);
   }
 
   /**
@@ -121,7 +122,7 @@ export default class BackendMusicAssistant extends Backend {
       maPlayerId: this.maPlayerId,
       loxoneZoneId: this.loxoneZoneId,
       getZoneOrWarn: () => this.getZoneOrWarn(),
-      pushTrackUpdate: (update) => this.pushTrackUpdate(update),
+      pushPlayerEntryUpdate: (update) => this.pushPlayerStatusUpdate(update),
     };
 
     const handled = await handleMusicAssistantCommand(ctx, command, param);
@@ -162,14 +163,23 @@ export default class BackendMusicAssistant extends Backend {
     switch (eventName) {
       case 'queue_added':
       case 'queue_updated':
-        this.updateFromQueue(evt.data);
+        void this.updateFromQueue(evt.data);
         break;
 
-      case 'queue_time_updated':
-        this.pushTrackUpdate({
-          time: Number(evt.data ?? 0),
-        });
+      case 'queue_time_updated': {
+        const seconds = Number(evt.data ?? 0);
+        if (!Number.isFinite(seconds) || seconds < 0) {
+          break;
+        }
+        const update: Partial<PlayerStatus> = {
+          time: seconds,
+          position_ms: Math.round(seconds * 1000),
+          // Music Assistant sends a "time updated" event with 0 seconds when playback stops
+          ...(seconds === 0 ? { mode: 'pause' } : {}),
+        };
+        this.pushPlayerStatusUpdate(update);
         break;
+      }
 
       case 'player_added':
       case 'player_updated':
@@ -180,34 +190,66 @@ export default class BackendMusicAssistant extends Backend {
 
   private updateFromPlayer(player: any) {
     const trackUpdate = mapPlayerToTrack(this.loxoneZoneId, player);
-    this.pushTrackUpdate(trackUpdate);
+    this.pushPlayerStatusUpdate(trackUpdate);
   }
 
-  private updateFromQueue(queue: any) {
+  private async updateFromQueue(queue: any) {
+    if (!queue) return;
+
+    const queueId = queue?.queue_id ?? this.maPlayerId ?? '';
+    let augmentedQueue = queue;
+
+    const needsExpansion =
+      !Array.isArray(queue?.items) ||
+      queue.items.length <= 3 ||
+      queue.items.every((item: any) => item?.queue_item_id === undefined);
+
+    if (needsExpansion && queueId) {
+      try {
+        const fullItems = await this.client.rpc('player_queues/items', {
+          queue_id: queueId,
+          offset: 0,
+          limit: 250,
+        });
+        if (Array.isArray(fullItems) && fullItems.length > 0) {
+          augmentedQueue = {
+            ...queue,
+            items: fullItems,
+          };
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.debug(`[MusicAssistant] Failed to expand queue items via RPC: ${message}`);
+      }
+    }
+
+    if (!Array.isArray(augmentedQueue?.items) && queue?.items && Array.isArray(queue.items)) {
+      augmentedQueue = { ...augmentedQueue, items: queue.items };
+    }
 
     const currentQueueId = queue?.current_item?.queue_item_id;
     if (this.lastQueueItem && this.lastQueueItem.queue_item_id !== currentQueueId) {
       this.previousQueueItem = this.lastQueueItem;
     }
 
-    const state = mapQueueToState(this.loxoneZoneId, queue, this.previousQueueItem);
+    const state = mapQueueToState(this.loxoneZoneId, augmentedQueue, this.previousQueueItem);
     if (!state) return;
 
-    this.pushTrackUpdate(state.trackUpdate);
+    this.pushPlayerStatusUpdate(state.trackUpdate);
 
     const zone = this.getZoneOrWarn();
     if (zone) {
       zone.queue = {
         id: this.loxoneZoneId,
         items: state.items,
-        shuffle: state.shuffleEnabled === 1,
+        shuffle: state.shuffleEnabled,
         start: 0,
         totalitems: state.items.length,
       };
       updateZoneQueue(this.loxoneZoneId, state.items.length, 1);
     }
 
-    this.lastQueueItem = queue.current_item;
+    this.lastQueueItem = augmentedQueue.current_item;
   }
 
   private captureSuggestions(players: any[]) {

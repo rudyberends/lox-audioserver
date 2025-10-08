@@ -30,7 +30,6 @@ function validateEnvVariables() {
 async function initializeAudioServer() {
   await initializeConfig(); // Load configuration from the environment
   validateEnvVariables(); // Validate the loaded configuration
-  logger.info('[Main] Starting Loxone Audio Server Proxy');
   logger.info(`[Main] AudioServer Name: ${config.audioserver!.name}`); // Logging AudioServer name safely
 }
 

@@ -1,5 +1,6 @@
 import logger from '../../utils/troxorlogger';
-import { getZoneById, updateZoneTrack, Track } from './zonemanager';
+import { getZoneById, updateZonePlayerStatus } from './zonemanager';
+import { PlayerStatus } from './loxoneTypes';
 
 export interface BackendProbeOptions {
   ip: string;
@@ -82,13 +83,10 @@ export default abstract class Backend {
     return zone;
   }
 
-  /**
-   * Apply a partial track update to this backend's zone, guarding against missing zones.
-   */
-  protected pushTrackUpdate(update: Partial<Track>): void {
+  protected pushPlayerStatusUpdate(update: Partial<PlayerStatus>): void {
     if (!update || Object.keys(update).length === 0) return;
     const zone = this.getZoneOrWarn();
     if (!zone) return;
-    updateZoneTrack(this.playerid, update);
+    updateZonePlayerStatus(this.playerid, update);
   }
 }

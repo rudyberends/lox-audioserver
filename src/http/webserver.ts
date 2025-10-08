@@ -6,58 +6,7 @@ import { config } from '../config/config'; // Import config from the configurati
 import logger from '../utils/troxorlogger'; // Importing the custom logger for logging messages
 import * as http from 'http'; // Importing the HTTP module for server creation
 import { handleConfigRequest } from './configHttp';
-
-function summariseInboundMessage(raw: string | undefined): string {
-  if (!raw) return '';
-
-  const SECURE_INIT_PREFIX = 'secure/init/';
-  if (raw.startsWith(SECURE_INIT_PREFIX)) {
-    const tokenLength = Math.max(0, raw.length - SECURE_INIT_PREFIX.length);
-    return `${SECURE_INIT_PREFIX}[token redacted, ${tokenLength} chars]`;
-  }
-
-  const SECURE_HELLO_PREFIX = 'secure/hello/';
-  if (raw.startsWith(SECURE_HELLO_PREFIX)) {
-    const remainder = raw.slice(SECURE_HELLO_PREFIX.length);
-    const [sessionToken = '', certificate = ''] = remainder.split('/', 2);
-    return `${SECURE_HELLO_PREFIX}${sessionToken}/[certificate trimmed, ${certificate.length} chars]`;
-  }
-
-  const SECURE_AUTH_PREFIX = 'secure/authenticate/';
-  if (raw.startsWith(SECURE_AUTH_PREFIX)) {
-    const remainder = raw.slice(SECURE_AUTH_PREFIX.length);
-    const [identity = '', token = ''] = remainder.split('/', 2);
-    return `${SECURE_AUTH_PREFIX}${identity}/[token redacted, ${token.length} chars]`;
-  }
-
-  const SETCONFIG_PREFIX = 'audio/cfg/setconfig/';
-  if (raw.startsWith(SETCONFIG_PREFIX)) {
-    const payloadLength = Math.max(0, raw.length - SETCONFIG_PREFIX.length);
-    return `${SETCONFIG_PREFIX}[payload trimmed, ${payloadLength} chars]`;
-  }
-
-  const AUDIO_CFG_PREFIXES: Record<string, string> = {
-    'audio/cfg/speakertype/': 'speakertype payload',
-    'audio/cfg/volumes/': 'volume payload',
-    'audio/cfg/playername/': 'player name payload',
-    'audio/cfg/groupopts/': 'group options payload',
-    'audio/cfg/playeropts/': 'player options payload',
-  };
-
-  for (const [prefix, label] of Object.entries(AUDIO_CFG_PREFIXES)) {
-    if (raw.startsWith(prefix)) {
-      const payloadLength = Math.max(0, raw.length - prefix.length);
-      return `${prefix}[${label} trimmed, ${payloadLength} chars]`;
-    }
-  }
-
-  const MAX_LENGTH = 320;
-  if (raw.length > MAX_LENGTH) {
-    return `${raw.slice(0, MAX_LENGTH)}… (truncated ${raw.length - MAX_LENGTH} chars)`;
-  }
-
-  return raw;
-}
+import { summariseLoxoneCommand } from './utils/requestSummary';
 
 /**
  * Handles incoming HTTP requests.
@@ -84,7 +33,7 @@ const handleHttpRequest = async (req: http.IncomingMessage, res: http.ServerResp
     sendHttpResponse(res, 200, response); // Send success response
   } catch (error) {
     logger.error(`[HTTP] Unexpected error processing request for ${url}: ${error}`);
-    sendHttpResponse(res, 500, 'Internal Server Error'); // Send a generic error response
+    sendHttpResponse(res, 500, JSON.stringify({ error: 'Internal Server Error' })); // Send a generic error response
   }
 };
 
@@ -109,7 +58,9 @@ const sendHttpResponse = (res: http.ServerResponse, statusCode: number, data: st
  * @throws {Error} If the request cannot be processed.
  */
 const handleRequest = async (url: string, name: string): Promise<string> => {
-  const response = await handleLoxoneCommand!(url); // Type is now HandlerResponse
+  const normalizedUrl = url.trim().replace(/^\/+/, '');
+  logger.info(`[${name}] Handling request: ${summariseLoxoneCommand(normalizedUrl)}`);
+  const response = await handleLoxoneCommand!(normalizedUrl); // Type is now HandlerResponse
 
   try {
     const parsed = JSON.parse(response);
@@ -184,7 +135,7 @@ const handleWebSocketConnect = (connection: WebSocketConnection, name: string) =
 const handleWebSocketRequest = async (message: any, name: string, connection: WebSocketConnection) => {
   if (message.type === 'utf8') {
     const url = message.utf8Data; // Get the message data
-    logger.info(`[${name}] Received message: ${summariseInboundMessage(url)}`); // Log received message
+    //logger.info(`[${name}] Received message: ${summariseLoxoneCommand(url)}`); // Log received message
 
     try {
       const response = await handleRequest(url, name); // Handle the request and get the response

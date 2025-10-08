@@ -330,7 +330,7 @@ function registerDefaultRoutes() {
   registerConfigRoute('POST', '/admin/api/zones/connect', async (req, res) => {
     try {
       const body = await readRequestBody(req);
-      let payload: { playerId?: number; zone?: { id?: number; backend?: string; ip?: string; maPlayerId?: string } } = {};
+      let payload: { playerId?: number; zone?: { id?: number; backend?: string; ip?: string; maPlayerId?: string; name?: string } } = {};
       try {
         payload = JSON.parse(body || '{}');
       } catch (error) {
@@ -351,11 +351,13 @@ function registerDefaultRoutes() {
         const currentConfig = getAdminConfig();
         const zones = [...currentConfig.zones];
         const zoneIndex = zones.findIndex((zone) => zone.id === playerId);
+        const existingZone = zoneIndex >= 0 ? zones[zoneIndex] : undefined;
         updatedZone = {
           id: playerId,
-          backend: payload.zone.backend || zones[zoneIndex]?.backend || 'DummyBackend',
-          ip: payload.zone.ip || zones[zoneIndex]?.ip || '127.0.0.1',
-          maPlayerId: payload.zone.maPlayerId ?? zones[zoneIndex]?.maPlayerId,
+          backend: payload.zone.backend || existingZone?.backend || 'DummyBackend',
+          ip: payload.zone.ip || existingZone?.ip || '127.0.0.1',
+          maPlayerId: payload.zone.maPlayerId ?? existingZone?.maPlayerId,
+          name: payload.zone.name?.trim() || existingZone?.name,
         };
 
         try {

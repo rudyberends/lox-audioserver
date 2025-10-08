@@ -1,4 +1,4 @@
-import { Track } from '../zonemanager';
+import { PlayerStatus, AudioPlaybackMode } from '../loxoneTypes';
 import { NotificationData } from './types';
 
 /**
@@ -18,7 +18,7 @@ export function mapNotificationToTrack(
   type: string,
   data: NotificationData,
   audioServerIp?: string,
-): Partial<Track> {
+): Partial<PlayerStatus> {
   switch (type) {
     case 'SOURCE':
       return {
@@ -40,9 +40,18 @@ export function mapNotificationToTrack(
       };
 
     case 'PROGRESS_INFORMATION': {
-      const trackInfo: Partial<Track> = {
-        mode: data.state,
-        time: data.position,
+      const state = (data.state ?? '').toString().toLowerCase();
+      const mode: AudioPlaybackMode = state === 'playing'
+        ? 'play'
+        : state === 'paused'
+          ? 'pause'
+          : state === 'resume' || state === 'resuming'
+            ? 'resume'
+            : 'stop';
+
+      const trackInfo: Partial<PlayerStatus> = {
+        mode,
+        time: Number(data.position ?? 0),
       };
 
       if (data.playQueueItemId && data.playQueueItemId === 'AUX') {

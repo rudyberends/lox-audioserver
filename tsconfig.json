@@ -4,5 +4,6 @@
     "typeRoots": ["./node_modules/@types"],
     "removeComments": true,
     "outDir": "dist" 
-  }
+  },
+  "exclude": ["client_code"]
 }

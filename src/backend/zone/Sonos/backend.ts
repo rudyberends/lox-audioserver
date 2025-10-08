@@ -1,6 +1,6 @@
-import Backend, { BackendProbeOptions } from '../backendBaseClass'; // Import the base class
-import logger from '../../../utils/troxorlogger'; // Import the custom logger
-import { Track } from '../zonemanager'; // Import track-related types
+import Backend, { BackendProbeOptions } from '../backendBaseClass';
+import logger from '../../../utils/troxorlogger';
+import { PlayerStatus, AudioType, RepeatMode } from '../loxoneTypes';
 import axios from 'axios';
 
 /**
@@ -42,27 +42,28 @@ export default class BackendSonos extends Backend {
       // Call the common method from the base class for logging
       this.logConnection();
 
-      // Set up a dummy track for testing purposes
-      const dummyTrack: Partial<Track> = {
+      // Set up a dummy player entry for testing purposes
+      const dummyEntry: Partial<PlayerStatus> = {
         playerid: this.playerid,
         title: 'Dummy Track',
         artist: 'Unknown Artist',
         album: 'Test Album',
         coverurl: 'https://dummycover.url/cover.jpg',
-        audiotype: 2,
+        audiotype: AudioType.Playlist,
         audiopath: '/dummy/path',
         mode: 'pause',
-        plrepeat: 0,
-        plshuffle: 0,
+        plrepeat: RepeatMode.NoRepeat,
+        plshuffle: false,
         duration: 300, // 5 minutes duration
         time: 0, // Start from the beginning
         power: 'on',
         volume: 50,
+        qindex: 0,
       };
 
-      // Update the zone with the dummy track
-      this.pushTrackUpdate(dummyTrack);
-      logger.info(`[SonosBackend] Dummy track set for player ${this.playerid}`);
+      // Update the zone with the dummy status
+      this.pushPlayerStatusUpdate(dummyEntry);
+      logger.info(`[SonosBackend] Dummy status set for player ${this.playerid}`);
     } catch (error) {
       logger.error(`[SonosBackend] Error initializing Backend: ${error}`);
       throw error; // Re-throw the error after logging

@@ -1,6 +1,10 @@
 import NodeRSA from 'node-rsa';
-import { CommandResult, emptyCommand } from './requesthandler';
-import { config } from '../../config/config';
+import { CommandResult, emptyCommand, response } from './commandTypes';
+import { config, processAudioServerConfig } from '../../config/config';
+import { saveMusicCache } from '../../config/musicCache';
+import { asyncCrc32 } from '../../utils/crc32utils';
+import logger from '../../utils/troxorlogger';
+import { updateZonePlayerName } from '../../backend/zone/zonemanager';
 
 /**
  * Shared RSA key used for Loxone key exchange endpoints.
@@ -23,6 +27,7 @@ export function audioCfgReady(url: string): CommandResult {
 export function audioCfgGetConfig(url: string): CommandResult {
   const configData = {
     crc32: config.audioserver?.musicCRC,
+    //timestamp: config.audioserver?.musicTimestamp ?? null,
     extensions: [],
   };
   return emptyCommand(url, configData);
@@ -40,4 +45,205 @@ export function audioCfgGetKey(url: string): CommandResult {
     },
   ];
   return emptyCommand(url, data);
+}
+
+/**
+ * Accept updated audio configuration payloads from the client.
+ * Decodes the inline base64 blob, updates the runtime config, and echoes the new CRC.
+ */
+export async function audioCfgSetConfig(url: string): Promise<CommandResult> {
+  const parts = url.split('/');
+  const encodedPayload = parts[3];
+
+  if (!encodedPayload) {
+    logger.warn(`[configCommands] Received audio/cfg/setconfig without payload: ${url}`);
+    return response(url, 'setconfig', { success: false });
+  }
+
+  try {
+    const decodedSegment = decodeURIComponent(encodedPayload);
+    const normalizedBase64 = normalizeBase64(decodedSegment);
+    const rawConfig = Buffer.from(normalizedBase64, 'base64').toString('utf8');
+    const parsedConfig = JSON.parse(rawConfig);
+    const crc32 = await asyncCrc32(rawConfig);
+
+    const processed = await processAudioServerConfig(parsedConfig);
+    const target = config.audioserver ?? processed ?? null;
+    if (target) {
+      target.musicCFG = parsedConfig;
+      target.musicCRC = crc32;
+      target.paired = true;
+      config.audioserver = target;
+    }
+
+    const responsePayload = {
+      crc32,
+      extensions: [] as unknown[],
+    };
+
+    saveMusicCache({ crc32, musicCFG: parsedConfig, timestamp: config.audioserver?.musicTimestamp });
+
+    return response(url, 'setconfig', responsePayload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(`[configCommands] Failed to process audio/cfg/setconfig payload: ${message}`);
+    return response(url, 'setconfig', { success: false, error: 'Invalid configuration payload' });
+  }
+}
+
+/**
+ * Store the MiniServer supplied configuration timestamp so subsequent getconfig
+ * calls can prove the cached configuration is up to date.
+ */
+export function audioCfgSetConfigTimestamp(url: string): CommandResult {
+  const parts = url.split('/');
+  const timestampSegment = parts[3];
+
+  if (!timestampSegment) {
+    logger.warn(`[configCommands] Received audio/cfg/setconfigtimestamp without payload: ${url}`);
+    return response(url, 'setconfigtimestamp', { success: false, error: 'Missing timestamp payload' });
+  }
+
+  const timestamp = Number(timestampSegment);
+
+  if (!Number.isFinite(timestamp)) {
+    logger.warn(`[configCommands] Invalid audio/cfg/setconfigtimestamp payload: ${timestampSegment}`);
+    return response(url, 'setconfigtimestamp', { success: false, error: 'Invalid timestamp payload' });
+  }
+
+  if (config.audioserver) {
+    config.audioserver.musicTimestamp = timestamp;
+    if (config.audioserver.musicCFG !== undefined && config.audioserver.musicCRC) {
+      saveMusicCache({
+        crc32: config.audioserver.musicCRC,
+        musicCFG: config.audioserver.musicCFG,
+        timestamp,
+      });
+    }
+  }
+
+  return response(url, 'setconfigtimestamp', {
+    success: true,
+    timestamp,
+    crc32: config.audioserver?.musicCRC ?? null,
+  });
+}
+
+/**
+ * Persist volume presets pushed by the MiniServer during pairing.
+ * Currently they are acknowledged but not yet applied to local state.
+ */
+export function audioCfgSetVolumes(url: string): CommandResult {
+  const parts = url.split('/');
+  const encodedPayload = parts[3];
+
+  if (!encodedPayload) {
+    logger.warn(`[configCommands] Received audio/cfg/volumes without payload: ${url}`);
+    return response(url, 'volumes', { success: false });
+  }
+
+  try {
+    const decodedSegment = decodeURIComponent(encodedPayload);
+    const normalizedBase64 = normalizeBase64(decodedSegment);
+    const rawConfig = Buffer.from(normalizedBase64, 'base64').toString('utf8');
+    logger.debug('[configCommands] Received volume preset update', rawConfig);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(`[configCommands] Failed to parse audio/cfg/volumes payload: ${message}`);
+    return response(url, 'volumes', { success: false, error: 'Invalid volume payload' });
+  }
+
+  return response(url, 'volumes', { success: true });
+}
+
+/**
+ * Acknowledge player option updates coming from the MiniServer pairing flow.
+ */
+export function audioCfgSetPlayerOpts(url: string): CommandResult {
+  return emptyCommand(url, 'ok');
+}
+
+/**
+ * Update zone display names from the MiniServer provided payload.
+ */
+export function audioCfgSetPlayerName(url: string): CommandResult {
+  const parts = url.split('/');
+  const encodedPayload = parts[3];
+
+  if (!encodedPayload) {
+    logger.warn(`[configCommands] Received audio/cfg/playername without payload: ${url}`);
+    return response(url, 'playername', { success: false });
+  }
+
+  let decodedJson: unknown;
+  try {
+    const decodedSegment = decodeURIComponent(encodedPayload);
+    const normalizedBase64 = normalizeBase64(decodedSegment);
+    const rawConfig = Buffer.from(normalizedBase64, 'base64').toString('utf8');
+    decodedJson = JSON.parse(rawConfig);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(`[configCommands] Failed to parse audio/cfg/playername payload: ${message}`);
+    return response(url, 'playername', { success: false, error: 'Invalid player name payload' });
+  }
+
+  const updates = extractPlayerNameUpdates(decodedJson);
+  let applied = 0;
+  for (const update of updates) {
+    if (updateZonePlayerName(update.playerid, update.name)) {
+      applied += 1;
+    }
+  }
+
+  return response(url, 'playername', { success: true, updated: applied });
+}
+
+function extractPlayerNameUpdates(payload: unknown): Array<{ playerid: number; name: string }> {
+  const updates: Array<{ playerid: number; name: string }> = [];
+
+  const visitCandidate = (candidate: any) => {
+    if (!candidate) return;
+    const id = Number(candidate.playerid ?? candidate.id ?? candidate.playerID ?? candidate.zoneid ?? candidate.zoneId);
+    const name = typeof candidate.name === 'string' ? candidate.name : typeof candidate.title === 'string' ? candidate.title : undefined;
+    if (Number.isFinite(id) && name) {
+      updates.push({ playerid: id, name });
+    }
+  };
+
+  if (Array.isArray(payload)) {
+    payload.forEach(visitCandidate);
+    return updates;
+  }
+
+  if (payload && typeof payload === 'object') {
+    const records = (payload as Record<string, unknown>)['players'] ?? (payload as Record<string, unknown>)['player'];
+    if (Array.isArray(records)) {
+      records.forEach(visitCandidate);
+    } else if (records && typeof records === 'object') {
+      Object.values(records).forEach(visitCandidate);
+    } else {
+      visitCandidate(payload);
+    }
+  }
+
+  return updates;
+}
+
+function normalizeBase64(input: string): string {
+  const restored = input.replace(/-/g, '+').replace(/_/g, '/');
+  const paddingNeeded = (4 - (restored.length % 4 || 4)) % 4;
+  return restored.padEnd(restored.length + paddingNeeded, '=');
+}
+
+/**
+ * Provide the PEM-encoded public key for clients expecting the newer format.
+ */
+export function audioCfgGetKeyFull(url: string): CommandResult {
+  const pem = rsaKey.exportKey('pkcs8-public-pem');
+  const data = [
+    {
+      pubkey: pem,
+    },
+  ];
+  return response(url, 'getkey', data);
 }

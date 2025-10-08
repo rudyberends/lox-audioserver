@@ -1,6 +1,6 @@
 import Backend from './backendBaseClass';
 import logger from '../../utils/troxorlogger';
-import { Track } from './zonemanager';
+import { PlayerStatus, AudioType, RepeatMode, FileType } from './loxoneTypes';
 
 /**
  * DummyBackend – minimal backend implementation for fallback for unconfigered zones.
@@ -20,36 +20,40 @@ export default class DummyBackend extends Backend {
     try {
       logger.info(`[DummyBackend] Initializing connection to device at ${this.ip}, Player ID: ${this.playerid}`);
       this.logConnection();
-      this.startUpdatingTrack();
+      this.startUpdatingPlayerEntry();
     } catch (error) {
       logger.error(`[DummyBackend] Error initializing backend: ${error instanceof Error ? error.message : error}`);
       throw error;
     }
   }
 
-  private startUpdatingTrack(): void {
+  private startUpdatingPlayerEntry(): void {
     const pushUpdate = (): void => {
-      const dummyTrack: Track = {
+      const dummyEntry: PlayerStatus = {
         playerid: this.playerid,
-        title: `Please configure Zone ${this.playerid}`,
-        artist: `Zone ID ${this.playerid}`,
+        title: `Unconfigured`,
+        artist: `ID ${this.playerid}`,
         album: 'DummyBackend',
         coverurl: '',
-        audiotype: 2,
+        audiotype: AudioType.Playlist,
         audiopath: '/dummy/path',
         mode: 'pause',
-        plrepeat: 0,
-        plshuffle: 0,
+        plrepeat: RepeatMode.NoRepeat,
+        plshuffle: false,
         duration: 300,
         time: 0,
         power: 'on',
         volume: 10,
         station: '',
         players: [],
+        qindex: 0,
+        duration_ms: 300_000,
+        name: `Zone ${this.playerid}`,
+        type: FileType.Unknown,
       };
 
-      this.pushTrackUpdate(dummyTrack);
-      logger.debug(`[DummyBackend] Dummy track update pushed for player ${this.playerid}`);
+      this.pushPlayerStatusUpdate(dummyEntry);
+      logger.debug(`[DummyBackend] Dummy player entry update pushed for player ${this.playerid}`);
     };
 
     pushUpdate();
@@ -59,7 +63,7 @@ export default class DummyBackend extends Backend {
     }
 
     this.updateInterval = setInterval(pushUpdate, 60_000);
-    logger.info(`[DummyBackend] Dummy track set for player ${this.playerid}`);
+    logger.info(`[DummyBackend] Dummy status set for player ${this.playerid}`);
   }
 
   async sendCommand(command: string): Promise<void> {

@@ -1,143 +1,164 @@
+import logger from '../../../utils/troxorlogger';
+import { FileType } from '../../zone/loxoneTypes';
+import MusicAssistantProviderClient from './client';
+import RadioController from './radio';
+import PlaylistController from './playlist';
+import LibraryController from './library';
 import {
-  MediaProvider,
-  RadioEntry,
-  RadioFolderResponse,
-  PlaylistResponse,
-  RadioFolderItem,
-  MediaFolderResponse,
+  parsePort,
+} from './utils';
+import { setMusicAssistantBaseUrl } from './mappers';
+import {
   MediaFolderItem,
+  MediaFolderResponse,
+  MediaProvider,
+  PlaylistItem,
+  PlaylistResponse,
+  RadioEntry,
+  RadioFolderItem,
+  RadioFolderResponse,
 } from '../types';
-import { MusicAssistantRadioService } from './radioService';
-import { MusicAssistantPlaylistService } from './playlistService';
-import { createProviderClient, MusicAssistantProviderClient } from './providerClient';
-import { MusicAssistantLibraryService } from './libraryService';
 
-const MEDIA_LIBRARY_ROOT_ITEMS: MediaFolderResponse['items'] = [
-  {
-    id: 'albums',
-    name: 'Albums',
-    cmd: 'albums',
-    type: 1,
-    contentType: 'Folder',
-    sort: 'alpha',
-  },
-  {
-    id: 'artists',
-    name: 'Artists',
-    cmd: 'artists',
-    type: 1,
-    contentType: 'Folder',
-    sort: 'alpha',
-  },
-  {
-    id: 'tracks',
-    name: 'Tracks',
-    cmd: 'tracks',
-    type: 1,
-    contentType: 'Folder',
-    sort: 'alpha',
-  },
+const ROOT_FOLDER_ID = '0';
+const DEFAULT_PROVIDER_LABEL = 'Music Assistant';
+const DEFAULT_RADIO_SERVICE = 'musicassistant';
+const CACHE_TTL_MS = 30_000;
+
+// We are faking a NAS origin for all our Music Assistant library items
+// This way Loxone will show it under Shared Network Drives instead of SD Card
+const LOCAL_LIBRARY_ORIGIN_NAS = 1;
+
+const MEDIA_LIBRARY_ROOT_ITEMS: MediaFolderItem[] = [
+  createRootFolderItem('albums', 'Albums'),
+  createRootFolderItem('artists', 'Artists'),
+  createRootFolderItem('tracks', 'Tracks'),
 ];
 
 /**
- * MusicAssistantProvider – bridges the Loxone media contract to a Music Assistant server.
- * It wraps dedicated radio, playlist, and library services so every API call is proxied
- * to Music Assistant while keeping the same MediaProvider interface.
+ * Music Assistant media provider backed by the Music Assistant websocket API.
+ * Bridges library, playlist, and radio browsing into the Loxone AudioServer schema.
  */
 export class MusicAssistantProvider implements MediaProvider {
-  private readonly radioService: MusicAssistantRadioService;
-  private readonly playlistService: MusicAssistantPlaylistService;
-  private readonly client: MusicAssistantProviderClient;
-  private readonly libraryService: MusicAssistantLibraryService;
+  private readonly host?: string;
+  private readonly port: number;
+  private client?: MusicAssistantProviderClient;
 
-  /** Build the provider around a shared RPC client instance. */
-  constructor(client: MusicAssistantProviderClient = createProviderClient()) {
-    this.client = client;
-    this.radioService = new MusicAssistantRadioService(this.client);
-    this.playlistService = new MusicAssistantPlaylistService(this.client);
-    this.libraryService = new MusicAssistantLibraryService(this.client);
+  private readonly radioController: RadioController;
+  private readonly playlistController: PlaylistController;
+  private readonly libraryController: LibraryController;
+
+  constructor() {
+    const host =
+      (process.env.MEDIA_PROVIDER_IP ?? process.env.MUSIC_ASSISTANT_HOST ?? '').trim() ||
+      (process.env.MUSICASSISTANT_IP ?? '').trim();
+    const port = parsePort(process.env.MEDIA_PROVIDER_PORT, 8095);
+
+    this.host = host || undefined;
+    this.port = port;
+
+    if (this.host) {
+      this.client = new MusicAssistantProviderClient(this.host, this.port);
+      setMusicAssistantBaseUrl(this.host, this.port);
+      logger.info(`[MusicAssistantProvider] Configured with host ${this.host}:${this.port}`);
+    } else {
+      logger.warn('[MusicAssistantProvider] MEDIA_PROVIDER_IP not set. Provider will stay inactive.');
+      this.client = undefined;
+    }
+
+    const clientResolver = () => this.getClient();
+    this.radioController = new RadioController(
+      clientResolver,
+      DEFAULT_RADIO_SERVICE,
+      CACHE_TTL_MS,
+      DEFAULT_PROVIDER_LABEL,
+    );
+    this.playlistController = new PlaylistController(
+      clientResolver,
+      DEFAULT_RADIO_SERVICE,
+      DEFAULT_PROVIDER_LABEL,
+    );
+    this.libraryController = new LibraryController(
+      clientResolver,
+      DEFAULT_RADIO_SERVICE,
+      ROOT_FOLDER_ID,
+      MEDIA_LIBRARY_ROOT_ITEMS,
+    );
   }
 
-  /** Relay radio root metadata and presets from Music Assistant. */
   getRadios(): Promise<RadioEntry[]> | RadioEntry[] {
-    return this.radioService.getRadios();
+    return this.radioController.getRadios();
   }
 
-  /**
-   * Resolve a service folder either from the Music Assistant library or, when nothing matches,
-   * fall back to the radio hierarchy to emulate the original Loxone layout.
-   */
-  async getServiceFolder(
+  getServiceFolder(
     service: string,
     folderId: string,
-    user: string,
+    _user: string,
     offset: number,
     limit: number,
-  ): Promise<RadioFolderResponse | MediaFolderResponse> {
-    const alias = this.libraryService.resolveFolderAlias(folderId);
-    const normalizedFolder = alias.trim();
-    const isRoot = normalizedFolder === '' || normalizedFolder === 'start' || normalizedFolder === 'root';
+  ): Promise<RadioFolderResponse> | RadioFolderResponse {
+    return this.radioController.getServiceFolder(service, folderId, offset, limit);
+  }
 
-    if (!isRoot) {
-      const mediaFolder = await this.libraryService.getServiceFolder(service, alias, user, offset, limit);
-      if (mediaFolder) {
-        return { ...mediaFolder, id: folderId };
-      }
+  resolveStation(
+    _service: string,
+    stationId: string,
+  ): Promise<RadioFolderItem | undefined> | RadioFolderItem | undefined {
+    return this.radioController.resolveStation(stationId);
+  }
+
+  getPlaylists(offset: number, limit: number): Promise<PlaylistResponse> | PlaylistResponse {
+    return this.playlistController.getPlaylists(offset, limit);
+  }
+
+  getPlaylistItems(
+    playlistId: string,
+    offset: number,
+    limit: number,
+  ): Promise<PlaylistResponse | undefined> | PlaylistResponse | undefined {
+    return this.playlistController.getPlaylistItems(playlistId, offset, limit);
+  }
+
+  resolvePlaylist(
+    _service: string,
+    playlistId: string,
+  ): Promise<PlaylistItem | undefined> | PlaylistItem | undefined {
+    return this.playlistController.resolvePlaylist(playlistId);
+  }
+
+  getMediaFolder(
+    folderId: string,
+    offset: number,
+    limit: number,
+  ): Promise<MediaFolderResponse> | MediaFolderResponse {
+    return this.libraryController.getMediaFolder(folderId, offset, limit);
+  }
+
+  resolveMediaItem(
+    folderId: string,
+    itemId: string,
+  ): Promise<MediaFolderItem | undefined> | MediaFolderItem | undefined {
+    return this.libraryController.resolveMediaItem(folderId, itemId);
+  }
+
+  private getClient(): MusicAssistantProviderClient | undefined {
+    if (!this.client) {
+      logger.debug('[MusicAssistantProvider] Client unavailable.');
     }
-
-    return this.radioService.getServiceFolder(service, normalizedFolder || 'start', user, offset, limit);
+    return this.client;
   }
+}
 
-  /** Lookup a concrete radio station by id. */
-  resolveStation(service: string, stationId: string): RadioFolderItem | undefined {
-    return this.radioService.resolveStation(service, stationId);
-  }
-
-  /** Page through playlists exposed by Music Assistant. */
-  async getPlaylists(offset: number, limit: number): Promise<PlaylistResponse> {
-    const { items, total } = await this.playlistService.getPlaylists(offset, limit);
-
-    return {
-      id: 0,
-      name: 'Music Assistant',
-      totalitems: total,
-      start: offset,
-      items,
-    };
-  }
-
-  /** Resolve a playlist payload so we can forward the audiopath back to the zone. */
-  resolvePlaylist(service: string, playlistId: string) {
-    return this.playlistService.resolvePlaylist ? this.playlistService.resolvePlaylist(playlistId) : undefined;
-  }
-
-  /**
-   * Navigate the Music Assistant media library, returning curated root folders when a lookup
-   * is performed on the logical root.
-   */
-  async getMediaFolder(folderId: string, offset: number, limit: number): Promise<MediaFolderResponse> {
-    const alias = this.libraryService.resolveFolderAlias(folderId);
-    const normalized = alias.trim().toLowerCase();
-    const isRoot = normalized === '' || normalized === 'root' || normalized === 'start' || normalized === '0';
-
-    if (!isRoot) {
-      return this.libraryService.getFolder(alias, offset, limit);
-    }
-
-    const items = MEDIA_LIBRARY_ROOT_ITEMS.slice(offset, offset + limit);
-    return {
-      id: folderId,
-      totalitems: MEDIA_LIBRARY_ROOT_ITEMS.length,
-      start: offset,
-      items,
-    };
-  }
-
-  /** Resolve a single media item (track/album/etc.) for playback. */
-  resolveMediaItem(folderId: string, itemId: string): Promise<MediaFolderItem | undefined> | MediaFolderItem | undefined {
-    const alias = this.libraryService.resolveFolderAlias(folderId);
-    return this.libraryService.resolveItem(alias, itemId);
-  }
+function createRootFolderItem(folderKey: string, displayName: string): MediaFolderItem {
+  return {
+    id: folderKey,
+    name: displayName,
+    cmd: folderKey,
+    type: FileType.Folder,
+    contentType: 'Folder',
+    sort: 'alpha',
+    nas: true,
+    origin: LOCAL_LIBRARY_ORIGIN_NAS,
+  };
 }
 
 export default MusicAssistantProvider;

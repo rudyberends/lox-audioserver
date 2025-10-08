@@ -1,74 +1,56 @@
-import logger from '../../utils/troxorlogger'; // Importing the custom logger for logging messages
-import { config, getAdminConfig, updateAdminConfig } from '../../config/config'; // Import config from the configuration module
+import logger from '../../utils/troxorlogger';
+import { config, getAdminConfig, updateAdminConfig } from '../../config/config';
 import { broadcastEvent } from '../../http/broadcastEvent';
 import { createBackend } from './backendFactory';
 import type { ZoneConfigEntry, AdminConfig } from '../../config/configStore';
+import { mergeZoneConfigEntries } from './zoneConfigUtils';
+import {
+  PlayerStatus as LoxonePlayerStatus,
+  AudioType,
+  FileType,
+  RepeatMode,
+  AudioEvent,
+} from './loxoneTypes';
 
-// Define the structure for Player
 interface Player {
-  uuid: string; // Unique identifier for the player
-  playerid: number; // ID of the player
-  backend: string; // Backend service associated with the player
-  ip: string; // IP address of the player
+  uuid: string;
+  playerid: number;
+  backend: string;
+  ip: string;
+  name?: string;
 }
 
-// Define the structure for Track
-interface Track {
-  playerid: number; // ID of the player associated with the track
-  coverurl: string; // URL for the track cover image
-  station: string; // Station name for radio tracks
-  audiotype: number; // Type of audio
-  audiopath: string; // Path to the audio file
-  mode: string; // Playback mode (e.g., stop, play, pause)
-  plrepeat: number; // Repeat mode for playback
-  plshuffle: number; // Shuffle mode for playback
-  duration: number; // Duration of the track in seconds
-  time: number; // Current playback time
-  power: string; // Power state of the player (e.g., on, off)
-  volume: number; // Volume level of the player
-  title?: string;
-  album?: string;
-  artist?: string;
-  players: { playerid: number }[]; // Array of players associated with the track
-  clientState?: string;          // bv. "on"
-  type?: number;                 // bv. 3 = track
-  qid?: string;                  // huidig queue item id
-  qindex?: number;               // huidige positie in queue
-  sourceName?: string;           // bv. "Music Assistant"
-  name?: string;                 // bron/zone naam
+type PlayerStatus = LoxonePlayerStatus;
+
+interface ZoneEntryQueue {
+  id: number;
+  items: any[];
+  shuffle: boolean;
+  start: number;
+  totalitems: number;
 }
 
-// Define the structure for Zone
-interface Zone {
-  [playerId: number]: {
-    player: {
-      uuid: string; // Unique identifier for the player
-      playerid: number; // ID of the player
-      clienttype: number; // Type of client (e.g., 0 for default)
-      enabled: boolean; // Indicates if the player is enabled
-      internalname: string; // Internal name for the zone
-      max_volume: number; // Maximum volume level for the zone
-      name: string; // Name of the zone
-      upnpmode: number; // UPnP mode setting
-      upnprelay: number; // UPnP relay setting
-      backend: string; // Backend service associated with the zone
-      ip: string; // IP address of the zone
-      backendInstance?: any; // Store the backend instance here
-    };
-    track: Track; // Track information associated with the zone
-    queue?: {
-      id: number;
-      items: any[];
-      shuffle: boolean;
-      start: number;
-      totalitems: number;
-    };
+interface ZoneState {
+  player: {
+    uuid: string;
+    playerid: number;
+    clienttype: number;
+    enabled: boolean;
+    internalname: string;
+    max_volume: number;
+    name: string;
+    upnpmode: number;
+    upnprelay: number;
+    backend: string;
+    ip: string;
+    backendInstance?: any;
   };
+  playerEntry: PlayerStatus;
+  queue?: ZoneEntryQueue;
 }
 
-// Initialize an in-memory database for zones
-const zone: Zone = {};
-type ZoneEntry = Zone[number];
+const zone: Record<number, ZoneState> = {};
+type ZoneEntry = ZoneState;
 
 interface ZoneStatus {
   id: number;
@@ -86,6 +68,95 @@ interface PreparedZoneContext {
   players: Player[];
   adminConfig: AdminConfig;
   adminZones: Map<number, ZoneConfigEntry>;
+}
+
+function createDefaultPlayerEntry(playerId: number, zoneName: string): PlayerStatus {
+  return {
+    playerid: playerId,
+    coverurl: '',
+    station: '',
+    audiotype: AudioType.Playlist,
+    audiopath: '',
+    mode: 'stop',
+    plrepeat: RepeatMode.NoRepeat,
+    plshuffle: false,
+    duration: 0,
+    duration_ms: 0,
+    time: 0,
+    power: 'on',
+    volume: 0,
+    title: '',
+    artist: '',
+    album: '',
+    qindex: 0,
+    name: zoneName,
+    type: FileType.Unknown,
+    clientState: 'off',
+    players: [{ playerid: playerId }],
+  };
+}
+
+function toAudioEvent(entry: PlayerStatus): AudioEvent {
+  const {
+    album = '',
+    artist = '',
+    audiopath = '',
+    audiotype = AudioType.Playlist,
+    coverurl = '',
+    duration = 0,
+    duration_ms,
+    eventype,
+    mode = 'stop',
+    name,
+    parent = null,
+    playerid,
+    plrepeat = RepeatMode.NoRepeat,
+    plshuffle = false,
+    position_ms,
+    power = 'off',
+    qid,
+    qindex = 0,
+    sourceName,
+    station,
+    time = 0,
+    title,
+    type = FileType.Unknown,
+    icontype,
+    volume = 0,
+  } = entry;
+
+  const toMilliseconds = (seconds: number) => (Number.isFinite(seconds) ? seconds * 1000 : 0);
+  const durationSeconds = Number(duration) || 0;
+  const timeSeconds = Number(time) || 0;
+  const resolvedName = name ?? title ?? '';
+
+  return {
+    album,
+    artist,
+    audiopath,
+    audiotype,
+    coverurl,
+    duration: durationSeconds,
+    duration_ms: duration_ms ?? toMilliseconds(durationSeconds),
+    eventype,
+    mode,
+    name: resolvedName,
+    parent,
+    playerid,
+    plrepeat,
+    plshuffle: Boolean(plshuffle),
+    position_ms: position_ms ?? toMilliseconds(timeSeconds),
+    power,
+    qid,
+    qindex,
+    sourceName,
+    station,
+    time: timeSeconds,
+    title: title ?? resolvedName,
+    type,
+    icontype,
+    volume: Number(volume),
+  };
 }
 
 function normaliseMusicConfig(rawMusicConfig: unknown): Record<string, any>[] {
@@ -192,18 +263,22 @@ async function setupZoneInternal(
   let backend = zoneOverride?.backend;
   let ip = zoneOverride?.ip;
   const maPlayerId = zoneOverride?.maPlayerId;
+  let configuredName = typeof zoneOverride?.name === 'string' ? zoneOverride.name.trim() : '';
+  const playerProvidedName = typeof player?.name === 'string' ? player.name.trim() : '';
 
   if (!backend || !ip) {
     logger.warn(`[ZoneManager] Missing backend or IP for Loxone player ID: ${playerId}. Creating default DummyBackend entry.`);
-    const defaultZone: ZoneConfigEntry = { id: playerId, backend: 'DummyBackend', ip: '127.0.0.1' };
+    const fallbackName = configuredName || playerProvidedName || `Zone ${index + 1}`;
+    const defaultZone: ZoneConfigEntry = { id: playerId, backend: 'DummyBackend', ip: '127.0.0.1', name: fallbackName };
     newZoneEntries.push(defaultZone);
     adminZones.set(playerId, defaultZone);
     backend = defaultZone.backend;
     ip = defaultZone.ip;
+    configuredName = defaultZone.name || configuredName;
   }
 
   const zoneNumber = index + 1;
-  const zoneName = `Zone ${zoneNumber}`;
+  const zoneName = configuredName || playerProvidedName || `Zone ${zoneNumber}`;
 
   zone[playerId] = {
     player: {
@@ -220,25 +295,11 @@ async function setupZoneInternal(
       ip: ip || '',
       backendInstance: backend ? createBackend(backend, ip!, playerId, { maPlayerId }) : null,
     },
-    track: {
-      playerid: playerId,
-      coverurl: '',
-      station: '',
-      audiotype: 2,
-      audiopath: '',
-      mode: 'stop',
-      plrepeat: 0,
-      plshuffle: 0,
-      duration: 0,
-      time: 0,
-      power: 'on',
-      volume: 0,
-      players: [{ playerid: playerId }],
-    },
+    playerEntry: createDefaultPlayerEntry(playerId, zoneName),
   };
 
   logger.info(
-    `[ZoneManager] Zone #${zoneNumber} set up for Loxone player ID: ${playerId}, Backend: ${backend || 'not specified'}, IP: ${ip || 'not specified'}`,
+    `[ZoneManager][${zoneName}] set up for Loxone player ID: ${playerId}, Backend: ${backend || 'not specified'}, IP: ${ip || 'not specified'}`,
   );
 
   if (zone[playerId].player.backendInstance) {
@@ -251,25 +312,21 @@ async function setupZoneInternal(
   }
 }
 
-function persistNewZoneEntries(newZoneEntries: ZoneConfigEntry[], adminConfig: AdminConfig) {
+function persistNewZoneConfig(newZoneEntries: ZoneConfigEntry[], adminConfig: AdminConfig) {
   if (!newZoneEntries.length) return;
-  const updatedZones = [...adminConfig.zones];
-  let hasChanges = false;
 
-  newZoneEntries.forEach((entry) => {
-    if (!updatedZones.some((zoneConfig) => zoneConfig.id === entry.id)) {
-      updatedZones.push(entry);
-      hasChanges = true;
-      logger.info(`[ZoneManager] Added default zone configuration for Loxone player ID ${entry.id}.`);
-    }
+  const { merged, added } = mergeZoneConfigEntries(adminConfig.zones, newZoneEntries);
+
+  if (!added.length) return;
+
+  added.forEach((entry) => {
+    logger.info(`[ZoneManager] Added default zone configuration for Loxone player ID ${entry.id}.`);
   });
 
-  if (hasChanges) {
-    updateAdminConfig({
-      ...adminConfig,
-      zones: updatedZones,
-    });
-  }
+  updateAdminConfig({
+    ...adminConfig,
+    zones: merged,
+  });
 }
 
 /**
@@ -301,7 +358,7 @@ const setupZones = async (): Promise<void> => {
     await setupZoneInternal(player, index, adminZones, newZoneEntries);
   }
 
-  persistNewZoneEntries(newZoneEntries, adminConfig);
+  persistNewZoneConfig(newZoneEntries, adminConfig);
 };
 
 const setupZoneById = async (playerId: number): Promise<boolean> => {
@@ -317,7 +374,7 @@ const setupZoneById = async (playerId: number): Promise<boolean> => {
 
   const newZoneEntries: ZoneConfigEntry[] = [];
   await setupZoneInternal(players[index], index, adminZones, newZoneEntries);
-  persistNewZoneEntries(newZoneEntries, adminConfig);
+  persistNewZoneConfig(newZoneEntries, adminConfig);
   return true;
 };
 
@@ -330,24 +387,24 @@ function getZoneStatuses(): Record<number, ZoneStatus> {
       id: zoneConfig.id,
       backend: zoneConfig.backend,
       ip: zoneConfig.ip,
-      name: `Zone ${zoneConfig.id}`,
+      name: zoneConfig.name || `Zone ${zoneConfig.id}`,
       connected: Boolean(zone[zoneConfig.id]?.player.backendInstance),
     };
   });
 
   Object.entries(zone).forEach(([idString, zoneEntry]) => {
     const id = Number(idString);
-    const track = zoneEntry.track;
+    const playerEntry = zoneEntry.playerEntry;
     statuses[id] = {
       id,
       backend: zoneEntry.player.backend || statuses[id]?.backend || '',
       ip: zoneEntry.player.ip || statuses[id]?.ip || '',
       name: zoneEntry.player.name || statuses[id]?.name || `Zone ${id}`,
       connected: Boolean(zoneEntry.player.backendInstance),
-      state: track?.mode || track?.clientState || statuses[id]?.state,
-      title: track?.title || track?.name || statuses[id]?.title,
-      artist: track?.artist || statuses[id]?.artist,
-      coverUrl: track?.coverurl || statuses[id]?.coverUrl,
+      state: playerEntry?.mode || playerEntry?.clientState || statuses[id]?.state,
+      title: playerEntry?.title || playerEntry?.name || statuses[id]?.title,
+      artist: playerEntry?.artist || statuses[id]?.artist,
+      coverUrl: playerEntry?.coverurl || statuses[id]?.coverUrl,
     };
   });
 
@@ -451,32 +508,33 @@ const getZoneById = (playerId: number): ZoneEntry | undefined => {
 };
 
 /**
- * Updates the track information for a specific zone.
- * This function allows updating track details for a zone based on the provided player ID and new track information.
- *
- * @param {string} playerId - The ID of the player whose track information is to be updated.
- * @param {Partial<Track>} newTrackInfo - The new track information to update.
+ * Updates the Loxone player status for a zone and notifies connected listeners.
+ * This is the primary way backends surface state changes (title, playback mode, etc.).
+*
+ * @param {string} playerId - The ID of the player whose state is being updated.
+ * @param {Partial<PlayerStatus>} newState - The new state information to merge.
  * @returns {boolean} Returns true if the update was successful, otherwise false.
  */
-const updateZoneTrack = (playerId: number, newTrackInfo: Partial<Track>): boolean => {
+const updateZonePlayerStatus = (playerId: number, newState: Partial<PlayerStatus>): boolean => {
   const existingZone = zone[playerId]; // Find the existing zone
 
   // Check if the zone exists
   if (!existingZone) {
-    logger.error(`[ZoneManager] Cannot update track: No zone found for Loxone player ID: ${playerId}`); // Log error if not found
+    logger.error(`[ZoneManager] Cannot update player entry: No zone found for Loxone player ID: ${playerId}`);
     return false; // Return false to indicate failure
   }
 
-  // Update the track information with new data
-  existingZone.track = { ...existingZone.track, ...newTrackInfo };
-  logger.debug(`[ZoneManager] Updated track for Loxone player ID: ${playerId}`, existingZone.track); // Log successful update
+  // Update the player entry with new data
+  existingZone.playerEntry = { ...existingZone.playerEntry, ...newState };
+  logger.debug(`[ZoneManager] Updated player entry for Loxone player ID: ${playerId}`, existingZone.playerEntry);
 
   // Push the new information to all WebSocket Clients
+  const audioEventPayload = toAudioEvent(existingZone.playerEntry);
   const audioEventMessage = JSON.stringify({
-    audio_event: [existingZone.track],
+    audio_event: [audioEventPayload],
   });
 
-  broadcastEvent(audioEventMessage); // Broadcast updated track information to WebSocket clients
+  broadcastEvent(audioEventMessage); // Broadcast updated player information to WebSocket clients
 
   return true; // Return true to indicate success
 };
@@ -484,8 +542,6 @@ const updateZoneTrack = (playerId: number, newTrackInfo: Partial<Track>): boolea
 /**
  * Updates the queue information for a specific zone and broadcasts an
  * `audio_queue_event` to all connected Loxone clients.
- *
- * This is analoog aan `updateZoneTrack`, maar dan voor queue status.
  *
  * @param {string} playerId - De Loxone player ID van de zone.
  * @param {number} queueSize - Het aantal items in de huidige queue.
@@ -505,19 +561,49 @@ const updateZoneQueue = (playerId: number, queueSize: number, restrictions: numb
   const audioQueueEvent = JSON.stringify({
     audio_queue_event: [
       {
-        playerid: Number(playerId),   // Loxone playerId numeriek
+        playerid: Number(playerId), // Loxone playerId numeriek
         queuesize: Number.isFinite(queueSize) ? queueSize : 0,
-        restrictions: Number.isFinite(restrictions) ? restrictions : 0
-      }
-    ]
+        restrictions: Number.isFinite(restrictions) ? restrictions : 0,
+      },
+    ],
   });
 
   // Log en verstuur
-  logger.debug(`[ZoneManager] Updated queue for Loxone player ID: ${playerId} (size=${queueSize}, restrictions=${restrictions})`);
+  logger.debug(
+    `[ZoneManager] Updated queue for Loxone player ID: ${playerId} (size=${queueSize}, restrictions=${restrictions})`,
+  );
   broadcastEvent(audioQueueEvent);
 
   return true;
 };
+
+function updateZonePlayerName(playerId: number, name: string): boolean {
+  const existingZone = zone[playerId];
+
+  if (!existingZone) {
+    logger.error(`[ZoneManager] Cannot update player name: No zone found for Loxone player ID: ${playerId}`);
+    return false;
+  }
+
+  const trimmedName = typeof name === 'string' ? name.trim() : '';
+  if (trimmedName) {
+    existingZone.player.name = trimmedName;
+    const adminConfig = getAdminConfig();
+    const zones = [...adminConfig.zones];
+    const index = zones.findIndex((entry) => entry.id === playerId);
+    if (index >= 0) {
+      if (zones[index].name !== trimmedName) {
+        zones[index] = { ...zones[index], name: trimmedName };
+        updateAdminConfig({ ...adminConfig, zones });
+      }
+    } else {
+      zones.push({ id: playerId, backend: existingZone.player.backend, ip: existingZone.player.ip, name: trimmedName });
+      updateAdminConfig({ ...adminConfig, zones });
+    }
+  }
+
+  return updateZonePlayerStatus(playerId, { name: trimmedName });
+}
 
 // TODO
 // Test with BeoLink
@@ -554,11 +640,13 @@ export {
   setupZoneById,
   sendCommandToZone,
   sendGroupCommandToZone,
-  updateZoneTrack,
+  updateZonePlayerStatus,
+  updateZonePlayerName,
   updateZoneQueue,
   updateZoneGroup,
   getZoneById,
   cleanupZones,
   getZoneStatuses,
-  Track,
 };
+
+export { mergeZoneConfigEntries } from './zoneConfigUtils';

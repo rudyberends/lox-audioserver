@@ -1,8 +1,9 @@
-import Backend, { BackendProbeOptions } from '../backendBaseClass'; // Base backend class
-import logger from '../../../utils/troxorlogger'; // Custom logger
+import Backend, { BackendProbeOptions } from '../backendBaseClass';
+import logger from '../../../utils/troxorlogger';
 import { config } from '../../../config/config';
-import axios, { AxiosRequestConfig } from 'axios'; // Import Axios
-import { Track, updateZoneGroup } from '../zonemanager';
+import axios, { AxiosRequestConfig } from 'axios';
+import { updateZoneGroup } from '../zonemanager';
+import { PlayerStatus } from '../loxoneTypes';
 import BeolinkNotifyClient from './notifyClient';
 import { NotificationMessage } from './types';
 import { mapNotificationToTrack } from './stateMapper';
@@ -113,7 +114,7 @@ export default class BackendBeolink extends Backend {
     }
 
     // Update the zone track information using ZoneManager
-    this.pushTrackUpdate(trackInfo);
+    this.pushPlayerStatusUpdate(trackInfo as Partial<PlayerStatus>);
   };
 
   /**
@@ -153,17 +154,17 @@ export default class BackendBeolink extends Backend {
       }
 
       // Ensure currentVolume is a number
-      const currentVolume = Number(zone.track.volume); // Convert to number
+      const currentVolume = Number(zone.playerEntry.volume); // Convert to number
       const volumeChange = Number(change); // Ensure change is also a number
 
-      // Calculate the new volume
-      const newVolume = currentVolume + volumeChange; // Numeric addition
+      // Calculate the new volume within the supported range (0-100)
+      const newVolume = Math.max(0, Math.min(100, currentVolume + volumeChange));
 
       // Update the zone with the new volume
-      const updatedTrackInfo: Partial<Track> = {
+      const updatedTrackInfo: Partial<PlayerStatus> = {
         volume: newVolume, // This should now be a number
       };
-      this.pushTrackUpdate(updatedTrackInfo);
+      this.pushPlayerStatusUpdate(updatedTrackInfo);
 
       logger.debug(`[BeoLink][Zone ${this.playerid}] Volume changed by ${volumeChange}, new volume: ${newVolume}`);
 

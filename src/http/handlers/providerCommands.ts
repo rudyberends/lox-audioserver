@@ -1,4 +1,4 @@
-import { CommandResult, response } from './requesthandler';
+import { CommandResult, response } from './commandTypes';
 import { parseNumberPart, parsePaging, splitUrl } from './commandUtils';
 import { getMediaProvider } from '../../backend/provider/factory';
 import logger from '../../utils/troxorlogger';
@@ -43,6 +43,25 @@ export async function audioCfgGetRadios(url: string): Promise<CommandResult> {
 }
 
 /**
+ * Report third-party streaming services supported by the current provider.
+ * The Music Assistant backend exposes radio content directly, so return an empty list.
+ */
+export function audioCfgGetAvailableServices(url: string): CommandResult {
+  return response(url, 'getavailableservices', []);
+}
+
+/**
+ * Describe the global search sources available to the client.
+ * For now, expose only the radio source to keep the UI pathways happy.
+ */
+export function audioCfgGlobalSearchDescribe(url: string): CommandResult {
+  const describePayload = {
+    tunein: ['station'],
+  };
+  return response(url, 'globalsearch', describePayload);
+}
+
+/**
  * Report that no library scan is in progress.
  */
 export function audioCfgScanStatus(url: string): CommandResult {
@@ -57,22 +76,89 @@ export async function audioCfgGetPlaylists(url: string): Promise<CommandResult> 
   const parts = splitUrl(url);
   const service = parts[3] || 'lms';
   const user = parts[4] || 'nouser';
-  const offset = parseNumberPart(parts[5], 0);
-  const start = parseNumberPart(parts[6], 0);
-  const limit = parseNumberPart(parts[7], 10);
+  const prefix = ['audio', 'cfg', 'getplaylists2', service, user].join('/') + '/';
+  const remainder = url.startsWith(prefix) ? url.slice(prefix.length) : '';
+
+  let playlistId: string | undefined;
+  let offset = 0;
+  let start = 0;
+  let limit = 10;
+
+  const startsWithDigit = remainder === '' ? false : /^[0-9]/.test(remainder);
+
+  if (!remainder || startsWithDigit) {
+    const segments = remainder
+      .split('/')
+      .filter((segment) => segment !== undefined && segment !== '');
+
+    if (segments.length >= 3 && segments[0] !== '0') {
+      const [rawId, rawOffset, rawLimit] = segments;
+      playlistId = decodeURIComponent(rawId);
+      offset = parseNumberPart(rawOffset, 0);
+      start = offset;
+      limit = parseNumberPart(rawLimit, 10);
+    } else {
+      offset = parseNumberPart(segments[0], 0);
+      if (segments.length === 2) {
+        start = offset;
+        limit = parseNumberPart(segments[1], 10);
+      } else {
+        start = offset;
+        limit = 10;
+      }
+    }
+  } else {
+    const rawSegments = remainder.split('/');
+    const numericTail: string[] = [];
+    while (
+      rawSegments.length > 0 &&
+      numericTail.length < 2
+    ) {
+      const candidate = rawSegments[rawSegments.length - 1];
+      if (candidate === '' || !/^-?\d+$/.test(candidate)) {
+        break;
+      }
+      numericTail.push(rawSegments.pop()!);
+    }
+    numericTail.reverse();
+
+    if (numericTail.length >= 1) {
+      offset = parseNumberPart(numericTail[0], 0);
+      start = offset;
+    }
+    if (numericTail.length >= 2) {
+      limit = parseNumberPart(numericTail[1], 10);
+    }
+
+    const joinedId = rawSegments.join('/');
+    playlistId = joinedId ? decodeURIComponent(joinedId) : undefined;
+  }
 
   const provider = getMediaProvider();
   logger.debug(
-    `[audioCfgGetPlaylists] provider=${provider.constructor.name} service=${service} user=${user} offset=${offset} limit=${limit}`,
+    `[audioCfgGetPlaylists] provider=${provider.constructor.name} service=${service} user=${user} playlist=${playlistId ?? 'root'} offset=${offset} limit=${limit}`,
   );
-  const playlist = await provider.getPlaylists(offset, limit);
+
+  const playlistResponse =
+    playlistId && provider.getPlaylistItems
+      ? await provider.getPlaylistItems(playlistId, offset, limit)
+      : await provider.getPlaylists(offset, limit);
+
+  const playlist = playlistResponse ?? {
+    id: 0,
+    name: playlistId ?? '',
+    totalitems: 0,
+    start: offset,
+    items: [],
+  };
 
   const payload = {
     id: playlist.id,
-    items: playlist.items,
+    name: playlist.name,
+    items: playlist.items ?? [],
     service,
     start,
-    totalitems: playlist.totalitems,
+    totalitems: playlist.totalitems ?? 0,
     type: 3,
     user,
   };
