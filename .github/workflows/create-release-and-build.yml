@@ -212,6 +212,6 @@ jobs:
         platforms: linux/amd64,linux/arm64
         push: true
         tags: |
-          ghcr.io/${{ github.repository_owner }}/${{ github.repository }}:latest
+          ${{ env.TARGET_BRANCH != 'beta' && format('ghcr.io/{0}/{1}:latest', github.repository_owner, github.repository) || '' }}
           ghcr.io/${{ github.repository_owner }}/${{ github.repository }}:${{ env.VERSION }}
           ${{ env.TARGET_BRANCH == 'beta' && format('ghcr.io/{0}/{1}:beta', github.repository_owner, github.repository) || '' }}
