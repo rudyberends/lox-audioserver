@@ -168,7 +168,7 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         tag: ${{ steps.pkg_version.outputs.version }}
         name: ${{ steps.release_meta.outputs.release_name }}
-        prerelease: ${{ steps.release_meta.outputs.prerelease }}
+        prerelease: ${{ steps.release_meta.outputs.prerelease == 'true' }}
 
   docker:
     name: Build and Push Docker Image
