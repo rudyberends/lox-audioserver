@@ -21,7 +21,6 @@ The project currently ships with working Bang & Olufsen BeoLink and Music Assist
 
 - Node.js **20** or newer (the repo uses `@tsconfig/node20`).
 - npm (ships with Node) for dependency management.
-- A configured Loxone Miniserver if you want to pair with real hardware.
 - Easiest deployment: use the published Docker image (see [Quick Start](#quick-start)).
 
 ## Quick Start
