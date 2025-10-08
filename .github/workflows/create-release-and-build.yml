@@ -47,6 +47,14 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
+    - name: Append beta suffix to package version
+      if: ${{ env.TARGET_BRANCH == 'beta' }}
+      run: |
+        BASE_VERSION=$(jq -r '.version' package.json)
+        if [[ "${BASE_VERSION}" != *-* ]]; then
+          npm version --no-git-tag-version "${BASE_VERSION}-beta"
+        fi
+
     - name: Build project
       run: npm run build
 
