@@ -57,7 +57,7 @@ The project currently ships with working Bang & Olufsen BeoLink and Music Assist
 
 4. **Configure via the admin UI**
 
-   Before rebooting the Miniserver, open `http://<lox-audioserver-ip>:7091/admin` so you can watch the live pairing status. The Miniserver initiates pairing automatically after the reboot; no manual “pair” button is required. Once pairing completes you can assign backends/providers, tweak logging levels, and review the cached AudioServer payload (`data/music-cache.json`) alongside the editable admin config (`data/config.json`).
+   Before rebooting the Miniserver, open `http://<lox-audioserver-ip>:7091/admin` so you can watch the live pairing status. The Miniserver initiates pairing automatically after the reboot; Once pairing completes you can assign backends/providers, and access logging.
 
 5. **Run via Docker (from GitHub Container Registry)**
 
@@ -76,22 +76,10 @@ The project currently ships with working Bang & Olufsen BeoLink and Music Assist
 
 ## Configuring Loxone
 
-Open the admin UI at `http://<lox-audioserver-ip>:7091/admin` and follow the guided steps. It walks you through adding the Audio Server in Loxone Config, rebooting the Miniserver, pairing automatically, and assigning zones/providers once the MiniServer reconnects.
+Open the admin UI at `http://<lox-audioserver-ip>:7091/admin` and follow the guided steps. It walks you through adding the Audio Server in Loxone Config, rebooting the Miniserver, pairing, and assigning zones/providers once the MiniServer reconnects.
 
 When the lox-audioserver starts successfully and the Miniserver pairs successfully with the lox-audioserver, the Audio Server icon in
 Loxone Config turns green.
-
-## Web Administration
-
-An always-on admin UI ships with the server at `http://<lox-audioserver-ip>:7091/admin`.
-
-- Review pairing status, assign zone backends/media providers, and inspect logs.
-- The Miniserver handles pairing automatically after you deploy and reboot; the UI displays a live
-  “waiting for pairing” indicator until the cached payload arrives.
-- Refresh Music Assistant player lists when a zone is missing a player ID—the UI surfaces the
-  available IDs reported by the backend instead of printing them to the console.
-- Need to wipe the setup? The **Reset config** tool clears `data/config.json` and the cached
-  `data/music-cache.json`, returning the server to an unpaired state.
 
 ## Configuration Overview
 
