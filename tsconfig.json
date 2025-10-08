@@ -1,0 +1,11 @@
+{
+  "extends": "@tsconfig/node20/tsconfig.json",
+  "compilerOptions": { 
+    "typeRoots": ["./node_modules/@types"],
+    "removeComments": true,
+    "rootDir": "src",
+    "outDir": "dist" 
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["client_code"]
+}
