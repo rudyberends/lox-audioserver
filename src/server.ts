@@ -1,5 +1,5 @@
 import logger from './utils/troxorlogger';
-import { initializeConfig, config } from './config/config';
+import { config, initializeConfig } from './config/config';
 import { startWebServer } from './http/webserver';
 import { cleanupZones } from './backend/zone/zonemanager';
 
@@ -13,15 +13,7 @@ type ServerHandle = { shutdown: () => Promise<void> };
 const serverHandles = new Map<ServerNames, ServerHandle>();
 let shuttingDown = false;
 
-function validateEnvVariables() {
-  const missing: string[] = [];
 
-  if (!config.audioserver?.name) missing.push('AudioServer name');
-
-  if (missing.length > 0) {
-    throw new Error(`Missing configuration values: ${missing.join(', ')}`);
-  }
-}
 
 /**
  * Initialize the application by loading the configuration and validating necessary variables.
@@ -29,7 +21,6 @@ function validateEnvVariables() {
  */
 async function initializeAudioServer() {
   await initializeConfig(); // Load configuration from the environment
-  validateEnvVariables(); // Validate the loaded configuration
   logger.info(`[Main] AudioServer Name: ${config.audioserver!.name}`); // Logging AudioServer name safely
 }
 

@@ -2,7 +2,7 @@ import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import { promises as fsp } from 'fs';
-import { BACKEND_OPTIONS, PROVIDER_OPTIONS, AdminConfig, ZoneConfigEntry, defaultAdminConfig } from '../config/configStore';
+import { BACKEND_OPTIONS, CONFIG_DIR, PROVIDER_OPTIONS, AdminConfig, ZoneConfigEntry, defaultAdminConfig } from '../config/configStore';
 import { getMusicAssistantSuggestions } from '../config/adminState';
 import { reloadConfiguration, getAdminConfig, updateAdminConfig, config as runtimeConfig } from '../config/config';
 import { getZoneStatuses, setupZoneById } from '../backend/zone/zonemanager';
@@ -203,6 +203,14 @@ function registerDefaultRoutes() {
   registerConfigRoute('POST', '/admin/api/config/clear', async (_req, res) => {
     try {
       const cleared = defaultAdminConfig();
+      const cachePath = path.join(CONFIG_DIR, 'music-cache.json');
+      if (fs.existsSync(cachePath)) {
+        try {
+          await fsp.unlink(cachePath);
+        } catch (unlinkError) {
+          logger.warn(`[configHttp] Failed to remove music cache: ${unlinkError instanceof Error ? unlinkError.message : String(unlinkError)}`);
+        }
+      }
       updateAdminConfig(cleared);
       await reloadConfiguration();
       resetMediaProvider();

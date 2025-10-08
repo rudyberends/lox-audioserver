@@ -36,6 +36,8 @@ const state = {
     type: '',
     options: {},
   },
+  loadingConfig: true,
+  waitingForPairing: false,
 };
 
 
@@ -54,6 +56,8 @@ const zoneErrorTimers = new Map();
 
 let renderScheduled = false;
 let logFullscreenEscHandler = null;
+let pairingWatcherId = 0;
+let pairingWatcherBusy = false;
 
 function scheduleRender() {
   if (renderScheduled) return;
@@ -79,13 +83,25 @@ async function init() {
 async function loadConfig(silent = false) {
   if (!silent) setStatus('Loading configuration…');
   let failed = false;
+  state.loadingConfig = true;
   try {
     const response = await fetch('/admin/api/config');
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    state.config = data.config;
-    state.options = data.options;
+    state.config = data.config || defaultConfig();
+    state.options = data.options || defaultOptions();
     state.version = typeof data.version === 'string' ? data.version : '';
+    const audioserver = state.config.audioserver = state.config.audioserver || {};
+    const pairedRaw = audioserver.paired;
+    let pairedNormalized = false;
+    if (typeof pairedRaw === 'string') {
+      const normalized = pairedRaw.trim().toLowerCase();
+      pairedNormalized = normalized === 'true' || normalized === '1' || normalized === 'yes';
+    } else {
+      pairedNormalized = Boolean(pairedRaw);
+    }
+    audioserver.paired = pairedNormalized;
+
     const connectedProviderType = data.config?.mediaProvider?.type || '';
     const connectedProviderOptions = {
       ...(data.config?.mediaProvider?.options || {}),
@@ -118,7 +134,6 @@ async function loadConfig(silent = false) {
       (data.suggestions || []).map((suggestion) => [suggestion.zoneId, suggestion.players]),
     );
     state.zoneStatus = data.zoneStatus || {};
-    render();
   } catch (error) {
     console.error('Failed to load configuration', error);
     failed = true;
@@ -127,6 +142,8 @@ async function loadConfig(silent = false) {
       true,
     );
   } finally {
+    state.loadingConfig = false;
+    render();
     if (!silent && !failed) clearStatus();
   }
   return !failed;
@@ -152,12 +169,19 @@ function renderPanels(config) {
   const activeTab = state.activeTab || 'miniserver';
   const panelClass = (name) => `tabpanel${activeTab === name ? ' active' : ''}`;
   const isPaired = Boolean(config.audioserver?.paired);
+  const miniserverIpRaw = config.miniserver?.ip || '';
+  const miniserverIpValue = escapeHtml(miniserverIpRaw);
   const miniserverSerialRaw = config.miniserver?.serial || '';
   const miniserverSerialValue = escapeHtml(isPaired ? miniserverSerialRaw : '');
+  const miniserverIpField = `
+            <div class="form-control readonly-field">
+              <label for="miniserver-ip">Miniserver IP</label>
+              <input id="miniserver-ip" type="text" value="${miniserverIpValue}" readonly aria-readonly="true" placeholder="Will populate after pairing" />
+            </div>`;
   const miniserverSerialField = `
             <div class="form-control readonly-field">
               <label for="miniserver-serial">Miniserver Serial</label>
-              <input id="miniserver-serial" type="text" value="${miniserverSerialValue}" readonly aria-readonly="true" />
+              <input id="miniserver-serial" type="text" value="${miniserverSerialValue}" readonly aria-readonly="true" placeholder="Will populate after pairing" />
             </div>`;
 
   const generalPanel = `
@@ -172,22 +196,22 @@ function renderPanels(config) {
         </div>
       </div>
       <div class="miniserver-layout">
-        <article class="miniserver-card connection">
-          <header>
-            <div>
-              <h3>Connection</h3>
-              <p>Enter Miniserver credentials.</p>
+        <div class="miniserver-primary">
+          <article class="miniserver-card connection">
+            <header>
+              <div>
+                <h3>Connection</h3>
+              </div>
+              <div class="connection-state">${renderMiniserverBadge(config)}</div>
+            </header>
+            <div class="miniserver-form">
+              ${miniserverIpField}
+              ${miniserverSerialField}
             </div>
-            <div class="connection-state">${renderMiniserverBadge(config)}</div>
-          </header>
-          <div class="miniserver-form">
-            ${renderInput('miniserver-ip', 'Miniserver IP', config.miniserver.ip)}
-            ${renderInput('miniserver-username', 'Username', config.miniserver.username)}
-            ${renderInput('miniserver-password', 'Password', config.miniserver.password, 'password')}
-            ${miniserverSerialField}
-          </div>
-          <p class="connection-hint">After updating the credentials, choose <strong>Pair</strong> in the Actions card to apply them.</p>
-        </article>
+            ${renderPairingWaitIndicator()}
+          </article>
+          ${renderToolsCard()}
+        </div>
         ${renderStatus(config)}
       </div>
     </section>
@@ -265,6 +289,66 @@ function updateTabs() {
   if (activeTab !== 'logs' && state.logs?.fullscreen) {
     setLogFullscreen(false);
   }
+
+  ensurePairingWatcher();
+}
+
+function shouldWatchPairing() {
+  if (typeof window === 'undefined') return false;
+  const activeTab = state.activeTab || 'miniserver';
+  if (activeTab !== 'miniserver') return false;
+  if (state.loadingConfig) return false;
+  return !Boolean(state.config?.audioserver?.paired);
+}
+
+function ensurePairingWatcher() {
+  if (!shouldWatchPairing()) {
+    stopPairingWatcher();
+    return;
+  }
+  if (!state.waitingForPairing) {
+    state.waitingForPairing = true;
+    scheduleRender();
+  }
+  if (pairingWatcherId || pairingWatcherBusy || typeof window === 'undefined') return;
+
+  const poll = async () => {
+    if (!shouldWatchPairing()) {
+      stopPairingWatcher();
+      return;
+    }
+    pairingWatcherBusy = true;
+    pairingWatcherId = 0;
+    let success = false;
+    try {
+      success = await loadConfig(true);
+    } catch (error) {
+      console.error('Failed to refresh pairing status', error);
+    } finally {
+      const continueWatching = shouldWatchPairing();
+      if (continueWatching && typeof window !== 'undefined') {
+        const delay = success ? 5000 : 10000;
+        pairingWatcherId = window.setTimeout(poll, delay);
+      } else {
+        pairingWatcherId = 0;
+      }
+      pairingWatcherBusy = false;
+    }
+  };
+
+  pairingWatcherId = window.setTimeout(poll, 5000);
+}
+
+function stopPairingWatcher() {
+  if (pairingWatcherId && typeof window !== 'undefined') {
+    window.clearTimeout(pairingWatcherId);
+  }
+  pairingWatcherId = 0;
+  pairingWatcherBusy = false;
+  if (state.waitingForPairing) {
+    state.waitingForPairing = false;
+    scheduleRender();
+  }
 }
 
 function renderStatus(config) {
@@ -315,10 +399,20 @@ function renderStatus(config) {
             <span class="pairing-step-indicator" aria-hidden="true"></span>
             <div class="pairing-step-content">
               <div class="pairing-step-heading">
-                <strong>Deploy & reboot</strong>
+                <strong>Deploy changes</strong>
                 <span class="pairing-step-status required">Required</span>
               </div>
-              <span class="pairing-step-description">Save your project to the Miniserver and reboot so the configuration is active.</span>
+              <span class="pairing-step-description">Save your project to the Miniserver so the configuration is active.</span>
+            </div>
+          </li>
+          <li class="pairing-step-required">
+            <span class="pairing-step-indicator" aria-hidden="true"></span>
+            <div class="pairing-step-content">
+              <div class="pairing-step-heading">
+                <strong>Reboot the Miniserver</strong>
+                <span class="pairing-step-status required">Required</span>
+              </div>
+              <span class="pairing-step-description">The Miniserver initiates pairing with the AudioServer automatically after it boots with the updated project.</span>
             </div>
           </li>
         </ol>
@@ -326,26 +420,29 @@ function renderStatus(config) {
   const pairingHeaderTitle = audioserver.paired ? 'Pairing completed 🎉' : 'Pairing setup';
   const pairingHeaderSubtitle = audioserver.paired
     ? 'Follow these steps to complete the configuration.'
-    : 'Follow these steps before attempting to pair with the Miniserver.';
+    : 'The Miniserver will initiate pairing automatically after rebooting with your updated project.';
   return `
-    <div class="miniserver-stack">
-      <article class="miniserver-card pairing-info">
-        <header>
-          <h3>${pairingHeaderTitle}</h3>
-          <p>${pairingHeaderSubtitle}</p>
-        </header>
-        ${pairingHelp}
-      </article>
-      <article class="miniserver-card pairing-actions-card">
-        <header>
-          <h3>Actions</h3>
-        </header>
-        <div class="pairing-actions">
-          <button type="button" id="trigger-pairing" class="primary pairing-action" ${audioserver.paired ? 'disabled aria-disabled="true"' : ''}>${audioserver.paired ? 'Paired' : 'Pair now'}</button>
-          <button type="button" id="clear-config" class="danger">Reset config</button>
-        </div>
-      </article>
-    </div>
+    <article class="miniserver-card pairing-info">
+      <header>
+        <h3>${pairingHeaderTitle}</h3>
+        <p>${pairingHeaderSubtitle}</p>
+      </header>
+      ${pairingHelp}
+    </article>
+  `;
+}
+
+function renderToolsCard() {
+  return `
+    <article class="miniserver-card pairing-actions-card">
+      <header>
+        <h3>Tools</h3>
+        <p>Need to start over? Reset clears the saved admin configuration.</p>
+      </header>
+      <div class="pairing-actions">
+        <button type="button" id="clear-config" class="danger">Reset config</button>
+      </div>
+    </article>
   `;
 }
 
@@ -357,7 +454,17 @@ function renderPairingBadge(audioserver = {}) {
     <span class="status-label">Pairing state</span>
     <span class="status-pill ${pillClass}">${label}</span>
   `;
-} 
+}
+
+function renderPairingWaitIndicator() {
+  if (!state.waitingForPairing) return '';
+  return `
+    <div class="connection-wait" role="status" aria-live="polite">
+      <span class="connection-wait__pulse" aria-hidden="true"></span>
+      <span class="connection-wait__text">Waiting for the Miniserver to initiate pairing…</span>
+    </div>
+  `;
+}
 
 function renderLogs(loggingConfig = {}) {
   const logsState = state.logs || {};
@@ -1425,6 +1532,19 @@ function bindModalEvents() {
         }
       }
       updateModalState(updates);
+      const scanButton = modal.querySelector('[data-action="modal-scan-zone"]');
+      if (scanButton instanceof HTMLButtonElement) {
+        const backend = state.modal?.backend || '';
+        const trimmedIp = (value || '').trim();
+        const shouldDisable = backend === 'BackendMusicAssistant' && !trimmedIp;
+        scanButton.disabled = shouldDisable;
+        if (shouldDisable) {
+          scanButton.setAttribute('aria-disabled', 'true');
+        } else {
+          scanButton.removeAttribute('aria-disabled');
+          scanButton.removeAttribute('disabled');
+        }
+      }
     });
   }
 
@@ -1537,10 +1657,6 @@ async function saveBackendModal() {
 
 function bindFormEvents() {
   if (!state.config) return;
-
-  bindMiniserverEvents();
-
-  document.getElementById('trigger-pairing')?.addEventListener('click', pairConfig);
 
   document.querySelectorAll('[data-action="configure-zone"]').forEach((button) => {
     if (!(button instanceof HTMLButtonElement)) return;
@@ -1785,18 +1901,6 @@ async function fetchMusicAssistantPlayers(zone, button) {
   }
 }
 
-function bindMiniserverEvents() {
-  document.getElementById('miniserver-ip')?.addEventListener('input', (event) => {
-    state.config.miniserver.ip = event.target.value;
-  });
-  document.getElementById('miniserver-username')?.addEventListener('input', (event) => {
-    state.config.miniserver.username = event.target.value;
-  });
-  document.getElementById('miniserver-password')?.addEventListener('input', (event) => {
-    state.config.miniserver.password = event.target.value;
-  });
-}
-
 function bindLoggingEvents() {
   document.getElementById('log-level')?.addEventListener('change', (event) => {
     const level = event.target.value;
@@ -2038,23 +2142,18 @@ async function persistConfig() {
 async function pairConfig() {
   if (!state.config) return;
   const miniserver = state.config.miniserver ?? {};
-  const missingFields = [];
-  if (!miniserver.ip || !miniserver.ip.trim()) missingFields.push('IP address');
-  if (!miniserver.username || !miniserver.username.trim()) missingFields.push('username');
-  if (!miniserver.password || !miniserver.password.trim()) missingFields.push('password');
-
-  if (missingFields.length) {
-    setStatus('Add Miniserver credentials before pairing.', true);
+  if (!miniserver.ip || !miniserver.ip.trim()) {
+    setStatus('Add the Miniserver IP before saving.', true);
     return;
   }
 
-  setStatus('Saving configuration and attempting to pair…');
+  setStatus('Saving configuration…');
   try {
     await persistConfig();
     const response = await fetch('/admin/api/config/reload', { method: 'POST' });
     const data = await response.json();
     if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`);
-    const message = data.message || 'Pairing attempt finished.';
+    const message = data.message || 'Configuration saved. Reboot the Miniserver to initiate pairing.';
     await loadConfig();
     setStatus(message);
   } catch (error) {
@@ -2084,7 +2183,24 @@ async function clearConfig() {
     const data = await response.json();
     if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`);
     await loadConfig();
-    setStatus(data?.message || 'Configuration cleared.');
+    state.config = defaultConfig();
+    state.options = defaultOptions();
+    state.zoneStatus = {};
+    state.suggestions = {};
+    state.connectedProvider = { type: '', options: {} };
+    state.modal = {
+      open: false,
+      zoneId: null,
+      backend: '',
+      ip: '',
+      maPlayerId: '',
+      maSuggestions: [],
+      error: '',
+    };
+    state.waitingForPairing = true;
+    render();
+    setStatus(data?.message || 'Configuration reset. Awaiting new pairing…');
+    ensurePairingWatcher();
   } catch (error) {
     setStatus(`Failed to clear configuration: ${error instanceof Error ? error.message : String(error)}`, true);
   }

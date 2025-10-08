@@ -233,11 +233,10 @@ header.hero::after {
   align-items: stretch;
 }
 
-.miniserver-stack {
+.miniserver-primary {
   display: flex;
   flex-direction: column;
-  gap: 0.9rem;
-  height: 100%;
+  gap: 1rem;
 }
 
 .miniserver-card {
@@ -304,8 +303,70 @@ header.hero::after {
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
 
+.connection-wait {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 14px;
+  border: 1px dashed rgba(122, 47, 143, 0.35);
+  background: rgba(122, 47, 143, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  margin-top: 0.85rem;
+}
+
+.connection-wait__pulse {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 0.18rem rgba(122, 47, 143, 0.2);
+  animation: connectionPulse 1s ease-in-out infinite alternate;
+}
+
+.connection-wait__text {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-accent);
+  animation: connectionBlink 1.4s ease-in-out infinite;
+}
+
+@keyframes connectionPulse {
+  0% {
+    transform: scale(0.75);
+    opacity: 0.4;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes connectionBlink {
+  0%, 100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connection-wait__pulse,
+  .connection-wait__text {
+    animation: none;
+  }
+}
+
 .miniserver-card.connection input {
   font-size: 1rem;
+}
+
+.miniserver-card.connection input[readonly] {
+  background: rgba(122, 47, 143, 0.08);
+  border-color: rgba(122, 47, 143, 0.2);
+  color: var(--color-subtle);
+  cursor: default;
 }
 
 .connection-hint {
@@ -1761,10 +1822,6 @@ code {
 
   .miniserver-state {
     align-self: stretch;
-  }
-
-  .miniserver-stack {
-    height: auto;
   }
 
   .miniserver-card.pairing-info {

@@ -1,4 +1,3 @@
-import axios from 'axios';
 import logger from '../utils/troxorlogger';
 import { asyncCrc32 } from '../utils/crc32utils';
 import { setupZones } from '../backend/zone/zonemanager';
@@ -66,58 +65,6 @@ applyAdminConfig();
 seedAudioServerFromCache();
 
 /**
- * Normalizes axios errors and logs context-sensitive messages.
- */
-const handleAxiosError = (error: unknown) => {
-  if (axios.isAxiosError(error) && error.response) {
-    const status = error.response.status;
-    switch (status) {
-      case 401:
-        logger.error('[config][getAudioserverConfig] Authentication failed: Unauthorized (401)');
-        break;
-      case 403:
-        logger.error('[config][getAudioserverConfig] Authentication failed: Forbidden (403)');
-        break;
-      default:
-        logger.error(`[config][getAudioserverConfig] Request failed with status: ${status}`);
-    }
-  } else if (error instanceof Error) {
-    logger.error('Error fetching audio server config:', error.message);
-  } else {
-    logger.error('Error fetching audio server config: Unknown error');
-  }
-};
-
-/**
- * Fetches the MiniServer Music.json payload that describes known AudioServers.
- */
-const downloadAudioServerConfig = async (): Promise<any> => {
-  if (!config.miniserver.ip) {
-    logger.warn('[config][downloadAudioServerConfig] MINISERVER_IP not set; skipping download.');
-    return null;
-  }
-  try {
-    logger.info(
-      `[config][downloadAudioServerConfig] Fetching AudioServer config from Loxone MiniServer [${config.miniserver.ip}]`
-    );
-
-    const encodedBase64Token = Buffer.from(`${config.miniserver.username}:${config.miniserver.password}`).toString('base64');
-    const authorization = `Basic ${encodedBase64Token}`;
-
-    const response = await axios({
-      url: `http://${config.miniserver.ip}/dev/fsget/prog/Music.json`,
-      method: 'get',
-      headers: { Authorization: authorization },
-    });
-
-    return response.data;
-  } catch (error) {
-    handleAxiosError(error);
-    throw new Error('Failed to download AudioServer configuration');
-  }
-};
-
-/**
  * Validates and merges the downloaded AudioServer definition into the runtime config.
  */
 const processAudioServerConfig = async (audioServerConfigData: any): Promise<AudioServerConfig | null> => {
@@ -154,6 +101,9 @@ const processAudioServerConfig = async (audioServerConfigData: any): Promise<Aud
         config.miniserver.ip = audioServerEntry[audioServer.macID].ip;
         config.miniserver.mac = masterSerial;
         config.miniserver.serial = masterSerial;
+        audioServer.name = audioServerEntry[audioServer.macID].name;
+        audioServer.uuid = audioServerEntry[audioServer.macID].uuid;
+        
         if (adminConfig.miniserver.serial !== masterSerial) {
           adminConfig.miniserver.serial = masterSerial;
           adminConfig.miniserver.ip = audioServerEntry[audioServer.macID].ip;
@@ -173,52 +123,38 @@ const processAudioServerConfig = async (audioServerConfigData: any): Promise<Aud
     return null;
   }
 };
-
 /**
- * Notifies the MiniServer that the AudioServer finished bootstrapping.
- */
-const informMiniServer = async (authorization: string): Promise<void> => {
-  try {
-    if (!config.audioserver?.uuid) return;
-    await axios({
-      url: `http://${config.miniserver.ip}/dev/sps/devicestartup/${config.audioserver.uuid}`,
-      method: 'get',
-      headers: { Authorization: authorization },
-    });
-    logger.info('[config][informMiniServer] AudioServer is ready and has informed the MiniServer.');
-  } catch (error) {
-    logger.error('Error informing the MiniServer:', error instanceof Error ? error.message : 'Unknown error');
-  }
-};
-
-/**
- * Bootstraps runtime configuration by downloading, processing, and persisting state.
+ * Bootstraps runtime configuration using the cached Music Assistant payload.
  */
 const initializeConfig = async () => {
   try {
-    const audioServerConfigData = await downloadAudioServerConfig();
+    const cached = loadMusicCache();
     let audioServerConfig: AudioServerConfig | null = null;
-    if (audioServerConfigData) {
-      audioServerConfig = await processAudioServerConfig(audioServerConfigData);
+
+    if (cached?.musicCFG) {
+      logger.info('[initializeConfig] Loading AudioServer configuration from cache.');
+      audioServerConfig = await processAudioServerConfig(cached.musicCFG);
+      if (audioServerConfig) {
+        audioServerConfig.musicTimestamp = cached.timestamp ?? audioServerConfig.musicTimestamp;
+        audioServerConfig.musicCRC = cached.crc32 ?? audioServerConfig.musicCRC;
+        config.audioserver = audioServerConfig;
+      }
+    } else {
+      logger.warn('[initializeConfig] No cached AudioServer configuration found. Waiting for MiniServer pairing.');
     }
 
-    config.audioserver = audioServerConfig || DEFAULT_AUDIO_SERVER;
-
-    if (!config.audioserver.paired) {
+    if (!config.audioserver || !config.audioserver.paired) {
+      config.audioserver = { ...DEFAULT_AUDIO_SERVER, paired: false };
       logger.warn('[initializeConfig] AudioServer is not paired yet. Waiting for Miniserver pairing.');
       return;
     }
 
-    if (config.miniserver.ip && config.miniserver.username && config.miniserver.password) {
-      const encodedBase64Token = Buffer.from(`${config.miniserver.username}:${config.miniserver.password}`).toString('base64');
-      const authorization = `Basic ${encodedBase64Token}`;
-      await informMiniServer(authorization);
-    } else {
-      logger.warn('[initializeConfig] Miniserver credentials incomplete; skipping device startup call.');
+    if (cached?.timestamp) {
+      config.audioserver.musicTimestamp = cached.timestamp;
     }
   } catch (error) {
-    logger.error('[initializeConfig] Failed to initialize configuration:', error instanceof Error ? error.message : 'Unknown error');
-    config.audioserver = DEFAULT_AUDIO_SERVER;
+    logger.error('[initializeConfig] Failed to initialize configuration from cache:', error instanceof Error ? error.message : 'Unknown error');
+    config.audioserver = { ...DEFAULT_AUDIO_SERVER };
   }
 };
 
