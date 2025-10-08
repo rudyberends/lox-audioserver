@@ -52,7 +52,14 @@ jobs:
 
     - name: Read package.json version
       id: pkg_version
-      run: echo "version=v$(jq -r '.version' package.json)" >> "$GITHUB_OUTPUT"
+      env:
+        TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
+      run: |
+        BASE_VERSION=$(jq -r '.version' package.json)
+        if [ "${TARGET_BRANCH}" = "beta" ] && [[ "${BASE_VERSION}" != *-* ]]; then
+          BASE_VERSION="${BASE_VERSION}-beta"
+        fi
+        echo "version=v${BASE_VERSION}" >> "$GITHUB_OUTPUT"
 
     - name: Find latest tagged version
       id: latest_tag
