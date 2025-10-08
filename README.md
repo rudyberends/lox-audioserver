@@ -21,10 +21,11 @@ The project currently ships with working Bang & Olufsen BeoLink and Music Assist
 
 - Node.js **20** or newer (the repo uses `@tsconfig/node20`).
 - npm (ships with Node) for dependency management.
-- A configured Loxone Miniserver if you want to pair with real hardware.
-- Easiest deployment: use the published Docker image (see [Quick Start](#quick-start)).
+- Easiest deployment: use the published Docker image.
 
 ## Quick Start
+
+Clone the repository of use a zipped release from the releases.
 
 1. **Install dependencies**
 
@@ -55,10 +56,6 @@ The project currently ships with working Bang & Olufsen BeoLink and Music Assist
    npm run watch
    ```
 
-4. **Configure via the admin UI**
-
-   Before rebooting the Miniserver, open `http://<lox-audioserver-ip>:7091/admin` so you can watch the live pairing status. The Miniserver initiates pairing automatically after the reboot; Once pairing completes you can assign backends/providers, and access logging.
-
 5. **Run via Docker (from GitHub Container Registry)**
 
    Every release publishes a multi-arch image to GHCR. Replace `VERSION` with a published tag
@@ -74,7 +71,7 @@ The project currently ships with working Bang & Olufsen BeoLink and Music Assist
    The workflow `.github/workflows/create-release-and-build.yml` bumps the version, builds,
    and pushes the image automatically whenever changes land on `main`.
 
-## Configuring Loxone
+## Configuring
 
 Open the admin UI at `http://<lox-audioserver-ip>:7091/admin` and follow the guided steps. It walks you through adding the Audio Server in Loxone Config, rebooting the Miniserver, pairing, and assigning zones/providers once the MiniServer reconnects.
 
