@@ -48,6 +48,20 @@ export function audioCfgGetKey(url: string): CommandResult {
 }
 
 /**
+ * Signal the MiniServer that identification succeeded without further payload.
+ */
+export function audioCfgIdentify(url: string): CommandResult {
+  return emptyCommand(url, []);
+}
+
+/**
+ * Confirm MiniServer time sync requests; legacy behaviour echoes boolean true.
+ */
+export function audioCfgMiniserverTime(url: string): CommandResult {
+  return emptyCommand(url, true);
+}
+
+/**
  * Accept updated audio configuration payloads from the client.
  * Decodes the inline base64 blob, updates the runtime config, and echoes the new CRC.
  */

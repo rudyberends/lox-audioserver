@@ -4,6 +4,8 @@ import {
   audioCfgGetConfig,
   audioCfgGetKey,
   audioCfgGetKeyFull,
+  audioCfgIdentify,
+  audioCfgMiniserverTime,
   audioCfgSetConfig,
   audioCfgSetConfigTimestamp,
   audioCfgSetVolumes,
@@ -47,6 +49,7 @@ export const COMMANDS = {
   SECURE_AUTHENTICATE: 'secure/authenticate',
   SECURE_INIT: 'secure/init',
   MINISERVER_TIME: 'audio/cfg/miniservertime',
+  AUDIO_CFG_IDENTIFY: 'audio/cfg/identify',
   AUDIO_CFG_READY: 'audio/cfg/ready',
   AUDIO_CFG_GET_CONFIG: 'audio/cfg/getconfig',
   AUDIO_CFG_SET_CONFIG: 'audio/cfg/setconfig',
@@ -134,6 +137,7 @@ prefixRoute('secure', COMMANDS.SECURE_HELLO, handleSecureHello);
 prefixRoute('secure', COMMANDS.SECURE_AUTHENTICATE, handleSecureAuthenticate);
 prefixRoute('secure', COMMANDS.SECURE_INIT, handleSecureInit);
 
+prefixRoute('audio', COMMANDS.MINISERVER_TIME, audioCfgMiniserverTime);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_GET_CONFIG, audioCfgGetConfig);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_READY, audioCfgReady);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_GET_KEY_FULL, audioCfgGetKeyFull);
@@ -152,6 +156,7 @@ prefixRoute('audio', COMMANDS.AUDIO_CFG_GET_RADIOS, audioCfgGetRadios);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_GET_SERVICE_FOLDER, audioCfgGetServiceFolder);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_GET_PLAYLISTS, audioCfgGetPlaylists);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_GLOBAL_SEARCH_DESCRIBE, audioCfgGlobalSearchDescribe);
+prefixRoute('audio', COMMANDS.AUDIO_CFG_IDENTIFY, audioCfgIdentify);
 
 regexRoute('audio', AUDIO_PLAYER_STATUS_RE, audioGetStatus);
 regexRoute('audio', AUDIO_QUEUE_RE, audioCfgGetQueue);
