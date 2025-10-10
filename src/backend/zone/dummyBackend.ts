@@ -18,7 +18,7 @@ export default class DummyBackend extends Backend {
 
   async initialize(): Promise<void> {
     try {
-      logger.info(`[DummyBackend] Initializing connection to device at ${this.ip}, Player ID: ${this.playerid}`);
+      logger.info(`[DummyBackend] Initializing Player ID: ${this.playerid}`);
       this.logConnection();
       this.startUpdatingPlayerEntry();
     } catch (error) {
