@@ -58,6 +58,10 @@ let renderScheduled = false;
 let logFullscreenEscHandler = null;
 let pairingWatcherId = 0;
 let pairingWatcherBusy = false;
+let zonesRefreshTimerId = 0;
+let zonesRefreshBusy = false;
+
+const ZONE_REFRESH_INTERVAL = 20_000;
 
 function scheduleRender() {
   if (renderScheduled) return;
@@ -291,6 +295,7 @@ function updateTabs() {
   }
 
   ensurePairingWatcher();
+  ensureZonesRefresh();
 }
 
 function shouldWatchPairing() {
@@ -348,6 +353,52 @@ function stopPairingWatcher() {
   if (state.waitingForPairing) {
     state.waitingForPairing = false;
     scheduleRender();
+  }
+}
+
+function shouldRefreshZones() {
+  if (typeof window === 'undefined') return false;
+  const activeTab = state.activeTab || 'miniserver';
+  if (activeTab !== 'zones') return false;
+  if (state.loadingConfig) return false;
+  if (state.modal?.open) return false;
+  return true;
+}
+
+function ensureZonesRefresh() {
+  if (!shouldRefreshZones()) {
+    stopZonesRefresh();
+    return;
+  }
+  if (zonesRefreshTimerId || zonesRefreshBusy || typeof window === 'undefined') return;
+  zonesRefreshTimerId = window.setTimeout(refreshZones, ZONE_REFRESH_INTERVAL);
+}
+
+function stopZonesRefresh() {
+  if (zonesRefreshTimerId && typeof window !== 'undefined') {
+    window.clearTimeout(zonesRefreshTimerId);
+  }
+  zonesRefreshTimerId = 0;
+}
+
+async function refreshZones() {
+  if (!shouldRefreshZones()) {
+    stopZonesRefresh();
+    return;
+  }
+  zonesRefreshBusy = true;
+  zonesRefreshTimerId = 0;
+  try {
+    await loadConfig(true);
+  } catch (error) {
+    console.error('Failed to refresh zones', error);
+  } finally {
+    zonesRefreshBusy = false;
+    if (shouldRefreshZones() && typeof window !== 'undefined') {
+      zonesRefreshTimerId = window.setTimeout(refreshZones, ZONE_REFRESH_INTERVAL);
+    } else {
+      stopZonesRefresh();
+    }
   }
 }
 
