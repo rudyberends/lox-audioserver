@@ -65,7 +65,7 @@ Clone the repository of use a zipped release from the releases.
    docker run \
      -p 7091:7091 \
      -p 7095:7095 \
-     -v $(pwd)/data:/data \
+     -v $(pwd)/data:/app/data \
      ghcr.io/rudyberends/rudyberends/lox-audioserver:VERSION
 
    The workflow `.github/workflows/create-release-and-build.yml` bumps the version, builds,
