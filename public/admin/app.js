@@ -192,8 +192,8 @@ function renderPanels(config) {
     <section data-tabpanel="miniserver" class="${panelClass('miniserver')}">
       <div class="miniserver-header">
         <div class="miniserver-title">
-          <h2>Miniserver</h2>
-          <p class="miniserver-subtitle">Connect your Loxone Miniserver to establish communication with the AudioServer.</p>
+          <h2>AudioServer Setup</h2>
+          <p class="miniserver-subtitle">Follow these steps to get paired and start using the AudioServer.</p>
         </div>
         <div class="miniserver-state">
           ${renderPairingBadge(config.audioserver)}
@@ -264,7 +264,7 @@ function setupTabs() {
 
 function updateTabs() {
   const paired = Boolean(state.config?.audioserver?.paired);
-  if (!paired && (state.activeTab === 'zones' || state.activeTab === 'provider')) {
+  if (!paired && state.activeTab === 'provider') {
     state.activeTab = 'miniserver';
   }
   const activeTab = state.activeTab || 'miniserver';
@@ -272,13 +272,13 @@ function updateTabs() {
     button.classList.toggle('active', button.dataset.tab === activeTab);
     const tab = button.dataset.tab;
     if (!tab) return;
-    const isRestricted = tab === 'zones' || tab === 'provider';
+    const isRestricted = tab === 'provider';
     button.disabled = isRestricted && !paired;
   });
   document.querySelectorAll('[data-tabpanel]').forEach((panel) => {
     if (!(panel instanceof HTMLElement)) return;
     const name = panel.getAttribute('data-tabpanel');
-    const isRestricted = name === 'zones' || name === 'provider';
+    const isRestricted = name === 'provider';
     if (isRestricted && !paired) {
       panel.classList.remove('active');
       return;
@@ -443,7 +443,17 @@ function renderStatus(config) {
                 <strong>Add an Audio Server in Loxone Config</strong>
                 <span class="pairing-step-status required">Required</span>
               </div>
-              <span class="pairing-step-description">Use IP of this service and serial <code>50:4F:94:FF:1B:B3</code>, then drop the players into your project. <span class="pairing-warning"><span class="pairing-warning__icon" aria-hidden="true">⚠️</span><span>The serial must match exactly or pairing will fail.</span></span></span>
+              <span class="pairing-step-description">Use IP of this service and serial <code>50:4F:94:FF:1B:B3</code>.</span>
+            </div>
+          </li>
+          <li class="pairing-step-required">
+            <span class="pairing-step-indicator" aria-hidden="true"></span>
+            <div class="pairing-step-content">
+              <div class="pairing-step-heading">
+                <strong>Configure audio zones</strong>
+                <span class="pairing-step-status required">Required</span>
+              </div>
+              <span class="pairing-step-description">Drop the AudioServer outputs into your project. You start with two stereo outputs (two zones) but can split them for four zones. Loxone labels the split outputs as mono, yet they remain full stereo.</span>
             </div>
           </li>
           <li class="pairing-step-required">
@@ -453,17 +463,7 @@ function renderStatus(config) {
                 <strong>Deploy changes</strong>
                 <span class="pairing-step-status required">Required</span>
               </div>
-              <span class="pairing-step-description">Save your project to the Miniserver so the configuration is active.</span>
-            </div>
-          </li>
-          <li class="pairing-step-required">
-            <span class="pairing-step-indicator" aria-hidden="true"></span>
-            <div class="pairing-step-content">
-              <div class="pairing-step-heading">
-                <strong>Reboot the Miniserver</strong>
-                <span class="pairing-step-status required">Required</span>
-              </div>
-              <span class="pairing-step-description">The Miniserver initiates pairing with the AudioServer automatically after it boots with the updated project.</span>
+              <span class="pairing-step-description">Save your changes and let the Miniserver reboot. The Miniserver initiates pairing with the AudioServer automatically after it boots with the updated project.</span>
             </div>
           </li>
         </ol>
@@ -744,7 +744,7 @@ function renderZonesPanel({ zones } = {}) {
       <div class="zones-empty">
         <div class="zones-empty__card">
           <h3>No zones detected yet</h3>
-          <p>Add Loxone zones to your configuration and reload to see them listed here.</p>
+          <p>Add Loxone zones to your configuration and reboot the Miniserver to see them listed here.</p>
           <p class="zones-empty__hint">Once zones are available you can assign a backend and manage playback.</p>
         </div>
       </div>
