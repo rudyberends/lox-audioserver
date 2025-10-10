@@ -36,6 +36,7 @@ const state = {
     type: '',
     options: {},
   },
+  extensionPlaceholders: [],
   loadingConfig: true,
   waitingForPairing: false,
 };
@@ -62,6 +63,8 @@ let zonesRefreshTimerId = 0;
 let zonesRefreshBusy = false;
 
 const ZONE_REFRESH_INTERVAL = 20_000;
+const MAX_EXTENSION_COUNT = 10;
+const AUDIO_SERVER_SERIAL = '504F94FF1BB3';
 
 function scheduleRender() {
   if (renderScheduled) return;
@@ -665,81 +668,41 @@ function renderZonesPanel({ zones } = {}) {
   const zoneList = Array.isArray(zones) ? [...zones] : [];
   const sortedZones = zoneList.sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
   const stats = computeZoneStats(sortedZones);
+  const groupedZones = groupZonesBySource(sortedZones);
+  const extensionStats = deriveExtensionStats(groupedZones, state.extensionPlaceholders || []);
+  state.extensionPlaceholders = extensionStats.placeholders;
 
-  const zoneCards = sortedZones
-    .map((zone) => {
-      const status = getZoneStatusEntry(zone);
-      const rawBackend = status?.backend ?? zone.backend ?? '';
-      const isDummy = isDummyBackend(rawBackend);
-      const connected = !isDummy && Boolean(status?.connected);
-      const statusPrefix = connected ? 'Online' : 'Pending connection';
-      const statusText = isDummy ? 'Unassigned' : statusPrefix;
-      const statusClass = isDummy ? 'dummy' : connected ? 'connected' : 'disconnected';
-      const safeStatusText = escapeHtml(statusText);
-      const zoneNumber = typeof zone.id === 'number' ? zone.id : '—';
-      const safeZoneId = escapeHtml(String(zoneNumber));
-      const zoneNameRaw = `${status?.name ?? zone.name ?? ''}`.trim();
-      const safeZoneName = zoneNameRaw ? escapeHtml(zoneNameRaw) : '';
-      const zoneTitle = safeZoneName ? safeZoneName : `#${safeZoneId}`;
-      const metadataBlock = renderZoneMetadata(status, { isDummy });
-      const isMusicAssistant = normalizeBackend(zone.backend) === 'BackendMusicAssistant';
-      const hasPlayerSelection = Boolean((zone.maPlayerId || '').trim());
-      let connectHint = '';
-      const connectError = state.zoneStatus?.[zone.id]?.connectError || '';
-      const cardStateClass = connected
-        ? 'zone-card--connected'
-        : isDummy
-          ? 'zone-card--unassigned'
-          : 'zone-card--pending';
+  const placeholderGroups = extensionStats.placeholders.map((placeholder) => {
+    const label = placeholder.label || `Stereo Extension ${placeholder.index}`;
+    return {
+      key: `extension-placeholder-${placeholder.index}`,
+      label,
+      zones: [
+        {
+          placeholder: 'extension',
+          index: placeholder.index,
+          serial: placeholder.serial,
+          label,
+        },
+      ],
+    };
+  });
 
-      if (!connected && isMusicAssistant && !hasPlayerSelection) {
-        connectHint = '<p class="zone-card-hint">Configure a Music Assistant player before connecting.</p>';
-      }
-
-      const backendLabel = formatBackendLabel(rawBackend);
-      const zoneLabel = safeZoneName || `Zone ${safeZoneId}`;
-      const backendName = escapeHtml(backendLabel);
-      const zoneLabelAria = escapeHtml(zoneLabel);
-      let backendSubDetail = '';
-      if (isMusicAssistant) {
-        const playerId = (status?.maPlayerId ?? zone.maPlayerId ?? '').trim();
-        if (playerId) backendSubDetail = escapeHtml(playerId);
-      } else {
-        const ip = (status?.ip ?? zone.ip ?? '').trim();
-        if (ip) backendSubDetail = escapeHtml(ip);
-      }
-
-      return `
-        <article class="zone-card ${cardStateClass}" data-index="${zone.id}">
-          <header class="zone-card-header">
-            <div class="zone-card-heading">
-              <h3 class="zone-card-title">${zoneTitle}</h3>
-            </div>
-            <div class="zone-card-status-dot zone-card-status-dot--${statusClass}" title="${safeStatusText}" data-zone-status="${zone.id}" aria-hidden="true"></div>
-          </header>
-          <div class="zone-card-playback">
-            <div class="zone-card-nowplaying">${metadataBlock}</div>
-          </div>
-          <div class="zone-card-backend">
-            <span class="zone-backend-label">Zone backend</span>
-            <div class="zone-backend-info">
-              <span class="zone-backend-name">${backendName}</span>
-            </div>
-            ${backendSubDetail ? `<span class="zone-backend-sub">${backendSubDetail}</span>` : ''}
-          </div>
-          <div class="zone-card-divider" aria-hidden="true"></div>
-          <div class="zone-card-actions">
-            <button type="button" class="zone-backend-button" data-action="configure-zone" data-id="${zone.id}" aria-label="Configure ${zoneLabelAria}">Configure</button>
-          </div>
-          ${connectHint}
-          ${connectError ? `<p class="zone-card-error">${escapeHtml(connectError)}</p>` : ''}
-        </article>
-      `;
+  const combinedGroups = sortZoneGroups([...groupedZones, ...placeholderGroups]);
+  const extensionGroups = combinedGroups.filter((group) => isExtensionLabel(group.label));
+  const extensionStretchKey =
+    extensionGroups.length % 2 === 1 && extensionGroups.length > 0
+      ? extensionGroups[extensionGroups.length - 1]?.key ?? null
+      : null;
+  const zoneGroupsHtml = combinedGroups
+    .map((group, index) => {
+      const stretch = Boolean(extensionStretchKey && group.key === extensionStretchKey);
+      return renderZoneGroup(group, index, stretch);
     })
     .join('');
 
-  const zonesContent = zoneCards
-    ? `<div class="zones">${zoneCards}</div>`
+  const zonesContent = combinedGroups.length
+    ? `<div class="zone-groups">${zoneGroupsHtml}</div>`
     : `
       <div class="zones-empty">
         <div class="zones-empty__card">
@@ -749,16 +712,155 @@ function renderZonesPanel({ zones } = {}) {
         </div>
       </div>
     `;
+  const addExtensionControls = renderAddExtensionControls(extensionStats);
+  const extensionControlsSection = addExtensionControls
+    ? `<div class="zones-footer">${addExtensionControls}</div>`
+    : '';
 
   return `
     <header class="zones-header">
       <div class="zones-header__copy">
         <h2>Imported Loxone Zones</h2>
-        <p>These zones were imported from the Loxone configuration on your MiniServer. Please assign an appropriate backend to each zone.</p>
+        <p>Splitting the default outputs in Loxone Config gives you four controllable zones. Need more coverage? Use the button below to add an extension and follow the inline steps.</p>
       </div>
-      ${renderZonesOverview(stats)}
+      <div class="zones-header__sidebar">
+        ${renderZonesOverview(stats)}
+      </div>
     </header>
     ${zonesContent}
+    ${extensionControlsSection}
+  `;
+}
+
+function renderZoneGroup(group, index = 0, stretch = false) {
+  if (!group) return '';
+  const { label = 'Unknown source', zones = [] } = group;
+  const realZoneCount = zones.filter((zone) => !zone || zone.placeholder !== 'extension').length;
+  const groupCount = realZoneCount;
+  const countLabel = `${groupCount} ${groupCount === 1 ? 'zone' : 'zones'}`;
+  const safeLabel = escapeHtml(label);
+  const safeCount = escapeHtml(countLabel);
+  const groupKey = typeof group.key === 'string' && group.key ? group.key : `group-${index}`;
+  const groupId = `zone-group-${groupKey.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '') || index}`;
+  const isExtensionGroup = isExtensionLabel(label);
+  const classes = ['zone-group'];
+  if (isExtensionGroup) classes.push('zone-group--extension');
+  if (stretch) classes.push('zone-group--stretch');
+  const groupClass = classes.join(' ');
+  const groupSerial = resolveSourceSerial(label);
+  const serialLine = groupSerial ? `<span class="zone-group-serial">Serial ${escapeHtml(groupSerial)}</span>` : '';
+  const cards = zones.map((zone) => renderZoneCard(zone)).join('');
+
+  return `
+    <section class="${groupClass}" aria-labelledby="${groupId}">
+      <header class="zone-group-header">
+        <div class="zone-group-heading">
+          <h3 class="zone-group-title" id="${groupId}">${safeLabel}</h3>
+          ${serialLine}
+        </div>
+        <span class="zone-group-count">${safeCount}</span>
+      </header>
+      <div class="zones">
+        ${cards}
+      </div>
+    </section>
+  `;
+}
+
+function renderZoneCard(zone) {
+  if (!zone) return '';
+  if (zone && zone.placeholder === 'extension') {
+    return renderExtensionPlaceholderCard(zone);
+  }
+  const status = getZoneStatusEntry(zone);
+  const rawBackend = status?.backend ?? zone.backend ?? '';
+  const isDummy = isDummyBackend(rawBackend);
+  const connected = !isDummy && Boolean(status?.connected);
+  const statusPrefix = connected ? 'Online' : 'Pending connection';
+  const statusText = isDummy ? 'Unassigned' : statusPrefix;
+  const statusClass = isDummy ? 'dummy' : connected ? 'connected' : 'disconnected';
+  const safeStatusText = escapeHtml(statusText);
+  const zoneNumber = typeof zone.id === 'number' ? zone.id : '—';
+  const safeZoneId = escapeHtml(String(zoneNumber));
+  const zoneNameRaw = `${status?.name ?? zone.name ?? ''}`.trim();
+  const safeZoneName = zoneNameRaw ? escapeHtml(zoneNameRaw) : '';
+  const zoneTitle = safeZoneName ? safeZoneName : `#${safeZoneId}`;
+  const metadataBlock = renderZoneMetadata(status, { isDummy });
+  const isMusicAssistant = normalizeBackend(zone.backend) === 'BackendMusicAssistant';
+  const hasPlayerSelection = Boolean((zone.maPlayerId || '').trim());
+  let connectHint = '';
+  const connectError = state.zoneStatus?.[zone.id]?.connectError || '';
+  const cardStateClass = connected
+    ? 'zone-card--connected'
+    : isDummy
+      ? 'zone-card--unassigned'
+      : 'zone-card--pending';
+
+  if (!connected && isMusicAssistant && !hasPlayerSelection) {
+    connectHint = '<p class="zone-card-hint">Configure a Music Assistant player before connecting.</p>';
+  }
+
+  const backendLabel = formatBackendLabel(rawBackend);
+  const zoneLabel = safeZoneName || `Zone ${safeZoneId}`;
+  const backendName = escapeHtml(backendLabel);
+  const zoneLabelAria = escapeHtml(zoneLabel);
+  let backendSubDetail = '';
+  if (isMusicAssistant) {
+    const playerId = (status?.maPlayerId ?? zone.maPlayerId ?? '').trim();
+    if (playerId) backendSubDetail = escapeHtml(playerId);
+  } else {
+    const ip = (status?.ip ?? zone.ip ?? '').trim();
+    if (ip) backendSubDetail = escapeHtml(ip);
+  }
+
+  return `
+    <article class="zone-card ${cardStateClass}" data-index="${zone.id}">
+      <header class="zone-card-header">
+        <div class="zone-card-heading">
+          <h3 class="zone-card-title">${zoneTitle}</h3>
+        </div>
+        <div class="zone-card-status-dot zone-card-status-dot--${statusClass}" title="${safeStatusText}" data-zone-status="${zone.id}" aria-hidden="true"></div>
+      </header>
+      <div class="zone-card-playback">
+        <div class="zone-card-nowplaying">${metadataBlock}</div>
+      </div>
+      <div class="zone-card-backend">
+        <span class="zone-backend-label">Zone backend</span>
+        <div class="zone-backend-info">
+          <span class="zone-backend-name">${backendName}</span>
+        </div>
+        ${backendSubDetail ? `<span class="zone-backend-sub">${backendSubDetail}</span>` : ''}
+      </div>
+      <div class="zone-card-divider" aria-hidden="true"></div>
+      <div class="zone-card-actions">
+        <button type="button" class="zone-backend-button" data-action="configure-zone" data-id="${zone.id}" aria-label="Configure ${zoneLabelAria}">Configure</button>
+      </div>
+      ${connectHint}
+      ${connectError ? `<p class="zone-card-error">${escapeHtml(connectError)}</p>` : ''}
+    </article>
+  `;
+}
+
+function renderExtensionPlaceholderCard(placeholder) {
+  const index = Number(placeholder?.index) || 0;
+  const label = placeholder?.label || (index ? `Stereo Extension ${index}` : 'New Extension');
+  const serial = typeof placeholder?.serial === 'string' && placeholder.serial ? placeholder.serial.toUpperCase() : '';
+  const safeLabel = escapeHtml(label);
+  const safeSerial = serial ? escapeHtml(serial) : '—';
+
+  const macSerial = safeSerial.replace(/(..)(?=.)/g, '$1:');
+  const safeSerialMac = escapeHtml(macSerial);
+  return `
+    <article class="zone-card zone-card--placeholder">
+      <header class="zone-card-header zone-card-placeholder-header">
+        <div class="zone-card-heading">
+          <span class="zone-card-placeholder-status">Awaiting MiniServer configuration</span>
+        </div>
+      </header>
+      <div class="zone-card-placeholder-body">
+        <p>Use the serial ${safeSerialMac} when creating the extension in Loxone Config.</p>
+      </div>
+    </article>
   `;
 }
 
@@ -786,6 +888,10 @@ function computeZoneStats(zones = []) {
     unassigned: 0,
     configured: 0,
     activeBackends: 0,
+    coreTotal: 0,
+    extensionTotal: 0,
+    coreConfigured: 0,
+    extensionConfigured: 0,
   };
 
   const activeBackends = new Set();
@@ -796,6 +902,14 @@ function computeZoneStats(zones = []) {
     const normalizedBackend = normalizeBackend(rawBackend);
     const dummy = isDummyBackend(normalizedBackend);
     const connected = Boolean(status?.connected);
+    const source = resolveZoneSource(zone);
+    const sourceIsExtension = isExtensionLabel(source.label);
+
+    if (sourceIsExtension) {
+      stats.extensionTotal += 1;
+    } else {
+      stats.coreTotal += 1;
+    }
 
     if (connected) {
       stats.connected += 1;
@@ -805,15 +919,174 @@ function computeZoneStats(zones = []) {
 
     if (dummy) {
       stats.unassigned += 1;
-    } else if (normalizedBackend) {
+      return;
+    }
+
+    if (normalizedBackend) {
       activeBackends.add(formatBackendLabel(normalizedBackend));
+    }
+
+    if (sourceIsExtension) {
+      stats.extensionConfigured += 1;
+    } else {
+      stats.coreConfigured += 1;
     }
   });
 
-  stats.configured = stats.total - stats.unassigned;
+  stats.configured = stats.coreConfigured + stats.extensionConfigured;
   stats.activeBackends = activeBackends.size;
 
   return stats;
+}
+
+function groupZonesBySource(zones = []) {
+  const groups = new Map();
+
+  zones.forEach((zone) => {
+    const { key, label } = resolveZoneSource(zone);
+    const groupKey = key || '__unknown';
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, { key: groupKey, label, zones: [] });
+    }
+    groups.get(groupKey).zones.push(zone);
+  });
+
+  return sortZoneGroups(Array.from(groups.values()));
+}
+
+function resolveZoneSource(zone = {}) {
+  const rawSource = typeof zone?.source === 'string' ? zone.source.trim() : '';
+  if (rawSource) {
+    return {
+      key: rawSource.toLowerCase(),
+      label: rawSource,
+    };
+  }
+  return {
+    key: '__unknown',
+    label: 'Unknown source',
+  };
+}
+
+function resolveSourceSerial(label) {
+  const index = extractExtensionIndex(label);
+  if (Number.isFinite(index) && index > 0) {
+    return computeExtensionSerial(index);
+  }
+  if (isAudioServerLabel(label)) {
+    return AUDIO_SERVER_SERIAL;
+  }
+  return '';
+}
+
+function isAudioServerLabel(label) {
+  if (typeof label !== 'string') return false;
+  const normalized = label.trim().toLowerCase();
+  if (!normalized) return false;
+  return normalized.includes('audioserver') || normalized.includes('audio server');
+}
+
+function sortZoneGroups(groups = []) {
+  return (groups || []).sort((a, b) => {
+    const aUnknown = a?.key === '__unknown';
+    const bUnknown = b?.key === '__unknown';
+    if (aUnknown && !bUnknown) return 1;
+    if (bUnknown && !aUnknown) return -1;
+    const aIsExtension = isExtensionLabel(a?.label);
+    const bIsExtension = isExtensionLabel(b?.label);
+    if (aIsExtension && !bIsExtension) return 1;
+    if (bIsExtension && !aIsExtension) return -1;
+    const aIndex = extractExtensionIndex(a?.label);
+    const bIndex = extractExtensionIndex(b?.label);
+    if (Number.isFinite(aIndex) && Number.isFinite(bIndex)) {
+      if (aIndex !== bIndex) return aIndex - bIndex;
+    } else if (Number.isFinite(aIndex)) {
+      return -1;
+    } else if (Number.isFinite(bIndex)) {
+      return 1;
+    }
+    return (a?.label || '').localeCompare(b?.label || '', undefined, { sensitivity: 'base' });
+  });
+}
+
+function deriveExtensionStats(groups = [], placeholders = []) {
+  const actualIndexes = new Set();
+  let highestActual = 0;
+
+  (groups || []).forEach((group) => {
+    const index = extractExtensionIndex(group?.label);
+    if (Number.isFinite(index) && index > 0) {
+      actualIndexes.add(index);
+      if (index > highestActual) highestActual = index;
+    }
+  });
+
+  const filteredPlaceholders = [];
+  let highestPlaceholder = 0;
+
+  (placeholders || []).forEach((placeholder) => {
+    if (!placeholder || !Number.isFinite(placeholder.index)) return;
+    if (actualIndexes.has(placeholder.index)) {
+      return;
+    }
+    const normalizedSerial = typeof placeholder.serial === 'string'
+      ? placeholder.serial.toUpperCase()
+      : computeExtensionSerial(placeholder.index);
+    const normalizedLabel = placeholder.label || `Stereo Extension ${placeholder.index}`;
+    filteredPlaceholders.push({
+      index: placeholder.index,
+      serial: normalizedSerial,
+      label: normalizedLabel,
+    });
+    if (placeholder.index > highestPlaceholder) highestPlaceholder = placeholder.index;
+  });
+
+  const highestIndex = Math.max(highestActual, highestPlaceholder);
+  const totalCount = actualIndexes.size + filteredPlaceholders.length;
+
+  return {
+    actualIndexes,
+    placeholders: filteredPlaceholders,
+    highestIndex,
+    totalCount,
+  };
+}
+
+function extractExtensionIndex(value) {
+  if (typeof value !== 'string') return null;
+  const match = value.match(/extension\s*(\d+)/i);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function computeExtensionSerial(extensionIndex) {
+  if (!Number.isFinite(extensionIndex)) return '';
+  const baseValue = parseInt(AUDIO_SERVER_SERIAL, 16);
+  if (!Number.isFinite(baseValue)) return '';
+  const value = baseValue + extensionIndex;
+  const hex = value.toString(16).toUpperCase();
+  return hex.padStart(AUDIO_SERVER_SERIAL.length, '0');
+}
+
+function renderAddExtensionControls(extensionStats) {
+  if (!extensionStats) return '';
+  const totalCount = Number(extensionStats.totalCount) || 0;
+  const highestIndex = Number(extensionStats.highestIndex) || 0;
+  const remaining = Math.max(0, MAX_EXTENSION_COUNT - totalCount);
+  const nextIndex = highestIndex + 1;
+  const canAdd = remaining > 0 && nextIndex <= MAX_EXTENSION_COUNT;
+  const buttonDisabledAttr = canAdd ? '' : 'disabled';
+
+  return `
+    <div class="zone-add-extension">
+      <button type="button" id="add-extension" class="secondary" ${buttonDisabledAttr}>Add Extension</button>
+    </div>
+  `;
+}
+
+function isExtensionLabel(value) {
+  return typeof value === 'string' && value.toLowerCase().includes('extension');
 }
 
 function renderZonesMetricIcon(name) {
@@ -836,13 +1109,17 @@ function renderZonesMetricIcon(name) {
 
 function renderZonesOverview(stats) {
   if (!stats) return '';
+  const coreZones = stats.core ?? 0;
+  const extensionZones = stats.extension ?? 0;
   const metrics = [
     {
       id: 'total',
       label: 'Total zones',
       value: stats.total,
       tone: 'primary',
-      note: stats.total ? `${stats.configured} configured` : 'Add zones to begin',
+      note: stats.total
+        ? `${stats.coreTotal} AudioServer · ${stats.extensionTotal} Extension`
+        : 'Add zones to begin',
       icon: renderZonesMetricIcon('total'),
     },
     {
@@ -1752,6 +2029,7 @@ function bindFormEvents() {
   document.getElementById('provider-connect')?.addEventListener('click', connectProvider);
 
   bindModalEvents();
+  bindExtensionEvents();
 }
 
 async function connectZone(zoneId, button) {
@@ -1995,6 +2273,51 @@ function bindLogEvents() {
     viewer.scrollTop = viewer.scrollHeight;
   }
   if (state.logs) state.logs.scrollToBottom = false;
+}
+
+function bindExtensionEvents() {
+  const button = document.getElementById('add-extension');
+  if (button instanceof HTMLButtonElement) {
+    button.addEventListener('click', handleAddExtensionClick);
+  }
+}
+
+function handleAddExtensionClick(event) {
+  if (event && typeof event.preventDefault === 'function') {
+    event.preventDefault();
+  }
+  const zones = Array.isArray(state.config?.zones) ? [...state.config.zones] : [];
+  zones.sort((a, b) => (a?.id ?? 0) - (b?.id ?? 0));
+  const groupedZones = groupZonesBySource(zones);
+  const extensionStats = deriveExtensionStats(groupedZones, state.extensionPlaceholders || []);
+  state.extensionPlaceholders = extensionStats.placeholders;
+
+  if (extensionStats.totalCount >= MAX_EXTENSION_COUNT || extensionStats.highestIndex >= MAX_EXTENSION_COUNT) {
+    setStatus(`Maximum of ${MAX_EXTENSION_COUNT} extensions reached.`, true);
+    render();
+    return;
+  }
+
+  const nextIndex = extensionStats.highestIndex + 1;
+  if (nextIndex > MAX_EXTENSION_COUNT) {
+    setStatus(`Maximum of ${MAX_EXTENSION_COUNT} extensions reached.`, true);
+    render();
+    return;
+  }
+
+  const serial = computeExtensionSerial(nextIndex);
+  const label = `Stereo Extension ${nextIndex}`;
+  state.extensionPlaceholders = [
+    ...state.extensionPlaceholders,
+    {
+      index: nextIndex,
+      serial,
+      label,
+    },
+  ];
+
+  setStatus(`Placeholder added for ${label}. Use serial ${serial} in your MiniServer project.`);
+  render();
 }
 
 function ensureLogStream() {

@@ -7,6 +7,7 @@ import logger from '../utils/troxorlogger'; // Importing the custom logger for l
 import * as http from 'http'; // Importing the HTTP module for server creation
 import { handleConfigRequest } from './configHttp';
 import { summariseLoxoneCommand } from './utils/requestSummary';
+import { startExtensionHeartbeat, stopExtensionHeartbeat } from './extensionHeartbeat';
 
 /**
  * Handles incoming HTTP requests.
@@ -93,7 +94,12 @@ export const startWebServer = (port: number, name: string): { shutdown: () => Pr
   wsServer.on('connect', (connection: WebSocketConnection) => handleWebSocketConnect(connection, name)); // Handle new WebSocket connections
 
   // Start listening on the given port
-  httpServer.listen(port, () => logger.info(`[${name}] HTTP and WebSocket server is listening on port ${port}`)); // Log server listening status
+  httpServer.listen(port, () => {
+    logger.info(`[${name}] HTTP and WebSocket server is listening on port ${port}`);
+    if (name === 'AppHttp') {
+      startExtensionHeartbeat();
+    }
+  }); // Log server listening status
 
   // Return an object containing the shutdown function for external use
   return { shutdown: () => shutdownServer(httpServer, name) };
@@ -195,6 +201,9 @@ const getApiIdentificationString = (name: string): string => {
  */
 const shutdownServer = (httpServer: http.Server, name: string): Promise<void> => {
   logger.info(`[${name}] Shutting down server...`); // Log shutdown initiation
+  if (name === 'AppHttp') {
+    stopExtensionHeartbeat();
+  }
   wsConnections.forEach((conn: WebSocketConnection) =>
     conn.close(1000, 'Server shutting down'),
   );
