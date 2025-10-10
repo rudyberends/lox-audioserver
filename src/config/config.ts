@@ -138,20 +138,21 @@ const initializeConfig = async () => {
         audioServerConfig.musicTimestamp = cached.timestamp ?? audioServerConfig.musicTimestamp;
         audioServerConfig.musicCRC = cached.crc32 ?? audioServerConfig.musicCRC;
         config.audioserver = audioServerConfig;
+        if (cached?.timestamp) {
+          config.audioserver.musicTimestamp = cached.timestamp;
+        }
+        return;
       }
     } else {
       logger.warn('[initializeConfig] No cached AudioServer configuration found. Waiting for MiniServer pairing.');
     }
 
-    if (!config.audioserver || !config.audioserver.paired) {
-      config.audioserver = { ...DEFAULT_AUDIO_SERVER, paired: false };
-      logger.warn('[initializeConfig] AudioServer is not paired yet. Waiting for Miniserver pairing.');
-      return;
+    if (cached?.musicCFG && !audioServerConfig) {
+      logger.warn('[initializeConfig] Cached AudioServer configuration was invalid. Resetting to defaults.');
     }
 
-    if (cached?.timestamp) {
-      config.audioserver.musicTimestamp = cached.timestamp;
-    }
+    config.audioserver = { ...DEFAULT_AUDIO_SERVER, paired: false };
+    logger.warn('[initializeConfig] AudioServer is not paired yet. Waiting for Miniserver pairing.');
   } catch (error) {
     logger.error('[initializeConfig] Failed to initialize configuration from cache:', error instanceof Error ? error.message : 'Unknown error');
     config.audioserver = { ...DEFAULT_AUDIO_SERVER };

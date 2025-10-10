@@ -12,12 +12,23 @@ import {
   AudioEvent,
 } from './loxoneTypes';
 
+type PlayerOutputChannel = {
+  id?: string;
+};
+
+type PlayerOutput = {
+  channels?: PlayerOutputChannel[];
+};
+
+type PlayerOutputCollection = PlayerOutput[] | Record<string, PlayerOutput>;
+
 interface Player {
   uuid: string;
   playerid: number;
   backend: string;
   ip: string;
   name?: string;
+  outputs?: PlayerOutputCollection;
 }
 
 type PlayerStatus = LoxonePlayerStatus;
@@ -49,6 +60,10 @@ interface ZoneState {
   queue?: ZoneEntryQueue;
 }
 
+/**
+ * In-memory registry of active zones keyed by Loxone player ID. Populated from the MiniServer config
+ * and mirrored toward the admin UI via websocket broadcasts.
+ */
 const zone: Record<number, ZoneState> = {};
 type ZoneEntry = ZoneState;
 
@@ -68,6 +83,7 @@ interface PreparedZoneContext {
   players: Player[];
   adminConfig: AdminConfig;
   adminZones: Map<number, ZoneConfigEntry>;
+  resolveSourceName?: SourceResolver;
 }
 
 function createDefaultPlayerEntry(playerId: number, zoneName: string): PlayerStatus {
@@ -159,6 +175,10 @@ function toAudioEvent(entry: PlayerStatus): AudioEvent {
   };
 }
 
+/**
+ * The MiniServer can deliver the music config as JSON, stringified JSON, or keyed objects.
+ * Normalise everything into a plain array so downstream processing can stay simple.
+ */
 function normaliseMusicConfig(rawMusicConfig: unknown): Record<string, any>[] {
   if (!rawMusicConfig) return [];
 
@@ -186,6 +206,10 @@ function normaliseMusicConfig(rawMusicConfig: unknown): Record<string, any>[] {
   return [];
 }
 
+/**
+ * Extract the set of players for the current AudioServer, coping with the many casing variants
+ * Loxone uses in different firmware versions.
+ */
 function extractPlayers(musicConfig: Record<string, any>, macId?: string): Player[] {
   if (!musicConfig || typeof musicConfig !== 'object') return [];
 
@@ -206,6 +230,82 @@ function extractPlayers(musicConfig: Record<string, any>, macId?: string): Playe
   return [];
 }
 
+function normaliseOutputs(outputs?: PlayerOutputCollection): PlayerOutput[] {
+  if (!outputs) return [];
+  if (Array.isArray(outputs)) return outputs.filter(Boolean);
+  return Object.values(outputs).filter(Boolean);
+}
+
+function extractPrimaryChannelId(player: Player): string | undefined {
+  const outputs = normaliseOutputs(player.outputs);
+  for (const output of outputs) {
+    const channels = Array.isArray(output?.channels) ? output.channels : [];
+    for (const channel of channels) {
+      if (typeof channel?.id === 'string' && channel.id.trim()) {
+        return channel.id.trim();
+      }
+    }
+  }
+  return undefined;
+}
+
+type SourceResolver = (player: Player) => string | undefined;
+
+/**
+ * Build a helper that maps channel serials back to friendly source names (core + extensions).
+ */
+function createSourceResolver(serverSection: Record<string, any>, macId?: string): SourceResolver | undefined {
+  if (!serverSection || typeof serverSection !== 'object') return undefined;
+
+  const sourceMap = new Map<string, string>();
+  const register = (serial: unknown, name: unknown) => {
+    if (typeof serial !== 'string') return;
+    const normalizedSerial = serial.trim().toUpperCase();
+    if (!normalizedSerial) return;
+    if (sourceMap.has(normalizedSerial)) return;
+    const resolvedName = typeof name === 'string' && name.trim() ? name.trim() : normalizedSerial;
+    sourceMap.set(normalizedSerial, resolvedName);
+  };
+
+  const registerServer = (section: Record<string, any> | undefined) => {
+    if (!section || typeof section !== 'object') return;
+    register(section.serial, section.name);
+    register(section.mac, section.name);
+    register(section.macid, section.name);
+  };
+
+  register(macId, serverSection?.name);
+  registerServer(serverSection);
+
+  const extensions =
+    Array.isArray(serverSection.extensions)
+      ? serverSection.extensions
+      : Array.isArray(serverSection.Extensions)
+        ? serverSection.Extensions
+        : [];
+
+  extensions.forEach((extension: Record<string, any>) => {
+    if (!extension || typeof extension !== 'object') return;
+    register(extension.serial ?? extension.mac, extension.name ?? extension.label);
+  });
+
+  if (!sourceMap.size) return undefined;
+
+  return (player: Player) => {
+    const channelId = extractPrimaryChannelId(player);
+    if (!channelId) return undefined;
+    const [rawSerial] = channelId.split('#');
+    if (!rawSerial) return undefined;
+    const normalizedSerial = rawSerial.trim().toUpperCase();
+    if (!normalizedSerial) return undefined;
+    return sourceMap.get(normalizedSerial) ?? normalizedSerial;
+  };
+}
+
+/**
+ * Compose the working view for zone setup, combining MiniServer data, admin overrides,
+ * and the source resolver in one place.
+ */
 function prepareZoneContext(): PreparedZoneContext | null {
   const rawMusicConfig = config.audioserver?.musicCFG;
   if (!rawMusicConfig) {
@@ -229,13 +329,18 @@ function prepareZoneContext(): PreparedZoneContext | null {
     return null;
   }
 
+  const serverSection = macId && musicConfig[macId] ? musicConfig[macId] : musicConfig;
+  const resolveSourceName = createSourceResolver(serverSection, macId);
   const players = extractPlayers(musicConfig, macId).sort((a, b) => a.playerid - b.playerid);
   const adminConfig = getAdminConfig();
   const adminZones = new Map<number, ZoneConfigEntry>(adminConfig.zones.map((zone) => [zone.id, zone]));
 
-  return { players, adminConfig, adminZones };
+  return { players, adminConfig, adminZones, resolveSourceName };
 }
 
+/**
+ * Tear down the backend for a single zone; used when re-syncing from MiniServer updates.
+ */
 async function cleanupZone(playerId: number): Promise<void> {
   const existingZone = zone[playerId];
   if (!existingZone) return;
@@ -250,16 +355,30 @@ async function cleanupZone(playerId: number): Promise<void> {
   delete zone[playerId];
 }
 
+/**
+ * Apply admin overrides, create the backend instance, and broadcast player info for a single zone.
+ */
 async function setupZoneInternal(
   player: Player,
   index: number,
   adminZones: Map<number, ZoneConfigEntry>,
   newZoneEntries: ZoneConfigEntry[],
+  updatedZoneEntries: ZoneConfigEntry[],
+  resolveSourceName?: SourceResolver,
 ): Promise<void> {
   const playerId = player.playerid;
   await cleanupZone(playerId);
 
-  const zoneOverride = adminZones.get(playerId);
+  let zoneOverride = adminZones.get(playerId);
+  const resolvedSource = resolveSourceName?.(player);
+  const sourceName = typeof resolvedSource === 'string' ? resolvedSource.trim() : '';
+
+  if (zoneOverride && sourceName && zoneOverride.source !== sourceName) {
+    zoneOverride = { ...zoneOverride, source: sourceName };
+    adminZones.set(playerId, zoneOverride);
+    updatedZoneEntries.push(zoneOverride);
+  }
+
   let backend = zoneOverride?.backend;
   let ip = zoneOverride?.ip;
   const maPlayerId = zoneOverride?.maPlayerId;
@@ -269,7 +388,13 @@ async function setupZoneInternal(
   if (!backend || !ip) {
     logger.warn(`[ZoneManager] Missing backend or IP for Loxone player ID: ${playerId}. Creating default DummyBackend entry.`);
     const fallbackName = configuredName || playerProvidedName || `Zone ${index + 1}`;
-    const defaultZone: ZoneConfigEntry = { id: playerId, backend: 'DummyBackend', ip: '127.0.0.1', name: fallbackName };
+    const defaultZone: ZoneConfigEntry = {
+      id: playerId,
+      backend: 'DummyBackend',
+      ip: '127.0.0.1',
+      name: fallbackName,
+      source: sourceName || undefined,
+    };
     newZoneEntries.push(defaultZone);
     adminZones.set(playerId, defaultZone);
     backend = defaultZone.backend;
@@ -312,20 +437,38 @@ async function setupZoneInternal(
   }
 }
 
-function persistNewZoneConfig(newZoneEntries: ZoneConfigEntry[], adminConfig: AdminConfig) {
-  if (!newZoneEntries.length) return;
-
+/**
+ * Write any new or updated zones back to the admin configuration to keep disk state in sync.
+ */
+function persistZoneConfigChanges(
+  newZoneEntries: ZoneConfigEntry[],
+  updatedZoneEntries: ZoneConfigEntry[],
+  adminConfig: AdminConfig,
+) {
   const { merged, added } = mergeZoneConfigEntries(adminConfig.zones, newZoneEntries);
+  const updatesById = new Map(updatedZoneEntries.map((entry) => [entry.id, entry]));
 
-  if (!added.length) return;
+  let finalZones = merged;
+  if (updatesById.size) {
+    finalZones = merged.map((entry) => {
+      const update = updatesById.get(entry.id);
+      return update ? { ...entry, ...update } : entry;
+    });
+  }
+
+  if (!added.length && !updatesById.size) return;
 
   added.forEach((entry) => {
     logger.info(`[ZoneManager] Added default zone configuration for Loxone player ID ${entry.id}.`);
   });
 
+  updatesById.forEach((entry) => {
+    logger.info(`[ZoneManager] Updated zone configuration for Loxone player ID ${entry.id}.`);
+  });
+
   updateAdminConfig({
     ...adminConfig,
-    zones: merged,
+    zones: finalZones,
   });
 }
 
@@ -340,7 +483,7 @@ const setupZones = async (): Promise<void> => {
   const context = prepareZoneContext();
   if (!context) return;
 
-  const { players, adminConfig, adminZones } = context;
+  const { players, adminConfig, adminZones, resolveSourceName } = context;
 
   if (players.length === 0) {
     logger.error('[ZoneManager] No players configured in Music configuration. Skipping Zone Initialization');
@@ -353,19 +496,20 @@ const setupZones = async (): Promise<void> => {
   Object.keys(zone).forEach((key) => delete zone[Number(key)]);
 
   const newZoneEntries: ZoneConfigEntry[] = [];
+  const updatedZoneEntries: ZoneConfigEntry[] = [];
 
   for (const [index, player] of players.entries()) {
-    await setupZoneInternal(player, index, adminZones, newZoneEntries);
+    await setupZoneInternal(player, index, adminZones, newZoneEntries, updatedZoneEntries, resolveSourceName);
   }
 
-  persistNewZoneConfig(newZoneEntries, adminConfig);
+  persistZoneConfigChanges(newZoneEntries, updatedZoneEntries, adminConfig);
 };
 
 const setupZoneById = async (playerId: number): Promise<boolean> => {
   const context = prepareZoneContext();
   if (!context) return false;
 
-  const { players, adminConfig, adminZones } = context;
+  const { players, adminConfig, adminZones, resolveSourceName } = context;
   const index = players.findIndex((player) => player.playerid === playerId);
   if (index === -1) {
     logger.warn(`[ZoneManager] Cannot connect unknown Loxone player ID: ${playerId}`);
@@ -373,8 +517,9 @@ const setupZoneById = async (playerId: number): Promise<boolean> => {
   }
 
   const newZoneEntries: ZoneConfigEntry[] = [];
-  await setupZoneInternal(players[index], index, adminZones, newZoneEntries);
-  persistNewZoneConfig(newZoneEntries, adminConfig);
+  const updatedZoneEntries: ZoneConfigEntry[] = [];
+  await setupZoneInternal(players[index], index, adminZones, newZoneEntries, updatedZoneEntries, resolveSourceName);
+  persistZoneConfigChanges(newZoneEntries, updatedZoneEntries, adminConfig);
   return true;
 };
 
@@ -617,6 +762,9 @@ const updateZoneGroup = () => {
 }
 // TODO
 
+/**
+ * Stop every backend instance and clear the in-memory registry. Used on shutdown and full re-syncs.
+ */
 const cleanupZones = async (): Promise<void> => {
   const entries = Object.values(zone);
   await Promise.all(

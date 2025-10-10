@@ -1,6 +1,6 @@
 {
   "name": "lox-audioserver",
-  "version": "2.0.3",
+  "version": "2.1.0",
   "description": "Modern TypeScript implementation of the Loxone Audio Server",
   "private": false,
   "repository": {
@@ -24,31 +24,31 @@
     ]
   },
   "devDependencies": {
-    "@tsconfig/node20": "^20.1.4",
+    "@tsconfig/node20": "^20.1.6",
     "@types/ndjson": "^2.0.4",
-    "@types/node": "^22.7.4",
+    "@types/node": "^24.7.1",
     "@types/node-rsa": "^1.1.4",
     "@types/websocket": "^1.0.10",
     "@types/ws": "^8.18.1",
-    "@typescript-eslint/eslint-plugin": "^8.8.0",
-    "@typescript-eslint/parser": "^8.8.0",
-    "eslint": "^9.11.1",
-    "eslint-config-prettier": "^9.1.0",
-    "eslint-plugin-prettier": "^5.2.1",
-    "nodemon": "^3.1.7",
-    "prettier": "^3.3.3",
+    "@typescript-eslint/eslint-plugin": "^8.46.0",
+    "@typescript-eslint/parser": "^8.46.0",
+    "eslint": "^9.37.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
+    "nodemon": "^3.1.10",
+    "prettier": "^3.6.2",
     "rimraf": "^6.0.1",
     "ts-node": "^10.9.2",
-    "typescript": "^5.6.2"
+    "typescript": "^5.9.3"
   },
   "dependencies": {
-    "axios": "^1.12.0",
+    "axios": "^1.12.2",
     "crc": "^4.3.2",
     "ndjson": "^2.0.0",
     "node-rsa": "^1.1.1",
     "websocket": "^1.0.35",
-    "winston": "^3.14.2",
-    "winston-transport": "^4.8.0",
+    "winston": "^3.18.3",
+    "winston-transport": "^4.9.0",
     "ws": "^8.18.3"
   }
 }

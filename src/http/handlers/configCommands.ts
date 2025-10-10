@@ -5,6 +5,7 @@ import { saveMusicCache } from '../../config/musicCache';
 import { asyncCrc32 } from '../../utils/crc32utils';
 import logger from '../../utils/troxorlogger';
 import { updateZonePlayerName } from '../../backend/zone/zonemanager';
+import { extractExtensions } from '../utils/extensions';
 
 /**
  * Shared RSA key used for Loxone key exchange endpoints.
@@ -25,10 +26,11 @@ export function audioCfgReady(url: string): CommandResult {
  * Return the CRC and extension list for the current audio configuration.
  */
 export function audioCfgGetConfig(url: string): CommandResult {
+  const extensions = extractExtensions(config.audioserver?.musicCFG, config.audioserver?.macID);
   const configData = {
     crc32: config.audioserver?.musicCRC,
     //timestamp: config.audioserver?.musicTimestamp ?? null,
-    extensions: [],
+    extensions,
   };
   return emptyCommand(url, configData);
 }
@@ -92,7 +94,7 @@ export async function audioCfgSetConfig(url: string): Promise<CommandResult> {
 
     const responsePayload = {
       crc32,
-      extensions: [] as unknown[],
+      extensions: extractExtensions(parsedConfig, config.audioserver?.macID),
     };
 
     saveMusicCache({ crc32, musicCFG: parsedConfig, timestamp: config.audioserver?.musicTimestamp });
