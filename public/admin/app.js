@@ -1258,6 +1258,18 @@ function renderProviderContent(mediaProvider = {}) {
         : '')
     : '';
 
+  const canConnectProvider = (() => {
+    if (isDummyProvider) return true;
+    if (!providerType) return false;
+    if (!requiresHost) return true;
+    return Boolean(hostValue && hostValue.trim());
+  })();
+  const connectButtonAttrs = canConnectProvider ? '' : 'disabled aria-disabled="true"';
+  const connectButtonText = canConnectProvider ? 'Connect provider' : 'Enter host to connect';
+  const connectButtonHint = !canConnectProvider && requiresHost
+    ? '<p class="provider-card__hint provider-card__hint--warning">Add the provider host above to enable Connect.</p>'
+    : '';
+
   const providerDescription = describeProviderType(providerType);
   const selectedHostDisplay = requiresHost ? (hasHost ? hostValue : 'Host not set yet') : 'Not required';
   const selectedPortDisplay = showPortField ? (hasPort ? portValue : 'Default (8095)') : 'Not required';
@@ -1355,8 +1367,9 @@ function renderProviderContent(mediaProvider = {}) {
             ${providerFields}
           </div>
           <div class="provider-card__actions">
-            <button type="button" id="provider-connect" class="primary">Connect provider</button>
+            <button type="button" id="provider-connect" class="primary" ${connectButtonAttrs}>${connectButtonText}</button>
           </div>
+          ${connectButtonHint}
         </div>
       </div>
     </div>
@@ -2015,11 +2028,13 @@ function bindFormEvents() {
   document.getElementById('provider-ip')?.addEventListener('input', (event) => {
     state.config.mediaProvider.options = state.config.mediaProvider.options || {};
     state.config.mediaProvider.options.IP = event.target.value;
+    render();
   });
 
   document.getElementById('provider-port')?.addEventListener('input', (event) => {
     state.config.mediaProvider.options = state.config.mediaProvider.options || {};
     state.config.mediaProvider.options.PORT = event.target.value;
+    render();
   });
 
   bindLoggingEvents();

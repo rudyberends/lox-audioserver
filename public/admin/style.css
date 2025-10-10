@@ -2400,6 +2400,17 @@ code {
   justify-content: flex-end;
 }
 
+.provider-card__hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.84rem;
+  color: rgba(71, 85, 105, 0.78);
+}
+
+.provider-card__hint--warning {
+  color: rgba(220, 38, 38, 0.82);
+  font-weight: 600;
+}
+
 .provider-fields-grid {
   display: grid;
   gap: 0.9rem;
