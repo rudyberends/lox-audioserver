@@ -3,7 +3,7 @@ version: '3.8'
 services:
   loxoneaudioserver:
     container_name: lox-audioserver
-    image: ghcr.io/rudyberends/rudyberends/lox-audioserver:latest
+    image: ghcr.io/rudyberends/lox-audioserver:latest
     hostname: lox-audioserver
     build:
       context: .
