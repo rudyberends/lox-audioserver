@@ -1,3 +1,9 @@
+## <small>2.1.3-beta.1 (2025-10-11)</small>
+
+* Merge pull request #19 from rudyberends/main ([c8fe477](https://github.com/rudyberends/lox-audioserver/commit/c8fe477)), closes [#19](https://github.com/rudyberends/lox-audioserver/issues/19)
+* chore(release): 2.1.2-beta.2 [skip ci] ([87193dc](https://github.com/rudyberends/lox-audioserver/commit/87193dc))
+* fix: slim down docker build image ([1148cdc](https://github.com/rudyberends/lox-audioserver/commit/1148cdc))
+
 ## <small>2.1.2-beta.2 (2025-10-11)</small>
 
 * fix: slim down docker build image ([1148cdc](https://github.com/rudyberends/lox-audioserver/commit/1148cdc))
