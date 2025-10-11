@@ -1,5 +1,16 @@
 # lox-audioserver
 
+> ⚠️ **Attention**
+>
+> Loxone is preparing to release a new version of their client applications.  
+> On some items these updated clients communicate with the Audio Server in a different way compared to the current versions.  
+> The overall look and feel have also been redesigned.
+>
+> As the current clients will soon be considered *legacy*, this server’s main focus is towards supporting the new generation of clients.  
+>
+> If you encounter any issues, please also test whether the problem can be reproduced using the latest beta clients, available here:  
+> 👉 [https://www.loxone.com/enen/support/downloads/](https://www.loxone.com/enen/support/downloads/)
+
 Modern TypeScript implementation of the Loxone Audio Server that lets you run your own
 player backends (required) and, optionally, media providers while keeping the Miniserver API
 happy. It exposes the same HTTP/WebSocket surface as the original firmware so existing apps,
