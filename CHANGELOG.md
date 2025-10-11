@@ -1,3 +1,16 @@
+## <small>2.1.3-beta.1 (2025-10-11)</small>
+
+* Merge pull request #19 from rudyberends/main ([c8fe477](https://github.com/rudyberends/lox-audioserver/commit/c8fe477)), closes [#19](https://github.com/rudyberends/lox-audioserver/issues/19)
+* chore(release): 2.1.2-beta.2 [skip ci] ([87193dc](https://github.com/rudyberends/lox-audioserver/commit/87193dc))
+* fix: slim down docker build image ([1148cdc](https://github.com/rudyberends/lox-audioserver/commit/1148cdc))
+
+## <small>2.1.2-beta.2 (2025-10-11)</small>
+
+* fix: slim down docker build image ([1148cdc](https://github.com/rudyberends/lox-audioserver/commit/1148cdc))
+* Merge pull request #16 from rudyberends/beta ([3143c25](https://github.com/rudyberends/lox-audioserver/commit/3143c25)), closes [#16](https://github.com/rudyberends/lox-audioserver/issues/16)
+* Merge pull request #17 from rudyberends/main ([f89040e](https://github.com/rudyberends/lox-audioserver/commit/f89040e)), closes [#17](https://github.com/rudyberends/lox-audioserver/issues/17)
+* chore(release): 2.1.2 [skip ci] ([66d5875](https://github.com/rudyberends/lox-audioserver/commit/66d5875))
+
 ## <small>2.1.2 (2025-10-11)</small>
 
 * Merge pull request #10 from jorrite/fix-update-docs ([fe8feda](https://github.com/rudyberends/lox-audioserver/commit/fe8feda)), closes [#10](https://github.com/rudyberends/lox-audioserver/issues/10)

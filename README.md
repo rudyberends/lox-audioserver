@@ -63,7 +63,7 @@ docker run -d \
   -p 7091:7091 \
   -p 7095:7095 \
   -v $(pwd)/data:/app/data \
-  ghcr.io/rudyberends/rudyberends/lox-audioserver:latest
+  ghcr.io/rudyberends/lox-audioserver:latest
 ```
 
 This starts a container named `lox-audioserver` and exposes the required ports (`7091`, `7095`).
