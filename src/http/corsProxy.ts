@@ -27,12 +27,37 @@ export const corsProxy = async (res: http.ServerResponse, url: string) => {
     return; // Exit the function
   }
 
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(originalUrl);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('Bad Request: Invalid URL');
+    return;
+  }
+
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('Bad Request: Unsupported protocol');
+    return;
+  }
+
   try {
     // Fetch the resource from the original URL using axios
-    const response = await axios.get(originalUrl, { responseType: 'arraybuffer' });
+    const response = await axios.get(originalUrl, {
+      responseType: 'arraybuffer',
+      timeout: 10_000,
+      maxContentLength: 10 * 1024 * 1024,
+      validateStatus: (status) => status >= 200 && status < 300,
+    });
 
     // Get the content type from the response headers
     const contentType = response.headers['content-type'];
+    if (!contentType || !contentType.startsWith('image/')) {
+      res.writeHead(415, { 'Content-Type': 'text/plain' });
+      res.end('Unsupported Media Type');
+      return;
+    }
 
     // Set CORS headers to allow all origins and specific methods
     res.setHeader('Access-Control-Allow-Origin', '*'); // Allow all origins
@@ -43,9 +68,17 @@ export const corsProxy = async (res: http.ServerResponse, url: string) => {
     res.writeHead(200, { 'Content-Type': contentType });
     res.end(response.data); // Send the content data back to the client
   } catch (error) {
-    // Log the error and return a 500 Internal Server Error response
-    logger.debug(`[HTTP] Error fetching resource from ${originalUrl}: ${error}`);
-    res.writeHead(500, { 'Content-Type': 'text/plain' });
-    res.end('Internal Server Error'); // End the response with an error message
+    const statusCode = axios.isAxiosError(error) && error.response ? error.response.status : 500;
+    const safeStatus = statusCode >= 400 && statusCode < 600 ? statusCode : 500;
+    const message =
+      safeStatus === 404
+        ? 'Not Found'
+        : safeStatus === 415
+          ? 'Unsupported Media Type'
+          : 'Failed to fetch resource';
+
+    logger.debug(`[HTTP] Image proxy blocked or failed for ${originalUrl}: ${error}`);
+    res.writeHead(safeStatus, { 'Content-Type': 'text/plain' });
+    res.end(message); // End the response with an error message
   }
 };

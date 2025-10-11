@@ -102,19 +102,39 @@ export async function handleConfigRequest(req: http.IncomingMessage, res: http.S
   }
 
   if (pathOnly === '/admin' || pathOnly.startsWith('/admin/')) {
-    const normalized = pathOnly === '/admin' ? 'index.html' : (pathOnly.replace('/admin', '') || 'index.html');
-    const relative = normalized.replace(/^\//, '');
-    const filePath = path.join(ADMIN_DIR, relative);
-    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+    const suffix = pathOnly === '/admin' ? '' : pathOnly.slice('/admin'.length);
+    let decodedSuffix: string;
+    try {
+      decodedSuffix = decodeURIComponent(suffix || '/index.html');
+    } catch {
+      res.writeHead(400);
+      res.end('Bad Request');
+      return true;
+    }
+
+    const relativePath = (decodedSuffix.replace(/^\/+/, '') || 'index.html').replace(/\\/g, '/');
+    const resolvedPath = path.resolve(ADMIN_DIR, relativePath);
+    const relativeToAdmin = path.relative(ADMIN_DIR, resolvedPath);
+    const isOutsideAdmin = relativeToAdmin.startsWith('..') || path.isAbsolute(relativeToAdmin);
+
+    if (isOutsideAdmin) {
+      res.writeHead(403);
+      res.end('Forbidden');
+      return true;
+    }
+
+    if (!fs.existsSync(resolvedPath) || fs.statSync(resolvedPath).isDirectory()) {
       res.writeHead(404);
       res.end('Not Found');
       return true;
     }
-    const contentType = getContentType(path.extname(filePath).toLowerCase());
+    const contentType = getContentType(path.extname(resolvedPath).toLowerCase());
     res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'no-store' });
-    fs.createReadStream(filePath)
+    fs.createReadStream(resolvedPath)
       .on('error', (error) => {
-        logger.error(`[configHttp] Error streaming ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+        logger.error(
+          `[configHttp] Error streaming ${resolvedPath}: ${error instanceof Error ? error.message : String(error)}`,
+        );
         if (!res.headersSent) {
           res.writeHead(500);
         }
