@@ -3,6 +3,7 @@ import {
   buildLibraryKey,
   buildLibraryUri,
   buildPlaylistKey,
+  buildPlaylistUri,
   buildRadioKey,
   extractAlbum,
   extractArtist,
@@ -12,6 +13,7 @@ import {
   extractProvider,
   extractUri,
   normalizeMediaUri,
+  toPlaylistCommandUri,
   safeNumber,
 } from './utils';
 import { MediaFolderItem, PlaylistItem, RadioFolderItem } from '../types';
@@ -174,10 +176,10 @@ export function mapTrackToPlaylistItem(
       playlistContext?.image,
     ]);
     playlistProviderInstanceId = extractProvider(playlistContext) ?? provider;
-    playlistCommandUri = normalizeMediaUri(
+    const rawPlaylistUri =
       extractUri(playlistContext, 'playlist', playlistRawId, playlistProviderInstanceId) ??
-        buildLibraryUri('playlist', playlistRawId, playlistProviderInstanceId),
-    );
+      buildPlaylistUri(playlistRawId, playlistProviderInstanceId);
+    playlistCommandUri = toPlaylistCommandUri(rawPlaylistUri, playlistProviderInstanceId, playlistRawId);
   }
 
   const trackCover = resolveArtwork(track, [track?.coverurl, track?.thumbnail, track?.image]);
@@ -216,7 +218,10 @@ export function mapPlaylistToItem(
 ): PlaylistItem {
   const provider = extractProvider(playlist) ?? fallbackProvider;
   const rawId = extractItemId(playlist) ?? extractUri(playlist) ?? extractName(playlist) ?? '';
-  const uri = extractUri(playlist, 'playlist', rawId, provider) ?? buildPlaylistKey(provider, rawId);
+  const rawUri =
+    extractUri(playlist, 'playlist', rawId, provider) ??
+    buildPlaylistUri(rawId, provider);
+  const uri = toPlaylistCommandUri(rawUri, provider, rawId);
   const name = extractName(playlist) ?? rawId;
   const cover = resolveArtwork(playlist, [playlist?.playlistCover, playlist?.coverurl, playlist?.thumbnail, playlist?.image]);
 
