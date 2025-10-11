@@ -1,5 +1,26 @@
 ## <small>2.1.2-beta.1 (2025-10-11)</small>
 
+* ci: consolidate release workflow with docker gate ([80f30d9](https://github.com/rudyberends/lox-audioserver/commit/80f30d9))
+* ci: consolidate release workflow with docker gate ([b7ebb9d](https://github.com/rudyberends/lox-audioserver/commit/b7ebb9d))
+* ci: consolidate release workflow with docker gate ([df02825](https://github.com/rudyberends/lox-audioserver/commit/df02825))
+* chore: remove unwanted file ([2181022](https://github.com/rudyberends/lox-audioserver/commit/2181022))
+* chore(release): 2.1.2-beta.1 [skip ci] ([b541685](https://github.com/rudyberends/lox-audioserver/commit/b541685))
+* chore(release): configure semantic-release and workflow for main + beta ([9c35740](https://github.com/rudyberends/lox-audioserver/commit/9c35740))
+* chore(release): configure semantic-release and workflow for main + beta ([d832613](https://github.com/rudyberends/lox-audioserver/commit/d832613))
+* Merge pull request #10 from jorrite/fix-update-docs ([fe8feda](https://github.com/rudyberends/lox-audioserver/commit/fe8feda)), closes [#10](https://github.com/rudyberends/lox-audioserver/issues/10)
+* Merge pull request #11 from rudyberends/feature/release-and-docs ([27b2b92](https://github.com/rudyberends/lox-audioserver/commit/27b2b92)), closes [#11](https://github.com/rudyberends/lox-audioserver/issues/11)
+* Merge pull request #12 from rudyberends/beta ([2933aaa](https://github.com/rudyberends/lox-audioserver/commit/2933aaa)), closes [#12](https://github.com/rudyberends/lox-audioserver/issues/12)
+* Merge pull request #13 from rudyberends/beta ([9b0bfab](https://github.com/rudyberends/lox-audioserver/commit/9b0bfab)), closes [#13](https://github.com/rudyberends/lox-audioserver/issues/13)
+* Merge pull request #14 from rudyberends/main ([21e5bf8](https://github.com/rudyberends/lox-audioserver/commit/21e5bf8)), closes [#14](https://github.com/rudyberends/lox-audioserver/issues/14)
+* Merge pull request #15 from rudyberends/fix/legacy-client-playlist ([a9d494c](https://github.com/rudyberends/lox-audioserver/commit/a9d494c)), closes [#15](https://github.com/rudyberends/lox-audioserver/issues/15)
+* Merge pull request #9 from rudyberends/main ([174e28d](https://github.com/rudyberends/lox-audioserver/commit/174e28d)), closes [#9](https://github.com/rudyberends/lox-audioserver/issues/9)
+* fix: align legacy playlist handling with new client ([d8146bb](https://github.com/rudyberends/lox-audioserver/commit/d8146bb))
+* docs: update docker volume mount to reflect WORKDIR ([7abe71d](https://github.com/rudyberends/lox-audioserver/commit/7abe71d))
+* docs: Update README.md ([6e85c4d](https://github.com/rudyberends/lox-audioserver/commit/6e85c4d))
+* docs: updated readme ([12db83a](https://github.com/rudyberends/lox-audioserver/commit/12db83a))
+
+## <small>2.1.2-beta.1 (2025-10-11)</small>
+
 * Merge pull request #10 from jorrite/fix-update-docs ([fe8feda](https://github.com/rudyberends/lox-audioserver/commit/fe8feda)), closes [#10](https://github.com/rudyberends/lox-audioserver/issues/10)
 * Merge pull request #11 from rudyberends/feature/release-and-docs ([27b2b92](https://github.com/rudyberends/lox-audioserver/commit/27b2b92)), closes [#11](https://github.com/rudyberends/lox-audioserver/issues/11)
 * Merge pull request #12 from rudyberends/beta ([2933aaa](https://github.com/rudyberends/lox-audioserver/commit/2933aaa)), closes [#12](https://github.com/rudyberends/lox-audioserver/issues/12)
