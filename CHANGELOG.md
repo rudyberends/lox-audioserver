@@ -1,3 +1,10 @@
+## <small>2.1.5 (2025-10-11)</small>
+
+* Merge pull request #21 from rudyberends/main ([5e9506c](https://github.com/rudyberends/lox-audioserver/commit/5e9506c)), closes [#21](https://github.com/rudyberends/lox-audioserver/issues/21)
+* Merge pull request #25 from rudyberends/main ([6dca14a](https://github.com/rudyberends/lox-audioserver/commit/6dca14a)), closes [#25](https://github.com/rudyberends/lox-audioserver/issues/25)
+* Merge pull request #28 from rudyberends/fix-26-setup-add-a-provider-not-shown ([a9ac2f6](https://github.com/rudyberends/lox-audioserver/commit/a9ac2f6)), closes [#28](https://github.com/rudyberends/lox-audioserver/issues/28)
+* fix: improve setup guidance shortcuts ([9d326ed](https://github.com/rudyberends/lox-audioserver/commit/9d326ed))
+
 ## <small>2.1.4 (2025-10-11)</small>
 
 * Merge pull request #23 from rudyberends/fix-22-provider-inserting-provider-iphost-issues ([cde0732](https://github.com/rudyberends/lox-audioserver/commit/cde0732)), closes [#23](https://github.com/rudyberends/lox-audioserver/issues/23)
