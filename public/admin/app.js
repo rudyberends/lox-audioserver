@@ -470,6 +470,19 @@ function renderStatus(config) {
   const assignmentStepClass = hasUnassignedZones ? 'pairing-step-pending' : 'pairing-step-complete';
   const assignmentBadgeClass = hasUnassignedZones ? 'pending' : 'complete';
   const assignmentBadgeLabel = hasUnassignedZones ? 'Incomplete' : 'Complete';
+  const providerConfig = config.mediaProvider ?? {};
+  const providerTypeRaw = typeof providerConfig.type === 'string' ? providerConfig.type : '';
+  const providerType = providerTypeRaw.trim();
+  const providerOptions = providerConfig.options && typeof providerConfig.options === 'object' ? providerConfig.options : {};
+  const providerHostRaw = typeof providerOptions.IP === 'string' ? providerOptions.IP : '';
+  const providerHost = providerHostRaw.trim();
+  const providerRequiresHost = Boolean(providerType && providerType !== 'DummyProvider');
+  const providerConfigured = Boolean(providerType && (!providerRequiresHost || providerHost));
+  const providerStepClass = providerConfigured ? 'pairing-step-complete' : 'pairing-step-pending';
+  const providerBadgeClass = providerConfigured ? 'complete' : 'pending';
+  const providerBadgeLabel = providerConfigured ? 'Complete' : 'Pending';
+  const zoneActionLabel = hasUnassignedZones ? 'Go to Zones tab' : 'Review zones';
+  const providerActionLabel = providerConfigured ? 'Review provider' : 'Open provider setup';
   const pairingHelp = audioserver.paired
     ? `
         <ol class="pairing-steps">
@@ -481,16 +494,23 @@ function renderStatus(config) {
                 <span class="pairing-step-status ${assignmentBadgeClass}">${assignmentBadgeLabel}</span>
               </div>
               <span class="pairing-step-description">Loxone zones are downloaded from the Miniserver config. Assign a backend to each zone in the Zones tab.</span>
+              <div class="pairing-step-actions">
+                <button type="button" class="pairing-step-link" data-nav-tab="zones">${zoneActionLabel}</button>
+              </div>
             </div>
           </li>
-          <li class="pairing-step-optional">
+          <li class="pairing-step-optional ${providerStepClass}">
             <span class="pairing-step-indicator" aria-hidden="true"></span>
             <div class="pairing-step-content">
               <div class="pairing-step-heading">
                 <strong>Add a provider</strong>
                 <span class="pairing-step-status optional">Optional</span>
+                <span class="pairing-step-status ${providerBadgeClass}">${providerBadgeLabel}</span>
               </div>
               <span class="pairing-step-description">Enable a provider to expose sources to the AudioServer. Without a provider the server returns empty lists for every source request.</span>
+              <div class="pairing-step-actions">
+                <button type="button" class="pairing-step-link" data-nav-tab="provider">${providerActionLabel}</button>
+              </div>
             </div>
           </li>
         </ol>
@@ -2103,6 +2123,7 @@ function bindFormEvents() {
 
   bindModalEvents();
   bindExtensionEvents();
+  bindStatusShortcuts();
 }
 
 async function connectZone(zoneId, button) {
@@ -2196,6 +2217,23 @@ async function connectZone(zoneId, button) {
     }, 6000);
     zoneErrorTimers.set(zoneId, timer);
   }
+}
+
+function bindStatusShortcuts() {
+  document.querySelectorAll('[data-nav-tab]').forEach((element) => {
+    if (!(element instanceof HTMLElement)) return;
+    element.onclick = (event) => {
+      event.preventDefault();
+      const targetTab = element.getAttribute('data-nav-tab');
+      if (!targetTab || state.activeTab === targetTab) return;
+      state.activeTab = targetTab;
+      render();
+      const targetButton = tabsNav?.querySelector(`.tab[data-tab="${targetTab}"]`);
+      if (targetButton instanceof HTMLElement) {
+        targetButton.focus();
+      }
+    };
+  });
 }
 
 function setZoneStatusIndicator(zoneId, className, text) {
