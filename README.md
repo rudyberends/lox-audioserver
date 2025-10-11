@@ -5,94 +5,101 @@ player backends (required) and, optionally, media providers while keeping the Mi
 happy. It exposes the same HTTP/WebSocket surface as the original firmware so existing apps,
 Touch/Miniservers, and integrations can keep talking to it without modification.
 
-The project currently ships with working Bang & Olufsen BeoLink and Music Assistant support, but the modular design makes it straightforward to plug in other systems.
-
 ## Features
 
-- 🎧 **Zone backends**: Music Assistant, Beolink, and a stub Sonos implementation that
-  demonstrates how to integrate additional clients.
-- 📻 **Media providers (optional)**: Music Assistant provider with full library/radio/playlist
-  support. If no provider is configured, the built-in dummy provider returns empty lists so
-  clients remain responsive.
-- 🧩 **Extensible core**: Clean separation between request routing, providers, and zone
-  backends to make future integrations easy.
+- Zone backends
+  - 🎧 Music Assistant backend — Controls Music Assistant players; supports multiple players per server. (Set `maPlayerId` per zone in the admin UI.)
+  - 🔊 BeoLink backend — Integrates with Bang & Olufsen BeoLink devices. Typically one device per zone via its IP.
+  - 📦 Sonos / Example backend — Stub/sample implementation to demonstrate how to integrate additional clients; extend this for real Sonos support.
+
+- Media providers (optional)
+  - 📻 Music Assistant provider — Full library, radio and playlist browsing and playback via Music Assistant.
+  - 🧪 BeoLink provider — Only radio support.
+  - ⚙️ Dummy provider — Returns empty lists for library/radio/playlist requests so clients remain responsive when no provider is configured (Default provider).
+
+- Extensible core
+  - 🧩 Clean separation between HTTP/WebSocket routing, media providers, and zone backends to make adding new integrations straightforward.
+
+You can configure backends and providers via the admin UI; see the `Configuration Overview` below for pointer to `data/config.json` and per-backend notes.
 
 ## Requirements
 
-- Node.js **20** or newer (the repo uses `@tsconfig/node20`).
-- npm (ships with Node) for dependency management.
-- Easiest deployment: use the published Docker image.
+- Docker (recommended) — easiest way to run the server without building from source.
+- docker-compose (optional) — the repository includes a `docker-compose.yml` for one-command startup.
+- Make sure host ports `7091` and `7095` are available (or adjust host mappings when running the container).
 
 ## Quick Start
 
-Clone the repository of use a zipped release from the releases.
+The easiest options are `docker-compose` or `docker run`.
 
-1. **Install dependencies**
+### Recommended: docker-compose (one command)
 
-   ```bash
-   npm install
-   ```
+If you have Docker and docker-compose installed you can use the included `docker-compose.yml`:
 
-2. **Build**
+```bash
+docker compose up -d
+```
 
-   ```bash
-   npm run build
-   ```
+This starts a container named `lox-audioserver` and exposes the required ports (`7091`, `7095`).
 
-3. **Run**
+### Quick Docker run
 
-   ```bash
-   npm start
-   ```
+If you prefer `docker run`:
 
-   The server exposes two endpoints by default:
+```bash
+docker run -d \
+  --name lox-audioserver \
+  -p 7091:7091 \
+  -p 7095:7095 \
+  -v $(pwd)/data:/app/data \
+  ghcr.io/rudyberends/rudyberends/lox-audioserver:latest
+```
 
-   - `7091` – `AppHttp` (used by Loxone apps / WebSocket clients and the admin UI).
-   - `7095` – `msHttp` (used by the Miniserver itself).
+This starts a container named `lox-audioserver` and exposes the required ports (`7091`, `7095`).
 
-   During development you can use the watcher to run TypeScript directly:
+### Run standalone by cloning (no Docker)
 
-   ```bash
-   npm run watch
-   ```
+If you prefer to run the server directly on the host without Docker, follow these steps. This is a minimal "standalone" run and requires Node.js and npm.
 
-5. **Run via Docker (from GitHub Container Registry)**
+Prerequisites
 
-   Every release publishes a multi-arch image to GHCR. Replace `VERSION` with a published tag
-   (or use `latest`).
+- Node.js 20 or newer
+- npm (comes with Node)
+- Ports `7091` and `7095` available on the host
 
-   ```bash
-   docker run \
-     -p 7091:7091 \
-     -p 7095:7095 \
-     -v $(pwd)/data:/data \
-     ghcr.io/rudyberends/rudyberends/lox-audioserver:VERSION
+Step-by-step
 
-   The workflow `.github/workflows/create-release-and-build.yml` bumps the version, builds,
-   and pushes the image automatically whenever changes land on `main`.
+1. Clone the repository and change directory:
 
-## Configuring
+```bash
+git clone https://github.com/rudyberends/lox-audioserver.git
+cd lox-audioserver
+```
 
-Open the admin UI at `http://<lox-audioserver-ip>:7091/admin` and follow the guided steps. It walks you through adding the Audio Server in Loxone Config, rebooting the Miniserver, pairing, and assigning zones/providers once the MiniServer reconnects.
+2. Create a persistent data folder (used for config, logs, and cache):
 
-When the lox-audioserver starts successfully and the Miniserver pairs successfully with the lox-audioserver, the Audio Server icon in
-Loxone Config turns green.
+```bash
+mkdir -p data
+```
 
-## Configuration Overview
+3. Install dependencies and build:
 
-All settings are stored in `data/config.json`. The
-admin UI reads and writes this file for you.
+```bash
+npm install
+npm run build
+```
 
-- **Beolink/Sonos backends** expect a one-to-one mapping: each zone points to a dedicated
-  device IP.
-- **MusicAssistant backend** can control many players on the same server. Set `maPlayerId` for
-  each zone using the “Player ID” from Music Assistant → Player settings.
+4. Start the server:
 
-| Zone backend | Compatible provider(s)                   | Notes |
-| ------------ | ---------------------------------------- | ----- |
-| `BackendMusicAssistant` | `MusicAssistantProvider`, `DummyProvider` | Requires `maPlayerId`; multiple zones can share one MA host. |
-| `BackendBeolink`        | `BeolinkProvider`, `DummyProvider`                           | One device per zone via its IP. |
-| `BackendSonos` / `BackendExample` | `DummyProvider`                 | Stub/sample implementations; extend to add real provider support. |
+```bash
+npm start
+```
+
+### Configuring
+
+Open the admin UI at http://<lox-audioserver-ip>:7091/admin and follow the guided steps. It walks you through adding the Audio Server in Loxone Config, rebooting the Miniserver, pairing, and assigning zones/providers once the MiniServer reconnects.
+
+When the lox-audioserver starts successfully and the Miniserver pairs successfully with the lox-audioserver, the Audio Server icon in Loxone Config turns green.
 
 ## Code Structure
 
@@ -124,19 +131,17 @@ src/
   (e.g., Music Assistant provider pairs with `BackendMusicAssistant`). Mixing incompatible
   providers/backends is not supported.
 
-## Development Notes
-
-- TypeScript sources live in `src/`; compiled output goes to `dist/` via `npm run build`.
-- Logging uses a Winston-based logger (`src/utils/troxorlogger.ts`). Log levels are configured
-  via the admin UI (stored in `data/config.json`).
-- Graceful shutdown signals (`SIGINT`, `SIGTERM`) are handled in `src/server.ts`; staged
-  clean-up (zone backends, servers) ensures repeatable restarts.
-
 ## Contributing
 
-Pull requests for new providers/backends are welcome. Please run `npm run build` before
-submitting to ensure the TypeScript output stays in sync.
+Pull requests are welcome. Full contribution guidelines (commit message conventions, PR flow and release rules) are in `CONTRIBUTING.md`.
+
+- Make a feature branch from `beta` (or `main` when appropriate):
+  `git checkout -b feature/your-feature-name`
+- Follow Conventional Commits for message formatting (commitlint will reject non-conforming messages).
+- Push your branch and open a PR targeting `beta` for testing: `gh pr create --base beta --head feature/your-feature-name`.
+
+Run `npm run build` locally before submitting a PR to keep compiled output in sync.
 
 ---
 
-Need help or discovered a bug? Open an issue in the repository.
+Need help or found a bug? Open an issue in the repository.

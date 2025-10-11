@@ -13,16 +13,13 @@
     "watch": "nodemon",
     "build": "rimraf ./dist && tsc",
     "start": "node dist/server.js",
-    "test": "ts-node tests/run-tests.ts"
+    "test": "ts-node tests/run-tests.ts",
+    "release": "semantic-release",
+  "prepare": "husky install .husky"
   },
   "keywords": [],
   "author": "Rudy Berends",
   "license": "ISC",
-  "release": {
-    "branches": [
-      "main"
-    ]
-  },
   "devDependencies": {
     "@tsconfig/node20": "^20.1.6",
     "@types/ndjson": "^2.0.4",
@@ -39,7 +36,15 @@
     "prettier": "^3.6.2",
     "rimraf": "^6.0.1",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "semantic-release": "^24.2.9",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/npm": "^12.0.2",
+    "@semantic-release/github": "^11.0.6",
+    "husky": "^9.1.7",
+    "@commitlint/config-conventional": "^20.0.0",
+    "@commitlint/cli": "^20.1.0"
   },
   "dependencies": {
     "axios": "^1.12.2",
