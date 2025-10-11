@@ -15,6 +15,7 @@ import {
   logError,
   parseIdentifier,
   safeNumber,
+  toPlaylistCommandUri,
 } from './utils';
 
 export class PlaylistController {
@@ -73,7 +74,7 @@ export class PlaylistController {
         : [];
 
       return {
-        id: this.fallbackProvider,
+        id: 0,
         name: `${this.providerLabel} Playlists`,
         totalitems: totalitems ?? items.length,
         start: offset,
@@ -129,9 +130,10 @@ export class PlaylistController {
         mapped.length,
       );
 
-      const uri =
+      const rawUri =
         extractUri(playlist, 'playlist', itemId, provider) ??
         `playlist:${itemId}`;
+      const playlistUri = toPlaylistCommandUri(rawUri, provider, itemId);
 
       const playlistCover = extractImage(playlist) ?? mapped.find((item) => item.coverurl)?.coverurl ?? '';
       if (playlistCover) {
@@ -142,7 +144,7 @@ export class PlaylistController {
       }
 
       return {
-        id: uri,
+        id: playlistUri,
         name: extractName(playlist) ?? itemId,
         totalitems: totalitems ?? mapped.length,
         start: offset,
@@ -178,9 +180,10 @@ export class PlaylistController {
 
       const mapped = mapPlaylistToItem(playlist, this.fallbackProvider);
       const rawId = extractItemId(playlist) ?? itemId;
-      const uri =
+      const rawUri =
         extractUri(playlist, 'playlist', rawId, provider) ??
         `playlist:${rawId}`;
+      const playlistUri = toPlaylistCommandUri(rawUri, provider, rawId);
       const totalitems = safeNumber(
         playlist?.track_count ??
           playlist?.items?.length ??
@@ -189,13 +192,13 @@ export class PlaylistController {
 
       return {
         ...mapped,
-        id: uri,
-        audiopath: uri,
+        id: playlistUri,
+        audiopath: playlistUri,
         provider: provider ?? mapped.provider,
         providerInstanceId: provider ?? mapped.providerInstanceId,
         playlistProviderInstanceId: provider ?? mapped.playlistProviderInstanceId,
-        playlistCommandUri: uri,
-        playlistId: uri,
+        playlistCommandUri: playlistUri,
+        playlistId: playlistUri,
         items: totalitems,
         coverurl: extractImage(playlist) ?? mapped.coverurl ?? '',
         rawId,
@@ -208,7 +211,7 @@ export class PlaylistController {
 
   private buildEmptyResponse(offset: number): PlaylistResponse {
     return {
-      id: this.fallbackProvider,
+      id: 0,
       name: `${this.providerLabel} Playlists`,
       totalitems: 0,
       start: offset,

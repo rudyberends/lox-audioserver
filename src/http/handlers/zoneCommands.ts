@@ -2,6 +2,7 @@ import { CommandResult, emptyCommand, response } from './commandTypes';
 import { parseNumberPart, splitUrl } from './commandUtils';
 import { getZoneById, sendCommandToZone } from '../../backend/zone/zonemanager';
 import { getMediaProvider } from '../../backend/provider/factory';
+import { toPlaylistCommandUri } from '../../backend/provider/musicAssistant/utils';
 import logger from '../../utils/troxorlogger';
 import { MediaFolderItem, PlaylistItem } from '../../backend/provider/types';
 import { FileType } from '../../backend/zone/loxoneTypes';
@@ -632,6 +633,18 @@ export async function audioPlayUrl(url: string): Promise<CommandResult> {
   };
   addPlaylistCandidate(playlistIdFromQuery);
   addPlaylistCandidate(decodedBasePath);
+  // LEGACY(current): older client encodes playlist info under /parentpath or /parentid.
+  for (let i = 0; i < meta.length; i++) {
+    const token = meta[i]?.toLowerCase();
+    if (token === 'parentpath' || token === 'parentid') {
+      const candidate = meta[i + 1];
+      if (candidate) {
+        addPlaylistCandidate(decodeURIComponent(candidate));
+      }
+      i++;
+      continue;
+    }
+  }
 
   let resolvedPlaylist: PlaylistItem | undefined;
   if (provider.resolvePlaylist) {
@@ -757,20 +770,54 @@ export async function audioPlayUrl(url: string): Promise<CommandResult> {
 
   const providerHint =
     resolved?.provider ?? (decodedUri.includes(':') ? decodedUri.split(':')[0] : undefined) ?? 'external';
-  const sanitizedAudiopath = decodedUri.replace(/\/(?:no)?shuffle$/i, '');
+  const sanitizedAudiopath = decodedBasePath.replace(/\/(?:no)?shuffle$/i, '');
+  const localTrackMatch = decodedUri.match(/^library:local:track:([^:]+):/i);
+  const providerFromPath = localTrackMatch ? localTrackMatch[1] : undefined;
   const trackPayload: Record<string, unknown> = {
     id: resolved?.id ?? decodedUri,
     name: resolved?.title ?? resolved?.name ?? decodedUri,
     audiopath: sanitizedAudiopath,
     coverurl: resolved?.coverurl ?? '',
     type: resolved?.type ?? FileType.File,
-    provider: resolved?.provider ?? providerHint,
-    providerInstanceId: resolved?.providerInstanceId,
+    provider: resolved?.provider ?? providerFromPath ?? providerHint,
+    providerInstanceId: resolved?.providerInstanceId ?? providerFromPath,
     album: resolved?.album,
     artist: resolved?.artist,
     title: resolved?.title ?? resolved?.name,
     uniqueId: resolved?.id ?? decodedUri,
   };
+
+  const playlistCommandUri =
+    resolvedPlaylist?.playlistCommandUri ??
+    playlistContext?.playlistCommandUri ??
+    playlistRawCommand ??
+    playlistIdFromQuery ??
+    undefined;
+  if (playlistCommandUri) {
+    // LEGACY(current): queue UI requires playlist ids even when /playurl kicked off playback.
+    const normalizedPlaylist = toPlaylistCommandUri(playlistCommandUri, playlistContext?.playlistProviderInstanceId, playlistContext?.rawId);
+    trackPayload.playlistCommandUri = normalizedPlaylist;
+    trackPayload.playlistId = normalizedPlaylist;
+  }
+  if (playlistContext?.playlistProviderInstanceId ?? resolvedPlaylist?.playlistProviderInstanceId ?? resolvedPlaylist?.providerInstanceId) {
+    trackPayload.playlistProviderInstanceId =
+      resolvedPlaylist?.playlistProviderInstanceId ??
+      resolvedPlaylist?.providerInstanceId ??
+      playlistContext?.playlistProviderInstanceId;
+  }
+  if (playlistContext?.playlistCover ?? resolvedPlaylist?.playlistCover) {
+    trackPayload.playlistCover = resolvedPlaylist?.playlistCover ?? playlistContext?.playlistCover;
+  }
+  if (playlistContext?.playlistStartItem ?? resolvedPlaylist?.playlistStartItem ?? startItemParam ?? originalStartItemParam) {
+    trackPayload.playlistStartItem =
+      resolvedPlaylist?.playlistStartItem ??
+      playlistContext?.playlistStartItem ??
+      startItemParam ??
+      originalStartItemParam;
+  }
+  if (playlistContext?.playlistName ?? resolvedPlaylist?.playlistName) {
+    trackPayload.playlistName = resolvedPlaylist?.playlistName ?? playlistContext?.playlistName;
+  }
 
   if (shuffle !== undefined) {
     trackPayload.shuffle = shuffle ? 1 : 0;
@@ -834,13 +881,7 @@ function buildEmptyQueue(url: string, zoneId: number): CommandResult {
 }
 
 function ensurePlaylistCommandUri(value: string): string {
-  const trimmed = (value || '').trim();
-  if (!trimmed) return '';
-  const lower = trimmed.toLowerCase();
-  if (lower.includes('://') || lower.startsWith('playlist:')) {
-    return trimmed;
-  }
-  return `playlist:${trimmed}`;
+  return toPlaylistCommandUri(value);
 }
 
 function buildFriendlyPlaylistPath(rawId: string): string {

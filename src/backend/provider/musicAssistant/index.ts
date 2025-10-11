@@ -21,7 +21,7 @@ import {
 
 const ROOT_FOLDER_ID = '0';
 const DEFAULT_PROVIDER_LABEL = 'Music Assistant';
-const DEFAULT_RADIO_SERVICE = 'musicassistant';
+const DEFAULT_SERVICE = 'musicassistant';
 const CACHE_TTL_MS = 30_000;
 
 // We are faking a NAS origin for all our Music Assistant library items
@@ -68,18 +68,18 @@ export class MusicAssistantProvider implements MediaProvider {
     const clientResolver = () => this.getClient();
     this.radioController = new RadioController(
       clientResolver,
-      DEFAULT_RADIO_SERVICE,
+      DEFAULT_SERVICE,
       CACHE_TTL_MS,
       DEFAULT_PROVIDER_LABEL,
     );
     this.playlistController = new PlaylistController(
       clientResolver,
-      DEFAULT_RADIO_SERVICE,
+      DEFAULT_SERVICE,
       DEFAULT_PROVIDER_LABEL,
     );
     this.libraryController = new LibraryController(
       clientResolver,
-      DEFAULT_RADIO_SERVICE,
+      DEFAULT_SERVICE,
       ROOT_FOLDER_ID,
       MEDIA_LIBRARY_ROOT_ITEMS,
     );

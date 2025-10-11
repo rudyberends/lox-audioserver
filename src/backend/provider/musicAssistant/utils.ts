@@ -79,8 +79,22 @@ export function parsePlaylistIdentifier(value: string): ParsedKey | undefined {
   const [base, query = ''] = value.split('?', 2);
   const idPart = base.slice('playlist:'.length);
   const params = new URLSearchParams(query);
-  const provider = params.get('provider') ?? params.get('instance_id') ?? undefined;
-  const itemId = decodeURIComponent(idPart);
+  let provider = params.get('provider') ?? params.get('instance_id') ?? undefined;
+
+  let itemId: string;
+  if (!provider) {
+    const segments = idPart.split(':');
+    if (segments.length >= 2) {
+      provider = decodeSegment(segments[0]);
+      const encodedId = segments.slice(1).join(':');
+      itemId = decodeURIComponent(encodedId);
+    } else {
+      itemId = decodeURIComponent(idPart);
+    }
+  } else {
+    itemId = decodeURIComponent(idPart);
+  }
+
   return { kind: 'playlist', provider, itemId };
 }
 
@@ -117,6 +131,28 @@ export function parseCompositeIdentifier(value: string): ParsedKey {
   return { kind: head, provider, itemId };
 }
 
+export function toPlaylistCommandUri(
+  value: string | undefined,
+  fallbackProvider?: string,
+  fallbackId?: string,
+): string {
+  const parsed = value ? parseIdentifier(value) : { kind: '', provider: undefined, itemId: undefined };
+
+  if (parsed.kind === 'playlist' && parsed.itemId) {
+    return buildPlaylistUri(parsed.itemId, parsed.provider ?? fallbackProvider);
+  }
+
+  if (fallbackId) {
+    return buildPlaylistUri(fallbackId, parsed.provider ?? fallbackProvider);
+  }
+
+  if (value && value.toLowerCase().startsWith('playlist:')) {
+    return value;
+  }
+
+  return buildPlaylistUri('', fallbackProvider);
+}
+
 export function normalizeItemKey(value: string): string {
   if (!value) return value;
   const trimmed = value.trim();
@@ -140,9 +176,11 @@ export function buildLibraryUri(
 export function buildPlaylistUri(id: string, provider?: string): string {
   if (!id) return '';
   if (id.includes('://')) return id;
-  if (id.toLowerCase().startsWith('playlist:')) return id;
-  const base = `playlist:${id}`;
-  return provider ? `${base}?provider=${encodeURIComponent(provider)}` : base;
+  const safeId = encodeSegment(id);
+  if (!provider) {
+    return `playlist:${safeId}`;
+  }
+  return `playlist:${encodeSegment(provider)}:${safeId}`;
 }
 
 export function buildLibraryKey(
@@ -306,6 +344,26 @@ export function denormalizeMediaUri(uri: string): string {
     return `library://${path}`;
   }
   return uri;
+}
+
+export function denormalizePlaylistUri(value: string): string {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return '';
+
+  if (trimmed.toLowerCase().startsWith('library://')) {
+    return trimmed;
+  }
+
+  const parsed = parseIdentifier(trimmed);
+  if (parsed.kind === 'playlist' && parsed.itemId) {
+    const playlistId = encodeURIComponent(parsed.itemId);
+    const provider = parsed.provider && parsed.provider.toLowerCase() !== 'library'
+      ? encodeURIComponent(parsed.provider)
+      : undefined;
+    return provider ? `library://playlist/${playlistId}?provider=${provider}` : `library://playlist/${playlistId}`;
+  }
+
+  return denormalizeMediaUri(trimmed);
 }
 
 export function extractName(item: any): string | undefined {
