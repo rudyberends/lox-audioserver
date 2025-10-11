@@ -2,7 +2,7 @@ import { updateZoneGroup, getZoneById } from '../zonemanager';
 import { PlayerStatus, RepeatMode as LoxoneRepeatMode } from '../loxoneTypes';
 import logger from '../../../utils/troxorlogger';
 import MusicAssistantClient from './client';
-import { denormalizeMediaUri, normalizeMediaUri } from '../../provider/musicAssistant/utils';
+import { denormalizeMediaUri, denormalizePlaylistUri, normalizeMediaUri } from '../../provider/musicAssistant/utils';
 
 type RepeatMapping = {
   ma: 'off' | 'one' | 'all';
@@ -156,7 +156,7 @@ export async function handleMusicAssistantCommand(
         coerceToOptionalString(info.track);
       const normalizedPlaylistUri = normalizePlaylistCommandUri(playlistUri, playlistFallback);
       const targetUri = normalizedPlaylistUri || playlistUri || playlistFallback;
-      const maUri = denormalizeMediaUri(targetUri ?? playlistUri ?? '');
+      const maUri = denormalizePlaylistUri(targetUri ?? playlistUri ?? '') || denormalizeMediaUri(targetUri ?? playlistUri ?? '');
 
       logger.info(`[MusicAssistant][Zone:${ctx.loxoneZoneId}] playlistplay: ${targetUri}`);
 
@@ -343,6 +343,13 @@ function normalizePlaylistCommandUri(primary: string, fallback?: string): string
 
     if (lower.startsWith('library:local:track:') || lower.startsWith('library:local:playlist:')) {
       return trimmed;
+    }
+
+    if (lower.startsWith('playlist:')) {
+      const rest = trimmed.slice('playlist:'.length);
+      if (rest.includes(':') && !rest.includes('://')) {
+        return trimmed;
+      }
     }
 
     if (lower.startsWith('library://')) resolved = trimmed;
