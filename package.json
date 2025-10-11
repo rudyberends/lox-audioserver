@@ -1,6 +1,6 @@
 {
   "name": "lox-audioserver",
-  "version": "2.1.1",
+  "version": "2.1.2-beta.1",
   "description": "Modern TypeScript implementation of the Loxone Audio Server",
   "private": false,
   "repository": {
@@ -15,7 +15,7 @@
     "start": "node dist/server.js",
     "test": "ts-node tests/run-tests.ts",
     "release": "semantic-release",
-  "prepare": "husky install .husky"
+    "prepare": "husky install .husky"
   },
   "keywords": [],
   "author": "Rudy Berends",
