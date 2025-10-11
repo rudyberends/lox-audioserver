@@ -36,7 +36,13 @@ jobs:
 
       - name: Capture current version
         id: current_version
+<<<<<<< HEAD
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+=======
         run: echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+>>>>>>> df028250e743d747ac6a0f974bba0ebbf0b8a705
 
       - name: Run semantic-release
         env:
@@ -45,7 +51,13 @@ jobs:
 
       - name: Read version from package.json
         id: pkg
+<<<<<<< HEAD
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+=======
         run: echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+>>>>>>> df028250e743d747ac6a0f974bba0ebbf0b8a705
 
       - name: Determine if release was published
         id: release_check
