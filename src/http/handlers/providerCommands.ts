@@ -90,7 +90,6 @@ export async function audioCfgGetPlaylists(url: string): Promise<CommandResult> 
     const segments = remainder
       .split('/')
       .filter((segment) => segment !== undefined && segment !== '');
-
     if (segments.length >= 3 && segments[0] !== '0') {
       const [rawId, rawOffset, rawLimit] = segments;
       playlistId = decodeURIComponent(rawId);
@@ -99,21 +98,26 @@ export async function audioCfgGetPlaylists(url: string): Promise<CommandResult> 
       limit = parseNumberPart(rawLimit, 10);
     } else {
       offset = parseNumberPart(segments[0], 0);
-      if (segments.length === 2) {
-        start = offset;
-        limit = parseNumberPart(segments[1], 10);
-      } else {
-        start = offset;
-        limit = 10;
+      switch (segments.length) {
+        case 2:
+          start = offset;
+          limit = parseNumberPart(segments[1], 10);
+          break;
+        case 3:
+          offset = parseNumberPart(segments[1], 0);
+          start = offset;
+          limit = parseNumberPart(segments[2], 10);
+          break;
+        default:
+          start = offset;
+          limit = 10;
+          break;
       }
     }
   } else {
     const rawSegments = remainder.split('/');
     const numericTail: string[] = [];
-    while (
-      rawSegments.length > 0 &&
-      numericTail.length < 2
-    ) {
+    while (rawSegments.length > 0 && numericTail.length < 2) {
       const candidate = rawSegments[rawSegments.length - 1];
       if (candidate === '' || !/^-?\d+$/.test(candidate)) {
         break;
@@ -180,7 +184,13 @@ export async function audioCfgGetServiceFolder(url: string): Promise<CommandResu
   logger.debug(
     `[audioCfgGetServiceFolder] provider=${provider.constructor.name} service=${service} folder=${folderId} user=${user} offset=${paging.offset} limit=${paging.limit}`,
   );
-  const folder = await provider.getServiceFolder(service, folderId, user, paging.offset, paging.limit);
+  const folder = await provider.getServiceFolder(
+    service,
+    folderId,
+    user,
+    paging.offset,
+    paging.limit,
+  );
 
   return response(url, 'getservicefolder', [{ ...folder, service }]);
 }
