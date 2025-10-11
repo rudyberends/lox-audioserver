@@ -1,3 +1,8 @@
+## <small>2.1.4 (2025-10-11)</small>
+
+* Merge pull request #23 from rudyberends/fix-22-provider-inserting-provider-iphost-issues ([cde0732](https://github.com/rudyberends/lox-audioserver/commit/cde0732)), closes [#23](https://github.com/rudyberends/lox-audioserver/issues/23)
+* fix: preserve focus on provider host inputs ([0f5cc9f](https://github.com/rudyberends/lox-audioserver/commit/0f5cc9f))
+
 ## <small>2.1.3 (2025-10-11)</small>
 
 * Merge pull request #19 from rudyberends/main ([c8fe477](https://github.com/rudyberends/lox-audioserver/commit/c8fe477)), closes [#19](https://github.com/rudyberends/lox-audioserver/issues/19)
