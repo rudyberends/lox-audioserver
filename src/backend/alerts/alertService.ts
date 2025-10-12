@@ -17,6 +17,8 @@ import { config as runtimeConfig } from '../../config/config';
  */
 const DEFAULT_MEDIA_DIR = path.resolve(process.cwd(), 'public', 'alerts');
 const DEFAULT_CACHE_DIR = path.resolve(process.cwd(), 'public', 'alerts', 'cache');
+const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // one week
+const CACHE_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000; // six hours
 
 export const BUILTIN_ALERT_PREFIX = 'builtin';
 export const BUILTIN_ALERT_DIR = path.resolve(process.cwd(), 'public', 'alerts');
@@ -53,6 +55,8 @@ export interface AlertsConfigNormalized {
     provider: 'google';
   };
 }
+
+let lastCacheCleanup = 0;
 
 /**
  * Returns the canonical alert media configuration.
@@ -200,6 +204,7 @@ async function generateTtsResource(request: AlertMediaRequest): Promise<AlertMed
 
   const language = (request.language ?? 'en').trim() || 'en';
   await ensureDirectoryExists(config.cacheDirectory);
+  await runCacheCleanupIfNeeded(config.cacheDirectory);
 
   const hashInput = `${language}|${text}`;
   const digest = createHash('sha1').update(hashInput).digest('hex');
@@ -260,6 +265,47 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Performs periodic cleanup of stale cache files to cap disk usage. */
+async function runCacheCleanupIfNeeded(dir: string): Promise<void> {
+  const now = Date.now();
+  if (now - lastCacheCleanup < CACHE_CLEANUP_INTERVAL_MS) {
+    return;
+  }
+  lastCacheCleanup = now;
+
+  let entries: fs.Dirent[];
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    logger.warn(
+      `[AlertService] Unable to enumerate cache directory ${dir}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return;
+  }
+
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isFile())
+      .map(async (entry) => {
+        const absolute = path.join(dir, entry.name);
+        try {
+          const stats = await fsp.stat(absolute);
+          if (now - stats.mtimeMs > CACHE_MAX_AGE_MS) {
+            await fsp.unlink(absolute);
+          }
+        } catch (error) {
+          logger.debug(
+            `[AlertService] Cache cleanup skipped for ${absolute}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }),
+  );
 }
 
 /** Ensures the path is inside the configured media directory, returning a portable relative form. */
