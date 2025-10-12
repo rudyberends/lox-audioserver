@@ -559,6 +559,36 @@ header.hero::after {
   box-shadow: 0 0 0 2px rgba(109, 98, 117, 0.26);
 }
 
+.pairing-steps li.pairing-step-optional.pairing-step-complete .pairing-step-indicator {
+  background: var(--color-highlight);
+  box-shadow: 0 0 0 2px rgba(143, 226, 56, 0.25);
+}
+
+.pairing-step-actions {
+  margin-top: 0.5rem;
+}
+
+.pairing-step-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--color-accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.pairing-step-link:hover,
+.pairing-step-link:focus {
+  color: var(--color-highlight);
+  text-decoration: none;
+}
+
+.pairing-step-link:focus {
+  outline: 2px solid rgba(122, 47, 143, 0.45);
+  outline-offset: 2px;
+}
+
 .pairing-steps li.pairing-step-required .pairing-step-indicator {
   background: rgba(233, 155, 67, 0.9);
   box-shadow: 0 0 0 2px rgba(233, 155, 67, 0.28);
