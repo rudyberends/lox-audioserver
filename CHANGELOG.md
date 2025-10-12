@@ -1,3 +1,11 @@
+## <small>2.1.6 (2025-10-12)</small>
+
+* Merge pull request #32 from rudyberends/main ([6a2bb53](https://github.com/rudyberends/lox-audioserver/commit/6a2bb53)), closes [#32](https://github.com/rudyberends/lox-audioserver/issues/32)
+* Merge pull request #33 from rudyberends/fix-playlist-offset-start ([86bb098](https://github.com/rudyberends/lox-audioserver/commit/86bb098)), closes [#33](https://github.com/rudyberends/lox-audioserver/issues/33)
+* Merge pull request #34 from rudyberends/beta ([2f0e57d](https://github.com/rudyberends/lox-audioserver/commit/2f0e57d)), closes [#34](https://github.com/rudyberends/lox-audioserver/issues/34)
+* chore(release): 2.1.6-beta.1 [skip ci] ([1b3e1d5](https://github.com/rudyberends/lox-audioserver/commit/1b3e1d5))
+* fix: add case for root playlist which is 3 segments and playlistid = 0 ([965c9a5](https://github.com/rudyberends/lox-audioserver/commit/965c9a5))
+
 ## <small>2.1.6-beta.1 (2025-10-12)</small>
 
 * Merge pull request #32 from rudyberends/main ([6a2bb53](https://github.com/rudyberends/lox-audioserver/commit/6a2bb53)), closes [#32](https://github.com/rudyberends/lox-audioserver/issues/32)
