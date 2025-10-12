@@ -1,0 +1,7 @@
+#!/command/with-contenv bashio
+
+set -euo pipefail
+
+cd /opt/lox-audioserver
+bashio::log.info "Starting Loxone Audio Server"
+exec node dist/server.js

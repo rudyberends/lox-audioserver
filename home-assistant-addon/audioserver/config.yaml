@@ -1,0 +1,25 @@
+name: "Lox-AudioServer"
+version: "0.1.1"
+slug: lox_audioserver
+description: >-
+  Home Assistant add-on packaging of the community Loxone Audio Server
+  implementation. Provides the admin UI and proxy services on ports 7091/7095.
+url: https://github.com/rudyberends/lox-audioserver
+arch:
+  - aarch64
+  - amd64
+  - armv7
+startup: services
+ingress: false
+panel_admin: false
+panel_icon: mdi:speaker-multiple
+panel_title: "Lox-AudioServer"
+webui: http://[HOST]:[PORT:7091]/admin
+ports:
+  7091/tcp: 7091
+  7095/tcp: 7095
+ports_description:
+  7091/tcp: Admin UI and HTTP interface
+  7095/tcp: Loxone Miniserver pairing port
+options: {}
+schema: {}
