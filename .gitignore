@@ -124,3 +124,5 @@ dist
 .yarn/build-state.yml
 .pnp.*
 public/.DS_Store
+public/alerts/cache
+.DS_Store

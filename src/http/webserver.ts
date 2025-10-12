@@ -5,9 +5,12 @@ import { corsProxy } from './corsProxy'; // Import the CORS proxy function
 import { config } from '../config/config'; // Import config from the configuration module
 import logger from '../utils/troxorlogger'; // Importing the custom logger for logging messages
 import * as http from 'http'; // Importing the HTTP module for server creation
+import fs from 'fs';
+import path from 'path';
 import { handleConfigRequest } from './configHttp';
 import { summariseLoxoneCommand } from './utils/requestSummary';
 import { startExtensionHeartbeat, stopExtensionHeartbeat } from './extensionHeartbeat';
+import { BUILTIN_ALERT_DIR, BUILTIN_ALERT_PREFIX, getAlertsConfig } from '../backend/alerts/alertService';
 
 /**
  * Handles incoming HTTP requests.
@@ -20,6 +23,10 @@ const handleHttpRequest = async (req: http.IncomingMessage, res: http.ServerResp
   const url = req.url || ''; // Get the requested URL
 
   if (await handleConfigRequest(req, res)) {
+    return;
+  }
+
+  if (await serveAlertAsset(req, res, url)) {
     return;
   }
 
@@ -192,6 +199,111 @@ const getApiIdentificationString = (name: string): string => {
 
   return identificationStrings[name] || ''; // Return the corresponding identification string or an empty string if not found
 };
+
+/**
+ * Streams `/alerts/...` media files back to the caller.
+ * Supports both bundled assets (`builtin/...`) and files generated or cached at runtime.
+ */
+async function serveAlertAsset(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: string,
+): Promise<boolean> {
+  if (!url.startsWith('/alerts/')) {
+    return false;
+  }
+  if (req.method && req.method.toUpperCase() !== 'GET') {
+    res.writeHead(405, { 'Content-Type': 'text/plain' });
+    res.end('Method Not Allowed');
+    return true;
+  }
+
+  const [pathOnly] = url.split('?', 1);
+  const rawRelative = pathOnly.slice('/alerts/'.length);
+  if (!rawRelative) {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('Bad Request');
+    return true;
+  }
+
+  const decodedRelative = decodeURIComponentSafe(rawRelative).replace(/\\/g, '/');
+  const alertsConfig = getAlertsConfig();
+  let absolutePath: string;
+  let withinAllowedRoot = false;
+
+  if (decodedRelative.startsWith(`${BUILTIN_ALERT_PREFIX}/`)) {
+    const remainder = decodedRelative.slice(BUILTIN_ALERT_PREFIX.length + 1);
+    absolutePath = path.resolve(BUILTIN_ALERT_DIR, remainder);
+    withinAllowedRoot =
+      absolutePath === BUILTIN_ALERT_DIR ||
+      absolutePath.startsWith(`${BUILTIN_ALERT_DIR}${path.sep}`);
+  } else {
+    absolutePath = path.resolve(alertsConfig.mediaDirectory, decodedRelative);
+    withinAllowedRoot =
+      absolutePath === alertsConfig.mediaDirectory ||
+      absolutePath.startsWith(`${alertsConfig.mediaDirectory}${path.sep}`);
+  }
+
+  if (!withinAllowedRoot) {
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    res.end('Forbidden');
+    return true;
+  }
+
+  try {
+    const stats = fs.statSync(absolutePath);
+    if (!stats.isFile()) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not Found');
+      return true;
+    }
+  } catch {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not Found');
+    return true;
+  }
+
+  const contentType = detectAlertContentType(path.extname(absolutePath).toLowerCase());
+  res.writeHead(200, {
+    'Content-Type': contentType,
+    'Cache-Control': 'no-store',
+  });
+
+  const stream = fs.createReadStream(absolutePath);
+  stream.on('error', (error) => {
+    logger.error(`[Alerts] Error streaming ${absolutePath}: ${error instanceof Error ? error.message : String(error)}`);
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+    }
+    res.end('Internal Server Error');
+  });
+  stream.pipe(res);
+  return true;
+}
+
+function detectAlertContentType(extension: string): string {
+  switch (extension) {
+    case '.mp3':
+      return 'audio/mpeg';
+    case '.wav':
+      return 'audio/wav';
+    case '.ogg':
+    case '.oga':
+      return 'audio/ogg';
+    case '.aac':
+      return 'audio/aac';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+function decodeURIComponentSafe(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
 
 /**
  * Gracefully shuts down the server.
