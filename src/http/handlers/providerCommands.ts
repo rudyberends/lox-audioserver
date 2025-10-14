@@ -51,11 +51,46 @@ export function audioCfgGetAvailableServices(url: string): CommandResult {
 }
 
 /**
+ * Handles global search requests (e.g. "audio/cfg/globalsearch/local:track#5/Foo").
+ * Delegates the search to the active media provider (e.g. MusicAssistantProvider).
+ */
+export async function audioCfgGlobalSearch(url: string) {
+  const parts = splitUrl(url);
+  // URL pattern: audio/cfg/globalsearch/{source}/{query}
+  const rawSource = parts[3] || 'local:track';
+  const query = decodeURIComponent(parts[4] || '').trim();
+
+  const provider = getMediaProvider();
+  logger.debug(`[audioCfgGlobalSearch] provider=${provider?.constructor?.name} source=${rawSource} query="${query}"`);
+
+  if (!provider || !query) {
+    logger.warn('[audioCfgGlobalSearch] No provider or empty query');
+    return response(url, 'globalsearch', []);
+  }
+
+  try {
+    // delegate to provider
+    let results: Record<string, any> = {};
+
+    if (provider.globalSearch) {
+      results = await provider.globalSearch(rawSource, query);
+    } else {
+      logger.warn(`[audioCfgGlobalSearch] Provider ${provider.constructor.name} does not implement globalSearch()`);
+    }
+    return response('xx', 'dummy', []);
+  } catch (err) {
+    logger.warn(`[audioCfgGlobalSearch] Error during search: ${err}`);
+    return response(url, 'dummy', []);
+  }
+}
+
+/**
  * Describe the global search sources available to the client.
  * For now, expose only the radio source to keep the UI pathways happy.
  */
 export function audioCfgGlobalSearchDescribe(url: string): CommandResult {
   const describePayload = {
+    local: ["track", "album", "artist", "playlist", "folder"],
     tunein: ['station'],
   };
   return response(url, 'globalsearch', describePayload);

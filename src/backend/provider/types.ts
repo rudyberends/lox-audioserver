@@ -106,6 +106,63 @@ export interface MediaFolderResponse {
   artist?: string;
 }
 
+export interface FavoriteItem {
+  id: number;
+  slot: number;
+  name: string;
+  plus: boolean;
+  audiopath: string;
+  type: string;
+  coverurl?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  owner?: string;
+  station?: string;
+  service?: string;
+  username?: string;
+  duration?: number;
+  provider?: string;
+  providerInstanceId?: string;
+  rawId?: string;
+  [key: string]: unknown;
+}
+
+export interface FavoriteResponse {
+  id: string | number;
+  name: string;
+  totalitems: number;
+  start: number;
+  items: FavoriteItem[];
+  ts?: number;
+}
+
+export interface RecentItem {
+  audiopath: string;
+  coverurl: string;
+  title: string;
+  service: string;
+  type: number;
+  user?: string;
+  name?: string;
+  artist?: string;
+  album?: string;
+  duration?: number;
+  provider?: string;
+  station?: string;
+  contentType?: string;
+  [key: string]: unknown;
+}
+
+export interface RecentResponse {
+  id: string;
+  name: string;
+  totalitems: number;
+  start: number;
+  items: RecentItem[];
+  ts: number;
+}
+
 export interface RadioProvider {
   getRadios(): Promise<RadioEntry[]> | RadioEntry[];
   getServiceFolder(
@@ -150,4 +207,15 @@ export interface MediaProvider extends RadioProvider {
     folderId: string,
     itemId: string,
   ): Promise<MediaFolderItem | undefined> | MediaFolderItem | undefined;
+  getFavorites?(
+    zoneId: number,
+    offset: number,
+    limit: number,
+  ): Promise<FavoriteResponse> | FavoriteResponse;
+  getRecentlyPlayed?(
+    zoneId: number,
+    limit: number,
+  ): Promise<RecentResponse> | RecentResponse;
+  clearRecentlyPlayed?(zoneId: number): Promise<void> | void;
+  globalSearch?(source: string, query: string): Promise<Record<string, any>> | Record<string, any>;
 }

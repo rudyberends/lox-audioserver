@@ -430,8 +430,8 @@ export function extractAlbum(item: any): string | undefined {
   return undefined;
 }
 
-export function extractImage(item: any): string | undefined {
-  if (!item || typeof item !== 'object') return undefined;
+export function extractImage(item: any): string {
+  if (!item || typeof item !== 'object') return '';
 
   const candidates = [
     item.image,
@@ -452,6 +452,7 @@ export function extractImage(item: any): string | undefined {
     item.thumbnailPath,
     item.thumb,
     item.picture,
+    item.path,
     item.icon,
     item.art,
     item.artwork,
@@ -469,6 +470,7 @@ export function extractImage(item: any): string | undefined {
   }
 
   const imageArrayCandidates = [
+    item.image,
     item.images,
     item.thumbnails,
     item.covers,
@@ -527,7 +529,7 @@ export function extractImage(item: any): string | undefined {
     }
   }
 
-  return undefined;
+  return '';
 }
 
 export function extractUri(

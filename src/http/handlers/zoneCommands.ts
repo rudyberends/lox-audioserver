@@ -4,7 +4,7 @@ import { getZoneById, sendCommandToZone } from '../../backend/zone/zonemanager';
 import { getMediaProvider } from '../../backend/provider/factory';
 import { toPlaylistCommandUri } from '../../backend/provider/musicAssistant/utils';
 import logger from '../../utils/troxorlogger';
-import { MediaFolderItem, PlaylistItem } from '../../backend/provider/types';
+import { MediaFolderItem, PlaylistItem, FavoriteResponse, RecentResponse } from '../../backend/provider/types';
 import { FileType } from '../../backend/zone/loxoneTypes';
 
 /**
@@ -46,21 +46,30 @@ export function audioCfgGetQueue(url: string): CommandResult {
 }
 
 /**
- * Placeholder endpoint for room favourites; returns an empty structure per zone.
+ * Load room favorites for the active media provider.
  */
-export function audioCfgGetRoomFavs(url: string): CommandResult {
+export async function audioCfgGetRoomFavs(url: string): Promise<CommandResult> {
   const parts = splitUrl(url);
   const zoneId = parseNumberPart(parts[3], 0);
+  const start = parseNumberPart(parts[4], 0);
+  const limit = parseNumberPart(parts[5], 50);
 
-  logger.debug(`[audioCfgGetRoomFavs] zone=${zoneId}`);
+  logger.debug(`[audioCfgGetRoomFavs] zone=${zoneId} offset=${start} limit=${limit}`);
+
+  const provider = getMediaProvider();
+  if (typeof provider.getFavorites === 'function') {
+    try {
+      const favorites = await provider.getFavorites(zoneId, start, limit);
+      const normalized = normalizeFavoriteResponse(favorites, zoneId, start);
+      return response(url, 'getroomfavs', [normalized]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`[audioCfgGetRoomFavs] Failed to load favorites: ${message}`);
+    }
+  }
 
   return response(url, 'getroomfavs', [
-    {
-      id: zoneId,
-      totalitems: 0,
-      start: 0,
-      items: [],
-    },
+    normalizeFavoriteResponse(undefined, zoneId, start),
   ]);
 }
 
@@ -70,6 +79,45 @@ export function audioCfgGetRoomFavs(url: string): CommandResult {
 export function audioCfgGetSyncedPlayers(url: string): CommandResult {
   logger.debug('[audioCfgGetSyncedPlayers] requested');
   return response(url, 'getsyncedplayers', [{ items: [] }]);
+}
+
+/**
+ * Retrieve or clear the recently played list for a zone.
+ */
+export async function audioRecent(url: string): Promise<CommandResult> {
+  const segments = splitUrl(url);
+  const zoneId = parseNumberPart(segments[1], 0);
+  const action = (segments[2] ?? '').toLowerCase();
+  const maybeParam = segments[3];
+  const isClear = (maybeParam ?? '').toLowerCase() === 'clear';
+  const limit = !isClear && maybeParam !== undefined ? parseNumberPart(maybeParam, 50) : 50;
+
+  logger.debug(
+    `[audioRecent] zone=${zoneId} action=${action}${isClear ? ' clear' : ''} limit=${limit}`,
+  );
+
+  const provider = getMediaProvider();
+
+  if (isClear && typeof provider.clearRecentlyPlayed === 'function') {
+    try {
+      await provider.clearRecentlyPlayed(zoneId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`[audioRecent] Failed to clear recently played items: ${message}`);
+    }
+  }
+
+  let payload: RecentResponse | undefined;
+  if (typeof provider.getRecentlyPlayed === 'function') {
+    try {
+      payload = await provider.getRecentlyPlayed(zoneId, limit);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`[audioRecent] Failed to load recently played items: ${message}`);
+    }
+  }
+
+  return response(url, 'recent', normalizeRecentResponse(payload));
 }
 
 /**
@@ -359,10 +407,10 @@ export async function audioLibraryPlay(url: string): Promise<CommandResult> {
     const zone = getZoneById(playerId);
     const queueItem = Array.isArray(zone?.queue?.items)
       ? zone!.queue!.items.find(
-          (entry: any) =>
-            entry?.audiopath?.toLowerCase() === itemId.toLowerCase() ||
-            entry?.unique_id?.toLowerCase() === trackId.toLowerCase(),
-        )
+        (entry: any) =>
+          entry?.audiopath?.toLowerCase() === itemId.toLowerCase() ||
+          entry?.unique_id?.toLowerCase() === trackId.toLowerCase(),
+      )
       : undefined;
 
     if (queueItem && typeof queueItem.qindex === 'number') {
@@ -529,6 +577,64 @@ export async function audioLibraryPlay(url: string): Promise<CommandResult> {
 }
 
 /**
+ * Handle Favorite play commands.
+ */
+export async function audioFavoritePlay(url: string): Promise<CommandResult> {
+  const match = url.match(/^audio\/(\d+)\/roomfav\/play\/(\d+)\/([^/]+)/);
+  if (!match) {
+    logger.warn(`[audioFavoritePlay] Invalid URL format: ${url}`);
+    return response(url, 'libraryplay', []);
+  }
+
+  const zoneId = Number(match[1]);
+  const slot = Number(match[2]);
+  const providerKey = match[3];
+  const shuffle = /shuffle$/i.test(url) && !/noshuffle$/i.test(url);
+  const provider = getMediaProvider();
+  const favorites = (provider as any)?.favoritesController?.getCachedFavorites?.(zoneId);
+
+  logger.info(`[audioFavoritePlay] zone=${zoneId} slot=${slot} provider=${provider}`);
+
+  if (!favorites || !Array.isArray(favorites)) {
+    logger.warn(`[audioFavoritePlay] No favorites cached for zone ${zoneId}`);
+    return response(url, 'libraryplay', []);
+  }
+
+  const fav = favorites.find((f: any) => f.slot === slot);
+  if (!fav) {
+    logger.warn(`[audioFavoritePlay] No favorite found for slot ${slot} in zone ${zoneId}`);
+    return response(url, 'libraryplay', []);
+  }
+
+  const audiopath = fav.audiopath;
+  if (!audiopath) {
+    logger.warn(`[audioFavoritePlay] Favorite ${fav.name} has no audiopath`);
+    return response(url, 'libraryplay', []);
+  }
+
+  // Bouw payload en stuur naar zone
+  const commandPayload: Record<string, unknown> = {
+    id: fav.rawId ?? audiopath,
+    name: fav.name ?? fav.title ?? audiopath,
+    audiopath,
+    coverurl: fav.coverurl ?? '',
+    provider: fav.provider ?? providerKey,
+    providerInstanceId: fav.provider ?? providerKey,
+    type: fav.type ?? 'library_track',
+    option: 'replace',
+  };
+
+  if (shuffle) {
+    commandPayload.shuffle = 1;
+  }
+
+  logger.info(`[audioFavoritePlay] Playing favorite: ${fav.name} → ${audiopath}`);
+  await sendCommandToZone(zoneId, 'playlistplay', JSON.stringify(commandPayload));
+
+  return response(url, 'libraryplay', [commandPayload]);
+}
+
+/**
  * Handle direct playurl commands, resolving playlist metadata when available so playback continues.
  */
 export async function audioPlayUrl(url: string): Promise<CommandResult> {
@@ -671,11 +777,11 @@ export async function audioPlayUrl(url: string): Promise<CommandResult> {
 
   const playlistRawCommand = playlistContext
     ? playlistContext.playlistCommandUri ??
-      playlistContext.playlistId ??
-      playlistContext.rawId ??
-      playlistContext.id ??
-      playlistIdFromQuery ??
-      decodedBasePath
+    playlistContext.playlistId ??
+    playlistContext.rawId ??
+    playlistContext.id ??
+    playlistIdFromQuery ??
+    decodedBasePath
     : undefined;
 
   if (playlistContext && playlistRawCommand) {
@@ -866,6 +972,51 @@ export function audioDynamicCommand(url: string): CommandResult {
 
   sendCommandToZone(playerID, command, param);
   return emptyCommand(url, []);
+}
+
+function normalizeFavoriteResponse(
+  responseData: FavoriteResponse | undefined,
+  zoneId: number,
+  fallbackStart: number,
+): FavoriteResponse {
+  const items = Array.isArray(responseData?.items) ? responseData.items : [];
+  const totalitems = Number.isFinite(responseData?.totalitems)
+    ? Number(responseData!.totalitems)
+    : items.length;
+  const start = Number.isFinite(responseData?.start) ? Number(responseData!.start) : fallbackStart;
+  const id =
+    responseData?.id !== undefined && responseData?.id !== null
+      ? responseData.id
+      : String(zoneId);
+  const name =
+    typeof responseData?.name === 'string' && responseData.name.trim()
+      ? responseData.name
+      : 'Favorites';
+
+  return {
+    id,
+    name,
+    start,
+    totalitems,
+    items,
+    ts: responseData?.ts ?? Date.now(),
+  };
+}
+
+function normalizeRecentResponse(responseData: RecentResponse | undefined): RecentResponse {
+  const items = Array.isArray(responseData?.items) ? responseData.items : [];
+  const totalitems = Number.isFinite(responseData?.totalitems)
+    ? Number(responseData!.totalitems)
+    : items.length;
+
+  return {
+    id: responseData?.id ?? 'recentlyPlayed',
+    name: responseData?.name ?? 'Recently Played',
+    start: Number.isFinite(responseData?.start) ? Number(responseData!.start) : 0,
+    totalitems,
+    items,
+    ts: responseData?.ts ?? Date.now(),
+  };
 }
 
 function buildEmptyQueue(url: string, zoneId: number): CommandResult {
