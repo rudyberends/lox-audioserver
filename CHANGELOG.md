@@ -1,3 +1,9 @@
+## 2.3.0 (2025-10-16)
+
+* Merge branch 'feature/alerts-backend' into main ([3ea8ef7](https://github.com/rudyberends/lox-audioserver/commit/3ea8ef7))
+* chore: auto-clean tts cache ([4442383](https://github.com/rudyberends/lox-audioserver/commit/4442383))
+* feat: add grouped alert handling ([9090b61](https://github.com/rudyberends/lox-audioserver/commit/9090b61))
+
 ## <small>2.2.1 (2025-10-16)</small>
 
 * Merge branch 'beta' into main ([21c69c0](https://github.com/rudyberends/lox-audioserver/commit/21c69c0))
