@@ -110,6 +110,7 @@ header.hero::after {
   letter-spacing: 0.05em;
   color: rgba(246, 245, 251, 0.75);
   margin-left: 0.6rem;
+  white-space: nowrap;
 }
 
 .hero-info dl {
