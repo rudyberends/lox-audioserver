@@ -1,3 +1,11 @@
+## 2.2.0 (2025-10-16)
+
+* Merge pull request #38 from rudyberends/feat/fav-recent-and-search-support ([50e82c4](https://github.com/rudyberends/lox-audioserver/commit/50e82c4)), closes [#38](https://github.com/rudyberends/lox-audioserver/issues/38)
+* Update README.md ([c49a07c](https://github.com/rudyberends/lox-audioserver/commit/c49a07c))
+* fix: fixed search and some play commands ([5e25102](https://github.com/rudyberends/lox-audioserver/commit/5e25102))
+* feat: implementation of search, recent and favorites ([b51f139](https://github.com/rudyberends/lox-audioserver/commit/b51f139))
+* chore: modernize husky commit hook ([3e6b096](https://github.com/rudyberends/lox-audioserver/commit/3e6b096))
+
 ## <small>2.1.6 (2025-10-12)</small>
 
 * Merge pull request #32 from rudyberends/main ([6a2bb53](https://github.com/rudyberends/lox-audioserver/commit/6a2bb53)), closes [#32](https://github.com/rudyberends/lox-audioserver/issues/32)
