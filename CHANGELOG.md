@@ -1,3 +1,9 @@
+## <small>2.1.6-beta.2 (2025-10-16)</small>
+
+* Merge pull request #37 from rudyberends/fix/wrapped-beta-tag ([cb4bcb2](https://github.com/rudyberends/lox-audioserver/commit/cb4bcb2)), closes [#37](https://github.com/rudyberends/lox-audioserver/issues/37)
+* fix: prevent wrapping of beta tag ([5b66154](https://github.com/rudyberends/lox-audioserver/commit/5b66154))
+* chore: modernize husky commit hook ([3e6b096](https://github.com/rudyberends/lox-audioserver/commit/3e6b096))
+
 ## <small>2.1.6-beta.1 (2025-10-12)</small>
 
 * Merge pull request #32 from rudyberends/main ([6a2bb53](https://github.com/rudyberends/lox-audioserver/commit/6a2bb53)), closes [#32](https://github.com/rudyberends/lox-audioserver/issues/32)
