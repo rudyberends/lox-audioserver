@@ -20,6 +20,7 @@ import {
   audioCfgGetServiceFolder,
   audioCfgGlobalSearchDescribe,
   audioCfgScanStatus,
+  audioCfgGlobalSearch
 } from './providerCommands';
 import {
   audioCfgGetQueue,
@@ -30,7 +31,9 @@ import {
   audioLibraryPlay,
   audioPlaylistPlay,
   audioServicePlay,
+  audioFavoritePlay,
   audioPlayUrl,
+  audioRecent,
 } from './zoneCommands';
 import { CommandResult, emptyCommand, response } from './commandTypes';
 import logger from '../../utils/troxorlogger';
@@ -66,6 +69,7 @@ export const COMMANDS = {
   AUDIO_CFG_GET_SERVICE_FOLDER: 'audio/cfg/getservicefolder',
   AUDIO_CFG_GET_ROOM_FAVS: 'audio/cfg/getroomfavs',
   AUDIO_CFG_GET_SYNCED_PLAYERS: 'audio/cfg/getsyncedplayers',
+  AUDIO_CFG_GLOBAL_SEARCH: 'audio/cfg/globalsearch',
   AUDIO_CFG_GLOBAL_SEARCH_DESCRIBE: 'audio/cfg/globalsearch/describe',
   AUDIO_CFG_GET_SCAN_STATUS: 'audio/cfg/scanstatus',
   AUDIO_CFG_GET_QUEUE: 'audio/\\d+/getqueue',
@@ -74,6 +78,7 @@ export const COMMANDS = {
   AUDIO_SERVICE_PLAY: 'audio/\\d+/serviceplay',
   AUDIO_PLAYLIST_PLAY: 'audio/\\d+/playlist/play',
   AUDIO_LIBRARY_PLAY: 'audio/\\d+/library/play',
+  AUDIO_RECENT: 'audio/\\d+/recent',
   AUDIO_COMMANDS_PATTERN: 'audio/\\d+/(on|off|play|resume|pause|queueminus|queue|queueplus|volume|repeat|shuffle|position|test)',
 };
 
@@ -125,9 +130,11 @@ const AUDIO_QUEUE_RE = /^audio\/\d+\/getqueue(?:\/\d+\/\d+)?$/;
 const AUDIO_SERVICE_PLAY_RE = /^audio\/\d+\/serviceplay\//;
 const AUDIO_PLAYLIST_PLAY_RE = /^audio\/\d+\/playlist\/play\//;
 const AUDIO_LIBRARY_PLAY_RE = /^audio\/\d+\/library\/play\//;
+const AUDIO_RECENT_RE = /^audio\/\d+\/recent(?:\/(?:\d+|clear))?$/;
 const AUDIO_PLAY_URL_RE = /^audio\/\d+\/playurl\//;
 const AUDIO_COMMANDS_RE = /(?:^|\/)audio\/\d+\/(on|off|play|resume|pause|queueminus|queue|queueplus|volume|repeat|shuffle|position|test)(?:\/|$)/;
 const AUDIO_LIBRARY_ALIAS_RE = /^audio\/\d+\/(?:albums|artists|tracks):/;
+const AUDIO_ROOM_FAV_PLAY_RE = /^audio\/\d+\/roomfav\/play\/\d+\/[^/]+(?:\/(?:no)?shuffle)?$/;
 
 /**
  * Ordered route table powering the incremental match within {@link handleLoxoneCommand}.
@@ -156,13 +163,16 @@ prefixRoute('audio', COMMANDS.AUDIO_CFG_GET_RADIOS, audioCfgGetRadios);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_GET_SERVICE_FOLDER, audioCfgGetServiceFolder);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_GET_PLAYLISTS, audioCfgGetPlaylists);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_GLOBAL_SEARCH_DESCRIBE, audioCfgGlobalSearchDescribe);
+prefixRoute('audio', COMMANDS.AUDIO_CFG_GLOBAL_SEARCH, audioCfgGlobalSearch);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_IDENTIFY, audioCfgIdentify);
 
 regexRoute('audio', AUDIO_PLAYER_STATUS_RE, audioGetStatus);
 regexRoute('audio', AUDIO_QUEUE_RE, audioCfgGetQueue);
+regexRoute('audio', AUDIO_RECENT_RE, audioRecent);
 regexRoute('audio', AUDIO_SERVICE_PLAY_RE, audioServicePlay);
 regexRoute('audio', AUDIO_PLAYLIST_PLAY_RE, audioPlaylistPlay);
 regexRoute('audio', AUDIO_LIBRARY_PLAY_RE, audioLibraryPlay);
+regexRoute('audio', AUDIO_ROOM_FAV_PLAY_RE, audioFavoritePlay);
 regexRoute('audio', AUDIO_PLAY_URL_RE, audioPlayUrl);
 regexRoute('audio', AUDIO_LIBRARY_ALIAS_RE, handleLibraryAlias);
 regexRoute('audio', AUDIO_COMMANDS_RE, audioDynamicCommand);

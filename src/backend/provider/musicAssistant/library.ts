@@ -34,7 +34,7 @@ function shouldLimitToLibrary(provider?: string): boolean {
 export class LibraryController {
   constructor(
     private readonly getClient: () => MusicAssistantProviderClient | undefined,
-    private readonly fallbackProvider: string,
+    private readonly Provider: string,
     private readonly rootId: string,
     private readonly rootItems: MediaFolderItem[],
   ) {}
@@ -120,7 +120,7 @@ export class LibraryController {
       ]);
 
       const items = Array.isArray(albums)
-        ? albums.map((album) => mapAlbumToFolderItem(album, this.fallbackProvider))
+        ? albums.map((album) => mapAlbumToFolderItem(album, this.Provider))
         : [];
 
       return {
@@ -150,7 +150,7 @@ export class LibraryController {
       ]);
 
       const items = Array.isArray(artists)
-        ? artists.map((artist) => mapArtistToFolderItem(artist, this.fallbackProvider))
+        ? artists.map((artist) => mapArtistToFolderItem(artist, this.Provider))
         : [];
 
       return {
@@ -180,7 +180,7 @@ export class LibraryController {
       ]);
 
       const items = Array.isArray(tracks)
-        ? tracks.map((track) => mapTrackToMediaItem(track, this.fallbackProvider))
+        ? tracks.map((track) => mapTrackToMediaItem(track, this.Provider))
         : [];
 
       return {
@@ -225,7 +225,7 @@ export class LibraryController {
       ]);
 
       const items = Array.isArray(tracks)
-        ? tracks.map((track) => mapTrackToMediaItem(track, this.fallbackProvider, provider, album))
+        ? tracks.map((track) => mapTrackToMediaItem(track, this.Provider, provider, album))
         : [];
 
       const totalitems = safeNumber(album?.track_count ?? tracks?.length ?? items.length, items.length);
@@ -275,7 +275,7 @@ export class LibraryController {
       ]);
 
       const items = Array.isArray(tracks)
-        ? tracks.map((track) => mapTrackToMediaItem(track, this.fallbackProvider, provider))
+        ? tracks.map((track) => mapTrackToMediaItem(track, this.Provider, provider))
         : [];
 
       const totalitems = safeNumber(tracks?.length ?? items.length, items.length);
@@ -377,7 +377,7 @@ export class LibraryController {
       });
       if (!track) return undefined;
 
-      return mapTrackToMediaItem(track, this.fallbackProvider, provider);
+      return mapTrackToMediaItem(track, this.Provider, provider);
     } catch (error) {
       logError('music/tracks/get_track', error);
       const fallbackKey = buildLibraryKey('track', provider, trackId);
