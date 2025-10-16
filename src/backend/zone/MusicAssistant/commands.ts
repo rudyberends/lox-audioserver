@@ -126,6 +126,72 @@ export async function handleMusicAssistantCommand(
       return true;
     }
 
+    case 'announce': {
+      const info = parseCommandPayload(param);
+      if (!info) {
+        logger.warn(`[MusicAssistant][Zone:${ctx.loxoneZoneId}] announce payload missing`);
+        return true;
+      }
+
+      const announcementUrl =
+        coerceToOptionalString(info.url) ??
+        coerceToOptionalString(info.audiopath) ??
+        coerceToOptionalString(info.announcement_url);
+      if (!announcementUrl) {
+        logger.warn(`[MusicAssistant][Zone:${ctx.loxoneZoneId}] announce payload missing url`);
+        return true;
+      }
+
+      const payload: Record<string, unknown> = {
+        player_id: ctx.maPlayerId,
+        url: announcementUrl,
+      };
+
+      const preAnnounce =
+        coerceToOptionalBoolean(info.pre_announce ?? info.preAnnounce ?? info.preannounce);
+      if (preAnnounce !== undefined) {
+        payload.pre_announce = preAnnounce;
+      }
+
+      const preAnnounceUrl = coerceToOptionalString(
+        info.pre_announce_url ?? info.preAnnounceUrl ?? info.preannounce_url,
+      );
+      if (preAnnounceUrl) {
+        payload.pre_announce_url = preAnnounceUrl;
+      }
+
+      const volumeLevel = coerceToOptionalNumber(
+        info.volume_level ?? info.volumeLevel ?? info.announcement_volume,
+      );
+      if (volumeLevel !== undefined) {
+        payload.volume_level = volumeLevel;
+      }
+
+      const playerGroup = coerceToOptionalBoolean(info.player_group ?? info.playerGroup);
+      if (playerGroup !== undefined) {
+        payload.player_group = playerGroup;
+      }
+
+      const expirationSecs = coerceToOptionalNumber(
+        info.expiration_secs ?? info.expirationSecs ?? info.ttl,
+      );
+      if (expirationSecs !== undefined) {
+        payload.expiration_secs = expirationSecs;
+      }
+
+      try {
+        await ctx.client.rpc('players/cmd/play_announcement', payload);
+        logger.info(
+          `[MusicAssistant][Zone:${ctx.loxoneZoneId}] Announcement playing via ${announcementUrl}`,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn(`[MusicAssistant] Failed to send announcement command: ${message}`);
+      }
+
+      return true;
+    }
+
     case 'playlistplay': {
       const info = parseCommandPayload(param);
 
@@ -329,6 +395,24 @@ function coerceToOptionalString(value: unknown): string | undefined {
   }
   if (typeof value === 'number') return String(value);
   if (typeof value === 'boolean') return value ? '1' : '0';
+  return undefined;
+}
+
+function coerceToOptionalBoolean(value: unknown): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return undefined;
+    if (value === 1) return true;
+    if (value === 0) return false;
+    return value > 0;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return undefined;
+    if (['true', 'yes', '1', 'on', 'enable', 'enabled'].includes(trimmed)) return true;
+    if (['false', 'no', '0', 'off', 'disable', 'disabled'].includes(trimmed)) return false;
+  }
   return undefined;
 }
 
