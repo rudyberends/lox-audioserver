@@ -5,9 +5,24 @@ import {
   buildAlertMediaUrl,
   AlertMediaResource,
 } from '../../backend/alerts/alertService';
-import { getZoneById, sendCommandToZone } from '../../backend/zone/zonemanager';
+import {
+  getZoneById,
+  sendCommandToZone,
+  applyStoredVolumePreset,
+} from '../../backend/zone/zonemanager';
 import logger from '../../utils/troxorlogger';
 import { FileType, AudioEventType, RepeatMode } from '../../backend/zone/loxoneTypes';
+import {
+  parseFadeOptions,
+  clampFadeDuration,
+  clampVolume,
+  cancelFade,
+  scheduleFade,
+  DEFAULT_FADE_DURATION_MS,
+  FadeOptions,
+  FadeSnapshot,
+  FadeController,
+} from '../utils/fade';
 
 const MAX_TTS_CHARACTERS = 800;
 const STOP_KEYWORDS = new Set(['off', 'stop', 'cancel']);
@@ -25,6 +40,8 @@ interface LoopStateSnapshot {
 }
 
 const loopState = new Map<string, LoopStateSnapshot>();
+const fadeState = new Map<string, FadeSnapshot>();
+const activeFadeControllers = new Map<string, FadeController>();
 
 /**
  * Handles grouped alert commands emitted by Loxone (`audio/grouped/...` URLs).
@@ -64,6 +81,7 @@ export async function handleGroupedAlert(url: string): Promise<CommandResult> {
 
   const payloadSegments = segments.slice(pointer + 1);
   const rawPayload = payloadSegments.join('/');
+  const alertOptions = parseFadeOptions(rawPayload);
 
   if (targets.length === 0) {
     logger.warn(
@@ -81,7 +99,7 @@ export async function handleGroupedAlert(url: string): Promise<CommandResult> {
   }
 
   if (action === 'stop') {
-    const stopResult = await stopAlert(type, targets);
+    const stopResult = await stopAlert(type, targets, alertOptions);
     return response(url, 'groupalert', [
       {
         success: stopResult.commands.length > 0,
@@ -115,7 +133,7 @@ export async function handleGroupedAlert(url: string): Promise<CommandResult> {
   }
 
   const mediaUrl = buildAlertMediaUrl(media.relativePath);
-  const startResult = await startAlert(type, targets, media, mediaUrl);
+  const startResult = await startAlert(type, targets, media, mediaUrl, alertOptions);
 
   return response(url, 'groupalert', [
     {
@@ -209,10 +227,14 @@ async function startAlert(
   targets: number[],
   media: AlertMediaResource,
   mediaUrl: string,
+  options: FadeOptions,
 ): Promise<{ commands: Array<{ zone: number; command: string }>; skipped: Array<{ zone: number; reason: string }> }> {
   const commands: Array<{ zone: number; command: string }> = [];
   const skipped: Array<{ zone: number; reason: string }> = [];
   const isLooping = LOOPING_ALERT_TYPES.has(type);
+  const fadeRequested = options.fade === true;
+  const requestedFadeDuration = options.fadeDurationMs ?? DEFAULT_FADE_DURATION_MS;
+  const resolvedFadeDuration = clampFadeDuration(requestedFadeDuration);
 
   const servicePayload = JSON.stringify(buildServicePlayPayload(type, media, mediaUrl));
   let announcementPayload: string | undefined;
@@ -231,6 +253,34 @@ async function startAlert(
     }
 
     const backendName = zone.player.backend || '';
+    const fadeKey = buildLoopKey(zoneId, type);
+    const initialVolume = clampVolume(zone.playerEntry?.volume ?? 0);
+    const enableFade = fadeRequested && resolvedFadeDuration > 0;
+
+    if (enableFade) {
+      fadeState.set(fadeKey, {
+        originalVolume: initialVolume,
+        fadeDurationMs: resolvedFadeDuration,
+      });
+      cancelFade(fadeKey, activeFadeControllers);
+
+      const dropDelta = -Math.max(Math.round(initialVolume), 100);
+      try {
+        await sendCommandToZone(zoneId, 'volume', String(dropDelta));
+        commands.push({ zone: zoneId, command: `volume ${dropDelta}` });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn(`[AlertCommands] Failed to prime fade-in for zone ${zoneId}: ${message}`);
+      }
+      if (zone) {
+        zone.playerEntry.volume = 0;
+        applyStoredVolumePreset(zoneId, false);
+      }
+    } else {
+      fadeState.delete(fadeKey);
+      cancelFade(fadeKey, activeFadeControllers);
+    }
+
     const commandName = selectAlertCommand(backendName, type, isLooping);
     const payload =
       commandName === 'announce'
@@ -244,7 +294,40 @@ async function startAlert(
       const message = error instanceof Error ? error.message : String(error);
       logger.error(`[AlertCommands] Failed to dispatch alert to zone ${zoneId}: ${message}`);
       skipped.push({ zone: zoneId, reason: 'dispatch-failed' });
+      if (enableFade) {
+        fadeState.delete(fadeKey);
+        if (initialVolume > 0) {
+          const initialInt = Math.round(clampVolume(initialVolume));
+          const currentInt = zone ? Math.round(clampVolume(zone.playerEntry.volume ?? 0)) : 0;
+          const delta = initialInt - currentInt;
+          if (zone) {
+            zone.playerEntry.volume = initialInt;
+          }
+          if (delta !== 0) {
+            sendCommandToZone(zoneId, 'volume', String(delta)).catch((restoreError) => {
+              const restoreMessage =
+                restoreError instanceof Error ? restoreError.message : String(restoreError);
+              logger.warn(
+                `[AlertCommands] Failed to restore volume for zone ${zoneId} after failed alert: ${restoreMessage}`,
+              );
+            });
+          }
+        }
+      }
       continue;
+    }
+
+    if (enableFade) {
+      try {
+        await sendCommandToZone(zoneId, 'volume', '-100');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn(`[AlertCommands] Failed to enforce fade start volume for zone ${zoneId}: ${message}`);
+      }
+      if (zone) {
+        zone.playerEntry.volume = 0;
+        applyStoredVolumePreset(zoneId, false);
+      }
     }
 
     if (isLooping) {
@@ -263,6 +346,40 @@ async function startAlert(
     } else {
       loopState.delete(buildLoopKey(zoneId, type));
     }
+
+    if (enableFade) {
+      const snapshot = fadeState.get(fadeKey);
+      const targetVolume = snapshot?.originalVolume ?? initialVolume;
+      const duration = snapshot?.fadeDurationMs ?? resolvedFadeDuration;
+
+      if (targetVolume > 0 && duration > 0) {
+        commands.push({ zone: zoneId, command: `fade-in ${duration}ms` });
+        let lastVolumeInt = 0;
+        if (zone) {
+          zone.playerEntry.volume = lastVolumeInt;
+        }
+        scheduleFade(
+          zoneId,
+          fadeKey,
+          activeFadeControllers,
+          0,
+          targetVolume,
+          duration,
+          (value) => {
+            const next = Math.round(clampVolume(value));
+            const delta = next - lastVolumeInt;
+            lastVolumeInt = next;
+            if (zone) {
+              zone.playerEntry.volume = next;
+            }
+            if (delta === 0) return Promise.resolve();
+            return sendCommandToZone(zoneId, 'volume', String(delta));
+          },
+        );
+      } else {
+        fadeState.delete(fadeKey);
+      }
+    }
   }
 
   return { commands, skipped };
@@ -274,6 +391,7 @@ async function startAlert(
 async function stopAlert(
   type: string,
   targets: number[],
+  options: FadeOptions,
 ): Promise<{ commands: Array<{ zone: number; command: string }>; skipped: Array<{ zone: number; reason: string }> }> {
   const commands: Array<{ zone: number; command: string }> = [];
   const skipped: Array<{ zone: number; reason: string }> = [];
@@ -291,6 +409,15 @@ async function stopAlert(
       skipped.push({ zone: zoneId, reason: 'unknown-zone' });
       continue;
     }
+    const fadeKey = buildLoopKey(zoneId, type);
+    const snapshot = fadeState.get(fadeKey);
+    const storedDuration = snapshot?.fadeDurationMs;
+    const fadeEnabled = options.fade ?? Boolean(snapshot);
+    const requestedDuration = options.fadeDurationMs ?? storedDuration;
+    const fadeDuration = fadeEnabled
+      ? clampFadeDuration(requestedDuration ?? storedDuration ?? DEFAULT_FADE_DURATION_MS)
+      : 0;
+    const hasFade = fadeEnabled && fadeDuration > 0;
 
     if (isLooping) {
       const loopKey = buildLoopKey(zoneId, type);
@@ -309,13 +436,70 @@ async function stopAlert(
       }
     }
 
-    try {
-      await sendCommandToZone(zoneId, 'pause');
-      commands.push({ zone: zoneId, command: 'pause' });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.warn(`[AlertCommands] Failed to pause zone ${zoneId}: ${message}`);
-      skipped.push({ zone: zoneId, reason: 'pause-failed' });
+    if (hasFade) {
+      cancelFade(fadeKey, activeFadeControllers);
+      const startVolume = clampVolume(zone.playerEntry?.volume ?? snapshot?.originalVolume ?? 0);
+      let lastVolumeInt = Math.round(startVolume);
+      if (zone) {
+        zone.playerEntry.volume = lastVolumeInt;
+      }
+      commands.push({ zone: zoneId, command: `fade-out ${fadeDuration}ms` });
+      commands.push({ zone: zoneId, command: 'pause (after fade)' });
+      scheduleFade(
+        zoneId,
+        fadeKey,
+        activeFadeControllers,
+        startVolume,
+        0,
+        fadeDuration,
+        (value) => {
+          const next = Math.round(clampVolume(value));
+          const delta = next - lastVolumeInt;
+          lastVolumeInt = next;
+          if (zone) {
+            zone.playerEntry.volume = next;
+          }
+          if (delta === 0) return Promise.resolve();
+          return sendCommandToZone(zoneId, 'volume', String(delta));
+        },
+        async () => {
+          try {
+            await sendCommandToZone(zoneId, 'pause');
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            logger.warn(`[AlertCommands] Failed to pause zone ${zoneId} after fade: ${message}`);
+          }
+
+          if (snapshot?.originalVolume !== undefined) {
+            const restoreTarget = Math.round(clampVolume(snapshot.originalVolume));
+            const delta = restoreTarget - lastVolumeInt;
+            lastVolumeInt = restoreTarget;
+            if (zone) {
+              zone.playerEntry.volume = restoreTarget;
+            }
+            try {
+              if (delta !== 0) {
+                await sendCommandToZone(zoneId, 'volume', String(delta));
+              }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              logger.warn(`[AlertCommands] Failed to restore volume for zone ${zoneId} after fade: ${message}`);
+            }
+          }
+
+          fadeState.delete(fadeKey);
+        },
+      );
+    } else {
+      fadeState.delete(fadeKey);
+      try {
+        await sendCommandToZone(zoneId, 'pause');
+        commands.push({ zone: zoneId, command: 'pause' });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn(`[AlertCommands] Failed to pause zone ${zoneId}: ${message}`);
+        skipped.push({ zone: zoneId, reason: 'pause-failed' });
+      }
     }
   }
 

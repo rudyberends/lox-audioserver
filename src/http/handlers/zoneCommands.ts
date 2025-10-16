@@ -1,11 +1,24 @@
 import { CommandResult, emptyCommand, response } from './commandTypes';
 import { parseNumberPart, splitUrl } from './commandUtils';
-import { getZoneById, sendCommandToZone } from '../../backend/zone/zonemanager';
+import { applyStoredVolumePreset, getZoneById, sendCommandToZone } from '../../backend/zone/zonemanager';
 import { getMediaProvider } from '../../backend/provider/factory';
 import { toPlaylistCommandUri } from '../../backend/provider/musicAssistant/utils';
 import logger from '../../utils/troxorlogger';
 import { MediaFolderItem, PlaylistItem, FavoriteResponse, RecentResponse } from '../../backend/provider/types';
 import { FileType } from '../../backend/zone/loxoneTypes';
+import {
+  parseFadeOptions,
+  clampFadeDuration,
+  clampVolume,
+  cancelFade,
+  scheduleFade,
+  DEFAULT_FADE_DURATION_MS,
+  FadeController,
+  FadeSnapshot,
+} from '../utils/fade';
+
+const favoriteFadeState = new Map<number, FadeSnapshot>();
+const favoriteFadeControllers = new Map<string, FadeController>();
 
 /**
  * Return the current status payload for a zone, or an error if the zone is unknown.
@@ -590,6 +603,8 @@ export async function audioFavoritePlay(url: string): Promise<CommandResult> {
   const slot = Number(match[2]);
   const providerKey = match[3];
   const shuffle = /shuffle$/i.test(url) && !/noshuffle$/i.test(url);
+  const [, rawQuery = ''] = url.split('?', 2);
+  const fadeOptions = parseFadeOptions(rawQuery ? `?${rawQuery}` : '');
   const provider = getMediaProvider();
   const favorites = (provider as any)?.favoritesController?.getCachedFavorites?.(zoneId);
 
@@ -629,7 +644,71 @@ export async function audioFavoritePlay(url: string): Promise<CommandResult> {
   }
 
   logger.info(`[audioFavoritePlay] Playing favorite: ${fav.name} → ${audiopath}`);
+
+  const enableFade = fadeOptions.fade === true;
+  const fadeDuration = clampFadeDuration(fadeOptions.fadeDurationMs ?? DEFAULT_FADE_DURATION_MS);
+  const zone = getZoneById(zoneId);
+  const fadeKey = String(zoneId);
+  if (enableFade && fadeDuration > 0 && zone) {
+    const originalVolume = clampVolume(zone.playerEntry?.volume ?? 0);
+    favoriteFadeState.set(zoneId, { originalVolume, fadeDurationMs: fadeDuration });
+    cancelFade(fadeKey, favoriteFadeControllers);
+
+    const dropDelta = -Math.max(Math.round(originalVolume), 100);
+    try {
+      await sendCommandToZone(zoneId, 'volume', String(dropDelta));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`[audioFavoritePlay] Failed to prime fade for zone ${zoneId}: ${message}`);
+    }
+    zone.playerEntry.volume = 0;
+  } else {
+    favoriteFadeState.delete(zoneId);
+    cancelFade(fadeKey, favoriteFadeControllers);
+  }
+
   await sendCommandToZone(zoneId, 'playlistplay', JSON.stringify(commandPayload));
+
+  if (enableFade && fadeDuration > 0 && zone) {
+    try {
+      await sendCommandToZone(zoneId, 'volume', '-100');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`[audioFavoritePlay] Failed to enforce fade start volume for zone ${zoneId}: ${message}`);
+    }
+    zone.playerEntry.volume = 0;
+  }
+
+  if (enableFade && fadeDuration > 0 && zone) {
+    const snapshot = favoriteFadeState.get(zoneId);
+    const presetApplied = applyStoredVolumePreset(zoneId, false);
+    const targetVolume = presetApplied?.tts ?? presetApplied?.default ?? snapshot?.originalVolume ?? clampVolume(zone.playerEntry?.volume ?? 0);
+    if (targetVolume > 0) {
+      let lastVolumeInt = 0;
+      zone.playerEntry.volume = lastVolumeInt;
+      scheduleFade(
+        zoneId,
+        fadeKey,
+        favoriteFadeControllers,
+        0,
+        targetVolume,
+        fadeDuration,
+        (value) => {
+          const next = Math.round(clampVolume(value));
+          const delta = next - lastVolumeInt;
+          lastVolumeInt = next;
+          zone.playerEntry.volume = next;
+          if (delta === 0) return Promise.resolve();
+          return sendCommandToZone(zoneId, 'volume', String(delta));
+        },
+        () => {
+          favoriteFadeState.delete(zoneId);
+        },
+      );
+    } else {
+      favoriteFadeState.delete(zoneId);
+    }
+  }
 
   return response(url, 'libraryplay', [commandPayload]);
 }
@@ -973,7 +1052,6 @@ export function audioDynamicCommand(url: string): CommandResult {
   sendCommandToZone(playerID, command, param);
   return emptyCommand(url, []);
 }
-
 function normalizeFavoriteResponse(
   responseData: FavoriteResponse | undefined,
   zoneId: number,

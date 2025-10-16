@@ -1,5 +1,11 @@
 import logger from '../../utils/troxorlogger';
-import { config, getAdminConfig, updateAdminConfig } from '../../config/config';
+import {
+  config,
+  getAdminConfig,
+  updateAdminConfig,
+  getStoredVolumePreset,
+} from '../../config/config';
+import type { ZoneVolumeConfig } from '../../config/config';
 import { broadcastEvent } from '../../http/broadcastEvent';
 import { createBackend } from './backendFactory';
 import type { ZoneConfigEntry, AdminConfig } from '../../config/configStore';
@@ -58,6 +64,7 @@ interface ZoneState {
   };
   playerEntry: PlayerStatus;
   queue?: ZoneEntryQueue;
+  fadeTargetVolume?: number;
 }
 
 /**
@@ -435,6 +442,9 @@ async function setupZoneInternal(
       zone[playerId].player.backendInstance = null;
     }
   }
+
+  applyStoredVolumePreset(playerId, false);
+  updateZoneFadeTarget(playerId);
 }
 
 /**
@@ -783,6 +793,43 @@ const cleanupZones = async (): Promise<void> => {
   );
 };
 
+function applyVolumePresetToZone(playerId: number, preset: ZoneVolumeConfig, broadcast = false): void {
+  const entry = zone[playerId];
+  if (!entry) return;
+
+  const updates: Partial<PlayerStatus> = {};
+
+  if (preset.default !== undefined) updates.defaultVolume = preset.default;
+  if (preset.alarm !== undefined) updates.alarmVolume = preset.alarm;
+  if (preset.fire !== undefined) (updates as any).fireVolume = preset.fire;
+  if (preset.bell !== undefined) updates.bellVolume = preset.bell;
+  if (preset.buzzer !== undefined) updates.buzzerVolume = preset.buzzer;
+  if (preset.tts !== undefined) updates.ttsVolume = preset.tts;
+  if (preset.max !== undefined) {
+    updates.maxVolume = preset.max;
+    entry.player.max_volume = preset.max;
+  }
+
+  if (Object.keys(updates).length === 0) return;
+
+  if (broadcast) {
+    updateZonePlayerStatus(playerId, updates);
+  } else {
+    entry.playerEntry = { ...entry.playerEntry, ...updates };
+  }
+}
+
+function applyStoredVolumePreset(playerId: number, broadcast = false): ZoneVolumeConfig | undefined {
+  const preset = getStoredVolumePreset(playerId);
+  if (!preset) return undefined;
+  applyVolumePresetToZone(playerId, preset, broadcast);
+  const entry = zone[playerId];
+  if (entry) {
+    entry.fadeTargetVolume = preset.tts ?? preset.default ?? entry.playerEntry.defaultVolume ?? entry.playerEntry.volume ?? 0;
+  }
+  return preset;
+}
+
 export {
   setupZones,
   setupZoneById,
@@ -795,6 +842,25 @@ export {
   getZoneById,
   cleanupZones,
   getZoneStatuses,
+  applyStoredVolumePreset,
+  applyVolumePresetToZone,
+  updateZoneFadeTarget,
 };
 
 export { mergeZoneConfigEntries } from './zoneConfigUtils';
+function updateZoneFadeTarget(playerId: number): void {
+  const entry = zone[playerId];
+  if (!entry) return;
+  const preset = getStoredVolumePreset(playerId);
+  const fallback = Number.isFinite(entry.playerEntry?.defaultVolume)
+    ? Number(entry.playerEntry.defaultVolume)
+    : Number(entry.playerEntry?.volume ?? 0);
+
+  if (preset?.tts !== undefined) {
+    entry.fadeTargetVolume = preset.tts;
+  } else if (preset?.default !== undefined) {
+    entry.fadeTargetVolume = preset.default;
+  } else {
+    entry.fadeTargetVolume = fallback;
+  }
+}

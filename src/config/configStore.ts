@@ -15,6 +15,17 @@ export interface ZoneConfigEntry {
   maPlayerId?: string;
   name?: string;
   source?: string;
+  volumes?: ZoneVolumeConfig;
+}
+
+export interface ZoneVolumeConfig {
+  default?: number;
+  alarm?: number;
+  fire?: number;
+  bell?: number;
+  buzzer?: number;
+  tts?: number;
+  max?: number;
 }
 
 export interface MediaProviderConfig {
@@ -37,6 +48,9 @@ export interface AdminConfig {
   logging: {
     consoleLevel: string;
     fileLevel: string;
+  };
+  volumes?: {
+    players: Array<ZoneVolumeConfig & { playerid: number }>;
   };
 }
 
@@ -142,6 +156,7 @@ function normalizeAdminConfig(raw: Partial<AdminConfig>): AdminConfig {
           maPlayerId: zone?.maPlayerId ? String(zone.maPlayerId).trim() : undefined,
           name: typeof zone?.name === 'string' ? zone.name.trim() : undefined,
           source: zone?.source ? String(zone.source).trim() : undefined,
+          volumes: normalizeVolumeConfig(zone?.volumes),
         }))
         .filter((zone) => Number.isFinite(zone.id) && zone.backend)
     : [];
@@ -156,11 +171,46 @@ function normalizeAdminConfig(raw: Partial<AdminConfig>): AdminConfig {
     fileLevel: raw?.logging?.fileLevel ? String(raw.logging.fileLevel).trim() : defaults.logging.fileLevel,
   };
 
+  const volumes = normalizeVolumeStore(raw?.volumes);
+
   return {
     miniserver,
     audioserver,
     zones,
     mediaProvider,
     logging,
+    volumes,
   };
+}
+
+function normalizeVolumeConfig(raw: any): ZoneVolumeConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const coerce = (value: any) => {
+    const num = Number(value);
+    return Number.isFinite(num) && num >= 0 ? Math.min(100, Math.max(0, Math.round(num))) : undefined;
+  };
+  const result: ZoneVolumeConfig = {
+    default: coerce(raw.default),
+    alarm: coerce(raw.alarm),
+    fire: coerce(raw.fire),
+    bell: coerce(raw.bell),
+    buzzer: coerce(raw.buzzer),
+    tts: coerce(raw.tts),
+    max: coerce(raw.max),
+  };
+  return Object.values(result).some((value) => value !== undefined) ? result : undefined;
+}
+
+function normalizeVolumeStore(raw: any): { players: Array<ZoneVolumeConfig & { playerid: number }> } | undefined {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.players)) return undefined;
+  const players = raw.players
+    .map((entry: any) => {
+      const playerid = Number(entry?.playerid ?? entry?.id ?? 0);
+      if (!Number.isFinite(playerid) || playerid <= 0) return undefined;
+      const volumes = normalizeVolumeConfig(entry);
+      if (!volumes) return undefined;
+      return { playerid, ...volumes };
+    })
+    .filter((entry: any): entry is ZoneVolumeConfig & { playerid: number } => Boolean(entry));
+  return players.length > 0 ? { players } : undefined;
 }

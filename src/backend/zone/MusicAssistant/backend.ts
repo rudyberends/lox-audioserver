@@ -16,7 +16,7 @@
 import Backend, { BackendProbeOptions } from '../backendBaseClass';
 import type { PlayerStatus } from '../loxoneTypes';
 import logger from '../../../utils/troxorlogger';
-import { updateZoneQueue, updateZoneGroup } from '../zonemanager';
+import { updateZoneQueue, updateZoneGroup, sendCommandToZone } from '../zonemanager';
 import MusicAssistantClient from './client';
 import { EventMessage } from './types';
 import { mapPlayerToTrack, mapQueueToState } from './stateMapper';
@@ -135,7 +135,7 @@ export default class BackendMusicAssistant extends Backend {
   sendGroupCommand(_cmd: string, _type: string, _playerid: string, ...additionalIDs: string[]): void {
     logger.info(`[MusicAssistant] Creating group Leader:${this.maPlayerId}, Members:${additionalIDs.join(', ')}`);
     additionalIDs.forEach((id) => {
-      // if (id !== this.maPlayerId) sendCommandToZone(id, 'groupJoin', this.maPlayerId);
+      if (id !== this.maPlayerId) sendCommandToZone(Number(id), 'groupJoin', this.maPlayerId);
     });
     updateZoneGroup();
   }

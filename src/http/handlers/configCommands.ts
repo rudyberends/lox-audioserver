@@ -1,10 +1,18 @@
 import NodeRSA from 'node-rsa';
 import { CommandResult, emptyCommand, response } from './commandTypes';
-import { config, processAudioServerConfig } from '../../config/config';
+import {
+  config,
+  processAudioServerConfig,
+  setVolumePresets,
+  setZoneDefaultVolume,
+  setZoneMaxVolume,
+  setZoneEventVolumes,
+} from '../../config/config';
+import type { ZoneVolumeConfig } from '../../config/config';
 import { saveMusicCache } from '../../config/musicCache';
 import { asyncCrc32 } from '../../utils/crc32utils';
 import logger from '../../utils/troxorlogger';
-import { updateZonePlayerName } from '../../backend/zone/zonemanager';
+import { updateZonePlayerName, applyStoredVolumePreset } from '../../backend/zone/zonemanager';
 import { extractExtensions } from '../utils/extensions';
 
 /**
@@ -162,14 +170,124 @@ export function audioCfgSetVolumes(url: string): CommandResult {
     const decodedSegment = decodeURIComponent(encodedPayload);
     const normalizedBase64 = normalizeBase64(decodedSegment);
     const rawConfig = Buffer.from(normalizedBase64, 'base64').toString('utf8');
-    logger.debug('[configCommands] Received volume preset update', rawConfig);
+    const parsed = JSON.parse(rawConfig);
+    const players = Array.isArray(parsed?.players) ? parsed.players : [];
+    const store = setVolumePresets(players);
+
+    store?.players.forEach(({ playerid }) => applyStoredVolumePreset(playerid, false));
+
+    return response(url, 'volumes', {
+      success: true,
+      players: store?.players.length ?? 0,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error(`[configCommands] Failed to parse audio/cfg/volumes payload: ${message}`);
     return response(url, 'volumes', { success: false, error: 'Invalid volume payload' });
   }
+}
 
-  return response(url, 'volumes', { success: true });
+export function audioCfgSetDefaultVolume(url: string): CommandResult {
+  const parts = url.split('/');
+  const zoneId = Number(parts[3]);
+  const volumeSegment = parts[4];
+
+  if (!Number.isFinite(zoneId) || zoneId <= 0 || volumeSegment === undefined) {
+    logger.warn(`[configCommands] Invalid audio/cfg/defaultvolume payload: ${url}`);
+    return response(url, 'defaultvolume', { success: false, error: 'invalid-payload' });
+  }
+
+  const value = Number(volumeSegment);
+  if (!Number.isFinite(value)) {
+    logger.warn(`[configCommands] Invalid default volume value: ${volumeSegment}`);
+    return response(url, 'defaultvolume', { success: false, error: 'invalid-volume' });
+  }
+
+  const sanitized = setZoneDefaultVolume(zoneId, value);
+  if (!sanitized || sanitized.default === undefined) {
+    return response(url, 'defaultvolume', { success: false, error: 'unable-to-store' });
+  }
+
+  applyStoredVolumePreset(zoneId, true);
+
+  return response(url, 'defaultvolume', {
+    success: true,
+    zone: zoneId,
+    default: sanitized.default,
+  });
+}
+
+export function audioCfgSetMaxVolume(url: string): CommandResult {
+  const parts = url.split('/');
+  const zoneId = Number(parts[3]);
+  const volumeSegment = parts[4];
+
+  if (!Number.isFinite(zoneId) || zoneId <= 0 || volumeSegment === undefined) {
+    logger.warn(`[configCommands] Invalid audio/cfg/maxvolume payload: ${url}`);
+    return response(url, 'maxvolume', { success: false, error: 'invalid-payload' });
+  }
+
+  const value = Number(volumeSegment);
+  if (!Number.isFinite(value)) {
+    logger.warn(`[configCommands] Invalid max volume value: ${volumeSegment}`);
+    return response(url, 'maxvolume', { success: false, error: 'invalid-volume' });
+  }
+
+  const sanitized = setZoneMaxVolume(zoneId, value);
+  if (!sanitized || sanitized.max === undefined) {
+    return response(url, 'maxvolume', { success: false, error: 'unable-to-store' });
+  }
+
+  applyStoredVolumePreset(zoneId, true);
+
+  return response(url, 'maxvolume', {
+    success: true,
+    zone: zoneId,
+    max: sanitized.max,
+  });
+}
+
+export function audioCfgSetEventVolumes(url: string): CommandResult {
+  const parts = url.split('/');
+  const zoneId = Number(parts[3]);
+  const encodedPayload = parts.slice(4).join('/');
+
+  if (!Number.isFinite(zoneId) || zoneId <= 0 || !encodedPayload) {
+    logger.warn(`[configCommands] Invalid audio/cfg/eventvolumes payload: ${url}`);
+    return response(url, 'eventvolumes', { success: false, error: 'invalid-payload' });
+  }
+
+  try {
+    const decodedSegment = decodeURIComponent(encodedPayload);
+    const normalizedBase64 = normalizeBase64(decodedSegment);
+    const rawConfig = Buffer.from(normalizedBase64, 'base64').toString('utf8');
+    const parsed = JSON.parse(rawConfig);
+
+    const partial: Partial<ZoneVolumeConfig> = {
+      alarm: parsed?.general ?? parsed?.alarm,
+      fire: parsed?.fire,
+      bell: parsed?.bell,
+      buzzer: parsed?.buzzer ?? parsed?.clock,
+      tts: parsed?.tts,
+    };
+
+    const sanitized = setZoneEventVolumes(zoneId, partial);
+    if (!sanitized) {
+      return response(url, 'eventvolumes', { success: false, error: 'unable-to-store' });
+    }
+
+    applyStoredVolumePreset(zoneId, true);
+
+    return response(url, 'eventvolumes', {
+      success: true,
+      zone: zoneId,
+      volumes: sanitized,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(`[configCommands] Failed to parse audio/cfg/eventvolumes payload: ${message}`);
+    return response(url, 'eventvolumes', { success: false, error: 'invalid-volume-payload' });
+  }
 }
 
 /**

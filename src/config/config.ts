@@ -1,7 +1,7 @@
 import logger from '../utils/troxorlogger';
 import { asyncCrc32 } from '../utils/crc32utils';
 import { setupZones } from '../backend/zone/zonemanager';
-import { loadAdminConfig, saveAdminConfig, detectLocalIp, AdminConfig } from './configStore';
+import { loadAdminConfig, saveAdminConfig, detectLocalIp, AdminConfig, ZoneConfigEntry } from './configStore';
 import { computeAuthorizationHeader } from './auth';
 import { loadMusicCache } from './musicCache';
 
@@ -33,6 +33,21 @@ interface AudioServerConfig {
 interface Config {
   miniserver: MiniServerConfig;
   audioserver?: AudioServerConfig;
+  volumes?: VolumeStore;
+}
+
+interface VolumeStore {
+  players: Array<ZoneVolumeConfig & { playerid: number }>;
+}
+
+interface ZoneVolumeConfig {
+  default?: number;
+  alarm?: number;
+  fire?: number;
+  bell?: number;
+  buzzer?: number;
+  tts?: number;
+  max?: number;
 }
 
 let adminConfig: AdminConfig = loadAdminConfig();
@@ -45,6 +60,7 @@ const config: Config = {
     username: adminConfig.miniserver.username,
     password: adminConfig.miniserver.password,
   },
+  volumes: adminConfig.volumes,
 };
 
 /**
@@ -183,6 +199,7 @@ function applyAdminConfig() {
   config.miniserver.username = adminConfig.miniserver.username || '';
   config.miniserver.password = adminConfig.miniserver.password || '';
   config.miniserver.serial = adminConfig.miniserver.serial || '';
+  config.volumes = adminConfig.volumes;
 
   DEFAULT_AUDIO_SERVER.ip = adminConfig.audioserver.ip || detectLocalIp();
   if (!config.audioserver) {
@@ -225,6 +242,139 @@ function seedAudioServerFromCache(): void {
   };
 }
 
+function sanitizeVolumeValue(value: unknown): number | undefined {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return undefined;
+  const clamped = Math.max(0, Math.min(100, Math.round(num)));
+  return clamped;
+}
+
+function sanitizeVolumePartial(input: any): ZoneVolumeConfig {
+  if (!input || typeof input !== 'object') return {};
+  const result: ZoneVolumeConfig = {};
+  const mappings: Array<[keyof ZoneVolumeConfig, unknown]> = [
+    ['default', input.default],
+    ['alarm', input.alarm ?? input.general],
+    ['fire', input.fire],
+    ['bell', input.bell],
+    ['buzzer', input.buzzer ?? input.clock],
+    ['tts', input.tts],
+    ['max', input.max ?? input.maximum],
+  ];
+  for (const [key, rawValue] of mappings) {
+    const sanitized = sanitizeVolumeValue(rawValue);
+    if (sanitized !== undefined) {
+      result[key] = sanitized;
+    }
+  }
+  return result;
+}
+
+function sanitizePresetEntry(entry: any): (ZoneVolumeConfig & { playerid: number }) | undefined {
+  const playerid = Number(entry?.playerid ?? entry?.id);
+  if (!Number.isFinite(playerid) || playerid <= 0) return undefined;
+  const partial = sanitizeVolumePartial(entry);
+  if (Object.keys(partial).length === 0) return undefined;
+  return { playerid, ...partial };
+}
+
+function sanitizePresetList(entries: Array<ZoneVolumeConfig & { playerid: number }>): Array<ZoneVolumeConfig & { playerid: number }> {
+  const map = new Map<number, ZoneVolumeConfig & { playerid: number }>();
+  for (const entry of entries) {
+    const sanitized = sanitizePresetEntry(entry);
+    if (!sanitized) continue;
+    const existing = map.get(sanitized.playerid) ?? { playerid: sanitized.playerid };
+    map.set(sanitized.playerid, { ...existing, ...sanitized });
+  }
+  return Array.from(map.values());
+}
+
+function applyVolumesToZonesList(zones: ZoneConfigEntry[], store?: VolumeStore): ZoneConfigEntry[] {
+  if (!store || store.players.length === 0) {
+    return zones.map((zone) => {
+      if (zone.volumes) {
+        const { volumes, ...rest } = zone as ZoneConfigEntry & { volumes?: ZoneVolumeConfig };
+        if (volumes) {
+          const clone: ZoneConfigEntry = { ...rest };
+          return clone;
+        }
+      }
+      return zone;
+    });
+  }
+
+  const volumeMap = new Map<number, ZoneVolumeConfig>();
+  for (const { playerid, ...volumes } of store.players) {
+    volumeMap.set(playerid, { ...volumes });
+  }
+
+  return zones.map((zone) => {
+    const match = volumeMap.get(zone.id);
+    if (!match) {
+      if (zone.volumes) {
+        const { volumes, ...rest } = zone as ZoneConfigEntry & { volumes?: ZoneVolumeConfig };
+        const clone: ZoneConfigEntry = { ...rest };
+        return clone;
+      }
+      return zone;
+    }
+    return { ...zone, volumes: { ...match } };
+  });
+}
+
+function persistVolumeStore(players: Array<ZoneVolumeConfig & { playerid: number }>): VolumeStore | undefined {
+  const sanitizedPlayers = sanitizePresetList(players);
+  const volumeStore = sanitizedPlayers.length > 0 ? { players: sanitizedPlayers } : undefined;
+
+  const newZones = applyVolumesToZonesList(adminConfig.zones, volumeStore);
+  const newAdminConfig: AdminConfig = {
+    ...adminConfig,
+    zones: newZones,
+    volumes: volumeStore,
+  };
+  updateAdminConfig(newAdminConfig);
+  return config.volumes;
+}
+
+function setVolumePresets(presets: Array<ZoneVolumeConfig & { playerid: number }>): VolumeStore | undefined {
+  return persistVolumeStore(presets);
+}
+
+function setZoneVolumePartial(zoneId: number, partial: ZoneVolumeConfig): ZoneVolumeConfig | undefined {
+  const sanitized = sanitizeVolumePartial(partial);
+  if (Object.keys(sanitized).length === 0) return undefined;
+
+  const currentPlayers = config.volumes?.players ?? adminConfig.volumes?.players ?? [];
+  const map = new Map<number, ZoneVolumeConfig & { playerid: number }>();
+  currentPlayers.forEach((entry) => {
+    map.set(entry.playerid, { ...entry });
+  });
+
+  const existing = map.get(zoneId) ?? { playerid: zoneId };
+  map.set(zoneId, { ...existing, ...sanitized });
+
+  persistVolumeStore(Array.from(map.values()));
+  return sanitized;
+}
+
+function setZoneDefaultVolume(zoneId: number, value: number): ZoneVolumeConfig | undefined {
+  return setZoneVolumePartial(zoneId, { default: value });
+}
+
+function setZoneMaxVolume(zoneId: number, value: number): ZoneVolumeConfig | undefined {
+  return setZoneVolumePartial(zoneId, { max: value });
+}
+
+function setZoneEventVolumes(zoneId: number, volumes: Partial<ZoneVolumeConfig>): ZoneVolumeConfig | undefined {
+  return setZoneVolumePartial(zoneId, volumes as ZoneVolumeConfig);
+}
+
+function getStoredVolumePreset(zoneId: number): ZoneVolumeConfig | undefined {
+  const entry = config.volumes?.players?.find((player) => player.playerid === zoneId);
+  if (!entry) return undefined;
+  const { playerid, ...rest } = entry;
+  return { ...rest };
+}
 /**
  * Returns the last cached admin configuration.
  */
@@ -249,4 +399,11 @@ export {
   getAdminConfig,
   updateAdminConfig,
   computeAuthorizationHeader,
+  getStoredVolumePreset,
+  setVolumePresets,
+  setZoneDefaultVolume,
+  setZoneMaxVolume,
+  setZoneEventVolumes,
 };
+
+export type { ZoneVolumeConfig, VolumeStore };

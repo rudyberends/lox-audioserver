@@ -11,6 +11,9 @@ import {
   audioCfgSetVolumes,
   audioCfgSetPlayerOpts,
   audioCfgSetPlayerName,
+  audioCfgSetDefaultVolume,
+  audioCfgSetMaxVolume,
+  audioCfgSetEventVolumes,
 } from './configCommands';
 import {
   audioCfgGetAvailableServices,
@@ -74,6 +77,9 @@ export const COMMANDS = {
   AUDIO_CFG_GLOBAL_SEARCH_DESCRIBE: 'audio/cfg/globalsearch/describe',
   AUDIO_CFG_GET_SCAN_STATUS: 'audio/cfg/scanstatus',
   AUDIO_CFG_GET_QUEUE: 'audio/\\d+/getqueue',
+  AUDIO_CFG_DEFAULT_VOLUME: 'audio/cfg/defaultvolume',
+  AUDIO_CFG_MAX_VOLUME: 'audio/cfg/maxvolume',
+  AUDIO_CFG_EVENT_VOLUMES: 'audio/cfg/eventvolumes',
   AUDIO_PLAYER_STATUS: 'audio/\\d+/status',
   AUDIO_GROUP: 'audio/cfg/dgroup',
   AUDIO_SERVICE_PLAY: 'audio/\\d+/serviceplay',
@@ -135,8 +141,11 @@ const AUDIO_RECENT_RE = /^audio\/\d+\/recent(?:\/(?:\d+|clear))?$/;
 const AUDIO_PLAY_URL_RE = /^audio\/\d+\/playurl\//;
 const AUDIO_COMMANDS_RE = /(?:^|\/)audio\/\d+\/(on|off|play|resume|pause|queueminus|queue|queueplus|volume|repeat|shuffle|position|test)(?:\/|$)/;
 const AUDIO_LIBRARY_ALIAS_RE = /^audio\/\d+\/(?:albums|artists|tracks):/;
-const AUDIO_ROOM_FAV_PLAY_RE = /^audio\/\d+\/roomfav\/play\/\d+\/[^/]+(?:\/(?:no)?shuffle)?$/;
+const AUDIO_ROOM_FAV_PLAY_RE = /^audio\/\d+\/roomfav\/play\/\d+\/[^/]+(?:\/(?:no)?shuffle)?(?:\?.*)?$/;
 const AUDIO_GROUPED_ALERT_RE = /^audio\/grouped\/[^/]+\/.+$/;
+const AUDIO_CFG_DEFAULT_VOLUME_RE = /^audio\/cfg\/defaultvolume\/\d+\/[^/]+$/;
+const AUDIO_CFG_MAX_VOLUME_RE = /^audio\/cfg\/maxvolume\/\d+\/[^/]+$/;
+const AUDIO_CFG_EVENT_VOLUMES_RE = /^audio\/cfg\/eventvolumes\//;
 
 /**
  * Ordered route table powering the incremental match within {@link handleLoxoneCommand}.
@@ -178,6 +187,9 @@ regexRoute('audio', AUDIO_ROOM_FAV_PLAY_RE, audioFavoritePlay);
 regexRoute('audio', AUDIO_PLAY_URL_RE, audioPlayUrl);
 regexRoute('audio', AUDIO_LIBRARY_ALIAS_RE, handleLibraryAlias);
 regexRoute('audio', AUDIO_GROUPED_ALERT_RE, handleGroupedAlert);
+regexRoute('audio', AUDIO_CFG_DEFAULT_VOLUME_RE, audioCfgSetDefaultVolume);
+regexRoute('audio', AUDIO_CFG_MAX_VOLUME_RE, audioCfgSetMaxVolume);
+regexRoute('audio', AUDIO_CFG_EVENT_VOLUMES_RE, audioCfgSetEventVolumes);
 regexRoute('audio', AUDIO_COMMANDS_RE, audioDynamicCommand);
 
 /**
