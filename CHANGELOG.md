@@ -1,3 +1,10 @@
+## <small>2.2.1 (2025-10-16)</small>
+
+* Merge branch 'beta' into main ([21c69c0](https://github.com/rudyberends/lox-audioserver/commit/21c69c0))
+* Merge pull request #37 from rudyberends/fix/wrapped-beta-tag ([cb4bcb2](https://github.com/rudyberends/lox-audioserver/commit/cb4bcb2)), closes [#37](https://github.com/rudyberends/lox-audioserver/issues/37)
+* chore(release): 2.1.6-beta.2 [skip ci] ([c739f17](https://github.com/rudyberends/lox-audioserver/commit/c739f17))
+* fix: prevent wrapping of beta tag ([5b66154](https://github.com/rudyberends/lox-audioserver/commit/5b66154))
+
 ## 2.2.0 (2025-10-16)
 
 * Merge pull request #38 from rudyberends/feat/fav-recent-and-search-support ([50e82c4](https://github.com/rudyberends/lox-audioserver/commit/50e82c4)), closes [#38](https://github.com/rudyberends/lox-audioserver/issues/38)
