@@ -24,6 +24,9 @@ export interface RadioFolderItem {
   sort?: string;
   type: number;
   provider?: string;
+  album?: string;
+  artist?: string;
+  tag?: string;
 }
 
 export interface PlaylistItem {

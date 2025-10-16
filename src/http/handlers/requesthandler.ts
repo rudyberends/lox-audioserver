@@ -31,6 +31,7 @@ import {
   audioLibraryPlay,
   audioPlaylistPlay,
   audioServicePlay,
+  audioFavoritePlay,
   audioPlayUrl,
   audioRecent,
 } from './zoneCommands';
@@ -133,6 +134,7 @@ const AUDIO_RECENT_RE = /^audio\/\d+\/recent(?:\/(?:\d+|clear))?$/;
 const AUDIO_PLAY_URL_RE = /^audio\/\d+\/playurl\//;
 const AUDIO_COMMANDS_RE = /(?:^|\/)audio\/\d+\/(on|off|play|resume|pause|queueminus|queue|queueplus|volume|repeat|shuffle|position|test)(?:\/|$)/;
 const AUDIO_LIBRARY_ALIAS_RE = /^audio\/\d+\/(?:albums|artists|tracks):/;
+const AUDIO_ROOM_FAV_PLAY_RE = /^audio\/\d+\/roomfav\/play\/\d+\/[^/]+(?:\/(?:no)?shuffle)?$/;
 
 /**
  * Ordered route table powering the incremental match within {@link handleLoxoneCommand}.
@@ -170,6 +172,7 @@ regexRoute('audio', AUDIO_RECENT_RE, audioRecent);
 regexRoute('audio', AUDIO_SERVICE_PLAY_RE, audioServicePlay);
 regexRoute('audio', AUDIO_PLAYLIST_PLAY_RE, audioPlaylistPlay);
 regexRoute('audio', AUDIO_LIBRARY_PLAY_RE, audioLibraryPlay);
+regexRoute('audio', AUDIO_ROOM_FAV_PLAY_RE, audioFavoritePlay);
 regexRoute('audio', AUDIO_PLAY_URL_RE, audioPlayUrl);
 regexRoute('audio', AUDIO_LIBRARY_ALIAS_RE, handleLibraryAlias);
 regexRoute('audio', AUDIO_COMMANDS_RE, audioDynamicCommand);

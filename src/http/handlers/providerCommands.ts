@@ -90,8 +90,8 @@ export async function audioCfgGlobalSearch(url: string) {
  */
 export function audioCfgGlobalSearchDescribe(url: string): CommandResult {
   const describePayload = {
-    local: ["track", "album", "artist", "playlist", "folder"],
-    tunein: ['station'],
+    local: ['track', 'album', 'artist', 'playlist', 'folder'],
+    tunein: ['station', 'custom'],
   };
   return response(url, 'globalsearch', describePayload);
 }
