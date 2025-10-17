@@ -370,15 +370,54 @@ header.hero::after {
   cursor: default;
 }
 
-.connection-hint {
-  margin: 0.6rem 0 0;
-  font-size: 0.9rem;
+.audioserver-card header p {
+  margin: 0;
   color: var(--color-subtle);
 }
 
-.connection-hint strong {
-  color: var(--color-accent);
-  font-weight: 600;
+.audioserver-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex: 1;
+}
+
+@media (max-width: 900px) {
+  .miniserver-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.connection-override-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.connection-override-actions {
+  margin-top: 0.5rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.connection-override-actions .primary {
+  min-width: 9.5rem;
+}
+
+@media (max-width: 640px) {
+  .connection-override-actions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .connection-override-actions .primary {
+    width: 100%;
+  }
+
+  .connection-override-actions .danger {
+    width: 100%;
+  }
 }
 
 .form-control {
@@ -1855,6 +1894,37 @@ body.logs-fullscreen-active {
   font-size: 0.82rem;
   color: rgba(71, 85, 105, 0.75);
   margin-top: 0.15rem;
+}
+
+.zone-card-volumes {
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed rgba(148, 163, 184, 0.25);
+}
+
+.zone-volume-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.22rem;
+}
+
+.zone-volume-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.18rem 0.38rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(247, 248, 253, 0.78);
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: rgba(71, 85, 105, 0.85);
+}
+
+.zone-volume-chip-value {
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-weight: 700;
+  color: rgba(30, 64, 175, 0.88);
 }
 
 .zone-card-divider {

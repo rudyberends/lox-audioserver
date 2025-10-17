@@ -3,7 +3,7 @@
  */
 export interface BeolinkCommandContext {
   adjustVolume(change: number): Promise<void>;
-  doAction(action: string): Promise<void>;
+  doAction(action: string, param?: any): Promise<void>;
 }
 
 /**
@@ -17,7 +17,9 @@ const actionMap: Record<string, string> = {
   queueplus: 'Stream/Forward',
   volume: 'adjustVolume',
   groupJoin: 'Device/OneWayJoin',
+  groupJoinMany: 'Device/OneWayJoin',
   groupLeave: 'Device/OneWayLeave',
+  groupLeaveMany: 'Device/OneWayLeave',
   repeat: 'List/Repeat',
   shuffle: 'List/Shuffle',
 };
@@ -38,6 +40,6 @@ export async function handleBeolinkCommand(
     return true;
   }
 
-  await ctx.doAction(action);
+  await ctx.doAction(action, param);
   return true;
 }

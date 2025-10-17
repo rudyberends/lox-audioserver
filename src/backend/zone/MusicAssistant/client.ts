@@ -42,7 +42,7 @@ export default class MusicAssistantClient {
       ws.on('open', () => {
         this.ws = ws;
         this.state = ConnectionState.CONNECTED;
-        logger.info(`[MusicAssistant] Connected to ${url}`);
+        logger.debug(`[MusicAssistant] Connected to ${url}`);
         resolved = true;
 
         // Heartbeat ping every 10s
@@ -144,7 +144,7 @@ export default class MusicAssistantClient {
     }
 
     if ('server_version' in msg) {
-      logger.info(`[MusicAssistant] Server version: ${(msg as ServerInfoMessage).server_version}`);
+      logger.debug(`[MusicAssistant] Server version: ${(msg as ServerInfoMessage).server_version}`);
       return;
     }
 

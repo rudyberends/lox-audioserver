@@ -15,6 +15,17 @@ export interface ZoneConfigEntry {
   maPlayerId?: string;
   name?: string;
   source?: string;
+  volumes?: ZoneVolumeConfig;
+}
+
+export interface ZoneVolumeConfig {
+  default?: number;
+  alarm?: number;
+  fire?: number;
+  bell?: number;
+  buzzer?: number;
+  tts?: number;
+  max?: number;
 }
 
 export interface MediaProviderConfig {
@@ -133,7 +144,7 @@ function normalizeAdminConfig(raw: Partial<AdminConfig>): AdminConfig {
     ip: raw?.audioserver?.ip && raw.audioserver.ip.trim() ? raw.audioserver.ip : defaults.audioserver.ip,
   };
 
-  const zones = Array.isArray(raw?.zones)
+  let zones = Array.isArray(raw?.zones)
     ? raw!.zones
         .map((zone) => ({
           id: Number(zone?.id ?? 0),
@@ -142,6 +153,7 @@ function normalizeAdminConfig(raw: Partial<AdminConfig>): AdminConfig {
           maPlayerId: zone?.maPlayerId ? String(zone.maPlayerId).trim() : undefined,
           name: typeof zone?.name === 'string' ? zone.name.trim() : undefined,
           source: zone?.source ? String(zone.source).trim() : undefined,
+          volumes: normalizeVolumeConfig(zone?.volumes),
         }))
         .filter((zone) => Number.isFinite(zone.id) && zone.backend)
     : [];
@@ -156,6 +168,20 @@ function normalizeAdminConfig(raw: Partial<AdminConfig>): AdminConfig {
     fileLevel: raw?.logging?.fileLevel ? String(raw.logging.fileLevel).trim() : defaults.logging.fileLevel,
   };
 
+  const legacyVolumes = normalizeVolumeStore((raw as any)?.volumes);
+  if (legacyVolumes?.players.length) {
+    const volumeMap = new Map<number, ZoneVolumeConfig>();
+    legacyVolumes.players.forEach(({ playerid, volumes }) => {
+      volumeMap.set(playerid, volumes);
+    });
+    zones = zones.map((zone) => {
+      const merge = volumeMap.get(zone.id);
+      if (!merge) return zone;
+      const combined = zone.volumes ? { ...zone.volumes, ...merge } : merge;
+      return { ...zone, volumes: combined };
+    });
+  }
+
   return {
     miniserver,
     audioserver,
@@ -163,4 +189,39 @@ function normalizeAdminConfig(raw: Partial<AdminConfig>): AdminConfig {
     mediaProvider,
     logging,
   };
+}
+
+function normalizeVolumeConfig(raw: any): ZoneVolumeConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const coerce = (value: any) => {
+    const num = Number(value);
+    return Number.isFinite(num) && num >= 0 ? Math.min(100, Math.max(0, Math.round(num))) : undefined;
+  };
+  const result: ZoneVolumeConfig = {
+    default: coerce(raw.default),
+    alarm: coerce(raw.alarm),
+    fire: coerce(raw.fire),
+    bell: coerce(raw.bell),
+    buzzer: coerce(raw.buzzer),
+    tts: coerce(raw.tts),
+    max: coerce(raw.max),
+  };
+  return Object.values(result).some((value) => value !== undefined) ? result : undefined;
+}
+
+function normalizeVolumeStore(raw: any): { players: Array<{ playerid: number; volumes: ZoneVolumeConfig }> } | undefined {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.players)) return undefined;
+  const players = raw.players
+    .map((entry: any) => {
+      const playerid = Number(entry?.playerid ?? entry?.id ?? 0);
+      if (!Number.isFinite(playerid) || playerid <= 0) return undefined;
+      const volumes = normalizeVolumeConfig(entry);
+      if (!volumes) return undefined;
+      return { playerid, volumes };
+    })
+    .filter(
+      (entry: any): entry is { playerid: number; volumes: ZoneVolumeConfig } =>
+        Boolean(entry) && typeof entry.playerid === 'number' && typeof entry.volumes === 'object',
+    );
+  return players.length > 0 ? { players } : undefined;
 }

@@ -16,18 +16,22 @@
 import Backend, { BackendProbeOptions } from '../backendBaseClass';
 import type { PlayerStatus } from '../loxoneTypes';
 import logger from '../../../utils/troxorlogger';
-import { updateZoneQueue, updateZoneGroup } from '../zonemanager';
+import { updateZoneQueue, updateZoneGroup, sendCommandToZone, findZoneByBackendPlayerId } from '../zonemanager';
 import MusicAssistantClient from './client';
 import { EventMessage } from './types';
 import { mapPlayerToTrack, mapQueueToState } from './stateMapper';
 import { handleMusicAssistantCommand, MusicAssistantCommandContext } from './commands';
 import { setMusicAssistantSuggestions, clearMusicAssistantSuggestion } from '../../../config/adminState';
+import { upsertGroup, removeZoneFromGroups, getGroupByLeader, getGroupByZone, removeGroupByLeader } from '../groupTracker';
 
 export default class BackendMusicAssistant extends Backend {
   private client: MusicAssistantClient;
   private removeEventListener?: () => void;
   private lastQueueItem: any = null;
   private previousQueueItem: any = null;
+
+  private activeQueueId?: string;
+  private activeGroupLeaderId?: string;
 
   private maPlayerId: string; // <- the Music Assistant player ID
   private loxoneZoneId: number; // <- keep track of original zone id for logging
@@ -135,7 +139,7 @@ export default class BackendMusicAssistant extends Backend {
   sendGroupCommand(_cmd: string, _type: string, _playerid: string, ...additionalIDs: string[]): void {
     logger.info(`[MusicAssistant] Creating group Leader:${this.maPlayerId}, Members:${additionalIDs.join(', ')}`);
     additionalIDs.forEach((id) => {
-      // if (id !== this.maPlayerId) sendCommandToZone(id, 'groupJoin', this.maPlayerId);
+      if (id !== this.maPlayerId) sendCommandToZone(Number(id), 'groupJoin', this.maPlayerId);
     });
     updateZoneGroup();
   }
@@ -154,11 +158,24 @@ export default class BackendMusicAssistant extends Backend {
 
   private handleEvent(evt: EventMessage) {
     const eventName = (evt.event ?? '').toString().toLowerCase();
-    const objectId = (evt.object_id ?? '').toString().toLowerCase();
-    const myId = (this.maPlayerId ?? '').toString().toLowerCase();
+    const objectId = this.normaliseId(evt.object_id);
+    const myId = this.normaliseId(this.maPlayerId);
+    const queueId = this.activeQueueId;
+    const leaderId = this.activeGroupLeaderId;
 
-    // Only process events for our configured Music Assistant player
-    if (objectId !== myId) return;
+    const relevantIds = new Set<string>();
+    if (myId) relevantIds.add(myId);
+    if (queueId) relevantIds.add(queueId);
+    if (leaderId) relevantIds.add(leaderId);
+
+    if (relevantIds.size > 0) {
+      if (objectId) {
+        if (!relevantIds.has(objectId)) return;
+      } else if (eventName.startsWith('queue_') || eventName.startsWith('player_')) {
+        // Skip queue/player events without a target identifier when we have specific IDs to watch.
+        return;
+      }
+    }
 
     switch (eventName) {
       case 'queue_added':
@@ -189,14 +206,21 @@ export default class BackendMusicAssistant extends Backend {
   }
 
   private updateFromPlayer(player: any) {
+    this.captureActiveContext(player);
     const trackUpdate = mapPlayerToTrack(this.loxoneZoneId, player);
     this.pushPlayerStatusUpdate(trackUpdate);
+    void this.updateGroupMembership(player);
+    void this.ensureGroupPlaybackState(player);
   }
 
   private async updateFromQueue(queue: any) {
     if (!queue) return;
 
     const queueId = queue?.queue_id ?? this.maPlayerId ?? '';
+    const normalizedQueueId = this.normaliseId(queueId);
+    if (normalizedQueueId) {
+      this.activeQueueId = normalizedQueueId;
+    }
     let augmentedQueue = queue;
 
     const needsExpansion =
@@ -252,9 +276,142 @@ export default class BackendMusicAssistant extends Backend {
     this.lastQueueItem = augmentedQueue.current_item;
   }
 
+  private captureActiveContext(player: any): void {
+    const queueId = this.normaliseId(player?.active_queue ?? player?.queue_id ?? this.maPlayerId);
+    if (queueId) {
+      this.activeQueueId = queueId;
+    }
+
+    const leaderId = this.normaliseId(player?.synced_to ?? player?.active_group);
+    this.activeGroupLeaderId = leaderId;
+  }
+
+  private async updateGroupMembership(player: any): Promise<void> {
+    const backendName = 'MusicAssistant';
+    const playerRawId: string = typeof player?.player_id === 'string' ? player.player_id : this.maPlayerId;
+    const playerNormalized = this.normaliseId(playerRawId);
+    const playerLookup = playerNormalized ? findZoneByBackendPlayerId(playerNormalized) : undefined;
+    const zoneId = playerLookup?.zoneId ?? this.loxoneZoneId;
+
+    const groupMembersRaw: unknown[] = Array.isArray(player?.group_members) ? player.group_members : [];
+    const groupChildsRaw: unknown[] = Array.isArray(player?.group_childs) ? player.group_childs : [];
+
+    const normalisedSelf = playerNormalized;
+    const syncedToNormalized = this.normaliseId(player?.synced_to);
+    const leaderNormalized = syncedToNormalized ?? normalisedSelf;
+
+    const memberZoneIdsFrom = (entries: unknown[], leaderId?: string): number[] => {
+      return entries
+        .map((entry) => {
+          if (typeof entry === 'string') return entry;
+          if (entry && typeof (entry as any).player_id === 'string') return (entry as any).player_id;
+          return undefined;
+        })
+        .map((id) => (id ? this.normaliseId(id) : undefined))
+        .filter((id): id is string => Boolean(id) && id !== leaderId)
+        .map((id) => findZoneByBackendPlayerId(id))
+        .filter((lookup): lookup is NonNullable<typeof lookup> => Boolean(lookup))
+        .map((lookup) => lookup.zoneId);
+    };
+
+    const membersFromMembers = memberZoneIdsFrom(groupMembersRaw, leaderNormalized);
+    const membersFromChilds = memberZoneIdsFrom(groupChildsRaw, leaderNormalized);
+
+    const leaderLookup = leaderNormalized ? findZoneByBackendPlayerId(leaderNormalized) : undefined;
+
+    const cleanedMembersFromChilds = membersFromChilds.filter((memberId) => memberId !== (leaderLookup?.zoneId ?? -1));
+    const membersCandidates = membersFromMembers.length > 0 ? membersFromMembers : cleanedMembersFromChilds;
+
+    const isLeaderEvent = !syncedToNormalized || syncedToNormalized === normalisedSelf;
+
+    if (isLeaderEvent && leaderLookup) {
+      const uniqueMembers = Array.from(new Set(membersCandidates));
+      if (uniqueMembers.length > 0) {
+        const existingLeaderRecord = getGroupByLeader(leaderLookup.zoneId);
+        const { changed } = upsertGroup({
+          leader: leaderLookup.zoneId,
+          members: uniqueMembers,
+          backend: existingLeaderRecord?.backend ?? backendName,
+          externalId: existingLeaderRecord?.externalId ?? this.activeQueueId ?? `group-${leaderLookup.zoneId}`,
+          source: existingLeaderRecord?.source ?? 'backend',
+        });
+        if (changed) updateZoneGroup();
+      } else {
+        const removed = removeGroupByLeader(leaderLookup.zoneId);
+        if (removed) updateZoneGroup();
+      }
+      return;
+    }
+
+    if (syncedToNormalized && leaderLookup) {
+      const existingLeaderRecord = getGroupByLeader(leaderLookup.zoneId);
+      const currentMembers = new Set(existingLeaderRecord?.members ?? []);
+      membersCandidates.forEach((memberId) => {
+        if (memberId !== leaderLookup.zoneId) currentMembers.add(memberId);
+      });
+      if (playerLookup && playerLookup.zoneId !== leaderLookup.zoneId) {
+        currentMembers.add(playerLookup.zoneId);
+      }
+
+      const filteredMembers = Array.from(currentMembers).filter((memberId) => memberId !== leaderLookup.zoneId);
+
+      if (filteredMembers.length > 0) {
+        const { changed } = upsertGroup({
+          leader: leaderLookup.zoneId,
+          members: filteredMembers,
+          backend: existingLeaderRecord?.backend ?? backendName,
+          externalId: existingLeaderRecord?.externalId ?? this.activeQueueId ?? `group-${leaderLookup.zoneId}`,
+          source: existingLeaderRecord?.source ?? 'backend',
+        });
+        if (changed) updateZoneGroup();
+      } else {
+        const removed = removeGroupByLeader(leaderLookup.zoneId);
+        if (removed) updateZoneGroup();
+      }
+      return;
+    }
+
+    const existingGroup = getGroupByZone(zoneId);
+    if (existingGroup) {
+      const changed = removeZoneFromGroups(zoneId);
+      if (changed) updateZoneGroup();
+    }
+  }
+
+  private async ensureGroupPlaybackState(player: any): Promise<void> {
+    const queueId = this.normaliseId(player?.active_queue ?? player?.queue_id);
+    if (!queueId) return;
+
+    const leaderId = this.normaliseId(player?.synced_to ?? player?.active_group);
+    // Fetch the shared queue when we are part of a sync group
+    if (!leaderId && queueId === this.normaliseId(this.maPlayerId)) return;
+
+    try {
+      const queue = await this.client.rpc('player_queues/get', { queue_id: queueId });
+      if (queue) {
+        await this.updateFromQueue(queue);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.debug(`[MusicAssistant][Zone:${this.loxoneZoneId}] Failed to fetch active group queue ${queueId}: ${message}`);
+    }
+  }
+
+  private normaliseId(value: unknown): string | undefined {
+    if (value === undefined || value === null) return undefined;
+    const str = typeof value === 'string' ? value : String(value);
+    const trimmed = str.trim();
+    if (!trimmed) return undefined;
+    return trimmed.toLowerCase();
+  }
+
   private captureSuggestions(players: any[]) {
     const mapped = players.map((p: any) => ({ id: p.player_id, name: p.name }));
     setMusicAssistantSuggestions(this.loxoneZoneId, mapped);
+  }
+
+  private handlePlayerRemoved(_payload: any): void {
+    // no-op (Music Assistant does not emit player_removed for grouping)
   }
 
   static async listAvailablePlayers(serverIp: string, serverPort = 8095): Promise<Array<{ id: string; name: string }>> {
