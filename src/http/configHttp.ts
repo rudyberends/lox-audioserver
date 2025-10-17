@@ -4,7 +4,7 @@ import fs from 'fs';
 import { promises as fsp } from 'fs';
 import { BACKEND_OPTIONS, CONFIG_DIR, PROVIDER_OPTIONS, AdminConfig, ZoneConfigEntry, defaultAdminConfig } from '../config/configStore';
 import { getMusicAssistantSuggestions } from '../config/adminState';
-import { reloadConfiguration, getAdminConfig, updateAdminConfig, config as runtimeConfig } from '../config/config';
+import { reloadConfiguration, getAdminConfig, updateAdminConfig, config as runtimeConfig, setAudioServerIp } from '../config/config';
 import { getZoneStatuses, setupZoneById } from '../backend/zone/zonemanager';
 import { validateBackendConfig } from '../backend/zone/backendFactory';
 import { getMusicAssistantPlayers } from '../backend/zone/MusicAssistant/backend';
@@ -185,6 +185,34 @@ function registerDefaultRoutes() {
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ success: true, message: 'Configuration saved and reloaded.' }));
+  });
+
+  registerConfigRoute('POST', '/admin/api/audioserver/ip', async (req, res) => {
+    const body = await readRequestBody(req);
+    let payload: { ip?: string } = {};
+    try {
+      payload = JSON.parse(body || '{}');
+    } catch (error) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, message: 'Invalid JSON' }));
+      return;
+    }
+
+    const rawIp = typeof payload.ip === 'string' ? payload.ip : '';
+    try {
+      const savedIp = setAudioServerIp(rawIp);
+      await reloadConfiguration();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        message: 'AudioServer IP override saved.',
+        ip: savedIp,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, message }));
+    }
   });
 
   registerConfigRoute('POST', '/admin/api/config/reload', async (_req, res) => {

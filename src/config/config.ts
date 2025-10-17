@@ -348,6 +348,19 @@ function getStoredVolumePreset(zoneId: number): ZoneVolumeConfig | undefined {
   if (!zoneConfig?.volumes) return undefined;
   return { ...zoneConfig.volumes };
 }
+
+function setAudioServerIp(ip: string): string {
+  const trimmed = typeof ip === 'string' ? ip.trim() : '';
+  const nextConfig: AdminConfig = {
+    ...adminConfig,
+    audioserver: {
+      ...adminConfig.audioserver,
+      ip: trimmed,
+    },
+  };
+  updateAdminConfig(nextConfig);
+  return nextConfig.audioserver.ip;
+}
 /**
  * Returns the last cached admin configuration.
  */
@@ -377,6 +390,7 @@ export {
   setZoneDefaultVolume,
   setZoneMaxVolume,
   setZoneEventVolumes,
+  setAudioServerIp,
 };
 
 export type { ZoneVolumeConfig };

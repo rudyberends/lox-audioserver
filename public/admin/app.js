@@ -23,6 +23,8 @@ const state = {
     autoScroll: true,
     fullscreen: false,
   },
+  audioserverIpSaving: false,
+  lastSavedAudioserverIp: '',
   modal: {
     open: false,
     zoneId: null,
@@ -54,7 +56,7 @@ const statusEl = document.getElementById('status');
 const tabsNav = document.getElementById('tabs');
 let statusBannerTimeout = 0;
 const zoneErrorTimers = new Map();
-const FOCUS_PRESERVE_IDS = new Set(['provider-ip', 'provider-port']);
+const FOCUS_PRESERVE_IDS = new Set(['audioserver-ip', 'provider-ip', 'provider-port']);
 
 let renderScheduled = false;
 let logFullscreenEscHandler = null;
@@ -109,6 +111,9 @@ async function loadConfig(silent = false) {
       pairedNormalized = Boolean(pairedRaw);
     }
     audioserver.paired = pairedNormalized;
+    const audioserverIpValue = typeof audioserver.ip === 'string' ? audioserver.ip.trim() : '';
+    audioserver.ip = audioserverIpValue;
+    state.lastSavedAudioserverIp = audioserverIpValue;
 
     const connectedProviderType = data.config?.mediaProvider?.type || '';
     const connectedProviderOptions = {
@@ -234,6 +239,46 @@ function renderPanels(config) {
   const activeTab = state.activeTab || 'miniserver';
   const panelClass = (name) => `tabpanel${activeTab === name ? ' active' : ''}`;
   const isPaired = Boolean(config.audioserver?.paired);
+  const audioserverIpRaw = config.audioserver?.ip || '';
+  const audioserverIpTrimmed = audioserverIpRaw.trim();
+  const lastSavedAudioserverIp = typeof state.lastSavedAudioserverIp === 'string' ? state.lastSavedAudioserverIp : '';
+  const lastSavedAudioserverTrimmed = lastSavedAudioserverIp.trim();
+  const isSavingAudioserverIp = Boolean(state.audioserverIpSaving);
+  const audioserverIpDirty = audioserverIpTrimmed !== lastSavedAudioserverTrimmed;
+  const audioserverSaveDisabled = state.loadingConfig || isSavingAudioserverIp || !audioserverIpDirty;
+  const audioserverSaveLabel = isSavingAudioserverIp
+    ? 'Saving…'
+    : audioserverIpDirty
+      ? 'Save override'
+      : 'Override saved';
+  const audioserverIpField = renderInput(
+    'audioserver-ip',
+    'IP address',
+    audioserverIpRaw,
+    'text',
+    false,
+    'autocomplete="off" inputmode="decimal" placeholder="e.g. 192.168.1.50"'
+  );
+  const audioserverOverrideCard = `
+            <article class="miniserver-card audioserver-card">
+              <header>
+                <h3>AudioServer</h3>
+                <p>Set a manual IP when automatic detection doesn't match your network.</p>
+              </header>
+              <div class="audioserver-card-body">
+                <div class="connection-override-fields">
+                  ${audioserverIpField}
+                </div>
+              </div>
+              <div class="connection-override-actions">
+                <button type="button" id="save-audioserver-ip" class="primary" ${audioserverSaveDisabled ? 'disabled' : ''}>
+                  ${escapeHtml(audioserverSaveLabel)}
+                </button>
+                <button type="button" id="clear-config" class="ghost danger">
+                  Reset configuration
+                </button>
+              </div>
+            </article>`;
   const miniserverIpRaw = config.miniserver?.ip || '';
   const miniserverIpValue = escapeHtml(miniserverIpRaw);
   const miniserverSerialRaw = config.miniserver?.serial || '';
@@ -248,6 +293,21 @@ function renderPanels(config) {
               <label for="miniserver-serial">Miniserver Serial</label>
               <input id="miniserver-serial" type="text" value="${miniserverSerialValue}" readonly aria-readonly="true" placeholder="Will populate after pairing" />
             </div>`;
+  const connectionCard = `
+            <article class="miniserver-card connection">
+              <header>
+                <div>
+                  <h3>Connection</h3>
+                  <p>Review the detected MiniServer details after pairing.</p>
+                </div>
+                <div class="connection-state">${renderMiniserverBadge(config)}</div>
+              </header>
+              <div class="miniserver-form">
+                ${miniserverIpField}
+                ${miniserverSerialField}
+              </div>
+              ${renderPairingWaitIndicator()}
+            </article>`;
 
   const generalPanel = `
     <section data-tabpanel="miniserver" class="${panelClass('miniserver')}">
@@ -262,20 +322,8 @@ function renderPanels(config) {
       </div>
       <div class="miniserver-layout">
         <div class="miniserver-primary">
-          <article class="miniserver-card connection">
-            <header>
-              <div>
-                <h3>Connection</h3>
-              </div>
-              <div class="connection-state">${renderMiniserverBadge(config)}</div>
-            </header>
-            <div class="miniserver-form">
-              ${miniserverIpField}
-              ${miniserverSerialField}
-            </div>
-            ${renderPairingWaitIndicator()}
-          </article>
-          ${renderToolsCard()}
+          ${audioserverOverrideCard}
+          ${connectionCard}
         </div>
         ${renderStatus(config)}
       </div>
@@ -564,20 +612,6 @@ function renderStatus(config) {
   `;
 }
 
-function renderToolsCard() {
-  return `
-    <article class="miniserver-card pairing-actions-card">
-      <header>
-        <h3>Tools</h3>
-        <p>Need to start over? Reset clears the saved admin configuration.</p>
-      </header>
-      <div class="pairing-actions">
-        <button type="button" id="clear-config" class="danger">Reset config</button>
-      </div>
-    </article>
-  `;
-}
-
 function renderPairingBadge(audioserver = {}) {
   const isPaired = Boolean(audioserver?.paired);
   const label = isPaired ? 'Paired' : 'Awaiting pairing';
@@ -845,6 +879,59 @@ function renderZoneGroup(group, index = 0, stretch = false) {
   `;
 }
 
+const VOLUME_LABELS = {
+  default: 'Default',
+  max: 'Max',
+  alarm: 'Alarm',
+  fire: 'Fire',
+  bell: 'Bell',
+  buzzer: 'Buzzer',
+  tts: 'TTS',
+};
+
+const VOLUME_ORDER = ['default', 'max', 'alarm', 'fire', 'bell', 'buzzer', 'tts'];
+
+function renderZoneVolumeSection(rawVolumes) {
+  if (!rawVolumes || typeof rawVolumes !== 'object') return '';
+  const entries = Object.entries(rawVolumes)
+    .map(([key, value]) => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return null;
+      const clamped = Math.max(0, Math.min(100, Math.round(numeric)));
+      const label = VOLUME_LABELS[key] || key.replace(/_/g, ' ');
+      const className = String(key).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      return { key, label, value: clamped, className };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const orderA = VOLUME_ORDER.indexOf(a.key);
+      const orderB = VOLUME_ORDER.indexOf(b.key);
+      const safeA = orderA === -1 ? Number.POSITIVE_INFINITY : orderA;
+      const safeB = orderB === -1 ? Number.POSITIVE_INFINITY : orderB;
+      if (safeA !== safeB) return safeA - safeB;
+      return a.label.localeCompare(b.label);
+    });
+
+  if (!entries.length) return '';
+
+  const chips = entries
+    .map((entry) => `
+          <div class="zone-volume-chip zone-volume-chip--${escapeHtml(entry.className)}">
+            <span class="zone-volume-chip-label">${escapeHtml(entry.label)}</span>
+            <span class="zone-volume-chip-value">${escapeHtml(`${entry.value}%`)}</span>
+          </div>
+        `)
+    .join('');
+
+  return `
+    <div class="zone-card-volumes">
+      <div class="zone-volume-chip-list">
+        ${chips}
+      </div>
+    </div>
+  `;
+}
+
 function renderZoneCard(zone) {
   if (!zone) return '';
   if (zone && zone.placeholder === 'extension') {
@@ -890,6 +977,7 @@ function renderZoneCard(zone) {
     const ip = (status?.ip ?? zone.ip ?? '').trim();
     if (ip) backendSubDetail = escapeHtml(ip);
   }
+  const volumeSection = renderZoneVolumeSection(zone?.volumes || status?.volumes);
 
   return `
     <article class="zone-card ${cardStateClass}" data-index="${zone.id}">
@@ -909,6 +997,7 @@ function renderZoneCard(zone) {
         </div>
         ${backendSubDetail ? `<span class="zone-backend-sub">${backendSubDetail}</span>` : ''}
       </div>
+      ${volumeSection}
       <div class="zone-card-divider" aria-hidden="true"></div>
       <div class="zone-card-actions">
         <button type="button" class="zone-backend-button" data-action="configure-zone" data-id="${zone.id}" aria-label="Configure ${zoneLabelAria}">Configure</button>
@@ -2087,7 +2176,10 @@ function bindFormEvents() {
   });
 
   document.getElementById('audioserver-ip')?.addEventListener('input', (event) => {
-    state.config.audioserver.ip = event.target.value;
+    if (!state.config) return;
+    const audioserver = state.config.audioserver = state.config.audioserver || {};
+    audioserver.ip = event.target.value;
+    scheduleRender();
   });
 
   const providerSelect = document.getElementById('provider-type');
@@ -2258,6 +2350,43 @@ function clearZoneErrorTimer(zoneId) {
   zoneErrorTimers.delete(zoneId);
 }
 
+async function saveAudioserverIp() {
+  if (!state.config || state.audioserverIpSaving) return;
+  const audioserver = state.config.audioserver = state.config.audioserver || {};
+  const currentValue = typeof audioserver.ip === 'string' ? audioserver.ip.trim() : '';
+  audioserver.ip = currentValue;
+  const lastSaved = typeof state.lastSavedAudioserverIp === 'string' ? state.lastSavedAudioserverIp.trim() : '';
+  if (currentValue === lastSaved) {
+    setStatus('No AudioServer IP changes to save.');
+    return;
+  }
+
+  state.audioserverIpSaving = true;
+  scheduleRender();
+  setStatus('Saving AudioServer IP…');
+
+  try {
+    const response = await fetch('/admin/api/audioserver/ip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: currentValue }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`);
+    await loadConfig(true);
+    const savedIp = typeof data?.ip === 'string' ? data.ip : currentValue;
+    const trimmedSaved = savedIp.trim();
+    state.lastSavedAudioserverIp = trimmedSaved;
+    state.config.audioserver.ip = savedIp;
+    setStatus(data?.message || 'AudioServer IP saved.');
+  } catch (error) {
+    setStatus(`Failed to save AudioServer IP: ${error instanceof Error ? error.message : String(error)}`, true);
+  } finally {
+    state.audioserverIpSaving = false;
+    scheduleRender();
+  }
+}
+
 async function connectProvider() {
   if (!state.config) return;
   const providerType = state.config.mediaProvider?.type || '';
@@ -2351,6 +2480,9 @@ function bindLoggingEvents() {
 
 function bindActions() {
   document.getElementById('clear-config')?.addEventListener('click', clearConfig);
+  document.getElementById('save-audioserver-ip')?.addEventListener('click', () => {
+    saveAudioserverIp();
+  });
 }
 
 function bindLogEvents() {
@@ -2673,6 +2805,10 @@ async function clearConfig() {
     state.zoneStatus = {};
     state.suggestions = {};
     state.connectedProvider = { type: '', options: {} };
+    state.audioserverIpSaving = false;
+    state.lastSavedAudioserverIp = typeof state.config?.audioserver?.ip === 'string'
+      ? state.config.audioserver.ip.trim()
+      : '';
     state.modal = {
       open: false,
       zoneId: null,
