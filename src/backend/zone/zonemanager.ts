@@ -1,5 +1,11 @@
 import logger from '../../utils/troxorlogger';
-import { config, getAdminConfig, updateAdminConfig } from '../../config/config';
+import {
+  config,
+  getAdminConfig,
+  updateAdminConfig,
+  getStoredVolumePreset,
+} from '../../config/config';
+import type { ZoneVolumeConfig } from '../../config/config';
 import { broadcastEvent } from '../../http/broadcastEvent';
 import { createBackend } from './backendFactory';
 import type { ZoneConfigEntry, AdminConfig } from '../../config/configStore';
@@ -10,7 +16,14 @@ import {
   FileType,
   RepeatMode,
   AudioEvent,
+  SyncedPlayerEntry,
 } from './loxoneTypes';
+import {
+  getAllGroups as getTrackedGroups,
+  getGroupByZone as getTrackedGroupByZone,
+  removeZoneFromGroups,
+  GroupRecord,
+} from './groupTracker';
 
 type PlayerOutputChannel = {
   id?: string;
@@ -58,6 +71,7 @@ interface ZoneState {
   };
   playerEntry: PlayerStatus;
   queue?: ZoneEntryQueue;
+  fadeTargetVolume?: number;
 }
 
 /**
@@ -352,6 +366,7 @@ async function cleanupZone(playerId: number): Promise<void> {
       logger.error(`[ZoneManager] Error cleaning up backend for Loxone player ID: ${playerId}: ${error}`);
     }
   }
+  removeZoneFromGroups(playerId);
   delete zone[playerId];
 }
 
@@ -435,6 +450,9 @@ async function setupZoneInternal(
       zone[playerId].player.backendInstance = null;
     }
   }
+
+  applyStoredVolumePreset(playerId, false);
+  updateZoneFadeTarget(playerId);
 }
 
 /**
@@ -652,6 +670,49 @@ const getZoneById = (playerId: number): ZoneEntry | undefined => {
   return foundZone; // Return the found zone
 };
 
+interface BackendPlayerLookupResult {
+  zoneId: number;
+  zone: ZoneEntry;
+}
+
+function normalizeBackendIdentifier(identifier: unknown): string | undefined {
+  if (typeof identifier !== 'string') return undefined;
+  const trimmed = identifier.trim();
+  return trimmed ? trimmed.toLowerCase() : undefined;
+}
+
+function getBackendPlayerIdentifiers(entry: ZoneEntry): string[] {
+  const identifiers: string[] = [];
+  const uuid = normalizeBackendIdentifier(entry.player?.uuid);
+  if (uuid) identifiers.push(uuid);
+
+  const backendInstance = entry.player?.backendInstance as { maPlayerId?: string; playerId?: string } | undefined;
+  const maId = normalizeBackendIdentifier(backendInstance?.maPlayerId);
+  if (maId) identifiers.push(maId);
+
+  const genericId = normalizeBackendIdentifier((backendInstance as any)?.playerId);
+  if (genericId) identifiers.push(genericId);
+
+  return identifiers;
+}
+
+function findZoneByBackendPlayerId(backendPlayerId: string): BackendPlayerLookupResult | undefined {
+  const normalizedTarget = normalizeBackendIdentifier(backendPlayerId);
+  if (!normalizedTarget) return undefined;
+
+  for (const [idString, entry] of Object.entries(zone)) {
+    if (!entry) continue;
+    const identifiers = getBackendPlayerIdentifiers(entry);
+    if (identifiers.some((identifier) => identifier === normalizedTarget)) {
+      const zoneId = Number(idString);
+      if (!Number.isFinite(zoneId)) continue;
+      return { zoneId, zone: entry };
+    }
+  }
+
+  return undefined;
+}
+
 /**
  * Updates the Loxone player status for a zone and notifies connected listeners.
  * This is the primary way backends surface state changes (title, playback mode, etc.).
@@ -750,17 +811,242 @@ function updateZonePlayerName(playerId: number, name: string): boolean {
   return updateZonePlayerStatus(playerId, { name: trimmedName });
 }
 
-// TODO
-// Test with BeoLink
-const updateZoneGroup = () => {
-  const first = zone[15];
-  const second = zone[14];
-  if (!first || !second) return;
-  broadcastEvent(
-    `{"audio_sync_event":[{"group":"fe78dcce-e931-095d-0eff-018e010d95d8","mastervolume":25,"players":[{"id":"${first.player.uuid}","playerid":${first.player.playerid}},{"id":"${second.player.uuid}","playerid":${second.player.playerid}}],"type":"dynamic"}]}`,
-  );
+type AudioSyncEventPlayer = {
+  id: string;
+  playerid: number;
+  name?: string;
+};
+
+type AudioSyncGroupPayload = {
+  group: string;
+  mastervolume: number;
+  players: AudioSyncEventPlayer[];
+  type: 'dynamic';
+};
+
+type GroupBuildResult = {
+  payload: AudioSyncGroupPayload;
+  participantIds: number[];
+  syncedPlayers: SyncedPlayerEntry[];
+};
+
+const clampVolume = (value: unknown): number => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  if (numeric < 0) return 0;
+  if (numeric > 100) return 100;
+  return Math.round(numeric);
+};
+
+function resolveBackendPlayerIdentifier(entry: ZoneState): string {
+  const uuid = typeof entry.player?.uuid === 'string' ? entry.player.uuid.trim() : '';
+  if (uuid) return uuid;
+
+  const backendInstance = entry.player?.backendInstance as { maPlayerId?: string } | undefined;
+  const maPlayerId = typeof backendInstance?.maPlayerId === 'string' ? backendInstance.maPlayerId.trim() : '';
+  if (maPlayerId) return maPlayerId;
+
+  return String(entry.player.playerid);
 }
-// TODO
+
+function playersEqual(current: SyncedPlayerEntry[] | undefined, next: SyncedPlayerEntry[]): boolean {
+  if (!Array.isArray(current) || current.length !== next.length) return false;
+  return current.every((entry, index) => entry.playerid === next[index].playerid);
+}
+
+function buildGroupPayload(record: GroupRecord): GroupBuildResult | undefined {
+  if (!record) return undefined;
+
+  const candidateIds = record.members
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+
+  const uniqueIds: number[] = [];
+  const seen = new Set<number>();
+  candidateIds.forEach((id) => {
+    if (!seen.has(id)) {
+      seen.add(id);
+      uniqueIds.push(id);
+    }
+  });
+
+  const participants = uniqueIds
+    .map((id) => {
+      const entry = zone[id];
+      return entry ? { id, entry } : undefined;
+    })
+    .filter((item): item is { id: number; entry: ZoneState } => Boolean(item));
+
+  if (participants.length === 0) return undefined;
+
+  const syncedPlayers: SyncedPlayerEntry[] = participants.map(({ id, entry }) => ({
+    playerid: id,
+    name: entry.player.name,
+  }));
+
+  const audioPlayers: AudioSyncEventPlayer[] = participants.map(({ entry }) => ({
+    id: resolveBackendPlayerIdentifier(entry),
+    playerid: entry.player.playerid,
+    name: entry.player.name,
+  }));
+
+  const activeParticipant =
+    participants.find(({ entry }) => String(entry.playerEntry?.power ?? '').toLowerCase() === 'on') ??
+    participants[0];
+
+  const mastervolume = clampVolume(activeParticipant?.entry.playerEntry?.volume);
+  const groupId = record.externalId ?? `group-${record.leader}`;
+
+  return {
+    payload: {
+      group: groupId,
+      mastervolume,
+      players: audioPlayers,
+      type: 'dynamic',
+    },
+    participantIds: participants.map((participant) => participant.id),
+    syncedPlayers,
+  };
+}
+
+const updateZoneGroup = (): void => {
+  const trackedGroups = getTrackedGroups().filter((record) => record.members.length > 1);
+  const zonePlayersMap = new Map<number, SyncedPlayerEntry[]>();
+  const audioSyncGroups: AudioSyncGroupPayload[] = [];
+
+  trackedGroups.forEach((record) => {
+    const result = buildGroupPayload(record);
+    if (!result) return;
+    audioSyncGroups.push(result.payload);
+    result.participantIds.forEach((participantId) => {
+      zonePlayersMap.set(participantId, result.syncedPlayers);
+    });
+  });
+
+  broadcastEvent(JSON.stringify({ audio_sync_event: audioSyncGroups }));
+
+  if (audioSyncGroups.length > 0) {
+    audioSyncGroups.forEach((group) => {
+      broadcastEvent(
+        JSON.stringify({
+          mastervolumechanged_event: {
+            group: group.group,
+            mastervolume: group.mastervolume,
+          },
+        }),
+      );
+    });
+  }
+
+  Object.keys(zone).forEach((idString) => {
+    const zoneId = Number(idString);
+    if (!Number.isFinite(zoneId)) return;
+    const entry = zone[zoneId];
+    if (!entry) return;
+
+    const defaultPlayers: SyncedPlayerEntry[] = [{ playerid: zoneId, name: entry.player.name }];
+    const mappedPlayers = zonePlayersMap.get(zoneId) ?? defaultPlayers;
+    const currentPlayers = entry.playerEntry.players as SyncedPlayerEntry[] | undefined;
+    const currentlyGrouped = Array.isArray(currentPlayers) && currentPlayers.length > 1;
+    const shouldUpdate = zonePlayersMap.has(zoneId) || currentlyGrouped;
+
+    if (!shouldUpdate) return;
+
+    if (!playersEqual(currentPlayers, mappedPlayers)) {
+      updateZonePlayerStatus(zoneId, { players: mappedPlayers });
+    }
+  });
+
+  logger.debug(`[ZoneManager] Broadcast audio_sync_event with ${audioSyncGroups.length} group(s).`);
+};
+
+type MasterVolumeAdjustment = {
+  groupId?: string;
+  masterZoneId: number;
+  targetVolume: number;
+  updates: Array<{ zoneId: number; volume: number }>;
+  skipped: Array<{ zoneId: number; reason: string }>;
+};
+
+const applyMasterVolumeToGroup = async (zoneId: number, targetVolume: number): Promise<MasterVolumeAdjustment> => {
+  const zoneEntry = getZoneById(zoneId);
+  const clampedTarget = clampVolume(targetVolume);
+  if (!zoneEntry) {
+    return {
+      masterZoneId: zoneId,
+      targetVolume: clampedTarget,
+      updates: [],
+      skipped: [{ zoneId, reason: 'zone-not-found' }],
+    };
+  }
+
+  const trackedGroup = getTrackedGroupByZone(zoneId);
+
+  let participantIds: number[] = [];
+  let groupId: string | undefined;
+  if (trackedGroup && trackedGroup.members.length > 1) {
+    groupId = trackedGroup.externalId ?? `group-${trackedGroup.leader}`;
+    participantIds = [...trackedGroup.members];
+  } else {
+    const players = Array.isArray(zoneEntry.playerEntry?.players) ? zoneEntry.playerEntry.players : [];
+    if (players.length > 1) {
+      participantIds = players.map((player) => Number(player?.playerid)).filter((id) => Number.isFinite(id) && id > 0);
+    }
+  }
+
+  if (participantIds.length === 0) {
+    participantIds = [zoneId];
+  }
+
+  const uniqueParticipantIds = Array.from(new Set(participantIds));
+  const masterZoneId = trackedGroup?.leader ?? uniqueParticipantIds[0] ?? zoneId;
+  const masterEntry = getZoneById(masterZoneId) ?? zoneEntry;
+  const masterVolume = clampVolume(masterEntry.playerEntry?.volume ?? 0);
+  const volumeDelta = clampedTarget - masterVolume;
+
+  const updates: Array<{ zoneId: number; volume: number }> = [];
+  const skipped: Array<{ zoneId: number; reason: string }> = [];
+
+  for (const participantId of uniqueParticipantIds) {
+    const participantEntry = getZoneById(participantId);
+    if (!participantEntry) {
+      skipped.push({ zoneId: participantId, reason: 'zone-not-found' });
+      continue;
+    }
+
+    const currentVolume = clampVolume(participantEntry.playerEntry?.volume ?? 0);
+    const desiredVolume =
+      participantId === masterZoneId ? clampedTarget : clampVolume(currentVolume + volumeDelta);
+    const delta = desiredVolume - currentVolume;
+
+    if (delta === 0) {
+      updates.push({ zoneId: participantId, volume: desiredVolume });
+      continue;
+    }
+
+    try {
+      await sendCommandToZone(participantId, 'volume', String(delta));
+      updateZonePlayerStatus(participantId, { volume: desiredVolume });
+      updates.push({ zoneId: participantId, volume: desiredVolume });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`[ZoneManager] Failed to adjust volume for zone ${participantId}: ${message}`);
+      skipped.push({ zoneId: participantId, reason: 'command-failed' });
+    }
+  }
+
+  if (updates.length > 0) {
+    updateZoneGroup();
+  }
+
+  return {
+    groupId,
+    masterZoneId,
+    targetVolume: clampedTarget,
+    updates,
+    skipped,
+  };
+};
 
 /**
  * Stop every backend instance and clear the in-memory registry. Used on shutdown and full re-syncs.
@@ -783,6 +1069,43 @@ const cleanupZones = async (): Promise<void> => {
   );
 };
 
+function applyVolumePresetToZone(playerId: number, preset: ZoneVolumeConfig, broadcast = false): void {
+  const entry = zone[playerId];
+  if (!entry) return;
+
+  const updates: Partial<PlayerStatus> = {};
+
+  if (preset.default !== undefined) updates.defaultVolume = preset.default;
+  if (preset.alarm !== undefined) updates.alarmVolume = preset.alarm;
+  if (preset.fire !== undefined) (updates as any).fireVolume = preset.fire;
+  if (preset.bell !== undefined) updates.bellVolume = preset.bell;
+  if (preset.buzzer !== undefined) updates.buzzerVolume = preset.buzzer;
+  if (preset.tts !== undefined) updates.ttsVolume = preset.tts;
+  if (preset.max !== undefined) {
+    updates.maxVolume = preset.max;
+    entry.player.max_volume = preset.max;
+  }
+
+  if (Object.keys(updates).length === 0) return;
+
+  if (broadcast) {
+    updateZonePlayerStatus(playerId, updates);
+  } else {
+    entry.playerEntry = { ...entry.playerEntry, ...updates };
+  }
+}
+
+function applyStoredVolumePreset(playerId: number, broadcast = false): ZoneVolumeConfig | undefined {
+  const preset = getStoredVolumePreset(playerId);
+  if (!preset) return undefined;
+  applyVolumePresetToZone(playerId, preset, broadcast);
+  const entry = zone[playerId];
+  if (entry) {
+    entry.fadeTargetVolume = preset.tts ?? preset.default ?? entry.playerEntry.defaultVolume ?? entry.playerEntry.volume ?? 0;
+  }
+  return preset;
+}
+
 export {
   setupZones,
   setupZoneById,
@@ -792,9 +1115,30 @@ export {
   updateZonePlayerName,
   updateZoneQueue,
   updateZoneGroup,
+  applyMasterVolumeToGroup,
   getZoneById,
+  findZoneByBackendPlayerId,
   cleanupZones,
   getZoneStatuses,
+  applyStoredVolumePreset,
+  applyVolumePresetToZone,
+  updateZoneFadeTarget,
 };
 
 export { mergeZoneConfigEntries } from './zoneConfigUtils';
+function updateZoneFadeTarget(playerId: number): void {
+  const entry = zone[playerId];
+  if (!entry) return;
+  const preset = getStoredVolumePreset(playerId);
+  const fallback = Number.isFinite(entry.playerEntry?.defaultVolume)
+    ? Number(entry.playerEntry.defaultVolume)
+    : Number(entry.playerEntry?.volume ?? 0);
+
+  if (preset?.tts !== undefined) {
+    entry.fadeTargetVolume = preset.tts;
+  } else if (preset?.default !== undefined) {
+    entry.fadeTargetVolume = preset.default;
+  } else {
+    entry.fadeTargetVolume = fallback;
+  }
+}

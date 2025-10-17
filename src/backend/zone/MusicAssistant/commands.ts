@@ -1,4 +1,10 @@
-import { updateZoneGroup, getZoneById } from '../zonemanager';
+import {
+  updateZoneGroup,
+  getZoneById,
+  findZoneByBackendPlayerId,
+  updateZonePlayerStatus,
+  sendCommandToZone,
+} from '../zonemanager';
 import { PlayerStatus, RepeatMode as LoxoneRepeatMode } from '../loxoneTypes';
 import logger from '../../../utils/troxorlogger';
 import MusicAssistantClient from './client';
@@ -304,6 +310,33 @@ export async function handleMusicAssistantCommand(
         player_id: ctx.maPlayerId,
         target_player: targetLeader,
       });
+      if (targetLeader) {
+        await alignVolumeOnJoin(ctx, targetLeader, [ctx.maPlayerId]);
+      }
+      updateZoneGroup();
+      return true;
+    }
+
+    case 'groupJoinMany': {
+      const childIds = normalizeList(param);
+      if (childIds.length === 0) return true;
+      await ctx.client.rpc('players/cmd/group_many', {
+        target_player: ctx.maPlayerId,
+        child_player_ids: childIds,
+      });
+      if (childIds.length > 0) {
+        await alignVolumeOnJoin(ctx, ctx.maPlayerId, childIds);
+      }
+      updateZoneGroup();
+      return true;
+    }
+
+    case 'groupLeaveMany': {
+      const childIds = normalizeList(param);
+      if (childIds.length === 0) return true;
+      await ctx.client.rpc('players/cmd/ungroup_many', {
+        player_ids: childIds,
+      });
       updateZoneGroup();
       return true;
     }
@@ -398,6 +431,21 @@ function coerceToOptionalString(value: unknown): string | undefined {
   return undefined;
 }
 
+function normalizeList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => String(entry ?? '').trim())
+      .filter((entry) => entry.length > 0);
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(/[;,]/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  }
+  return [];
+}
+
 function coerceToOptionalBoolean(value: unknown): boolean | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value === 'boolean') return value;
@@ -466,6 +514,69 @@ function normalizePlaylistCommandUri(primary: string, fallback?: string): string
     }
   }
   return '';
+}
+
+function clampVolumeValue(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  if (numeric < 0) return 0;
+  if (numeric > 100) return 100;
+  return Math.round(numeric);
+}
+
+async function alignVolumeOnJoin(
+  ctx: MusicAssistantCommandContext,
+  leaderBackendId: string,
+  participantBackendIds: string[],
+): Promise<void> {
+  const leaderLookup = findZoneByBackendPlayerId(leaderBackendId);
+  if (!leaderLookup) {
+    logger.warn(
+      `[MusicAssistant][Zone:${ctx.loxoneZoneId}] Cannot align volume: leader ${leaderBackendId} not found`,
+    );
+    return;
+  }
+
+  const leaderVolume = clampVolumeValue(leaderLookup.zone.playerEntry?.volume ?? 0);
+  const normalizedLeader = leaderBackendId.trim().toLowerCase();
+
+  const uniqueParticipants = Array.from(
+    new Set(
+      participantBackendIds
+        .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+        .filter((entry) => entry.length > 0),
+    ),
+  );
+
+  await Promise.all(
+    uniqueParticipants.map(async (participantId) => {
+      if (participantId.toLowerCase() === normalizedLeader) return;
+      const lookup = findZoneByBackendPlayerId(participantId);
+      if (!lookup) {
+        logger.warn(
+          `[MusicAssistant][Zone:${ctx.loxoneZoneId}] Cannot align volume: participant ${participantId} not found`,
+        );
+        return;
+      }
+
+      const currentVolume = clampVolumeValue(lookup.zone.playerEntry?.volume ?? 0);
+      const delta = leaderVolume - currentVolume;
+      if (delta === 0) {
+        updateZonePlayerStatus(lookup.zoneId, { volume: leaderVolume });
+        return;
+      }
+
+      try {
+        await sendCommandToZone(lookup.zoneId, 'volume', String(delta));
+        updateZonePlayerStatus(lookup.zoneId, { volume: leaderVolume });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn(
+          `[MusicAssistant][Zone:${ctx.loxoneZoneId}] Failed to align volume for zone ${lookup.zoneId}: ${message}`,
+        );
+      }
+    }),
+  );
 }
 
 function coerceToOptionalNumber(value: unknown): number | undefined {
