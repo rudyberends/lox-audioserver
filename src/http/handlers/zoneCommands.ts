@@ -682,10 +682,11 @@ export async function audioFavoritePlay(url: string): Promise<CommandResult> {
   if (enableFade && fadeDuration > 0 && zone) {
     const snapshot = favoriteFadeState.get(zoneId);
     const presetApplied = applyStoredVolumePreset(zoneId, false);
-    const targetVolume = presetApplied?.tts ?? presetApplied?.default ?? snapshot?.originalVolume ?? clampVolume(zone.playerEntry?.volume ?? 0);
+    const targetVolume = presetApplied?.buzzer ?? presetApplied?.default ?? snapshot?.originalVolume ?? clampVolume(zone.playerEntry?.volume ?? 0);
     if (targetVolume > 0) {
       let lastVolumeInt = 0;
       zone.playerEntry.volume = lastVolumeInt;
+      zone.fadeTargetVolume = targetVolume;
       scheduleFade(
         zoneId,
         fadeKey,

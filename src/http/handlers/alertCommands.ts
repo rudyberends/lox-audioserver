@@ -5,11 +5,8 @@ import {
   buildAlertMediaUrl,
   AlertMediaResource,
 } from '../../backend/alerts/alertService';
-import {
-  getZoneById,
-  sendCommandToZone,
-  applyStoredVolumePreset,
-} from '../../backend/zone/zonemanager';
+import { getZoneById, sendCommandToZone } from '../../backend/zone/zonemanager';
+import { getStoredVolumePreset, type ZoneVolumeConfig } from '../../config/config';
 import logger from '../../utils/troxorlogger';
 import { FileType, AudioEventType, RepeatMode } from '../../backend/zone/loxoneTypes';
 import {
@@ -23,10 +20,15 @@ import {
   FadeSnapshot,
   FadeController,
 } from '../utils/fade';
+import { getGroupByZone } from '../../backend/zone/groupTracker';
 
 const MAX_TTS_CHARACTERS = 800;
 const STOP_KEYWORDS = new Set(['off', 'stop', 'cancel']);
 const LOOPING_ALERT_TYPES = new Set(['alarm', 'firealarm', 'buzzer']);
+const TEMP_GROUP_MIN_DURATION_MS = 6000;
+const TEMP_GROUP_MAX_DURATION_MS = 90000;
+const TEMP_GROUP_FALLBACK_DURATION_MS = 20000;
+const TEMP_GROUP_GRACE_MS = 4000;
 
 type AlertAction = 'start' | 'stop';
 
@@ -39,9 +41,48 @@ interface LoopStateSnapshot {
   previousRepeat: RepeatMode | number | undefined;
 }
 
+type ZoneStateSnapshot = NonNullable<ReturnType<typeof getZoneById>>;
+
+interface OriginalGroupSnapshot {
+  leaderId: number;
+  memberZoneIds: number[];
+}
+
+interface TemporaryGroupState {
+  leaderZoneId: number;
+  childMaPlayerIds: string[];
+  originalGroups: OriginalGroupSnapshot[];
+}
+
+type ZoneAlertContext = {
+  id: number;
+  zone: ZoneStateSnapshot;
+  backendName: string;
+  fadeKey: string;
+  initialVolume: number;
+  targetVolume: number;
+};
+
+interface GroupedTtsContext {
+  type: string;
+  media: AlertMediaResource;
+  mediaUrl: string;
+  fadeRequested: boolean;
+  zoneContexts: ZoneAlertContext[];
+  commands: Array<{ zone: number; command: string }>;
+  skipped: Array<{ zone: number; reason: string }>;
+}
+
 const loopState = new Map<string, LoopStateSnapshot>();
 const fadeState = new Map<string, FadeSnapshot>();
 const activeFadeControllers = new Map<string, FadeController>();
+
+type ScheduledTemporaryGroup = {
+  timer: NodeJS.Timeout;
+  state: TemporaryGroupState;
+};
+
+const temporaryGroupTimers = new Map<number, ScheduledTemporaryGroup>();
 
 /**
  * Handles grouped alert commands emitted by Loxone (`audio/grouped/...` URLs).
@@ -239,6 +280,8 @@ async function startAlert(
   const servicePayload = JSON.stringify(buildServicePlayPayload(type, media, mediaUrl));
   let announcementPayload: string | undefined;
 
+  const zoneContexts: ZoneAlertContext[] = [];
+
   for (const zoneIdRaw of targets) {
     const zoneId = Number(zoneIdRaw);
     if (!Number.isFinite(zoneId) || zoneId <= 0) {
@@ -255,6 +298,33 @@ async function startAlert(
     const backendName = zone.player.backend || '';
     const fadeKey = buildLoopKey(zoneId, type);
     const initialVolume = clampVolume(zone.playerEntry?.volume ?? 0);
+    const targetVolume = resolveAlertVolume(type, zoneId, initialVolume);
+    zoneContexts.push({
+      id: zoneId,
+      zone,
+      backendName,
+      fadeKey,
+      initialVolume,
+      targetVolume,
+    });
+  }
+
+  const handledByGroup = await maybeHandleGroupedTtsAlert({
+    type,
+    media,
+    mediaUrl,
+    fadeRequested,
+    zoneContexts,
+    commands,
+    skipped,
+  });
+
+  for (const context of zoneContexts) {
+    if (handledByGroup.has(context.id)) {
+      continue;
+    }
+
+    const { id: zoneId, zone, backendName, fadeKey, initialVolume, targetVolume } = context;
     const enableFade = fadeRequested && resolvedFadeDuration > 0;
 
     if (enableFade) {
@@ -274,11 +344,14 @@ async function startAlert(
       }
       if (zone) {
         zone.playerEntry.volume = 0;
-        applyStoredVolumePreset(zoneId, false);
+        zone.fadeTargetVolume = targetVolume;
       }
     } else {
       fadeState.delete(fadeKey);
       cancelFade(fadeKey, activeFadeControllers);
+      if (zone) {
+        zone.fadeTargetVolume = targetVolume;
+      }
     }
 
     const commandName = selectAlertCommand(backendName, type, isLooping);
@@ -326,7 +399,7 @@ async function startAlert(
       }
       if (zone) {
         zone.playerEntry.volume = 0;
-        applyStoredVolumePreset(zoneId, false);
+        zone.fadeTargetVolume = targetVolume;
       }
     }
 
@@ -349,10 +422,10 @@ async function startAlert(
 
     if (enableFade) {
       const snapshot = fadeState.get(fadeKey);
-      const targetVolume = snapshot?.originalVolume ?? initialVolume;
+      const desiredVolume = targetVolume;
       const duration = snapshot?.fadeDurationMs ?? resolvedFadeDuration;
 
-      if (targetVolume > 0 && duration > 0) {
+      if (desiredVolume > 0 && duration > 0) {
         commands.push({ zone: zoneId, command: `fade-in ${duration}ms` });
         let lastVolumeInt = 0;
         if (zone) {
@@ -379,6 +452,8 @@ async function startAlert(
       } else {
         fadeState.delete(fadeKey);
       }
+    } else {
+      await alignZoneToTargetVolume(zoneId, zone, targetVolume, commands, skipped);
     }
   }
 
@@ -563,10 +638,20 @@ function mapEventType(rawType: string): AudioEventType {
   }
 }
 
-function buildAnnouncementCommandPayload(mediaUrl: string): string {
-  return JSON.stringify({
+interface AnnouncementPayloadOptions {
+  playerGroup?: boolean;
+}
+
+function buildAnnouncementCommandPayload(mediaUrl: string, options?: AnnouncementPayloadOptions): string {
+  const payload: Record<string, unknown> = {
     url: mediaUrl,
-  });
+  };
+
+  if (options?.playerGroup) {
+    payload.player_group = true;
+  }
+
+  return JSON.stringify(payload);
 }
 
 function buildLoopKey(zoneId: number, type: string): string {
@@ -581,5 +666,236 @@ function repeatModeToParam(value: RepeatMode | number | undefined): string {
       return 'queue';
     default:
       return 'off';
+  }
+}
+
+function resolveAlertVolume(alertType: string, zoneId: number, fallback: number): number {
+  const preset = getStoredVolumePreset(zoneId);
+  if (!preset) return fallback;
+
+  const mappedKey = mapAlertTypeToPresetKey(alertType);
+  if (mappedKey && preset[mappedKey] !== undefined) {
+    return clampVolume(preset[mappedKey]);
+  }
+
+  if (preset.default !== undefined) {
+    return clampVolume(preset.default);
+  }
+
+  return fallback;
+}
+
+function mapAlertTypeToPresetKey(alertType: string): keyof ZoneVolumeConfig | undefined {
+  switch (alertType) {
+    case 'alarm':
+      return 'alarm';
+    case 'firealarm':
+      return 'fire';
+    case 'bell':
+      return 'bell';
+    case 'buzzer':
+      return 'buzzer';
+    case 'tts':
+      return 'tts';
+    default:
+      return undefined;
+  }
+}
+
+async function alignZoneToTargetVolume(
+  zoneId: number,
+  zone: ZoneStateSnapshot,
+  targetVolume: number,
+  commands: Array<{ zone: number; command: string }>,
+  skipped: Array<{ zone: number; reason: string }>,
+): Promise<void> {
+  const clampedTarget = clampVolume(targetVolume);
+  const currentVolume = Math.round(clampVolume(zone.playerEntry?.volume ?? 0));
+  const delta = clampedTarget - currentVolume;
+  if (delta === 0) {
+    return;
+  }
+
+  try {
+    await sendCommandToZone(zoneId, 'volume', String(delta));
+    zone.playerEntry.volume = clampedTarget;
+    (zone as any).fadeTargetVolume = clampedTarget;
+    commands.push({ zone: zoneId, command: `volume ${delta}` });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn(`[AlertCommands] Failed to adjust volume for zone ${zoneId}: ${message}`);
+    skipped.push({ zone: zoneId, reason: 'volume-adjust-failed' });
+  }
+}
+
+async function maybeHandleGroupedTtsAlert(context: GroupedTtsContext): Promise<Set<number>> {
+  const handled = new Set<number>();
+  const { type, media, mediaUrl, fadeRequested, zoneContexts, commands, skipped } = context;
+
+  if (type !== 'tts') return handled;
+  if (fadeRequested) return handled;
+
+  const maContexts = zoneContexts.filter((ctx) => ctx.backendName === 'BackendMusicAssistant');
+  if (maContexts.length < 2) return handled;
+
+  const leader = maContexts[0];
+  const members = maContexts.slice(1);
+
+  const leaderMaId = resolveMusicAssistantPlayerId(leader.zone);
+  if (!leaderMaId) {
+    logger.warn(`[AlertCommands] Skipping grouped TTS – leader zone ${leader.id} missing Music Assistant ID`);
+    return handled;
+  }
+
+  const childIds = Array.from(
+    new Set(
+      members
+        .map((entry) => resolveMusicAssistantPlayerId(entry.zone))
+        .filter((value): value is string => typeof value === 'string' && value.length > 0),
+    ),
+  );
+
+  if (childIds.length === 0) return handled;
+
+  const originalGroups = captureOriginalGroups(maContexts);
+  const tempState: TemporaryGroupState = {
+    leaderZoneId: leader.id,
+    childMaPlayerIds: childIds,
+    originalGroups,
+  };
+
+  await alignZoneToTargetVolume(leader.id, leader.zone, leader.targetVolume, commands, skipped);
+
+  try {
+    await sendCommandToZone(leader.id, 'groupJoinMany', childIds.join(','));
+    commands.push({ zone: leader.id, command: `groupJoinMany ${childIds.join(',')}` });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn(`[AlertCommands] Failed to create temporary MA group: ${message}`);
+    return handled;
+  }
+
+  const payload = buildAnnouncementCommandPayload(mediaUrl, { playerGroup: true });
+
+  try {
+    await sendCommandToZone(leader.id, 'announce', payload);
+    commands.push({ zone: leader.id, command: 'announce (group)' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn(`[AlertCommands] Failed to dispatch grouped TTS: ${message}`);
+    skipped.push({ zone: leader.id, reason: 'group-announce-failed' });
+    await releaseTemporaryGroup(tempState);
+    return handled;
+  }
+
+  handled.add(leader.id);
+  members.forEach((member) => handled.add(member.id));
+
+  scheduleTemporaryGroupRelease(tempState, estimateTtsDuration(media));
+  commands.push({ zone: leader.id, command: 'groupLeaveMany (scheduled)' });
+
+  return handled;
+}
+
+function resolveMusicAssistantPlayerId(zone: ZoneStateSnapshot): string | undefined {
+  const backendInstance = zone.player?.backendInstance as { maPlayerId?: string } | undefined;
+  const maPlayerId = typeof backendInstance?.maPlayerId === 'string' ? backendInstance.maPlayerId.trim() : '';
+  return maPlayerId || undefined;
+}
+
+function estimateTtsDuration(media: AlertMediaResource): number {
+  const textLength = media.text?.length ?? 0;
+  if (textLength <= 0) return TEMP_GROUP_FALLBACK_DURATION_MS + TEMP_GROUP_GRACE_MS;
+
+  const estimatedSeconds = textLength / 12;
+  const clampedSeconds = Math.min(
+    Math.max(estimatedSeconds + 1, TEMP_GROUP_MIN_DURATION_MS / 1000),
+    TEMP_GROUP_MAX_DURATION_MS / 1000,
+  );
+  return Math.round(clampedSeconds * 1000) + TEMP_GROUP_GRACE_MS;
+}
+
+function scheduleTemporaryGroupRelease(state: TemporaryGroupState, delayMs: number): void {
+  const { leaderZoneId } = state;
+
+  const existing = temporaryGroupTimers.get(leaderZoneId);
+  if (existing) {
+    clearTimeout(existing.timer);
+  }
+
+  const safeDelay = Math.min(
+    Math.max(delayMs, TEMP_GROUP_MIN_DURATION_MS),
+    TEMP_GROUP_MAX_DURATION_MS + TEMP_GROUP_GRACE_MS,
+  );
+
+  const timer = setTimeout(() => {
+    void releaseTemporaryGroup(state);
+    temporaryGroupTimers.delete(leaderZoneId);
+  }, safeDelay);
+
+  temporaryGroupTimers.set(leaderZoneId, { timer, state });
+}
+
+async function releaseTemporaryGroup(state: TemporaryGroupState): Promise<void> {
+  const { leaderZoneId, childMaPlayerIds, originalGroups } = state;
+
+  const scheduled = temporaryGroupTimers.get(leaderZoneId);
+  if (scheduled && scheduled.state === state) {
+    clearTimeout(scheduled.timer);
+    temporaryGroupTimers.delete(leaderZoneId);
+  }
+
+  if (childMaPlayerIds.length > 0) {
+    try {
+      await sendCommandToZone(leaderZoneId, 'groupLeaveMany', childMaPlayerIds.join(','));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`[AlertCommands] Failed to disband temporary MA group: ${message}`);
+    }
+  }
+
+  await restoreOriginalGroups(originalGroups);
+}
+
+function captureOriginalGroups(contexts: ZoneAlertContext[]): OriginalGroupSnapshot[] {
+  const snapshots = new Map<number, OriginalGroupSnapshot>();
+
+  for (const ctx of contexts) {
+    const existingGroup = getGroupByZone(ctx.id);
+    if (!existingGroup || existingGroup.members.length <= 1) continue;
+    if (snapshots.has(existingGroup.leader)) continue;
+
+    snapshots.set(existingGroup.leader, {
+      leaderId: existingGroup.leader,
+      memberZoneIds: existingGroup.members.filter((memberId) => memberId !== existingGroup.leader),
+    });
+  }
+
+  return Array.from(snapshots.values());
+}
+
+async function restoreOriginalGroups(snapshots: OriginalGroupSnapshot[]): Promise<void> {
+  for (const snapshot of snapshots) {
+    if (snapshot.memberZoneIds.length === 0) continue;
+
+    const leaderZone = getZoneById(snapshot.leaderId);
+    if (!leaderZone || leaderZone.player.backend !== 'BackendMusicAssistant') continue;
+
+    const childIds = snapshot.memberZoneIds
+      .map((memberId) => {
+        const memberZone = getZoneById(memberId);
+        if (!memberZone || memberZone.player.backend !== 'BackendMusicAssistant') return undefined;
+        return resolveMusicAssistantPlayerId(memberZone);
+      })
+      .filter((value): value is string => typeof value === 'string' && value.length > 0);
+
+    if (childIds.length === 0) continue;
+
+    try {
+      await sendCommandToZone(snapshot.leaderId, 'groupJoinMany', childIds.join(','));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`[AlertCommands] Failed to restore MA group ${snapshot.leaderId}: ${message}`);
+    }
   }
 }
