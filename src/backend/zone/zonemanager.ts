@@ -925,8 +925,6 @@ const updateZoneGroup = (): void => {
 
   broadcastEvent(JSON.stringify({ audio_sync_event: audioSyncGroups }));
 
-  console.log(audioSyncGroups)
-
   if (audioSyncGroups.length > 0) {
     audioSyncGroups.forEach((group) => {
       broadcastEvent(
