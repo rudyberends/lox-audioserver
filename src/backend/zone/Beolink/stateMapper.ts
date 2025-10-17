@@ -1,5 +1,5 @@
 import { PlayerStatus, AudioPlaybackMode } from '../loxoneTypes';
-import { NotificationData } from './types';
+import { NotificationData, PrimaryExperience } from './types';
 
 /**
  * Converts remote image URLs into proxied cover art served via the AudioServer.
@@ -8,19 +8,40 @@ function buildCoverUrl(audioServerIp?: string, originalUrl?: string, album?: str
   if (!audioServerIp || !originalUrl) return '';
   const encodedUrl = encodeURIComponent(originalUrl);
   const cacheBust = encodeURIComponent(album || 'x');
-  return `http://${audioServerIp}:7091/cors-proxy?url=${encodedUrl}&id=${cacheBust}`;
+  const url = `http://${audioServerIp}:7091/cors-proxy?url=${encodedUrl}&id=${cacheBust}`;
+  return url;
 }
 
 /**
  * Maps Beolink notification payloads to the Loxone Track structure consumed by the UI.
  */
+type MapperOptions = {
+  audioServerIp?: string;
+  onPrimaryExperienceChange?: (experience?: PrimaryExperience | null) => void;
+};
+
+type MapperArg = string | MapperOptions | undefined;
+
+function resolveOptions(arg: MapperArg): MapperOptions {
+  if (typeof arg === 'string' || typeof arg === 'undefined') {
+    return { audioServerIp: arg };
+  }
+  return arg ?? {};
+}
+
 export function mapNotificationToTrack(
   type: string,
   data: NotificationData,
-  audioServerIp?: string,
+  arg?: MapperArg,
 ): Partial<PlayerStatus> {
+  const options = resolveOptions(arg);
+  const audioServerIp = options.audioServerIp;
+
   switch (type) {
     case 'SOURCE':
+      if (data.primaryExperience) {
+        options.onPrimaryExperienceChange?.(data.primaryExperience);
+      }
       return {
         power: 'on',
         title: data.friendlyName || 'Unknown Source',
@@ -30,27 +51,20 @@ export function mapNotificationToTrack(
       return { volume: data.speaker?.level };
 
     case 'NOW_PLAYING_STORED_MUSIC':
+
       return {
-        audiotype: 2,
+        audiotype: 4,
         artist: data.artist,
         album: data.album,
         title: data.name,
         duration: data.duration,
-        coverurl: buildCoverUrl(audioServerIp, data.trackImage?.[0]?.url, data.album),
+        coverurl: buildCoverUrl(audioServerIp, data.trackImage?.[0]?.url, data.name),
       };
 
     case 'PROGRESS_INFORMATION': {
       const state = (data.state ?? '').toString().toLowerCase();
-      const mode: AudioPlaybackMode = state === 'playing'
-        ? 'play'
-        : state === 'paused'
-          ? 'pause'
-          : state === 'resume' || state === 'resuming'
-            ? 'resume'
-            : 'stop';
-
       const trackInfo: Partial<PlayerStatus> = {
-        mode,
+        mode: state as AudioPlaybackMode,
         time: Number(data.position ?? 0),
       };
 
@@ -68,7 +82,7 @@ export function mapNotificationToTrack(
         album: data.album,
         title: data.name,
         duration: 0,
-        coverurl: buildCoverUrl(audioServerIp, data.image?.[0]?.url, data.album),
+        coverurl: buildCoverUrl(audioServerIp, data.image?.[0]?.url, data.name),
       };
 
     case 'SHUTDOWN':
@@ -81,6 +95,10 @@ export function mapNotificationToTrack(
         duration: 0,
         coverurl: '',
       };
+
+    case 'SOURCE_EXPERIENCE_CHANGED':
+      options.onPrimaryExperienceChange?.(data.primaryExperience ?? null);
+      return {};
 
     default:
       return {};

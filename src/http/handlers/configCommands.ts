@@ -172,13 +172,13 @@ export function audioCfgSetVolumes(url: string): CommandResult {
     const rawConfig = Buffer.from(normalizedBase64, 'base64').toString('utf8');
     const parsed = JSON.parse(rawConfig);
     const players = Array.isArray(parsed?.players) ? parsed.players : [];
-    const store = setVolumePresets(players);
+    const presets = setVolumePresets(players);
 
-    store?.players.forEach(({ playerid }) => applyStoredVolumePreset(playerid, false));
+    presets.forEach(({ playerid }) => applyStoredVolumePreset(playerid, false));
 
     return response(url, 'volumes', {
       success: true,
-      players: store?.players.length ?? 0,
+      players: presets.length,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

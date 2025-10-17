@@ -49,9 +49,6 @@ export interface AdminConfig {
     consoleLevel: string;
     fileLevel: string;
   };
-  volumes?: {
-    players: Array<ZoneVolumeConfig & { playerid: number }>;
-  };
 }
 
 export const BACKEND_OPTIONS = Object.freeze(listBackends());
@@ -147,7 +144,7 @@ function normalizeAdminConfig(raw: Partial<AdminConfig>): AdminConfig {
     ip: raw?.audioserver?.ip && raw.audioserver.ip.trim() ? raw.audioserver.ip : defaults.audioserver.ip,
   };
 
-  const zones = Array.isArray(raw?.zones)
+  let zones = Array.isArray(raw?.zones)
     ? raw!.zones
         .map((zone) => ({
           id: Number(zone?.id ?? 0),
@@ -171,7 +168,19 @@ function normalizeAdminConfig(raw: Partial<AdminConfig>): AdminConfig {
     fileLevel: raw?.logging?.fileLevel ? String(raw.logging.fileLevel).trim() : defaults.logging.fileLevel,
   };
 
-  const volumes = normalizeVolumeStore(raw?.volumes);
+  const legacyVolumes = normalizeVolumeStore((raw as any)?.volumes);
+  if (legacyVolumes?.players.length) {
+    const volumeMap = new Map<number, ZoneVolumeConfig>();
+    legacyVolumes.players.forEach(({ playerid, volumes }) => {
+      volumeMap.set(playerid, volumes);
+    });
+    zones = zones.map((zone) => {
+      const merge = volumeMap.get(zone.id);
+      if (!merge) return zone;
+      const combined = zone.volumes ? { ...zone.volumes, ...merge } : merge;
+      return { ...zone, volumes: combined };
+    });
+  }
 
   return {
     miniserver,
@@ -179,7 +188,6 @@ function normalizeAdminConfig(raw: Partial<AdminConfig>): AdminConfig {
     zones,
     mediaProvider,
     logging,
-    volumes,
   };
 }
 
@@ -201,7 +209,7 @@ function normalizeVolumeConfig(raw: any): ZoneVolumeConfig | undefined {
   return Object.values(result).some((value) => value !== undefined) ? result : undefined;
 }
 
-function normalizeVolumeStore(raw: any): { players: Array<ZoneVolumeConfig & { playerid: number }> } | undefined {
+function normalizeVolumeStore(raw: any): { players: Array<{ playerid: number; volumes: ZoneVolumeConfig }> } | undefined {
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.players)) return undefined;
   const players = raw.players
     .map((entry: any) => {
@@ -209,8 +217,11 @@ function normalizeVolumeStore(raw: any): { players: Array<ZoneVolumeConfig & { p
       if (!Number.isFinite(playerid) || playerid <= 0) return undefined;
       const volumes = normalizeVolumeConfig(entry);
       if (!volumes) return undefined;
-      return { playerid, ...volumes };
+      return { playerid, volumes };
     })
-    .filter((entry: any): entry is ZoneVolumeConfig & { playerid: number } => Boolean(entry));
+    .filter(
+      (entry: any): entry is { playerid: number; volumes: ZoneVolumeConfig } =>
+        Boolean(entry) && typeof entry.playerid === 'number' && typeof entry.volumes === 'object',
+    );
   return players.length > 0 ? { players } : undefined;
 }
