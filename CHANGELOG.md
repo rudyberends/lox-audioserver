@@ -1,3 +1,14 @@
+## 2.4.0 (2025-10-17)
+
+* Merge pull request #42 from rudyberends/feature/alerts-backend ([2a0aea7](https://github.com/rudyberends/lox-audioserver/commit/2a0aea7)), closes [#42](https://github.com/rudyberends/lox-audioserver/issues/42)
+* Merge pull request #43 from rudyberends/beta ([cb89649](https://github.com/rudyberends/lox-audioserver/commit/cb89649)), closes [#43](https://github.com/rudyberends/lox-audioserver/issues/43)
+* chore: remove debug message ([2fd43c9](https://github.com/rudyberends/lox-audioserver/commit/2fd43c9))
+* chore(release): 2.4.0-beta.1 [skip ci] ([9c87619](https://github.com/rudyberends/lox-audioserver/commit/9c87619))
+* fix: additional webui improvements ([1a01f31](https://github.com/rudyberends/lox-audioserver/commit/1a01f31))
+* fix: fixed alerts to play in sync and with right volume ([6024c9f](https://github.com/rudyberends/lox-audioserver/commit/6024c9f))
+* fix: implement alerts ([92347f7](https://github.com/rudyberends/lox-audioserver/commit/92347f7))
+* feat: add full multiroom group support ([7cce6b9](https://github.com/rudyberends/lox-audioserver/commit/7cce6b9))
+
 ## 2.4.0-beta.1 (2025-10-17)
 
 * Merge pull request #42 from rudyberends/feature/alerts-backend ([2a0aea7](https://github.com/rudyberends/lox-audioserver/commit/2a0aea7)), closes [#42](https://github.com/rudyberends/lox-audioserver/issues/42)
