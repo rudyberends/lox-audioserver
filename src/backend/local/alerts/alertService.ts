@@ -3,8 +3,8 @@ import path from 'path';
 import { promises as fsp } from 'fs';
 import { createHash } from 'crypto';
 import * as googleTTS from 'google-tts-api';
-import logger from '../../utils/troxorlogger';
-import { config as runtimeConfig } from '../../config/config';
+import logger from '../../../utils/troxorlogger';
+import { config as runtimeConfig } from '../../../config/config';
 
 /**
  * Alert asset resolver shared by the HTTP handlers. It serves three jobs:

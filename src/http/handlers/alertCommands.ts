@@ -4,7 +4,7 @@ import {
   resolveAlertTargets,
   buildAlertMediaUrl,
   AlertMediaResource,
-} from '../../backend/alerts/alertService';
+} from '../../backend/local/alerts/alertService';
 import { getZoneById, sendCommandToZone } from '../../backend/zone/zonemanager';
 import { getStoredVolumePreset, type ZoneVolumeConfig } from '../../config/config';
 import logger from '../../utils/troxorlogger';

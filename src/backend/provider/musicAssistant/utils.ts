@@ -154,11 +154,25 @@ export function toPlaylistCommandUri(
 }
 
 export function normalizeItemKey(value: string): string {
-  if (!value) return value;
-  const trimmed = value.trim();
-  if (!trimmed.includes('/')) return trimmed;
-  const segments = trimmed.split('/').filter(Boolean);
-  return segments.join(':');
+  if (!value) return '';
+  const parts = value.trim().split(':').filter(Boolean);
+  // parts = ["library", "local", "track", "apple_music", "1411628233"]
+  // of ["library", "track", "apple_music", "1411628233"]
+
+  // als het tweede segment 'local' is, negeren we dat
+  const hasLocal = parts[1] === 'local';
+  const kindIndex = hasLocal ? 2 : 1;
+  const providerIndex = hasLocal ? 3 : 2;
+  const itemIdIndex = hasLocal ? 4 : 3;
+
+  const kind = parts[kindIndex];
+  const provider = parts[providerIndex];
+  const itemId = parts.slice(itemIdIndex).join(':');
+
+  if (!kind || !provider || !itemId) return '';
+
+  // string samenvoegen
+  return `${kind}:${provider}:${itemId}`;
 }
 
 export function buildLibraryUri(
