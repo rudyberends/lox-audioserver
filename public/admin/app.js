@@ -1733,6 +1733,7 @@ function renderBackendModal() {
       maPlayerId: '',
       maSuggestions: [],
       beolinkDeviceId: '',
+      contentAdapter: '',
       error: '',
     };
     return '<div id="backend-modal" class="backend-modal backend-modal--hidden" aria-hidden="true"></div>';
@@ -1740,6 +1741,21 @@ function renderBackendModal() {
 
   const backendOptions = state.options?.backends || [];
   const backend = modalState.backend || zone.backend || backendOptions[0] || '';
+  const contentAdapters = state.options?.contentAdapters || [];
+  const defaultContentAdapters = state.options?.defaultContentAdapters || {};
+  const builtinContentAdapter = defaultContentAdapters[backend] || '';
+  const adapterOptions = zone.contentAdapter?.options || {};
+  const adapterMaPlayer = typeof adapterOptions.maPlayerId === 'string' ? adapterOptions.maPlayerId.trim() : '';
+  const providerType = state.config?.mediaProvider?.type || '';
+  const contentAdapterOptions = [{ value: '', label: 'None', requiresMaPlayerId: false }];
+  contentAdapters.forEach((adapter) => {
+    if (Array.isArray(adapter.providers) && adapter.providers.length && providerType) {
+      if (!adapter.providers.includes(providerType)) return;
+    }
+    contentAdapterOptions.push({ value: adapter.key, label: adapter.label, requiresMaPlayerId: adapter.requiresMaPlayerId });
+  });
+  const contentAdapterType = modalState.contentAdapter ?? zone.contentAdapter?.type ?? builtinContentAdapter ?? '';
+  const needsMaPlayer = backend === 'BackendMusicAssistant' || contentAdapterType === 'musicassistant' || builtinContentAdapter === 'musicassistant';
   const cache = ensureMusicAssistantCache();
   const beolinkDiscovery = ensureBeolinkDiscoveryState();
   const knownIps = Object.keys(cache.playersByIp || {});
@@ -1768,13 +1784,13 @@ function renderBackendModal() {
     maSuggestions = modalState.maSuggestions;
   } else if (Array.isArray(state.suggestions?.[zone.id]) && state.suggestions[zone.id].length) {
     maSuggestions = state.suggestions[zone.id];
-  } else if (backend === 'BackendMusicAssistant') {
+  } else if (needsMaPlayer) {
     const cachedPlayers = cache.playersByIp?.[ipValue] || [];
     if (cachedPlayers.length) {
       maSuggestions = cachedPlayers;
     }
   }
-  if (backend === 'BackendMusicAssistant' && maSuggestions.length && (!Array.isArray(modalState.maSuggestions) || !modalState.maSuggestions.length)) {
+  if (needsMaPlayer && maSuggestions.length && (!Array.isArray(modalState.maSuggestions) || !modalState.maSuggestions.length)) {
     state.modal = {
       ...(state.modal || {}),
       maSuggestions,
@@ -1886,7 +1902,7 @@ function renderBackendModal() {
 
   let maField = '';
   let maActions = '';
-  if (backend === 'BackendMusicAssistant') {
+  if (needsMaPlayer) {
     const hasSuggestions = maSuggestions.length > 0;
     if (hasSuggestions) {
       const maPlayerOptions = [{ value: '', label: 'Select a player' }, ...maSuggestions.map((player) => ({ value: player.id, label: `${player.name} (${player.id})` }))];
@@ -1905,7 +1921,7 @@ function renderBackendModal() {
         </div>
       `;
     }
-    const scanDisabledAttr = backend === 'BackendMusicAssistant' && !ipValue ? 'disabled aria-disabled="true"' : '';
+    const scanDisabledAttr = needsMaPlayer && !ipValue ? 'disabled aria-disabled="true"' : '';
     maActions = `
       <div class="backend-modal__ma-actions">
         <button type="button" class="tertiary" data-action="modal-scan-zone" data-id="${zone.id}" ${scanDisabledAttr}>${hasSuggestions ? 'Rescan players' : 'Scan players'}</button>
@@ -1943,7 +1959,8 @@ function renderBackendModal() {
             <div class="backend-modal__form">
               ${backendSelect}
               ${backend === 'BackendBeolink' ? `${beolinkSection}${ipField}` : ipField}
-              ${backend === 'BackendMusicAssistant' ? `<div class="backend-modal__ma">${maField}${maActions}</div>` : ''}
+              ${renderSelect('modal-content-adapter', 'Content Playback', contentAdapterOptions, contentAdapterType, 'class="backend-modal__select"')}
+              ${needsMaPlayer ? `<div class="backend-modal__ma">${maField}${maActions}</div>` : ''}
             </div>
           </div>
         </div>
@@ -1961,6 +1978,11 @@ function openBackendModal(zoneId) {
   if (!zone) return;
   const backendOptions = state.options?.backends || [];
   const backend = zone.backend || backendOptions[0] || '';
+  const defaultContentAdapters = state.options?.defaultContentAdapters || {};
+  const builtinContentAdapter = defaultContentAdapters[backend] || '';
+  const zoneContentAdapter = zone.contentAdapter?.type || '';
+  const adapterOptions = zone.contentAdapter?.options || {};
+  const adapterMaPlayer = typeof adapterOptions.maPlayerId === 'string' ? adapterOptions.maPlayerId.trim() : '';
   const cache = ensureMusicAssistantCache();
   const knownIps = Object.keys(cache.playersByIp || {});
   const cacheFallbackIp = cache.lastIP || knownIps[0] || '';
@@ -1975,20 +1997,27 @@ function openBackendModal(zoneId) {
   } else if (defaultIp && backend !== 'BackendMusicAssistant' && isLoopback(defaultIp)) {
     defaultIp = '';
   }
-  const suggestionKey = backend === 'BackendMusicAssistant' ? (defaultIp || cacheFallbackIp) : '';
+  const initialContentAdapter = zoneContentAdapter || builtinContentAdapter || '';
+  const needsMaPlayer = backend === 'BackendMusicAssistant' || zoneContentAdapter === 'musicassistant' || builtinContentAdapter === 'musicassistant';
+  const suggestionKey = needsMaPlayer ? (defaultIp || cacheFallbackIp) : '';
   const suggestions = state.suggestions?.[zone.id]
-    || (backend === 'BackendMusicAssistant' ? cache.playersByIp?.[suggestionKey] || [] : []);
+    || (needsMaPlayer ? cache.playersByIp?.[suggestionKey] || [] : []);
   state.modal = {
     open: true,
     zoneId: zone.id,
     backend,
     ip: defaultIp,
-    maPlayerId: zone.maPlayerId || '',
+    maPlayerId: needsMaPlayer ? (zone.maPlayerId || adapterMaPlayer || '') : '',
     maSuggestions: suggestions,
     beolinkDeviceId: '',
+    contentAdapter: initialContentAdapter,
     error: '',
   };
-  if (backend === 'BackendMusicAssistant') {
+  if (!needsMaPlayer) {
+    state.modal.maPlayerId = '';
+    state.modal.maSuggestions = [];
+  }
+  if (needsMaPlayer) {
     state.suggestions = state.suggestions || {};
     if (suggestions.length) {
       state.suggestions[zone.id] = suggestions;
@@ -2022,6 +2051,7 @@ function closeBackendModal(shouldRender = true) {
     maPlayerId: '',
     maSuggestions: [],
     beolinkDeviceId: '',
+    contentAdapter: '',
     error: '',
   };
   if (typeof document !== 'undefined') {
@@ -2109,7 +2139,8 @@ function bindModalEvents() {
   if (backendSelectEl instanceof HTMLSelectElement) {
     backendSelectEl.addEventListener('change', (event) => {
       const selectedBackend = event.target.value;
-      const basePatch = { backend: selectedBackend, error: '' };
+      const defaultAdapters = state.options?.defaultContentAdapters || {};
+      const basePatch = { backend: selectedBackend, error: '', contentAdapter: '' };
       const patch = { ...basePatch };
       if (isNullBackend(selectedBackend)) {
         patch.ip = '';
@@ -2120,6 +2151,9 @@ function bindModalEvents() {
       }
       if (selectedBackend !== 'BackendBeolink') {
         patch.beolinkDeviceId = '';
+      }
+      if (defaultAdapters[selectedBackend]) {
+        patch.contentAdapter = '';
       }
       updateModalState(patch);
 
@@ -2172,6 +2206,30 @@ function bindModalEvents() {
         });
       }
 
+      render();
+    });
+  }
+
+  const contentSelectEl = modal.querySelector('#modal-content-adapter');
+  if (contentSelectEl instanceof HTMLSelectElement) {
+    contentSelectEl.addEventListener('change', (event) => {
+      const adapterValue = event.target.value;
+      const patch = { contentAdapter: adapterValue, error: '' };
+      if (adapterValue === 'musicassistant') {
+        const cache = ensureMusicAssistantCache();
+        const zoneId = state.modal.zoneId;
+        const zone = typeof zoneId === 'number' ? state.config?.zones.find((z) => z.id === zoneId) : undefined;
+        const ip = (state.modal.ip || zone?.ip || '').trim();
+        const cachedPlayers = ip ? cache.playersByIp?.[ip] || [] : [];
+        patch.maSuggestions = cachedPlayers;
+        if (!state.modal.maPlayerId && cachedPlayers.length === 1) {
+          patch.maPlayerId = cachedPlayers[0]?.id || '';
+        }
+      } else {
+        patch.maPlayerId = '';
+        patch.maSuggestions = [];
+      }
+      updateModalState(patch);
       render();
     });
   }
@@ -2305,26 +2363,43 @@ async function saveBackendModal() {
   if (!(backendSelectEl instanceof HTMLSelectElement)) return;
   const backend = backendSelectEl.value;
 
+  const defaultContentAdapters = state.options?.defaultContentAdapters || {};
+  const defaultAdapter = defaultContentAdapters[backend] || '';
+  const contentAdapterSelectEl = document.getElementById('modal-content-adapter');
+  const selectedContentAdapter = contentAdapterSelectEl instanceof HTMLSelectElement
+    ? contentAdapterSelectEl.value.trim()
+    : '';
+
   const ipInputEl = document.getElementById('modal-backend-ip');
   const ipValue = ipInputEl instanceof HTMLInputElement ? ipInputEl.value.trim() : '';
 
-  if (backend === 'BackendMusicAssistant' && !ipValue) {
+  const effectiveContentAdapter = selectedContentAdapter || defaultAdapter || '';
+  const needsMaPlayer = backend === 'BackendMusicAssistant' || effectiveContentAdapter === 'musicassistant';
+
+  if (needsMaPlayer && !ipValue) {
     updateModalState({ error: 'Enter the Music Assistant host before saving.' });
     render();
     return;
   }
 
-  let maPlayerId = '';
-  if (backend === 'BackendMusicAssistant') {
+  let adapterMaPlayerId = zone.contentAdapter?.options?.maPlayerId || '';
+  let maPlayerId = zone.maPlayerId || '';
+  if (needsMaPlayer) {
     const maFieldEl = document.getElementById('modal-ma-player');
     if (maFieldEl instanceof HTMLSelectElement) {
       maPlayerId = (maFieldEl.value || '').trim();
+    } else if (typeof state.modal?.maPlayerId === 'string') {
+      maPlayerId = state.modal.maPlayerId.trim();
     }
     if (!maPlayerId) {
       updateModalState({ error: 'Scan for players and choose one before saving.' });
       render();
       return;
     }
+    adapterMaPlayerId = maPlayerId;
+  } else {
+    adapterMaPlayerId = '';
+    maPlayerId = '';
   }
 
   if (!isNullBackend(backend) && backend !== 'BackendMusicAssistant' && !ipValue) {
@@ -2335,14 +2410,28 @@ async function saveBackendModal() {
 
   zone.backend = backend;
   zone.ip = isNullBackend(backend) ? '' : ipValue;
+  if (selectedContentAdapter) {
+    const adapterOptions = selectedContentAdapter === 'musicassistant' && adapterMaPlayerId
+      ? { maPlayerId: adapterMaPlayerId }
+      : undefined;
+    zone.contentAdapter = adapterOptions ? { type: selectedContentAdapter, options: adapterOptions } : { type: selectedContentAdapter };
+  } else if (defaultAdapter) {
+    zone.contentAdapter = { type: defaultAdapter };
+  } else if (zone.contentAdapter) {
+    delete zone.contentAdapter;
+  }
+
   if (backend === 'BackendMusicAssistant') {
     zone.maPlayerId = maPlayerId;
     if (state.modal.maSuggestions?.length) {
+      const trimmedIp = ipValue.trim();
       state.suggestions = state.suggestions || {};
       state.suggestions[zone.id] = state.modal.maSuggestions;
       const cache = ensureMusicAssistantCache();
-      cache.playersByIp[ipValue] = state.modal.maSuggestions;
-      cache.lastIP = ipValue;
+      if (trimmedIp) {
+        cache.playersByIp[trimmedIp] = state.modal.maSuggestions;
+        cache.lastIP = trimmedIp;
+      }
     }
   } else if ('maPlayerId' in zone) {
     delete zone.maPlayerId;
@@ -2356,7 +2445,7 @@ async function saveBackendModal() {
     connected: false,
   };
 
-  if (backend !== 'BackendMusicAssistant' && state.suggestions) {
+  if (!needsMaPlayer && state.suggestions) {
     delete state.suggestions[zone.id];
   }
 
@@ -3193,5 +3282,7 @@ function defaultOptions() {
   return {
     backends: [],
     providers: [],
+    contentAdapters: [],
+    defaultContentAdapters: {},
   };
 }

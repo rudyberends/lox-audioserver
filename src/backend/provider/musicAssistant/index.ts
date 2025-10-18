@@ -21,6 +21,7 @@ import {
   FavoriteResponse,
   RecentResponse,
 } from '../types';
+import './contentAdapter';
 
 const ROOT_FOLDER_ID = '0';
 const DEFAULT_PROVIDER_LABEL = 'Music Assistant';

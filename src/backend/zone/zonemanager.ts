@@ -8,6 +8,15 @@ import {
 import type { ZoneVolumeConfig } from '../../config/config';
 import { broadcastEvent } from '../../http/broadcastEvent';
 import { createBackend } from './backendFactory';
+import {
+  createZoneContentAdapter,
+  ZoneContentPlaybackAdapter,
+  ZoneContentCommand,
+  getAdapterDescriptor,
+  getDefaultAdapterForBackend,
+} from './capabilities';
+import '../provider/musicAssistant/contentAdapter';
+import '../provider/beoLink/contentAdapter';
 import type { ZoneConfigEntry, AdminConfig } from '../../config/configStore';
 import { mergeZoneConfigEntries } from './zoneConfigUtils';
 import {
@@ -72,6 +81,7 @@ interface ZoneState {
   playerEntry: PlayerStatus;
   queue?: ZoneEntryQueue;
   fadeTargetVolume?: number;
+  contentAdapter?: ZoneContentPlaybackAdapter;
 }
 
 /**
@@ -80,6 +90,7 @@ interface ZoneState {
  */
 const zone: Record<number, ZoneState> = {};
 type ZoneEntry = ZoneState;
+export type { ZoneEntry };
 
 interface ZoneStatus {
   id: number;
@@ -98,6 +109,68 @@ interface PreparedZoneContext {
   adminConfig: AdminConfig;
   adminZones: Map<number, ZoneConfigEntry>;
   resolveSourceName?: SourceResolver;
+}
+
+const CONTENT_COMMANDS = new Set<ZoneContentCommand>([
+  'serviceplay',
+  'playlistplay',
+  'announce',
+  'queue',
+  'queueplus',
+  'queueminus',
+  'repeat',
+  'shuffle',
+  'position',
+]);
+
+function buildContentAdapter(
+  backendName: string,
+  zoneId: number,
+  zoneConfig: ZoneConfigEntry,
+  adminConfig: AdminConfig,
+): ZoneContentPlaybackAdapter | undefined {
+  const defaultDescriptor = getDefaultAdapterForBackend(backendName);
+  const configuredType = zoneConfig.contentAdapter?.type?.trim();
+  if (backendName === 'BackendMusicAssistant') {
+    return undefined;
+  }
+
+  const adapterType = configuredType || defaultDescriptor?.key;
+
+  if (!adapterType) return undefined;
+
+  const descriptor = getAdapterDescriptor(adapterType);
+  if (!descriptor) {
+    logger.warn(`[ZoneManager] Unknown content adapter "${adapterType}" for zone ${zoneId}.`);
+    return undefined;
+  }
+
+  const adapterMaPlayerId = typeof zoneConfig.contentAdapter?.options?.maPlayerId === 'string'
+    ? zoneConfig.contentAdapter.options.maPlayerId.trim()
+    : '';
+
+  const mergedZoneConfig = descriptor.requires?.maPlayerId && adapterMaPlayerId && !zoneConfig.maPlayerId
+    ? { ...zoneConfig, maPlayerId: adapterMaPlayerId }
+    : zoneConfig;
+
+  if (descriptor.requires?.maPlayerId) {
+    const maId = mergedZoneConfig.maPlayerId || adapterMaPlayerId;
+    if (!maId) {
+      logger.warn(
+        `[ZoneManager] Content adapter "${adapterType}" requires maPlayerId for zone ${zoneId}, but none configured.`,
+      );
+      return undefined;
+    }
+  }
+
+  return createZoneContentAdapter(adapterType, {
+    zoneId,
+    backendId: backendName,
+    zoneConfig: mergedZoneConfig,
+    adminConfig,
+    getZoneOrWarn: () => getZoneById(zoneId),
+    pushPlayerEntryUpdate: (update) => updateZonePlayerStatus(zoneId, update),
+  });
 }
 
 function createDefaultPlayerEntry(playerId: number, zoneName: string): PlayerStatus {
@@ -366,6 +439,13 @@ async function cleanupZone(playerId: number): Promise<void> {
       logger.error(`[ZoneManager] Error cleaning up backend for Loxone player ID: ${playerId}: ${error}`);
     }
   }
+  if (existingZone.contentAdapter) {
+    try {
+      await existingZone.contentAdapter.cleanup();
+    } catch (error) {
+      logger.warn(`[ZoneManager] Error cleaning up content adapter for zone ${playerId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   removeZoneFromGroups(playerId);
   delete zone[playerId];
 }
@@ -377,6 +457,7 @@ async function setupZoneInternal(
   player: Player,
   index: number,
   adminZones: Map<number, ZoneConfigEntry>,
+  adminConfig: AdminConfig,
   newZoneEntries: ZoneConfigEntry[],
   updatedZoneEntries: ZoneConfigEntry[],
   resolveSourceName?: SourceResolver,
@@ -396,13 +477,13 @@ async function setupZoneInternal(
 
   let backend = zoneOverride?.backend;
   let ip = zoneOverride?.ip;
-  const maPlayerId = zoneOverride?.maPlayerId;
+  const maPlayerId = zoneOverride?.maPlayerId ?? zoneOverride?.contentAdapter?.options?.maPlayerId;
   let configuredName = typeof zoneOverride?.name === 'string' ? zoneOverride.name.trim() : '';
   const playerProvidedName = typeof player?.name === 'string' ? player.name.trim() : '';
 
   if (!backend || !ip) {
     logger.warn(
-      `[ZoneManager] Missing backend or IP for Loxone player ID: ${playerId}. Creating default NullBackend entry.`,
+      `[ZoneManager] Unconfigured Zone for Loxone player ID: ${playerId}.`,
     );
     const fallbackName = configuredName || playerProvidedName || `Zone ${index + 1}`;
     const defaultZone: ZoneConfigEntry = {
@@ -439,6 +520,12 @@ async function setupZoneInternal(
     },
     playerEntry: createDefaultPlayerEntry(playerId, zoneName),
   };
+
+  const effectiveZoneConfig = adminZones.get(playerId);
+  if (effectiveZoneConfig) {
+    const adapter = backend ? buildContentAdapter(backend, playerId, effectiveZoneConfig, adminConfig) : undefined;
+    zone[playerId].contentAdapter = adapter;
+  }
 
   logger.info(
     `[ZoneManager][${zoneName}] set up for Loxone player ID: ${playerId}, Backend: ${backend || 'not specified'}, IP: ${ip || 'not specified'}`,
@@ -519,7 +606,7 @@ const setupZones = async (): Promise<void> => {
   const updatedZoneEntries: ZoneConfigEntry[] = [];
 
   for (const [index, player] of players.entries()) {
-    await setupZoneInternal(player, index, adminZones, newZoneEntries, updatedZoneEntries, resolveSourceName);
+    await setupZoneInternal(player, index, adminZones, adminConfig, newZoneEntries, updatedZoneEntries, resolveSourceName);
   }
 
   persistZoneConfigChanges(newZoneEntries, updatedZoneEntries, adminConfig);
@@ -538,7 +625,7 @@ const setupZoneById = async (playerId: number): Promise<boolean> => {
 
   const newZoneEntries: ZoneConfigEntry[] = [];
   const updatedZoneEntries: ZoneConfigEntry[] = [];
-  await setupZoneInternal(players[index], index, adminZones, newZoneEntries, updatedZoneEntries, resolveSourceName);
+  await setupZoneInternal(players[index], index, adminZones, adminConfig, newZoneEntries, updatedZoneEntries, resolveSourceName);
   persistZoneConfigChanges(newZoneEntries, updatedZoneEntries, adminConfig);
   return true;
 };
@@ -595,6 +682,19 @@ const sendCommandToZone = async (
   if (!zone) {
     logger.warn(`[ZoneManager] Command ignored for unknown Loxone player ID: ${playerId}`);
     return;
+  }
+
+  if (zone.contentAdapter && CONTENT_COMMANDS.has(command as ZoneContentCommand)) {
+    try {
+      const handled = zone.contentAdapter.handles(command) && (await zone.contentAdapter.execute(command as ZoneContentCommand, param));
+      if (handled) {
+        return;
+      }
+    } catch (error) {
+      logger.warn(
+        `[ZoneManager] Content adapter failed for zone ${playerId}, command ${command}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   const backendInstance = zone.player.backendInstance; // Get the backend instance
@@ -1064,6 +1164,15 @@ const cleanupZones = async (): Promise<void> => {
         } catch (error) {
           logger.error(
             `[ZoneManager] Error cleaning up backend for Loxone player ID: ${entry.player.playerid}: ${error}`,
+          );
+        }
+      }
+      if (entry.contentAdapter) {
+        try {
+          await entry.contentAdapter.cleanup();
+        } catch (error) {
+          logger.warn(
+            `[ZoneManager] Error cleaning up content adapter for zone ${entry.player.playerid}: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
       }

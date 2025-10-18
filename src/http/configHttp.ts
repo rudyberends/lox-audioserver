@@ -12,6 +12,13 @@ import { setMusicAssistantSuggestions } from '../config/adminState';
 import { resetMediaProvider } from '../backend/provider/factory';
 import logger, { logStreamEmitter } from '../utils/troxorlogger';
 import { discoverBeolinkDevices } from '../utils/discovery/beolinkDiscovery';
+import {
+  listZoneContentAdapters,
+  listDefaultContentAdapters,
+  getAdapterDescriptor,
+  getDefaultAdapterForBackend,
+} from '../backend/zone/capabilities';
+import '../backend/provider/musicAssistant/contentAdapter';
 
 /**
  * HTTP layer powering the admin configuration UI and log streaming endpoints.
@@ -155,6 +162,8 @@ function registerDefaultRoutes() {
         options: {
           backends: BACKEND_OPTIONS,
           providers: PROVIDER_OPTIONS,
+          contentAdapters: listZoneContentAdapters(),
+          defaultContentAdapters: listDefaultContentAdapters(),
         },
         suggestions,
         zoneStatus: getZoneStatuses(),
@@ -386,7 +395,7 @@ function registerDefaultRoutes() {
   registerConfigRoute('POST', '/admin/api/zones/connect', async (req, res) => {
     try {
       const body = await readRequestBody(req);
-      let payload: { playerId?: number; zone?: { id?: number; backend?: string; ip?: string; maPlayerId?: string; name?: string } } = {};
+      let payload: { playerId?: number; zone?: { id?: number; backend?: string; ip?: string; maPlayerId?: string; name?: string; contentAdapter?: { type?: string; options?: Record<string, string> } } } = {};
       try {
         payload = JSON.parse(body || '{}');
       } catch (error) {
@@ -416,12 +425,72 @@ function registerDefaultRoutes() {
           typeof payload.zone.ip === 'string'
             ? payload.zone.ip.trim()
             : existingZone?.ip ?? '';
+        const requestedAdapter = payload.zone.contentAdapter;
+        let contentAdapter = existingZone?.contentAdapter;
+        if (requestedAdapter && typeof requestedAdapter === 'object') {
+          const type = typeof requestedAdapter.type === 'string' ? requestedAdapter.type.trim() : '';
+          const options = requestedAdapter.options && typeof requestedAdapter.options === 'object'
+            ? Object.entries(requestedAdapter.options).reduce<Record<string, string>>((acc, [key, value]) => {
+                const normalizedKey = String(key || '').trim();
+                if (!normalizedKey) return acc;
+                const normalizedValue = typeof value === 'string' ? value.trim() : value != null ? String(value) : '';
+                acc[normalizedKey] = normalizedValue;
+                return acc;
+              }, {})
+            : undefined;
+          contentAdapter = type ? { type, options } : undefined;
+        }
+
+        const defaultAdapter = getDefaultAdapterForBackend(resolvedBackend);
+        const requestedAdapterKey = typeof contentAdapter?.type === 'string' ? contentAdapter.type : '';
+        const payloadMaPlayerId = typeof payload.zone.maPlayerId === 'string' && payload.zone.maPlayerId.trim()
+          ? payload.zone.maPlayerId.trim()
+          : undefined;
+        const adapterMaPlayerId = contentAdapter?.options?.maPlayerId
+          ? String(contentAdapter.options.maPlayerId).trim()
+          : existingZone?.contentAdapter?.options?.maPlayerId
+            ? String(existingZone.contentAdapter.options.maPlayerId).trim()
+            : undefined;
+        const existingMaPlayerId = existingZone?.maPlayerId?.trim();
+        const effectiveMaPlayerId = payloadMaPlayerId || existingMaPlayerId || adapterMaPlayerId || '';
+
+        if (defaultAdapter && !requestedAdapterKey) {
+          contentAdapter = undefined;
+          if (defaultAdapter.requires?.maPlayerId && !effectiveMaPlayerId) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, message: 'This backend requires a configured Music Assistant player.' }));
+            return;
+          }
+        } else if (contentAdapter?.type) {
+          const descriptor = getAdapterDescriptor(contentAdapter.type);
+          if (!descriptor) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, message: `Unknown content adapter "${contentAdapter.type}"` }));
+            return;
+          }
+          if (descriptor.requires?.maPlayerId) {
+            if (!effectiveMaPlayerId) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: false, message: 'Content adapter requires a configured Music Assistant player.' }));
+              return;
+            }
+            contentAdapter = {
+              type: contentAdapter.type,
+              options: { maPlayerId: effectiveMaPlayerId },
+            };
+          }
+        }
+        const backendMaPlayerId = resolvedBackend === 'BackendMusicAssistant'
+          ? (payload.zone.maPlayerId ?? existingZone?.maPlayerId ?? (effectiveMaPlayerId || undefined))
+          : undefined;
+
         updatedZone = {
           id: playerId,
           backend: resolvedBackend,
           ip: resolvedIp,
-          maPlayerId: payload.zone.maPlayerId ?? existingZone?.maPlayerId,
           name: payload.zone.name?.trim() || existingZone?.name,
+          contentAdapter,
+          ...(backendMaPlayerId ? { maPlayerId: backendMaPlayerId } : {}),
         };
 
         try {

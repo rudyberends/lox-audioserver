@@ -5,8 +5,12 @@ import BackendSonos from './Sonos/backend';
 import NullBackend from './nullBackend';
 
 interface BackendFactoryEntry {
-  new (ip: string, playerId: number, extra?: string): Backend;
+  new (ip: string, playerId: number, extra?: any): Backend;
   probe?(opts: BackendProbeOptions): Promise<void>;
+}
+
+export interface BackendCreateOptions {
+  maPlayerId?: string;
 }
 
 const backendMap: Record<string, BackendFactoryEntry> = {
@@ -32,14 +36,17 @@ export function createBackend(
   backendName: string,
   ip: string,
   loxoneZoneId: number,
-  options: { maPlayerId?: string } = {},
+  options: BackendCreateOptions = {},
 ): Backend | null {
   const BackendClass = backendMap[backendName];
   if (!BackendClass) return null;
 
-  // Special handling for MusicAssistant
-  if (backendName === 'BackendMusicAssistant' || backendName === 'BackendBeolink') {
+  if (backendName === 'BackendMusicAssistant') {
     return new BackendClass(ip, loxoneZoneId, options.maPlayerId);
+  }
+
+  if (backendName === 'BackendBeolink') {
+    return new BackendClass(ip, loxoneZoneId, { maPlayerId: options.maPlayerId });
   }
 
   // Default: 2-arg constructor

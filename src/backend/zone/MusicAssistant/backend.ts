@@ -9,23 +9,40 @@
  * - Receives real-time events (PLAYER_UPDATED, QUEUE_UPDATED, QUEUE_TIME_UPDATED)
  *   and updates the ZoneManager instantly (no polling).
  *
- * ⚠️ Each zone needs its own MA Player ID in the .env file:
- *    ZONE_<LOXONE_ZONE_ID>_MA_PLAYER_ID=<MusicAssistantPlayerID>
  */
 
 import Backend, { BackendProbeOptions } from '../backendBaseClass';
+import { getAdminConfig } from '../../../config/config';
 import type { PlayerStatus } from '../loxoneTypes';
 import logger from '../../../utils/troxorlogger';
-import { updateZoneQueue, updateZoneGroup, sendCommandToZone, findZoneByBackendPlayerId } from '../zonemanager';
+import { updateZoneQueue, updateZoneGroup, sendCommandToZone, findZoneByBackendPlayerId, getZoneById } from '../zonemanager';
 import MusicAssistantClient from './client';
+import {
+  createZoneContentAdapter,
+  ZoneContentCommand,
+  ZoneContentPlaybackAdapter,
+} from '../capabilities';
 import { EventMessage } from './types';
 import { mapPlayerToTrack, mapQueueToState } from './stateMapper';
-import { handleMusicAssistantCommand, MusicAssistantCommandContext } from './commands';
+import { handleMusicAssistantControlCommand, MusicAssistantCommandContext } from './commands';
 import { setMusicAssistantSuggestions, clearMusicAssistantSuggestion } from '../../../config/adminState';
 import { upsertGroup, removeZoneFromGroups, getGroupByLeader, getGroupByZone, removeGroupByLeader } from '../groupTracker';
 
+const CONTENT_COMMANDS: ZoneContentCommand[] = [
+  'serviceplay',
+  'playlistplay',
+  'announce',
+  'queue',
+  'queueplus',
+  'queueminus',
+  'repeat',
+  'shuffle',
+  'position',
+];
+
 export default class BackendMusicAssistant extends Backend {
   private client: MusicAssistantClient;
+  private contentAdapter?: ZoneContentPlaybackAdapter;
   private removeEventListener?: () => void;
   private lastQueueItem: any = null;
   private previousQueueItem: any = null;
@@ -94,6 +111,8 @@ export default class BackendMusicAssistant extends Backend {
     logger.info(`[MusicAssistant][Zone:${this.loxoneZoneId}] Connected to player "${me.name}" (${this.maPlayerId})`);
     clearMusicAssistantSuggestion(this.loxoneZoneId);
 
+    this.ensureContentAdapter();
+
     this.registerEventHandlers();
     this.updateFromPlayer(me);
 
@@ -109,6 +128,14 @@ export default class BackendMusicAssistant extends Backend {
     logger.info(`[MusicAssistant][Zone:${this.loxoneZoneId}] Cleanup`);
     this.removeEventListener?.();
     this.client.cleanup();
+    if (this.contentAdapter) {
+      try {
+        await this.contentAdapter.cleanup();
+      } catch (error) {
+        logger.debug(`[MusicAssistant][Zone:${this.loxoneZoneId}] Content adapter cleanup error: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      this.contentAdapter = undefined;
+    }
     this.lastQueueItem = null;
     this.previousQueueItem = null;
     await super.cleanup();
@@ -121,6 +148,16 @@ export default class BackendMusicAssistant extends Backend {
   async sendCommand(command: string, param?: any): Promise<void> {
     logger.info(`[MusicAssistant][Zone ${this.loxoneZoneId}] Command: ${command}`);
 
+    if (CONTENT_COMMANDS.includes(command as ZoneContentCommand)) {
+      const adapter = this.ensureContentAdapter();
+      if (adapter && adapter.handles(command)) {
+        const handled = await adapter.execute(command as ZoneContentCommand, param);
+        if (handled) {
+          return;
+        }
+      }
+    }
+
     const ctx: MusicAssistantCommandContext = {
       client: this.client,
       maPlayerId: this.maPlayerId,
@@ -129,11 +166,39 @@ export default class BackendMusicAssistant extends Backend {
       pushPlayerEntryUpdate: (update) => this.pushPlayerStatusUpdate(update),
     };
 
-    const handled = await handleMusicAssistantCommand(ctx, command, param);
+    const handled = await handleMusicAssistantControlCommand(ctx, command, param);
 
     if (!handled) {
       logger.warn(`[MusicAssistant][Zone:${this.loxoneZoneId}] Unknown command: ${command}`);
     }
+  }
+
+  private ensureContentAdapter(): ZoneContentPlaybackAdapter | undefined {
+    if (this.contentAdapter) return this.contentAdapter;
+
+    const admin = getAdminConfig();
+    const zoneConfig = admin.zones.find((zone) => zone.id === this.loxoneZoneId);
+    if (!zoneConfig) return undefined;
+
+    const adapter = createZoneContentAdapter('musicassistant', {
+      zoneId: this.loxoneZoneId,
+      backendId: 'BackendMusicAssistant',
+      zoneConfig,
+      adminConfig: admin,
+      getZoneOrWarn: () => this.getZoneOrWarn(),
+      pushPlayerEntryUpdate: (update) => this.pushPlayerStatusUpdate(update),
+      acquireClient: async () => ({ client: this.client, release: async () => {} }),
+    });
+
+    if (adapter) {
+      this.contentAdapter = adapter;
+      const zone = getZoneById(this.loxoneZoneId);
+      if (zone) {
+        zone.contentAdapter = adapter;
+      }
+    }
+
+    return this.contentAdapter;
   }
 
   sendGroupCommand(_cmd: string, _type: string, _playerid: string, ...additionalIDs: string[]): void {

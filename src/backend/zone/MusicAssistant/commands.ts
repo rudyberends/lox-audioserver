@@ -8,7 +8,6 @@ import {
 import { PlayerStatus, RepeatMode as LoxoneRepeatMode } from '../loxoneTypes';
 import logger from '../../../utils/troxorlogger';
 import MusicAssistantClient from './client';
-import { denormalizeMediaUri, denormalizePlaylistUri, normalizeMediaUri } from '../../provider/musicAssistant/utils';
 
 type RepeatMapping = {
   ma: 'off' | 'one' | 'all';
@@ -50,7 +49,7 @@ export interface MusicAssistantCommandContext {
 /**
  * Translates Loxone command verbs into Music Assistant RPC calls.
  */
-export async function handleMusicAssistantCommand(
+export async function handleMusicAssistantControlCommand(
   ctx: MusicAssistantCommandContext,
   command: string,
   param?: any,
@@ -98,153 +97,6 @@ export async function handleMusicAssistantCommand(
         const message = error instanceof Error ? error.message : String(error);
         logger.warn(`[MusicAssistant] Failed to seek to position ${seconds}: ${message}`);
       }
-      return true;
-    }
-
-    case 'serviceplay': {
-      const info = parseCommandPayload(param);
-
-      if (!info || !info.audiopath) {
-        logger.warn(`[MusicAssistant][Zone:${ctx.loxoneZoneId}] serviceplay payload missing audiopath`);
-        return true;
-      }
-
-      const stream = String(info.audiopath ?? info.id ?? '');
-      if (!stream) {
-        logger.warn(`[MusicAssistant][Zone:${ctx.loxoneZoneId}] serviceplay payload missing stream`);
-        return true;
-      }
-      const provider = String(info.provider ?? 'library');
-      const targetStream = denormalizeMediaUri(stream);
-      logger.info(`[MusicAssistant][Zone:${ctx.loxoneZoneId}] serviceplay: ${stream}`);
-
-      try {
-        await ctx.client.rpc('player_queues/play_media', {
-          queue_id: ctx.maPlayerId,
-          media: [targetStream],
-          option: 'replace',
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        logger.warn(`[MusicAssistant] Failed to play radio stream ${stream}: ${message}`);
-      }
-
-      return true;
-    }
-
-    case 'announce': {
-      const info = parseCommandPayload(param);
-      if (!info) {
-        logger.warn(`[MusicAssistant][Zone:${ctx.loxoneZoneId}] announce payload missing`);
-        return true;
-      }
-
-      const announcementUrl =
-        coerceToOptionalString(info.url) ??
-        coerceToOptionalString(info.audiopath) ??
-        coerceToOptionalString(info.announcement_url);
-      if (!announcementUrl) {
-        logger.warn(`[MusicAssistant][Zone:${ctx.loxoneZoneId}] announce payload missing url`);
-        return true;
-      }
-
-      const payload: Record<string, unknown> = {
-        player_id: ctx.maPlayerId,
-        url: announcementUrl,
-      };
-
-      const preAnnounce =
-        coerceToOptionalBoolean(info.pre_announce ?? info.preAnnounce ?? info.preannounce);
-      if (preAnnounce !== undefined) {
-        payload.pre_announce = preAnnounce;
-      }
-
-      const preAnnounceUrl = coerceToOptionalString(
-        info.pre_announce_url ?? info.preAnnounceUrl ?? info.preannounce_url,
-      );
-      if (preAnnounceUrl) {
-        payload.pre_announce_url = preAnnounceUrl;
-      }
-
-      const volumeLevel = coerceToOptionalNumber(
-        info.volume_level ?? info.volumeLevel ?? info.announcement_volume,
-      );
-      if (volumeLevel !== undefined) {
-        payload.volume_level = volumeLevel;
-      }
-
-      const playerGroup = coerceToOptionalBoolean(info.player_group ?? info.playerGroup);
-      if (playerGroup !== undefined) {
-        payload.player_group = playerGroup;
-      }
-
-      const expirationSecs = coerceToOptionalNumber(
-        info.expiration_secs ?? info.expirationSecs ?? info.ttl,
-      );
-      if (expirationSecs !== undefined) {
-        payload.expiration_secs = expirationSecs;
-      }
-
-      try {
-        await ctx.client.rpc('players/cmd/play_announcement', payload);
-        logger.info(
-          `[MusicAssistant][Zone:${ctx.loxoneZoneId}] Announcement playing via ${announcementUrl}`,
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        logger.warn(`[MusicAssistant] Failed to send announcement command: ${message}`);
-      }
-
-      return true;
-    }
-
-    case 'playlistplay': {
-      const info = parseCommandPayload(param);
-
-      if (!info) {
-        logger.warn(`[MusicAssistant][Zone:${ctx.loxoneZoneId}] playlistplay payload missing`);
-        return true;
-      }
-
-      const playlistUri =
-        coerceToOptionalString(info.playlistCommandUri) ??
-        coerceToOptionalString(info.audiopath) ??
-        coerceToOptionalString(info.playlistId) ??
-        coerceToOptionalString(info.id);
-      const playlistFallback =
-        coerceToOptionalString(info.rawId) ??
-        coerceToOptionalString(info.playlistId) ??
-        coerceToOptionalString(info.id) ??
-        coerceToOptionalString(info.audiopath);
-      if (!playlistUri) {
-        logger.warn(`[MusicAssistant][Zone:${ctx.loxoneZoneId}] playlistplay payload missing playlist URI`);
-        return true;
-      }
-
-      const option = typeof info.option === 'string' && info.option ? info.option : 'replace';
-      const startItem =
-        coerceToOptionalString(info.start_item) ??
-        coerceToOptionalString(info.startItem) ??
-        coerceToOptionalString(info.track);
-      const normalizedPlaylistUri = normalizePlaylistCommandUri(playlistUri, playlistFallback);
-      const targetUri = normalizedPlaylistUri || playlistUri || playlistFallback;
-      const maUri = denormalizePlaylistUri(targetUri ?? playlistUri ?? '') || denormalizeMediaUri(targetUri ?? playlistUri ?? '');
-
-      logger.info(`[MusicAssistant][Zone:${ctx.loxoneZoneId}] playlistplay: ${targetUri}`);
-
-      try {
-        const payload: Record<string, any> = {
-          queue_id: ctx.maPlayerId,
-          media: [maUri],
-          option,
-        };
-        if (startItem) payload.start_item = denormalizeMediaUri(startItem);
-        await ctx.client.rpc('player_queues/play_media', payload);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        logger.warn(`[MusicAssistant] Failed to play playlist ${playlistUri}: ${message}`);
-      }
-
       return true;
     }
 
@@ -387,50 +239,6 @@ export async function handleMusicAssistantCommand(
   }
 }
 
-type CommandPayload = Record<string, any>;
-
-/** Attempts to normalise ad-hoc command parameters into a structured payload. */
-function parseCommandPayload(param: unknown): CommandPayload | undefined {
-  if (param === undefined || param === null) return undefined;
-
-  if (typeof param === 'string') {
-    try {
-      return JSON.parse(param);
-    } catch {
-      return { audiopath: param };
-    }
-  }
-
-  if (Array.isArray(param) && param.length > 0) {
-    const first = param[0];
-    if (typeof first === 'object' && first !== null) {
-      return first as CommandPayload;
-    }
-    try {
-      return JSON.parse(String(first));
-    } catch {
-      return { audiopath: String(first) };
-    }
-  }
-
-  if (typeof param === 'object') {
-    return param as CommandPayload;
-  }
-
-  return undefined;
-}
-
-function coerceToOptionalString(value: unknown): string | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  }
-  if (typeof value === 'number') return String(value);
-  if (typeof value === 'boolean') return value ? '1' : '0';
-  return undefined;
-}
-
 function normalizeList(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value
@@ -462,58 +270,6 @@ function coerceToOptionalBoolean(value: unknown): boolean | undefined {
     if (['false', 'no', '0', 'off', 'disable', 'disabled'].includes(trimmed)) return false;
   }
   return undefined;
-}
-
-function normalizePlaylistCommandUri(primary: string, fallback?: string): string {
-  const candidates = [primary, fallback].filter((value): value is string => typeof value === 'string' && value.length > 0);
-  for (const candidate of candidates) {
-    const trimmed = candidate.trim();
-    if (!trimmed) continue;
-    const lower = trimmed.toLowerCase();
-
-    let resolved: string | undefined;
-
-    if (lower.startsWith('library:local:track:') || lower.startsWith('library:local:playlist:')) {
-      return trimmed;
-    }
-
-    if (lower.startsWith('playlist:')) {
-      const rest = trimmed.slice('playlist:'.length);
-      if (rest.includes(':') && !rest.includes('://')) {
-        return trimmed;
-      }
-    }
-
-    if (lower.startsWith('library://')) resolved = trimmed;
-    else if (lower.startsWith('playlist://')) resolved = trimmed;
-    else if (lower.startsWith('http://') || lower.startsWith('https://')) resolved = trimmed;
-    else if (lower.startsWith('playlist/')) resolved = `library://${trimmed}`;
-    if (lower.startsWith('playlist:')) {
-      const rest = trimmed.slice('playlist:'.length);
-      if (rest.includes('://')) resolved = rest;
-      else if (rest.startsWith('playlist/')) resolved = `library://${rest}`;
-      else resolved = `library://playlist/${rest}`;
-    }
-    if (!resolved && lower.startsWith('library:playlist:')) {
-      const rest = trimmed.slice('library:playlist:'.length);
-      resolved = `library://playlist/${rest}`;
-    }
-    if (!resolved && lower.startsWith('library:')) {
-      const rest = trimmed.slice('library:'.length);
-      if (rest.startsWith('//')) resolved = `library://${rest.slice(2)}`;
-      else if (rest.startsWith('playlist:')) resolved = `library://playlist/${rest.slice('playlist:'.length)}`;
-      else if (rest.startsWith('playlist/')) resolved = `library://${rest}`;
-      else resolved = `library://${rest.replace(/:/g, '/')}`;
-    }
-    if (!resolved && /^[a-z0-9]+:\/\//i.test(trimmed)) resolved = trimmed;
-    if (!resolved && /^\d+$/.test(trimmed)) resolved = `library://playlist/${trimmed}`;
-    if (!resolved && /[a-z]:/i.test(trimmed)) resolved = trimmed;
-
-    if (resolved) {
-      return normalizeMediaUri(resolved);
-    }
-  }
-  return '';
 }
 
 function clampVolumeValue(value: unknown): number {
