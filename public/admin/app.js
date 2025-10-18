@@ -947,7 +947,7 @@ function renderZoneCard(zone) {
   }
   const status = getZoneStatusEntry(zone);
   const rawBackend = status?.backend ?? zone.backend ?? '';
-  const isDummy = isDummyBackend(rawBackend);
+  const isDummy = isNullBackend(rawBackend);
   const connected = !isDummy && Boolean(status?.connected);
   const statusPrefix = connected ? 'Online' : 'Pending connection';
   const statusText = isDummy ? 'Unassigned' : statusPrefix;
@@ -1075,7 +1075,7 @@ function computeZoneStats(zones = []) {
     const status = getZoneStatusEntry(zone);
     const rawBackend = status?.backend ?? zone.backend ?? '';
     const normalizedBackend = normalizeBackend(rawBackend);
-    const dummy = isDummyBackend(normalizedBackend);
+    const dummy = isNullBackend(normalizedBackend);
     const connected = Boolean(status?.connected);
     const source = resolveZoneSource(zone);
     const sourceIsExtension = isExtensionLabel(source.label);
@@ -1333,15 +1333,16 @@ function normalizeBackend(value = '') {
   return String(value || '').trim();
 }
 
-function isDummyBackend(value = '') {
+function isNullBackend(value = '') {
   const normalized = normalizeBackend(value);
-  return !normalized || normalized.toLowerCase() === 'dummybackend';
+  return !normalized || normalized.toLowerCase() === 'dummybackend' || normalized.toLowerCase() === 'nullbackend';
 }
 
 function formatBackendLabel(value = '') {
   const normalized = normalizeBackend(value);
   if (!normalized) return 'Unassigned';
-  if (normalized.toLowerCase() === 'dummybackend') return 'Unassigned';
+  const lower = normalized.toLowerCase();
+  if (lower === 'dummybackend' || lower === 'nullbackend') return 'Unassigned';
   if (/^backend/i.test(normalized)) {
     const label = normalized.replace(/^backend/i, '');
     const spaced = label.replace(/([a-z])([A-Z])/g, '$1 $2');
@@ -1803,7 +1804,7 @@ function renderBackendModal() {
     // IP field rendered within the Beolink section to reuse existing layout.
   } else {
     const ipAttrParts = [];
-    if (backend === 'DummyBackend') {
+    if (isNullBackend(backend)) {
       ipAttrParts.push('disabled aria-disabled="true"');
     }
     if (ipPlaceholderValue) {
@@ -1812,7 +1813,7 @@ function renderBackendModal() {
     ipField = renderInput(
       'modal-backend-ip',
       backend === 'BackendMusicAssistant' ? 'Music Assistant Host' : 'Backend IP',
-      backend === 'DummyBackend' ? '' : ipValue,
+      isNullBackend(backend) ? '' : ipValue,
       'text',
       false,
       ipAttrParts.join(' ').trim(),
@@ -2072,7 +2073,7 @@ function ensureMusicAssistantCache() {
 }
 
 const BACKEND_DESCRIPTIONS = {
-  DummyBackend: 'Use this placeholder when a zone should be ignored or remains unassigned.',
+  NullBackend: 'Use this placeholder when a zone should be ignored or remains unassigned.',
   BackendMusicAssistant: 'Integrates with Music Assistant to expose players from your MA instance. Scan once to discover available players, then reuse them across zones.',
   BackendSonos: 'Connects the zone to a Sonos player for playback control and metadata updates.',
   BackendBeolink: 'Links the zone with a Bang & Olufsen Beolink player using the BeoApp middleware.',
@@ -2110,7 +2111,7 @@ function bindModalEvents() {
       const selectedBackend = event.target.value;
       const basePatch = { backend: selectedBackend, error: '' };
       const patch = { ...basePatch };
-      if (selectedBackend === 'DummyBackend') {
+      if (isNullBackend(selectedBackend)) {
         patch.ip = '';
       }
       if (selectedBackend !== 'BackendMusicAssistant') {
@@ -2326,14 +2327,14 @@ async function saveBackendModal() {
     }
   }
 
-  if (backend !== 'DummyBackend' && backend !== 'BackendMusicAssistant' && !ipValue) {
+  if (!isNullBackend(backend) && backend !== 'BackendMusicAssistant' && !ipValue) {
     updateModalState({ error: 'Backend IP is required for this backend.' });
     render();
     return;
   }
 
   zone.backend = backend;
-  zone.ip = backend === 'DummyBackend' ? '' : ipValue;
+  zone.ip = isNullBackend(backend) ? '' : ipValue;
   if (backend === 'BackendMusicAssistant') {
     zone.maPlayerId = maPlayerId;
     if (state.modal.maSuggestions?.length) {

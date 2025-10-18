@@ -2,7 +2,7 @@ import Backend, { BackendProbeOptions } from './backendBaseClass';
 import BackendBeolink from './Beolink/backend';
 import BackendMusicAssistant from './MusicAssistant/backend';
 import BackendSonos from './Sonos/backend';
-import DummyBackend from './dummyBackend';
+import NullBackend from './nullBackend';
 
 interface BackendFactoryEntry {
   new (ip: string, playerId: number, extra?: string): Backend;
@@ -13,7 +13,7 @@ const backendMap: Record<string, BackendFactoryEntry> = {
   BackendBeolink: BackendBeolink as BackendFactoryEntry,
   BackendMusicAssistant: BackendMusicAssistant as BackendFactoryEntry,
   BackendSonos: BackendSonos as BackendFactoryEntry,
-  DummyBackend: DummyBackend as BackendFactoryEntry,
+  NullBackend: NullBackend as BackendFactoryEntry,
 };
 
 /** Returns the list of available backend identifiers. */

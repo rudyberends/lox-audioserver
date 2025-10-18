@@ -401,12 +401,14 @@ async function setupZoneInternal(
   const playerProvidedName = typeof player?.name === 'string' ? player.name.trim() : '';
 
   if (!backend || !ip) {
-    logger.warn(`[ZoneManager] Missing backend or IP for Loxone player ID: ${playerId}. Creating default DummyBackend entry.`);
+    logger.warn(
+      `[ZoneManager] Missing backend or IP for Loxone player ID: ${playerId}. Creating default NullBackend entry.`,
+    );
     const fallbackName = configuredName || playerProvidedName || `Zone ${index + 1}`;
     const defaultZone: ZoneConfigEntry = {
       id: playerId,
-      backend: 'DummyBackend',
-      ip: '127.0.0.1',
+      backend: 'NullBackend',
+      ip: '',
       name: fallbackName,
       source: sourceName || undefined,
     };

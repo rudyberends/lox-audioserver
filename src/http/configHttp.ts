@@ -408,10 +408,18 @@ function registerDefaultRoutes() {
         const zones = [...currentConfig.zones];
         const zoneIndex = zones.findIndex((zone) => zone.id === playerId);
         const existingZone = zoneIndex >= 0 ? zones[zoneIndex] : undefined;
+        const resolvedBackend =
+          typeof payload.zone.backend === 'string' && payload.zone.backend.trim()
+            ? payload.zone.backend.trim()
+            : existingZone?.backend || 'NullBackend';
+        const resolvedIp =
+          typeof payload.zone.ip === 'string'
+            ? payload.zone.ip.trim()
+            : existingZone?.ip ?? '';
         updatedZone = {
           id: playerId,
-          backend: payload.zone.backend || existingZone?.backend || 'DummyBackend',
-          ip: payload.zone.ip || existingZone?.ip || '127.0.0.1',
+          backend: resolvedBackend,
+          ip: resolvedIp,
           maPlayerId: payload.zone.maPlayerId ?? existingZone?.maPlayerId,
           name: payload.zone.name?.trim() || existingZone?.name,
         };
