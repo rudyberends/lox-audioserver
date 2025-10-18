@@ -3,6 +3,15 @@ import { parseNumberPart, splitUrl } from './commandUtils';
 import { applyStoredVolumePreset, getZoneById, sendCommandToZone } from '../../backend/zone/zonemanager';
 import { getMediaProvider } from '../../backend/provider/factory';
 import { toPlaylistCommandUri } from '../../backend/provider/musicAssistant/utils';
+import {
+  addRoomFavorite as addCoreRoomFavorite,
+  copyRoomFavorites as copyCoreRoomFavorites,
+  deleteRoomFavorite as deleteCoreRoomFavorite,
+  getRoomFavorites as getCoreRoomFavorites,
+  getRoomFavoriteForPlayback as getCoreRoomFavoriteForPlayback,
+  reorderRoomFavorites as reorderCoreRoomFavorites,
+  setRoomFavoritePlus as setCoreRoomFavoritePlus,
+} from '../../backend/local/favorites/favoritesService';
 import logger from '../../utils/troxorlogger';
 import { MediaFolderItem, PlaylistItem, FavoriteResponse, RecentResponse } from '../../backend/provider/types';
 import { FileType } from '../../backend/zone/loxoneTypes';
@@ -69,21 +78,90 @@ export async function audioCfgGetRoomFavs(url: string): Promise<CommandResult> {
 
   logger.debug(`[audioCfgGetRoomFavs] zone=${zoneId} offset=${start} limit=${limit}`);
 
-  const provider = getMediaProvider();
-  if (typeof provider.getFavorites === 'function') {
-    try {
-      const favorites = await provider.getFavorites(zoneId, start, limit);
-      const normalized = normalizeFavoriteResponse(favorites, zoneId, start);
-      return response(url, 'getroomfavs', [normalized]);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.warn(`[audioCfgGetRoomFavs] Failed to load favorites: ${message}`);
-    }
+  try {
+    const favorites = await getCoreRoomFavorites(zoneId, start, limit);
+    const normalized = normalizeFavoriteResponse(favorites, zoneId, start);
+    return response(url, 'getroomfavs', [normalized]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn(`[audioCfgGetRoomFavs] Failed to load favorites: ${message}`);
   }
 
   return response(url, 'getroomfavs', [
     normalizeFavoriteResponse(undefined, zoneId, start),
   ]);
+}
+
+/**
+ * Handle room favorite mutations (add, delete, reorder, copy, setplus).
+ */
+export async function audioCfgRoomFavs(url: string): Promise<CommandResult> {
+  const parts = splitUrl(url);
+  const zoneId = parseNumberPart(parts[3], 0);
+  const action = (parts[4] ?? '').toLowerCase();
+
+  if (zoneId <= 0) {
+    logger.warn(`[audioCfgRoomFavs] Invalid zone id in URL: ${url}`);
+    return emptyCommand(url, { success: false, error: 'invalid-zone' });
+  }
+
+  try {
+    switch (action) {
+      case 'add': {
+        const rawTitle = parts[5];
+        const title = decodeSegment(rawTitle);
+        const encodedId = parts.slice(6).filter((segment) => segment.length > 0).join('/');
+        await addCoreRoomFavorite(zoneId, title, encodedId);
+        break;
+      }
+      case 'delete': {
+        const encodedId = parts[5] ?? '';
+        if (encodedId) {
+          await deleteCoreRoomFavorite(zoneId, encodedId);
+        }
+        break;
+      }
+      case 'reorder': {
+        const config = parts[5] ?? '';
+        const orderedIds = config
+          .split(',')
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0);
+        await reorderCoreRoomFavorites(zoneId, orderedIds);
+        break;
+      }
+      case 'setplus': {
+        const encodedId = parts[5] ?? '';
+        const rawValue = parts[6] ?? '0';
+        const normalized = rawValue.trim().toLowerCase();
+        const plus = normalized === '1' || normalized === 'true' || normalized === 'yes';
+        if (encodedId) {
+          await setCoreRoomFavoritePlus(zoneId, encodedId, plus);
+        }
+        break;
+      }
+      case 'copy': {
+        const destinations = (parts[5] ?? '')
+          .split(',')
+          .map((value) => Number(value))
+          .filter((value) => Number.isInteger(value) && value > 0);
+        await copyCoreRoomFavorites(zoneId, destinations);
+        break;
+      }
+      default: {
+        logger.warn(`[audioCfgRoomFavs] Unsupported action "${action}" for URL: ${url}`);
+        break;
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn(
+      `[audioCfgRoomFavs] Failed to process action ${action || '<unknown>'} for zone ${zoneId}: ${message}`,
+    );
+    return emptyCommand(url, { success: false, error: message });
+  }
+
+  return emptyCommand(url, { success: true });
 }
 
 /**
@@ -601,49 +679,48 @@ export async function audioLibraryPlay(url: string): Promise<CommandResult> {
  * Handle Favorite play commands.
  */
 export async function audioFavoritePlay(url: string): Promise<CommandResult> {
-  const match = url.match(/^audio\/(\d+)\/roomfav\/play\/(\d+)\/([^/]+)/);
-  if (!match) {
-    logger.warn(`[audioFavoritePlay] Invalid URL format: ${url}`);
-    return response(url, 'libraryplay', []);
-  }
-
-  const zoneId = Number(match[1]);
-  const slot = Number(match[2]);
-  const providerKey = match[3];
+  const segments = splitUrl(url);
+  const zoneId = parseNumberPart(segments[1], 0);
+  const favoriteId = parseNumberPart(segments[4], 0);
+  const providerSegment = segments[5] ?? '';
   const shuffle = /shuffle$/i.test(url) && !/noshuffle$/i.test(url);
   const [, rawQuery = ''] = url.split('?', 2);
   const fadeOptions = parseFadeOptions(rawQuery ? `?${rawQuery}` : '');
-  const provider = getMediaProvider();
-  const favorites = (provider as any)?.favoritesController?.getCachedFavorites?.(zoneId);
 
-  logger.info(`[audioFavoritePlay] zone=${zoneId} slot=${slot} provider=${provider}`);
-
-  if (!favorites || !Array.isArray(favorites)) {
-    logger.warn(`[audioFavoritePlay] No favorites cached for zone ${zoneId}`);
+  if (zoneId <= 0 || favoriteId <= 0) {
+    logger.warn(`[audioFavoritePlay] Invalid zone (${zoneId}) or favorite id (${favoriteId}) in URL: ${url}`);
     return response(url, 'libraryplay', []);
   }
 
-  const fav = favorites.find((f: any) => f.slot === slot);
-  if (!fav) {
-    logger.warn(`[audioFavoritePlay] No favorite found for slot ${slot} in zone ${zoneId}`);
+  const favorite = await getCoreRoomFavoriteForPlayback(zoneId, favoriteId);
+
+  logger.info(
+    `[audioFavoritePlay] zone=${zoneId} favoriteId=${favoriteId} provider=${favorite?.provider ?? 'unknown'}`,
+  );
+
+  if (!favorite) {
+    logger.warn(`[audioFavoritePlay] No favorite found for id ${favoriteId} in zone ${zoneId}`);
     return response(url, 'libraryplay', []);
   }
 
-  const audiopath = fav.audiopath;
+  const audiopath = favorite.audiopath ?? favorite.rawId;
   if (!audiopath) {
-    logger.warn(`[audioFavoritePlay] Favorite ${fav.name} has no audiopath`);
+    logger.warn(`[audioFavoritePlay] Favorite ${favorite.name} has no audiopath`);
     return response(url, 'libraryplay', []);
   }
 
-  // Bouw payload en stuur naar zone
   const commandPayload: Record<string, unknown> = {
-    id: fav.rawId ?? audiopath,
-    name: fav.name ?? fav.title ?? audiopath,
+    id: favorite.rawId ?? audiopath,
+    name: favorite.name ?? favorite.title ?? audiopath,
     audiopath,
-    coverurl: fav.coverurl ?? '',
-    provider: fav.provider ?? providerKey,
-    providerInstanceId: fav.provider ?? providerKey,
-    type: fav.type ?? 'library_track',
+    coverurl: favorite.coverurl ?? '',
+    provider: favorite.provider ?? (providerSegment && !/shuffle$/i.test(providerSegment) ? providerSegment : undefined),
+    providerInstanceId:
+      favorite.providerInstanceId ??
+      favorite.provider ??
+      (providerSegment && !/shuffle$/i.test(providerSegment) ? providerSegment : undefined),
+    service: favorite.service ?? 'library',
+    type: favorite.type ?? 'library_track',
     option: 'replace',
   };
 
@@ -651,7 +728,7 @@ export async function audioFavoritePlay(url: string): Promise<CommandResult> {
     commandPayload.shuffle = 1;
   }
 
-  logger.info(`[audioFavoritePlay] Playing favorite: ${fav.name} → ${audiopath}`);
+  logger.info(`[audioFavoritePlay] Playing favorite: ${favorite.name} → ${audiopath}`);
 
   const enableFade = fadeOptions.fade === true;
   const fadeDuration = clampFadeDuration(fadeOptions.fadeDurationMs ?? DEFAULT_FADE_DURATION_MS);
@@ -1110,6 +1187,15 @@ function normalizeRecentResponse(responseData: RecentResponse | undefined): Rece
     items,
     ts: responseData?.ts ?? Date.now(),
   };
+}
+
+function decodeSegment(value: string | undefined): string {
+  if (!value) return '';
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function buildEmptyQueue(url: string, zoneId: number): CommandResult {

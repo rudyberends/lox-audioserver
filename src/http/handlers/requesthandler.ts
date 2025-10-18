@@ -28,6 +28,7 @@ import {
 import {
   audioCfgGetQueue,
   audioCfgGetRoomFavs,
+  audioCfgRoomFavs,
   audioCfgGetSyncedPlayers,
   audioDynamicCommand,
   audioGetStatus,
@@ -78,6 +79,7 @@ export const COMMANDS = {
   AUDIO_CFG_GET_RADIOS: 'audio/cfg/getradios',
   AUDIO_CFG_GET_SERVICE_FOLDER: 'audio/cfg/getservicefolder',
   AUDIO_CFG_GET_ROOM_FAVS: 'audio/cfg/getroomfavs',
+  AUDIO_CFG_ROOM_FAVS: 'audio/cfg/roomfavs',
   AUDIO_CFG_GET_SYNCED_PLAYERS: 'audio/cfg/getsyncedplayers',
   AUDIO_CFG_GLOBAL_SEARCH: 'audio/cfg/globalsearch',
   AUDIO_CFG_GLOBAL_SEARCH_DESCRIBE: 'audio/cfg/globalsearch/describe',
@@ -178,6 +180,7 @@ prefixRoute('audio', COMMANDS.AUDIO_CFG_SET_PLAYER_NAME, audioCfgSetPlayerName);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_GET_MEDIA_FOLDER, audioCfgGetMediaFolder);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_GET_AVAILABLE_SERVICES, audioCfgGetAvailableServices);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_GET_ROOM_FAVS, audioCfgGetRoomFavs);
+prefixRoute('audio', `${COMMANDS.AUDIO_CFG_ROOM_FAVS}/`, audioCfgRoomFavs);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_GET_SYNCED_PLAYERS, audioCfgGetSyncedPlayers);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_GET_SCAN_STATUS, audioCfgScanStatus);
 prefixRoute('audio', COMMANDS.AUDIO_CFG_GET_RADIOS, audioCfgGetRadios);

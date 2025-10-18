@@ -10,7 +10,7 @@ import path from 'path';
 import { handleConfigRequest } from './configHttp';
 import { summariseLoxoneCommand } from './utils/requestSummary';
 import { startExtensionHeartbeat, stopExtensionHeartbeat } from './extensionHeartbeat';
-import { BUILTIN_ALERT_DIR, BUILTIN_ALERT_PREFIX, getAlertsConfig } from '../backend/alerts/alertService';
+import { BUILTIN_ALERT_DIR, BUILTIN_ALERT_PREFIX, getAlertsConfig } from '../backend/local/alerts/alertService';
 
 /**
  * Handles incoming HTTP requests.
