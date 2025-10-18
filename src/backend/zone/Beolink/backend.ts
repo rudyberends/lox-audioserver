@@ -8,26 +8,9 @@ import BeolinkNotifyClient from './notifyClient';
 import { NotificationMessage, PrimaryExperience } from './types';
 import { mapNotificationToTrack } from './stateMapper';
 import { handleBeolinkCommand } from './commands';
-import MusicAssistantClient from '../MusicAssistant/client';
-import { handleMusicAssistantCommand, MusicAssistantCommandContext } from '../MusicAssistant/commands';
 import { upsertGroup, getGroupByLeader, removeGroupByLeader, getGroupByZone, removeZoneFromGroups } from '../groupTracker';
 import type { ZoneCapabilityDescriptor, ZoneCapabilityContext } from '../capabilityTypes';
 import { backendCapabilities } from '../capabilityHelper';
-
-const DEFAULT_MUSIC_ASSISTANT_PORT = 8095;
-const MUSIC_ASSISTANT_ROUTED_COMMANDS = new Set(['serviceplay', 'playlistplay']);
-const MUSIC_ASSISTANT_ONLY_COMMANDS = new Set(['playlistplay']);
-
-function resolveMusicAssistantConfig(): { host: string; port: number } | undefined {
-  const host = (process.env.MEDIA_PROVIDER_IP ?? '').trim();
-  if (!host) return undefined;
-
-  const rawPort = (process.env.MEDIA_PROVIDER_PORT ?? '').trim();
-  const parsedPort = Number(rawPort);
-  const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : DEFAULT_MUSIC_ASSISTANT_PORT;
-
-  return { host, port };
-}
 
 /**
  * BackendBeolink class extends the Base backend class to handle Beolink notifications.
@@ -84,11 +67,6 @@ export default class BackendBeolink extends Backend {
   private notifyClient: BeolinkNotifyClient;
   private deviceJid?: string;
   private normalizedDeviceJid?: string;
-  private readonly maPlayerId?: string;
-  private readonly maHost?: string;
-  private readonly maPort: number = DEFAULT_MUSIC_ASSISTANT_PORT;
-  private maClient?: MusicAssistantClient;
-  private maConnectPromise?: Promise<void>;
 
   /**
    * Constructor for the BackendBeolink class.
@@ -96,26 +74,10 @@ export default class BackendBeolink extends Backend {
    * @param {string} ip - The IP address of the device.
    * @param {string} playerid - The ID of the player.
    */
-  constructor(ip: string, playerid: number, maPlayerId?: string) {
+  constructor(ip: string, playerid: number) {
     super(ip, playerid);
     this.notifyUrl = `http://${this.ip}:8080/BeoNotify/Notifications`; // Notification URL based on IP
     this.notifyClient = new BeolinkNotifyClient(this.notifyUrl);
-    const maConfig = resolveMusicAssistantConfig();
-    this.maPlayerId =
-      typeof maPlayerId === 'string' && maPlayerId.trim().length > 0 ? maPlayerId.trim() : undefined;
-    if (maConfig) {
-      this.maHost = maConfig.host;
-      this.maPort = maConfig.port;
-    }
-    if (this.maPlayerId && !this.maHost) {
-      logger.warn(
-        `[BeoLink][Zone ${this.playerid}] Music Assistant player configured but MEDIA_PROVIDER_IP is missing. Playback routing disabled.`,
-      );
-    } else if (this.maPlayerId && this.maHost) {
-      logger.info(
-        `[BeoLink][Zone ${this.playerid}] Routing playback commands via Music Assistant player ${this.maPlayerId} (${this.maHost}:${this.maPort}).`,
-      );
-    }
     BackendBeolink.instances.set(playerid, this);
   }
 
@@ -155,7 +117,6 @@ export default class BackendBeolink extends Backend {
   async cleanup(): Promise<void> {
     BackendBeolink.unregisterZone(this.playerid);
     await this.notifyClient.close();
-    this.disposeMusicAssistantClient();
     await super.cleanup();
   }
 
@@ -324,86 +285,6 @@ export default class BackendBeolink extends Backend {
     if (!handled) {
       logger.warn(`[BeoLink][zone ${this.playerid}] Unknown command: ${command}`);
     }
-  }
-
-  private shouldRouteToMusicAssistant(command: string): boolean {
-    return Boolean(this.maPlayerId && this.maHost && MUSIC_ASSISTANT_ROUTED_COMMANDS.has(command));
-  }
-
-  private async routeCommandThroughMusicAssistant(command: string, param: any): Promise<boolean> {
-    if (!this.maPlayerId) return false;
-
-    const client = await this.ensureMusicAssistantClient();
-    if (!client) return false;
-
-    const ctx: MusicAssistantCommandContext = {
-      client,
-      maPlayerId: this.maPlayerId,
-      loxoneZoneId: this.playerid,
-      getZoneOrWarn: () => this.getZoneOrWarn(),
-      pushPlayerEntryUpdate: (update) => this.pushPlayerStatusUpdate(update),
-    };
-
-    try {
-      const handled = await handleMusicAssistantCommand(ctx, command, param);
-      if (handled) {
-        logger.debug(
-          `[BeoLink][zone ${this.playerid}] Routed "${command}" via Music Assistant player ${this.maPlayerId}`,
-        );
-      }
-      return handled;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.warn(
-        `[BeoLink][zone ${this.playerid}] Music Assistant command "${command}" failed: ${message}`,
-      );
-      return false;
-    }
-  }
-
-  private async ensureMusicAssistantClient(): Promise<MusicAssistantClient | undefined> {
-    if (!this.maPlayerId || !this.maHost) return undefined;
-
-    if (!this.maClient) {
-      this.maClient = new MusicAssistantClient(this.maHost, this.maPort);
-    }
-
-    if (!this.maConnectPromise) {
-      this.maConnectPromise = this.maClient
-        .connect()
-        .catch((error) => {
-          this.disposeMusicAssistantClient();
-          throw error;
-        });
-    }
-
-    try {
-      await this.maConnectPromise;
-      return this.maClient;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.warn(
-        `[BeoLink][zone ${this.playerid}] Failed to connect to Music Assistant: ${message}`,
-      );
-      return undefined;
-    } finally {
-      this.maConnectPromise = undefined;
-    }
-  }
-
-  private disposeMusicAssistantClient(): void {
-    if (this.maClient) {
-      try {
-        this.maClient.cleanup();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        logger.debug(
-          `[BeoLink][zone ${this.playerid}] Music Assistant client cleanup error: ${message}`,
-        );
-      }
-      this.maClient = undefined;
-    }
-    this.maConnectPromise = undefined;
   }
 
   /**
@@ -702,75 +583,4 @@ export default class BackendBeolink extends Backend {
       updateZoneGroup();
     }
   }
-}
-
-function buildPlayQueuePayload(
-  stationId: string,
-  behaviour: string,
-  payload?: Record<string, any>,
-): Record<string, any> {
-  const normalizedBehaviour =
-    typeof payload?.behaviour === 'string' && payload.behaviour.trim().length > 0
-      ? payload.behaviour.trim()
-      : behaviour;
-
-  const images = collectStationImages(payload);
-
-  return {
-    playQueueItem: {
-      behaviour: normalizedBehaviour,
-      station: {
-        tuneIn: {
-          stationId,
-        },
-        image: images,
-      },
-    },
-  };
-}
-
-function collectStationImages(
-  payload?: Record<string, any>,
-): Array<Record<string, string>> {
-  const urls = new Set<string>();
-
-  const add = (value: unknown) => {
-    if (typeof value === 'string') {
-      const trimmed = value.trim();
-      if (trimmed) urls.add(trimmed);
-    } else if (Array.isArray(value)) {
-      value.forEach((entry) => add(entry));
-    } else if (value && typeof value === 'object') {
-      add((value as any).url ?? (value as any).href ?? (value as any).src);
-    }
-  };
-
-  if (payload) {
-    add(payload.coverurl);
-    add(payload.thumbnail);
-    add(payload.icon);
-    add(payload.image);
-    add(payload.images);
-    add(payload.station?.image);
-  }
-
-  return Array.from(urls).map((href) => ({ href }));
-}
-
-function formatAxiosError(error: unknown): string {
-  if (!axios.isAxiosError(error)) {
-    return error instanceof Error ? error.message : String(error);
-  }
-
-  const responseData = error.response?.data;
-  if (typeof responseData === 'string') return responseData;
-  if (responseData && typeof responseData === 'object') {
-    try {
-      return JSON.stringify(responseData);
-    } catch {
-      return String(responseData);
-    }
-  }
-
-  return error.message;
 }
