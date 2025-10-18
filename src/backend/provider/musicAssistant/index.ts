@@ -79,15 +79,13 @@ export class MusicAssistantProvider implements MediaProvider {
    * Initializes a MusicAssistantProvider instance.
    *
    * Environment variables used:
-   * - MEDIA_PROVIDER_IP / MUSIC_ASSISTANT_HOST
+   * - MEDIA_PROVIDER_IP
    * - MEDIA_PROVIDER_PORT (default: 8095)
    *
    * The provider sets up controller modules for each content type.
    */
   constructor() {
-    const host =
-      (process.env.MEDIA_PROVIDER_IP ?? process.env.MUSIC_ASSISTANT_HOST ?? '').trim() ||
-      (process.env.MUSICASSISTANT_IP ?? '').trim();
+    const host = (process.env.MEDIA_PROVIDER_IP ?? '').trim();
     const port = parsePort(process.env.MEDIA_PROVIDER_PORT, 8095);
 
     this.host = host || undefined;
