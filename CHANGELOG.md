@@ -1,3 +1,8 @@
+## <small>2.4.1-beta.1 (2025-10-18)</small>
+
+* Merge pull request #46 from rudyberends/feat/beolink-improvements ([ecc9d6a](https://github.com/rudyberends/lox-audioserver/commit/ecc9d6a)), closes [#46](https://github.com/rudyberends/lox-audioserver/issues/46)
+* fix: improved the beolink backend ([28af207](https://github.com/rudyberends/lox-audioserver/commit/28af207))
+
 ## 2.4.0 (2025-10-17)
 
 * Merge pull request #42 from rudyberends/feature/alerts-backend ([2a0aea7](https://github.com/rudyberends/lox-audioserver/commit/2a0aea7)), closes [#42](https://github.com/rudyberends/lox-audioserver/issues/42)

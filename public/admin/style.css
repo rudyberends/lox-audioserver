@@ -3028,6 +3028,12 @@ code {
   margin-top: 0.6rem;
 }
 
+.backend-modal__beolink-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.6rem;
+}
+
 .backend-modal__ma-actions--has-cache .backend-modal__ma-cache {
   font-size: 0.82rem;
   color: rgba(71, 85, 105, 0.78);
