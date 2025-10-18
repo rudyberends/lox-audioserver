@@ -224,12 +224,48 @@ export default class BackendMusicAssistant extends Backend {
     };
   }
 
-  sendGroupCommand(_cmd: string, _type: string, _playerid: string, ...additionalIDs: string[]): void {
-    logger.info(`[MusicAssistant] Creating group Leader:${this.maPlayerId}, Members:${additionalIDs.join(', ')}`);
-    additionalIDs.forEach((id) => {
-      if (id !== this.maPlayerId) sendCommandToZone(Number(id), 'groupJoin', this.maPlayerId);
-    });
-    updateZoneGroup();
+  sendGroupCommand(command: string, _type: string, _playerid: string, ...additionalIDs: string[]): void {
+    switch (command) {
+      case 'groupJoinMany':
+      case 'groupJoin': {
+        logger.info(`[MusicAssistant] Creating group Leader:${this.maPlayerId}, Members:${additionalIDs.join(', ')}`);
+        additionalIDs.forEach((id) => {
+          if (id !== this.maPlayerId) void sendCommandToZone(Number(id), 'groupJoin', this.maPlayerId);
+        });
+        updateZoneGroup();
+        return;
+      }
+
+      case 'groupLeaveMany':
+      case 'groupLeave': {
+        const backendIds = command === 'groupLeave'
+          ? [this.maPlayerId]
+          : additionalIDs
+              .map((id) => Number(id))
+              .filter((zoneId) => Number.isFinite(zoneId))
+              .map((zoneId) => this.resolveBackendPlayerId(zoneId))
+              .filter((backendId): backendId is string => Boolean(backendId));
+
+        if (backendIds.length === 0) {
+          logger.debug(`[MusicAssistant] ${command} called with no resolvable members`);
+        } else {
+          logger.info(`[MusicAssistant] Removing members from group ${this.maPlayerId}: ${backendIds.join(',')}`);
+          void this.sendCommand(command, backendIds.join(','));
+        }
+        updateZoneGroup();
+        return;
+      }
+
+      default:
+        logger.debug(`[MusicAssistant] Unsupported group command ${command} for leader ${this.maPlayerId}`);
+    }
+  }
+
+  private resolveBackendPlayerId(zoneId: number): string | undefined {
+    const zoneEntry = getZoneById(zoneId);
+    const instance = zoneEntry?.player?.backendInstance as { maPlayerId?: string } | undefined;
+    const backendId = typeof instance?.maPlayerId === 'string' ? instance.maPlayerId.trim() : '';
+    return backendId || undefined;
   }
 
   async searchMusic(query: string) {

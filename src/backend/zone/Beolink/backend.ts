@@ -131,13 +131,7 @@ export default class BackendBeolink extends Backend {
    * 
    */
   async sendGroupCommand(command: string, type: string, playerid: number, ...additionalIDs: string[]): Promise<void> {
-    if (command === 'groupJoinMany' || command === 'groupJoin') {
-      await this.joinExperience(type, additionalIDs);
-    } else if (command === 'groupLeaveMany' || command === 'groupLeave') {
-      await this.leaveExperience(type, additionalIDs);
-    } else {
-      logger.warn(`[BeoLink][Zone ${this.playerid}] Unsupported group command: ${command}`);
-    }
+    logger.warn(`[BeoLink][Zone ${this.playerid}] Group commands are handled upstream; received unexpected ${command}.`);
   }
 
   private async joinExperience(_type: string, members: string[]): Promise<void> {
@@ -574,4 +568,3 @@ export default class BackendBeolink extends Backend {
     }
   }
 }
-
