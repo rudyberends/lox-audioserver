@@ -38,7 +38,7 @@ export function createBackend(
   if (!BackendClass) return null;
 
   // Special handling for MusicAssistant
-  if (backendName === 'BackendMusicAssistant') {
+  if (backendName === 'BackendMusicAssistant' || backendName === 'BackendBeolink') {
     return new BackendClass(ip, loxoneZoneId, options.maPlayerId);
   }
 

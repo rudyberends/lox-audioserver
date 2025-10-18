@@ -1,3 +1,4 @@
+import logger from '../../../utils/troxorlogger';
 import {
   MediaFolderItem,
   MediaFolderResponse,
@@ -10,24 +11,51 @@ import {
 } from '../types';
 import { BeolinkRadioService } from './radioService';
 
-const DEFAULT_HOST = process.env.MEDIA_PROVIDER_IP || process.env.BEOLINK_HOST || '127.0.0.1';
-const DEFAULT_TTL_SECONDS = Number(process.env.MEDIA_PROVIDER_CACHE_TTL || 30) || 30;
-const DEFAULT_FAVORITES_NAME = process.env.BEOLINK_FAVORITES_NAME || 'Beolink Favorites';
-const DEFAULT_ICON_PROXY = process.env.RADIO_ICON_PROXY || 'beolink';
-
 /**
  * Beolink provider that currently exposes radio favorites while returning
  * empty collections for playlist/media APIs.
  */
 export class BeolinkProvider implements MediaProvider {
+  private readonly host: string;
+  private readonly ttlSeconds: number;
+  private readonly favoritesName: string;
+  private readonly iconProxyId: string;
+  private readonly providerLabel: string;
+  private readonly serviceId: string;
   private readonly radioService: BeolinkRadioService;
 
   constructor() {
+    const rawHost = (process.env.MEDIA_PROVIDER_IP || process.env.BEOLINK_HOST || '').trim();
+    this.host = rawHost || '127.0.0.1';
+
+    if (rawHost) {
+      logger.info(`[BeolinkProvider] Configured with host ${this.host}`);
+    } else {
+      logger.warn(`[BeolinkProvider] MEDIA_PROVIDER_IP not set. Falling back to ${this.host}`);
+    }
+
+    this.ttlSeconds = Number(process.env.MEDIA_PROVIDER_CACHE_TTL || 30) || 30;
+
+    const resolvedFavoritesName = (process.env.BEOLINK_FAVORITES_NAME || 'Beolink Favorites').trim();
+    this.favoritesName = resolvedFavoritesName || 'Beolink Favorites';
+
+    const resolvedIconProxy = (process.env.RADIO_ICON_PROXY || 'beolink').trim();
+    this.iconProxyId = resolvedIconProxy || 'beolink';
+
+    const providerLabelEnv = (process.env.BEOLINK_PROVIDER_LABEL || '').trim();
+    const derivedLabel = this.favoritesName.replace(/\s+Favorites$/i, '');
+    this.providerLabel = providerLabelEnv || derivedLabel || 'Beolink';
+
+    const serviceIdEnv = (process.env.BEOLINK_SERVICE_ID || 'beolink').trim();
+    this.serviceId = serviceIdEnv || 'beolink';
+
     this.radioService = new BeolinkRadioService({
-      host: DEFAULT_HOST,
-      ttlSeconds: DEFAULT_TTL_SECONDS,
-      favoritesName: DEFAULT_FAVORITES_NAME,
-      iconProxyId: DEFAULT_ICON_PROXY,
+      host: this.host,
+      ttlSeconds: this.ttlSeconds,
+      favoritesName: this.favoritesName,
+      iconProxyId: this.iconProxyId,
+      providerLabel: this.providerLabel,
+      serviceId: this.serviceId,
     });
   }
 
@@ -91,4 +119,3 @@ export class BeolinkProvider implements MediaProvider {
 }
 
 export default BeolinkProvider;
-

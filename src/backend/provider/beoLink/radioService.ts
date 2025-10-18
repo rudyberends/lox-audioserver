@@ -34,9 +34,13 @@ interface BeolinkRadioOptions {
   ttlSeconds: number;
   favoritesName: string;
   iconProxyId: string;
+  providerLabel: string;
+  serviceId: string;
 }
 
 const FAVORITES_ICON_KEY = 'radiocustom';
+const LOCAL_SERVICE_CMD = 'local';
+const CUSTOM_SERVICE_CMD = 'custom';
 
 /**
  * Proxies Beolink NetRadio favourites into the Loxone radio provider contract.
@@ -46,10 +50,25 @@ export class BeolinkRadioService {
 
   constructor(private readonly options: BeolinkRadioOptions) {}
 
-  /** Fetch and return the single favourites category. */
+  /** Fetch and return the root radio categories aligned with Music Assistant. */
   async getRadios(): Promise<RadioEntry[]> {
-    await this.loadFavorites();
-    return [this.buildCategoryEntry()];
+    const favorites = await this.loadFavorites();
+    const icon = favorites.find((item) => item.coverurl)?.coverurl ?? this.buildIconUrl();
+
+    return [
+      {
+        cmd: LOCAL_SERVICE_CMD,
+        name: `${this.options.providerLabel} Radio`,
+        icon,
+        root: 'start',
+      },
+      {
+        cmd: CUSTOM_SERVICE_CMD,
+        name: `${this.options.providerLabel} Custom Radios`,
+        icon,
+        root: 'start',
+      },
+    ];
   }
 
   /** Slice favourites for the requested offset/limit. */
@@ -60,8 +79,9 @@ export class BeolinkRadioService {
     offset: number,
     limit: number,
   ): Promise<RadioFolderResponse> {
-    const favorites = await this.loadFavorites();
-    const items = favorites.slice(offset, offset + limit);
+    const normalizedService = this.normalizeService(service);
+    const favorites = normalizedService === CUSTOM_SERVICE_CMD ? [] : await this.loadFavorites();
+    const items = normalizedService === CUSTOM_SERVICE_CMD ? [] : favorites.slice(offset, offset + limit);
     return {
       id: folderId || 'start',
       name: '/',
@@ -84,14 +104,33 @@ export class BeolinkRadioService {
     });
   }
 
+  private normalizeService(service: string): string {
+    if (!service) {
+      return LOCAL_SERVICE_CMD;
+    }
+    const lowered = service.toLowerCase();
+    if (lowered === this.options.serviceId.toLowerCase()) {
+      return LOCAL_SERVICE_CMD;
+    }
+    if (lowered === 'favorites') {
+      return LOCAL_SERVICE_CMD;
+    }
+    if (lowered === CUSTOM_SERVICE_CMD) {
+      return CUSTOM_SERVICE_CMD;
+    }
+    if (lowered === LOCAL_SERVICE_CMD) {
+      return LOCAL_SERVICE_CMD;
+    }
+    return lowered;
+  }
+
   /** Fetches BeoContent favourites with simple TTL caching. */
   private async loadFavorites(): Promise<RadioFolderItem[]> {
     const now = Date.now();
     if (this.cache && now - this.cache.fetchedAt < this.options.ttlSeconds * 1000) {
       return this.cache.items;
     }
-
-    const url = `http://${this.options.host}:8080/BeoContent/radio/netRadioProfile/favoriteList/id%3df1/favoriteListStation`;
+    const url = `http://${this.options.host}:8080/BeoContent/radio/netRadioProfile/favoriteList/favorite/favoriteListStation`;
     try {
       const response = await axios.get<FavoriteStationResponse>(url, { timeout: 5000 });
       const rawStations = response.data.favoriteListStationList?.favoriteListStation ?? [];
@@ -109,21 +148,14 @@ export class BeolinkRadioService {
     }
   }
 
-  /** Builds the UI category entry referencing the favourites list. */
-  private buildCategoryEntry(): RadioEntry {
+  /** Reuses the legacy icon used for Beolink favourites. */
+  private buildIconUrl(): string {
     const iconHost =
       process.env.RADIO_ICON_HOST ||
       config.audioserver?.ip ||
       process.env.AUDIOSERVER_IP ||
       '127.0.0.1';
-    const icon = `http://${iconHost}:7091/imgcache/?item=${FAVORITES_ICON_KEY}&viaproxy=${this.options.iconProxyId}`;
-
-    return {
-      cmd: 'favorites',
-      name: this.options.favoritesName,
-      icon,
-      root: 'start',
-    };
+    return `http://${iconHost}:7091/imgcache/?item=${FAVORITES_ICON_KEY}&viaproxy=${this.options.iconProxyId}`;
   }
 }
 

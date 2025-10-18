@@ -11,6 +11,7 @@ import { getMusicAssistantPlayers } from '../backend/zone/MusicAssistant/backend
 import { setMusicAssistantSuggestions } from '../config/adminState';
 import { resetMediaProvider } from '../backend/provider/factory';
 import logger, { logStreamEmitter } from '../utils/troxorlogger';
+import { discoverBeolinkDevices } from '../utils/discovery/beolinkDiscovery';
 
 /**
  * HTTP layer powering the admin configuration UI and log streaming endpoints.
@@ -248,6 +249,25 @@ function registerDefaultRoutes() {
       const message = error instanceof Error ? error.message : String(error);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, message }));
+    }
+  });
+
+  registerConfigRoute('GET', '/admin/api/beolink/devices', async (req, res) => {
+    try {
+      const requestUrl = new URL(req.url || '', 'http://localhost');
+      const forceParam = requestUrl.searchParams.get('force');
+      const force = forceParam === '1' || forceParam === 'true';
+      const timeoutParam = requestUrl.searchParams.get('timeout');
+      const parsedTimeout = Number(timeoutParam);
+      const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 500 ? parsedTimeout : undefined;
+      const devices = await discoverBeolinkDevices(force, timeoutMs);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ devices }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error(`[configHttp] Failed to discover Beolink devices: ${message}`);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, message: 'Failed to discover Beolink devices' }));
     }
   });
 

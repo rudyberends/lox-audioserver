@@ -69,7 +69,7 @@ export function mapNotificationToTrack(
       };
 
       if (data.playQueueItemId && data.playQueueItemId === 'AUX') {
-        trackInfo.audiotype = 1;
+        trackInfo.audiotype = 3;
         trackInfo.duration = 0;
       }
       return trackInfo;

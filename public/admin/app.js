@@ -32,11 +32,18 @@ const state = {
     ip: '',
     maPlayerId: '',
     maSuggestions: [],
+    beolinkDeviceId: '',
     error: '',
   },
   connectedProvider: {
     type: '',
     options: {},
+  },
+  beolinkDiscovery: {
+    devices: [],
+    loading: false,
+    error: '',
+    lastFetched: 0,
   },
   extensionPlaceholders: [],
   loadingConfig: true,
@@ -68,6 +75,7 @@ let zonesRefreshBusy = false;
 const ZONE_REFRESH_INTERVAL = 20_000;
 const MAX_EXTENSION_COUNT = 10;
 const AUDIO_SERVER_SERIAL = '504F94FF1BB3';
+const CUSTOM_BEOLINK_DEVICE_VALUE = '__custom__';
 
 function scheduleRender() {
   if (renderScheduled) return;
@@ -1582,7 +1590,8 @@ function renderSelect(id, label, values, selectedValue = '', extraAttrs = '') {
       const optionLabelRaw = value.label ?? value.value ?? '';
       const optionLabel = escapeHtml(optionLabelRaw);
       const isSelected = value.value === selectedValue;
-      return `<option value="${optionValue}" ${isSelected ? 'selected' : ''}>${optionLabel}</option>`;
+      const disabledAttr = value.disabled ? 'disabled aria-disabled="true"' : '';
+      return `<option value="${optionValue}" ${isSelected ? 'selected' : ''} ${disabledAttr}>${optionLabel}</option>`;
     }
     const optionValueRaw = value ?? '';
     const optionValue = escapeHtml(optionValueRaw);
@@ -1715,13 +1724,23 @@ function renderBackendModal() {
   const zone = state.config?.zones.find((z) => z.id === modalState.zoneId);
   if (!zone) {
     if (typeof document !== 'undefined') document.body.classList.remove('modal-open');
-    state.modal = { open: false, zoneId: null, backend: '', ip: '', maPlayerId: '', maSuggestions: [], error: '' };
+    state.modal = {
+      open: false,
+      zoneId: null,
+      backend: '',
+      ip: '',
+      maPlayerId: '',
+      maSuggestions: [],
+      beolinkDeviceId: '',
+      error: '',
+    };
     return '<div id="backend-modal" class="backend-modal backend-modal--hidden" aria-hidden="true"></div>';
   }
 
   const backendOptions = state.options?.backends || [];
   const backend = modalState.backend || zone.backend || backendOptions[0] || '';
   const cache = ensureMusicAssistantCache();
+  const beolinkDiscovery = ensureBeolinkDiscoveryState();
   const knownIps = Object.keys(cache.playersByIp || {});
   const cacheFallbackIp = cache.lastIP || knownIps[0] || '';
   const isLoopback = (value = '') => {
@@ -1735,6 +1754,12 @@ function renderBackendModal() {
   if (backend !== 'BackendMusicAssistant' && isLoopback(ipValue)) {
     ipValue = '';
     if (state.modal) state.modal.ip = '';
+  }
+  if (backend === 'BackendBeolink' && modalState.beolinkDeviceId && modalState.beolinkDeviceId !== CUSTOM_BEOLINK_DEVICE_VALUE) {
+    const selectedBeolink = beolinkDiscovery.devices.find((device) => device && device.id === modalState.beolinkDeviceId);
+    if (selectedBeolink?.address) {
+      ipValue = selectedBeolink.address;
+    }
   }
 
   let maSuggestions = [];
@@ -1770,17 +1795,93 @@ function renderBackendModal() {
     return { value, label };
   });
   const backendSelect = renderSelect('modal-backend', 'Backend', backendOptionsLabels, backend, 'class="backend-modal__select"');
-  const ipAttrs = backend === 'DummyBackend' ? 'disabled aria-disabled="true"' : '';
+  const manualAllowed = isBeolinkManualAllowed(beolinkDiscovery);
+  const manualSelected = modalState.beolinkDeviceId === CUSTOM_BEOLINK_DEVICE_VALUE;
   const ipPlaceholderValue = backend === 'BackendMusicAssistant' ? cacheFallbackIp : '';
-  const ipPlaceholder = ipPlaceholderValue ? `placeholder="${escapeHtml(ipPlaceholderValue)}"` : '';
-  const ipField = renderInput(
-    'modal-backend-ip',
-    backend === 'BackendMusicAssistant' ? 'Music Assistant Host' : 'Backend IP',
-    backend === 'DummyBackend' ? '' : ipValue,
-    'text',
-    false,
-    `${ipAttrs} ${ipPlaceholder}`.trim(),
-  );
+  let ipField = '';
+  if (backend === 'BackendBeolink') {
+    // IP field rendered within the Beolink section to reuse existing layout.
+  } else {
+    const ipAttrParts = [];
+    if (backend === 'DummyBackend') {
+      ipAttrParts.push('disabled aria-disabled="true"');
+    }
+    if (ipPlaceholderValue) {
+      ipAttrParts.push(`placeholder="${escapeHtml(ipPlaceholderValue)}"`);
+    }
+    ipField = renderInput(
+      'modal-backend-ip',
+      backend === 'BackendMusicAssistant' ? 'Music Assistant Host' : 'Backend IP',
+      backend === 'DummyBackend' ? '' : ipValue,
+      'text',
+      false,
+      ipAttrParts.join(' ').trim(),
+    );
+  }
+
+  let beolinkSection = '';
+  if (backend === 'BackendBeolink') {
+    const devices = Array.isArray(beolinkDiscovery.devices) ? beolinkDiscovery.devices : [];
+    const selectedBeolinkId = modalState.beolinkDeviceId || '';
+    const shouldShowManualField =
+      manualSelected
+      || (manualAllowed && !beolinkDiscovery.loading && (!devices.length || beolinkDiscovery.error));
+    const placeholderLabel = beolinkDiscovery.loading
+      ? 'Searching…'
+      : devices.length
+        ? 'Select a device'
+        : manualAllowed
+          ? 'No devices discovered'
+          : 'Select a device';
+    const beolinkOptions = [
+      { value: '', label: placeholderLabel },
+      ...devices.map((device) => ({
+        value: device.id,
+        label: device.address ? `${device.name} (${device.address})` : device.name,
+      })),
+    ];
+    if (manualAllowed) {
+      beolinkOptions.push({
+        value: CUSTOM_BEOLINK_DEVICE_VALUE,
+        label: devices.length ? 'Enter IP manually' : 'Enter IP manually',
+      });
+    }
+    const beolinkPrimaryField = shouldShowManualField
+      ? renderInput(
+        'modal-backend-ip',
+        'Beolink IP',
+        ipValue,
+        'text',
+        false,
+        'autocomplete="off" inputmode="decimal" placeholder="e.g. 192.168.1.200"',
+      )
+      : `${renderSelect('modal-beolink-device', 'Beolink Device', beolinkOptions, selectedBeolinkId, 'class="backend-modal__select"')}
+         <input type="hidden" id="modal-backend-ip" value="${escapeHtml(ipValue)}" />`;
+    const refreshDisabled = beolinkDiscovery.loading ? 'disabled aria-disabled="true"' : '';
+    const beolinkMessages = [];
+    if (beolinkDiscovery.loading) {
+      beolinkMessages.push('<p class="backend-modal__beolink-message">Searching the network for Beolink devices…</p>');
+    }
+    if (!devices.length && !beolinkDiscovery.loading) {
+      beolinkMessages.push('<p class="backend-modal__beolink-message">No Beolink devices found. Ensure they are powered on and on the same network.</p>');
+    }
+    if (beolinkDiscovery.error) {
+      beolinkMessages.push(`<p class="backend-modal__error backend-modal__error--inline">${escapeHtml(beolinkDiscovery.error)}</p>`);
+    }
+    if (!manualAllowed && !beolinkDiscovery.loading) {
+      beolinkMessages.push('<p class="backend-modal__beolink-message">Manual entry activates when discovery fails.</p>');
+    }
+    // No extra message when manual entry is visible; the input label already clarifies.
+    beolinkSection = `
+      <div class="backend-modal__beolink">
+        ${beolinkPrimaryField}
+        <div class="backend-modal__beolink-actions">
+          <button type="button" class="tertiary" data-action="modal-refresh-beolink" ${refreshDisabled}>${beolinkDiscovery.loading ? 'Searching…' : 'Rescan devices'}</button>
+        </div>
+        ${beolinkMessages.join('')}
+      </div>
+    `;
+  }
 
   let maField = '';
   let maActions = '';
@@ -1840,7 +1941,7 @@ function renderBackendModal() {
             </aside>
             <div class="backend-modal__form">
               ${backendSelect}
-              ${ipField}
+              ${backend === 'BackendBeolink' ? `${beolinkSection}${ipField}` : ipField}
               ${backend === 'BackendMusicAssistant' ? `<div class="backend-modal__ma">${maField}${maActions}</div>` : ''}
             </div>
           </div>
@@ -1883,6 +1984,7 @@ function openBackendModal(zoneId) {
     ip: defaultIp,
     maPlayerId: zone.maPlayerId || '',
     maSuggestions: suggestions,
+    beolinkDeviceId: '',
     error: '',
   };
   if (backend === 'BackendMusicAssistant') {
@@ -1893,6 +1995,19 @@ function openBackendModal(zoneId) {
     if (!state.modal.maPlayerId && suggestions.length === 1) {
       state.modal.maPlayerId = suggestions[0].id || '';
     }
+  }
+  if (backend === 'BackendBeolink') {
+    const discovery = ensureBeolinkDiscoveryState();
+    const trimmedIp = (state.modal.ip || '').trim();
+    const matched = discovery.devices.find((device) => device.address === trimmedIp || device.host === trimmedIp);
+    state.modal.beolinkDeviceId = matched ? matched.id : (trimmedIp ? CUSTOM_BEOLINK_DEVICE_VALUE : '');
+    loadBeolinkDevices().catch((error) => {
+      console.error('Failed to load Beolink devices', error);
+      const discoveryState = ensureBeolinkDiscoveryState();
+      discoveryState.error = `Discovery failed: ${error instanceof Error ? error.message : String(error)}`;
+      discoveryState.loading = false;
+      scheduleRender();
+    });
   }
   render();
 }
@@ -1905,6 +2020,7 @@ function closeBackendModal(shouldRender = true) {
     ip: '',
     maPlayerId: '',
     maSuggestions: [],
+    beolinkDeviceId: '',
     error: '',
   };
   if (typeof document !== 'undefined') {
@@ -1918,6 +2034,26 @@ function updateModalState(patch = {}) {
     ...(state.modal || {}),
     ...patch,
   };
+}
+
+function ensureBeolinkDiscoveryState() {
+  if (!state.beolinkDiscovery || typeof state.beolinkDiscovery !== 'object') {
+    state.beolinkDiscovery = { devices: [], loading: false, error: '', lastFetched: 0 };
+  }
+  const discovery = state.beolinkDiscovery;
+  if (!Array.isArray(discovery.devices)) discovery.devices = [];
+  if (typeof discovery.loading !== 'boolean') discovery.loading = false;
+  if (typeof discovery.error !== 'string') discovery.error = '';
+  if (!Number.isFinite(discovery.lastFetched)) discovery.lastFetched = 0;
+  return discovery;
+}
+
+function isBeolinkManualAllowed(discovery = ensureBeolinkDiscoveryState()) {
+  if (state.modal?.backend !== 'BackendBeolink') return false;
+  if (state.modal.beolinkDeviceId === CUSTOM_BEOLINK_DEVICE_VALUE) return true;
+  if (discovery.error) return true;
+  if (!discovery.loading && (!Array.isArray(discovery.devices) || discovery.devices.length === 0)) return true;
+  return false;
 }
 
 function ensureMusicAssistantCache() {
@@ -1971,13 +2107,22 @@ function bindModalEvents() {
   const backendSelectEl = modal.querySelector('#modal-backend');
   if (backendSelectEl instanceof HTMLSelectElement) {
     backendSelectEl.addEventListener('change', (event) => {
-      updateModalState({ backend: event.target.value, error: '' });
-      if (event.target.value === 'DummyBackend') {
-        updateModalState({ ip: '' });
+      const selectedBackend = event.target.value;
+      const basePatch = { backend: selectedBackend, error: '' };
+      const patch = { ...basePatch };
+      if (selectedBackend === 'DummyBackend') {
+        patch.ip = '';
       }
-      if (event.target.value !== 'BackendMusicAssistant') {
-        updateModalState({ maPlayerId: '' });
-      } else {
+      if (selectedBackend !== 'BackendMusicAssistant') {
+        patch.maPlayerId = '';
+        patch.maSuggestions = [];
+      }
+      if (selectedBackend !== 'BackendBeolink') {
+        patch.beolinkDeviceId = '';
+      }
+      updateModalState(patch);
+
+      if (selectedBackend === 'BackendMusicAssistant') {
         const cache = ensureMusicAssistantCache();
         const updates = {};
         const knownIps = Object.keys(cache.playersByIp || {});
@@ -2009,6 +2154,23 @@ function bindModalEvents() {
           updateModalState(updates);
         }
       }
+
+      if (selectedBackend === 'BackendBeolink') {
+        const trimmedIp = (state.modal.ip || '').trim();
+        const discovery = ensureBeolinkDiscoveryState();
+        const existingMatch = discovery.devices.find((device) => device.address === trimmedIp || device.host === trimmedIp);
+        updateModalState({
+          beolinkDeviceId: existingMatch ? existingMatch.id : (trimmedIp ? CUSTOM_BEOLINK_DEVICE_VALUE : ''),
+        });
+        loadBeolinkDevices().catch((error) => {
+          console.error('Failed to load Beolink devices', error);
+          const discoveryState = ensureBeolinkDiscoveryState();
+          discoveryState.error = `Discovery failed: ${error instanceof Error ? error.message : String(error)}`;
+          discoveryState.loading = false;
+          render();
+        });
+      }
+
       render();
     });
   }
@@ -2060,6 +2222,46 @@ function bindModalEvents() {
   if (maFieldEl instanceof HTMLSelectElement) {
     maFieldEl.addEventListener('change', (event) => {
       updateModalState({ maPlayerId: event.target.value, error: '' });
+    });
+  }
+
+  const beolinkSelectEl = modal.querySelector('#modal-beolink-device');
+  if (beolinkSelectEl instanceof HTMLSelectElement) {
+    beolinkSelectEl.addEventListener('change', (event) => {
+      const selection = event.target.value;
+      const discovery = ensureBeolinkDiscoveryState();
+      const manualAllowed = isBeolinkManualAllowed(discovery);
+      if (selection === CUSTOM_BEOLINK_DEVICE_VALUE) {
+        if (!manualAllowed) {
+          event.target.value = '';
+          return;
+        }
+        updateModalState({ beolinkDeviceId: selection, error: '' });
+      } else if (selection) {
+        const device = discovery.devices.find((candidate) => candidate && candidate.id === selection);
+        const updatedIp = device?.address || '';
+        updateModalState({
+          beolinkDeviceId: selection,
+          ip: updatedIp,
+          error: '',
+        });
+      } else {
+        updateModalState({ beolinkDeviceId: '', error: '' });
+      }
+      render();
+    });
+  }
+
+  const beolinkRefreshButton = modal.querySelector('[data-action="modal-refresh-beolink"]');
+  if (beolinkRefreshButton instanceof HTMLButtonElement) {
+    beolinkRefreshButton.addEventListener('click', () => {
+      loadBeolinkDevices(true).catch((error) => {
+        console.error('Failed to refresh Beolink devices', error);
+        const discovery = ensureBeolinkDiscoveryState();
+        discovery.error = `Discovery failed: ${error instanceof Error ? error.message : String(error)}`;
+        discovery.loading = false;
+        render();
+      });
     });
   }
 
@@ -2412,6 +2614,128 @@ async function connectProvider() {
     setStatus('Provider configuration saved.');
   } catch (error) {
     setStatus(`Failed to connect provider: ${error instanceof Error ? error.message : String(error)}`, true);
+  }
+}
+
+function normalizeBeolinkDevice(raw = {}) {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = typeof raw.id === 'string' && raw.id ? raw.id.trim() : '';
+  const address = typeof raw.address === 'string' && raw.address ? raw.address.trim() : '';
+  if (!id || !address) return null;
+  const name = typeof raw.name === 'string' && raw.name ? raw.name.trim() : '';
+  const host = typeof raw.host === 'string' && raw.host ? raw.host.trim() : address;
+  const port = Number.isFinite(raw.port) ? Number(raw.port) : 0;
+  return {
+    id,
+    address,
+    host,
+    name: name || host || address,
+    port,
+  };
+}
+
+async function loadBeolinkDevices(force = false) {
+  const discovery = ensureBeolinkDiscoveryState();
+  const now = Date.now();
+  if (!force && discovery.loading) {
+    return discovery.devices;
+  }
+  if (!force && discovery.devices.length && now - discovery.lastFetched < 15_000) {
+    return discovery.devices;
+  }
+  discovery.loading = true;
+  discovery.error = '';
+  scheduleRender();
+  try {
+    const url = force ? '/admin/api/beolink/devices?force=1' : '/admin/api/beolink/devices';
+    const response = await fetch(url);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`);
+    const normalized = Array.isArray(data.devices)
+      ? data.devices.map((device) => normalizeBeolinkDevice(device)).filter(Boolean)
+      : [];
+    normalized.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    discovery.devices = normalized;
+    discovery.lastFetched = Date.now();
+    discovery.error = '';
+    if (state.modal?.open && state.modal.backend === 'BackendBeolink') {
+      syncBeolinkModalSelection();
+      render();
+    } else {
+      scheduleRender();
+    }
+    return normalized;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    discovery.error = message;
+    discovery.lastFetched = Date.now();
+    console.error('Beolink discovery failed', error);
+    if (state.modal?.open && state.modal.backend === 'BackendBeolink') {
+      syncBeolinkModalSelection();
+    }
+    render();
+    return discovery.devices;
+  } finally {
+    discovery.loading = false;
+    scheduleRender();
+  }
+}
+
+function syncBeolinkModalSelection() {
+  if (!state.modal?.open || state.modal.backend !== 'BackendBeolink') return;
+  const discovery = ensureBeolinkDiscoveryState();
+  const devices = Array.isArray(discovery.devices) ? discovery.devices : [];
+  const currentId = state.modal.beolinkDeviceId || '';
+  const currentIp = (state.modal.ip || '').trim();
+  const updates = {};
+
+  let effectiveId = currentId;
+  let effectiveIp = currentIp;
+
+  const manualAllowed = isBeolinkManualAllowed(discovery);
+
+  if (!manualAllowed && effectiveId === CUSTOM_BEOLINK_DEVICE_VALUE) {
+    const fallbackDevice = devices[0];
+    effectiveId = fallbackDevice ? fallbackDevice.id : '';
+    if (fallbackDevice?.address) {
+      updates.ip = fallbackDevice.address;
+      effectiveIp = fallbackDevice.address;
+    }
+    updates.beolinkDeviceId = effectiveId;
+  }
+
+  if (currentId && currentId !== CUSTOM_BEOLINK_DEVICE_VALUE) {
+    const matched = devices.find((device) => device.id === currentId);
+    if (matched) {
+      if (matched.address && matched.address !== currentIp) {
+        updates.ip = matched.address;
+        effectiveIp = matched.address;
+      }
+    } else {
+      updates.beolinkDeviceId = '';
+      effectiveId = '';
+    }
+  }
+
+  if (!effectiveId && effectiveIp) {
+    const matchByIp = devices.find((device) => device.address === effectiveIp || device.host === effectiveIp);
+    if (matchByIp) {
+      updates.beolinkDeviceId = matchByIp.id;
+      updates.ip = matchByIp.address;
+      effectiveId = matchByIp.id;
+      effectiveIp = matchByIp.address;
+    }
+  }
+
+  if (manualAllowed && (discovery.error || devices.length === 0) && effectiveId !== CUSTOM_BEOLINK_DEVICE_VALUE) {
+    updates.beolinkDeviceId = CUSTOM_BEOLINK_DEVICE_VALUE;
+  } else if (!effectiveId && !effectiveIp && devices.length === 1) {
+    updates.beolinkDeviceId = devices[0].id;
+    updates.ip = devices[0].address;
+  }
+
+  if (Object.keys(updates).length) {
+    updateModalState(updates);
   }
 }
 
