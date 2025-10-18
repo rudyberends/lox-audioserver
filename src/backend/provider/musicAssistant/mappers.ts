@@ -20,6 +20,9 @@ import { MediaFolderItem, PlaylistItem, RadioFolderItem } from '../types';
 
 let musicAssistantBaseUrl = '';
 const LOCAL_LIBRARY_ORIGIN_NAS = 1;
+const DEFAULT_THUMBNAIL_SIZE = 0;
+const DEFAULT_COVER_SIZE = 512;
+const DEFAULT_PLAYBACK_COVER_SIZE = 1024;
 
 export function setMusicAssistantBaseUrl(host: string, port: number): void {
   musicAssistantBaseUrl = `http://${host}:${port}`;
@@ -36,15 +39,22 @@ export function mapAlbumToFolderItem(
   );
   const key = buildLibraryKey('album', provider, rawId, fallbackProvider);
   const name = extractName(album) ?? rawId;
-  const cover = resolveArtwork(album, [album?.coverurl, album?.thumbnail, album?.image]);
+  const artworkSource = selectArtworkCandidate(album, [album?.coverurl, album?.thumbnail, album?.image]);
+  const coverHighRes = buildArtworkUrl(artworkSource, provider, DEFAULT_PLAYBACK_COVER_SIZE);
+  const cover = buildArtworkUrl(artworkSource, provider, DEFAULT_COVER_SIZE);
+  const thumbnail = buildArtworkUrl(artworkSource, provider, DEFAULT_THUMBNAIL_SIZE);
+  const finalCover = cover || thumbnail || coverHighRes || '';
+  const finalThumbnail = thumbnail || cover || coverHighRes || '';
+  const finalHighRes = coverHighRes || cover || thumbnail || '';
 
   return {
     id: key,
     name,
     cmd: key,
     type: FileType.Folder,
-    coverurl: cover,
-    thumbnail: cover,
+    coverurl: finalCover,
+    thumbnail: finalThumbnail,
+    coverurlHighRes: finalHighRes,
     audiopath: uri,
     items: safeNumber(album?.track_count),
     album: name,
@@ -65,15 +75,22 @@ export function mapArtistToFolderItem(
     extractUri(artist, 'artist', rawId, provider) ?? buildLibraryUri('artist', rawId, provider),
   );
   const key = buildLibraryKey('artist', provider, rawId, fallbackProvider);
-  const cover = resolveArtwork(artist, [artist?.coverurl, artist?.thumbnail, artist?.image]);
+  const artworkSource = selectArtworkCandidate(artist, [artist?.coverurl, artist?.thumbnail, artist?.image]);
+  const coverHighRes = buildArtworkUrl(artworkSource, provider, DEFAULT_PLAYBACK_COVER_SIZE);
+  const cover = buildArtworkUrl(artworkSource, provider, DEFAULT_COVER_SIZE);
+  const thumbnail = buildArtworkUrl(artworkSource, provider, DEFAULT_THUMBNAIL_SIZE);
+  const finalCover = cover || thumbnail || coverHighRes || '';
+  const finalThumbnail = thumbnail || cover || coverHighRes || '';
+  const finalHighRes = coverHighRes || cover || thumbnail || '';
 
   return {
     id: key,
     name: extractName(artist) ?? rawId,
     cmd: key,
     type: FileType.Folder,
-    coverurl: cover,
-    thumbnail: cover,
+    coverurl: finalCover,
+    thumbnail: finalThumbnail,
+    coverurlHighRes: finalHighRes,
     audiopath: uri,
     artist: extractArtist(artist) ?? extractName(artist) ?? undefined,
     tag: 'artist',
@@ -99,6 +116,8 @@ export function mapTrackToMediaItem(
   let playlistCommandUri: string | undefined;
   let playlistName: string | undefined;
   let playlistCover: string | undefined;
+  let playlistThumbnail: string | undefined;
+  let playlistHighRes: string | undefined;
   if (albumContext) {
     const albumRawId =
       extractItemId(albumContext) ??
@@ -106,7 +125,17 @@ export function mapTrackToMediaItem(
       extractName(albumContext) ??
       '';
     playlistName = extractName(albumContext) ?? albumRawId;
-    playlistCover = resolveArtwork(albumContext, [albumContext?.coverurl, albumContext?.thumbnail, albumContext?.image]);
+    const albumArtworkSource = selectArtworkCandidate(albumContext, [
+      albumContext?.coverurl,
+      albumContext?.thumbnail,
+      albumContext?.image,
+    ]);
+    playlistHighRes = buildArtworkUrl(albumArtworkSource, provider, DEFAULT_PLAYBACK_COVER_SIZE) || undefined;
+    playlistCover = buildArtworkUrl(albumArtworkSource, provider, DEFAULT_COVER_SIZE) || playlistHighRes || undefined;
+    playlistThumbnail =
+      buildArtworkUrl(albumArtworkSource, provider, DEFAULT_THUMBNAIL_SIZE) ||
+      playlistCover ||
+      playlistHighRes;
     playlistCommandUri =
       normalizeMediaUri(
         extractUri(albumContext, 'album', albumRawId, provider) ??
@@ -114,8 +143,13 @@ export function mapTrackToMediaItem(
       );
   }
 
-  const trackCover = resolveArtwork(track, [track?.coverurl, track?.thumbnail, track?.image]);
-  const cover = trackCover || playlistCover;
+  const trackArtworkSource = selectArtworkCandidate(track, [track?.coverurl, track?.thumbnail, track?.image]);
+  const trackHighRes = buildArtworkUrl(trackArtworkSource, provider, DEFAULT_PLAYBACK_COVER_SIZE);
+  const trackCover = buildArtworkUrl(trackArtworkSource, provider, DEFAULT_COVER_SIZE);
+  const trackThumbnail = buildArtworkUrl(trackArtworkSource, provider, DEFAULT_THUMBNAIL_SIZE);
+  const cover = trackCover || playlistCover || trackHighRes || playlistHighRes || '';
+  const thumbnail = trackThumbnail || playlistThumbnail || trackCover || playlistCover || trackHighRes || playlistHighRes || '';
+  const coverHighRes = trackHighRes || playlistHighRes || trackCover || playlistCover || trackThumbnail || playlistThumbnail || '';
 
   return {
     id: key,
@@ -123,8 +157,9 @@ export function mapTrackToMediaItem(
     cmd: key,
     type: FileType.File,
     audiopath: uri,
-    coverurl: cover ?? '',
-    thumbnail: cover,
+    coverurl: cover,
+    thumbnail,
+    coverurlHighRes: coverHighRes,
     provider,
     rawId,
     album: extractAlbum(track) ?? extractName(albumContext) ?? undefined,
@@ -160,6 +195,8 @@ export function mapTrackToPlaylistItem(
   let playlistCommandUri: string | undefined;
   let playlistName: string | undefined;
   let playlistCover: string | undefined;
+  let playlistThumbnail: string | undefined;
+  let playlistHighRes: string | undefined;
   let playlistProviderInstanceId: string | undefined;
 
   if (playlistContext) {
@@ -169,21 +206,40 @@ export function mapTrackToPlaylistItem(
       extractName(playlistContext) ??
       '';
     playlistName = extractName(playlistContext) ?? playlistRawId;
-    playlistCover = resolveArtwork(playlistContext, [
+    const inferredPlaylistProvider = extractProvider(playlistContext) ?? provider;
+    const playlistArtworkSource = selectArtworkCandidate(playlistContext, [
       playlistContext?.playlistCover,
       playlistContext?.coverurl,
       playlistContext?.thumbnail,
       playlistContext?.image,
     ]);
-    playlistProviderInstanceId = extractProvider(playlistContext) ?? provider;
+    playlistHighRes =
+      buildArtworkUrl(playlistArtworkSource, inferredPlaylistProvider, DEFAULT_PLAYBACK_COVER_SIZE) || undefined;
+    playlistCover =
+      buildArtworkUrl(playlistArtworkSource, inferredPlaylistProvider, DEFAULT_COVER_SIZE) ||
+      playlistHighRes ||
+      undefined;
+    playlistThumbnail =
+      buildArtworkUrl(playlistArtworkSource, inferredPlaylistProvider, DEFAULT_THUMBNAIL_SIZE) ||
+      playlistCover ||
+      playlistHighRes;
+    playlistProviderInstanceId = inferredPlaylistProvider;
     const rawPlaylistUri =
       extractUri(playlistContext, 'playlist', playlistRawId, playlistProviderInstanceId) ??
       buildPlaylistUri(playlistRawId, playlistProviderInstanceId);
     playlistCommandUri = toPlaylistCommandUri(rawPlaylistUri, playlistProviderInstanceId, playlistRawId);
   }
 
-  const trackCover = resolveArtwork(track, [track?.coverurl, track?.thumbnail, track?.image]);
-  const cover = trackCover || playlistCover;
+  const trackArtworkSource = selectArtworkCandidate(track, [track?.coverurl, track?.thumbnail, track?.image]);
+  const trackHighRes = buildArtworkUrl(trackArtworkSource, provider, DEFAULT_PLAYBACK_COVER_SIZE);
+  const trackCover = buildArtworkUrl(trackArtworkSource, provider, DEFAULT_COVER_SIZE);
+  const trackThumbnail = buildArtworkUrl(trackArtworkSource, provider, DEFAULT_THUMBNAIL_SIZE);
+  const cover =
+    trackCover || playlistCover || trackHighRes || playlistHighRes || trackThumbnail || playlistThumbnail || '';
+  const thumbnail =
+    trackThumbnail || playlistThumbnail || trackCover || playlistCover || trackHighRes || playlistHighRes || '';
+  const coverHighRes =
+    trackHighRes || playlistHighRes || trackCover || playlistCover || trackThumbnail || playlistThumbnail || '';
 
   if (!playlistProviderInstanceId) {
     playlistProviderInstanceId = provider;
@@ -193,8 +249,9 @@ export function mapTrackToPlaylistItem(
     id: key,
     name,
     audiopath: uri,
-    coverurl: cover ?? '',
-    thumbnail: cover,
+    coverurl: cover,
+    thumbnail,
+    coverurlHighRes: coverHighRes,
     type: FileType.File,
     provider,
     providerInstanceId: provider,
@@ -206,7 +263,7 @@ export function mapTrackToPlaylistItem(
     playlistCommandUri,
     playlistId: playlistCommandUri,
     playlistName,
-    playlistCover: playlistCover ?? cover,
+    playlistCover: playlistHighRes ?? playlistCover ?? cover,
     playlistProviderInstanceId,
     playlistStartItem: uri,
   };
@@ -223,14 +280,26 @@ export function mapPlaylistToItem(
     buildPlaylistUri(rawId, provider);
   const uri = toPlaylistCommandUri(rawUri, provider, rawId);
   const name = extractName(playlist) ?? rawId;
-  const cover = resolveArtwork(playlist, [playlist?.playlistCover, playlist?.coverurl, playlist?.thumbnail, playlist?.image]);
+  const artworkSource = selectArtworkCandidate(playlist, [
+    playlist?.playlistCover,
+    playlist?.coverurl,
+    playlist?.thumbnail,
+    playlist?.image,
+  ]);
+  const coverHighRes = buildArtworkUrl(artworkSource, provider, DEFAULT_PLAYBACK_COVER_SIZE);
+  const cover = buildArtworkUrl(artworkSource, provider, DEFAULT_COVER_SIZE);
+  const thumbnail = buildArtworkUrl(artworkSource, provider, DEFAULT_THUMBNAIL_SIZE);
+  const finalCover = cover || thumbnail || coverHighRes || '';
+  const finalThumbnail = thumbnail || cover || coverHighRes || '';
+  const finalHighRes = coverHighRes || cover || thumbnail || '';
 
   return {
     id: buildPlaylistKey(provider, rawId),
     name,
     audiopath: uri,
-    coverurl: cover,
-    thumbnail: cover,
+    coverurl: finalCover,
+    thumbnail: finalThumbnail,
+    coverurlHighRes: finalHighRes,
     type: FileType.PlaylistEditable,
     provider,
     providerInstanceId: provider,
@@ -238,7 +307,7 @@ export function mapPlaylistToItem(
     items: safeNumber(playlist?.track_count ?? playlist?.items?.length),
     playlistId: uri,
     playlistName: name,
-    playlistCover: cover,
+    playlistCover: finalHighRes,
     playlistProviderInstanceId: provider,
     playlistCommandUri: uri,
   };
@@ -257,30 +326,40 @@ export function mapRadioToFolderItem(
     return undefined;
   }
 
-  const cover = resolveArtwork(radio, [radio?.coverurl, radio?.thumbnail, radio?.image]);
+  const artworkSource = selectArtworkCandidate(radio, [radio?.coverurl, radio?.thumbnail, radio?.image]);
+  const coverHighRes = buildArtworkUrl(artworkSource, provider, DEFAULT_PLAYBACK_COVER_SIZE);
+  const cover = buildArtworkUrl(artworkSource, provider, DEFAULT_COVER_SIZE);
+  const thumbnail = buildArtworkUrl(artworkSource, provider, DEFAULT_THUMBNAIL_SIZE);
+  const finalCover = cover || thumbnail || coverHighRes || '';
+  const finalThumbnail = thumbnail || cover || coverHighRes || '';
+  const finalHighRes = coverHighRes || cover || thumbnail || '';
 
   return {
     id: buildRadioKey(provider, rawId, fallbackProvider),
     name,
     station: uri,
     audiopath: uri,
-    coverurl: cover,
+    coverurl: finalCover,
+    thumbnail: finalThumbnail,
+    coverurlHighRes: finalHighRes,
     sort: 'alpha',
     type: FileType.Playlist,
     provider,
   };
 }
 
-function resolveArtwork(item: any, additional: Array<string | undefined> = []): string {
-  const candidates = new Set<string>();
-  const add = (value?: string) => {
+function selectArtworkCandidate(item: any, additional: Array<string | undefined> = []): string | undefined {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const pushCandidate = (value?: string) => {
     if (typeof value !== 'string') return;
     const trimmed = value.trim();
-    if (!trimmed) return;
-    candidates.add(trimmed);
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    candidates.push(trimmed);
   };
 
-  add(extractImage(item));
+  pushCandidate(extractImage(item));
 
   const directFields = [
     'image',
@@ -296,24 +375,24 @@ function resolveArtwork(item: any, additional: Array<string | undefined> = []): 
     'logo',
     'poster',
   ];
-  for (const field of directFields) add(item?.[field]);
+  for (const field of directFields) pushCandidate(item?.[field]);
 
   const metadata = item?.metadata;
   if (metadata && typeof metadata === 'object') {
-    add(metadata.image);
-    add(metadata.cover);
-    add(metadata.thumbnail);
-    add(metadata.icon);
+    pushCandidate(metadata.image);
+    pushCandidate(metadata.cover);
+    pushCandidate(metadata.thumbnail);
+    pushCandidate(metadata.icon);
     const metadataImages = Array.isArray(metadata.images) ? metadata.images : [];
     for (const entry of metadataImages) {
       if (typeof entry === 'string') {
-        add(entry);
+        pushCandidate(entry);
       } else if (entry && typeof entry === 'object') {
-        add(entry.path);
-        add(entry.url);
-        add(entry.href);
-        add(entry.link);
-        add(entry.src);
+        pushCandidate(entry.path);
+        pushCandidate(entry.url);
+        pushCandidate(entry.href);
+        pushCandidate(entry.link);
+        pushCandidate(entry.src);
       }
     }
   }
@@ -331,19 +410,17 @@ function resolveArtwork(item: any, additional: Array<string | undefined> = []): 
   for (const field of arrayFields) {
     if (!field) continue;
     if (typeof field === 'string') {
-      add(field);
-      continue;
-    }
-    if (Array.isArray(field)) {
+      pushCandidate(field);
+    } else if (Array.isArray(field)) {
       for (const entry of field) {
         if (typeof entry === 'string') {
-          add(entry);
+          pushCandidate(entry);
         } else if (entry && typeof entry === 'object') {
-          add(entry.path);
-          add(entry.url);
-          add(entry.href);
-          add(entry.link);
-          add(entry.src);
+          pushCandidate(entry.path);
+          pushCandidate(entry.url);
+          pushCandidate(entry.href);
+          pushCandidate(entry.link);
+          pushCandidate(entry.src);
         }
       }
     }
@@ -357,26 +434,19 @@ function resolveArtwork(item: any, additional: Array<string | undefined> = []): 
     item?.providerMapping?.image,
     item?.providerMapping?.icon,
   ];
-  providerCandidates.forEach(add);
+  providerCandidates.forEach(pushCandidate);
 
-  additional.forEach(add);
+  additional.forEach(pushCandidate);
 
-  for (const candidate of candidates) {
-    const normalized = toMusicAssistantImageUrl(candidate);
-    if (normalized) {
-      return normalized;
-    }
-  }
-
-  return '';
+  return candidates[0];
 }
 
-function toMusicAssistantImageUrl(value?: string, provider = 'builtin'): string {
+function buildArtworkUrl(value?: string, provider?: string, size = DEFAULT_THUMBNAIL_SIZE): string {
   if (!value) return '';
   const trimmed = value.trim();
   if (!trimmed) return '';
   if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed;
+    return rewriteRemoteArtwork(trimmed, size);
   }
   if (trimmed.startsWith('media://')) {
     const rest = trimmed.slice('media://'.length).replace(/^\/+/, '');
@@ -389,6 +459,26 @@ function toMusicAssistantImageUrl(value?: string, provider = 'builtin'): string 
   const normalizedPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
   const encodedOnce = encodeURIComponent(normalizedPath);
   const encodedTwice = encodeURIComponent(encodedOnce);
-  const providerParam = encodeURIComponent(provider);
-  return `${musicAssistantBaseUrl}/imageproxy?path=${encodedTwice}&provider=${providerParam}&checksum=&size=256`;
+  const providerParam = encodeURIComponent(provider ?? 'builtin');
+  return `${musicAssistantBaseUrl}/imageproxy?path=${encodedTwice}&provider=${providerParam}&checksum=&size=${size}`;
+}
+
+function rewriteRemoteArtwork(url: string, size: number): string {
+  try {
+    const parsed = new URL(url);
+    const pathSegments = parsed.pathname.split('/');
+    if (pathSegments.length > 0) {
+      const last = pathSegments[pathSegments.length - 1];
+      const match = last.match(/^(\d{2,4})x(\d{2,4})(.*)$/i);
+      if (match) {
+        const suffix = match[3] ?? '';
+        pathSegments[pathSegments.length - 1] = `${size}x${size}${suffix}`;
+        parsed.pathname = pathSegments.join('/');
+        return parsed.toString();
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return url;
 }

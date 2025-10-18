@@ -248,7 +248,11 @@ export async function audioPlaylistPlay(url: string): Promise<CommandResult> {
     ? await provider.resolvePlaylist(hostArg, canonicalPlaylist)
     : undefined;
 
-  const cover = resolved?.coverurl ?? '';
+  const cover =
+    resolved?.coverurlHighRes ??
+    resolved?.coverurl ??
+    resolved?.thumbnail ??
+    '';
   const providerHint = resolved?.provider ?? hostArg;
 
   const responseAudiopath = queryString ? `${canonicalPlaylist}?${queryString}` : canonicalPlaylist;
@@ -503,7 +507,11 @@ export async function audioLibraryPlay(url: string): Promise<CommandResult> {
     id: resolved.id || itemId,
     name: resolved.name || resolved.id || itemId,
     audiopath,
-    coverurl: resolved.coverurl ?? '',
+    coverurl:
+      resolved.coverurlHighRes ??
+      resolved.coverurl ??
+      resolved.thumbnail ??
+      '',
     items: resolved.items ?? 0,
     type: resolved.type ?? 3,
     provider: resolved.provider ?? 'library',
@@ -880,11 +888,13 @@ export async function audioPlayUrl(url: string): Promise<CommandResult> {
       resolved?.provider ??
       'musicassistant';
     const cover =
+      resolvedPlaylist?.coverurlHighRes ??
       resolvedPlaylist?.playlistCover ??
       resolvedPlaylist?.coverurl ??
       playlistContext.playlistCover ??
       playlistContext.coverurl ??
-      '';
+      playlistContext.coverurlHighRes ??
+      ''; 
     const effectiveStartItem =
       startItemParam ??
       playlistContext.playlistStartItem ??
@@ -963,7 +973,11 @@ export async function audioPlayUrl(url: string): Promise<CommandResult> {
     id: resolved?.id ?? decodedUri,
     name: resolved?.title ?? resolved?.name ?? decodedUri,
     audiopath: sanitizedAudiopath,
-    coverurl: resolved?.coverurl ?? '',
+    coverurl:
+      resolved?.coverurlHighRes ??
+      resolved?.coverurl ??
+      resolved?.thumbnail ??
+      '',
     type: resolved?.type ?? FileType.File,
     provider: resolved?.provider ?? providerFromPath ?? providerHint,
     providerInstanceId: resolved?.providerInstanceId ?? providerFromPath,

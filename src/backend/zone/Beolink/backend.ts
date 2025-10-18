@@ -9,6 +9,8 @@ import { NotificationMessage, PrimaryExperience } from './types';
 import { mapNotificationToTrack } from './stateMapper';
 import { handleBeolinkCommand } from './commands';
 import { upsertGroup, getGroupByLeader, removeGroupByLeader, getGroupByZone, removeZoneFromGroups } from '../groupTracker';
+import type { ZoneCapabilityDescriptor, ZoneCapabilityContext } from '../capabilityTypes';
+import { backendCapabilities } from '../capabilityHelper';
 
 /**
  * BackendBeolink class extends the Base backend class to handle Beolink notifications.
@@ -114,8 +116,16 @@ export default class BackendBeolink extends Backend {
 
   async cleanup(): Promise<void> {
     BackendBeolink.unregisterZone(this.playerid);
-    await this.notifyClient.close();
-    await super.cleanup();
+   await this.notifyClient.close();
+   await super.cleanup();
+  }
+
+  describeCapabilities(_context: ZoneCapabilityContext = {}): ZoneCapabilityDescriptor[] {
+    return backendCapabilities({
+      control: { status: 'native', detail: "BeoLink" },
+      content: { status: 'native' },
+      grouping: { status: 'native', detail: 'BeoLink multiroom' },
+    });
   }
 
   /**

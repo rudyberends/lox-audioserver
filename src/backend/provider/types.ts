@@ -20,6 +20,8 @@ export interface RadioFolderItem {
   station: string;
   audiopath: string;
   coverurl: string;
+  coverurlHighRes?: string;
+  thumbnail?: string;
   contentType?: string;
   sort?: string;
   type: number;
@@ -32,6 +34,7 @@ export interface RadioFolderItem {
 export interface PlaylistItem {
   audiopath: string;
   coverurl: string;
+  coverurlHighRes?: string;
   type: number;
   id?: string;
   name?: string;
@@ -71,6 +74,7 @@ export interface MediaFolderItem {
   contentType?: string;
   sort?: string;
   coverurl?: string;
+  coverurlHighRes?: string;
   audiopath?: string;
   provider?: string;
   items?: number;
