@@ -8,6 +8,11 @@ import { listProviders } from '../backend/provider/factory';
  * Responsible for persisting admin configuration to disk and translating raw JSON into runtime-safe structures.
  */
 
+export interface ZoneContentAdapterConfig {
+  type: string;
+  options?: Record<string, string>;
+}
+
 export interface ZoneConfigEntry {
   id: number;
   backend: string;
@@ -16,6 +21,7 @@ export interface ZoneConfigEntry {
   name?: string;
   source?: string;
   volumes?: ZoneVolumeConfig;
+  contentAdapter?: ZoneContentAdapterConfig;
 }
 
 export interface ZoneVolumeConfig {
@@ -154,6 +160,7 @@ function normalizeAdminConfig(raw: Partial<AdminConfig>): AdminConfig {
           name: typeof zone?.name === 'string' ? zone.name.trim() : undefined,
           source: zone?.source ? String(zone.source).trim() : undefined,
           volumes: normalizeVolumeConfig(zone?.volumes),
+          contentAdapter: normalizeContentAdapter(zone?.contentAdapter),
         }))
         .filter((zone) => Number.isFinite(zone.id) && zone.backend)
     : [];
@@ -207,6 +214,26 @@ function normalizeVolumeConfig(raw: any): ZoneVolumeConfig | undefined {
     max: coerce(raw.max),
   };
   return Object.values(result).some((value) => value !== undefined) ? result : undefined;
+}
+
+function normalizeContentAdapter(raw: any): ZoneContentAdapterConfig | undefined {
+  const type = typeof raw?.type === 'string' ? raw.type.trim() : '';
+  if (!type) return undefined;
+
+  const options: Record<string, string> = {};
+  if (raw?.options && typeof raw.options === 'object') {
+    Object.entries(raw.options).forEach(([key, value]) => {
+      const normalizedKey = String(key || '').trim();
+      if (!normalizedKey) return;
+      const normalizedValue = typeof value === 'string' ? value.trim() : value != null ? String(value) : '';
+      options[normalizedKey] = normalizedValue;
+    });
+  }
+
+  return {
+    type,
+    options: Object.keys(options).length ? options : undefined,
+  };
 }
 
 function normalizeVolumeStore(raw: any): { players: Array<{ playerid: number; volumes: ZoneVolumeConfig }> } | undefined {

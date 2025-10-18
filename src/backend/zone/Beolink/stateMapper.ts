@@ -53,7 +53,7 @@ export function mapNotificationToTrack(
     case 'NOW_PLAYING_STORED_MUSIC':
 
       return {
-        audiotype: 4,
+        audiotype: 0,
         artist: data.artist,
         album: data.album,
         title: data.name,

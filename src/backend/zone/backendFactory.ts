@@ -2,18 +2,22 @@ import Backend, { BackendProbeOptions } from './backendBaseClass';
 import BackendBeolink from './Beolink/backend';
 import BackendMusicAssistant from './MusicAssistant/backend';
 import BackendSonos from './Sonos/backend';
-import DummyBackend from './dummyBackend';
+import NullBackend from './nullBackend';
 
 interface BackendFactoryEntry {
-  new (ip: string, playerId: number, extra?: string): Backend;
+  new (ip: string, playerId: number, extra?: any): Backend;
   probe?(opts: BackendProbeOptions): Promise<void>;
+}
+
+export interface BackendCreateOptions {
+  maPlayerId?: string;
 }
 
 const backendMap: Record<string, BackendFactoryEntry> = {
   BackendBeolink: BackendBeolink as BackendFactoryEntry,
   BackendMusicAssistant: BackendMusicAssistant as BackendFactoryEntry,
   BackendSonos: BackendSonos as BackendFactoryEntry,
-  DummyBackend: DummyBackend as BackendFactoryEntry,
+  NullBackend: NullBackend as BackendFactoryEntry,
 };
 
 /** Returns the list of available backend identifiers. */
@@ -32,14 +36,17 @@ export function createBackend(
   backendName: string,
   ip: string,
   loxoneZoneId: number,
-  options: { maPlayerId?: string } = {},
+  options: BackendCreateOptions = {},
 ): Backend | null {
   const BackendClass = backendMap[backendName];
   if (!BackendClass) return null;
 
-  // Special handling for MusicAssistant
-  if (backendName === 'BackendMusicAssistant' || backendName === 'BackendBeolink') {
+  if (backendName === 'BackendMusicAssistant') {
     return new BackendClass(ip, loxoneZoneId, options.maPlayerId);
+  }
+
+  if (backendName === 'BackendBeolink') {
+    return new BackendClass(ip, loxoneZoneId, { maPlayerId: options.maPlayerId });
   }
 
   // Default: 2-arg constructor

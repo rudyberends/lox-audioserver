@@ -1,17 +1,10 @@
-/**
- * Minimal contract the Beolink command translator relies on to trigger backend actions.
- */
 import logger from '../../../utils/troxorlogger';
-
 export interface BeolinkCommandContext {
   adjustVolume(change: number): Promise<void>;
   doAction(action: string, param?: any): Promise<void>;
   servicePlay(stationId: string, payload?: Record<string, any>): Promise<void>;
 }
 
-/**
- * Maps UI command keywords to the Bang & Olufsen Beolink action strings.
- */
 const actionMap: Record<string, string> = {
   resume: 'Stream/Play',
   play: 'Stream/Play',
@@ -27,9 +20,6 @@ const actionMap: Record<string, string> = {
   shuffle: 'List/Shuffle',
 };
 
-/**
- * Routes a generic command to either the volume helper or the mapped Beolink action.
- */
 export async function handleBeolinkCommand(
   ctx: BeolinkCommandContext,
   command: string,

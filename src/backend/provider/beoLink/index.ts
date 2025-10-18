@@ -10,6 +10,7 @@ import {
   RadioFolderResponse,
 } from '../types';
 import { BeolinkRadioService } from './radioService';
+import './contentAdapter';
 
 /**
  * Beolink provider that currently exposes radio favorites while returning

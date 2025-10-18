@@ -11,6 +11,8 @@ import { handleBeolinkCommand } from './commands';
 import MusicAssistantClient from '../MusicAssistant/client';
 import { handleMusicAssistantCommand, MusicAssistantCommandContext } from '../MusicAssistant/commands';
 import { upsertGroup, getGroupByLeader, removeGroupByLeader, getGroupByZone, removeZoneFromGroups } from '../groupTracker';
+import type { ZoneCapabilityDescriptor, ZoneCapabilityContext } from '../capabilityTypes';
+import { backendCapabilities } from '../capabilityHelper';
 
 const DEFAULT_MUSIC_ASSISTANT_PORT = 8095;
 const MUSIC_ASSISTANT_ROUTED_COMMANDS = new Set(['serviceplay', 'playlistplay']);
@@ -155,6 +157,14 @@ export default class BackendBeolink extends Backend {
     await this.notifyClient.close();
     this.disposeMusicAssistantClient();
     await super.cleanup();
+  }
+
+  describeCapabilities(_context: ZoneCapabilityContext = {}): ZoneCapabilityDescriptor[] {
+    return backendCapabilities({
+      control: { status: 'native', detail: "BeoLink" },
+      content: { status: 'native' },
+      grouping: { status: 'native', detail: 'BeoLink multiroom' },
+    });
   }
 
   /**
@@ -302,29 +312,14 @@ export default class BackendBeolink extends Backend {
    */
   async sendCommand(command: string, param: any): Promise<void> {
     logger.info(`[BeoLink][zone ${this.playerid}][${command}] Sending command`);
-    let handled = false;
-    const shouldRoute = this.shouldRouteToMusicAssistant(command);
-    if (shouldRoute) {
-      handled = await this.routeCommandThroughMusicAssistant(command, param);
-      if (!handled && MUSIC_ASSISTANT_ONLY_COMMANDS.has(command)) {
-        logger.warn(
-          `[BeoLink][zone ${this.playerid}] Music Assistant routing failed for command "${command}". No fallback available.`,
-        );
-        return;
-      }
-    }
-
-    if (!handled) {
-      handled = await handleBeolinkCommand(
-        {
-          adjustVolume: (change) => this.adjustVolume(change),
-          doAction: (action, paramValue) => this.doAction(action, paramValue),
-          servicePlay: (stationId, payload) => this.servicePlay(stationId, payload),
-        },
-        command,
-        param,
-      );
-    }
+    const handled = await handleBeolinkCommand(
+      {
+        adjustVolume: (change) => this.adjustVolume(change),
+        doAction: (action, paramValue) => this.doAction(action, paramValue),
+      },
+      command,
+      param,
+    );
 
     if (!handled) {
       logger.warn(`[BeoLink][zone ${this.playerid}] Unknown command: ${command}`);
@@ -455,41 +450,6 @@ export default class BackendBeolink extends Backend {
       logger.error(`[BeoLink][Zone ${this.playerid}] Error adjusting volume: ${error}`);
     }
   }
-
-  private async servicePlay(stationId: string, payload?: Record<string, any>): Promise<void> {
-    const url = `http://${this.ip}:8080/BeoZone/Zone/PlayQueue?instantplay`;
-    const behaviour =
-      typeof payload?.behaviour === 'string' && payload.behaviour.trim().length > 0
-        ? payload.behaviour.trim()
-        : 'planned';
-
-    const requestPayload = buildPlayQueuePayload(stationId, behaviour, payload);
-
-    console.log(requestPayload)
-    console.log(url)
-
-    try {
-      logger.debug(
-        `[BeoLink][Zone ${this.playerid}] serviceplay payload ${JSON.stringify(requestPayload)}`,
-      );
-      await axios.request({
-        method: 'POST',
-        url,
-        data: requestPayload,
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 5000,
-      });
-      logger.info(
-        `[BeoLink][Zone ${this.playerid}] serviceplay queued station ${requestPayload.playQueueItem.station?.tuneIn?.stationId}`,
-      );
-    } catch (error) {
-      const message = formatAxiosError(error);
-      logger.warn(
-        `[BeoLink][Zone ${this.playerid}] serviceplay failed for ${stationId}: ${message}`,
-      );
-    }
-  }
-
   /**
    * Sends a specific action to the Beolink backend via HTTP.
    *
@@ -629,8 +589,8 @@ export default class BackendBeolink extends Backend {
     const normalizedLeaderCandidate =
       BackendBeolink.normaliseDeviceId(
         experience?.source?.product?.jid ??
-          (Array.isArray(experience.listener) ? experience.listener[0] : undefined) ??
-          this.deviceJid,
+        (Array.isArray(experience.listener) ? experience.listener[0] : undefined) ??
+        this.deviceJid,
       ) ?? this.normalizedDeviceJid;
 
     const unresolved = new Set<string>();

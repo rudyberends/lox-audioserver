@@ -8,7 +8,17 @@ import {
 import type { ZoneVolumeConfig } from '../../config/config';
 import { broadcastEvent } from '../../http/broadcastEvent';
 import { createBackend } from './backendFactory';
+import {
+  createZoneContentAdapter,
+  ZoneContentPlaybackAdapter,
+  ZoneContentCommand,
+  getAdapterDescriptor,
+  getDefaultAdapterForBackend,
+} from './capabilities';
+import '../provider/musicAssistant/contentAdapter';
+import '../provider/beoLink/contentAdapter';
 import type { ZoneConfigEntry, AdminConfig } from '../../config/configStore';
+import NullBackend from './nullBackend';
 import { mergeZoneConfigEntries } from './zoneConfigUtils';
 import {
   PlayerStatus as LoxonePlayerStatus,
@@ -24,6 +34,8 @@ import {
   removeZoneFromGroups,
   GroupRecord,
 } from './groupTracker';
+import type { ZoneCapabilityDescriptor, ZoneCapabilityKind } from './capabilityTypes';
+import { CAPABILITY_KIND_ORDER } from './capabilityHelper';
 
 type PlayerOutputChannel = {
   id?: string;
@@ -72,6 +84,7 @@ interface ZoneState {
   playerEntry: PlayerStatus;
   queue?: ZoneEntryQueue;
   fadeTargetVolume?: number;
+  contentAdapter?: ZoneContentPlaybackAdapter;
 }
 
 /**
@@ -80,6 +93,7 @@ interface ZoneState {
  */
 const zone: Record<number, ZoneState> = {};
 type ZoneEntry = ZoneState;
+export type { ZoneEntry };
 
 interface ZoneStatus {
   id: number;
@@ -91,6 +105,7 @@ interface ZoneStatus {
   title?: string;
   artist?: string;
   coverUrl?: string;
+  capabilities?: ZoneCapabilityDescriptor[];
 }
 
 interface PreparedZoneContext {
@@ -98,6 +113,68 @@ interface PreparedZoneContext {
   adminConfig: AdminConfig;
   adminZones: Map<number, ZoneConfigEntry>;
   resolveSourceName?: SourceResolver;
+}
+
+const CONTENT_COMMANDS = new Set<ZoneContentCommand>([
+  'serviceplay',
+  'playlistplay',
+  'announce',
+  'queue',
+  'queueplus',
+  'queueminus',
+  'repeat',
+  'shuffle',
+  'position',
+]);
+
+function buildContentAdapter(
+  backendName: string,
+  zoneId: number,
+  zoneConfig: ZoneConfigEntry,
+  adminConfig: AdminConfig,
+): ZoneContentPlaybackAdapter | undefined {
+  const defaultDescriptor = getDefaultAdapterForBackend(backendName);
+  const configuredType = zoneConfig.contentAdapter?.type?.trim();
+  if (backendName === 'BackendMusicAssistant') {
+    return undefined;
+  }
+
+  const adapterType = configuredType || defaultDescriptor?.key;
+
+  if (!adapterType) return undefined;
+
+  const descriptor = getAdapterDescriptor(adapterType);
+  if (!descriptor) {
+    logger.warn(`[ZoneManager] Unknown content adapter "${adapterType}" for zone ${zoneId}.`);
+    return undefined;
+  }
+
+  const adapterMaPlayerId = typeof zoneConfig.contentAdapter?.options?.maPlayerId === 'string'
+    ? zoneConfig.contentAdapter.options.maPlayerId.trim()
+    : '';
+
+  const mergedZoneConfig = descriptor.requires?.maPlayerId && adapterMaPlayerId && !zoneConfig.maPlayerId
+    ? { ...zoneConfig, maPlayerId: adapterMaPlayerId }
+    : zoneConfig;
+
+  if (descriptor.requires?.maPlayerId) {
+    const maId = mergedZoneConfig.maPlayerId || adapterMaPlayerId;
+    if (!maId) {
+      logger.warn(
+        `[ZoneManager] Content adapter "${adapterType}" requires maPlayerId for zone ${zoneId}, but none configured.`,
+      );
+      return undefined;
+    }
+  }
+
+  return createZoneContentAdapter(adapterType, {
+    zoneId,
+    backendId: backendName,
+    zoneConfig: mergedZoneConfig,
+    adminConfig,
+    getZoneOrWarn: () => getZoneById(zoneId),
+    pushPlayerEntryUpdate: (update) => updateZonePlayerStatus(zoneId, update),
+  });
 }
 
 function createDefaultPlayerEntry(playerId: number, zoneName: string): PlayerStatus {
@@ -366,6 +443,13 @@ async function cleanupZone(playerId: number): Promise<void> {
       logger.error(`[ZoneManager] Error cleaning up backend for Loxone player ID: ${playerId}: ${error}`);
     }
   }
+  if (existingZone.contentAdapter) {
+    try {
+      await existingZone.contentAdapter.cleanup();
+    } catch (error) {
+      logger.warn(`[ZoneManager] Error cleaning up content adapter for zone ${playerId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   removeZoneFromGroups(playerId);
   delete zone[playerId];
 }
@@ -377,6 +461,7 @@ async function setupZoneInternal(
   player: Player,
   index: number,
   adminZones: Map<number, ZoneConfigEntry>,
+  adminConfig: AdminConfig,
   newZoneEntries: ZoneConfigEntry[],
   updatedZoneEntries: ZoneConfigEntry[],
   resolveSourceName?: SourceResolver,
@@ -396,17 +481,19 @@ async function setupZoneInternal(
 
   let backend = zoneOverride?.backend;
   let ip = zoneOverride?.ip;
-  const maPlayerId = zoneOverride?.maPlayerId;
+  const maPlayerId = zoneOverride?.maPlayerId ?? zoneOverride?.contentAdapter?.options?.maPlayerId;
   let configuredName = typeof zoneOverride?.name === 'string' ? zoneOverride.name.trim() : '';
   const playerProvidedName = typeof player?.name === 'string' ? player.name.trim() : '';
 
   if (!backend || !ip) {
-    logger.warn(`[ZoneManager] Missing backend or IP for Loxone player ID: ${playerId}. Creating default DummyBackend entry.`);
+    logger.warn(
+      `[ZoneManager] Unconfigured Zone for Loxone player ID: ${playerId}.`,
+    );
     const fallbackName = configuredName || playerProvidedName || `Zone ${index + 1}`;
     const defaultZone: ZoneConfigEntry = {
       id: playerId,
-      backend: 'DummyBackend',
-      ip: '127.0.0.1',
+      backend: 'NullBackend',
+      ip: '',
       name: fallbackName,
       source: sourceName || undefined,
     };
@@ -437,6 +524,12 @@ async function setupZoneInternal(
     },
     playerEntry: createDefaultPlayerEntry(playerId, zoneName),
   };
+
+  const effectiveZoneConfig = adminZones.get(playerId);
+  if (effectiveZoneConfig) {
+    const adapter = backend ? buildContentAdapter(backend, playerId, effectiveZoneConfig, adminConfig) : undefined;
+    zone[playerId].contentAdapter = adapter;
+  }
 
   logger.info(
     `[ZoneManager][${zoneName}] set up for Loxone player ID: ${playerId}, Backend: ${backend || 'not specified'}, IP: ${ip || 'not specified'}`,
@@ -517,7 +610,7 @@ const setupZones = async (): Promise<void> => {
   const updatedZoneEntries: ZoneConfigEntry[] = [];
 
   for (const [index, player] of players.entries()) {
-    await setupZoneInternal(player, index, adminZones, newZoneEntries, updatedZoneEntries, resolveSourceName);
+    await setupZoneInternal(player, index, adminZones, adminConfig, newZoneEntries, updatedZoneEntries, resolveSourceName);
   }
 
   persistZoneConfigChanges(newZoneEntries, updatedZoneEntries, adminConfig);
@@ -536,7 +629,7 @@ const setupZoneById = async (playerId: number): Promise<boolean> => {
 
   const newZoneEntries: ZoneConfigEntry[] = [];
   const updatedZoneEntries: ZoneConfigEntry[] = [];
-  await setupZoneInternal(players[index], index, adminZones, newZoneEntries, updatedZoneEntries, resolveSourceName);
+  await setupZoneInternal(players[index], index, adminZones, adminConfig, newZoneEntries, updatedZoneEntries, resolveSourceName);
   persistZoneConfigChanges(newZoneEntries, updatedZoneEntries, adminConfig);
   return true;
 };
@@ -544,34 +637,226 @@ const setupZoneById = async (playerId: number): Promise<boolean> => {
 function getZoneStatuses(): Record<number, ZoneStatus> {
   const statuses: Record<number, ZoneStatus> = {};
   const adminConfig = getAdminConfig();
+  const configMap = new Map<number, ZoneConfigEntry>();
 
   adminConfig.zones.forEach((zoneConfig) => {
-    statuses[zoneConfig.id] = {
-      id: zoneConfig.id,
-      backend: zoneConfig.backend,
-      ip: zoneConfig.ip,
-      name: zoneConfig.name || `Zone ${zoneConfig.id}`,
-      connected: Boolean(zone[zoneConfig.id]?.player.backendInstance),
-    };
+    configMap.set(zoneConfig.id, zoneConfig);
+    const zoneEntry = zone[zoneConfig.id];
+    const status = composeZoneStatus(zoneConfig, zoneEntry);
+    if (status) {
+      statuses[status.id] = status;
+    }
   });
 
   Object.entries(zone).forEach(([idString, zoneEntry]) => {
     const id = Number(idString);
-    const playerEntry = zoneEntry.playerEntry;
-    statuses[id] = {
-      id,
-      backend: zoneEntry.player.backend || statuses[id]?.backend || '',
-      ip: zoneEntry.player.ip || statuses[id]?.ip || '',
-      name: zoneEntry.player.name || statuses[id]?.name || `Zone ${id}`,
-      connected: Boolean(zoneEntry.player.backendInstance),
-      state: playerEntry?.mode || playerEntry?.clientState || statuses[id]?.state,
-      title: playerEntry?.title || playerEntry?.name || statuses[id]?.title,
-      artist: playerEntry?.artist || statuses[id]?.artist,
-      coverUrl: playerEntry?.coverurl || statuses[id]?.coverUrl,
-    };
+    const zoneConfig = configMap.get(id);
+    const status = composeZoneStatus(zoneConfig, zoneEntry);
+    if (status) {
+      statuses[id] = status;
+    }
   });
 
   return statuses;
+}
+
+function composeZoneStatus(zoneConfig?: ZoneConfigEntry, zoneEntry?: ZoneEntry): ZoneStatus | undefined {
+  const id = zoneConfig?.id ?? zoneEntry?.player.playerid;
+  if (!Number.isFinite(id)) return undefined;
+
+  const backend = zoneEntry?.player.backend || zoneConfig?.backend || '';
+  const ip = zoneEntry?.player.ip || zoneConfig?.ip || '';
+  const name =
+    zoneEntry?.player.name
+    || zoneConfig?.name
+    || `Zone ${id}`;
+  const playerEntry = zoneEntry?.playerEntry;
+
+  const status: ZoneStatus = {
+    id: Number(id),
+    backend,
+    ip,
+    name,
+    connected: Boolean(zoneEntry?.player.backendInstance),
+    capabilities: buildZoneCapabilities(zoneConfig, zoneEntry),
+  };
+
+  if (playerEntry) {
+    status.state = playerEntry.mode || playerEntry.clientState || undefined;
+    status.title = playerEntry.title || playerEntry.name || undefined;
+    status.artist = playerEntry.artist || undefined;
+    status.coverUrl = playerEntry.coverurl || undefined;
+  }
+
+  return status;
+}
+
+function buildZoneCapabilities(zoneConfig?: ZoneConfigEntry, zoneEntry?: ZoneEntry): ZoneCapabilityDescriptor[] {
+  const backendDescriptors = collectBackendCapabilities(zoneConfig, zoneEntry);
+  const adapterDescriptors = collectAdapterCapabilities(zoneConfig, zoneEntry);
+  return mergeCapabilityDescriptors(backendDescriptors, adapterDescriptors);
+}
+
+function collectBackendCapabilities(zoneConfig?: ZoneConfigEntry, zoneEntry?: ZoneEntry): ZoneCapabilityDescriptor[] {
+  const backendInstance = zoneEntry?.player.backendInstance;
+  if (backendInstance && typeof (backendInstance as any).describeCapabilities === 'function') {
+    try {
+      return normalizeCapabilityDescriptors(
+        (backendInstance as any).describeCapabilities({ zoneConfig, zoneState: zoneEntry }),
+        'backend',
+      );
+    } catch (error) {
+      logger.debug(
+        `[ZoneManager] describeCapabilities failed for zone ${zoneEntry?.player.playerid}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  const backendKey = zoneEntry?.player.backend || zoneConfig?.backend || '';
+  if (backendKey.toLowerCase() === 'nullbackend' || backendKey.toLowerCase() === 'dummybackend') {
+    const nullBackend = new NullBackend('', zoneConfig?.id ?? zoneEntry?.player.playerid ?? 0);
+    return normalizeCapabilityDescriptors(
+      nullBackend.describeCapabilities({ zoneConfig, zoneState: zoneEntry }),
+      'backend',
+    );
+  }
+
+  return [];
+}
+
+function collectAdapterCapabilities(zoneConfig?: ZoneConfigEntry, zoneEntry?: ZoneEntry): ZoneCapabilityDescriptor[] {
+  const descriptors: ZoneCapabilityDescriptor[] = [];
+
+  const configuredAdapterType = zoneConfig?.contentAdapter?.type?.trim();
+  if (!configuredAdapterType) return descriptors;
+
+  const adapterInstance = zoneEntry?.contentAdapter;
+  if (adapterInstance && typeof adapterInstance.describeCapabilities === 'function') {
+    descriptors.push(
+      ...normalizeCapabilityDescriptors(
+        adapterInstance.describeCapabilities({ zoneConfig, zoneState: zoneEntry }),
+        'adapter',
+      ),
+    );
+  }
+
+  const descriptor = getAdapterDescriptor(configuredAdapterType);
+  if (descriptor?.capabilities?.length) {
+    descriptors.push(...normalizeCapabilityDescriptors(descriptor.capabilities, 'adapter'));
+  }
+
+  return descriptors;
+}
+
+function normalizeCapabilityDescriptors(
+  input: unknown,
+  defaultSource: 'backend' | 'adapter',
+): ZoneCapabilityDescriptor[] {
+  if (!Array.isArray(input)) return [];
+  const normalized: ZoneCapabilityDescriptor[] = [];
+
+  input.forEach((entry) => {
+    if (!entry || typeof entry !== 'object') return;
+    const raw = entry as Record<string, unknown>;
+    const kindRaw = typeof raw.kind === 'string' ? raw.kind.trim().toLowerCase() : '';
+    if (!isZoneCapabilityKind(kindRaw)) return;
+    const statusRaw = typeof raw.status === 'string' ? raw.status.trim().toLowerCase() : '';
+    const status = normalizeCapabilityStatus(statusRaw);
+    const detail = typeof raw.detail === 'string' ? raw.detail.trim() : undefined;
+    const source = raw.source === 'backend' || raw.source === 'adapter' ? raw.source : defaultSource;
+
+    normalized.push({
+      kind: kindRaw,
+      status,
+      detail,
+      source,
+    });
+  });
+
+  return normalized;
+}
+
+function isZoneCapabilityKind(value: string): value is ZoneCapabilityKind {
+  return CAPABILITY_KIND_ORDER.includes(value as ZoneCapabilityKind);
+}
+
+function normalizeCapabilityStatus(value: string): 'none' | 'native' | 'adapter' {
+  switch (value) {
+    case 'native':
+      return 'native';
+    case 'adapter':
+      return 'adapter';
+    default:
+      return 'none';
+  }
+}
+
+function mergeCapabilityDescriptors(
+  backendDescriptors: ZoneCapabilityDescriptor[],
+  adapterDescriptors: ZoneCapabilityDescriptor[],
+): ZoneCapabilityDescriptor[] {
+  const map = new Map<ZoneCapabilityKind, ZoneCapabilityDescriptor>();
+
+  CAPABILITY_KIND_ORDER.forEach((kind) => {
+    map.set(kind, { kind, status: 'none', source: 'backend' });
+  });
+
+  backendDescriptors.forEach((descriptor) => {
+    map.set(descriptor.kind, { ...descriptor, source: descriptor.source || 'backend' });
+  });
+
+  adapterDescriptors.forEach((descriptor) => {
+    const normalized = { ...descriptor, source: descriptor.source || 'adapter' };
+    const existing = map.get(normalized.kind);
+    if (!existing || existing.status === 'none') {
+      map.set(normalized.kind, normalized);
+      return;
+    }
+
+    if (existing.status === 'native') {
+      if (normalized.status === 'adapter') {
+        map.set(normalized.kind, {
+          kind: normalized.kind,
+          status: 'adapter',
+          detail: mergeCapabilityDetail(normalized.detail, existing.detail),
+          source: 'adapter',
+        });
+        return;
+      }
+      const detail = mergeCapabilityDetail(existing.detail, normalized.detail);
+      map.set(normalized.kind, { ...existing, detail });
+      return;
+    }
+
+    if (normalized.status === 'native') {
+      map.set(normalized.kind, normalized);
+      return;
+    }
+
+    if (normalized.status === 'adapter') {
+      map.set(normalized.kind, {
+        kind: normalized.kind,
+        status: 'adapter',
+        detail: normalized.detail,
+        source: 'adapter',
+      });
+      return;
+    }
+
+    const detail = mergeCapabilityDetail(existing.detail, normalized.detail);
+    map.set(normalized.kind, { ...existing, detail });
+  });
+
+  return CAPABILITY_KIND_ORDER.map((kind) => map.get(kind) ?? { kind, status: 'none', source: 'backend' });
+}
+
+function mergeCapabilityDetail(a?: string, b?: string): string | undefined {
+  if (a && b) {
+    if (a.includes(b)) return a;
+    if (b.includes(a)) return b;
+    return `${a}; ${b}`;
+  }
+  return a || b || undefined;
 }
 
 /**
@@ -593,6 +878,19 @@ const sendCommandToZone = async (
   if (!zone) {
     logger.warn(`[ZoneManager] Command ignored for unknown Loxone player ID: ${playerId}`);
     return;
+  }
+
+  if (zone.contentAdapter && CONTENT_COMMANDS.has(command as ZoneContentCommand)) {
+    try {
+      const handled = zone.contentAdapter.handles(command) && (await zone.contentAdapter.execute(command as ZoneContentCommand, param));
+      if (handled) {
+        return;
+      }
+    } catch (error) {
+      logger.warn(
+        `[ZoneManager] Content adapter failed for zone ${playerId}, command ${command}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   const backendInstance = zone.player.backendInstance; // Get the backend instance
@@ -1062,6 +1360,15 @@ const cleanupZones = async (): Promise<void> => {
         } catch (error) {
           logger.error(
             `[ZoneManager] Error cleaning up backend for Loxone player ID: ${entry.player.playerid}: ${error}`,
+          );
+        }
+      }
+      if (entry.contentAdapter) {
+        try {
+          await entry.contentAdapter.cleanup();
+        } catch (error) {
+          logger.warn(
+            `[ZoneManager] Error cleaning up content adapter for zone ${entry.player.playerid}: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
       }

@@ -81,13 +81,15 @@ export async function audioCfgDynamicGroup(url: string): Promise<CommandResult> 
     const leaderZone = getZoneById(existing.leader);
     const members = existing.members.filter((member) => member !== existing.leader);
 
-    const removed = removeGroupByLeader(existing.leader);
-
     if (!leaderZone) {
       logger.warn(`[audioCfgDynamicGroup] Leader zone ${existing.leader} not found while removing group ${groupIdRaw}.`);
     } else if (members.length > 0) {
       await sendGroupCommandToZone('groupLeaveMany', 'Audio', [existing.leader, ...members].join(','));
+    } else {
+      await sendCommandToZone(existing.leader, 'groupLeave');
     }
+
+    const removed = removeGroupByLeader(existing.leader);
     if (removed) updateZoneGroup();
     return response(url, 'dgroup_update', { success: true, removed: groupIdRaw });
   }

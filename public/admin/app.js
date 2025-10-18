@@ -48,6 +48,9 @@ const state = {
   extensionPlaceholders: [],
   loadingConfig: true,
   waitingForPairing: false,
+  ui: {
+    expandedZones: new Set(),
+  },
 };
 
 
@@ -164,6 +167,7 @@ async function loadConfig(silent = false) {
     );
   } finally {
     state.loadingConfig = false;
+    ensureUiState().expandedZones.clear();
     render();
     if (!silent && !failed) clearStatus();
   }
@@ -171,6 +175,7 @@ async function loadConfig(silent = false) {
 }
 
 function render() {
+  ensureUiState();
   if (!state.config) return;
 
   let focusSnapshot = null;
@@ -898,6 +903,18 @@ const VOLUME_LABELS = {
 };
 
 const VOLUME_ORDER = ['default', 'max', 'alarm', 'fire', 'bell', 'buzzer', 'tts'];
+const CAPABILITY_KIND_ORDER = ['control', 'content', 'grouping', 'alerts', 'tts'];
+const CAPABILITY_STATUS_LABEL = {
+  native: 'Native',
+  adapter: 'Adapter',
+  none: 'None',
+};
+const CAPABILITY_GROUPS = [
+  { key: 'control', label: 'Control', icon: '🎛', gradient: '--cap-control', kinds: ['control'] },
+  { key: 'content', label: 'Content', icon: '🎧', gradient: '--cap-content', kinds: ['content'] },
+  { key: 'grouping', label: 'Grouping', icon: '🎚', gradient: '--cap-grouping', kinds: ['grouping'] },
+  { key: 'alerts-tts', label: 'Alerts · TTS', icon: '🔔', gradient: '--cap-alerts', kinds: ['alerts', 'tts'] },
+];
 
 function renderZoneVolumeSection(rawVolumes) {
   if (!rawVolumes || typeof rawVolumes !== 'object') return '';
@@ -940,6 +957,77 @@ function renderZoneVolumeSection(rawVolumes) {
   `;
 }
 
+function renderZoneRouting(zone, status) {
+  const rows = Array.isArray(status?.capabilities) ? status.capabilities : [];
+  if (!rows.length) return '';
+  const htmlRows = rows
+    .map((entry) => normalizeCapabilityEntry(entry))
+    .filter(Boolean)
+    .map((entry) => renderZoneRoutingRow(entry))
+    .join('');
+
+  return `
+    <div class="zone-card-backend">
+      <span class="zone-backend-heading">Zone routing</span>
+      <div class="zone-backend-rows">
+        ${htmlRows}
+      </div>
+    </div>
+  `;
+}
+
+function renderZoneRoutingRow(entry) {
+  if (!entry) return '';
+  const group = CAPABILITY_GROUPS.find((item) => item.key === entry.key) ?? { icon: '•', gradient: '' };
+  const label = escapeHtml(entry.label || capitalize(entry.kind || '—'));
+  const detail = entry.detail ? `<span class="zone-backend-row-detail">${escapeHtml(entry.detail)}</span>` : '';
+  const statusLabel = escapeHtml(capabilityStatusToLabel(entry.status));
+  const statusClass = `zone-backend-status zone-backend-status--${entry.status}`;
+  const icon = escapeHtml(group.icon || '•');
+  const gradient = group.gradient ? `style="--zone-row-gradient: var(${group.gradient})"` : '';
+
+  return `
+    <div class="zone-backend-row" ${gradient}>
+      <div class="zone-backend-row-meta">
+        <span class="zone-backend-row-icon">${icon}</span>
+        <div class="zone-backend-row-main">
+          <span class="zone-backend-row-label">${label}</span>
+          ${detail}
+        </div>
+      </div>
+      <span class="${statusClass}">${statusLabel}</span>
+    </div>
+  `;
+}
+
+function normalizeCapabilityEntry(entry = {}) {
+  if (!entry || typeof entry !== 'object') return null;
+  const kind = typeof entry.kind === 'string' ? entry.kind.trim() : '';
+  const status = capabilityStatusToInternal(entry.status);
+  const detail = typeof entry.detail === 'string' ? entry.detail.trim() : '';
+  return {
+    kind,
+    label: typeof entry.label === 'string' ? entry.label.trim() : undefined,
+    status,
+    detail,
+  };
+}
+
+function capabilityStatusToInternal(rawStatus) {
+  const status = typeof rawStatus === 'string' ? rawStatus.trim().toLowerCase() : '';
+  if (status === 'native' || status === 'adapter') return status;
+  return 'none';
+}
+
+function capabilityStatusToLabel(status) {
+  return CAPABILITY_STATUS_LABEL[status] || CAPABILITY_STATUS_LABEL.none;
+}
+
+function capitalize(value) {
+  if (!value) return '';
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 function renderZoneCard(zone) {
   if (!zone) return '';
   if (zone && zone.placeholder === 'extension') {
@@ -947,7 +1035,7 @@ function renderZoneCard(zone) {
   }
   const status = getZoneStatusEntry(zone);
   const rawBackend = status?.backend ?? zone.backend ?? '';
-  const isDummy = isDummyBackend(rawBackend);
+  const isDummy = isNullBackend(rawBackend);
   const connected = !isDummy && Boolean(status?.connected);
   const statusPrefix = connected ? 'Online' : 'Pending connection';
   const statusText = isDummy ? 'Unassigned' : statusPrefix;
@@ -973,19 +1061,12 @@ function renderZoneCard(zone) {
     connectHint = '<p class="zone-card-hint">Configure a Music Assistant player before connecting.</p>';
   }
 
-  const backendLabel = formatBackendLabel(rawBackend);
   const zoneLabel = safeZoneName || `Zone ${safeZoneId}`;
-  const backendName = escapeHtml(backendLabel);
+  const routingSection = renderZoneRouting(zone, status);
   const zoneLabelAria = escapeHtml(zoneLabel);
-  let backendSubDetail = '';
-  if (isMusicAssistant) {
-    const playerId = (status?.maPlayerId ?? zone.maPlayerId ?? '').trim();
-    if (playerId) backendSubDetail = escapeHtml(playerId);
-  } else {
-    const ip = (status?.ip ?? zone.ip ?? '').trim();
-    if (ip) backendSubDetail = escapeHtml(ip);
-  }
   const volumeSection = renderZoneVolumeSection(zone?.volumes || status?.volumes);
+  ensureUiState();
+  const detailsExpanded = state.ui.expandedZones.has(zone.id);
 
   return `
     <article class="zone-card ${cardStateClass}" data-index="${zone.id}">
@@ -998,17 +1079,18 @@ function renderZoneCard(zone) {
       <div class="zone-card-playback">
         <div class="zone-card-nowplaying">${metadataBlock}</div>
       </div>
-      <div class="zone-card-backend">
-        <span class="zone-backend-label">Zone backend</span>
-        <div class="zone-backend-info">
-          <span class="zone-backend-name">${backendName}</span>
-        </div>
-        ${backendSubDetail ? `<span class="zone-backend-sub">${backendSubDetail}</span>` : ''}
+      ${renderZoneDetailsToggle(zone, detailsExpanded)}
+      <div class="zone-card-details${detailsExpanded ? ' zone-card-details--visible' : ''}" id="zone-details-${zone.id}" ${detailsExpanded ? '' : 'hidden'} data-zone-details="${zone.id}">
+        ${routingSection}
+        ${volumeSection}
       </div>
-      ${volumeSection}
       <div class="zone-card-divider" aria-hidden="true"></div>
       <div class="zone-card-actions">
         <button type="button" class="zone-backend-button" data-action="configure-zone" data-id="${zone.id}" aria-label="Configure ${zoneLabelAria}">Configure</button>
+        <button type="button" class="zone-backend-button zone-details-button${detailsExpanded ? ' zone-details-button--open' : ''}" data-action="toggle-zone-details" data-id="${zone.id}" aria-expanded="${detailsExpanded ? 'true' : 'false'}" aria-controls="zone-details-${zone.id}">
+          <span class="zone-details-button-label">${detailsExpanded ? 'Hide details' : 'Details'}</span>
+          <span class="zone-details-button-icon" aria-hidden="true">${detailsExpanded ? '⋀' : '⋁'}</span>
+        </button>
       </div>
       ${connectHint}
       ${connectError ? `<p class="zone-card-error">${escapeHtml(connectError)}</p>` : ''}
@@ -1037,6 +1119,42 @@ function renderExtensionPlaceholderCard(placeholder) {
       </div>
     </article>
   `;
+}
+
+function renderZoneDetailsToggle(zone, expanded = false) {
+  const expandedAttr = expanded ? 'true' : 'false';
+  const label = expanded ? 'Hide details' : 'Details';
+  const icon = expanded ? '⋀' : '⋁';
+  return `
+    <div class="zone-card-details-toggle" data-zone-details-toggle="${zone.id}">
+      <button type="button" class="zone-details-chip" data-action="toggle-zone-details" data-id="${zone.id}" aria-expanded="${expandedAttr}" aria-controls="zone-details-${zone.id}">
+        <span class="zone-details-chip-icon" aria-hidden="true">${icon}</span>
+        <span class="zone-details-chip-label">${label}</span>
+      </button>
+    </div>
+  `;
+}
+
+function ensureUiState() {
+  if (!state.ui || typeof state.ui !== 'object') {
+    state.ui = { expandedZones: new Set() };
+  }
+  if (!(state.ui.expandedZones instanceof Set)) {
+    const seed = Array.isArray(state.ui.expandedZones) ? state.ui.expandedZones : [];
+    state.ui.expandedZones = new Set(seed);
+  }
+  return state.ui;
+}
+
+function toggleZoneDetails(zoneId) {
+  ensureUiState();
+  const expanded = state.ui.expandedZones;
+  if (expanded.has(zoneId)) {
+    expanded.delete(zoneId);
+  } else {
+    expanded.add(zoneId);
+  }
+  scheduleRender();
 }
 
 function getZoneStatusEntry(zone = {}) {
@@ -1075,7 +1193,7 @@ function computeZoneStats(zones = []) {
     const status = getZoneStatusEntry(zone);
     const rawBackend = status?.backend ?? zone.backend ?? '';
     const normalizedBackend = normalizeBackend(rawBackend);
-    const dummy = isDummyBackend(normalizedBackend);
+    const dummy = isNullBackend(normalizedBackend);
     const connected = Boolean(status?.connected);
     const source = resolveZoneSource(zone);
     const sourceIsExtension = isExtensionLabel(source.label);
@@ -1333,15 +1451,16 @@ function normalizeBackend(value = '') {
   return String(value || '').trim();
 }
 
-function isDummyBackend(value = '') {
+function isNullBackend(value = '') {
   const normalized = normalizeBackend(value);
-  return !normalized || normalized.toLowerCase() === 'dummybackend';
+  return !normalized || normalized.toLowerCase() === 'dummybackend' || normalized.toLowerCase() === 'nullbackend';
 }
 
 function formatBackendLabel(value = '') {
   const normalized = normalizeBackend(value);
   if (!normalized) return 'Unassigned';
-  if (normalized.toLowerCase() === 'dummybackend') return 'Unassigned';
+  const lower = normalized.toLowerCase();
+  if (lower === 'dummybackend' || lower === 'nullbackend') return 'Unassigned';
   if (/^backend/i.test(normalized)) {
     const label = normalized.replace(/^backend/i, '');
     const spaced = label.replace(/([a-z])([A-Z])/g, '$1 $2');
@@ -1732,6 +1851,7 @@ function renderBackendModal() {
       maPlayerId: '',
       maSuggestions: [],
       beolinkDeviceId: '',
+      contentAdapter: '',
       error: '',
     };
     return '<div id="backend-modal" class="backend-modal backend-modal--hidden" aria-hidden="true"></div>';
@@ -1739,6 +1859,30 @@ function renderBackendModal() {
 
   const backendOptions = state.options?.backends || [];
   const backend = modalState.backend || zone.backend || backendOptions[0] || '';
+  const contentAdapters = state.options?.contentAdapters || [];
+  const defaultContentAdapters = state.options?.defaultContentAdapters || {};
+  const builtinContentAdapter = backend === 'BackendMusicAssistant'
+    ? ''
+    : (defaultContentAdapters[backend] || '');
+  const adapterOptions = zone.contentAdapter?.options || {};
+  const adapterMaPlayer = typeof adapterOptions.maPlayerId === 'string' ? adapterOptions.maPlayerId.trim() : '';
+  const providerType = state.config?.mediaProvider?.type || '';
+  const contentAdapterOptions = [{ value: '', label: 'None', requiresMaPlayerId: false }];
+  contentAdapters.forEach((adapter) => {
+    if (!adapter) return;
+    const key = String(adapter.key ?? '').trim();
+    if (backend === 'BackendMusicAssistant' && key.toLowerCase() === 'musicassistant') return;
+    if (Array.isArray(adapter.providers) && adapter.providers.length && providerType) {
+      if (!adapter.providers.includes(providerType)) return;
+    }
+    contentAdapterOptions.push({ value: adapter.key, label: adapter.label, requiresMaPlayerId: adapter.requiresMaPlayerId });
+  });
+  const resolvedContentAdapterType = modalState.contentAdapter ?? zone.contentAdapter?.type ?? builtinContentAdapter ?? '';
+  const contentAdapterType = backend === 'BackendMusicAssistant' ? '' : resolvedContentAdapterType;
+  const needsMaPlayer = doesZoneNeedMusicAssistantPlayer(zone, {
+    backendOverride: backend,
+    contentAdapterTypeOverride: resolvedContentAdapterType || builtinContentAdapter,
+  });
   const cache = ensureMusicAssistantCache();
   const beolinkDiscovery = ensureBeolinkDiscoveryState();
   const knownIps = Object.keys(cache.playersByIp || {});
@@ -1767,13 +1911,13 @@ function renderBackendModal() {
     maSuggestions = modalState.maSuggestions;
   } else if (Array.isArray(state.suggestions?.[zone.id]) && state.suggestions[zone.id].length) {
     maSuggestions = state.suggestions[zone.id];
-  } else if (backend === 'BackendMusicAssistant') {
+  } else if (needsMaPlayer) {
     const cachedPlayers = cache.playersByIp?.[ipValue] || [];
     if (cachedPlayers.length) {
       maSuggestions = cachedPlayers;
     }
   }
-  if (backend === 'BackendMusicAssistant' && maSuggestions.length && (!Array.isArray(modalState.maSuggestions) || !modalState.maSuggestions.length)) {
+  if (needsMaPlayer && maSuggestions.length && (!Array.isArray(modalState.maSuggestions) || !modalState.maSuggestions.length)) {
     state.modal = {
       ...(state.modal || {}),
       maSuggestions,
@@ -1803,7 +1947,7 @@ function renderBackendModal() {
     // IP field rendered within the Beolink section to reuse existing layout.
   } else {
     const ipAttrParts = [];
-    if (backend === 'DummyBackend') {
+    if (isNullBackend(backend)) {
       ipAttrParts.push('disabled aria-disabled="true"');
     }
     if (ipPlaceholderValue) {
@@ -1812,7 +1956,7 @@ function renderBackendModal() {
     ipField = renderInput(
       'modal-backend-ip',
       backend === 'BackendMusicAssistant' ? 'Music Assistant Host' : 'Backend IP',
-      backend === 'DummyBackend' ? '' : ipValue,
+      isNullBackend(backend) ? '' : ipValue,
       'text',
       false,
       ipAttrParts.join(' ').trim(),
@@ -1885,7 +2029,7 @@ function renderBackendModal() {
 
   let maField = '';
   let maActions = '';
-  if (backend === 'BackendMusicAssistant') {
+  if (needsMaPlayer) {
     const hasSuggestions = maSuggestions.length > 0;
     if (hasSuggestions) {
       const maPlayerOptions = [{ value: '', label: 'Select a player' }, ...maSuggestions.map((player) => ({ value: player.id, label: `${player.name} (${player.id})` }))];
@@ -1904,10 +2048,22 @@ function renderBackendModal() {
         </div>
       `;
     }
-    const scanDisabledAttr = backend === 'BackendMusicAssistant' && !ipValue ? 'disabled aria-disabled="true"' : '';
+    const scanHost = resolveMusicAssistantScanHost(zone, {
+      backendOverride: backend,
+      ipOverride: ipValue,
+      contentAdapterTypeOverride: contentAdapterType,
+    });
+    const scanDisabledAttr = needsMaPlayer && !scanHost ? 'disabled aria-disabled="true"' : '';
+    const scanHintText = needsMaPlayer && !scanHost
+      ? (backend === 'BackendMusicAssistant'
+        ? 'Enter the Music Assistant host before scanning.'
+        : 'Configure the Music Assistant provider host before scanning.')
+      : '';
+    const scanHintHiddenAttr = scanHintText ? '' : ' hidden';
     maActions = `
       <div class="backend-modal__ma-actions">
         <button type="button" class="tertiary" data-action="modal-scan-zone" data-id="${zone.id}" ${scanDisabledAttr}>${hasSuggestions ? 'Rescan players' : 'Scan players'}</button>
+        <p class="backend-modal__hint" data-ma-hint="true"${scanHintHiddenAttr}>${scanHintText || ''}</p>
       </div>
     `;
   }
@@ -1915,6 +2071,10 @@ function renderBackendModal() {
   const errorHtml = modalError
     ? `<div class="backend-modal__error" role="alert">${escapeHtml(modalError)}</div>`
     : '';
+
+  const contentSelectHtml = backend === 'BackendMusicAssistant'
+    ? ''
+    : renderSelect('modal-content-adapter', 'Content Playback', contentAdapterOptions, contentAdapterType, 'class="backend-modal__select"');
 
   return `
     <div id="backend-modal" class="backend-modal" role="dialog" aria-modal="true" aria-labelledby="backend-modal-title">
@@ -1942,7 +2102,8 @@ function renderBackendModal() {
             <div class="backend-modal__form">
               ${backendSelect}
               ${backend === 'BackendBeolink' ? `${beolinkSection}${ipField}` : ipField}
-              ${backend === 'BackendMusicAssistant' ? `<div class="backend-modal__ma">${maField}${maActions}</div>` : ''}
+              ${contentSelectHtml}
+              ${needsMaPlayer ? `<div class="backend-modal__ma">${maField}${maActions}</div>` : ''}
             </div>
           </div>
         </div>
@@ -1960,6 +2121,13 @@ function openBackendModal(zoneId) {
   if (!zone) return;
   const backendOptions = state.options?.backends || [];
   const backend = zone.backend || backendOptions[0] || '';
+  const defaultContentAdapters = state.options?.defaultContentAdapters || {};
+  const builtinContentAdapter = backend === 'BackendMusicAssistant'
+    ? ''
+    : (defaultContentAdapters[backend] || '');
+  const zoneContentAdapter = zone.contentAdapter?.type || '';
+  const adapterOptions = zone.contentAdapter?.options || {};
+  const adapterMaPlayer = typeof adapterOptions.maPlayerId === 'string' ? adapterOptions.maPlayerId.trim() : '';
   const cache = ensureMusicAssistantCache();
   const knownIps = Object.keys(cache.playersByIp || {});
   const cacheFallbackIp = cache.lastIP || knownIps[0] || '';
@@ -1974,20 +2142,33 @@ function openBackendModal(zoneId) {
   } else if (defaultIp && backend !== 'BackendMusicAssistant' && isLoopback(defaultIp)) {
     defaultIp = '';
   }
-  const suggestionKey = backend === 'BackendMusicAssistant' ? (defaultIp || cacheFallbackIp) : '';
+  const initialContentAdapter = backend === 'BackendMusicAssistant' ? '' : (zoneContentAdapter || builtinContentAdapter || '');
+  const needsMaPlayer = doesZoneNeedMusicAssistantPlayer(zone, {
+    backendOverride: backend,
+    contentAdapterTypeOverride: initialContentAdapter || zoneContentAdapter || builtinContentAdapter,
+  });
+  const suggestionKey = needsMaPlayer ? (defaultIp || cacheFallbackIp) : '';
   const suggestions = state.suggestions?.[zone.id]
-    || (backend === 'BackendMusicAssistant' ? cache.playersByIp?.[suggestionKey] || [] : []);
+    || (needsMaPlayer ? cache.playersByIp?.[suggestionKey] || [] : []);
   state.modal = {
     open: true,
     zoneId: zone.id,
     backend,
     ip: defaultIp,
-    maPlayerId: zone.maPlayerId || '',
+    maPlayerId: needsMaPlayer ? (zone.maPlayerId || adapterMaPlayer || '') : '',
     maSuggestions: suggestions,
     beolinkDeviceId: '',
+    contentAdapter: initialContentAdapter,
     error: '',
   };
+  if (!needsMaPlayer) {
+    state.modal.maPlayerId = '';
+    state.modal.maSuggestions = [];
+  }
   if (backend === 'BackendMusicAssistant') {
+    state.modal.contentAdapter = '';
+  }
+  if (needsMaPlayer) {
     state.suggestions = state.suggestions || {};
     if (suggestions.length) {
       state.suggestions[zone.id] = suggestions;
@@ -2021,6 +2202,7 @@ function closeBackendModal(shouldRender = true) {
     maPlayerId: '',
     maSuggestions: [],
     beolinkDeviceId: '',
+    contentAdapter: '',
     error: '',
   };
   if (typeof document !== 'undefined') {
@@ -2071,8 +2253,79 @@ function ensureMusicAssistantCache() {
   return cache;
 }
 
+function resolveMusicAssistantProviderHost() {
+  const mediaProvider = state.config?.mediaProvider || {};
+  const providerType = typeof mediaProvider.type === 'string' ? mediaProvider.type : '';
+  if (isMusicAssistantProviderType(providerType)) {
+    const options = typeof mediaProvider.options === 'object' && mediaProvider.options ? mediaProvider.options : {};
+    const providerIp = typeof options.IP === 'string' ? options.IP.trim() : '';
+    if (providerIp) return providerIp;
+  }
+  const cache = ensureMusicAssistantCache();
+  if (typeof cache.providerHost === 'string' && cache.providerHost.trim()) {
+    return cache.providerHost.trim();
+  }
+  if (typeof cache.lastIP === 'string' && cache.lastIP.trim()) {
+    return cache.lastIP.trim();
+  }
+  return '';
+}
+
+function doesZoneNeedMusicAssistantPlayer(zone = {}, overrides = {}) {
+  const modalState = state.modal || {};
+  const backend = normalizeBackend(
+    overrides.backendOverride ?? modalState.backend ?? zone.backend ?? '',
+  );
+  if (backend === 'BackendMusicAssistant') return true;
+  const defaultContentAdapters = state.options?.defaultContentAdapters || {};
+  const contentAdapterRaw = overrides.contentAdapterTypeOverride
+    ?? modalState.contentAdapter
+    ?? zone.contentAdapter?.type
+    ?? defaultContentAdapters[backend]
+    ?? '';
+  return String(contentAdapterRaw || '').trim() === 'musicassistant';
+}
+
+function resolveMusicAssistantScanHost(zone = {}, overrides = {}) {
+  const modalState = state.modal || {};
+  const backendOverride = overrides.backendOverride;
+  const contentAdapterOverride = overrides.contentAdapterTypeOverride;
+  const ipOverride = typeof overrides.ipOverride === 'string' ? overrides.ipOverride.trim() : '';
+  const backend = normalizeBackend(
+    backendOverride ?? modalState.backend ?? zone.backend ?? '',
+  );
+  const modalIp = typeof modalState.ip === 'string' ? modalState.ip.trim() : '';
+  const zoneIp = typeof zone.ip === 'string' ? zone.ip.trim() : '';
+  const defaultContentAdapters = state.options?.defaultContentAdapters || {};
+  const contentAdapterRaw = contentAdapterOverride
+    ?? modalState.contentAdapter
+    ?? zone.contentAdapter?.type
+    ?? defaultContentAdapters[backend]
+    ?? '';
+  const contentAdapter = String(contentAdapterRaw || '').trim();
+  const cache = ensureMusicAssistantCache();
+  const providerHost = resolveMusicAssistantProviderHost();
+  const cacheHost = cache.providerHost?.trim()
+    || cache.lastIP?.trim()
+    || '';
+
+  if (backend === 'BackendMusicAssistant') {
+    return ipOverride || modalIp || zoneIp || providerHost || cacheHost;
+  }
+
+  if (contentAdapter === 'musicassistant') {
+    return providerHost || cacheHost || ipOverride || modalIp || zoneIp;
+  }
+
+  if (doesZoneNeedMusicAssistantPlayer(zone, overrides)) {
+    return providerHost || cacheHost || ipOverride || modalIp || zoneIp;
+  }
+
+  return ipOverride || modalIp || zoneIp || providerHost || cacheHost;
+}
+
 const BACKEND_DESCRIPTIONS = {
-  DummyBackend: 'Use this placeholder when a zone should be ignored or remains unassigned.',
+  NullBackend: 'Use this placeholder when a zone should be ignored or remains unassigned.',
   BackendMusicAssistant: 'Integrates with Music Assistant to expose players from your MA instance. Scan once to discover available players, then reuse them across zones.',
   BackendSonos: 'Connects the zone to a Sonos player for playback control and metadata updates.',
   BackendBeolink: 'Links the zone with a Bang & Olufsen Beolink player using the BeoApp middleware.',
@@ -2108,9 +2361,10 @@ function bindModalEvents() {
   if (backendSelectEl instanceof HTMLSelectElement) {
     backendSelectEl.addEventListener('change', (event) => {
       const selectedBackend = event.target.value;
-      const basePatch = { backend: selectedBackend, error: '' };
+      const defaultAdapters = state.options?.defaultContentAdapters || {};
+      const basePatch = { backend: selectedBackend, error: '', contentAdapter: '' };
       const patch = { ...basePatch };
-      if (selectedBackend === 'DummyBackend') {
+      if (isNullBackend(selectedBackend)) {
         patch.ip = '';
       }
       if (selectedBackend !== 'BackendMusicAssistant') {
@@ -2119,6 +2373,9 @@ function bindModalEvents() {
       }
       if (selectedBackend !== 'BackendBeolink') {
         patch.beolinkDeviceId = '';
+      }
+      if (defaultAdapters[selectedBackend]) {
+        patch.contentAdapter = '';
       }
       updateModalState(patch);
 
@@ -2175,6 +2432,33 @@ function bindModalEvents() {
     });
   }
 
+  const contentSelectEl = modal.querySelector('#modal-content-adapter');
+  if (contentSelectEl instanceof HTMLSelectElement) {
+    contentSelectEl.addEventListener('change', (event) => {
+      const adapterValue = event.target.value;
+      const patch = { contentAdapter: adapterValue, error: '' };
+      if (adapterValue === 'musicassistant') {
+        const cache = ensureMusicAssistantCache();
+        const zoneId = state.modal.zoneId;
+        const zone = typeof zoneId === 'number' ? state.config?.zones.find((z) => z.id === zoneId) : undefined;
+        const host = resolveMusicAssistantScanHost(zone, {
+          backendOverride: state.modal?.backend,
+          contentAdapterTypeOverride: adapterValue,
+        });
+        const cachedPlayers = host ? cache.playersByIp?.[host] || [] : [];
+        patch.maSuggestions = cachedPlayers;
+        if (!state.modal.maPlayerId && cachedPlayers.length === 1) {
+          patch.maPlayerId = cachedPlayers[0]?.id || '';
+        }
+      } else {
+        patch.maPlayerId = '';
+        patch.maSuggestions = [];
+      }
+      updateModalState(patch);
+      render();
+    });
+  }
+
   const ipInputEl = modal.querySelector('#modal-backend-ip');
   if (ipInputEl instanceof HTMLInputElement) {
     ipInputEl.addEventListener('input', (event) => {
@@ -2205,14 +2489,33 @@ function bindModalEvents() {
       const scanButton = modal.querySelector('[data-action="modal-scan-zone"]');
       if (scanButton instanceof HTMLButtonElement) {
         const backend = state.modal?.backend || '';
-        const trimmedIp = (value || '').trim();
-        const shouldDisable = backend === 'BackendMusicAssistant' && !trimmedIp;
+        const zoneId = state.modal?.zoneId;
+        const zone = typeof zoneId === 'number' ? state.config?.zones.find((z) => z.id === zoneId) : undefined;
+        const needsMaPlayer = doesZoneNeedMusicAssistantPlayer(zone, { backendOverride: backend });
+        const scanHost = resolveMusicAssistantScanHost(zone, {
+          backendOverride: backend,
+          ipOverride: value,
+          contentAdapterTypeOverride: state.modal?.contentAdapter,
+        });
+        const shouldDisable = needsMaPlayer && !scanHost;
         scanButton.disabled = shouldDisable;
         if (shouldDisable) {
           scanButton.setAttribute('aria-disabled', 'true');
         } else {
           scanButton.removeAttribute('aria-disabled');
           scanButton.removeAttribute('disabled');
+        }
+        const hintEl = modal.querySelector('[data-ma-hint="true"]');
+        if (hintEl instanceof HTMLElement) {
+          if (shouldDisable && needsMaPlayer) {
+            hintEl.textContent = backend === 'BackendMusicAssistant'
+              ? 'Enter the Music Assistant host before scanning.'
+              : 'Configure the Music Assistant provider host before scanning.';
+            hintEl.hidden = false;
+          } else {
+            hintEl.textContent = '';
+            hintEl.hidden = true;
+          }
         }
       }
     });
@@ -2280,7 +2583,20 @@ function bindModalEvents() {
       if (Number.isNaN(zoneId)) return;
       const zone = state.config?.zones.find((z) => z.id === zoneId);
       if (!zone) return;
-      const zonePayload = { ...zone, ip: state.modal.ip || zone.ip || '' };
+      const scanHost = resolveMusicAssistantScanHost(zone, {
+        backendOverride: state.modal?.backend,
+        ipOverride: state.modal?.ip,
+        contentAdapterTypeOverride: state.modal?.contentAdapter,
+      });
+      if (!scanHost) {
+        const backend = state.modal?.backend || zone.backend || '';
+        const message = backend === 'BackendMusicAssistant'
+          ? 'Enter the Music Assistant host before scanning.'
+          : 'Configure the Music Assistant provider host before scanning.';
+        setStatus(message, true);
+        return;
+      }
+      const zonePayload = { ...zone, ip: scanHost };
       fetchMusicAssistantPlayers(zonePayload, scanButton).catch((error) => {
         console.error('Failed to scan Music Assistant players', error);
       });
@@ -2304,8 +2620,23 @@ async function saveBackendModal() {
   if (!(backendSelectEl instanceof HTMLSelectElement)) return;
   const backend = backendSelectEl.value;
 
+  const defaultContentAdapters = state.options?.defaultContentAdapters || {};
+  const defaultAdapter = backend === 'BackendMusicAssistant' ? '' : (defaultContentAdapters[backend] || '');
+  const contentAdapterSelectEl = document.getElementById('modal-content-adapter');
+  const selectedContentAdapter = contentAdapterSelectEl instanceof HTMLSelectElement
+    ? contentAdapterSelectEl.value.trim()
+    : '';
+
   const ipInputEl = document.getElementById('modal-backend-ip');
   const ipValue = ipInputEl instanceof HTMLInputElement ? ipInputEl.value.trim() : '';
+
+  const effectiveContentAdapter = backend === 'BackendMusicAssistant'
+    ? ''
+    : (selectedContentAdapter || defaultAdapter || '');
+  const needsMaPlayer = doesZoneNeedMusicAssistantPlayer(zone, {
+    backendOverride: backend,
+    contentAdapterTypeOverride: effectiveContentAdapter,
+  });
 
   if (backend === 'BackendMusicAssistant' && !ipValue) {
     updateModalState({ error: 'Enter the Music Assistant host before saving.' });
@@ -2313,49 +2644,109 @@ async function saveBackendModal() {
     return;
   }
 
-  let maPlayerId = '';
-  if (backend === 'BackendMusicAssistant') {
+  if (needsMaPlayer && backend !== 'BackendMusicAssistant') {
+    const scanHost = resolveMusicAssistantScanHost(zone, {
+      backendOverride: backend,
+      ipOverride: ipValue,
+      contentAdapterTypeOverride: effectiveContentAdapter,
+    });
+    if (!scanHost) {
+      updateModalState({ error: 'Configure the Music Assistant provider host before saving.' });
+      render();
+      return;
+    }
+  }
+
+  let adapterMaPlayerId = zone.contentAdapter?.options?.maPlayerId || '';
+  let maPlayerId = zone.maPlayerId || '';
+  if (needsMaPlayer) {
     const maFieldEl = document.getElementById('modal-ma-player');
     if (maFieldEl instanceof HTMLSelectElement) {
       maPlayerId = (maFieldEl.value || '').trim();
+    } else if (typeof state.modal?.maPlayerId === 'string') {
+      maPlayerId = state.modal.maPlayerId.trim();
     }
     if (!maPlayerId) {
       updateModalState({ error: 'Scan for players and choose one before saving.' });
       render();
       return;
     }
+    adapterMaPlayerId = maPlayerId;
+  } else {
+    adapterMaPlayerId = '';
+    maPlayerId = '';
   }
 
-  if (backend !== 'DummyBackend' && backend !== 'BackendMusicAssistant' && !ipValue) {
+  if (!isNullBackend(backend) && backend !== 'BackendMusicAssistant' && !ipValue) {
     updateModalState({ error: 'Backend IP is required for this backend.' });
     render();
     return;
   }
 
   zone.backend = backend;
-  zone.ip = backend === 'DummyBackend' ? '' : ipValue;
+  zone.ip = isNullBackend(backend) ? '' : ipValue;
+  if (backend === 'BackendMusicAssistant') {
+    if (zone.contentAdapter) delete zone.contentAdapter;
+  } else if (selectedContentAdapter) {
+    const adapterOptions = selectedContentAdapter === 'musicassistant' && adapterMaPlayerId
+      ? { maPlayerId: adapterMaPlayerId }
+      : undefined;
+    zone.contentAdapter = adapterOptions ? { type: selectedContentAdapter, options: adapterOptions } : { type: selectedContentAdapter };
+  } else if (defaultAdapter) {
+    zone.contentAdapter = { type: defaultAdapter };
+  } else if (zone.contentAdapter) {
+    delete zone.contentAdapter;
+  }
+
   if (backend === 'BackendMusicAssistant') {
     zone.maPlayerId = maPlayerId;
     if (state.modal.maSuggestions?.length) {
+      const trimmedIp = ipValue.trim();
       state.suggestions = state.suggestions || {};
       state.suggestions[zone.id] = state.modal.maSuggestions;
       const cache = ensureMusicAssistantCache();
-      cache.playersByIp[ipValue] = state.modal.maSuggestions;
+      if (trimmedIp) {
+        cache.playersByIp[trimmedIp] = state.modal.maSuggestions;
+        cache.lastIP = trimmedIp;
+      }
+    }
+    const provider = state.config.mediaProvider = state.config.mediaProvider || { type: '', options: {} };
+    const providerType = typeof provider.type === 'string' ? provider.type.trim() : '';
+    if (!providerType || providerType === 'DummyProvider') {
+      provider.type = 'MusicAssistantProvider';
+    }
+    const providerOptions = typeof provider.options === 'object' && provider.options
+      ? provider.options
+      : (provider.options = {});
+    if (ipValue) {
+      providerOptions.IP = ipValue;
+      const cache = ensureMusicAssistantCache();
+      cache.providerHost = ipValue;
       cache.lastIP = ipValue;
     }
+    if (!providerOptions.PORT) {
+      providerOptions.PORT = '8095';
+    }
+    state.connectedProvider = {
+      type: provider.type,
+      options: { ...providerOptions },
+    };
   } else if ('maPlayerId' in zone) {
     delete zone.maPlayerId;
   }
 
   state.zoneStatus = state.zoneStatus || {};
-  state.zoneStatus[zone.id] = {
+  const updatedStatus = state.zoneStatus[zone.id] = {
     ...(state.zoneStatus[zone.id] || { id: zone.id }),
     backend: zone.backend,
     ip: zone.ip,
     connected: false,
   };
+  updatedStatus.capabilities = Array.isArray(updatedStatus.capabilities)
+    ? [...updatedStatus.capabilities]
+    : [];
 
-  if (backend !== 'BackendMusicAssistant' && state.suggestions) {
+  if (!needsMaPlayer && state.suggestions) {
     delete state.suggestions[zone.id];
   }
 
@@ -2374,6 +2765,16 @@ function bindFormEvents() {
       const zoneId = Number(button.getAttribute('data-id'));
       if (Number.isNaN(zoneId)) return;
       openBackendModal(zoneId);
+    });
+  });
+
+  document.querySelectorAll('[data-action="toggle-zone-details"]').forEach((button) => {
+    if (!(button instanceof HTMLButtonElement)) return;
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      const zoneId = Number(button.getAttribute('data-id'));
+      if (Number.isNaN(zoneId)) return;
+      toggleZoneDetails(zoneId);
     });
   });
 
@@ -2740,9 +3141,13 @@ function syncBeolinkModalSelection() {
 }
 
 async function fetchMusicAssistantPlayers(zone, button) {
-  const ip = (zone.ip || '').trim();
-  if (!ip) {
-    setStatus('Set the Music Assistant host before scanning players.', true);
+  const host = (zone.ip || '').trim();
+  if (!host) {
+    const backend = normalizeBackend(zone.backend || state.modal?.backend || '');
+    const message = backend === 'BackendMusicAssistant'
+      ? 'Enter the Music Assistant host before scanning players.'
+      : 'Configure the Music Assistant provider host before scanning players.';
+    setStatus(message, true);
     if (button instanceof HTMLButtonElement) {
       button.disabled = false;
       button.textContent = 'Scan players';
@@ -2759,16 +3164,16 @@ async function fetchMusicAssistantPlayers(zone, button) {
     const response = await fetch('/admin/api/musicassistant/players', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ip, zoneId: zone.id }),
+      body: JSON.stringify({ ip: host, zoneId: zone.id }),
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data?.message || `HTTP ${response.status}`);
-    const trimmedIp = ip.trim();
+    const trimmedHost = host.trim();
     state.suggestions = state.suggestions || {};
     state.suggestions[zone.id] = data.players || [];
     const cache = ensureMusicAssistantCache();
-    cache.playersByIp[trimmedIp] = data.players || [];
-    cache.lastIP = trimmedIp;
+    cache.playersByIp[trimmedHost] = data.players || [];
+    cache.lastIP = trimmedHost;
     if (state.modal?.open && state.modal.zoneId === zone.id) {
       state.modal.maSuggestions = data.players || [];
       if (!state.modal.maPlayerId && Array.isArray(data.players) && data.players.length === 1) {
@@ -3192,5 +3597,7 @@ function defaultOptions() {
   return {
     backends: [],
     providers: [],
+    contentAdapters: [],
+    defaultContentAdapters: {},
   };
 }
