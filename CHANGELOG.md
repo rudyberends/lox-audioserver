@@ -1,3 +1,16 @@
+## <small>2.4.1-beta.2 (2025-10-18)</small>
+
+* fix: advertise capabilities for backends ([04dfb46](https://github.com/rudyberends/lox-audioserver/commit/04dfb46))
+* fix: improved the beolink backend ([1fe398d](https://github.com/rudyberends/lox-audioserver/commit/1fe398d))
+* fix: refactor backends ([5cd3219](https://github.com/rudyberends/lox-audioserver/commit/5cd3219))
+* fix: resize coverart for lists to improve performance ([cefc631](https://github.com/rudyberends/lox-audioserver/commit/cefc631))
+* fix: reworked sendcommand ([b7341ba](https://github.com/rudyberends/lox-audioserver/commit/b7341ba))
+* fix: updated files ([b4253fb](https://github.com/rudyberends/lox-audioserver/commit/b4253fb))
+* fix: zonehandling ([da5d335](https://github.com/rudyberends/lox-audioserver/commit/da5d335))
+* Merge branch 'beta' into feat/backend-refactor ([64cea1a](https://github.com/rudyberends/lox-audioserver/commit/64cea1a))
+* Merge pull request #47 from rudyberends/feat/backend-refactor ([0dd04a7](https://github.com/rudyberends/lox-audioserver/commit/0dd04a7)), closes [#47](https://github.com/rudyberends/lox-audioserver/issues/47)
+* refactor(nullBackend): renamed dummy to nullBackend ([253e540](https://github.com/rudyberends/lox-audioserver/commit/253e540))
+
 ## <small>2.4.1-beta.1 (2025-10-18)</small>
 
 * Merge pull request #46 from rudyberends/feat/beolink-improvements ([ecc9d6a](https://github.com/rudyberends/lox-audioserver/commit/ecc9d6a)), closes [#46](https://github.com/rudyberends/lox-audioserver/issues/46)
