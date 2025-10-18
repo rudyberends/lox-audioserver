@@ -1,6 +1,7 @@
 import logger from '../../utils/troxorlogger';
 import { getZoneById, updateZonePlayerStatus } from './zonemanager';
 import { PlayerStatus } from './loxoneTypes';
+import type { ZoneCapabilityDescriptor, ZoneCapabilityContext } from './capabilityTypes';
 
 export interface BackendProbeOptions {
   ip: string;
@@ -9,7 +10,6 @@ export interface BackendProbeOptions {
   port?: number;
   timeoutMs?: number;
 }
-
 /**
  * Abstract base class representing a backend connection.
  * Subclasses must implement the initialize method.
@@ -70,6 +70,8 @@ export default abstract class Backend {
   async cleanup(): Promise<void> {
     // Default: nothing to clean up
   }
+
+  abstract describeCapabilities(context?: ZoneCapabilityContext): ZoneCapabilityDescriptor[];
 
   /**
    * Retrieve the zone for this backend, logging a warning if it doesn't exist.

@@ -2,6 +2,8 @@ import Backend, { BackendProbeOptions } from '../backendBaseClass';
 import logger from '../../../utils/troxorlogger';
 import { PlayerStatus, AudioType, RepeatMode } from '../loxoneTypes';
 import axios from 'axios';
+import type { ZoneCapabilityDescriptor, ZoneCapabilityContext } from '../capabilityTypes';
+import { backendCapabilities } from '../capabilityHelper';
 
 /**
  * BackendSonos class extends the Base backend class to handle Sonos-specific functionalities.
@@ -86,5 +88,9 @@ export default class BackendSonos extends Backend {
       logger.error(`[SonosBackend] Error sending command [${command}] to Sonos for player ${this.playerid}: ${error}`);
       throw error; // Re-throw for error handling
     }
+  }
+
+  describeCapabilities(_context: ZoneCapabilityContext = {}): ZoneCapabilityDescriptor[] {
+    return backendCapabilities({ control: { status: 'native' } });
   }
 }

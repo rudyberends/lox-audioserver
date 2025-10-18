@@ -18,6 +18,7 @@ import {
 import '../provider/musicAssistant/contentAdapter';
 import '../provider/beoLink/contentAdapter';
 import type { ZoneConfigEntry, AdminConfig } from '../../config/configStore';
+import NullBackend from './nullBackend';
 import { mergeZoneConfigEntries } from './zoneConfigUtils';
 import {
   PlayerStatus as LoxonePlayerStatus,
@@ -33,6 +34,8 @@ import {
   removeZoneFromGroups,
   GroupRecord,
 } from './groupTracker';
+import type { ZoneCapabilityDescriptor, ZoneCapabilityKind } from './capabilityTypes';
+import { CAPABILITY_KIND_ORDER } from './capabilityHelper';
 
 type PlayerOutputChannel = {
   id?: string;
@@ -102,6 +105,7 @@ interface ZoneStatus {
   title?: string;
   artist?: string;
   coverUrl?: string;
+  capabilities?: ZoneCapabilityDescriptor[];
 }
 
 interface PreparedZoneContext {
@@ -633,34 +637,226 @@ const setupZoneById = async (playerId: number): Promise<boolean> => {
 function getZoneStatuses(): Record<number, ZoneStatus> {
   const statuses: Record<number, ZoneStatus> = {};
   const adminConfig = getAdminConfig();
+  const configMap = new Map<number, ZoneConfigEntry>();
 
   adminConfig.zones.forEach((zoneConfig) => {
-    statuses[zoneConfig.id] = {
-      id: zoneConfig.id,
-      backend: zoneConfig.backend,
-      ip: zoneConfig.ip,
-      name: zoneConfig.name || `Zone ${zoneConfig.id}`,
-      connected: Boolean(zone[zoneConfig.id]?.player.backendInstance),
-    };
+    configMap.set(zoneConfig.id, zoneConfig);
+    const zoneEntry = zone[zoneConfig.id];
+    const status = composeZoneStatus(zoneConfig, zoneEntry);
+    if (status) {
+      statuses[status.id] = status;
+    }
   });
 
   Object.entries(zone).forEach(([idString, zoneEntry]) => {
     const id = Number(idString);
-    const playerEntry = zoneEntry.playerEntry;
-    statuses[id] = {
-      id,
-      backend: zoneEntry.player.backend || statuses[id]?.backend || '',
-      ip: zoneEntry.player.ip || statuses[id]?.ip || '',
-      name: zoneEntry.player.name || statuses[id]?.name || `Zone ${id}`,
-      connected: Boolean(zoneEntry.player.backendInstance),
-      state: playerEntry?.mode || playerEntry?.clientState || statuses[id]?.state,
-      title: playerEntry?.title || playerEntry?.name || statuses[id]?.title,
-      artist: playerEntry?.artist || statuses[id]?.artist,
-      coverUrl: playerEntry?.coverurl || statuses[id]?.coverUrl,
-    };
+    const zoneConfig = configMap.get(id);
+    const status = composeZoneStatus(zoneConfig, zoneEntry);
+    if (status) {
+      statuses[id] = status;
+    }
   });
 
   return statuses;
+}
+
+function composeZoneStatus(zoneConfig?: ZoneConfigEntry, zoneEntry?: ZoneEntry): ZoneStatus | undefined {
+  const id = zoneConfig?.id ?? zoneEntry?.player.playerid;
+  if (!Number.isFinite(id)) return undefined;
+
+  const backend = zoneEntry?.player.backend || zoneConfig?.backend || '';
+  const ip = zoneEntry?.player.ip || zoneConfig?.ip || '';
+  const name =
+    zoneEntry?.player.name
+    || zoneConfig?.name
+    || `Zone ${id}`;
+  const playerEntry = zoneEntry?.playerEntry;
+
+  const status: ZoneStatus = {
+    id: Number(id),
+    backend,
+    ip,
+    name,
+    connected: Boolean(zoneEntry?.player.backendInstance),
+    capabilities: buildZoneCapabilities(zoneConfig, zoneEntry),
+  };
+
+  if (playerEntry) {
+    status.state = playerEntry.mode || playerEntry.clientState || undefined;
+    status.title = playerEntry.title || playerEntry.name || undefined;
+    status.artist = playerEntry.artist || undefined;
+    status.coverUrl = playerEntry.coverurl || undefined;
+  }
+
+  return status;
+}
+
+function buildZoneCapabilities(zoneConfig?: ZoneConfigEntry, zoneEntry?: ZoneEntry): ZoneCapabilityDescriptor[] {
+  const backendDescriptors = collectBackendCapabilities(zoneConfig, zoneEntry);
+  const adapterDescriptors = collectAdapterCapabilities(zoneConfig, zoneEntry);
+  return mergeCapabilityDescriptors(backendDescriptors, adapterDescriptors);
+}
+
+function collectBackendCapabilities(zoneConfig?: ZoneConfigEntry, zoneEntry?: ZoneEntry): ZoneCapabilityDescriptor[] {
+  const backendInstance = zoneEntry?.player.backendInstance;
+  if (backendInstance && typeof (backendInstance as any).describeCapabilities === 'function') {
+    try {
+      return normalizeCapabilityDescriptors(
+        (backendInstance as any).describeCapabilities({ zoneConfig, zoneState: zoneEntry }),
+        'backend',
+      );
+    } catch (error) {
+      logger.debug(
+        `[ZoneManager] describeCapabilities failed for zone ${zoneEntry?.player.playerid}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  const backendKey = zoneEntry?.player.backend || zoneConfig?.backend || '';
+  if (backendKey.toLowerCase() === 'nullbackend' || backendKey.toLowerCase() === 'dummybackend') {
+    const nullBackend = new NullBackend('', zoneConfig?.id ?? zoneEntry?.player.playerid ?? 0);
+    return normalizeCapabilityDescriptors(
+      nullBackend.describeCapabilities({ zoneConfig, zoneState: zoneEntry }),
+      'backend',
+    );
+  }
+
+  return [];
+}
+
+function collectAdapterCapabilities(zoneConfig?: ZoneConfigEntry, zoneEntry?: ZoneEntry): ZoneCapabilityDescriptor[] {
+  const descriptors: ZoneCapabilityDescriptor[] = [];
+
+  const configuredAdapterType = zoneConfig?.contentAdapter?.type?.trim();
+  if (!configuredAdapterType) return descriptors;
+
+  const adapterInstance = zoneEntry?.contentAdapter;
+  if (adapterInstance && typeof adapterInstance.describeCapabilities === 'function') {
+    descriptors.push(
+      ...normalizeCapabilityDescriptors(
+        adapterInstance.describeCapabilities({ zoneConfig, zoneState: zoneEntry }),
+        'adapter',
+      ),
+    );
+  }
+
+  const descriptor = getAdapterDescriptor(configuredAdapterType);
+  if (descriptor?.capabilities?.length) {
+    descriptors.push(...normalizeCapabilityDescriptors(descriptor.capabilities, 'adapter'));
+  }
+
+  return descriptors;
+}
+
+function normalizeCapabilityDescriptors(
+  input: unknown,
+  defaultSource: 'backend' | 'adapter',
+): ZoneCapabilityDescriptor[] {
+  if (!Array.isArray(input)) return [];
+  const normalized: ZoneCapabilityDescriptor[] = [];
+
+  input.forEach((entry) => {
+    if (!entry || typeof entry !== 'object') return;
+    const raw = entry as Record<string, unknown>;
+    const kindRaw = typeof raw.kind === 'string' ? raw.kind.trim().toLowerCase() : '';
+    if (!isZoneCapabilityKind(kindRaw)) return;
+    const statusRaw = typeof raw.status === 'string' ? raw.status.trim().toLowerCase() : '';
+    const status = normalizeCapabilityStatus(statusRaw);
+    const detail = typeof raw.detail === 'string' ? raw.detail.trim() : undefined;
+    const source = raw.source === 'backend' || raw.source === 'adapter' ? raw.source : defaultSource;
+
+    normalized.push({
+      kind: kindRaw,
+      status,
+      detail,
+      source,
+    });
+  });
+
+  return normalized;
+}
+
+function isZoneCapabilityKind(value: string): value is ZoneCapabilityKind {
+  return CAPABILITY_KIND_ORDER.includes(value as ZoneCapabilityKind);
+}
+
+function normalizeCapabilityStatus(value: string): 'none' | 'native' | 'adapter' {
+  switch (value) {
+    case 'native':
+      return 'native';
+    case 'adapter':
+      return 'adapter';
+    default:
+      return 'none';
+  }
+}
+
+function mergeCapabilityDescriptors(
+  backendDescriptors: ZoneCapabilityDescriptor[],
+  adapterDescriptors: ZoneCapabilityDescriptor[],
+): ZoneCapabilityDescriptor[] {
+  const map = new Map<ZoneCapabilityKind, ZoneCapabilityDescriptor>();
+
+  CAPABILITY_KIND_ORDER.forEach((kind) => {
+    map.set(kind, { kind, status: 'none', source: 'backend' });
+  });
+
+  backendDescriptors.forEach((descriptor) => {
+    map.set(descriptor.kind, { ...descriptor, source: descriptor.source || 'backend' });
+  });
+
+  adapterDescriptors.forEach((descriptor) => {
+    const normalized = { ...descriptor, source: descriptor.source || 'adapter' };
+    const existing = map.get(normalized.kind);
+    if (!existing || existing.status === 'none') {
+      map.set(normalized.kind, normalized);
+      return;
+    }
+
+    if (existing.status === 'native') {
+      if (normalized.status === 'adapter') {
+        map.set(normalized.kind, {
+          kind: normalized.kind,
+          status: 'adapter',
+          detail: mergeCapabilityDetail(normalized.detail, existing.detail),
+          source: 'adapter',
+        });
+        return;
+      }
+      const detail = mergeCapabilityDetail(existing.detail, normalized.detail);
+      map.set(normalized.kind, { ...existing, detail });
+      return;
+    }
+
+    if (normalized.status === 'native') {
+      map.set(normalized.kind, normalized);
+      return;
+    }
+
+    if (normalized.status === 'adapter') {
+      map.set(normalized.kind, {
+        kind: normalized.kind,
+        status: 'adapter',
+        detail: normalized.detail,
+        source: 'adapter',
+      });
+      return;
+    }
+
+    const detail = mergeCapabilityDetail(existing.detail, normalized.detail);
+    map.set(normalized.kind, { ...existing, detail });
+  });
+
+  return CAPABILITY_KIND_ORDER.map((kind) => map.get(kind) ?? { kind, status: 'none', source: 'backend' });
+}
+
+function mergeCapabilityDetail(a?: string, b?: string): string | undefined {
+  if (a && b) {
+    if (a.includes(b)) return a;
+    if (b.includes(a)) return b;
+    return `${a}; ${b}`;
+  }
+  return a || b || undefined;
 }
 
 /**

@@ -1,6 +1,7 @@
 import type { ZoneConfigEntry, AdminConfig } from '../../../config/configStore';
 import type { ZoneEntry } from '../zonemanager';
 import type { PlayerStatus } from '../loxoneTypes';
+import type { ZoneCapabilityDescriptor, ZoneCapabilityContext } from '../capabilityTypes';
 
 export type ZoneContentCommand =
   | 'serviceplay'
@@ -17,6 +18,7 @@ export interface ZoneContentPlaybackAdapter {
   handles(command: string): boolean;
   execute(command: ZoneContentCommand, payload: unknown): Promise<boolean>;
   cleanup(): Promise<void>;
+  describeCapabilities?(context: ZoneCapabilityContext): ZoneCapabilityDescriptor[];
 }
 
 export interface ZoneContentFactoryOptions {
@@ -42,6 +44,7 @@ export interface ZoneContentAdapterDescriptor {
     maPlayerId?: boolean;
   };
   providers?: string[];
+  capabilities?: ZoneCapabilityDescriptor[];
 }
 
 const registry = new Map<string, ZoneContentAdapterDescriptor>();

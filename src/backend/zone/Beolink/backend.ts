@@ -116,8 +116,8 @@ export default class BackendBeolink extends Backend {
 
   async cleanup(): Promise<void> {
     BackendBeolink.unregisterZone(this.playerid);
-   await this.notifyClient.close();
-   await super.cleanup();
+    await this.notifyClient.close();
+    await super.cleanup();
   }
 
   describeCapabilities(_context: ZoneCapabilityContext = {}): ZoneCapabilityDescriptor[] {
@@ -141,7 +141,13 @@ export default class BackendBeolink extends Backend {
    * 
    */
   async sendGroupCommand(command: string, type: string, playerid: number, ...additionalIDs: string[]): Promise<void> {
-    logger.warn(`[BeoLink][Zone ${this.playerid}] Group commands are handled upstream; received unexpected ${command}.`);
+    if (command === 'groupJoinMany' || command === 'groupJoin') {
+      await this.joinExperience(type, additionalIDs);
+    } else if (command === 'groupLeaveMany' || command === 'groupLeave') {
+      await this.leaveExperience(type, additionalIDs);
+    } else {
+      logger.warn(`[BeoLink][Zone ${this.playerid}] Unsupported group command: ${command}`);
+    }
   }
 
   private async joinExperience(_type: string, members: string[]): Promise<void> {
@@ -464,8 +470,8 @@ export default class BackendBeolink extends Backend {
     const normalizedLeaderCandidate =
       BackendBeolink.normaliseDeviceId(
         experience?.source?.product?.jid ??
-          (Array.isArray(experience.listener) ? experience.listener[0] : undefined) ??
-          this.deviceJid,
+        (Array.isArray(experience.listener) ? experience.listener[0] : undefined) ??
+        this.deviceJid,
       ) ?? this.normalizedDeviceJid;
 
     const unresolved = new Set<string>();

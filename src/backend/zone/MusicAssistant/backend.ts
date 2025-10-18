@@ -33,6 +33,8 @@ import {
 } from './commands';
 import { setMusicAssistantSuggestions, clearMusicAssistantSuggestion } from '../../../config/adminState';
 import { upsertGroup, removeZoneFromGroups, getGroupByLeader, getGroupByZone, removeGroupByLeader } from '../groupTracker';
+import type { ZoneCapabilityDescriptor, ZoneCapabilityContext } from '../capabilityTypes';
+import { backendNativeCapabilities } from '../capabilityHelper';
 
 const CONTENT_COMMANDS: ZoneContentCommand[] = [
   'serviceplay',
@@ -212,6 +214,14 @@ export default class BackendMusicAssistant extends Backend {
       ];
     }
     return this.capabilities;
+  }
+
+  describeCapabilities(context: ZoneCapabilityContext = {}): ZoneCapabilityDescriptor[] {
+    return backendNativeCapabilities({
+      control: { status: 'native', detail: "Music Assistant" },
+      content: { status: 'native', detail: "Music Assistant" },
+      grouping: { status: 'native', detail: "Music Assistant" },
+    });
   }
 
   private createCommandContext(): MusicAssistantCommandContext {

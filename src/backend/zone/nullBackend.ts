@@ -1,6 +1,8 @@
 import Backend from './backendBaseClass';
 import logger from '../../utils/troxorlogger';
 import { PlayerStatus, AudioType, RepeatMode, FileType } from './loxoneTypes';
+import type { ZoneCapabilityDescriptor, ZoneCapabilityContext } from './capabilityTypes';
+import { backendNoneCapabilities } from './capabilityHelper';
 
 /**
  * NullBackend – fallback backend used when a zone has no concrete integration.
@@ -53,6 +55,12 @@ export default class NullBackend extends Backend {
       this.updateInterval = null;
     }
     await super.cleanup();
+  }
+
+  describeCapabilities(_context: ZoneCapabilityContext = {}): ZoneCapabilityDescriptor[] {
+    return backendNoneCapabilities({
+      control: { status: 'none', detail: 'Unconfigured' },
+    });
   }
 
   private pushInitialPlayerEntry(): void {

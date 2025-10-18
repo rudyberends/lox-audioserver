@@ -8,6 +8,8 @@ import {
   ZoneContentCommand,
   ZoneContentFactoryOptions,
 } from '../../zone/capabilities';
+import type { ZoneCapabilityDescriptor, ZoneCapabilityContext } from '../../zone/capabilityTypes';
+import { adapterCapabilities } from '../../zone/capabilityHelper';
 
 const SUPPORTED_COMMANDS: ZoneContentCommand[] = ['serviceplay'];
 
@@ -29,6 +31,12 @@ class BeolinkContentAdapter implements ZoneContentPlaybackAdapter {
 
   async cleanup(): Promise<void> {
     // No persistent resources to release.
+  }
+
+  describeCapabilities(_context: ZoneCapabilityContext = {}): ZoneCapabilityDescriptor[] {
+    return adapterCapabilities({
+      content: { status: 'adapter', detail: 'BeoRadio' },
+    });
   }
 
   private async handleServicePlay(rawPayload: unknown): Promise<boolean> {
@@ -63,9 +71,12 @@ class BeolinkContentAdapter implements ZoneContentPlaybackAdapter {
 
 registerZoneContentAdapter({
   key: 'beolink',
-  label: 'BeoLink Player',
+  label: 'BeoLink',
   defaultBackends: ['BackendBeolink'],
   providers: ['BeolinkProvider'],
+  capabilities: adapterCapabilities({
+    content: { status: 'adapter', detail: 'BeoRadio' },
+  }),
   factory: (options) => {
     if (options.backendId !== 'BackendBeolink') return undefined;
     const ip = options.zoneConfig.ip?.trim();

@@ -5,6 +5,8 @@ import {
   ZoneContentCommand,
   ZoneContentFactoryOptions,
 } from '../../zone/capabilities';
+import type { ZoneCapabilityDescriptor, ZoneCapabilityContext } from '../../zone/capabilityTypes';
+import { adapterCapabilities } from '../../zone/capabilityHelper';
 import MusicAssistantClient from '../../zone/MusicAssistant/client';
 import { denormalizeMediaUri, denormalizePlaylistUri, normalizeMediaUri, toPlaylistCommandUri } from './utils';
 
@@ -53,6 +55,14 @@ class MusicAssistantContentAdapter implements ZoneContentPlaybackAdapter {
       this.connectPromise = undefined;
       this.ownsClient = false;
     }
+  }
+
+  describeCapabilities(_context: ZoneCapabilityContext = {}): ZoneCapabilityDescriptor[] {
+    return adapterCapabilities({
+      content: { status: 'adapter', detail: 'Music Assistant' },
+      alerts: { status: 'adapter' },
+      tts: { status: 'adapter' },
+    });
   }
 
   private async ensureClient(): Promise<MusicAssistantClient | undefined> {
@@ -326,6 +336,11 @@ registerZoneContentAdapter({
   defaultBackends: ['BackendMusicAssistant'],
   requires: { maPlayerId: true },
   providers: ['MusicAssistantProvider'],
+  capabilities: adapterCapabilities({
+    content: { status: 'adapter', detail: 'Music Assistant' },
+    alerts: { status: 'adapter' },
+    tts: { status: 'adapter' },
+  }),
   factory: (options) => {
     const { zoneConfig, zoneId } = options;
     const maPlayerId = zoneConfig.maPlayerId;
