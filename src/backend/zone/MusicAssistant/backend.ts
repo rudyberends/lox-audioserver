@@ -24,7 +24,13 @@ import {
 } from '../capabilities';
 import { EventMessage } from './types';
 import { mapPlayerToTrack, mapQueueToState } from './stateMapper';
-import { handleMusicAssistantControlCommand, MusicAssistantCommandContext } from './commands';
+import {
+  MusicAssistantCapability,
+  MusicAssistantCommandContext,
+  createZoneContentPlaybackCapability,
+  createZoneControlCapability,
+  createZoneGroupingCapability,
+} from './commands';
 import { setMusicAssistantSuggestions, clearMusicAssistantSuggestion } from '../../../config/adminState';
 import { upsertGroup, removeZoneFromGroups, getGroupByLeader, getGroupByZone, removeGroupByLeader } from '../groupTracker';
 
@@ -52,6 +58,7 @@ export default class BackendMusicAssistant extends Backend {
 
   private maPlayerId: string; // <- the Music Assistant player ID
   private loxoneZoneId: number; // <- keep track of original zone id for logging
+  private capabilities?: MusicAssistantCapability[];
 
   /**
    * @param serverIp     IP or hostname of the Music Assistant server.
@@ -158,19 +165,14 @@ export default class BackendMusicAssistant extends Backend {
       }
     }
 
-    const ctx: MusicAssistantCommandContext = {
-      client: this.client,
-      maPlayerId: this.maPlayerId,
-      loxoneZoneId: this.loxoneZoneId,
-      getZoneOrWarn: () => this.getZoneOrWarn(),
-      pushPlayerEntryUpdate: (update) => this.pushPlayerStatusUpdate(update),
-    };
-
-    const handled = await handleMusicAssistantControlCommand(ctx, command, param);
-
-    if (!handled) {
-      logger.warn(`[MusicAssistant][Zone:${this.loxoneZoneId}] Unknown command: ${command}`);
+    const ctx = this.createCommandContext();
+    for (const capability of this.ensureCapabilities()) {
+      if (!capability.handles(command)) continue;
+      const handled = await capability.execute(ctx, command, param);
+      if (handled) return;
     }
+
+    logger.warn(`[MusicAssistant][Zone:${this.loxoneZoneId}] Unknown command: ${command}`);
   }
 
   private ensureContentAdapter(): ZoneContentPlaybackAdapter | undefined {
@@ -199,6 +201,27 @@ export default class BackendMusicAssistant extends Backend {
     }
 
     return this.contentAdapter;
+  }
+
+  private ensureCapabilities(): MusicAssistantCapability[] {
+    if (!this.capabilities) {
+      this.capabilities = [
+        createZoneControlCapability(),
+        createZoneGroupingCapability(),
+        createZoneContentPlaybackCapability(),
+      ];
+    }
+    return this.capabilities;
+  }
+
+  private createCommandContext(): MusicAssistantCommandContext {
+    return {
+      client: this.client,
+      maPlayerId: this.maPlayerId,
+      loxoneZoneId: this.loxoneZoneId,
+      getZoneOrWarn: () => this.getZoneOrWarn(),
+      pushPlayerEntryUpdate: (update) => this.pushPlayerStatusUpdate(update),
+    };
   }
 
   sendGroupCommand(_cmd: string, _type: string, _playerid: string, ...additionalIDs: string[]): void {
