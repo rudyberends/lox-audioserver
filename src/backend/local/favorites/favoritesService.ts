@@ -1,680 +1,233 @@
-import { promises as fs } from 'fs';
-import path from 'path';
-import logger from '../../../utils/troxorlogger';
-import { FavoriteItem, FavoriteResponse, MediaFolderItem, PlaylistItem, RadioFolderItem } from '../../provider/types';
-import { getMediaProvider } from '../../provider/factory';
-import { parseIdentifier, normalizeMediaUri, denormalizeMediaUri } from '../../provider/musicAssistant/utils';
-import { broadcastEvent } from '../../../http/broadcastEvent';
+import path from "path";
+import logger from "../../../utils/troxorlogger";
+import { broadcastEvent } from "../../../http/broadcastEvent";
+import { FavoriteItem, FavoriteResponse } from "../../provider/types";
+import { ensureDir, readJson, writeJson, resolveDataDir } from "../../../utils/fileutils";
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const FAVORITES_DIR = path.join(DATA_DIR, 'favorites');
-const BASE_DELTA = 1_000_000;
-const BASE_FAVORITE_ZONE = 1 * BASE_DELTA;
-
-type InternalFavoriteItem = FavoriteItem & { sourceId?: string };
-type InternalFavoriteResponse = FavoriteResponse & { items: InternalFavoriteItem[]; ts: number };
-type FavoriteMetadata = Partial<InternalFavoriteItem>;
-
-const metadataCache = new Map<string, FavoriteMetadata | null>();
+const FAVORITES_DIR = resolveDataDir("favorites");
 
 /**
- * Return favorites for a zone, applying pagination while keeping stored data intact.
+ * Builds the absolute file path for a given zone's favorites file.
+ * @param zoneId - The numeric ID of the zone (e.g., a room or device group).
+ * @returns The absolute JSON file path for that zone's favorites list.
  */
-export async function getRoomFavorites(
-  zoneId: number,
-  start: number,
-  limit: number,
-): Promise<FavoriteResponse> {
-  const favorites = await loadFavorites(zoneId);
-  const offset = Math.max(0, start);
-  const boundedLimit = limit > 0 ? limit : favorites.items.length;
-  const items = favorites.items.slice(offset, offset + boundedLimit);
-
-  return {
-    ...favorites,
-    start: offset,
-    totalitems: favorites.items.length,
-    items,
-  };
+function getFavoritesFilePath(zoneId: number): string {
+  return path.join(FAVORITES_DIR, `${zoneId}.json`);
+}
+/**
+ * Loads and parses a zone’s favorites file. If it doesn't exist,
+ * an empty structure is returned.
+ * @param zoneId - The zone to load favorites for.
+ * @returns The current favorites state for the given zone.
+ */
+async function load(zoneId: number): Promise<FavoriteResponse> {
+  await ensureDir(FAVORITES_DIR);
+  const data = await readJson<FavoriteResponse>(getFavoritesFilePath(zoneId));
+  return (
+    data ?? {
+      id: String(zoneId),
+      name: "Favorites",
+      totalitems: 0,
+      start: 0,
+      items: [],
+      ts: Date.now(),
+    }
+  );
 }
 
 /**
- * Append a favorite for the given zone. Missing identifiers are derived from the title.
+ * Writes a favorites structure to disk and triggers a broadcast event.
+ * @param zoneId - The target zone whose favorites have been updated.
+ * @param data - The favorites payload to persist.
+ */
+async function save(zoneId: number, data: FavoriteResponse): Promise<void> {
+  data.totalitems = data.items.length;
+  await writeJson(getFavoritesFilePath(zoneId), data);
+
+  logger.debug(`[favorites][zone:${zoneId}] Saved ${data.items.length} items`);
+  broadcastEvent(
+    JSON.stringify({
+      roomfavchanged_event: [
+        { count: data.items.length, playerid: zoneId },
+      ],
+    }),
+  );
+}
+
+/**
+ * Retrieves favorites for a specific zone, with optional pagination.
+ * @param zoneId - The zone to read favorites from.
+ * @param start - Optional start index (defaults to 0).
+ * @param limit - Optional limit of items to return (0 = all).
+ * @returns A {@link FavoriteResponse} containing the requested items.
+ */
+export async function getRoomFavorites(
+  zoneId: number,
+  start = 0,
+  limit = 0,
+): Promise<FavoriteResponse> {
+  const favs = await load(zoneId);
+  const items =
+    limit > 0 ? favs.items.slice(start, start + limit) : favs.items;
+  return { ...favs, start, totalitems: favs.items.length, items };
+}
+
+/**
+ * Appends a new favorite to the given zone.
+ * IDs increment automatically; `slot` defines ordering.
+ * @param zoneId - Zone to add the favorite to.
+ * @param title - Human-readable title or track name.
+ * @param sourceId - Backend identifier for the audio source.
+ * @returns The updated {@link FavoriteResponse} after insertion.
  */
 export async function addRoomFavorite(
   zoneId: number,
   title: string,
-  encodedId?: string,
+  sourceId: string,
 ): Promise<FavoriteResponse> {
-  const favorites = await loadFavorites(zoneId);
-  const trimmedId = encodedId?.trim();
-  const sourceId =
-    extractSourceId(trimmedId) ??
-    (trimmedId && trimmedId.length > 0 ? trimmedId : buildFallbackSourceId(zoneId, title));
-  const normalizedTitle = title?.trim() ? title.trim() : sourceId;
+  const favs = await load(zoneId);
+  const id =
+    favs.items.length > 0 ? Math.max(...favs.items.map((f) => f.id)) + 1 : 1;
+  const slot = favs.items.length + 1;
 
-  const baseItem: InternalFavoriteItem = {
-    id: 0,
-    slot: 0,
-    name: normalizedTitle,
-    title: normalizedTitle,
+  const item: FavoriteItem = {
+    id,
+    slot,
     plus: false,
+    name: title,
+    title,
+    album: "",
+    artist: "",
     audiopath: sourceId,
-    type: '',
-    provider: inferProvider(sourceId),
-    service: 'library',
-    rawId: trimmedId ?? '',
-    sourceId,
-  };
-  const enrichedItem = await enrichFavoriteMetadata(baseItem);
-
-  const appended: InternalFavoriteResponse = {
-    ...favorites,
-    items: [
-      ...favorites.items,
-      enrichedItem,
-    ],
-    ts: Date.now(),
+    type: "library_track",
+    coverurl: "",
+    rawId: sourceId,
   };
 
-  return persistFavorites(zoneId, appended);
+  favs.items.push(item);
+  favs.ts = Date.now();
+  logger.info(`[favorites][zone:${zoneId}] Added "${title}"`);
+  await save(zoneId, favs);
+  return favs;
 }
 
 /**
- * Remove a favorite identified by its id.
+ * Deletes a favorite by its numeric ID.
+ * Automatically reorders slots to remain sequential.
+ * @param zoneId - Zone to modify.
+ * @param id - Numeric or string ID of the favorite to remove.
+ * @returns The updated {@link FavoriteResponse} after deletion.
  */
 export async function deleteRoomFavorite(
   zoneId: number,
-  targetId: number | string
+  id: number | string,
 ): Promise<FavoriteResponse> {
-  const favorites = await loadFavorites(zoneId);
-  const id = Number(targetId);
-  if (Number.isNaN(id)) return favorites;
+  const numericId = Number(id);
+  const favs = await load(zoneId);
+  const removed = favs.items.find((f) => f.id === numericId);
+  favs.items = favs.items.filter((f) => f.id !== numericId);
+  favs.items.forEach((f, i) => (f.slot = i + 1));
+  favs.ts = Date.now();
 
-  const prunedItems = favorites.items.filter(
-    (item) => item.id !== id
+  logger.info(
+    `[favorites][zone:${zoneId}] Deleted favorite ${removed?.name ?? numericId}`,
   );
-
-  const filtered: InternalFavoriteResponse = {
-    ...favorites,
-    items: prunedItems,
-    ts: Date.now(),
-  };
-
-  return persistFavorites(zoneId, filtered);
+  await save(zoneId, favs);
+  return favs;
 }
 
 /**
- * Reorder favorites based on the provided encoded identifiers.
+ * Reorders the favorites list by updating slot order
+ * based on an array of favorite IDs.
+ * @param zoneId - Zone to reorder.
+ * @param newOrder - Ordered list of favorite IDs representing the new order.
+ * @returns The updated {@link FavoriteResponse} after reordering.
  */
 export async function reorderRoomFavorites(
   zoneId: number,
-  orderedIds: string[],
+  newOrder: number[],
 ): Promise<FavoriteResponse> {
-  const favorites = await loadFavorites(zoneId);
-  if (!orderedIds.length) return favorites;
+  const favs = await load(zoneId);
+  const byId = new Map(favs.items.map((f) => [f.id, f]));
+  const reordered = newOrder
+    .map((id) => byId.get(id))
+    .filter(Boolean) as FavoriteItem[];
 
-  const itemsById = new Map<string, InternalFavoriteItem>();
-  favorites.items.forEach((item) => itemsById.set(getItemKey(item), item));
-  const reordered: InternalFavoriteItem[] = [];
+  // Append items that weren't explicitly ordered
+  for (const f of favs.items) if (!reordered.includes(f)) reordered.push(f);
 
-  for (const encoded of orderedIds) {
-    const candidate = itemsById.get(encoded);
-    if (candidate) {
-      reordered.push(candidate);
-      itemsById.delete(encoded);
-    }
-  }
+  reordered.forEach((f, i) => (f.slot = i + 1));
+  favs.items = reordered;
+  favs.ts = Date.now();
 
-  // Append items that were not mentioned in the reorder payload, keeping their current order.
-  const remaining = favorites.items.filter((item) => itemsById.has(getItemKey(item))) as InternalFavoriteItem[];
-  const updated: InternalFavoriteResponse = {
-    ...favorites,
-    items: [...reordered, ...remaining],
-    ts: Date.now(),
-  };
-
-  return persistFavorites(zoneId, updated);
+  logger.info(`[favorites][zone:${zoneId}] Reordered favorites`);
+  await save(zoneId, favs);
+  return favs;
 }
 
 /**
- * Toggle the "plus" flag for a given favorite.
+ * Updates the ID of a single favorite entry while preserving order.
+ * Useful for syncing external ID mappings without renumbering everything.
+ * @param zoneId - Zone to update.
+ * @param oldId - Current ID of the favorite.
+ * @param newId - New ID to assign.
+ * @returns The updated {@link FavoriteResponse}.
  */
-export async function setRoomFavoritePlus(
+export async function setRoomFavoritesID(
   zoneId: number,
-  encodedId: string,
-  plus: boolean,
+  oldId: number,
+  newId: number,
 ): Promise<FavoriteResponse> {
-  const favorites = await loadFavorites(zoneId);
-  const updatedItems = favorites.items.map((item) =>
-    getItemKey(item) === encodedId ? { ...item, plus } : item,
-  ) as InternalFavoriteItem[];
+  const favs = await load(zoneId);
+  const updated = favs.items.map((f) =>
+    f.id === oldId ? { ...f, id: newId } : f,
+  );
+  favs.items = updated;
+  favs.ts = Date.now();
 
-  return persistFavorites(zoneId, {
-    ...favorites,
-    items: updatedItems,
-    ts: Date.now(),
-  });
+  logger.info(`[favorites][zone:${zoneId}] Changed favorite ID ${oldId} → ${newId}`);
+  await save(zoneId, favs);
+  return favs;
 }
 
 /**
- * Copy favorites from a source zone to one or more destination zones.
+ * Copies the favorites list from one zone to one or more destination zones.
+ * Existing favorites in destination zones will be overwritten.
+ * @param sourceZone - Zone ID to copy from.
+ * @param destZones - One or more destination zone IDs.
  */
-export async function copyRoomFavorites(sourceZoneId: number, destinationZoneIds: number[]): Promise<void> {
-  if (!destinationZoneIds.length) return;
-
-  const sourceFavorites = await loadFavorites(sourceZoneId);
-
-  for (const destinationId of destinationZoneIds) {
-    if (!Number.isFinite(destinationId) || destinationId <= 0) continue;
-    if (destinationId === sourceZoneId) continue;
-
-    const duplicate: InternalFavoriteResponse = {
-      id: String(destinationId),
-      name: sourceFavorites.name,
-      start: 0,
-      totalitems: sourceFavorites.items.length,
-      items: sourceFavorites.items.map((item) => ({ ...item })) as InternalFavoriteItem[],
-      ts: Date.now(),
-    };
-
-    await persistFavorites(destinationId, duplicate);
+export async function copyRoomFavorites(
+  sourceZone: number,
+  destZones: number[],
+): Promise<void> {
+  const source = await load(sourceZone);
+  for (const dest of destZones) {
+    if (dest === sourceZone) continue;
+    const copy = { ...source, id: String(dest), ts: Date.now() };
+    await save(dest, copy);
+    logger.info(`[favorites][zone:${sourceZone}] Copied favorites → zone:${dest}`);
   }
 }
 
 /**
- * Retrieve a favorite item for playback by its numeric identifier.
+ * Retrieves a specific favorite by ID, typically for playback.
+ * Logs warnings if the item cannot be found.
+ * @param zoneId - Zone to search within.
+ * @param favoriteId - Numeric ID of the favorite to play.
+ * @returns The {@link FavoriteItem} if found, otherwise `undefined`.
  */
 export async function getRoomFavoriteForPlayback(
   zoneId: number,
   favoriteId: number,
 ): Promise<FavoriteItem | undefined> {
-  const favorites = await loadFavorites(zoneId);
-  const match = favorites.items.find(
-    (item) => item.id === favoriteId || item.slot === favoriteId,
-  );
-  if (!match) return undefined;
-  const { sourceId, ...rest } = match;
-  return { ...rest };
-}
+  const favs = await load(zoneId);
+  const item = favs.items.find((f) => f.id === favoriteId);
 
-/**
- * Ensure the favorites directory exists and return the normalized payload for a zone.
- */
-async function loadFavorites(zoneId: number): Promise<InternalFavoriteResponse> {
-  await ensureFavoritesDirectory();
-  const filePath = getFavoritesFilePath(zoneId);
-  const raw = await readFavoritesFile(filePath);
-  let shouldPersist = !raw;
-
-  const normalized = normalizeFavorites(zoneId, raw);
-  if (raw) {
-    shouldPersist = shouldPersist || JSON.stringify(raw) !== JSON.stringify(normalized);
+  if (!item) {
+    logger.warn(`[favorites][zone:${zoneId}] Favorite ${favoriteId} not found for playback`);
+  } else {
+    logger.debug(`[favorites][zone:${zoneId}] Playback favorite: ${item.name}`);
   }
 
-  const { value, changed } = await enrichFavoritesMetadata(normalized);
-  if (changed || shouldPersist) {
-    await writeFavoritesFile(filePath, value);
-  }
-
-  return value;
-}
-
-async function persistFavorites(zoneId: number, payload: InternalFavoriteResponse): Promise<FavoriteResponse> {
-  await ensureFavoritesDirectory();
-  const normalized = normalizeFavorites(zoneId, payload);
-  const { value } = await enrichFavoritesMetadata(normalized);
-  await writeFavoritesFile(getFavoritesFilePath(zoneId), value);
-  const event = {
-    roomfavchanged_event: [
-      {
-        count: value.items?.length ?? 0,
-        playerid: zoneId,
-      },
-    ],
-  };
-
-  broadcastEvent(JSON.stringify(event));
-  return value;
-}
-
-function getFavoritesFilePath(zoneId: number): string {
-  return path.join(FAVORITES_DIR, `${zoneId}.json`);
-}
-
-async function ensureFavoritesDirectory(): Promise<void> {
-  try {
-    await fs.mkdir(FAVORITES_DIR, { recursive: true });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.warn(`[favorites] Failed to ensure favorites directory: ${message}`);
-    throw error;
-  }
-}
-
-async function readFavoritesFile(filePath: string): Promise<FavoriteResponse | undefined> {
-  try {
-    const raw = await fs.readFile(filePath, 'utf8');
-    return JSON.parse(raw);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException)?.code;
-    if (code === 'ENOENT') {
-      return undefined;
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    logger.warn(`[favorites] Failed to read favorites for ${filePath}: ${message}`);
-    throw error;
-  }
-}
-
-async function writeFavoritesFile(
-  filePath: string,
-  payload: InternalFavoriteResponse,
-): Promise<void> {
-  const data = JSON.stringify(payload, null, 2);
-  try {
-    await fs.writeFile(filePath, data, 'utf8');
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.warn(`[favorites] Failed to write favorites for ${filePath}: ${message}`);
-    throw error;
-  }
-}
-
-function normalizeFavorites(
-  zoneId: number,
-  payload: FavoriteResponse | InternalFavoriteResponse | undefined,
-): InternalFavoriteResponse {
-  const items = Array.isArray(payload?.items) ? payload!.items : [];
-
-  const normalizedItems = items
-    .filter((candidate): candidate is InternalFavoriteItem | FavoriteItem => !!candidate)
-    .map((item, index) => normalizeFavoriteItem(item as Record<string, unknown>, index + 1));
-
-  return {
-    id: extractIdentifier(payload?.id, zoneId),
-    name: extractName(payload?.name),
-    start: 0,
-    totalitems: normalizedItems.length,
-    items: normalizedItems,
-    ts: typeof payload?.ts === 'number' ? payload.ts : Date.now(),
-  };
-}
-
-function normalizeFavoriteItem(raw: Record<string, unknown>, slot: number): InternalFavoriteItem {
-  const fallbackTitle = `Favorite ${slot}`;
-  const sourceId = extractSourceIdFromItem(raw, fallbackTitle);
-  const name = extractString(raw.name) || extractString(raw.title) || fallbackTitle;
-  const title = extractString(raw.title) || name;
-  const provider = extractString(raw.provider) || inferProvider(sourceId);
-  const service = extractString(raw.service) || 'library';
-  const type = extractString(raw.type) || inferFavoriteType(sourceId);
-  const audiopath = extractString(raw.audiopath) || sourceId;
-  const coverurl = extractString(raw.coverurl);
-  const duration = extractNumber(raw.duration);
-  const album = extractString(raw.album);
-  const artist = extractString(raw.artist);
-  const station = extractString(raw.station);
-  const owner = extractString(raw.owner);
-  const username = extractString(raw.username);
-  const serviceField = extractString(raw.service);
-  const rawId = encodeFavoriteIdentifier(sourceId, slot);
-  const favoriteId = BASE_FAVORITE_ZONE + (slot - 1);
-
-  const normalized: InternalFavoriteItem = {
-    ...(raw as FavoriteItem),
-    id: favoriteId,
-    slot,
-    name,
-    title,
-    plus: Boolean(raw.plus),
-    audiopath,
-    type,
-    provider,
-    service: serviceField || service,
-    rawId,
-    sourceId,
-  };
-
-  if (coverurl !== undefined) normalized.coverurl = coverurl;
-  if (duration !== undefined) normalized.duration = duration;
-  if (album !== undefined) normalized.album = album;
-  if (artist !== undefined) normalized.artist = artist;
-  if (station !== undefined) normalized.station = station;
-  if (owner !== undefined) normalized.owner = owner;
-  if (username !== undefined) normalized.username = username;
-
-  return normalized;
-}
-
-function extractIdentifier(id: unknown, zoneId: number): string {
-  if (typeof id === 'string' && id.trim()) return id;
-  if (typeof id === 'number' && Number.isFinite(id)) return String(id);
-  return String(zoneId);
-}
-
-function extractName(name: unknown): string {
-  if (typeof name === 'string' && name.trim()) return name.trim();
-  return 'Favorites';
-}
-
-function extractString(value: unknown): string | undefined {
-  if (typeof value === 'string' && value.length > 0) return value;
-  return undefined;
-}
-
-function extractNumber(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  return undefined;
-}
-
-function extractSourceId(encodedId?: string): string | undefined {
-  if (!encodedId) return undefined;
-  const decoded = decodeFavoriteIdentifier(encodedId);
-  if (decoded?.sourceId) return decoded.sourceId;
-  return undefined;
-}
-
-function extractSourceIdFromItem(raw: Record<string, unknown>, fallback: string): string {
-  if (typeof raw.sourceId === 'string' && raw.sourceId.trim()) return raw.sourceId.trim();
-  if (typeof raw.audiopath === 'string' && raw.audiopath.trim()) return raw.audiopath.trim();
-  if (typeof raw.rawId === 'string' && raw.rawId.trim()) {
-    const decoded = decodeFavoriteIdentifier(raw.rawId);
-    if (decoded?.sourceId) return decoded.sourceId;
-  }
-  if (typeof raw.station === 'string' && raw.station.trim()) return raw.station.trim();
-  if (typeof raw.title === 'string' && raw.title.trim()) return raw.title.trim();
-  return fallback;
-}
-
-function buildFallbackSourceId(zoneId: number, title: string): string {
-  const slug = title
-    ?.toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  const base = slug && slug.length > 0 ? slug : `favorite-${Date.now()}`;
-  return `zone:${zoneId}:${base}`;
-}
-
-function inferProvider(sourceId: string): string {
-  if (/^spotify:/i.test(sourceId)) return 'spotify';
-  if (/^tidal:/i.test(sourceId)) return 'tidal';
-  if (/^radio:/i.test(sourceId)) return 'radio';
-  if (/^deezer:/i.test(sourceId)) return 'deezer';
-  return 'library';
-}
-
-function inferFavoriteType(sourceId: string): string {
-  if (/^spotify:playlist:/i.test(sourceId)) return 'playlist';
-  if (/^spotify:(track|song):/i.test(sourceId)) return 'library_track';
-  if (/^radio:/i.test(sourceId)) return 'radio';
-  return 'library_track';
-}
-
-function getItemKey(item: InternalFavoriteItem): string {
-  if (typeof item.rawId === 'string' && item.rawId.length > 0) {
-    return item.rawId;
-  }
-  const fallbackSource =
-    item.sourceId && item.sourceId.length > 0
-      ? item.sourceId
-      : typeof item.audiopath === 'string' && item.audiopath.length > 0
-        ? item.audiopath
-        : typeof item.title === 'string' && item.title.length > 0
-          ? item.title
-          : typeof item.name === 'string' && item.name.length > 0
-            ? item.name
-            : `favorite-${item.slot}`;
-  return encodeFavoriteIdentifier(fallbackSource, item.slot);
-}
-
-function needsMetadataEnrichment(item: InternalFavoriteItem): boolean {
-  if (!item.coverurl) return true;
-  if (!item.artist) return true;
-  if (!item.album) return true;
-  return false;
-}
-
-async function enrichFavoritesMetadata(
-  payload: InternalFavoriteResponse,
-): Promise<{ value: InternalFavoriteResponse; changed: boolean }> {
-  let changed = false;
-  const items: InternalFavoriteItem[] = [];
-
-  for (const item of payload.items) {
-    if (!needsMetadataEnrichment(item)) {
-      items.push(item);
-      continue;
-    }
-
-    const enriched = await enrichFavoriteMetadata(item);
-    if (enriched !== item) {
-      changed = true;
-      items.push(enriched);
-    } else {
-      items.push(item);
-    }
-  }
-
-  if (!changed) {
-    return { value: payload, changed: false };
-  }
-
-  return {
-    value: {
-      ...payload,
-      items,
-      ts: Date.now(),
-    },
-    changed: true,
-  };
-}
-
-async function enrichFavoriteMetadata(item: InternalFavoriteItem): Promise<InternalFavoriteItem> {
-  const cacheKey = item.sourceId || item.audiopath || item.rawId;
-  if (!cacheKey) return item;
-
-  const cached = metadataCache.get(cacheKey);
-  if (cached !== undefined) {
-    if (cached === null) return item;
-    return mergeFavoriteMetadata(item, cached);
-  }
-
-  const metadata = await fetchFavoriteMetadata(item);
-  metadataCache.set(cacheKey, metadata ?? null);
-  if (!metadata) return item;
-  return mergeFavoriteMetadata(item, metadata);
-}
-
-function mergeFavoriteMetadata(
-  original: InternalFavoriteItem,
-  metadata: FavoriteMetadata,
-): InternalFavoriteItem {
-  let updated = false;
-  const merged: InternalFavoriteItem = { ...original };
-
-  for (const [key, value] of Object.entries(metadata)) {
-    if (value === undefined) continue;
-    if ((merged as Record<string, unknown>)[key] === value) continue;
-    (merged as Record<string, unknown>)[key] = value;
-    updated = true;
-  }
-
-  return updated ? merged : original;
-}
-
-async function fetchFavoriteMetadata(item: InternalFavoriteItem): Promise<FavoriteMetadata | undefined> {
-  const provider = getMediaProvider();
-  const identifier = item.sourceId || item.audiopath || item.rawId;
-  if (!identifier) return undefined;
-
-  const candidates = buildIdentifierCandidates(identifier);
-
-  for (const candidate of candidates) {
-    const parsed = parseIdentifier(candidate);
-    let resolved: MediaFolderItem | PlaylistItem | RadioFolderItem | undefined;
-
-    try {
-      switch ((parsed.kind || '').toLowerCase()) {
-        case 'track':
-        case 'album':
-        case 'artist':
-          if (provider.resolveMediaItem) {
-            resolved =
-              (await provider.resolveMediaItem('', candidate)) ??
-              (candidate.startsWith('library:')
-                ? await provider.resolveMediaItem(parsed.kind ?? '', candidate)
-                : undefined);
-          }
-          break;
-        case 'playlist':
-          if (provider.resolvePlaylist && parsed.itemId) {
-            resolved = await provider.resolvePlaylist(
-              parsed.provider ?? item.provider ?? 'library',
-              parsed.itemId,
-            );
-          }
-          break;
-        case 'radio':
-          if (provider.resolveStation && parsed.itemId) {
-            resolved = await provider.resolveStation(parsed.provider ?? item.provider ?? 'radio', parsed.itemId);
-          }
-          break;
-        default:
-          if (provider.resolveMediaItem) {
-            resolved = await provider.resolveMediaItem('', candidate);
-          }
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.debug(`[favorites] Metadata lookup failed for ${candidate}: ${message}`);
-      resolved = undefined;
-    }
-
-    if (!resolved) {
-      continue;
-    }
-
-    const metadata: FavoriteMetadata = {};
-    const resolvedAny = resolved as unknown as Record<string, unknown>;
-
-    const cover = pickFirstString(resolvedAny, ['coverurlHighRes', 'coverurl', 'thumbnail']);
-    if (cover) metadata.coverurl = cover;
-
-    const artist = pickFirstString(resolvedAny, ['artist']);
-    if (artist) metadata.artist = artist;
-
-    const album = pickFirstString(resolvedAny, ['album']);
-    if (album) metadata.album = album;
-
-    const owner = pickFirstString(resolvedAny, ['owner']);
-    if (owner) metadata.owner = owner;
-
-    const title = pickFirstString(resolvedAny, ['title']);
-    if (title) metadata.title = title;
-
-    const name = pickFirstString(resolvedAny, ['name']);
-    if (name) metadata.name = name;
-
-    const duration = resolvedAny.duration;
-    if (typeof duration === 'number' && Number.isFinite(duration)) metadata.duration = duration;
-
-    const providerName = pickFirstString(resolvedAny, ['provider']);
-    if (providerName) metadata.provider = providerName;
-
-    const serviceName = pickFirstString(resolvedAny, ['service']);
-    if (serviceName) metadata.service = serviceName;
-
-    const audiopath = pickFirstString(resolvedAny, ['audiopath', 'id']);
-    if (audiopath && (!item.audiopath || item.audiopath === item.sourceId)) {
-      metadata.audiopath = audiopath;
-    }
-
-    const typeValue = resolvedAny.type;
-    if (typeof typeValue === 'string' && typeValue.trim()) metadata.type = typeValue;
-
-    const station = pickFirstString(resolvedAny, ['station']);
-    if (station) metadata.station = station;
-
-    return metadata;
-  }
-
-  return undefined;
-}
-
-function buildIdentifierCandidates(identifier: string): string[] {
-  const values = new Set<string>();
-  const trimmed = identifier.trim();
-  if (!trimmed) return [];
-  values.add(trimmed);
-
-  const withoutQuery = trimmed.split('?')[0];
-  values.add(withoutQuery);
-
-  const normalized = normalizeMediaUri(trimmed);
-  values.add(normalized);
-
-  const libraryUrl = toLibraryUrl(normalized);
-  if (libraryUrl) values.add(libraryUrl);
-
-  const denormalized = denormalizeMediaUri(normalized);
-  if (denormalized && denormalized !== normalized) {
-    values.add(denormalized);
-  }
-
-  return Array.from(values).filter((value) => value.length > 0);
-}
-
-function toLibraryUrl(value: string): string | undefined {
-  const lower = value.toLowerCase();
-  if (lower.startsWith('library://')) {
-    return value;
-  }
-  if (lower.startsWith('library:')) {
-    const rest = value.slice('library:'.length).replace(/:/g, '/');
-    return `library://${rest}`;
-  }
-  return undefined;
-}
-
-function pickFirstString(source: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = source[key];
-    if (typeof value === 'string' && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
-}
-
-function encodeFavoriteIdentifier(sourceId: string, slot: number): string {
-  const payload = JSON.stringify([sourceId, BASE_FAVORITE_ZONE + (slot - 1)]);
-  const base64 = Buffer.from(payload).toString('base64');
-  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
-function decodeFavoriteIdentifier(
-  encoded: string,
-): { sourceId: string; favoriteId?: number } | undefined {
-  if (!encoded) return undefined;
-  const normalized = encoded.replace(/-/g, '+').replace(/_/g, '/');
-  const padLength = (4 - (normalized.length % 4)) % 4;
-  try {
-    const raw = Buffer.from(normalized + '='.repeat(padLength), 'base64').toString('utf8');
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      const source = typeof parsed[0] === 'string' ? parsed[0] : String(parsed[0] ?? '');
-      const favoriteId =
-        typeof parsed[1] === 'number' && Number.isFinite(parsed[1])
-          ? parsed[1]
-          : undefined;
-      return { sourceId: source, favoriteId };
-    }
-    if (typeof parsed === 'string') {
-      return { sourceId: parsed, favoriteId: undefined };
-    }
-  } catch (error) {
-    // ignore decode failures and fall back to undefined
-  }
-  return undefined;
+  return item;
 }
