@@ -4,13 +4,13 @@ import { applyStoredVolumePreset, getZoneById, sendCommandToZone } from '../../b
 import { getMediaProvider } from '../../backend/provider/factory';
 import { toPlaylistCommandUri } from '../../backend/provider/musicAssistant/utils';
 import {
-  addRoomFavorite as addCoreRoomFavorite,
-  copyRoomFavorites as copyCoreRoomFavorites,
-  deleteRoomFavorite as deleteCoreRoomFavorite,
-  getRoomFavorites as getCoreRoomFavorites,
-  getRoomFavoriteForPlayback as getCoreRoomFavoriteForPlayback,
-  reorderRoomFavorites as reorderCoreRoomFavorites,
-  setRoomFavoritePlus as setCoreRoomFavoritePlus,
+  addRoomFavorite,
+  copyRoomFavorites,
+  deleteRoomFavorite,
+  setRoomFavoritesID,
+  getRoomFavorites,
+  getRoomFavoriteForPlayback,
+  reorderRoomFavorites,
 } from '../../backend/local/favorites/favoritesService';
 import logger from '../../utils/troxorlogger';
 import { MediaFolderItem, PlaylistItem, FavoriteResponse, RecentResponse } from '../../backend/provider/types';
@@ -79,7 +79,7 @@ export async function audioCfgGetRoomFavs(url: string): Promise<CommandResult> {
   logger.debug(`[audioCfgGetRoomFavs] zone=${zoneId} offset=${start} limit=${limit}`);
 
   try {
-    const favorites = await getCoreRoomFavorites(zoneId, start, limit);
+    const favorites = await getRoomFavorites(zoneId, start, limit);
     const normalized = normalizeFavoriteResponse(favorites, zoneId, start);
     return response(url, 'getroomfavs', [normalized]);
   } catch (error) {
@@ -96,72 +96,57 @@ export async function audioCfgGetRoomFavs(url: string): Promise<CommandResult> {
  * Handle room favorite mutations (add, delete, reorder, copy, setplus).
  */
 export async function audioCfgRoomFavs(url: string): Promise<CommandResult> {
-  const parts = splitUrl(url);
-  const zoneId = parseNumberPart(parts[3], 0);
-  const action = (parts[4] ?? '').toLowerCase();
-
-  if (zoneId <= 0) {
-    logger.warn(`[audioCfgRoomFavs] Invalid zone id in URL: ${url}`);
-    return emptyCommand(url, { success: false, error: 'invalid-zone' });
-  }
+  const [,,, zoneStr, actionRaw, ...rest] = splitUrl(url);
+  const zoneId = parseNumberPart(zoneStr, 0);
+  const action = (actionRaw ?? '').toLowerCase();
 
   try {
     switch (action) {
       case 'add': {
-        const rawTitle = parts[5];
-        const title = decodeSegment(rawTitle);
-        const encodedId = parts.slice(6).filter((segment) => segment.length > 0).join('/');
-        await addCoreRoomFavorite(zoneId, title, encodedId);
-        break;
+        const title = decodeSegment(rest[0]);
+        const encodedId = rest.slice(1).join('/');
+        const id = await addRoomFavorite(zoneId, title, encodedId);
+        return response(url, 'roomfavs_add', { id, name: title });
       }
-      case 'delete': {
-        const encodedId = parts[5] ?? '';
-        if (encodedId) {
-          await deleteCoreRoomFavorite(zoneId, encodedId);
-        }
-        break;
-      }
-      case 'reorder': {
-        const config = parts[5] ?? '';
-        const orderedIds = config
-          .split(',')
-          .map((value) => value.trim())
-          .filter((value) => value.length > 0);
-        await reorderCoreRoomFavorites(zoneId, orderedIds);
-        break;
-      }
-      case 'setplus': {
-        const encodedId = parts[5] ?? '';
-        const rawValue = parts[6] ?? '0';
-        const normalized = rawValue.trim().toLowerCase();
-        const plus = normalized === '1' || normalized === 'true' || normalized === 'yes';
-        if (encodedId) {
-          await setCoreRoomFavoritePlus(zoneId, encodedId, plus);
-        }
-        break;
-      }
-      case 'copy': {
-        const destinations = (parts[5] ?? '')
-          .split(',')
-          .map((value) => Number(value))
-          .filter((value) => Number.isInteger(value) && value > 0);
-        await copyCoreRoomFavorites(zoneId, destinations);
-        break;
-      }
-      default: {
-        logger.warn(`[audioCfgRoomFavs] Unsupported action "${action}" for URL: ${url}`);
-        break;
-      }
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.warn(
-      `[audioCfgRoomFavs] Failed to process action ${action || '<unknown>'} for zone ${zoneId}: ${message}`,
-    );
-    return emptyCommand(url, { success: false, error: message });
-  }
 
-  return emptyCommand(url, { success: true });
+      case 'delete': {
+        if (!rest[0]) return response(url, 'roomfavs_delete_result', { error: 'missing-id' });
+        await deleteRoomFavorite(zoneId, rest[0]);
+        const id = Number(rest[0]);
+        return response(url, 'roomfavs_delete', { delete_id: id });
+      }
+
+      case 'reorder': {
+        const order = (rest[0] ?? '')
+          .split(',')
+          .map(v => v.trim())
+          .filter(Boolean)
+          .join(',');
+        await reorderRoomFavorites(zoneId, order.split(',').map(Number));
+        return response(url, 'roomfavs_reorder', order);
+      }
+
+      case 'copy': {
+        const destinations = (rest[0] ?? '')
+          .split(',')
+          .map(Number)
+          .filter(v => v > 0);
+        await copyRoomFavorites(zoneId, destinations);
+        return response(url, 'roomfavs_copy', 'ok');
+      }
+      case 'setid': {
+        const oldId = Number(rest[0]);
+        const newId = Number(rest[1]);
+        await setRoomFavoritesID(zoneId, oldId, newId);
+        return response(url, 'roomfavs_set', 'ok');
+      }
+
+      default:
+        return response(url, 'roomfavs_error', {});
+    }
+  } catch (e) {
+    return response(url, 'roomfavs_error', {});
+  }
 }
 
 /**
@@ -692,7 +677,7 @@ export async function audioFavoritePlay(url: string): Promise<CommandResult> {
     return response(url, 'libraryplay', []);
   }
 
-  const favorite = await getCoreRoomFavoriteForPlayback(zoneId, favoriteId);
+  const favorite = await getRoomFavoriteForPlayback(zoneId, favoriteId);
 
   logger.info(
     `[audioFavoritePlay] zone=${zoneId} favoriteId=${favoriteId} provider=${favorite?.provider ?? 'unknown'}`,
@@ -971,7 +956,7 @@ export async function audioPlayUrl(url: string): Promise<CommandResult> {
       playlistContext.playlistCover ??
       playlistContext.coverurl ??
       playlistContext.coverurlHighRes ??
-      ''; 
+      '';
     const effectiveStartItem =
       startItemParam ??
       playlistContext.playlistStartItem ??
