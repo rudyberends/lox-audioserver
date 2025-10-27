@@ -1,3 +1,8 @@
+## 2.5.0-beta.2 (2025-10-27)
+
+* fix: updated local favorite handling ([98766c7](https://github.com/rudyberends/lox-audioserver/commit/98766c7))
+* feat: local per zone favorites ([80fa054](https://github.com/rudyberends/lox-audioserver/commit/80fa054))
+
 ## 2.5.0-beta.1 (2025-10-27)
 
 * feat: add home assistant addon ([2c9b431](https://github.com/rudyberends/lox-audioserver/commit/2c9b431))
