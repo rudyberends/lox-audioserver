@@ -26,7 +26,7 @@ function detectType(audiopath: string): string {
     return 'tunein';
   }
   if (/playlist/i.test(audiopath)) {
-    return 'spotify_playlist';
+    return 'playlist';
   }
   if (/album/i.test(audiopath)) {
     return 'spotify_album';
