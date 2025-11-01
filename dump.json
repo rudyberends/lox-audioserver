@@ -1,0 +1,81 @@
+{
+    "event": "player_updated",
+    "object_id": "ap501e2d2c8584",
+    "data": {
+        "player_id": "ap501e2d2c8584",
+        "provider": "airplay",
+        "type": "player",
+        "name": "BeoLab 50",
+        "available": true,
+        "device_info": {
+            "model": "BeoSound Core",
+            "manufacturer": "Bang And Olufsen",
+            "software_version": null,
+            "model_id": null,
+            "manufacturer_id": null,
+            "ip_address": "192.168.1.162",
+            "mac_address": null
+        },
+        "supported_features": [
+            "volume_set",
+            "pause",
+            "multi_device_dsp",
+            "set_members"
+        ],
+        "playback_state": "playing",
+        "elapsed_time": 62.0,
+        "elapsed_time_last_updated": 1761862393.5622773,
+        "powered": true,
+        "volume_level": 36,
+        "volume_muted": null,
+        "group_members": [],
+        "static_group_members": [],
+        "can_group_with": [
+            "airplay"
+        ],
+        "synced_to": null,
+        "active_source": "ap501e2d2c8584",
+        "source_list": [
+            {
+                "id": "ap501e2d2c8584",
+                "name": "Music Assistant Queue",
+                "passive": false,
+                "can_play_pause": true,
+                "can_seek": true,
+                "can_next_previous": true
+            }
+        ],
+        "active_group": null,
+        "current_media": {
+            "uri": "apple_music://track/1440775509",
+            "media_type": "track",
+            "title": "Reborn",
+            "artist": "ERA",
+            "album": "The Essential Era",
+            "image_url": "http://192.168.1.252:8097/imageproxy?provider=apple_music&size=500&fmt=jpeg&path=https%253A%252F%252Fis1-ssl.mzstatic.com%252Fimage%252Fthumb%252FMusic114%252Fv4%252F35%252F27%252Fb5%252F3527b566-1b4d-ac5b-f751-a552f2925110%252F10UMGIM16489.rgb.jpg%252F1429x1414bb.jpg",
+            "duration": 330.08,
+            "source_id": "ap501e2d2c8584",
+            "queue_item_id": "9a7b7872e5644cd883e2b7d403069edb",
+            "custom_data": null,
+            "elapsed_time": 61,
+            "elapsed_time_last_updated": 1761862393.3778672
+        },
+        "enabled": true,
+        "hide_player_in_ui": [
+            "when_unavailable",
+            "when_group_active",
+            "when_synced"
+        ],
+        "expose_to_ha": true,
+        "icon": "mdi-speaker",
+        "group_volume": 36,
+        "extra_attributes": {},
+        "power_control": "none",
+        "volume_control": "native",
+        "mute_control": "none",
+        "display_name": "BeoLab 50",
+        "state": "playing",
+        "group_childs": [],
+        "extra_data": {}
+    }
+}	1761862391.571802
