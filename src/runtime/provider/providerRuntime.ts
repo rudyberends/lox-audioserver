@@ -299,15 +299,15 @@ export class ProviderRuntime {
     };
   }
 
-  public async resolveTrack(audiopath: string): Promise<any | undefined> {
-    if (!this.active || typeof (this.active as any).resolveTrack !== 'function') {
-      logger.warn('[ProviderRuntime] Active provider missing resolveTrack()');
+  public async resolveItem(audiopath: string): Promise<any | undefined> {
+    if (!this.active || typeof (this.active as any).resolveItem !== 'function') {
+      logger.warn('[ProviderRuntime] Active provider missing resolveItem()');
       return undefined;
     }
     try {
-      return await this.active.resolveTrack(audiopath);
+      return await this.active.resolveItem(audiopath);
     } catch (err) {
-      logger.error(`[ProviderRuntime] resolveTrack() failed for ${audiopath}: ${err}`);
+      logger.error(`[ProviderRuntime] resolveItem() failed for ${audiopath}: ${err}`);
       return undefined;
     }
   }

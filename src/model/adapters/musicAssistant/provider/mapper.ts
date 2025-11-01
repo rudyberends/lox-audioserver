@@ -356,24 +356,55 @@ export class MusicAssistantContentProviderMapper {
   }
 
   /* -------------------------------------------------------------------------- */
-  /* Track resolving & search (typed)                                           */
+  /* Item resolving & search (typed)                                           */
   /* -------------------------------------------------------------------------- */
-  async resolveTrack(audiopath: string): Promise<(Track & { coverurl?: string }) | undefined> {
+  async resolveItem(audiopath: string): Promise<any> {
     try {
-    // Verwacht: provider://[type/]id
-      const match = audiopath.match(/^([^:]+):\/\/(?:[^/]+\/)?(.+)$/);
-      const provider = match?.[1] ?? 'library';
-      const id = match?.[2] ?? audiopath;
+    // Expected formats:
+    // spotify:track:ID | spotify:album:ID | spotify:playlist:ID | tunein:station:ID | library://radio/ID ...
+      let provider: string;
+      let type: string;
+      let id: string;
 
-      const track = await this.api.getTrack(provider, id);
-      if (!track) {
+      // Spotify-style (spotify:track:xxx)
+      const spotifyMatch = audiopath.match(/^([^:]+):([^:]+):(.+)$/);
+      // Library-style (library://radio/1)
+      const libraryMatch = audiopath.match(/^([^:]+):\/\/([^/]+)\/(.+)$/);
+
+      if (spotifyMatch) {
+        provider = spotifyMatch[1];
+        type = spotifyMatch[2];
+        id = spotifyMatch[3];
+      } else if (libraryMatch) {
+        provider = libraryMatch[1];
+        type = libraryMatch[2];
+        id = libraryMatch[3];
+      } else {
+        provider = 'library';
+        type = 'track';
+        id = audiopath;
+      }
+
+      // Route by type
+      const resolverMap: Record<string, (p: string, id: string) => Promise<any>> = {
+        radio: this.api.getRadio.bind(this.api),
+        station: this.api.getRadio.bind(this.api),
+        album: this.api.getAlbum.bind(this.api),
+        artist: this.api.getArtist.bind(this.api),
+        playlist: this.api.getPlaylist.bind(this.api),
+      };
+
+      const resolver = resolverMap[type] ?? this.api.getTrack.bind(this.api);
+      const item = await resolver(provider, id);
+
+      if (!item) {
         return undefined;
       }
 
-      const coverurl = extractCover(track);
-      return { ...track, coverurl };
+      const coverurl = extractCover(item);
+      return { ...item, coverurl };
     } catch (err) {
-      logger.warn(`[MusicAssistantProviderMapper] resolveTrack failed for "${audiopath}": ${String(err)}`);
+      logger.warn(`[MusicAssistantProviderMapper] resolveItem failed for "${audiopath}": ${String(err)}`);
       return undefined;
     }
   }

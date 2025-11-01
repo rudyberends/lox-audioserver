@@ -206,5 +206,5 @@ export interface ContentProvider {
   getRecentlyPlayed?(zoneId: number, limit: number): Promise<any>;
   clearRecentlyPlayed?(zoneId: number): Promise<void>;
   getPlaylists?(...args: any[]): Promise<any>;
-  resolveTrack(audiopath: string): Promise<any>;
+  resolveItem(audiopath: string): Promise<any>;
 }
