@@ -387,6 +387,16 @@ export class MusicAssistantApi {
     }, null);
   }
 
+  public async getRadio(provider: string, station: string, inLibraryOnly?: boolean): Promise<any | null> {
+  // Expected format: radio://radio/1 or library://radio/1
+    const stationId = station.split('/').pop() ?? station;
+    return this.safeRpc('music/radios/get_radio', {
+      item_id: stationId,
+      provider_instance_id_or_domain: provider || 'library',
+      in_library_only: inLibraryOnly || undefined,
+    }, null);
+  }
+
   public async getLibraryPlaylists(limit = 50, offset = 0): Promise<{ items: any[]; total: number }> {
     const items = await this.safeRpc<any[]>('music/playlists/library_items', { limit, offset }, []);
     const total = await this.safeRpc<number | null>('music/playlists/count', undefined, null);

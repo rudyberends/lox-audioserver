@@ -20,18 +20,33 @@ export const favoritesManager = {
     const stored = await loadFavorites(zoneId);
     const items = limit > 0 ? stored.items.slice(start, start + limit) : stored.items;
 
-    const cleanItems = items.map((i) => ({
-      id: i.id,
-      slot: i.slot,
-      plus: true,
-      name: i.name,
-      title: i.title,
-      album: i.album,
-      artist: i.artist,
-      audiopath: `spotify:${i.audiopath}`,
-      type: 'spotify_track',
-      coverurl: i.coverurl || '',
-    }));
+    const prefixMap: Record<string, string> = {
+      tunein: 'tunein:station:s',
+      spotify_playlist: 'spotify:playlist:',
+      playlist: 'playlist:',
+      spotify_artist: 'spotify:artist:',
+      spotify_album: 'spotify:album:',
+      spotify_track: 'spotify:track:',
+    };
+
+    const cleanItems = items.map((i) => {
+      const id = i.audiopath.split('/').pop() ?? i.audiopath;
+      const prefix = prefixMap[i.type] ?? 'spotify:track:';
+      const audiopath = `${prefix}${id}`;
+
+      return {
+        id: i.id,
+        slot: i.slot,
+        plus: true,
+        name: i.name,
+        title: i.title,
+        album: i.album,
+        artist: i.artist,
+        audiopath,
+        type: i.type || detectType(audiopath),
+        coverurl: i.coverurl || '',
+      };
+    });
 
     return {
       id: zoneId,
@@ -49,11 +64,12 @@ export const favoritesManager = {
     const slot = favs.items.length + 1;
     const audiopath = sourceId;
 
-    // Get extra metadata from provider
-    const track = await providerRuntime.resolveTrack(audiopath);
-    const coverurl = extractImageFromTrack(track);
-    const album = track?.album?.name ?? '';
-    const artist = track?.artist ?? track?.artists?.[0]?.name ?? '';
+    // Detect media type
+    const type = detectType(audiopath);
+    const meta = await providerRuntime.resolveItem(audiopath);
+    const coverurl = extractImageFromTrack(meta);
+    const album = meta?.album?.name ?? '';
+    const artist = meta?.artist ?? meta?.artists?.[0]?.name ?? '';
 
     const item: FavoriteItem = {
       id: nextId,
@@ -64,7 +80,7 @@ export const favoritesManager = {
       album,
       artist,
       audiopath,
-      type: 'spotify_track',
+      type,
       coverurl,
     };
 
@@ -176,3 +192,14 @@ export const favoritesManager = {
     return item;
   },
 };
+
+/** Determine media type from audiopath */
+function detectType(audiopath: string): string {
+  if (/^tunein:/.test(audiopath)) return 'tunein';
+  if (/radio/i.test(audiopath)) return 'tunein';
+  if (/playlist/i.test(audiopath)) return 'spotify_playlist';
+  if (/album/i.test(audiopath)) return 'spotify_album';
+  if (/artist/i.test(audiopath)) return 'spotify_artist';
+  if (/track/i.test(audiopath)) return 'spotify_track';
+  return 'unknown';
+}
