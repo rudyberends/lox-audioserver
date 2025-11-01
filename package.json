@@ -1,6 +1,6 @@
 {
   "name": "lox-audioserver",
-  "version": "2.5.2",
+  "version": "3.0.0",
   "description": "Modern TypeScript implementation of the Loxone Audio Server",
   "private": false,
   "repository": {
