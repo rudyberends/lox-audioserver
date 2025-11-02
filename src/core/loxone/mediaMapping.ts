@@ -17,17 +17,6 @@ export type LoxoneItemType =
   | 'spotify_track'
   | 'unknown';
 
-const prefixMap = {
-  tunein: 'tunein:station:s',
-  spotify_playlist: 'spotify:playlist:',
-  playlist: 'playlist:',
-  spotify_artist: 'spotify:artist:',
-  spotify_album: 'spotify:album:',
-  spotify_track: 'spotify:track:',
-} as const;
-
-type KnownLoxoneItemType = Exclude<LoxoneItemType, 'unknown'>;
-
 /** Detects the Loxone item type from an audiopath. */
 export function detectLoxoneItemType(audiopath: string): LoxoneItemType {
   const path = audiopath.toLowerCase();
@@ -47,15 +36,6 @@ export function detectLoxoneItemType(audiopath: string): LoxoneItemType {
     return 'spotify_track';
   }
   return 'unknown';
-}
-
-/** Returns the canonical Loxone prefix for a given type. */
-export function getLoxonePrefixForType(
-  type: LoxoneItemType,
-  fallback: KnownLoxoneItemType = 'spotify_track',
-): string {
-  const map: Record<KnownLoxoneItemType, string> = prefixMap;
-  return map[(type === 'unknown' ? fallback : type) as KnownLoxoneItemType];
 }
 
 /**
