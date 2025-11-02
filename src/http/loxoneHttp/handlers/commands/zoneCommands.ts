@@ -183,12 +183,8 @@ export async function audioServicePlay(url: string): Promise<CommandResult> {
   }
 
   const lowerStation = stationId.toLowerCase();
-  const looksLikeTrack =
-    lowerStation.startsWith('library://track/') ||
-    lowerStation.startsWith('track:') ||
-    lowerStation.startsWith('spotify://track/');
 
-  if (looksLikeTrack) {
+  if (lowerStation.startsWith('spotify')) {
     await zoneRuntime.sendZoneCommand(zoneId, 'playlistplay', [stationId, 'false']);
     return response(url, 'playlistplay', [{ zoneId, service, stationId, shuffle: false }]);
   }

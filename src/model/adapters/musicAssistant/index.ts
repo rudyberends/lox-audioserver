@@ -3,10 +3,10 @@ import { registerStateMapper, StateMapperConstructor } from '@/model/registry/st
 import { registerContentProvider } from '@/model/registry/contentProviderRegistry';
 import { MusicAssistantStateMapper } from './state/mapper';
 import { MusicAssistantCommandMapper } from './command/mapper';
-import { MusicAssistantContentProviderMapper } from './provider/mapper';
 import { registerContentPlayer } from '@/model/registry/contentPlayerRegistry';
 import { MusicAssistantContentPlaybackMapper } from './contentPlayback/mapper';
 import { MusicAssistantApi } from './api';
+import { MusicAssistantContentProvider } from './provider/musicAssistantProvider';
 
 async function validateMusicAssistantAdapterConfig(params: Record<string, any>): Promise<void> {
   const ip = typeof params?.ip === 'string' ? params.ip.trim() : '';
@@ -86,7 +86,7 @@ registerStateMapper('musicassistant', MusicAssistantStateMapper as unknown as St
   version: '2.0.0',
 });
 
-registerContentProvider('musicassistant', MusicAssistantContentProviderMapper as unknown as new (params: Record<string, any>) => any, {
+registerContentProvider('musicassistant', MusicAssistantContentProvider as unknown as new (params: Record<string, any>) => any, {
   // eslint-disable-next-line max-len
   description: 'Content provider for Music Assistant. Fakes a spotify library on Loxone and serves all library content under this spotify library. If you configure tunein it will be available under radio.',
   version: '2.0.0',

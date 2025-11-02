@@ -81,18 +81,14 @@ export interface PlaylistResponse {
 
 export interface RecentItem {
   audiopath: string;
-  title: string;
+  coverurl: string;
   service: string;
+  serviceType: number | string;
   type: number | string;
-  coverurl?: string;
-  name?: string;
-  artist?: string;
+  owner_id?: string;
+  title?: string;
   album?: string;
-  duration?: number;
-  provider?: string;
-  station?: string;
-  contentType?: string;
-  [key: string]: unknown;
+  artist?: string;
 }
 
 export interface RecentResponse {

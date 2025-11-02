@@ -5,7 +5,7 @@ import { providerRuntime } from '@/runtime/provider';
 import { extractImageFromTrack } from '@/model/adapters/musicAssistant/utils/imageUtils';
 import { FileType } from '@/core/loxone/types';
 import { notifyRoomFavoritesChanged } from '@/http/loxoneHttp/websocketNotifier';
-import { detectLoxoneItemType, getLoxonePrefixForType } from '@/core/loxone/mediaMapping';
+import { detectLoxoneItemType, getLoxonePrefixForType, LoxoneItemType } from '@/core/loxone/mediaMapping';
 
 /**
  * Saves the updated favorites list to disk and broadcasts the
@@ -46,7 +46,7 @@ export const favoritesManager = {
 
     const items = list.map((i) => {
       const id = i.audiopath.split('/').pop() ?? i.audiopath;
-      const prefix = getLoxonePrefixForType(i.type);
+      const prefix = getLoxonePrefixForType(i.type as LoxoneItemType);
       const audiopath = `${prefix}${id}`;
 
       return {

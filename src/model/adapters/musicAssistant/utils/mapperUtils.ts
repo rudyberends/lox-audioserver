@@ -39,9 +39,3 @@ export function mapArtists(source: unknown): string {
   return ensureString(s?.artist ?? s);
 }
 
-/**
- * Normalizes any URI to Loxone's expected "spotify@" format.
- */
-export function normalizeUri(uri?: string | null): string {
-  return uri ? `spotify@${uri}` : '';
-}
