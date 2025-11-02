@@ -1,5 +1,5 @@
 import logger from '@/utils/troxorLogger';
-import { AudioType, AudioPlaybackMode, AudioPowerState, FileType } from '@/core/types/loxone';
+import { AudioType, AudioPlaybackMode, AudioPowerState, FileType } from '@/core/loxone/types';
 import type { NotificationData, PrimaryExperience } from '../types/notifications';
 import { ZoneState } from '@/runtime/zones/types';
 import { safeNumber, safeString } from '@/core/utils/media';

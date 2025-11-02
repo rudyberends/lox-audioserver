@@ -1,6 +1,6 @@
 import logger from '@/utils/troxorLogger';
 import type { ZoneState } from '@/runtime/zones/types/zoneStateTypes';
-import { AudioPlaybackMode } from '@/core/types/loxone';
+import { AudioPlaybackMode } from '@/core/loxone/types';
 import { zoneStateStore } from '@/runtime/zones/zoneStateStore';
 import { removeGroupByLeader, getCurrentGroups } from '@/runtime/groups/groupTracker';
 import { MusicAssistantApi } from '../api';

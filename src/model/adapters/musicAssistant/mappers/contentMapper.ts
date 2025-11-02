@@ -1,5 +1,5 @@
 import type { Track, Album, Artist, Playlist } from '../types/musicAssistantTypes';
-import { FileType } from '@/core/types/loxone';
+import { FileType } from '@/core/loxone/types';
 import { mapArtists, normalizeUri } from '../utils/mapperUtils';
 import { extractCover } from '../utils/imageUtils';
 import { ServiceFolderItem } from '@/core/types/content';

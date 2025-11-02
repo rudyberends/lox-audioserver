@@ -12,7 +12,7 @@ import { getCommandMapperMeta, getCommandMapperValidator, listCommandMappers } f
 import type { AdapterConfigSchema } from '@/model/registry/commandMapperRegistry';
 import { getContentProviderMeta, listContentProviders } from '@/model/registry/contentProviderRegistry';
 import { getContentPlayerMeta, listContentPlayers } from '@/model/registry/contentPlayerRegistry';
-import { AudioPowerState } from '@/core/types/loxone';
+import { AudioPowerState } from '@/core/loxone/types';
 import { MusicAssistantApi } from '@/model/adapters/musicAssistant/api';
 import type { ZoneState } from '@/runtime/zones/types/zoneStateTypes';
 import logger, { logStreamEmitter } from '@/utils/troxorLogger';
