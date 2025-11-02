@@ -1,10 +1,11 @@
 import logger from '@/utils/troxorLogger';
 import { AudioType, RepeatMode, FileType, AudioPlaybackMode, AudioPowerState } from '@/core/loxone/types';
 import type { ZoneState } from '@/runtime/zones/types';
-import { ensureString, mapArtists, normalizeUri } from '../utils/mapperUtils';
+import { ensureString, mapArtists } from '../utils/mapperUtils';
 import { extractCover } from '../utils/imageUtils';
 import { PlayerQueue } from '../types/musicAssistantTypes';
 import { safeString, safeNumber } from '@/core/utils/media';
+import { buildAudiopath } from '@/core/loxone/mediaMapping';
 
 /**
  * Result structure returned to ZoneRuntime.
@@ -88,7 +89,7 @@ export function mapQueueToState(
       qindex: findCurrentIndex(items, cur.queue_item_id),
       sourceName: 'Music Assistant',
       name: 'Music Assistant',
-      audiopath: normalizeUri(cur.media_item?.uri),
+      audiopath: buildAudiopath(cur.media_item!.uri, 'track'),
       audiotype: audioType,
     };
 
@@ -105,7 +106,7 @@ export function mapQueueToState(
 
 export function mapQueueItem(item: any, index: number) {
   const media = item?.media_item ?? item ?? {};
-  const audiopath = `spotify:track:0/${media.uri ?? ''}`;
+  const audiopath = buildAudiopath(media.uri, 'track');
   const coverurl = extractCover(media, 16);
   const uniqueId = safeString(item?.queue_item_id) || btoa(`${audiopath}-${index}`).slice(0, 32);
 

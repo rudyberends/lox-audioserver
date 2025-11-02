@@ -1,6 +1,5 @@
 import logger from '@/utils/troxorLogger';
 import { MusicAssistantApi } from '../api';
-import { cleanLoxoneUri } from '../utils/loxoneUriParser';
 import { ContentPlayCommand } from '@/core/types/contentPlaybackTypes';
 
 /**
@@ -101,9 +100,9 @@ export class MusicAssistantContentPlaybackMapper {
     }
 
     // --- Standard playback ---
-    const mainUri: string = cleanLoxoneUri(cmd.item);
+    const mainUri: string = cmd.item;
     const startItem: string | undefined = cmd.start_item
-      ? cleanLoxoneUri(cmd.start_item)
+      ? cmd.start_item
       : undefined;
     const shuffle: boolean = !!cmd.shuffle;
 

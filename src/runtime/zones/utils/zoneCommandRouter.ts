@@ -100,7 +100,7 @@ export class ZoneCommandRouter {
     }
 
     // Alerts: handled separately earlier (guarded in caller)
-    const { item, startItem, shuffle } = parseLoxoneCommand(param, type);
+    const { item, startItem, shuffle } = parseLoxoneCommand(param);
 
     logger.info(
       `[ZoneRuntime][${zoneName}] ▶ item="${item}"${startItem ? `, start_item="${startItem}"` : ''}, shuffle=${shuffle}, type=${type}`,
@@ -111,7 +111,7 @@ export class ZoneCommandRouter {
       item,
       start_item: startItem,
       shuffle,
-      type: type as Exclude<ContentPlayCommand['type'], 'alert'>, // ✅ Safe, TS-approved cast
+      type: type as Exclude<ContentPlayCommand['type'], 'alert'>,
     };
 
     await zone.contentMapper.handlePlayCommand(cmd);
