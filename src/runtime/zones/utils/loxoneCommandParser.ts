@@ -18,36 +18,40 @@ export interface ParsedContentPayload {
 }
 
 /**
- * Parse a Loxone playback command parameter.
- * Handles `/parentpath/...` pattern and `noshuffle` suffixes.
+ * Parses a Loxone command parameter into its base components:
+ *  - item: main target URI (e.g. "library://album/634")
+ *  - startItem: optional nested track ID (e.g. "1436541295")
+ *  - shuffle: playback shuffle flag
  */
 export function parseLoxoneCommand(param: unknown): ParsedContentPayload {
   const args = Array.isArray(param) ? param.map(String) : [String(param ?? '')];
   const raw = decodeURIComponent(args[0] ?? '').trim();
 
-  // Shuffle = true unless /noshuffle is explicitly present
-  const shuffle = !raw.toLowerCase().includes('/noshuffle');
+  // Remove query string early — nothing after "?" is part of the encoded URI
+  const cleanedRaw = raw.split('?')[0];
 
-  let item = raw;
+  // Determine shuffle flag from any arg
+  const shuffle =
+    args.some(a => a?.toLowerCase?.() === 'true' || a === '1' || a === 'shuffle');
+
+  let item = cleanedRaw;
   let startItem: string | undefined;
 
-  if (raw.includes('/parentpath/')) {
-    // Split between encoded child and parent folder
-    const [childRaw, parentRaw] = raw.split('/parentpath/');
+  if (cleanedRaw.includes('/parentpath/')) {
+    const [childRaw, parentRaw] = cleanedRaw.split('/parentpath/');
 
-    // Remove /noshuffle and query parts before decoding
-    const cleanChild = childRaw.split('/noshuffle')[0].split('?')[0].trim();
-
-    // Decode the Base64 section (e.g. YXBwbGVfbXVzaWM6Ly90cmFjay8xNzMyNTc1MjY4)
-    const decoded = decodeAudiopath(cleanChild);
+    // Decode the child audiopath and extract only the final ID
+    const decoded = decodeAudiopath(childRaw);
     startItem = decoded.split('/').pop();
 
-    // Strip trailing numeric segment (e.g. /3) from album path
-    item = parentRaw.replace(/\/\d+$/i, '').replace(/\/+$/, '');
+    // Strip numeric tail and optional /noshuffle from parent path
+    item = parentRaw
+      .replace(/\/\d+(?:\/noshuffle.*)?$/i, '')
+      .replace(/\/+$/, '');
   } else {
-    // No parentpath, just decode the base64 section cleanly
-    const cleanItem = raw.split('/noshuffle')[0].split('?')[0].trim();
-    item = decodeAudiopath(cleanItem);
+    // Direct decode path (no parent reference)
+    const decoded = decodeAudiopath(cleanedRaw);
+    item = decoded.replace(/\/noshuffle.*$/i, '').replace(/\/+$/, '');
   }
 
   return { item, startItem, shuffle };
