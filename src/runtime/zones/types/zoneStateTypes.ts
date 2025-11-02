@@ -1,4 +1,4 @@
-import { AudioType, AudioPlaybackMode, RepeatMode, AudioPowerState, FileType, AudioEventType, LineInIconType } from '@/core/types/loxone';
+import { AudioType, AudioPlaybackMode, RepeatMode, AudioPowerState, FileType, AudioEventType, LineInIconType } from '@/core/loxone/types';
 
 
 /**

@@ -1,5 +1,5 @@
 import logger from '@/utils/troxorLogger';
-import { AudioType, RepeatMode, FileType, AudioPlaybackMode, AudioPowerState } from '@/core/types/loxone';
+import { AudioType, RepeatMode, FileType, AudioPlaybackMode, AudioPowerState } from '@/core/loxone/types';
 import type { ZoneState } from '@/runtime/zones/types';
 import { ensureString, mapArtists, normalizeUri } from '../utils/mapperUtils';
 import { extractCover } from '../utils/imageUtils';

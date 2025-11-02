@@ -3,42 +3,9 @@ import { loadFavorites, saveFavorites } from '@/model/local/favorites/favoritesS
 import type { FavoriteItem, FavoriteResponse } from '@/model/local/favorites/types';
 import { providerRuntime } from '@/runtime/provider';
 import { extractImageFromTrack } from '@/model/adapters/musicAssistant/utils/imageUtils';
-import { FileType } from '@/core/types/loxone';
+import { FileType } from '@/core/loxone/types';
 import { notifyRoomFavoritesChanged } from '@/http/loxoneHttp/websocketNotifier';
-
-/** Mapping between logical favorite types and Loxone-compatible path prefixes */
-const prefixMap: Record<string, string> = {
-  tunein: 'tunein:station:s',
-  spotify_playlist: 'spotify:playlist:',
-  playlist: 'playlist:',
-  spotify_artist: 'spotify:artist:',
-  spotify_album: 'spotify:album:',
-  spotify_track: 'spotify:track:',
-};
-
-/**
- * Detects the media type based on the `audiopath` string.
- * Uses simple pattern matching to map URIs like `library://album/...`
- * or `spotify:track:...` to the correct Loxone-compatible type.
- */
-function detectType(audiopath: string): string {
-  if (/tunein|radio/i.test(audiopath)) {
-    return 'tunein';
-  }
-  if (/playlist/i.test(audiopath)) {
-    return 'playlist';
-  }
-  if (/album/i.test(audiopath)) {
-    return 'spotify_album';
-  }
-  if (/artist/i.test(audiopath)) {
-    return 'spotify_artist';
-  }
-  if (/track/i.test(audiopath)) {
-    return 'spotify_track';
-  }
-  return 'unknown';
-}
+import { detectLoxoneItemType, getLoxonePrefixForType } from '@/core/loxone/mediaMapping';
 
 /**
  * Saves the updated favorites list to disk and broadcasts the
@@ -79,14 +46,14 @@ export const favoritesManager = {
 
     const items = list.map((i) => {
       const id = i.audiopath.split('/').pop() ?? i.audiopath;
-      const prefix = prefixMap[i.type] ?? prefixMap.spotify_track;
+      const prefix = getLoxonePrefixForType(i.type);
       const audiopath = `${prefix}${id}`;
 
       return {
         ...i,
         plus: true,
         audiopath,
-        type: i.type || detectType(audiopath),
+        type: i.type || detectLoxoneItemType(audiopath),
         coverurl: i.coverurl || '',
       };
     });
@@ -113,7 +80,7 @@ export const favoritesManager = {
       album: meta?.album?.name ?? '',
       artist: meta?.artist ?? meta?.artists?.[0]?.name ?? '',
       audiopath: sourceId,
-      type: detectType(sourceId),
+      type: detectLoxoneItemType(sourceId),
       coverurl: extractImageFromTrack(meta),
     };
 
