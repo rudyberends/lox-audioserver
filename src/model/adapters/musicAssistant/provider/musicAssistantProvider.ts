@@ -8,6 +8,8 @@ import type { Track } from '../types/musicAssistantTypes';
 import { getAvailableServices, getServices } from './facades/spotifyFacade';
 import { decodeAudiopath } from '@/core/loxone/mediaMapping';
 import { detectMediaType } from '../utils/detectMediaType';
+import { performSearch } from './utils/globalSearch';
+import { resolveItem } from './utils/resolveItem';
 
 /**
  * -----------------------------------------------------------------------------
@@ -76,6 +78,14 @@ export class MusicAssistantContentProvider {
 
   async getServices() {
     return getServices();
+  }
+
+  async globalSearch(source: string, query: string, unique: string) {
+    return performSearch(this.api, source, query, unique);
+  }
+
+  async resolveItem(audiopath: string): Promise<any | undefined> {
+    return resolveItem(this.api, audiopath);
   }
 
   /* -------------------------------------------------------------------------- */
