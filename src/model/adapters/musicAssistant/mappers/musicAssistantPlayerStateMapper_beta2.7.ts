@@ -1,7 +1,7 @@
 import logger from '@/utils/troxorLogger';
 import { AudioType, RepeatMode, FileType, AudioPlaybackMode, AudioPowerState } from '@/core/loxone/types';
 import type { ZoneState } from '@/runtime/zones/types';
-import { ensureString, mapArtists, normalizeUri } from '../utils/mapperUtils';
+import { ensureString, mapArtists } from '../utils/mapperUtils';
 import { extractCover } from '../utils/imageUtils';
 import { Player, PlayerQueue } from '../types/musicAssistantTypes';
 import { safeString, safeNumber } from '@/core/utils/media';
@@ -103,7 +103,7 @@ export function mapQueueToState(
       qindex: findCurrentIndex(items, cur.queue_item_id),
       sourceName: 'Music Assistant',
       //name: 'Music Assistant',
-      audiopath: normalizeUri(media?.uri),
+      //audiopath: normalizeUri(media?.uri),
       audiotype: AudioType.File,
     };
 
