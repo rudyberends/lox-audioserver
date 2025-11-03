@@ -41,15 +41,17 @@ export function mapQueueToState(
 ): QueueMappingResult | null {
   try {
     const itemsArray = Array.isArray(queue?.items) ? queue.items : [];
-    if (itemsArray.length === 0) {
+    const cur = queue.current_item ?? itemsArray[0];
+    const media = cur?.media_item ?? cur ?? {};
+
+    // ⬇️ Fallback: skip only if absolutely no media info is available
+    if (!cur && !media) {
+      logger.debug(`[mapQueueToState] No current media or queue items for zone ${zoneId}`);
       return null;
     }
 
-    const cur = queue.current_item ?? itemsArray[0];
-    const media = cur?.media_item ?? cur ?? {};
     const artist = mapArtists(media);
     const repeat = safeString(queue.repeat_mode).toLowerCase();
-
     const repeatMode: RepeatMode =
       repeat === 'one'
         ? RepeatMode.Track
@@ -61,33 +63,34 @@ export function mapQueueToState(
     const cover = extractCover(media, 265);
     const audioType = AudioType.File;
 
-    const items = itemsArray.map((item, i) => mapQueueItem(item, i));
-
+    // Queue is optional but still built if present
     const mappedQueue: ZoneState['queue'] = {
       id: zoneId,
-      items,
+      items: Array.isArray(itemsArray)
+        ? itemsArray.map((item, i) => mapQueueItem(item, i))
+        : [],
       shuffle,
       start: 0,
-      totalitems: items.length,
+      totalitems: itemsArray.length,
     };
 
     const trackUpdate: Partial<ZoneState> = {
       playerid: zoneId,
-      title: safeString(media.name ?? cur?.name),
+      title: safeString(media.name ?? cur?.name ?? ''),
       artist,
-      album: '',
+      album: safeString(media.album ?? ''),
       coverurl: cover,
-      duration: safeNumber(cur?.duration, { min: 0 }),
-      time: safeNumber(queue.elapsed_time, { min: 0 }),
+      duration: safeNumber(cur?.duration ?? media.duration, { min: 0 }),
+      time: safeNumber(queue.elapsed_time ?? 0, { min: 0 }),
       plrepeat: repeatMode,
       plshuffle: shuffle ? 1 : 0,
       clientState: 'on',
       type: FileType.Playlist,
-      qid: safeString(cur?.queue_item_id),
-      qindex: findCurrentIndex(items, cur?.queue_item_id),
+      qid: safeString(cur?.queue_item_id ?? ''),
+      qindex: findCurrentIndex(mappedQueue.items, cur?.queue_item_id),
       sourceName: 'Music Assistant',
       name: 'Music Assistant',
-      audiopath: buildAudiopath(cur?.media_item?.uri ?? '', 'track'),
+      audiopath: buildAudiopath(media?.uri ?? '', 'track'),
       audiotype: audioType,
     };
 
