@@ -43,6 +43,7 @@ If you prefer `docker run`:
 ```bash
 docker run -d \
   --name lox-audioserver \
+  -p 7090:7090 \
   -p 7091:7091 \
   -p 7095:7095 \
   -v $(pwd)/data:/app/data \
@@ -59,7 +60,7 @@ Prerequisites
 
 - Node.js 20 or newer
 - npm (comes with Node)
-- Ports `7091` and `7095` available on the host
+- Ports `7090`, `7091` and `7095` available on the host
 
 Step-by-step
 
@@ -91,7 +92,7 @@ npm start
 
 ### Configuring
 
-Open the admin UI at http://<lox-audioserver-ip>:7090 and follow the guided steps. It walks you through adding the Audio Server in Loxone Config, rebooting the Miniserver, pairing, and assigning zones/providers once the MiniServer reconnects.
+Open the admin UI at http://lox-audioserver-ip:7090 and follow the guided steps. It walks you through adding the Audio Server in Loxone Config, rebooting the Miniserver, pairing, and assigning zones/providers once the MiniServer reconnects.
 
 When the lox-audioserver starts successfully and the Miniserver pairs successfully with the lox-audioserver, the Audio Server icon in Loxone Config turns green.
 
