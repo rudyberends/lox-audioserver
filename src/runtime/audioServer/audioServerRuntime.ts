@@ -72,9 +72,11 @@ export class AudioServerRuntime {
       let server: Record<string, any> | undefined;
 
       if (Array.isArray(parsed)) {
-        const first = parsed[0];
-        if (first && typeof first === 'object' && macId in first) {
-          server = first[macId];
+        for (const item of parsed) {
+          if (item && typeof item === 'object' && macId in item) {
+            server = item[macId];
+            break;
+          }
         }
       } else if (typeof parsed === 'object' && macId in parsed) {
         server = parsed[macId];
