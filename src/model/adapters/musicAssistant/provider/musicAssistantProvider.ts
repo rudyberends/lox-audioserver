@@ -168,7 +168,8 @@ export class MusicAssistantContentProvider {
     limit = 50,
   ): Promise<ServiceFolderResponse> {
     try {
-      const [info, tracksResult] = await this.fetchDetail(type, id, offset, limit);
+      const itemId = this.extractItemIdFromUri(id);
+      const [info, tracksResult] = await this.fetchDetail(type, itemId, offset, limit);
 
       const tracks: Track[] = Array.isArray(tracksResult)
         ? tracksResult
@@ -252,6 +253,14 @@ export class MusicAssistantContentProvider {
       ]),
     } as const;
     return f[type]();
+  }
+
+  /**
+   * Normalizes incoming IDs to raw Music Assistant IDs.
+   * Removes prefixes like `library://` or `spotify@`.
+   */
+  private extractItemIdFromUri(id: string): string {
+    return id.replace(/^library:\/\/(album|playlist|artist|track)\//, '').trim();
   }
 
   /**
