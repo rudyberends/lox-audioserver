@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   loxoneaudioserver:
     container_name: lox-audioserver
