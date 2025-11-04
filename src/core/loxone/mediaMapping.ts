@@ -67,10 +67,6 @@ export function decodeAudiopath(audiopath: string): string {
   if (!audiopath) {
     return '';
   }
-  if (audiopath.startsWith('tunein:')) {
-    return audiopath;
-  }
-
   const encoded = audiopath.split(':').pop();
   if (!encoded) {
     return audiopath;
