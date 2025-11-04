@@ -3,15 +3,13 @@ import type { ServiceFolderItem, ServiceFolderResponse } from '@/core/types/cont
 import { mapMediaItem } from './contentMapper';
 import { Track } from '../../types/musicAssistantTypes';
 
+
 export function mapFolderResponse(
   type: 'album' | 'playlist' | 'artist' | 'radio',
   items: any[],
   offset: number,
 ): ServiceFolderResponse {
-  const mapped =
-    type === 'radio'
-      ? items as ServiceFolderItem[]
-      : items.map(obj => mapMediaItem(obj, type));
+  const mapped = items.map(obj => mapMediaItem(obj, type)).filter((i): i is ServiceFolderItem => Boolean(i));
 
   return {
     id: type,

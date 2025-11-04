@@ -103,6 +103,18 @@ export class MusicAssistantContentProvider {
     offset = 0,
     limit = 50,
   ): Promise<ServiceFolderResponse> {
+
+    // Radio Service
+    if (service === 'local') {
+      try {
+        const res = await this.api.getLibraryRadios(limit, offset);
+        return mapFolderResponse('radio', res.items, offset);
+      } catch (err) {
+        logger.warn(`[MusicAssistantContentProvider] Radio folder fetch failed: ${String(err)}`);
+        return this.emptyResponse('local', 'Radio', offset);
+      }
+    }
+
     const folderId = decodeAudiopath(orgFolderId);
     const mediaType = detectMediaType(folderId);
 
@@ -156,8 +168,7 @@ export class MusicAssistantContentProvider {
     limit = 50,
   ): Promise<ServiceFolderResponse> {
     try {
-      const normalizedId = this.normalizeId(id);
-      const [info, tracksResult] = await this.fetchDetail(type, normalizedId, offset, limit);
+      const [info, tracksResult] = await this.fetchDetail(type, id, offset, limit);
 
       const tracks: Track[] = Array.isArray(tracksResult)
         ? tracksResult
@@ -203,8 +214,9 @@ export class MusicAssistantContentProvider {
    */
   async clearRecentlyPlayed(_zoneId?: number): Promise<void> {
     try {
+      // Music Assistant only has global recents
       await this.api.clearRecentlyPlayed();
-      logger.debug('[MusicAssistantContentProvider] Cleared recently played');
+      logger.debug('[MusicAssistantContentProvider] Cleared recently played for zone '+_zoneId);
     } catch (err) {
       logger.warn(`[MusicAssistantContentProvider] clearRecentlyPlayed failed: ${String(err)}`);
     }
@@ -240,17 +252,6 @@ export class MusicAssistantContentProvider {
       ]),
     } as const;
     return f[type]();
-  }
-
-  /**
-   * Normalizes incoming IDs to raw Music Assistant IDs.
-   * Removes prefixes like `library://` or `spotify@`.
-   */
-  private normalizeId(id: string): string {
-    return id
-      .replace(/^library:\/\/(album|playlist|artist|track)\//, '')
-      .replace(/^spotify@[^:]+:(album|playlist|artist|track):/, '')
-      .trim();
   }
 
   /**
