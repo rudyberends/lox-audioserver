@@ -14,7 +14,7 @@
   "scripts": {
     "lint": "eslint src/**.ts --max-warnings=0",
     "watch": "nodemon",
-    "build": "rimraf ./dist && tsc && tsc-alias -p tsconfig.json",
+    "build": "rimraf ./dist && tsc && tsc-alias -p tsconfig.json && npm run build:admin",
     "build:admin": "esbuild src/admin/js/main.js --bundle --minify --sourcemap --outfile=public/admin/app.js && cp -r src/admin/* public/admin/ && rm -rf public/admin/js",
     "start": "node dist/server.js",
     "test": "ts-node tests/run-tests.ts",
