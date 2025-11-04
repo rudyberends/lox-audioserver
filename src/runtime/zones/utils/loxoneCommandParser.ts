@@ -4,7 +4,7 @@ export const CONTENT_COMMANDS = [
   'libraryplay',
   'serviceplay',
   'playlistplay',
-  'urlplay',
+  'playurl',
   'favoriteplay',
   'alertplay',
 ] as const;
@@ -18,41 +18,47 @@ export interface ParsedContentPayload {
 }
 
 /**
- * Parses a Loxone command parameter into its base components:
- *  - item: main target URI (e.g. "library://album/634")
- *  - startItem: optional nested track ID (e.g. "1436541295")
- *  - shuffle: playback shuffle flag
+ * Decode Loxone/MusicAssistant audiopaths containing base64 payloads.
+ * Examples:
+ *  - tunein:station:bGlicmFyeTovL3JhZGlvLzEw   → library://radio/10
+ *  - spotify@nouser:track:YXBwbGVfbXVzaWM6Ly90cmFjay8xMzQzOTY0MjY4 → apple_music://track/1343964268
+ *  - library://track/12345 → passthrough
  */
 export function parseLoxoneCommand(param: unknown): ParsedContentPayload {
   const args = Array.isArray(param) ? param.map(String) : [String(param ?? '')];
-  const raw = decodeURIComponent(args[0] ?? '').trim();
+  const raw = (args[0] ?? '').trim();
+  const cleanedRaw = raw.split('?')[0]; // strip query params
 
-  // Remove query string early — nothing after "?" is part of the encoded URI
-  const cleanedRaw = raw.split('?')[0];
+  const shuffle = args.some(a => /^(true|1|shuffle)$/i.test(a ?? ''));
 
-  // Determine shuffle flag from any arg
-  const shuffle =
-    args.some(a => a?.toLowerCase?.() === 'true' || a === '1' || a === 'shuffle');
-
-  let item = cleanedRaw;
-  let startItem: string | undefined;
-
+  // Handle nested parent reference (used for albums/playlists)
   if (cleanedRaw.includes('/parentpath/')) {
-    const [childRaw, parentRaw] = cleanedRaw.split('/parentpath/');
+    const [child, parent] = cleanedRaw.split('/parentpath/');
+    const decodedChild = decodeAudiopath(child);
+    const startItem = decodedChild.split('/').pop();
 
-    // Decode the child audiopath and extract only the final ID
-    const decoded = decodeAudiopath(childRaw);
-    startItem = decoded.split('/').pop();
-
-    // Strip numeric tail and optional /noshuffle from parent path
-    item = parentRaw
+    const item = parent
       .replace(/\/\d+(?:\/noshuffle.*)?$/i, '')
       .replace(/\/+$/, '');
-  } else {
-    // Direct decode path (no parent reference)
-    const decoded = decodeAudiopath(cleanedRaw);
-    item = decoded.replace(/\/noshuffle.*$/i, '').replace(/\/+$/, '');
+
+    return { item, startItem, shuffle };
   }
 
-  return { item, startItem, shuffle };
+  // --- Simple path (no parent reference) ---
+  const stripped = cleanedRaw.replace(/\/noshuffle.*$/i, '').replace(/\/+$/, '');
+
+  // If already a plain URI (e.g. library://radio/10), don't decode again
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(stripped)) {
+    return { item: stripped, shuffle };
+  }
+
+  // Extract only the base64 token after the last ":" (if present)
+  const afterColon = stripped.slice(stripped.lastIndexOf(':') + 1);
+  const token = afterColon.split('/')[0];
+
+  const item = /^[A-Za-z0-9+/=]+$/.test(token)
+    ? decodeAudiopath(token)
+    : stripped;
+
+  return { item, shuffle };
 }
