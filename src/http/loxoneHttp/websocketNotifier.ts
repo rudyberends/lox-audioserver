@@ -154,6 +154,32 @@ export function notifyGlobalSearchResult(
   providerId: string,
   unique: string,
 ): void {
+  // --- Handle TuneIn (radio) search separately ---
+  if (providerId.toLowerCase() === 'tunein' && result.station) {
+    const payload = {
+      globalsearch_result: {
+        station: {
+          caption: 'Zender',
+          items: result.station,
+          link: `audio/cfg/search/radio/nouser/station/arr/0/${result.station.length}`,
+          totalitems: result.station.length,
+        },
+        custom: {
+          caption: 'Eigen radiostations',
+          items: result.custom ?? [],
+          link: 'audio/cfg/search/radio/nouser/custom/arr/0/0',
+          totalitems: result.custom?.length ?? 0,
+        },
+      },
+      type: providerId,
+      unique,
+    };
+
+    broadcastMessage(JSON.stringify(payload));
+    return;
+  }
+
+  // --- Default behavior for music providers ---
   const userId = result.user ?? 'nouser';
   const query = result.query ?? '';
 
@@ -175,14 +201,7 @@ export function notifyGlobalSearchResult(
     unique,
   };
 
-
-  try {
-    broadcastMessage(JSON.stringify(payload));
-    logger.debug(`[WebSocketNotifier] Global search result broadcast (${providerId})`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn(`[WebSocketNotifier] Failed to broadcast global search result: ${msg}`);
-  }
+  broadcastMessage(JSON.stringify(payload));
 }
 
 /**

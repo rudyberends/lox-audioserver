@@ -1,6 +1,7 @@
 import logger from '@/utils/troxorLogger';
 import type { EventMessage } from './types';
 import MusicAssistantClient from './client';
+import { Album, Artist, Playlist, Radio, Track } from '../types/musicAssistantTypes';
 
 /**
  * -----------------------------------------------------------------------------
@@ -176,6 +177,67 @@ export class MusicAssistantApi {
   //search
   public async search(query: string, limit = 10): Promise<any> {
     return this.safeRpc('music/search', { search_query: query, limit });
+  }
+
+  /**
+   * Search for tracks by keyword.
+   */
+  public async searchTracks(query: string, limit = 10): Promise<{ result: Track[] }> {
+    return this.safeRpc('music/tracks/library_items', {
+      search: query,
+      limit,
+      offset: 0,
+      order_by: 'name',
+    });
+  }
+
+  /**
+   * Search for albums by keyword.
+   */
+  public async searchAlbums(query: string, limit = 10): Promise<{ result: Album[] }> {
+    return this.safeRpc('music/albums/library_items', {
+      search: query,
+      limit,
+      offset: 0,
+      order_by: 'name',
+    });
+  }
+
+  /**
+   * Search for artists by keyword.
+   */
+  public async searchArtists(query: string, limit = 10): Promise<{ result: Artist[] }> {
+    return this.safeRpc('music/artists/library_items', {
+      search: query,
+      limit,
+      offset: 0,
+      order_by: 'name',
+    });
+  }
+
+  /**
+   * Search for playlists by keyword.
+   */
+  public async searchPlaylists(query: string, limit = 10): Promise<{ result: Playlist[] }> {
+    return this.safeRpc('music/playlists/library_items', {
+      search: query,
+      limit,
+      offset: 0,
+      order_by: 'name',
+    });
+  }
+
+  /**
+   * Search for radio stations by keyword.
+   * Used when provider is TuneIn.
+   */
+  public async searchRadios(query: string, limit = 10): Promise<{ result: Radio[] }> {
+    return this.safeRpc('music/radios/library_items', {
+      search: query,
+      limit,
+      offset: 0,
+      order_by: 'name',
+    });
   }
 
   /* -------------------------------------------------------------------------- */
