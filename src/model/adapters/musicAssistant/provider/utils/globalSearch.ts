@@ -1,21 +1,23 @@
 import logger from '@/utils/troxorLogger';
 import type { MusicAssistantApi } from '../../api';
-import type { Track, Album, Artist, Playlist } from '../../types/musicAssistantTypes';
+import type { Track, Album, Artist, Playlist, Radio } from '../../types/musicAssistantTypes';
 import { mapMediaItem } from '../mappers/contentMapper';
 import type { ServiceFolderItem } from '@/core/types/content';
 
-/**
- * -----------------------------------------------------------------------------
- * Music Assistant Global Search
- * -----------------------------------------------------------------------------
- * Provides a static search description and a search executor (performSearch).
- * -----------------------------------------------------------------------------
- */
+/* -------------------------------------------------------------------------- */
+/* Types                                                                      */
+/* -------------------------------------------------------------------------- */
 
-/**
- * Returns a static folder describing the available search groups.
- * Used by Loxone to render the "Search" root folder.
- */
+interface SearchResponse {
+  error: number;
+  result: Record<string, ServiceFolderItem[]>;
+  message?: string;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Static descriptor                                                          */
+/* -------------------------------------------------------------------------- */
+
 export function globalSearchDescribe() {
   return {
     id: 'globalSearch',
@@ -32,17 +34,17 @@ export function globalSearchDescribe() {
   };
 }
 
-/**
- * Performs the actual search via the Music Assistant API.
- * Returns mapped results per category.
- */
+/* -------------------------------------------------------------------------- */
+/* performSearch                                                              */
+/* -------------------------------------------------------------------------- */
+
 export async function performSearch(
   api: MusicAssistantApi,
   source: string,
   query: string,
   unique: string,
-): Promise<{ error: number; result: Record<string, ServiceFolderItem[]>; message?: string }> {
-  logger.debug(`[MusicAssistantSearch] source="${source}" query="${query}" unique=${unique}`);
+): Promise<SearchResponse> {
+  logger.info(`[MusicAssistantSearch] source="${source}" query="${query}" unique=${unique}`);
 
   const limits: Record<string, number> = {};
   const filterPart = source.split(':')[1] ?? '';
@@ -52,29 +54,59 @@ export async function performSearch(
       limits[type.trim().toLowerCase()] = Number(rawLimit) || 5;
     }
   }
-  const limit = Math.max(...Object.values(limits), 10);
+  const limit = Math.min(Math.max(...Object.values(limits), 5), 10);
 
+  /* ------------------------------------------------------------------------ */
+  /* Radio search (TuneIn only)                                               */
+  /* ------------------------------------------------------------------------ */
+  if (source.toLowerCase().startsWith('tunein')) {
+    try {
+      const result = await api.searchRadios(query, limit);
+      const radios = (result?.result ?? result ?? []) as Radio[];
+
+      return {
+        error: 0,
+        result: {
+          station: radios.map(r => mapMediaItem(r, 'radio')),
+        },
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`[MusicAssistantSearch] Radio search failed for "${query}": ${msg}`);
+      return { error: 1, result: {}, message: msg };
+    }
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Default: standard music search                                           */
+  /* ------------------------------------------------------------------------ */
   try {
     const result = await api.search(query, limit);
-    const raw = result?.result ?? result ?? {};
-    const mapped: Record<string, ServiceFolderItem[]> = {};
+    const raw = (result?.result ?? result ?? {}) as {
+      tracks?: Track[];
+      albums?: Album[];
+      artists?: Artist[];
+      playlists?: Playlist[];
+    };
 
+    const mapped: Record<string, ServiceFolderItem[]> = {};
     if (Array.isArray(raw.tracks)) {
-      mapped.tracks = (raw.tracks as Track[]).map(t => mapMediaItem(t, 'track'));
+      mapped.tracks = raw.tracks.map(t => mapMediaItem(t, 'track'));
     }
     if (Array.isArray(raw.albums)) {
-      mapped.albums = (raw.albums as Album[]).map(a => mapMediaItem(a, 'album'));
+      mapped.albums = raw.albums.map(a => mapMediaItem(a, 'album'));
     }
     if (Array.isArray(raw.artists)) {
-      mapped.artists = (raw.artists as Artist[]).map(a => mapMediaItem(a, 'artist'));
+      mapped.artists = raw.artists.map(a => mapMediaItem(a, 'artist'));
     }
     if (Array.isArray(raw.playlists)) {
-      mapped.playlists = (raw.playlists as Playlist[]).map(p => mapMediaItem(p, 'playlist'));
+      mapped.playlists = raw.playlists.map(p => mapMediaItem(p, 'playlist'));
     }
 
     return { error: 0, result: mapped };
   } catch (err) {
-    logger.warn(`[MusicAssistantSearch] failed for "${query}": ${String(err)}`);
-    return { error: 1, result: {}, message: String(err) };
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`[MusicAssistantSearch] Music search failed for "${query}": ${msg}`);
+    return { error: 1, result: {}, message: msg };
   }
 }

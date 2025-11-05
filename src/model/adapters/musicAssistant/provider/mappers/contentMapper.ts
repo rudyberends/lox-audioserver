@@ -16,7 +16,7 @@ const FILE_TYPE_MAP: Record<LoxoneTag, FileType> = {
   album: FileType.PlaylistBrowsable,
   artist: FileType.PlaylistBrowsable,
   playlist: FileType.PlaylistBrowsable,
-  radio: FileType.Playlist,
+  radio: FileType.File,
 };
 
 /* -------------------------------------------------------------------------- */
