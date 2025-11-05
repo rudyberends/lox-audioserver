@@ -13,7 +13,7 @@ export async function handleContentPlayCommand(
 ): Promise<boolean> {
   try {
     const normalized = String(command || '').toLowerCase();
-    const supported = ['libraryplay', 'serviceplay', 'playlistplay', 'urlplay', 'favoriteplay'];
+    const supported = ['announce', 'libraryplay', 'serviceplay', 'playlistplay', 'urlplay', 'favoriteplay'];
     if (!supported.includes(normalized)) {
       return false;
     }

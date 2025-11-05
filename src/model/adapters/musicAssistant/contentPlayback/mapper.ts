@@ -82,6 +82,19 @@ export class MusicAssistantContentPlaybackMapper {
       return;
     }
 
+    // --- Handle announcement playback (new) ---
+    if (cmd.type === 'announce') {
+      logger.debug(`${prefix} Announcement → ${cmd.item}`);
+      try {
+        await this.api.playAnnouncement(this.playerId, { url: cmd.item });
+        logger.info(`${prefix} Played announcement ${cmd.item}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn(`${prefix} Announcement failed: ${msg}`);
+      }
+      return;
+    }
+
     // --- Handle alert playback (direct path) ---
     if (cmd.type === 'alert') {
       logger.debug(`${prefix} Direct alert playback → ${cmd.item}`);

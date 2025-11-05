@@ -1,40 +1,27 @@
 import logger from '@/utils/troxorLogger';
 import { zoneRuntime } from '@/runtime/zones/zoneRuntime';
-import {
-  getGroupByLeader,
-  upsertGroup,
-  removeGroupByLeader,
-} from '@/runtime/groups/groupTracker';
-import { groupRuntime } from '@/runtime/groups/groupRuntime';
 import type { AlertMediaResource } from '@/model/local/alerts/types';
 import { FileAlertProvider } from '@/model/local/alerts/alerts/fileAlertsProvider';
 import { GoogleTtsProvider } from '@/model/local/alerts/tts/googleTtsProvder';
+import { RepeatMode } from '@/core/loxone/types';
 
 const LOOPED_ALERTS = new Set(['alarm', 'firealarm', 'buzzer']);
-const TEMP_GROUP_DURATION_MS = 10_000; // auto-cleanup for short alerts
 
 /**
  * -----------------------------------------------------------------------------
  * AlertsManager
  * -----------------------------------------------------------------------------
- * Resolves alert media (File/TTS), handles optional grouping, and delegates
- * playback to ZoneRuntime. Temporary groups are automatically removed for
- * non-looped alerts (e.g. TTS, bell), but persist for alarms until stopped.
+ * Huidige implementatie zonder groepslogica.
+ * Stuurt alerts direct naar elke zone, net als in de oude handler.
  * -----------------------------------------------------------------------------
  */
 export class AlertsManager {
   private readonly fileProvider = new FileAlertProvider();
   private readonly ttsProvider = new GoogleTtsProvider();
+  private readonly loopState = new Map<string, RepeatMode | undefined>();
 
   /**
-   * Handles a grouped alert request from the Loxone command router.
-   *
-   * @param leaderId   Zone ID of the leader (first zone in list)
-   * @param type       Alert type (e.g. "alarm", "tts", "buzzer")
-   * @param action     "start" or "off"
-   * @param targetZones Optional list of target zones
-   * @param ttsText    Optional TTS message text
-   * @param ttsLang    Optional TTS language code
+   * Handles a grouped alert command, but sends playback directly to each zone.
    */
   public async handleGroupedAlert(
     leaderId: number,
@@ -44,65 +31,39 @@ export class AlertsManager {
     ttsText?: string,
     ttsLang?: string,
   ): Promise<{ success: boolean; type: string; action: string; reason?: string }> {
-    logger.info(`[AlertsManager] ${action.toUpperCase()} alert "${type}" for leader ${leaderId}`);
+    logger.info(`[AlertsManager] ${action.toUpperCase()} alert "${type}"`);
 
-    const zones = targetZones?.length ? targetZones : [14];
+    const zones = targetZones?.length ? targetZones : [leaderId];
 
-    // 🔹 Stop alert
+    // stop alert
     if (action === 'off') {
       await this.stopAlert(zones, type);
       return { success: true, type, action };
     }
 
-    // 🔹 Resolve media
+    // resolve media
     const media = await this.resolveMedia(type, ttsText, ttsLang);
     if (!media) {
       logger.warn(`[AlertsManager] No media found for alert type "${type}"`);
       return { success: false, type, action, reason: 'media-unavailable' };
     }
 
-    const multiZone = zones.length > 1;
-    const leader = zones[0];
-
-    // 🔹 Create temporary group if multiple zones
-    if (multiZone) {
-      upsertGroup({
-        leader,
-        members: zones,
-        externalId: `alert-${leader}`,
-        backend: 'alerts',
-        source: 'manual',
-      });
-      groupRuntime.broadcastGroupState();
-      logger.debug(`[AlertsManager] Temporary alert group created (${zones.length} zones)`);
-
-      // 🕐 Wait briefly for group registration to propagate before playback
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-
-    try {
-      await this.playAlert(leader, type, media);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error(`[AlertsManager] Failed to start alert "${type}": ${msg}`);
-
-      // Clean up group if playback fails
-      if (multiZone) {
-        removeGroupByLeader(leader);
-        groupRuntime.broadcastGroupState();
-      }
-      return { success: false, type, action, reason: msg };
-    }
-
-    // 🔹 Auto-remove group only for short alerts
-    if (multiZone && this.shouldAutoRemoveGroup(type)) {
-      setTimeout(() => {
-        removeGroupByLeader(leader);
-        groupRuntime.broadcastGroupState();
-        logger.debug(`[AlertsManager] Temporary alert group ${leader} removed`);
-      }, TEMP_GROUP_DURATION_MS);
-    }
-
+    // play media per zone
+    await Promise.all(
+      zones.map(async (zoneId) => {
+        const state = zoneRuntime.getZoneState(zoneId);
+        if (!state) {
+          logger.warn(`[AlertsManager] Unknown zone ${zoneId}`);
+          return;
+        }
+        try {
+          await this.playAlert(zoneId, type, media);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn(`[AlertsManager] Failed to start alert on zone ${zoneId}: ${msg}`);
+        }
+      }),
+    );
     return { success: true, type, action };
   }
 
@@ -133,21 +94,34 @@ export class AlertsManager {
     const isLooped = LOOPED_ALERTS.has(type);
     const useAnnounce = !isLooped;
 
-    const payload = ['alerts', media.url]; // consistent with serviceplay signature
+    // In de oude code werd dit als JSON-string verstuurd
+    const payload = useAnnounce
+      ? { url: media.url }
+      : {
+        id: `alerts:${media.relativePath}`,
+        name: media.title,
+        audiopath: media.url,
+        provider: 'alerts',
+        type: 0,
+        option: 'replace',
+      };
 
-    logger.debug(
-      `[AlertsManager] Using ${useAnnounce ? 'announce' : 'serviceplay'} (looped=${isLooped}) → ${media.url}`,
-    );
+    const command = useAnnounce ? 'announce' : 'serviceplay';
+    logger.debug(`[AlertsManager] Zone ${zoneId} → ${command} (${media.url})`);
 
-    await zoneRuntime.sendZoneCommand(
-      zoneId,
-      useAnnounce ? 'announce' : 'serviceplay',
-      payload,
-    );
+    await zoneRuntime.sendZoneCommand(zoneId, command, payload);
 
-    logger.info(
-      `[AlertsManager] Alert "${type}" started via ${useAnnounce ? 'announce' : 'serviceplay'} on zone ${zoneId}`,
-    );
+    logger.info(`[AlertsManager] Alert "${type}" started on zone ${zoneId}`);
+
+    if (isLooped) {
+      const prevRepeat = zoneRuntime.getZoneState(zoneId)?.plrepeat;
+      this.loopState.set(`${zoneId}:${type}`, prevRepeat);
+      try {
+        await zoneRuntime.sendZoneCommand(zoneId, 'repeat', 'track');
+      } catch (err) {
+        logger.warn(`[AlertsManager] Failed to enable repeat for zone ${zoneId}: ${String(err)}`);
+      }
+    }
   }
 
   /* ------------------------------------------------------------------------ */
@@ -155,23 +129,32 @@ export class AlertsManager {
   /* ------------------------------------------------------------------------ */
 
   private async stopAlert(zones: number[], type: string): Promise<void> {
-    logger.debug(`[AlertsManager] Stopping alert "${type}" for ${zones.length} zone(s)`);
+    const looped = LOOPED_ALERTS.has(type);
 
-    const leader = zones[0];
-    try {
-      await zoneRuntime.sendZoneCommand(leader, 'pause');
-      logger.info(`[AlertsManager] Leader zone ${leader} paused for alert "${type}"`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn(`[AlertsManager] Failed to pause leader zone ${leader}: ${msg}`);
-    }
+    for (const zoneId of zones) {
+      const state = zoneRuntime.getZoneState(zoneId);
+      if (!state) {
+        continue;
+      }
 
-    // Remove group if one exists
-    const existingGroup = getGroupByLeader(leader);
-    if (existingGroup) {
-      removeGroupByLeader(leader);
-      groupRuntime.broadcastGroupState();
-      logger.debug(`[AlertsManager] Group for alert "${type}" removed after stop`);
+      if (looped) {
+        const prev = this.loopState.get(`${zoneId}:${type}`);
+        const restore = this.mapRepeatToParam(prev);
+        this.loopState.delete(`${zoneId}:${type}`);
+
+        try {
+          await zoneRuntime.sendZoneCommand(zoneId, 'repeat', restore);
+        } catch (err) {
+          logger.warn(`[AlertsManager] Failed to restore repeat for zone ${zoneId}: ${String(err)}`);
+        }
+      }
+
+      try {
+        await zoneRuntime.sendZoneCommand(zoneId, 'pause');
+        logger.debug(`[AlertsManager] Zone ${zoneId} paused`);
+      } catch (err) {
+        logger.warn(`[AlertsManager] Failed to pause zone ${zoneId}: ${String(err)}`);
+      }
     }
   }
 
@@ -179,10 +162,15 @@ export class AlertsManager {
   /*  Helpers                                                                 */
   /* ------------------------------------------------------------------------ */
 
-  /** Determines whether a group should auto-remove after a fixed timeout. */
-  private shouldAutoRemoveGroup(type: string): boolean {
-    // alarms/firealarms/buzzers are looping until explicit stop
-    return !LOOPED_ALERTS.has(type);
+  private mapRepeatToParam(value: RepeatMode | undefined): string {
+    switch (value) {
+      case RepeatMode.Track:
+        return 'track';
+      case RepeatMode.Queue:
+        return 'queue';
+      default:
+        return 'off';
+    }
   }
 }
 

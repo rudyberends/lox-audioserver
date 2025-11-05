@@ -4,7 +4,7 @@ export interface ContentPlayCommand {
   item: string;
   start_item?: string;
   shuffle?: boolean;
-  type: 'service' | 'playlist' | 'library' | 'alert' | 'radio' | 'url' | 'unknown';
+  type: 'service' | 'playlist' | 'library' | 'alert' | 'radio' | 'url' | 'announce'| 'unknown';
 }
 
 /** Interface for adapters that can handle play commands. */
