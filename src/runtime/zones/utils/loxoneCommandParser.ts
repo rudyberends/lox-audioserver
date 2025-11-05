@@ -7,6 +7,7 @@ export const CONTENT_COMMANDS = [
   'playurl',
   'favoriteplay',
   'alertplay',
+  'announce',
 ] as const;
 
 export type ContentCommandType = typeof CONTENT_COMMANDS[number];

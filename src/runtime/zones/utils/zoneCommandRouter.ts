@@ -99,9 +99,47 @@ export class ZoneCommandRouter {
       return;
     }
 
-    // Alerts: handled separately earlier (guarded in caller)
-    const { item, startItem, shuffle } = parseLoxoneCommand(param);
+    // Direct payloads (alerts or static serviceplay)
+    if (param && typeof param === 'object') {
+      const obj = param as Record<string, unknown>;
 
+      // Announce case
+      if ('url' in obj) {
+        const url = String(obj.url);
+        logger.info(`[ZoneRuntime][${zoneName}] ▶ direct url="${url}", type=${type}`);
+        const cmd: ContentPlayCommand = {
+          zoneId: zone.id,
+          item: url,
+          shuffle: false,
+          type: 'announce',
+        };
+        await zone.contentMapper.handlePlayCommand(cmd);
+        return;
+      }
+
+      // Serviceplay or playlistplay case (from alerts or direct)
+      if ('audiopath' in obj) {
+        const url = String(obj.audiopath);
+        logger.info(`[ZoneRuntime][${zoneName}] ▶ direct audiopath="${url}", type=${type}`);
+        const mappedType =
+      type === 'serviceplay'
+        ? 'service'
+        : type === 'playlistplay'
+          ? 'playlist'
+          : (type as ContentPlayCommand['type']);
+        const cmd: ContentPlayCommand = {
+          zoneId: zone.id,
+          item: url,
+          shuffle: false,
+          type: mappedType,
+        };
+        await zone.contentMapper.handlePlayCommand(cmd);
+        return;
+      }
+    }
+
+    // default behaviour
+    const { item, startItem, shuffle } = parseLoxoneCommand(param);
     logger.info(
       `[ZoneRuntime][${zoneName}] ▶ item="${item}"${startItem ? `, start_item="${startItem}"` : ''}, shuffle=${shuffle}, type=${type}`,
     );
