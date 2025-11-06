@@ -232,11 +232,14 @@ export class MusicAssistantApi {
    * Used when provider is TuneIn.
    */
   public async searchRadios(query: string, limit = 10): Promise<{ result: Radio[] }> {
-    return this.safeRpc('music/search', {
+    const res = await this.safeRpc('music/search', {
       search_query: query,
       media_types: ['radio'],
       limit,
     });
+
+    const radios = Array.isArray(res?.radio) ? res.radio : [];
+    return { result: radios };
   }
 
   /* -------------------------------------------------------------------------- */
