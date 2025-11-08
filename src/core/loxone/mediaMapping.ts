@@ -24,7 +24,7 @@ export function detectLoxoneItemType(audiopath: string): LoxoneItemType {
     return 'tunein';
   }
   if (path.includes('playlist')) {
-    return 'spotify_playlist';
+    return 'playlist';
   }
   if (path.includes('album')) {
     return 'spotify_album';
