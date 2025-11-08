@@ -13,9 +13,10 @@
   },
   "scripts": {
     "lint": "eslint src/**.ts --max-warnings=0",
-    "watch": "nodemon",
+    "watch": "concurrently \"nodemon\" \"npm:watch:admin\"",
+    "watch:admin": "vite build --config vite.admin.config.ts --watch",
     "build": "rimraf ./dist && tsc && tsc-alias -p tsconfig.json && npm run build:admin",
-    "build:admin": "esbuild src/admin/js/main.js --bundle --minify --sourcemap --outfile=public/admin/app.js && cp -r src/admin/* public/admin/ && rm -rf public/admin/js",
+    "build:admin": "vite build --config vite.admin.config.ts",
     "start": "node dist/server.js",
     "test": "ts-node tests/run-tests.ts",
     "release": "semantic-release",
@@ -41,6 +42,7 @@
     "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.46.0",
     "@typescript-eslint/parser": "^8.46.0",
+    "concurrently": "^9.2.1",
     "esbuild": "^0.25.11",
     "eslint": "^9.38.0",
     "eslint-config-prettier": "^10.1.8",
@@ -54,7 +56,8 @@
     "tsc-alias": "^1.8.16",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.46.1"
+    "typescript-eslint": "^8.46.1",
+    "vite": "^5.4.10"
   },
   "dependencies": {
     "axios": "^1.12.2",

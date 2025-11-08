@@ -11,5 +11,5 @@
     }
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["client_code"]
+  "exclude": ["node_modules", "dist", "src/admin"]
 }
