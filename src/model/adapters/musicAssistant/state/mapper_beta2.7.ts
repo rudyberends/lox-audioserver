@@ -16,9 +16,8 @@ import { StateMapper } from '@/core/interfaces/stateMapper';
  * -----------------------------------------------------------------------------
  * MusicAssistantStateMapper
  * -----------------------------------------------------------------------------
- * Handles synchronization of player and queue states from Music Assistant
- * into the Loxone ZoneRuntime. Fetches the initial backend state on startup
- * and keeps it updated through event-driven updates.
+ * Synchronizes the Music Assistant player's state to the Loxone ZoneRuntime.
+ * Handles player updates, queue changes, and group membership synchronization.
  * -----------------------------------------------------------------------------
  */
 export class MusicAssistantStateMapper implements StateMapper {
@@ -26,24 +25,22 @@ export class MusicAssistantStateMapper implements StateMapper {
 
   private readonly zoneId: number;
   private readonly zoneName: string;
+
   private readonly maPlayerId: string;
   private readonly api: MusicAssistantApi;
-
   private unsubscribe?: () => void;
   private updateHandler?: (patch: Partial<ZoneState>) => void;
 
   private activeQueueId = '';
   private activeGroupLeaderId = '';
   private groupDisbandTimeout?: NodeJS.Timeout;
-
   private hasDisbanded = false;
   private lastRefreshTs = 0;
   private lastQueueUpdateTs = 0;
 
   private static readonly TIMING = {
-    DISBAND_REFRESH_COOLDOWN_MS: 15_000,
+    DISBAND_REFRESH_COOLDOWN_MS: 15000,
     QUEUE_UPDATE_DEBOUNCE_MS: 500,
-    DISBAND_DEBOUNCE_MS: 2_500,
   };
 
   constructor(params: MusicAssistantConfig) {
@@ -57,68 +54,38 @@ export class MusicAssistantStateMapper implements StateMapper {
   /* Lifecycle                                                                  */
   /* -------------------------------------------------------------------------- */
 
-  /**
-   * Initializes the mapper, connects to Music Assistant, and loads
-   * the initial state (player + queue) from the backend before subscribing to events.
-   */
   async initialize(): Promise<void> {
     await this.api.connect();
 
     try {
-      // (1) Fetch player state
-      const player = await this.api.getPlayer(this.maPlayerId);
-
-      // (2) Resolve queue related to this player
       const queues = await this.api.getAllQueues();
-      const lowerId = this.maPlayerId.toLowerCase();
-      const myQueue: PlayerQueue | undefined =
-        queues.find((q: any) => q.player_id?.toLowerCase?.() === lowerId) ??
-        queues.find(
-          (q: any) =>
-            Array.isArray(q.players) &&
-            q.players.map((p: any) => String(p).toLowerCase()).includes(lowerId),
-        ) ??
-        queues.find((q: any) => String(q.state).toLowerCase() === 'playing');
+      const myQueue =
+        queues.find(q => q.queue_id === this.maPlayerId) ??
+        queues.find(q => q.queue_id === this.activeQueueId);
 
       if (myQueue?.queue_id) {
         const items = await this.api.getQueueItems(myQueue.queue_id);
-        if (Array.isArray(items)) {
-          (myQueue as any).items = items;
+        if (Array.isArray(items) && items.length > 0) {
+          (myQueue as { items: unknown[] }).items = items;
         }
-
-        const mapped = mapQueueToState(this.zoneId, myQueue);
-        if (mapped) {
-          zoneStateStore.patch(this.zoneId, { ...mapped.trackUpdate, queue: mapped.queue });
-          this.activeQueueId = myQueue.queue_id.toLowerCase();
-        }
+        await this.updateFromQueue(myQueue);
       }
-
-      // (3) Apply player-specific state last so it overwrites queue-based metadata
-      if (player) {
-        const patch = mapPlayerToState(this.zoneId, player);
-        zoneStateStore.patch(this.zoneId, patch);
-      }
-
-      this.log('info', `Initial state loaded for ${this.zoneName}`);
     } catch (err) {
-      this.logWarn('Initial state fetch failed', err);
+      this.logWarn('Initial queue fetch failed', err);
     }
 
-    // (4) Subscribe to all backend events
-    this.unsubscribe = this.api.onEvent((evt: EventMessage) => this.handleEvent(evt));
-
-    // (5) Request a full sync for consistency
+    this.unsubscribe = this.api.onEvent(evt => this.handleEvent(evt));
     await this.api.refreshFullState();
+
+    this.log('info', `StateMapper initialized for ${this.maPlayerId}`);
   }
 
-  /** Disconnects mapper, cancels timers, and releases resources. */
   dispose(): void {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
 
     if (this.groupDisbandTimeout) {
       clearTimeout(this.groupDisbandTimeout);
-      this.groupDisbandTimeout = undefined;
     }
 
     this.api.release();
@@ -130,53 +97,60 @@ export class MusicAssistantStateMapper implements StateMapper {
   }
 
   /* -------------------------------------------------------------------------- */
-  /* Event Handling                                                             */
+  /* Event Routing                                                              */
   /* -------------------------------------------------------------------------- */
 
   private handleEvent(evt: EventMessage): void {
     const eventName = String(evt.event ?? '').toLowerCase();
-    const objectId = this.normalizeId(evt.object_id);
-
-    // Allow events without object_id
-    if (objectId) {
-      const relevant = new Set(
-        [this.maPlayerId, this.activeQueueId, this.activeGroupLeaderId].map(this.normalizeId),
-      );
-      if (!relevant.has(objectId)) {
-        return;
-      }
+    if (!this.isEventRelevant(eventName, evt.object_id)) {
+      return;
     }
+
+    this.log('debug', `stateUpdate received (${eventName})`);
 
     switch (eventName) {
       case 'queue_items_updated':
         void this.refreshQueueItems(evt.data?.queue_id);
         break;
-
-      case 'queue_updated':
       case 'queue_added':
-        void this.updateFromQueue(evt.data as PlayerQueue);
-        if (!Array.isArray((evt.data as PlayerQueue)?.items)) {
-          void this.refreshQueueItems((evt.data as PlayerQueue)?.queue_id);
-        }
+        void this.updateFromQueue(evt.data);
         break;
-
-      case 'player_updated':
-      case 'player_added':
-        this.updateFromPlayer(evt.data as Player);
+      case 'queue_updated':
+        void this.updateQueueMetadata(evt.data);
         break;
-
       case 'queue_time_updated':
         this.handleQueueTime(evt.data);
         break;
-
+      case 'player_added':
+      case 'player_updated':
+        this.updateFromPlayer(evt.data);
+        break;
       default:
         break;
     }
   }
 
   /* -------------------------------------------------------------------------- */
-  /* Queue Handling                                                             */
+  /* Queue and Player Mapping                                                   */
   /* -------------------------------------------------------------------------- */
+
+  private updateQueueMetadata(queueData: PlayerQueue): void {
+    try {
+      const repeat = String(queueData.repeat_mode ?? '').toLowerCase();
+      const repeatMode = repeat === 'one' ? 2 : repeat === 'all' ? 1 : 0;
+      const shuffle = queueData.shuffle_enabled ? 1 : 0;
+
+      const patch: Partial<ZoneState> = {
+        plrepeat: repeatMode,
+        plshuffle: shuffle,
+      };
+
+      this.pushPlayerStatusUpdate(patch);
+      this.log('debug', `Queue metadata updated (shuffle=${shuffle}, repeat=${repeat})`);
+    } catch (err) {
+      this.logWarn('updateQueueMetadata failed', err);
+    }
+  }
 
   private async refreshQueueItems(queueId?: string): Promise<void> {
     const id = this.normalizeId(queueId ?? this.activeQueueId);
@@ -186,18 +160,25 @@ export class MusicAssistantStateMapper implements StateMapper {
 
     try {
       const items = await this.api.getQueueItems(id);
-      const mappedItems = Array.isArray(items) ? items.map((item, i) => mapQueueItem(item, i)) : [];
+      if (!Array.isArray(items) || items.length === 0) {
+        this.log('debug', 'refreshQueueItems: no items returned');
+        return;
+      }
+
+      const mappedItems = items.map((item, i) => mapQueueItem(item, i));
 
       const newQueue: ZoneState['queue'] = {
-        id: this.zoneId,
+        id: this.zoneId!,
         items: mappedItems,
-        shuffle: zoneStateStore.get(this.zoneId)?.queue?.shuffle ?? false,
+        shuffle: false, // shuffle wordt later via queue_updated event gezet
         start: 0,
         totalitems: mappedItems.length,
       };
 
-      zoneStateStore.patch(this.zoneId, { queue: newQueue });
-      this.log('info', `Queue refreshed (${mappedItems.length} items)`);
+      // Patch direct naar de store
+      zoneStateStore.patch(this.zoneId!, { queue: newQueue });
+
+      this.log('info', `Queue rebuilt (${mappedItems.length} items)`);
     } catch (err) {
       this.logWarn('refreshQueueItems failed', err);
     }
@@ -207,44 +188,37 @@ export class MusicAssistantStateMapper implements StateMapper {
     if (!queueData?.queue_id) {
       return;
     }
-
-    const now = Date.now();
-    if (now - this.lastQueueUpdateTs < MusicAssistantStateMapper.TIMING.QUEUE_UPDATE_DEBOUNCE_MS) {
+    if (!this.shouldProcessQueueUpdate()) {
       return;
     }
-    this.lastQueueUpdateTs = now;
 
     try {
-      const mapped = mapQueueToState(this.zoneId, queueData);
+      const mapped = mapQueueToState(this.zoneId!, queueData);
       if (!mapped) {
         return;
       }
 
       this.activeQueueId = this.normalizeId(queueData.queue_id);
-      zoneStateStore.patch(this.zoneId, { ...mapped.trackUpdate, queue: mapped.queue });
 
-      this.log('info', `Queue updated (${mapped.queue?.totalitems} items, shuffle=${mapped.queue?.shuffle})`);
+      zoneStateStore.patch(this.zoneId!, {
+        ...mapped.trackUpdate,
+        queue: mapped.queue,
+      });
+
+      this.log(
+        'info',
+        `Queue updated (${mapped.queue!.totalitems} items, shuffle=${mapped.queue!.shuffle})`,
+      );
     } catch (err) {
       this.logWarn('updateFromQueue failed', err);
     }
   }
 
-  /* -------------------------------------------------------------------------- */
-  /* Player Handling                                                            */
-  /* -------------------------------------------------------------------------- */
-
   private updateFromPlayer(playerData: Player): void {
     try {
       this.activeGroupLeaderId = this.normalizeId(playerData.synced_to);
-
-      const patch = mapPlayerToState(this.zoneId, playerData);
+      const patch = mapPlayerToState(this.zoneId!, playerData);
       this.pushPlayerStatusUpdate(patch);
-
-      // If synced to a leader, refresh that leader's queue
-      if (this.activeGroupLeaderId) {
-        void this.refreshQueueItems(this.activeGroupLeaderId);
-      }
-
       this.syncGroupMembership(playerData);
     } catch (err) {
       this.logWarn('updateFromPlayer failed', err);
@@ -252,18 +226,8 @@ export class MusicAssistantStateMapper implements StateMapper {
   }
 
   /* -------------------------------------------------------------------------- */
-  /* Group Synchronization                                                      */
+  /* Group Synchronization Logic                                                */
   /* -------------------------------------------------------------------------- */
-
-  private async maybeRefreshFullState(): Promise<void> {
-    const now = Date.now();
-    if (now - this.lastRefreshTs < MusicAssistantStateMapper.TIMING.DISBAND_REFRESH_COOLDOWN_MS) {
-      return;
-    }
-    await this.api.refreshFullState();
-    this.lastRefreshTs = now;
-    this.log('debug', 'Full state refreshed after disband');
-  }
 
   private syncGroupMembership(playerData: Player): void {
     const backend = 'MusicAssistant' as const;
@@ -272,12 +236,21 @@ export class MusicAssistantStateMapper implements StateMapper {
       return;
     }
 
-    const rawLeaderId = playerData.synced_to ?? null;
+    const hasGroupField =
+      'synced_to' in playerData ||
+      'group_leader' in playerData ||
+      'group_members' in playerData ||
+      'group_childs' in playerData;
+    if (!hasGroupField) {
+      return;
+    }
+
+    const rawLeaderId = playerData.synced_to;
     const leaderId = this.normalizeId(rawLeaderId ?? this.maPlayerId);
     const leaderZone = rawLeaderId ? findZoneByMaPlayerId(leaderId) : selfZone;
+    const membersRaw = playerData.group_members ?? [];
 
-    const membersRaw = Array.isArray(playerData.group_members) ? playerData.group_members : [];
-    const memberZoneIds = normalizeMembers(membersRaw as any[], (m: any) => {
+    const memberZoneIds = normalizeMembers(membersRaw, (m: any) => {
       const z =
         typeof m === 'string'
           ? findZoneByMaPlayerId(m)
@@ -287,9 +260,11 @@ export class MusicAssistantStateMapper implements StateMapper {
       return z?.zoneId;
     });
 
+    // If new or existing group detected → cancel pending disband
     if ((leaderZone && selfZone.zoneId !== leaderZone.zoneId) || memberZoneIds.length > 0) {
       if (this.groupDisbandTimeout) {
         clearTimeout(this.groupDisbandTimeout);
+        this.groupDisbandTimeout = undefined;
       }
       this.hasDisbanded = false;
 
@@ -303,9 +278,10 @@ export class MusicAssistantStateMapper implements StateMapper {
       return;
     }
 
+    // Schedule disband only if we are leader with no members
     if (memberZoneIds.length === 0 && leaderZone && selfZone.zoneId === leaderZone.zoneId) {
       const currentGroups = getCurrentGroups();
-      const isRegisteredLeader = currentGroups.some((g) => g.leader === selfZone.zoneId);
+      const isRegisteredLeader = currentGroups.some(g => g.leader === selfZone.zoneId);
 
       if (!this.groupDisbandTimeout && !this.hasDisbanded && isRegisteredLeader) {
         this.groupDisbandTimeout = setTimeout(async () => {
@@ -325,13 +301,13 @@ export class MusicAssistantStateMapper implements StateMapper {
           } catch (err) {
             this.logWarn('Failed to refresh state', err);
           }
-        }, MusicAssistantStateMapper.TIMING.DISBAND_DEBOUNCE_MS);
+        }, 1000);
       }
     }
   }
 
   /* -------------------------------------------------------------------------- */
-  /* Utilities                                                                  */
+  /* Utility Methods                                                            */
   /* -------------------------------------------------------------------------- */
 
   private handleQueueTime(data: unknown): void {
@@ -348,12 +324,44 @@ export class MusicAssistantStateMapper implements StateMapper {
     this.pushPlayerStatusUpdate(update);
   }
 
+  private shouldProcessQueueUpdate(): boolean {
+    const now = Date.now();
+    if (now - this.lastQueueUpdateTs < MusicAssistantStateMapper.TIMING.QUEUE_UPDATE_DEBOUNCE_MS) {
+      return false;
+    }
+    this.lastQueueUpdateTs = now;
+    return true;
+  }
+
+  private async maybeRefreshFullState(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastRefreshTs < MusicAssistantStateMapper.TIMING.DISBAND_REFRESH_COOLDOWN_MS) {
+      return;
+    }
+    await this.api.refreshFullState();
+    this.lastRefreshTs = now;
+    this.log('debug', 'Full state refreshed after disband');
+  }
+
   private pushPlayerStatusUpdate(patch: Partial<ZoneState>): void {
     try {
       this.updateHandler?.(patch);
     } catch (err) {
       this.logWarn('Failed to dispatch update', err);
     }
+  }
+
+  private isEventRelevant(event: string, objectId?: string): boolean {
+    const id = this.normalizeId(objectId);
+    const relevant = new Set(
+      [this.maPlayerId, this.activeQueueId, this.activeGroupLeaderId]
+        .map(i => this.normalizeId(i))
+        .filter(Boolean),
+    );
+    if (!id && (event.startsWith('queue_') || event.startsWith('player_'))) {
+      return false;
+    }
+    return !id || relevant.has(id);
   }
 
   private normalizeId(value: unknown): string {
