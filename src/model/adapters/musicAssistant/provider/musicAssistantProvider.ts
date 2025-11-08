@@ -108,7 +108,7 @@ export class MusicAssistantContentProvider {
     if (service === 'local') {
       try {
         const res = await this.api.getLibraryRadios(limit, offset);
-        return mapFolderResponse('radio', res.items, offset);
+        return mapFolderResponse('radio', res.items, offset, res.total);
       } catch (err) {
         logger.warn(`[MusicAssistantContentProvider] Radio folder fetch failed: ${String(err)}`);
         return this.emptyResponse('local', 'Radio', offset);
@@ -150,7 +150,7 @@ export class MusicAssistantContentProvider {
   async getFolder(type: FolderType, offset = 0, limit = 50): Promise<ServiceFolderResponse> {
     try {
       const res = await this.fetchFolder(type, offset, limit);
-      return mapFolderResponse(type, res.items, offset);
+      return mapFolderResponse(type, res.items, offset, res.total);
     } catch (err) {
       logger.warn(`[MusicAssistantContentProvider] Folder fetch failed: ${String(err)}`);
       return this.emptyResponse(type, type, offset);

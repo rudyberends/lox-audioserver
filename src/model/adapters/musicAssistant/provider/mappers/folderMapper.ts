@@ -8,6 +8,7 @@ export function mapFolderResponse(
   type: 'album' | 'playlist' | 'artist' | 'radio',
   items: any[],
   offset: number,
+  total: number,
 ): ServiceFolderResponse {
   const mapped = items.map(obj => mapMediaItem(obj, type)).filter((i): i is ServiceFolderItem => Boolean(i));
 
@@ -16,7 +17,7 @@ export function mapFolderResponse(
     name: `${type[0].toUpperCase() + type.slice(1)}s`,
     service: 'musicassistant',
     start: offset,
-    totalitems: mapped.length,
+    totalitems: total,
     items: mapped,
   };
 }
