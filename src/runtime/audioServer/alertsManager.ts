@@ -1,27 +1,31 @@
 import logger from '@/utils/troxorLogger';
 import { zoneRuntime } from '@/runtime/zones/zoneRuntime';
-import type { AlertMediaResource } from '@/model/local/alerts/types';
+import type { AlertMediaResource } from '@/model/local/alerts/types/AlertTypes';
 import { FileAlertProvider } from '@/model/local/alerts/alerts/fileAlertsProvider';
 import { GoogleTtsProvider } from '@/model/local/alerts/tts/googleTtsProvder';
-import { RepeatMode } from '@/core/loxone/types';
-
-const LOOPED_ALERTS = new Set(['alarm', 'firealarm', 'buzzer']);
+import { AlertController } from '@/model/local/alerts/AlertController';
+import { AlertPlaybackEngine } from '@/model/local/alerts/AlertPlaybackEngine';
 
 /**
  * -----------------------------------------------------------------------------
  * AlertsManager
  * -----------------------------------------------------------------------------
- * Huidige implementatie zonder groepslogica.
- * Stuurt alerts direct naar elke zone, net als in de oude handler.
+ * High-level orchestration of alert lifecycle:
+ *  - Resolves alert media (TTS or file)
+ *  - Determines target zones and per-zone volume
+ *  - Delegates lifecycle control to AlertController
+ *  - Automatically handles per-zone auto-stop for one-shot alerts (TTS)
+ *
+ * This class is the public entry point for grouped alerts coming from Loxone.
  * -----------------------------------------------------------------------------
  */
 export class AlertsManager {
+  private readonly controller = new AlertController(new AlertPlaybackEngine());
   private readonly fileProvider = new FileAlertProvider();
   private readonly ttsProvider = new GoogleTtsProvider();
-  private readonly loopState = new Map<string, RepeatMode | undefined>();
 
   /**
-   * Handles a grouped alert command, but sends playback directly to each zone.
+   * Handles ON/OFF alert commands for a leader zone, optionally targeting a group.
    */
   public async handleGroupedAlert(
     leaderId: number,
@@ -30,46 +34,36 @@ export class AlertsManager {
     targetZones?: number[],
     ttsText?: string,
     ttsLang?: string,
-  ): Promise<{ success: boolean; type: string; action: string; reason?: string }> {
-    logger.info(`[AlertsManager] ${action.toUpperCase()} alert "${type}"`);
-
+  ): Promise<{ success: boolean; type: string; action: string }> {
     const zones = targetZones?.length ? targetZones : [leaderId];
+    logger.info(`[AlertsManager] ${action.toUpperCase()} alert "${type}" zones=${JSON.stringify(zones)}`);
 
-    // stop alert
     if (action === 'off') {
-      await this.stopAlert(zones, type);
+      await this.controller.alertStop(zones, type);
       return { success: true, type, action };
     }
 
-    // resolve media
+    // Resolve alert media (TTS or static file)
     const media = await this.resolveMedia(type, ttsText, ttsLang);
     if (!media) {
-      logger.warn(`[AlertsManager] No media found for alert type "${type}"`);
-      return { success: false, type, action, reason: 'media-unavailable' };
+      logger.warn(`[AlertsManager] No media for alert type "${type}"`);
+      return { success: false, type, action };
     }
 
-    // play media per zone
-    await Promise.all(
-      zones.map(async (zoneId) => {
-        const state = zoneRuntime.getZoneState(zoneId);
-        if (!state) {
-          logger.warn(`[AlertsManager] Unknown zone ${zoneId}`);
-          return;
-        }
-        try {
-          await this.playAlert(zoneId, type, media);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.warn(`[AlertsManager] Failed to start alert on zone ${zoneId}: ${msg}`);
-        }
-      }),
+    // Start alert — controller handles full per-zone lifecycle
+    await this.controller.alertStart(
+      zones,
+      type,
+      media,
+      (zoneId) => this.resolveAlertVolume(zoneId, type),
     );
+
     return { success: true, type, action };
   }
 
-  /* ------------------------------------------------------------------------ */
-  /*  Provider resolution                                                     */
-  /* ------------------------------------------------------------------------ */
+  /* --------------------------------------------------------------------------
+   * Media resolution                                                          *
+   * ------------------------------------------------------------------------ */
 
   private async resolveMedia(
     type: string,
@@ -78,99 +72,55 @@ export class AlertsManager {
   ): Promise<AlertMediaResource | undefined> {
     if (type === 'tts') {
       if (!ttsText) {
-        logger.warn('[AlertsManager] TTS alert requested without text');
         return undefined;
       }
-      return this.ttsProvider.generate(ttsText, ttsLang || 'en');
+      return this.ttsProvider.generate(ttsText, ttsLang ?? 'en');
     }
     return this.fileProvider.resolve(type);
   }
 
-  /* ------------------------------------------------------------------------ */
-  /*  Playback                                                                */
-  /* ------------------------------------------------------------------------ */
+  /* --------------------------------------------------------------------------
+   * Volume resolution per zone                                                *
+   * ------------------------------------------------------------------------ */
 
-  private async playAlert(zoneId: number, type: string, media: AlertMediaResource): Promise<void> {
-    const isLooped = LOOPED_ALERTS.has(type);
-    const useAnnounce = !isLooped;
-
-    // In de oude code werd dit als JSON-string verstuurd
-    const payload = useAnnounce
-      ? { url: media.url }
-      : {
-        id: `alerts:${media.relativePath}`,
-        name: media.title,
-        audiopath: media.url,
-        provider: 'alerts',
-        type: 0,
-        option: 'replace',
-      };
-
-    const command = useAnnounce ? 'announce' : 'serviceplay';
-    logger.debug(`[AlertsManager] Zone ${zoneId} → ${command} (${media.url})`);
-
-    await zoneRuntime.sendZoneCommand(zoneId, command, payload);
-
-    logger.info(`[AlertsManager] Alert "${type}" started on zone ${zoneId}`);
-
-    if (isLooped) {
-      const prevRepeat = zoneRuntime.getZoneState(zoneId)?.plrepeat;
-      this.loopState.set(`${zoneId}:${type}`, prevRepeat);
-      try {
-        await zoneRuntime.sendZoneCommand(zoneId, 'repeat', 'track');
-      } catch (err) {
-        logger.warn(`[AlertsManager] Failed to enable repeat for zone ${zoneId}: ${String(err)}`);
-      }
+  /**
+   * Computes the final alert volume for a zone based on the configured profile.
+   * Uses ZoneRuntime as the authoritative source for event volumes.
+   */
+  private resolveAlertVolume(zoneId: number, type: string): number {
+    const vols = zoneRuntime.getZoneVolumeConfig(zoneId);
+    if (!vols) {
+      return 30;
     }
+
+    const key = typeToVolumeKey(type);
+
+    return (
+      (vols as any)[key] ??
+      vols.default ??
+      30
+    );
   }
+}
 
-  /* ------------------------------------------------------------------------ */
-  /*  Stop handling                                                           */
-  /* ------------------------------------------------------------------------ */
-
-  private async stopAlert(zones: number[], type: string): Promise<void> {
-    const looped = LOOPED_ALERTS.has(type);
-
-    for (const zoneId of zones) {
-      const state = zoneRuntime.getZoneState(zoneId);
-      if (!state) {
-        continue;
-      }
-
-      if (looped) {
-        const prev = this.loopState.get(`${zoneId}:${type}`);
-        const restore = this.mapRepeatToParam(prev);
-        this.loopState.delete(`${zoneId}:${type}`);
-
-        try {
-          await zoneRuntime.sendZoneCommand(zoneId, 'repeat', restore);
-        } catch (err) {
-          logger.warn(`[AlertsManager] Failed to restore repeat for zone ${zoneId}: ${String(err)}`);
-        }
-      }
-
-      try {
-        await zoneRuntime.sendZoneCommand(zoneId, 'pause');
-        logger.debug(`[AlertsManager] Zone ${zoneId} paused`);
-      } catch (err) {
-        logger.warn(`[AlertsManager] Failed to pause zone ${zoneId}: ${String(err)}`);
-      }
-    }
-  }
-
-  /* ------------------------------------------------------------------------ */
-  /*  Helpers                                                                 */
-  /* ------------------------------------------------------------------------ */
-
-  private mapRepeatToParam(value: RepeatMode | undefined): string {
-    switch (value) {
-      case RepeatMode.Track:
-        return 'track';
-      case RepeatMode.Queue:
-        return 'queue';
-      default:
-        return 'off';
-    }
+/**
+ * Mapping function from alert type → volume config key.
+ */
+function typeToVolumeKey(type: string): string {
+  switch (type) {
+    case 'alarm':
+      return 'alarm';
+    case 'fire':
+    case 'firealarm':
+      return 'fire';
+    case 'bell':
+      return 'bell';
+    case 'buzzer':
+      return 'buzzer';
+    case 'tts':
+      return 'tts';
+    default:
+      return 'default';
   }
 }
 

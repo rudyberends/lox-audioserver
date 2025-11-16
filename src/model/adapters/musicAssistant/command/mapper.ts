@@ -1,6 +1,5 @@
 import { zoneStateStore } from '@/runtime/zones/zoneStateStore';
 import { getAdapterProp, setAdapterProp } from '@/runtime/zones/types/zoneStateTypes';
-import type { ZoneState } from '@/runtime/zones/types/zoneStateTypes';
 import { MusicAssistantApi } from '../api';
 import { MusicAssistantConfig } from '../types/config';
 import { MusicAssistantCommand } from '../types/command';
@@ -71,9 +70,7 @@ export class MusicAssistantCommandMapper implements CommandHandler {
   /* -------------------------------------------------------------------------- */
   /* Volume + playback helpers                                                  */
   /* -------------------------------------------------------------------------- */
-
   private async adjustVolume(param?: any): Promise<void> {
-    const delta = Number(param?.delta ?? param ?? 0);
     const zone = zoneStateStore.getZoneState(this.zoneId);
 
     if (!zone) {
@@ -81,12 +78,21 @@ export class MusicAssistantCommandMapper implements CommandHandler {
       return;
     }
 
-    const current = Number((zone as ZoneState).volume ?? 0);
-    const newVol = computeRelativeVolume(current, delta);
+    let target: number;
+
+    // ABSOLUTE VOLUME (used by alerts)
+    if (param && typeof param === 'object' && 'absolute' in param) {
+      target = Number(param.absolute);
+    } else {
+      // RELATIVE VOLUME (legacy delta)
+      const delta = Number(param?.delta ?? param ?? 0);
+      const current = Number(zone.volume ?? 0);
+      target = computeRelativeVolume(current, delta);
+    }
 
     try {
-      await this.api.setVolume(this.playerId, newVol);
-      logDebug('MusicAssistantCommandMapper', this.zoneName, `Volume ${delta >= 0 ? '+' : ''}${delta} → ${newVol}`);
+      await this.api.setVolume(this.playerId, target);
+      logDebug('MusicAssistantCommandMapper', this.zoneName, `Volume set → ${target}`);
     } catch (err) {
       logWarn('MusicAssistantCommandMapper', this.zoneName, `Volume update failed: ${String(err)}`);
     }

@@ -182,9 +182,13 @@ export class ZoneRuntime {
     const extensionMap = new Map<string, { label: string }>();
     const extensions = Array.isArray(server.extensions) ? server.extensions : [];
     extensions.forEach((ext: any, index: number) => {
-      if (!ext || typeof ext !== 'object') return;
+      if (!ext || typeof ext !== 'object') {
+        return;
+      }
       const serial = String(ext.serial ?? '').trim().toUpperCase();
-      if (!serial) return;
+      if (!serial) {
+        return;
+      }
       const name = typeof ext.name === 'string' && ext.name.trim()
         ? ext.name.trim()
         : `Stereo Extension ${index + 1}`;
@@ -205,7 +209,9 @@ export class ZoneRuntime {
             }
           }
         }
-        if (serial) break;
+        if (serial) {
+          break;
+        }
       }
 
       let label = serverName;
@@ -220,7 +226,9 @@ export class ZoneRuntime {
         serial = audioSerial;
       }
 
-      if (!label && audioSerial && serial === audioSerial) label = serverName;
+      if (!label && audioSerial && serial === audioSerial) {
+        label = serverName;
+      }
       return { serial, label: label || serverName };
     };
 
@@ -311,6 +319,12 @@ export class ZoneRuntime {
   /** Returns a minimal list of { id, name } pairs for UI use. */
   public listZones(): Array<{ id: number; name: string }> {
     return Array.from(this.zones.values()).map(({ id, name }) => ({ id, name }));
+  }
+
+  /** Returns the configured event volume profile for a zone, if available. */
+  public getZoneVolumeConfig(zoneId: number): ZoneVolumeConfig | undefined {
+    const entry = this.zones.get(zoneId);
+    return entry?.volumes;
   }
 
   /* -------------------------------------------------------------------------- */

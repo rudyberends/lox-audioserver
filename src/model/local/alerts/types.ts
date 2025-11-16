@@ -1,21 +1,31 @@
-export interface AlertMediaRequest {
-  type: string;
-  text?: string;
-  language?: string;
-}
+/**
+ * -----------------------------------------------------------------------------
+ * AlertTypes
+ * -----------------------------------------------------------------------------
+ * Shared domain types used by the alerts lifecycle components.
+ * These types represent alert media resources and lifecycle results.
+ * -----------------------------------------------------------------------------
+ */
 
 export interface AlertMediaResource {
-  source: 'file' | 'tts';
-  title: string;
-  absolutePath: string;
+  /** Public URL where the audio resource can be streamed. */
+  url: string;
+
+  /** Local relative file path (used for serviceplay payloads). */
   relativePath: string;
-  url: string;        // ← add this field
-  text?: string;
-  language?: string;
+
+  /** Optional display title for debugging/logging. */
+  title?: string;
 }
 
-export interface AlertMediaProvider {
-  id: string;
-  canHandle(type: string): boolean;
-  resolve(request: AlertMediaRequest): Promise<AlertMediaResource | undefined>;
+export interface AlertStartResult {
+  zoneId: number;
+  success: boolean;
+  reason?: string;
+}
+
+export interface AlertStopResult {
+  zoneId: number;
+  success: boolean;
+  reason?: string;
 }
