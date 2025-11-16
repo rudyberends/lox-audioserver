@@ -8,7 +8,6 @@ import { joinLeaderGeneric, leaveGroupGeneric } from '@/runtime/zones/utils/grou
 import { CommandHandler } from '@/core/interfaces/commandHandler';
 import { logCommand, logWarn, logDebug } from '@/core/utils/logging';
 import { parseRepeat, parseShuffle } from '@/core/utils/media';
-import { computeRelativeVolume } from '@/core/utils/volume';
 
 /**
  * -----------------------------------------------------------------------------
@@ -70,29 +69,10 @@ export class MusicAssistantCommandMapper implements CommandHandler {
   /* -------------------------------------------------------------------------- */
   /* Volume + playback helpers                                                  */
   /* -------------------------------------------------------------------------- */
-  private async adjustVolume(param?: any): Promise<void> {
-    const zone = zoneStateStore.getZoneState(this.zoneId);
-
-    if (!zone) {
-      logWarn('MusicAssistantCommandMapper', this.zoneName, 'Volume change ignored: zone not found');
-      return;
-    }
-
-    let target: number;
-
-    // ABSOLUTE VOLUME (used by alerts)
-    if (param && typeof param === 'object' && 'absolute' in param) {
-      target = Number(param.absolute);
-    } else {
-      // RELATIVE VOLUME (legacy delta)
-      const delta = Number(param?.delta ?? param ?? 0);
-      const current = Number(zone.volume ?? 0);
-      target = computeRelativeVolume(current, delta);
-    }
-
+  private async adjustVolume(absoluteVolume: number): Promise<void> {
     try {
-      await this.api.setVolume(this.playerId, target);
-      logDebug('MusicAssistantCommandMapper', this.zoneName, `Volume set → ${target}`);
+      await this.api.setVolume(this.playerId, absoluteVolume);
+      logDebug('MusicAssistantCommandMapper', this.zoneName, `Volume set → ${absoluteVolume}`);
     } catch (err) {
       logWarn('MusicAssistantCommandMapper', this.zoneName, `Volume update failed: ${String(err)}`);
     }
