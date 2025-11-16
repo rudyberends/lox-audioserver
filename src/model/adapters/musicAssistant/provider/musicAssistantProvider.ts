@@ -193,10 +193,18 @@ export class MusicAssistantContentProvider {
     logger.debug(`[MusicAssistantContentProvider] getRecentlyPlayed(zone=${zoneId}, limit=${limit})`);
     try {
       const { items } = await this.api.getRecentlyPlayed(limit, 0);
+      // temp debug logging
+      logger.debug('!! ma-recent items!');
+      logger.debug(JSON.stringify(items));
+      logger.debug('!! ma-recent items!');
       const mapped: RecentItem[] = (Array.isArray(items) ? items : []).map((obj) =>
         mapRecentlyPlayedItem(obj),
       );
 
+      // temp debug logging
+      logger.debug('!! loxone-recent items!');
+      logger.debug(JSON.stringify(mapped));
+      logger.debug('!! loxone-recent items!');
       return {
         items: mapped,
         ts: Math.floor(Date.now() / 1000),
