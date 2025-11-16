@@ -49,7 +49,7 @@ export class GoogleTtsProvider {
       try {
         await fs.access(abs);
         logger.debug(`[GoogleTtsProvider] Using cached TTS: ${fileName}`);
-        return this.buildResource(abs, fileName, text, lang);
+        return this.buildResource(abs, fileName, text);
       } catch {
         // Not cached — continue to generate
       }
@@ -70,7 +70,7 @@ export class GoogleTtsProvider {
       await fs.writeFile(abs, buffer);
       logger.info(`[GoogleTtsProvider] Generated new TTS (${lang}) → ${fileName}`);
 
-      return this.buildResource(abs, fileName, text, lang);
+      return this.buildResource(abs, fileName, text);
     } catch (err) {
       logger.error(`[GoogleTtsProvider] Failed to generate TTS audio: ${String(err)}`);
       return undefined;
@@ -104,7 +104,7 @@ export class GoogleTtsProvider {
    * Builds a normalized media resource description for the generated TTS file.
    * Includes a fully qualified HTTP URL ready for playback.
    */
-  private buildResource(abs: string, fileName: string, text: string, lang: string): AlertMediaResource {
+  private buildResource(abs: string, fileName: string, text: string): AlertMediaResource {
     const host = configManager.getAudioServerConfig()?.ip ?? '127.0.0.1';
     const relativePath = `cache/${fileName}`;
 
@@ -113,13 +113,9 @@ export class GoogleTtsProvider {
     const url = `http://${host}:7090/alerts/${encodedPath}`;
 
     return {
-      source: 'tts',
       title: text.length > 48 ? `${text.slice(0, 45)}…` : text,
-      absolutePath: abs,
       relativePath,
       url,
-      text,
-      language: lang,
     };
   }
 }

@@ -63,10 +63,24 @@ export class ZoneCommandRouter {
     // Normalize volume payloads to { delta, currentVolume }
     if (normalized === 'volume') {
       const currentState = zoneStateStore.get(zone.id);
+
+      // 1. ABSOLUTE VOLUME (alerts + restore)
+      if (param && typeof param === 'object' && 'absolute' in param) {
+        const handled = await zone.commandMapper?.handle(command, param);
+        if (!handled) {
+          logger.debug(`[ZoneRuntime][${zoneName}] Command not handled by mapper.`);
+        }
+        return;
+      }
+
+      // 2. DELTA VOLUME (legacy / user presses + / - buttons)
+      const delta = Number((param as any)?.delta ?? param ?? 0);
+
       const enriched = {
-        delta: Number(param ?? 0),
+        delta,
         currentVolume: currentState.volume ?? 25,
       };
+
       const handled = await zone.commandMapper?.handle(command, enriched);
       if (!handled) {
         logger.debug(`[ZoneRuntime][${zoneName}] Command not handled by mapper.`);
