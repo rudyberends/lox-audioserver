@@ -61,6 +61,36 @@ export class AlertsManager {
     return { success: true, type, action };
   }
 
+  /**
+   * Handles one-shot alerts from uploaded audio files.
+   */
+  public async handleUploadedAlert(
+    filename: string,
+    targetZones: number[],
+  ): Promise<{ success: boolean; type: string; action: string }> {
+    const zones = targetZones.length ? targetZones : [];
+    logger.info(`[AlertsManager] ON uploaded alert "${filename}" zones=${JSON.stringify(zones)}`);
+
+    if (zones.length === 0) {
+      return { success: false, type: 'uploaded', action: 'on' };
+    }
+
+    const media = await this.fileProvider.resolveUploaded(filename);
+    if (!media) {
+      logger.warn(`[AlertsManager] Uploaded media not found for "${filename}"`);
+      return { success: false, type: 'uploaded', action: 'on' };
+    }
+
+    await this.controller.alertStart(
+      zones,
+      'uploaded',
+      media,
+      (zoneId) => this.resolveAlertVolume(zoneId, 'uploaded'),
+    );
+
+    return { success: true, type: 'uploaded', action: 'on' };
+  }
+
   /* --------------------------------------------------------------------------
    * Media resolution                                                          *
    * ------------------------------------------------------------------------ */

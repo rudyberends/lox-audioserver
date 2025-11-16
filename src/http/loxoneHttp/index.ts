@@ -11,7 +11,6 @@ import {
   unregisterConnection,
   closeAllConnections,
 } from './websocketManager';
-//import { startServerHeartbeat } from './serverHeartbeat';
 import { formatLoxoneCommandForLog } from './utils/loxoneCommandLogFormatter';
 
 /**
@@ -90,19 +89,29 @@ export class LoxoneHttp {
   /**
    * Handles HTTP requests directed to the Loxone API.
    */
-  private async handleHttp(
-    req: http.IncomingMessage,
-    res: http.ServerResponse,
-    name: 'appHttp' | 'msHttp',
-  ): Promise<void> {
+  private async handleHttp(req: http.IncomingMessage, res: http.ServerResponse, name: 'appHttp' | 'msHttp' ): Promise<void> {
     const url = req.url ?? '';
-    logger.info(`[LoxoneHttp][${name}] HTTP request: ${formatLoxoneCommandForLog(url)}`);
+    logger.info(`[LoxoneHttp][${name}] HTTP ${req.method} request: ${formatLoxoneCommandForLog(url)}`);
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(200);
+      res.end();
+      return;
+    }
 
     try {
-      const response = await this.handleRequest(url, name);
+      const data = await new Promise<Buffer>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        req.on('data', (c) => chunks.push(c));
+        req.on('end', () => resolve(Buffer.concat(chunks)));
+        req.on('error', reject);
+      });
+
+      const response = await this.handleRequest(url, name, data);
+
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(response);
-    } catch (error: unknown) {
+    } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error(`[LoxoneHttp][${name}] Error processing request ${url}: ${message}`);
       res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -113,13 +122,11 @@ export class LoxoneHttp {
   /**
    * Handles a single Loxone API command (used by HTTP and WS).
    */
-  private async handleRequest(
-    url: string,
-    name: 'appHttp' | 'msHttp',
+  private async handleRequest(url: string, name: 'appHttp' | 'msHttp', data?: Buffer,
   ): Promise<string> {
     const normalized = url.trim().replace(/^\/+/, '');
     logger.debug(`[LoxoneHttp][${name}] Command: ${formatLoxoneCommandForLog(normalized)}`);
-    return handleLoxoneCommand(normalized);
+    return handleLoxoneCommand(normalized, data);
   }
 
   // ---------------------------------------------------------------------------

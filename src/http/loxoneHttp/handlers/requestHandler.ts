@@ -59,7 +59,7 @@ function ensureRouter(): LoxoneRouter {
  * @param url - Raw Loxone command (e.g. "audio/cfg/getconfig").
  * @returns Serialized JSON string for the Loxone client.
  */
-export async function handleLoxoneCommand(url: string): Promise<string> {
+export async function handleLoxoneCommand(url: string, body?: Buffer): Promise<string> {
   const normalized = url.trim();
   if (!normalized) {
     return serializeResult(emptyCommand('', []));
@@ -69,7 +69,7 @@ export async function handleLoxoneCommand(url: string): Promise<string> {
   logger.debug(`[RequestHandler] Received command: ${formatLoxoneCommandForLog(normalized)}`);
 
   try {
-    const result: CommandResult = await activeRouter.dispatch(normalized);
+    const result: CommandResult = await activeRouter.dispatch(normalized, body);
     return serializeResult(result);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

@@ -5,7 +5,7 @@ import { formatLoxoneCommandForLog } from '../utils/loxoneCommandLogFormatter';
 /**
  * Contract for any Loxone command handler.
  */
-export type HandlerFn = (url: string) => CommandResult | Promise<CommandResult> | undefined;
+export type HandlerFn = (url: string, body?: Buffer) => CommandResult | Promise<CommandResult> | undefined;
 
 /**
  * Route definition linking a matcher to a handler.
@@ -40,7 +40,7 @@ export class LoxoneRouter {
   /**
    * Dispatch an incoming command to the correct handler.
    */
-  async dispatch(url: string): Promise<CommandResult> {
+  async dispatch(url: string, body?: Buffer): Promise<CommandResult> {
     if (!url?.trim()) {
       return this.unknownCommand('');
     }
@@ -50,8 +50,8 @@ export class LoxoneRouter {
     const bucket = this.routesBySegment.get(segment);
 
     const match = bucket
-      ? await this.dispatchBucket(bucket, normalizedUrl)
-      : await this.dispatchBucket(this.allRoutes, normalizedUrl);
+      ? await this.dispatchBucket(bucket, normalizedUrl, body)
+      : await this.dispatchBucket(this.allRoutes, normalizedUrl, body);
 
     return match ?? this.unknownCommand(normalizedUrl);
   }
@@ -59,19 +59,25 @@ export class LoxoneRouter {
   /**
    * Try all routes in the given bucket until one matches and returns a result.
    */
-  private async dispatchBucket(routes: Route[], url: string): Promise<CommandResult | undefined> {
+  private async dispatchBucket(
+    routes: Route[],
+    url: string,
+    body?: Buffer,
+  ): Promise<CommandResult | undefined> {
     for (const route of routes) {
       if (!route.test(url)) {
         continue;
       }
       try {
-        const result = await route.handler(url);
+        const result = await route.handler(url, body);
         if (result !== undefined) {
           return result;
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.error(`[LoxoneRouter] Handler for ${formatLoxoneCommandForLog(url)} failed: ${msg}`);
+        logger.error(
+          `[LoxoneRouter] Handler for ${formatLoxoneCommandForLog(url)} failed: ${msg}`,
+        );
       }
     }
     return undefined;
