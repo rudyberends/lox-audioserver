@@ -33,6 +33,8 @@ export class MusicAssistantApi {
   private readonly client: MusicAssistantClient;
   private readonly instanceKey: string;
   private isConnected = false;
+  private eventCallbacks: Array<[string, string, (evt: EventMessage) => void]> = [];
+  private clientEventUnsub?: () => void;
 
   private constructor(ip: string, port = 8095) {
     this.ip = ip;
@@ -86,6 +88,7 @@ export class MusicAssistantApi {
       await this.client.connect();
       this.isConnected = true;
       logger.info(`[MusicAssistantApi] Connected to ${this.ip}:${this.port}`);
+      this.ensureClientSubscription();
     } catch (err) {
       this.isConnected = false;
       logger.warn(`[MusicAssistantApi] Connection failed: ${String(err)}`);
@@ -93,9 +96,51 @@ export class MusicAssistantApi {
     }
   }
 
-  /** Registers a global event listener for WebSocket messages. */
+  /** Abonneer op 1 eventtype, optioneel beperkt tot 1 object_id. */
+  public subscribe(
+    eventFilter: string,
+    callback: (evt: EventMessage) => void,
+    objectId: string = '*',
+  ): () => void {
+    this.ensureClientSubscription();
+
+    const entry: [string, string, (evt: EventMessage) => void] = [
+      eventFilter,
+      objectId.toLowerCase(),
+      callback,
+    ];
+
+    this.eventCallbacks.push(entry);
+
+    return () => {
+      const idx = this.eventCallbacks.indexOf(entry);
+      if (idx >= 0) {
+        this.eventCallbacks.splice(idx, 1);
+      }
+
+      // Als niemand meer luistert, unsubscribe ook van de client
+      if (this.eventCallbacks.length === 0 && this.clientEventUnsub) {
+        this.clientEventUnsub();
+        this.clientEventUnsub = undefined;
+      }
+    };
+  }
+
+  /** Abonneer op meerdere eventtypes in één keer. */
+  public subscribe_multi(
+    eventFilters: string[],
+    callback: (evt: EventMessage) => void,
+    objectId: string = '*',
+  ): () => void {
+    const removers = eventFilters.map(filter =>
+      this.subscribe(filter, callback, objectId),
+    );
+    return () => removers.forEach(fn => fn());
+  }
+
+  /** Backwards compatible: geeft ALLE events door. */
   public onEvent(callback: (evt: EventMessage) => void): () => void {
-    return this.client.onEvent(callback);
+    return this.subscribe('ALL', callback, '*');
   }
 
   /** Closes the client connection (if no zones need it anymore). */
@@ -118,8 +163,54 @@ export class MusicAssistantApi {
 
   private teardown(): void {
     this.isConnected = false;
+
+    this.eventCallbacks = [];
+    if (this.clientEventUnsub) {
+      this.clientEventUnsub();
+      this.clientEventUnsub = undefined;
+    }
+
     this.client.dispose();
     logger.debug(`[MusicAssistantApi] Disposed connection to ${this.ip}:${this.port}`);
+  }
+
+  /* -------------------------------------------------------------------------- */
+  /* Subscription Layer (frontend-compatible)                                   */
+  /* -------------------------------------------------------------------------- */
+
+  /** Zorgt dat er precies één raw event-listener op de client staat. */
+  private ensureClientSubscription(): void {
+    if (this.clientEventUnsub) {
+      return;
+    }
+
+    this.clientEventUnsub = this.client.onEvent((evt: EventMessage) => {
+      this.dispatchEvent(evt);
+    });
+  }
+
+  /** Stuurt één binnengekomen event door naar alle lokale listeners. */
+  private dispatchEvent(evt: EventMessage): void {
+    const eventName = String(evt.event ?? '');
+    const objectId = String(evt.object_id ?? '').toLowerCase();
+
+    for (const [filterEvent, filterObjectId, cb] of this.eventCallbacks) {
+      const matchesEvent = filterEvent === 'ALL' || filterEvent === eventName;
+      const matchesObject =
+        filterObjectId === '*' || filterObjectId === objectId;
+
+      if (!matchesEvent || !matchesObject) {
+        continue;
+      }
+
+      try {
+        cb(evt);
+      } catch (err) {
+        logger.warn(
+          `[MusicAssistantApi] Event handler error for ${eventName}/${objectId}: ${String(err)}`,
+        );
+      }
+    }
   }
 
   /* -------------------------------------------------------------------------- */
