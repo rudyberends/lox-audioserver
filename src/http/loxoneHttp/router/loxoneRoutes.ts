@@ -61,7 +61,8 @@ import {
   audioGroupedPlayback,
 } from '../handlers/commands/groupCommands';
 
-import { handleGroupedAlert } from '../handlers/commands/alertCommands';
+import { audioCfgUploadAudioAdd } from '../handlers/commands/uploadCommands';
+import { handleGroupedAlert, handlePlayUploadedFileAlert } from '../handlers/commands/alertCommands';
 
 /**
  * Registers all known Loxone command routes with the given router.
@@ -107,6 +108,9 @@ export function registerLoxoneRoutes(router: LoxoneRouter): void {
   router.registerPrefix('audio', 'audio/cfg/miniserverversion', audioCfgMiniServerVersion);
   router.registerPrefix('audio', 'audio/cfg/timezone', audioCfgTimeZone);
 
+  // --- Upload routes
+  router.registerPrefix('audio', 'audio/cfg/upload/audioupload/add/', audioCfgUploadAudioAdd);
+
   // --- Regex routes
   router.registerRegex('audio', /(?:^|\/)audio\/\d+\/status(?:\/|$)/, audioGetStatus);
   router.registerRegex('audio', /^audio\/\d+\/getqueue(?:\/\d+\/\d+)?$/, audioCfgGetQueue);
@@ -117,9 +121,13 @@ export function registerLoxoneRoutes(router: LoxoneRouter): void {
   router.registerRegex('audio', /^audio\/\d+\/roomfav\/play\//, audioFavoritePlay);
   router.registerRegex('audio', /^audio\/\d+\/roomfav\/plus$/, audioRoomFavPlus);
   router.registerRegex('audio', /^audio\/\d+\/playurl\//, audioPlayUrl);
+
+  // --- Grouped actions
   router.registerRegex('audio', /^audio\/grouped\/(pause|play|resume|stop)\//, audioGroupedPlayback);
   router.registerRegex('audio', /^audio\/grouped\/volume\//, audioGroupedVolume);
-  router.registerRegex('audio', /^audio\/grouped\/[^/]+\/.+$/, handleGroupedAlert);
+  router.registerRegex('audio', /^audio\/grouped\/playuploadedfile\//, handlePlayUploadedFileAlert);
+  router.registerRegex('audio', /^audio\/grouped\/(?!playuploadedfile)[^/]+\/.+$/, handleGroupedAlert);
+
   router.registerRegex('audio', /^audio\/\d+\/mastervolume\//, audioMasterVolume);
   router.registerRegex('audio', /^audio\/cfg\/dgroup\/update\//, audioCfgDynamicGroup);
   router.registerRegex('audio', /^audio\/cfg\/defaultvolume\//, audioCfgSetDefaultVolume);

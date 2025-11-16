@@ -4,9 +4,9 @@ import { CommandResult, response } from '../requestHandler';
 /**
  * Handles grouped alert commands emitted by Loxone (audio/grouped/...).
  * Examples:
- *   - audio/grouped/alarm/20,19,38,14,15        → start
- *   - audio/grouped/alarm/off/20,19,38,14,15    → stop
- *   - audio/grouped/tts/20,19/NLD|Dit is een test  → start TTS
+ *   - audio/grouped/alarm/20,19,38,14,15
+ *   - audio/grouped/alarm/off/20,19,38,14,15
+ *   - audio/grouped/tts/20,19/NLD|Dit is een test
  */
 export async function handleGroupedAlert(url: string): Promise<CommandResult> {
   const parts = url.split('/');
@@ -55,6 +55,34 @@ export async function handleGroupedAlert(url: string): Promise<CommandResult> {
     ttsText,
     ttsLang,
   );
+
+  return response(url, 'groupalert', [result]);
+}
+
+/**
+ * Handles: audio/grouped/playuploadedfile/<filename>/<zones>
+ * Voorbeeld:
+ *   audio/grouped/playuploadedfile/audio_recording.wav/18
+ *   audio/grouped/playuploadedfile/audio_recording.wav/18,19
+ */
+export async function handlePlayUploadedFileAlert(url: string): Promise<CommandResult> {
+  const parts = url.split('/');
+  // parts: ["audio","grouped","playuploadedfile","audio_recording.wav","18,19"]
+  const filename = parts[3];
+  const zonesPart = parts[4] ?? '';
+
+  const zoneList = zonesPart
+    .split(',')
+    .map((s) => Number(s))
+    .filter((n) => !isNaN(n) && n > 0);
+
+  if (!filename || zoneList.length === 0) {
+    return response(url, 'groupalert', [
+      { success: false, reason: 'invalid-url' },
+    ]);
+  }
+
+  const result = await alertsManager.handleUploadedAlert(filename, zoneList);
 
   return response(url, 'groupalert', [result]);
 }
