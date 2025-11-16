@@ -15,6 +15,7 @@ import { zoneStateStore } from '../zoneStateStore';
 import { parseLoxoneCommand, CONTENT_COMMANDS, type ContentCommandType } from './loxoneCommandParser';
 import type { ZoneEntry } from '../types/zoneEntry';
 import { ContentPlayCommand } from '@/core/types/contentPlaybackTypes';
+import { convertToAbsoluteVolume } from './volumeUtils';
 
 function isContentCommand(command: string): command is ContentCommandType {
   const normalized = command.toLowerCase();
@@ -60,28 +61,12 @@ export class ZoneCommandRouter {
       void fadeController.fadeIn(zone.id, fade.fadeDurationMs ?? 60_000);
     }
 
-    // Normalize volume payloads to { delta, currentVolume }
     if (normalized === 'volume') {
-      const currentState = zoneStateStore.get(zone.id);
+      const state = zoneStateStore.get(zone.id);
+      const currentVolume = state.volume ?? 25;
+      const absolute = convertToAbsoluteVolume(param, currentVolume);
 
-      // 1. ABSOLUTE VOLUME (alerts + restore)
-      if (param && typeof param === 'object' && 'absolute' in param) {
-        const handled = await zone.commandMapper?.handle(command, param);
-        if (!handled) {
-          logger.debug(`[ZoneRuntime][${zoneName}] Command not handled by mapper.`);
-        }
-        return;
-      }
-
-      // 2. DELTA VOLUME (legacy / user presses + / - buttons)
-      const delta = Number((param as any)?.delta ?? param ?? 0);
-
-      const enriched = {
-        delta,
-        currentVolume: currentState.volume ?? 25,
-      };
-
-      const handled = await zone.commandMapper?.handle(command, enriched);
+      const handled = await zone.commandMapper?.handle('volume', absolute);
       if (!handled) {
         logger.debug(`[ZoneRuntime][${zoneName}] Command not handled by mapper.`);
       }

@@ -46,7 +46,7 @@ export class AlertPlaybackEngine {
     }
 
     // 1. Apply absolute alert volume
-    await zoneRuntime.sendZoneCommand(zoneId, 'volume', { absolute: alertVolume });
+    await zoneRuntime.sendZoneCommand(zoneId, 'volume', alertVolume);
     logger.debug(`[AlertPlaybackEngine] Zone ${zoneId} → alert volume ${alertVolume}`);
 
     // 2. Trigger announcement playback and wait until it finishes
@@ -80,7 +80,7 @@ export class AlertPlaybackEngine {
     }
 
     try {
-      await zoneRuntime.sendZoneCommand(zoneId, 'volume', { absolute: saved.volume });
+      await zoneRuntime.sendZoneCommand(zoneId, 'volume', saved.volume);
       logger.info(`[AlertPlaybackEngine] Restored volume ${saved.volume} on zone ${zoneId}`);
     } catch (err) {
       logger.warn(`[AlertPlaybackEngine] Failed to restore volume for zone ${zoneId}: ${String(err)}`);

@@ -1,10 +1,9 @@
 import { postBeoLinkCommand, putBeoLinkCommand, deleteBeoLinkCommand } from '../utils/httpHelper';
 import { zoneStateStore } from '@/runtime/zones/zoneStateStore';
 import { getAdapterProp } from '@/runtime/zones/types/zoneStateTypes';
-import { BeoLinkCommand, BeoLinkCommandParams } from '../types/command';
+import { BeoLinkCommand } from '../types/command';
 import { BeoLinkCommandConfig } from '../types/config';
 import { dispatch } from '@/runtime/zones/dispatch/commandDispatch';
-import { computeRelativeVolume } from '@/core/utils/volume';
 import { logCommand, logDebug, logError } from '@/core/utils/logging';
 import { joinLeaderGeneric, leaveGroupGeneric } from '@/runtime/zones/utils/groupUtils';
 import { CommandHandler } from '@/core/interfaces/commandHandler';
@@ -55,7 +54,7 @@ export class BeoLinkCommandMapper implements CommandHandler {
   /**
    * Main entrypoint for ZoneRuntime → executes mapped BeoLink command.
    */
-  async handle(command: BeoLinkCommand, param?: BeoLinkCommandParams): Promise<boolean> {
+  async handle(command: BeoLinkCommand, param: number): Promise<boolean> {
     const key = command.toLowerCase() as BeoLinkCommand;
     const path = this.actionMap[key];
 
@@ -66,7 +65,7 @@ export class BeoLinkCommandMapper implements CommandHandler {
 
     // Relative commands (volume, group join/leave)
     return await dispatch(key, {
-      volume: async () => this.adjustVolume(param ?? {}),
+      volume: async () => this.adjustVolume(param),
       groupjoin: async () => this.joinLeader(),
       groupleave: async () => this.leaveGroup(),
     });
@@ -87,18 +86,17 @@ export class BeoLinkCommandMapper implements CommandHandler {
     }
   }
 
-  /** Adjusts BeoLink speaker volume (relative only). */
-  private async adjustVolume(param: BeoLinkCommandParams): Promise<void> {
-    const current = Number(param.currentVolume ?? 50);
-    const delta = Number(param.delta ?? 0);
-    const newVolume = computeRelativeVolume(current, delta);
+  /** Sets BeoLink speaker volume (absolute 0–100). */
+  private async adjustVolume(absoluteVolume: number): Promise<void> {
+  // Clamp to valid range
+    const newVolume = Math.max(0, Math.min(100, Math.round(absoluteVolume)));
     const url = `${this.baseUrl}/Sound/Volume/Speaker/Level`;
 
     try {
       await putBeoLinkCommand(url, { level: newVolume });
-      logDebug('BeoLink', this.zoneName, `Volume ${delta >= 0 ? '+' : ''}${delta} → ${newVolume}`);
+      logDebug('BeoLink', this.zoneName, `Volume set → ${newVolume}`);
     } catch (err) {
-      logError('BeoLink', this.zoneName, 'Volume update', err);
+      logError('BeoLink', this.zoneName, 'Volume update failed', err);
     }
   }
 

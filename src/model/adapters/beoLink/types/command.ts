@@ -10,8 +10,3 @@ export type BeoLinkCommand =
   | 'volume'
   | 'groupjoin'
   | 'groupleave';
-
-export interface BeoLinkCommandParams {
-  delta?: number;
-  currentVolume?: number;
-}
