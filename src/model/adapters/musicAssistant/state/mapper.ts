@@ -191,6 +191,10 @@ export class MusicAssistantStateMapper implements StateMapper {
         totalitems: mappedItems.length,
       };
 
+      logger.debug('!! loxone-queue items!');
+      logger.debug(JSON.stringify(queue));
+      logger.debug('!! loxone-queue items!');
+
       zoneStateStore.patch(this.zoneId, { queue });
       this.log('debug', `Queue refreshed (${mappedItems.length} items)`);
     } catch (err) {
@@ -232,6 +236,9 @@ export class MusicAssistantStateMapper implements StateMapper {
         totalitems: mappedItems.length,
       };
 
+      logger.debug('!! loxone-queue items!');
+      logger.debug(JSON.stringify(queue));
+      logger.debug('!! loxone-queue items!');
       zoneStateStore.patch(this.zoneId, {
         ...(mappedMeta?.trackUpdate ?? {}),
         queue,
