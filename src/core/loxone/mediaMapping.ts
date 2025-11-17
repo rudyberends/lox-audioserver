@@ -48,7 +48,7 @@ export function detectLoxoneItemType(audiopath: string): LoxoneItemType {
  *   → "spotify@musicassistant:track:YXBwbGVfbXVzaWM6Ly90cmFjay8xNDM2NTQxNDY3"
  * -----------------------------------------------------------------------------
  */
-export function buildAudiopath(originalUri: string, itemType: string): string {
+export function buildAudiopath(originalUri: string, itemType: string, providerPrefix: string = 'spotify@nouser'): string {
   if (!originalUri) {
     return '';
   }
@@ -59,7 +59,7 @@ export function buildAudiopath(originalUri: string, itemType: string): string {
   }
 
   const encoded = Buffer.from(originalUri).toString('base64');
-  return `spotify@nouser:${itemType}:${encoded}`;
+  return `${providerPrefix}:${itemType}:${encoded}`;
 }
 
 /** Decodes a base64-wrapped Loxone audiopath back to its original provider URI. */

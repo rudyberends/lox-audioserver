@@ -2,7 +2,9 @@ import { handleContentPlayCommand } from './contentPlaybackDispatch';
 
 /**
  * Generic dispatcher for control and content-related commands.
- * Extends basic handler lookup with provider-specific content fallback.
+ * Resolves commands in this order:
+ *   1) Direct handler match
+ *   2) Provider-specific content-play fallback
  */
 export async function dispatch(
   command: string,
@@ -10,21 +12,18 @@ export async function dispatch(
   zoneId?: number,
   providerType?: string,
 ): Promise<boolean> {
-  const key = String(command || '').toLowerCase();
+  const key = command.toLowerCase();
 
-  // First, check local handler map
+  // 1) Direct handler lookup
   const fn = handlers[key];
   if (fn) {
     await fn();
     return true;
   }
 
-  // Fallback → content play handler (libraryplay, serviceplay, etc.)
+  // 2) Fallback → provider-specific content-play (only if both fields exist)
   if (zoneId && providerType) {
-    const handled = await handleContentPlayCommand(key, zoneId, providerType);
-    if (handled) {
-      return true;
-    }
+    return await handleContentPlayCommand(key, zoneId, providerType);
   }
 
   return false;

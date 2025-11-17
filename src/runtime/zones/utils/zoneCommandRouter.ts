@@ -1,187 +1,115 @@
 /**
  * zoneCommandRouter.ts
  * --------------------
- * A small, testable command router for ZoneRuntime.
- *
- * Responsibilities
- * - Centralize command logging and normalization (fade, volume payloads)
- * - Detect and handle "content" commands
- * - Keep ZoneRuntime slim and focused on lifecycle/config concerns
+ * Minimal, unified router for ZoneRuntime.
  */
 
 import logger from '@/utils/troxorLogger';
 import { fadeController } from './fadeController';
 import { zoneStateStore } from '../zoneStateStore';
-import { parseLoxoneCommand, CONTENT_COMMANDS, type ContentCommandType } from './loxoneCommandParser';
+import { parseLoxoneCommand } from './loxoneCommandParser';
 import type { ZoneEntry } from '../types/zoneEntry';
-import { ContentPlayCommand } from '@/core/types/contentPlaybackTypes';
 import { convertToAbsoluteVolume } from './volumeUtils';
+import { ContentPlayCommand } from '@/core/types/contentPlaybackTypes';
+import { buildAudiopath } from '@/core/loxone/mediaMapping';
 
-function isContentCommand(command: string): command is ContentCommandType {
-  const normalized = command.toLowerCase();
-  return CONTENT_COMMANDS.some((c) => normalized.includes(c));
-}
-
-interface FadeInfo {
-  readonly fade: boolean;
-  readonly fadeDurationMs?: number;
-}
-
-/** Narrow possible fade payloads from arbitrary param objects. */
-function extractFadeInfo(param: unknown): FadeInfo | undefined {
+/** Detect fade objects */
+function extractFade(param: unknown) {
   if (Array.isArray(param)) {
     const last = param.at(-1);
-    if (last && typeof last === 'object' && last !== null && 'fade' in last) {
-      const f = (last as Record<string, unknown>);
-      return { fade: Boolean(f.fade), fadeDurationMs: Number(f.fadeDurationMs ?? 0) || undefined };
-    }
-    return undefined;
+    return last && typeof last === 'object' && 'fade' in last ? last : undefined;
   }
-  if (param && typeof param === 'object' && 'fade' in (param as Record<string, unknown>)) {
-    const f = param as Record<string, unknown>;
-    return { fade: Boolean(f.fade), fadeDurationMs: Number(f.fadeDurationMs ?? 0) || undefined };
-  }
-  return undefined;
+  return param && typeof param === 'object' && 'fade' in (param as any) ? param : undefined;
 }
 
 export class ZoneCommandRouter {
-  /**
-   * Route a zone command to either the content mapper or the regular command mapper.
-   * Keeps ZoneRuntime lightweight and testable.
-   */
   public async handle(zone: ZoneEntry, command: string, param?: unknown): Promise<void> {
-    const zoneName = zone.name;
+    const name = zone.name;
     const normalized = command.toLowerCase();
 
-    logger.info(`[ZoneRuntime][${zoneName}] → ${command} ${JSON.stringify(param ?? '')}`);
+    logger.debug(`[ZoneRuntime][${name}] → ${command} ${JSON.stringify(param ?? '')}`);
 
-    // Optional fade (does not block playback)
-    const fade = extractFadeInfo(param);
+    // Fade (non-blocking)
+    const fade = extractFade(param);
     if (fade?.fade) {
-      void fadeController.fadeIn(zone.id, fade.fadeDurationMs ?? 60_000);
+      void fadeController.fadeIn(zone.id, Number(fade.fadeDurationMs ?? 60000));
     }
 
+    // Volume with relative/absolute logic
     if (normalized === 'volume') {
       const state = zoneStateStore.get(zone.id);
       const currentVolume = state.volume ?? 25;
-      const absolute = convertToAbsoluteVolume(param, currentVolume);
-
-      const handled = await zone.commandMapper?.handle('volume', absolute);
-      if (!handled) {
-        logger.debug(`[ZoneRuntime][${zoneName}] Command not handled by mapper.`);
-      }
+      const abs = convertToAbsoluteVolume(param, currentVolume);
+      await zone.commandMapper?.handle('volume', abs);
       return;
     }
 
-    // Content commands → content mapper
-    if (isContentCommand(normalized)) {
-      await this.handleContent(zone, normalized, param);
+    // Unified content command
+    if (normalized === 'contentplay') {
+      await this.handleContent(zone, param);
       return;
     }
 
-    // Regular mapper command
-    const handled = await zone.commandMapper?.handle(command, param);
-    if (!handled) {
-      logger.debug(`[ZoneRuntime][${zoneName}] Command not handled by mapper.`);
-    }
+    // All other commands → delegate to commandMapper
+    await zone.commandMapper?.handle(command, param);
   }
 
-  private async handleContent(
-    zone: ZoneEntry,
-    type: ContentCommandType,
-    param?: unknown,
-  ): Promise<void> {
-    const zoneName = zone.name;
+  private async handleContent(zone: ZoneEntry, param?: unknown): Promise<void> {
+    const name = zone.name;
 
     if (!zone.contentMapper) {
-      logger.warn(`[ZoneRuntime][${zoneName}] No content mapper for content command.`);
+      logger.warn(`[ZoneRuntime][${name}] No content mapper.`);
       return;
     }
 
-    // Detect serviceplay skip to existing queue item
-    if (type === 'serviceplay') {
-      const { item: audiopath } = parseLoxoneCommand(param);
+    // 1 — Direct ANNOUNCE : { url: "..." }
+    if (param && typeof param === 'object' && 'url' in (param as any)) {
+      const url = String((param as any).url);
 
-      if (audiopath) {
-        const zoneState = zoneStateStore.getZoneState(zone.id);
-        const target = audiopath.toLowerCase();
+      await zone.contentMapper.handlePlayCommand({
+        zoneId: zone.id,
+        item: url,
+        type: 'announce',
+        shuffle: false,
+      });
 
-        const match = zoneState?.queue?.items?.find(item =>
-          item.provider_id?.toLowerCase() === target || item.audiopath?.toLowerCase() === target);
-
-        if (match) {
-          logger.info(`[ZoneRuntime][${zoneName}] ▶ serviceplay mapped to queue_seek (uid=${match.unique_id})`);
-
-          const cmd: ContentPlayCommand = {
-            zoneId: zone.id,
-            item: match.unique_id,
-            type: 'queue_seek',
-            shuffle: false,
-          };
-
-          await zone.contentMapper.handlePlayCommand(cmd);
-          return;
-        }
-      }
+      return;
     }
 
-    // Direct payloads (alerts or static serviceplay)
-    if (param && typeof param === 'object') {
-      const obj = param as Record<string, unknown>;
+    // 2 — Parse contentplay payload
+    const { item, shuffle, startItem } = parseLoxoneCommand(param);
 
-      // Announce case
-      if ('url' in obj) {
-        const url = String(obj.url);
-        logger.info(`[ZoneRuntime][${zoneName}] ▶ direct url="${url}", type=${type}`);
-        const cmd: ContentPlayCommand = {
-          zoneId: zone.id,
-          item: url,
-          shuffle: false,
-          type: 'announce',
-        };
-        await zone.contentMapper.handlePlayCommand(cmd);
-        return;
-      }
+    // 3 — Queue skip detection
+    if (item) {
+      const state = zoneStateStore.getZoneState(zone.id);
+      const target = buildAudiopath(item, 'track', 'spotify');
+      const hit = state?.queue?.items?.find((i) => i.audiopath === target);
 
-      // Serviceplay or playlistplay case (from alerts or direct)
-      if ('audiopath' in obj) {
-        const url = String(obj.audiopath);
-        logger.info(`[ZoneRuntime][${zoneName}] ▶ direct audiopath="${url}", type=${type}`);
-        const mappedType =
-      type === 'serviceplay'
-        ? 'service'
-        : type === 'playlistplay'
-          ? 'playlist'
-          : (type as ContentPlayCommand['type']);
-        const cmd: ContentPlayCommand = {
+      if (hit) {
+        logger.info(`[ZoneRuntime][${name}] → queue_seek (uid=${hit.unique_id})`);
+
+        await zone.contentMapper.handlePlayCommand({
           zoneId: zone.id,
-          item: url,
+          item: hit.unique_id,
+          type: 'queue_seek',
           shuffle: false,
-          type: mappedType,
-        };
-        await zone.contentMapper.handlePlayCommand(cmd);
+        });
         return;
       }
     }
 
-    // default behaviour
-    const { item, startItem, shuffle } = parseLoxoneCommand(param);
-    logger.info(
-      `[ZoneRuntime][${zoneName}] ▶ item="${item}"${startItem ? `, start_item="${startItem}"` : ''}, shuffle=${shuffle}, type=${type}`,
-    );
-
+    // 4 — Default contentplay
     const cmd: ContentPlayCommand = {
       zoneId: zone.id,
       item,
-      start_item: startItem,
+      type: 'contentplay',
       shuffle,
-      type: type as Exclude<ContentPlayCommand['type'], 'alert'>,
     };
 
-    await zone.contentMapper.handlePlayCommand(cmd);
+    if (startItem) {
+      cmd.start_item = startItem;
+    }
 
-    logger.info(
-      `[ZoneRuntime][${zoneName}] Content command "${type}" handled (item=${item}, shuffle=${shuffle}, type=${type})`,
-    );
+    await zone.contentMapper.handlePlayCommand(cmd);
   }
 }

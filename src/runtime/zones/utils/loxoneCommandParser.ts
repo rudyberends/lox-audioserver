@@ -1,17 +1,5 @@
 import { decodeAudiopath } from '@/core/loxone/mediaMapping';
 
-export const CONTENT_COMMANDS = [
-  'libraryplay',
-  'serviceplay',
-  'playlistplay',
-  'playurl',
-  'favoriteplay',
-  'alertplay',
-  'announce',
-] as const;
-
-export type ContentCommandType = typeof CONTENT_COMMANDS[number];
-
 export interface ParsedContentPayload {
   readonly item: string;
   readonly startItem?: string;

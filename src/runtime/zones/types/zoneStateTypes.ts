@@ -68,7 +68,6 @@ export interface ZoneState {
       station: string;
       title: string;
       unique_id: string;
-      provider_id?: string;
       user: string;
     }>;
     shuffle: boolean;
