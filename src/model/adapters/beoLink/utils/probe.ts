@@ -1,18 +1,9 @@
-import axios from 'axios';
 import logger from '@/utils/troxorLogger';
 import { registerDeviceJid } from './deviceMap';
 
 /**
  * -----------------------------------------------------------------------------
- * probeBeoLinkDevice
- * -----------------------------------------------------------------------------
- * Sends a lightweight GET request to the BeoLink device `/Ping` endpoint
- * to verify connectivity and capture the `Device-Jid` header.
- *
- * Returns a typed result containing:
- * - success (boolean)
- * - jid (if available)
- * - status code and message
+ * probeBeoLinkDevice (fetch-based)
  * -----------------------------------------------------------------------------
  */
 export interface BeoLinkProbeResult {
@@ -26,12 +17,28 @@ export interface BeoLinkProbeResult {
 export async function probeBeoLinkDevice(ip: string, zoneId?: number): Promise<BeoLinkProbeResult> {
   const url = `http://${ip}:8080/Ping`;
 
-  try {
-    const response = await axios.get(url, { timeout: 3000 }); // 3s timeout
-    const jid = response.headers['device-jid'] || response.headers['Device-Jid'];
+  // 3s timeout via AbortController
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
 
-    if (response.status === 200) {
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    const status = res.status;
+
+    if (status === 200) {
       logger.info(`[BeoLinkProbe] ${ip} responded with 200 OK`);
+
+      const jid =
+        res.headers.get('device-jid') ??
+        res.headers.get('Device-Jid') ??
+        undefined;
+
       if (jid) {
         logger.info(`[BeoLinkProbe] Found Device-Jid: ${jid}`);
         if (zoneId) {
@@ -44,21 +51,20 @@ export async function probeBeoLinkDevice(ip: string, zoneId?: number): Promise<B
       return {
         success: true,
         ip,
-        status: response.status,
-        jid: jid as string | undefined,
+        status,
+        jid,
       };
     }
 
-    logger.warn(`[BeoLinkProbe] ${ip} responded with status ${response.status}`);
-    return { success: false, ip, status: response.status };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logger.warn(`[BeoLinkProbe] ❌ Failed to reach ${ip}: ${message}`);
+    logger.warn(`[BeoLinkProbe] ${ip} responded with status ${status}`);
+    return { success: false, ip, status };
 
-    return {
-      success: false,
-      ip,
-      error: message,
-    };
+  } catch (err) {
+    clearTimeout(timeout);
+
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`[BeoLinkProbe] Failed to reach ${ip}: ${msg}`);
+
+    return { success: false, ip, error: msg };
   }
 }
