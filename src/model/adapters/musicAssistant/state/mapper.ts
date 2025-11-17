@@ -125,16 +125,18 @@ export class MusicAssistantStateMapper implements StateMapper {
    * - if no object_id is present, `data.player_id` must match.
    */
   private handleEvent(evt: EventMessage): void {
-    const objectId = String(evt.object_id ?? '').toLowerCase();
-    const eventType = String(evt.event ?? '').toLowerCase();
+    const targetId = this.maPlayerId.toLowerCase();
+    const objectId = String(evt.object_id ?? '').trim().toLowerCase();
+    const eventType = String(evt.event ?? '').trim().toLowerCase();
 
-    // Reject events for other players/queues
-    if (objectId && objectId !== this.maPlayerId.toLowerCase()) {
+    if (objectId && objectId !== targetId) {
       return;
     }
+
     if (!objectId) {
-      const idFromData = evt.data?.player_id ?? evt.data?.queue_id;
-      if (idFromData && String(idFromData).toLowerCase() !== this.maPlayerId.toLowerCase()) {
+      const raw = evt.data?.player_id ?? evt.data?.queue_id;
+      const dataId = raw ? String(raw).trim().toLowerCase() : '';
+      if (dataId && dataId !== targetId) {
         return;
       }
     }
@@ -191,10 +193,6 @@ export class MusicAssistantStateMapper implements StateMapper {
         totalitems: mappedItems.length,
       };
 
-      logger.debug('!! loxone-queue items!');
-      logger.debug(JSON.stringify(queue));
-      logger.debug('!! loxone-queue items!');
-
       zoneStateStore.patch(this.zoneId, { queue });
       this.log('debug', `Queue refreshed (${mappedItems.length} items)`);
     } catch (err) {
@@ -236,9 +234,6 @@ export class MusicAssistantStateMapper implements StateMapper {
         totalitems: mappedItems.length,
       };
 
-      logger.debug('!! loxone-queue items!');
-      logger.debug(JSON.stringify(queue));
-      logger.debug('!! loxone-queue items!');
       zoneStateStore.patch(this.zoneId, {
         ...(mappedMeta?.trackUpdate ?? {}),
         queue,
