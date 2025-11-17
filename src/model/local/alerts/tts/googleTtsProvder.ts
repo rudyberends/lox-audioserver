@@ -1,4 +1,3 @@
-import * as googleTTS from 'google-tts-api';
 import fs from 'fs/promises';
 import path from 'path';
 import { createHash } from 'crypto';
@@ -8,16 +7,9 @@ import type { AlertMediaResource } from '../types';
 
 /**
  * -----------------------------------------------------------------------------
- * GoogleTtsProvider
+ * GoogleTtsProvider (no external library)
  * -----------------------------------------------------------------------------
- * Generates spoken audio files using Google Translate Text-to-Speech (TTS).
- *
- * Responsibilities:
- *  • Convert text into speech using the google-tts-api package (v2.x)
- *  • Cache generated files to avoid redundant TTS requests
- *  • Return normalized metadata (including URL) for use in alert playback
- *
- * Files are stored under `/public/alerts/cache` and served through `/alerts/cache/...`.
+ * Generates spoken audio files using Google Translate Text-to-Speech (TTS)
  * -----------------------------------------------------------------------------
  */
 export class GoogleTtsProvider {
@@ -26,12 +18,11 @@ export class GoogleTtsProvider {
 
   /**
    * Generates or retrieves a TTS audio resource for the given text and language.
-   *
-   * @param text - The text to synthesize into speech.
-   * @param language - Optional language code (e.g., "en", "nl", "de").
-   * @returns The generated or cached AlertMediaResource, or undefined on failure.
    */
-  public async generate(text: string, language?: string): Promise<AlertMediaResource | undefined> {
+  public async generate(
+    text: string,
+    language?: string,
+  ): Promise<AlertMediaResource | undefined> {
     const lang = this.normalizeLang(language);
     if (!lang) {
       logger.warn('[GoogleTtsProvider] No valid language provided, defaulting to "en"');
@@ -45,21 +36,15 @@ export class GoogleTtsProvider {
     try {
       await fs.mkdir(this.cacheDir, { recursive: true });
 
-      // Reuse cached file if it already exists
+      // Use cached version if available
       try {
         await fs.access(abs);
         logger.debug(`[GoogleTtsProvider] Using cached TTS: ${fileName}`);
         return this.buildResource(abs, fileName, text);
-      } catch {
-        // Not cached — continue to generate
-      }
+      } catch { /* empty */ }
 
-      // Request audio generation from Google
-      const url = googleTTS.getAudioUrl(text, {
-        lang,
-        slow: false,
-        host: 'https://translate.google.com',
-      });
+      // Build Google Translate TTS URL
+      const url = this.buildGoogleTtsUrl(text, lang);
 
       const res = await fetch(url);
       if (!res.ok) {
@@ -78,13 +63,30 @@ export class GoogleTtsProvider {
   }
 
   /**
-   * Normalizes various language codes and aliases (e.g., "nld" → "nl").
+   * Constructs a Google Translate TTS URL.
+   */
+  private buildGoogleTtsUrl(text: string, lang: string): string {
+    const url = new URL('https://translate.google.com/translate_tts');
+    url.searchParams.set('ie', 'UTF-8');
+    url.searchParams.set('q', text);
+    url.searchParams.set('tl', lang);
+    url.searchParams.set('client', 'tw-ob');
+    url.searchParams.set('ttsspeed', '1');
+    url.searchParams.set('total', String(text.length));
+    url.searchParams.set('idx', '0');
+
+    return url.toString();
+  }
+
+  /**
+   * Normalizes language codes.
    */
   private normalizeLang(lang?: string): string {
     if (!lang) {
       return 'en';
     }
     const lower = lang.trim().toLowerCase();
+
     const map: Record<string, string> = {
       nld: 'nl',
       dut: 'nl',
@@ -97,19 +99,22 @@ export class GoogleTtsProvider {
       ita: 'it',
       por: 'pt',
     };
+
     return map[lower] ?? lower.slice(0, 2);
   }
 
   /**
-   * Builds a normalized media resource description for the generated TTS file.
-   * Includes a fully qualified HTTP URL ready for playback.
+   * Builds metadata for the generated file.
    */
   private buildResource(abs: string, fileName: string, text: string): AlertMediaResource {
     const host = configManager.getAudioServerConfig()?.ip ?? '127.0.0.1';
     const relativePath = `cache/${fileName}`;
 
-    // Encode each segment separately to preserve `/` structure
-    const encodedPath = relativePath.split('/').map(encodeURIComponent).join('/');
+    const encodedPath = relativePath
+      .split('/')
+      .map(encodeURIComponent)
+      .join('/');
+
     const url = `http://${host}:7090/alerts/${encodedPath}`;
 
     return {

@@ -1,28 +1,23 @@
-import axios from 'axios';
 import ndjson from 'ndjson';
 import { Readable } from 'stream';
 import logger from '@/utils/troxorLogger';
 import type { ZoneState } from '@/runtime/zones/types/zoneStateTypes';
-import type { NotificationData, NotificationMessage, NotificationPayload, PrimaryExperience } from '../types/notifications';
+import type {
+  NotificationData,
+  NotificationMessage,
+  NotificationPayload,
+  PrimaryExperience,
+} from '../types/notifications';
+
 import { mapBeoLinkNotification } from './beoLinkMappingUtils';
 import { findZoneIdByJid } from '../utils/deviceMap';
 import { probeBeoLinkDevice } from '../utils/probe';
-import { disbandGroupFromBackend, normalizeMembers, updateGroupFromBackend } from '@/runtime/zones/utils/groupUtils';
+import {
+  disbandGroupFromBackend,
+  normalizeMembers,
+  updateGroupFromBackend,
+} from '@/runtime/zones/utils/groupUtils';
 import { StateMapper } from '@/core/interfaces/stateMapper';
-
-/**
- * -----------------------------------------------------------------------------
- * BeoLinkStateMapper
- * -----------------------------------------------------------------------------
- * Listens to the /BeoNotify/Notifications NDJSON stream and converts
- * incoming BeoLink events into normalized ZoneState updates.
- *
- * Responsibilities:
- * - NDJSON parsing
- * - Connection resilience (auto-reconnect with backoff)
- * - Automatic group synchronization via SOURCE_EXPERIENCE_CHANGED
- * -----------------------------------------------------------------------------
- */
 
 type BeoNotifyEnvelope = Partial<NotificationMessage> | Partial<NotificationPayload>;
 
@@ -45,7 +40,10 @@ export class BeoLinkStateMapper implements StateMapper {
     this.notifyUrl = `http://${this.ip}:8080/BeoNotify/Notifications`;
   }
 
-  /** Starts the NDJSON listener and periodic reconnect watchdog. */
+  /* -------------------------------------------------------------------------- */
+  /* Lifecycle                                                                  */
+  /* -------------------------------------------------------------------------- */
+
   async initialize(): Promise<void> {
     const probe = await probeBeoLinkDevice(this.ip, this.zoneId);
     if (probe.success) {
@@ -53,18 +51,17 @@ export class BeoLinkStateMapper implements StateMapper {
     } else {
       logger.warn(`[BeoLinkStateMapper][${this.zoneName}] Probe failed — ${probe.error ?? 'no response'}`);
     }
-    logger.info(`[BeoLinkStateMapper][${this.zoneName}] Starting BeoLink listener for ${this.ip}`);
+
+    logger.info(`[BeoLinkStateMapper][${this.zoneName}] Starting listener for ${this.ip}`);
 
     await this.startListener();
 
-    // Restart every 3 minutes to avoid stale connections
     this.reconnectTimer = setInterval(async () => {
       await this.stopListener();
       await this.startListener();
     }, 180_000);
   }
 
-  /** Stops the listener and clears timers. */
   async destroy(): Promise<void> {
     await this.stopListener();
     if (this.reconnectTimer) {
@@ -73,24 +70,30 @@ export class BeoLinkStateMapper implements StateMapper {
     }
   }
 
-  /** Registers the ZoneRuntime update callback. */
   onUpdate(handler: (update: Partial<ZoneState>) => void): void {
     this.updateHandler = handler;
   }
 
   /* -------------------------------------------------------------------------- */
-  /* Listener Lifecycle                                                         */
+  /* Listener Logic                                                             */
   /* -------------------------------------------------------------------------- */
 
   private async startListener(): Promise<void> {
     try {
       this.abortController = new AbortController();
-      const response = await axios.get(this.notifyUrl, {
-        responseType: 'stream',
-        signal: this.abortController.signal as unknown as AbortSignal,
+
+      const res = await fetch(this.notifyUrl, {
+        signal: this.abortController.signal,
       });
 
-      const parsed = response.data.pipe(ndjson.parse());
+      if (!res.ok || !res.body) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      // Convert WHATWG ReadableStream -> Node.js Readable
+      const nodeStream = Readable.fromWeb(res.body as any);
+      const parsed = nodeStream.pipe(ndjson.parse());
+
       this.notifyStream = parsed as unknown as Readable;
 
       parsed.on('data', (msg: unknown) => this.handleMessage(msg));
@@ -102,6 +105,7 @@ export class BeoLinkStateMapper implements StateMapper {
         );
         void this.restartWithBackoff();
       });
+
       parsed.once('close', () => {
         logger.info(`[BeoLinkStateMapper][${this.zoneName}] Stream closed`);
       });
@@ -124,6 +128,7 @@ export class BeoLinkStateMapper implements StateMapper {
         this.abortController.abort();
         this.abortController = undefined;
       }
+
       if (this.notifyStream) {
         this.notifyStream.removeAllListeners?.();
         this.notifyStream.destroy();
@@ -139,19 +144,21 @@ export class BeoLinkStateMapper implements StateMapper {
   }
 
   /* -------------------------------------------------------------------------- */
-  /* Message Handling                                                           */
+  /* NDJSON Message Processing                                                  */
   /* -------------------------------------------------------------------------- */
 
   private handleMessage(msg: unknown): void {
     try {
       const env = msg as BeoNotifyEnvelope;
+
       const type =
-        (env as NotificationMessage)?.notification?.type ??
-        (env as NotificationPayload)?.type ??
+        (env as NotificationMessage).notification?.type ??
+        (env as NotificationPayload).type ??
         '';
+
       const data =
-        ((env as NotificationMessage)?.notification?.data ??
-          (env as NotificationPayload)?.data) as NotificationData | undefined;
+        ((env as NotificationMessage).notification?.data ??
+          (env as NotificationPayload).data) as NotificationData | undefined;
 
       if (!type || !data) {
         return;
@@ -177,9 +184,12 @@ export class BeoLinkStateMapper implements StateMapper {
   }
 
   /* -------------------------------------------------------------------------- */
-  /* Group Synchronization (SOURCE_EXPERIENCE_CHANGED)                          */
+  /* Group Sync Logic (SOURCE_EXPERIENCE_CHANGED)                               */
   /* -------------------------------------------------------------------------- */
-  private async handlePrimaryExperienceChanged(exp?: PrimaryExperience | null): Promise<void> {
+
+  private async handlePrimaryExperienceChanged(
+    exp?: PrimaryExperience | null,
+  ): Promise<void> {
     if (!exp) {
       return;
     }
@@ -189,7 +199,6 @@ export class BeoLinkStateMapper implements StateMapper {
       const leaderJid = exp.source?.product?.jid ?? '';
       const leaderZoneId = findZoneIdByJid(leaderJid) ?? this.zoneId!;
 
-      // Normalize listener list (always array of strings)
       const listenersRaw = Array.isArray(exp.listener)
         ? exp.listener
         : exp.listener
@@ -198,15 +207,8 @@ export class BeoLinkStateMapper implements StateMapper {
 
       const listeners = listenersRaw
         .map((l) => (typeof l === 'string' ? l : (l as { jid?: string })?.jid))
-        .filter((jid): jid is string => !!jid && jid.trim().length > 0);
+        .filter((jid): jid is string => !!jid);
 
-      logger.info(
-        `[BeoLink][${this.zoneName}] Experience update: leaderJid=${leaderJid}, listeners=${listeners.length}, source=${sourceId}`,
-      );
-
-      // -----------------------------------------------------------------------
-      // Case 1: Disband — only the leader remains
-      // -----------------------------------------------------------------------
       const onlyLeaderOver =
         listeners.length <= 1 &&
         (!listeners[0] || listeners[0].toLowerCase() === leaderJid.toLowerCase());
@@ -216,10 +218,8 @@ export class BeoLinkStateMapper implements StateMapper {
         return;
       }
 
-      // -----------------------------------------------------------------------
-      // Case 2: Active group — map listeners to known zone IDs
-      // -----------------------------------------------------------------------
       const memberZoneIds = normalizeMembers(listeners, (jid) => findZoneIdByJid(jid));
+
       updateGroupFromBackend({
         adapter: 'BeoLink',
         zoneName: this.zoneName,
@@ -236,18 +236,21 @@ export class BeoLinkStateMapper implements StateMapper {
     }
   }
 
-
   /* -------------------------------------------------------------------------- */
-  /* Reconnect Logic                                                            */
+  /* Reconnect With Exponential Backoff                                         */
   /* -------------------------------------------------------------------------- */
 
   private async restartWithBackoff(): Promise<void> {
     this.consecutiveFailures += 1;
-    const base = 1000; // 1s
-    const max = 15000; // 15s
+
+    const base = 1000;
+    const max = 15000;
     const jitter = Math.random() * 300;
-    const delay =
-      Math.min(max, Math.pow(2, Math.min(5, this.consecutiveFailures)) * base) + jitter;
+
+    const delay = Math.min(
+      max,
+      Math.pow(2, Math.min(5, this.consecutiveFailures)) * base,
+    ) + jitter;
 
     logger.info(
       `[BeoLinkStateMapper][${this.zoneName}] Reconnecting in ${Math.round(
