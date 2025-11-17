@@ -93,7 +93,7 @@ export async function audioFavoritePlay(url: string): Promise<CommandResult> {
   }
 
   // Send play command — ZoneRuntime handles fade logic itself
-  await zoneRuntime.sendZoneCommand(zoneId, 'playlistplay', playParams);
+  await zoneRuntime.sendZoneCommand(zoneId, 'contentplay', playParams);
 
   const zoneState = zoneStateStore.get(zoneId);
   if (zoneState) {
