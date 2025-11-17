@@ -94,7 +94,12 @@ export class LoxoneHttp {
     logger.info(`[LoxoneHttp][${name}] HTTP ${req.method} request: ${formatLoxoneCommandForLog(url)}`);
 
     if (req.method === 'OPTIONS') {
-      res.writeHead(200);
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Max-Age': '86400',
+      });
       res.end();
       return;
     }
