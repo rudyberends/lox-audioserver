@@ -45,8 +45,8 @@ export class ZoneCommandRouter {
     }
 
     // Unified content command
-    if (normalized === 'contentplay') {
-      await this.handleContent(zone, param);
+    if (normalized === 'contentplay' || normalized === 'announce' || normalized === 'alert') {
+      await this.handleContent(zone, param, normalized);
       return;
     }
 
@@ -54,7 +54,7 @@ export class ZoneCommandRouter {
     await zone.commandMapper?.handle(command, param);
   }
 
-  private async handleContent(zone: ZoneEntry, param?: unknown): Promise<void> {
+  private async handleContent(zone: ZoneEntry, param?: unknown, forceType?: string): Promise<void> {
     const name = zone.name;
 
     if (!zone.contentMapper) {
@@ -69,7 +69,7 @@ export class ZoneCommandRouter {
       await zone.contentMapper.handlePlayCommand({
         zoneId: zone.id,
         item: url,
-        type: 'announce',
+        type: forceType === 'alert' ? 'alert' : 'announce',
         shuffle: false,
       });
 
