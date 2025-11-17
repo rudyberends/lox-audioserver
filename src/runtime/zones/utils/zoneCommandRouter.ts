@@ -98,6 +98,33 @@ export class ZoneCommandRouter {
       return;
     }
 
+    // Detect serviceplay skip to existing queue item
+    if (type === 'serviceplay') {
+      const { item: audiopath } = parseLoxoneCommand(param);
+
+      if (audiopath) {
+        const zoneState = zoneStateStore.getZoneState(zone.id);
+        const target = audiopath.toLowerCase();
+
+        const match = zoneState?.queue?.items?.find(item =>
+          item.provider_id?.toLowerCase() === target || item.audiopath?.toLowerCase() === target);
+
+        if (match) {
+          logger.info(`[ZoneRuntime][${zoneName}] ▶ serviceplay mapped to queue_seek (uid=${match.unique_id})`);
+
+          const cmd: ContentPlayCommand = {
+            zoneId: zone.id,
+            item: match.unique_id,
+            type: 'queue_seek',
+            shuffle: false,
+          };
+
+          await zone.contentMapper.handlePlayCommand(cmd);
+          return;
+        }
+      }
+    }
+
     // Direct payloads (alerts or static serviceplay)
     if (param && typeof param === 'object') {
       const obj = param as Record<string, unknown>;

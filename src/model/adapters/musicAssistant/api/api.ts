@@ -398,6 +398,13 @@ export class MusicAssistantApi {
     }
   }
 
+  async playQueueIndex(queueId: string, params: { index: string }) {
+    await this.safeRpc('player_queues/play_index', {
+      queue_id: queueId,
+      index: params.index,
+    });
+  }
+
   public async playAnnouncement(
     playerId: string,
     payload: {
