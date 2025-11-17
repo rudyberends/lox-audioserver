@@ -82,7 +82,7 @@ export class MusicAssistantContentPlaybackMapper {
       return;
     }
 
-    // --- Handle announcement playback (new) ---
+    // --- Handle announcement playback ---
     if (cmd.type === 'announce') {
       logger.debug(`${prefix} Announcement → ${cmd.item}`);
       try {
@@ -91,6 +91,23 @@ export class MusicAssistantContentPlaybackMapper {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn(`${prefix} Announcement failed: ${msg}`);
+      }
+      return;
+    }
+
+    // --- Handle queue seek ---
+    if (cmd.type === 'queue_seek') {
+      logger.debug(`${prefix} Queue seek → ${cmd.item}`);
+
+      try {
+        await this.api.playQueueIndex(this.playerId, {
+          index: cmd.item,   // unique_id
+        });
+
+        logger.info(`${prefix} Queue seek to ${cmd.item}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn(`${prefix} Queue seek failed for ${cmd.item}: ${msg}`);
       }
       return;
     }

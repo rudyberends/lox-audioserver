@@ -182,8 +182,8 @@ export async function audioServicePlay(url: string): Promise<CommandResult> {
     stationId = stationId.slice('nouser/'.length);
   }
 
-  await zoneRuntime.sendZoneCommand(zoneId, 'playlistplay', [stationId, 'false']);
-  return response(url, 'playlistplay', [{ zoneId, service, stationId, shuffle: false }]);
+  await zoneRuntime.sendZoneCommand(zoneId, 'serviceplay', [stationId, 'false']);
+  return response(url, 'serviceplay', [{ zoneId, service, stationId, shuffle: false }]);
 }
 
 /** Plays any arbitrary playurl (used by clients for testing or non-library content). */
