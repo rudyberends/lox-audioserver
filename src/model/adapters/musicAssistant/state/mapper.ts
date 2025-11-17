@@ -173,9 +173,6 @@ export class MusicAssistantStateMapper implements StateMapper {
   private async refreshQueue(): Promise<void> {
     try {
       const items = await this.api.getQueueItems(this.maPlayerId);
-      logger.debug('!! ma-queue items!');
-      logger.debug(JSON.stringify(items));
-      logger.debug('!! ma-queue items!');
       const mappedItems = Array.isArray(items)
         ? items.map((it, i) => mapQueueItem(it, i))
         : [];
@@ -215,9 +212,6 @@ export class MusicAssistantStateMapper implements StateMapper {
       const mappedMeta = mapQueueToState(this.zoneId, queueData);
 
       const items = await this.api.getQueueItems(this.maPlayerId);
-      logger.debug('!! ma-queue items!');
-      logger.debug(JSON.stringify(items));
-      logger.debug('!! ma-queue items!');
       const mappedItems = Array.isArray(items)
         ? items.map((it, i) => mapQueueItem(it, i))
         : [];
