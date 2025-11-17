@@ -48,7 +48,7 @@ export class MusicAssistantStateMapper implements StateMapper {
   constructor(params: MusicAssistantConfig) {
     this.zoneId = params.zoneId;
     this.zoneName = params.zoneName;
-    this.maPlayerId = params.maPlayerId.toLowerCase();
+    this.maPlayerId = params.maPlayerId;
     this.api = MusicAssistantApi.acquire(params.ip, params.port ?? 8095);
   }
 
@@ -129,12 +129,12 @@ export class MusicAssistantStateMapper implements StateMapper {
     const eventType = String(evt.event ?? '').toLowerCase();
 
     // Reject events for other players/queues
-    if (objectId && objectId !== this.maPlayerId) {
+    if (objectId && objectId !== this.maPlayerId.toLowerCase()) {
       return;
     }
     if (!objectId) {
       const idFromData = evt.data?.player_id ?? evt.data?.queue_id;
-      if (idFromData && String(idFromData).toLowerCase() !== this.maPlayerId) {
+      if (idFromData && String(idFromData).toLowerCase() !== this.maPlayerId.toLowerCase()) {
         return;
       }
     }
