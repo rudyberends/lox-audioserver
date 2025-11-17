@@ -5,7 +5,6 @@ import { emptyCommand } from '../requestHandler';
 import { ensureDir } from '@/core/utils/file';
 
 export async function audioCfgUploadAudioAdd(url: string, data?: Buffer) {
-  // url: audio/cfg/upload/audioupload/add/filename.wav
   const parts = url.split('/');
   const filename = parts[5];
 
@@ -19,19 +18,25 @@ export async function audioCfgUploadAudioAdd(url: string, data?: Buffer) {
     return emptyCommand(url, []);
   }
 
-  // public/alerts/cache/<filename>
   const uploadDir = path.join(process.cwd(), 'public/alerts/cache');
   await ensureDir(uploadDir);
 
   const dest = path.join(uploadDir, filename);
 
   try {
+    // stap 1: oude bestand verwijderen als het bestaat
+    try {
+      await fs.unlink(dest);
+      logger.debug(`[Upload] Existing file removed → ${dest}`);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_) { /* empty */ }
+
+    // stap 2: nieuwe data wegschrijven
     await fs.writeFile(dest, data);
     logger.info(`[Upload] Stored uploaded alert → ${dest}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(`[Upload] Failed to store uploaded alert ${filename}: ${msg}`);
-    // desnoods nog een foutcode teruggeven, maar emptyCommand is Loxone-safe
     return emptyCommand(url, []);
   }
 
