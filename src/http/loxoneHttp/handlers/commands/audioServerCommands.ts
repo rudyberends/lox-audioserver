@@ -70,7 +70,7 @@ export async function audioFavoritePlay(url: string): Promise<CommandResult> {
   const segments = splitUrl(url);
   const zoneId = parseNumberPart(segments[1], 0);
   const favoriteId = parseNumberPart(segments[4], 0);
-  const shuffle = /shuffle$/i.test(url) && !/noshuffle$/i.test(url);
+  const shuffle = !/noshuffle$/i.test(url);
   const [, rawQuery = ''] = url.split('?', 2);
 
   // Parse fade options (e.g. ?q&ZmFkaW5nJmZhZGluZ1RpbWU9MTIw)
