@@ -3,7 +3,6 @@ import { zoneStateStore } from '@/runtime/zones/zoneStateStore';
 import { getAdapterProp } from '@/runtime/zones/types/zoneStateTypes';
 import { BeoLinkCommand } from '../types/command';
 import { BeoLinkCommandConfig } from '../types/config';
-import { dispatch } from '@/runtime/zones/dispatch/commandDispatch';
 import { logCommand, logDebug, logError } from '@/core/utils/logging';
 import { joinLeaderGeneric, leaveGroupGeneric } from '@/runtime/zones/utils/groupUtils';
 import { CommandHandler } from '@/core/interfaces/commandHandler';
@@ -56,19 +55,28 @@ export class BeoLinkCommandMapper implements CommandHandler {
    */
   async handle(command: BeoLinkCommand, param: number): Promise<boolean> {
     const key = command.toLowerCase() as BeoLinkCommand;
-    const path = this.actionMap[key];
 
+    // 1) Absolute command → via actionMap
+    const path = this.actionMap[key];
     if (path) {
       await this.doAction(path);
       return true;
     }
 
-    // Relative commands (volume, group join/leave)
-    return await dispatch(key, {
-      volume: async () => this.adjustVolume(param),
-      groupjoin: async () => this.joinLeader(),
-      groupleave: async () => this.leaveGroup(),
-    });
+    // 2) Relative commands → inline mini-dispatch
+    const handlers: Record<string, (() => Promise<void>) | undefined> = {
+      volume:      () => this.adjustVolume(param),
+      groupjoin:   () => this.joinLeader(),
+      groupleave:  () => this.leaveGroup(),
+    };
+
+    const fn = handlers[key];
+    if (!fn) {
+      return false;
+    }
+
+    await fn();
+    return true;
   }
 
   /* -------------------------------------------------------------------------- */

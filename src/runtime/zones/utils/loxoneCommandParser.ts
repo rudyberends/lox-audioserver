@@ -1,39 +1,115 @@
 import { decodeAudiopath } from '@/core/loxone/mediaMapping';
+import { convertToAbsoluteVolume } from './volumeUtils';
+import { fadeController } from './fadeController';
+import { favoritesManager } from '@/runtime/audioServer';
 
-export interface ParsedContentPayload {
-  readonly item: string;
-  readonly startItem?: string;
-  readonly shuffle: boolean;
+export interface ParsedResult {
+  readonly isContent: boolean;
+  readonly contentType?: 'contentplay' | 'announce' | 'alert' | 'queue_seek';
+  readonly param: any;
 }
 
-/**
- * Decode Loxone/MusicAssistant audiopaths containing base64 payloads.
- * Examples:
- *  - tunein:station:bGlicmFyeTovL3JhZGlvLzEw   → library://radio/10
- *  - spotify@nouser:track:YXBwbGVfbXVzaWM6Ly90cmFjay8xMzQzOTY0MjY4 → apple_music://track/1343964268
- */
-export function parseLoxoneCommand(param: unknown) {
+export async function parseLoxoneCommand(
+  command: string,
+  param: unknown,
+  currentVolume: number,
+): Promise<ParsedResult> {
+
+  /* -----------------------------------------------------------------------
+   * VOLUME
+   * ---------------------------------------------------------------------*/
+  if (command === 'volume') {
+    return {
+      isContent: false,
+      param: convertToAbsoluteVolume(param, currentVolume),
+    };
+  }
+
+  /* -----------------------------------------------------------------------
+   * NON-CONTENT COMMANDS
+   * ---------------------------------------------------------------------*/
+  const isContentCmd = command === 'contentplay' || command === 'announce' || command === 'alert';
+
+  if (!isContentCmd) {
+    return { isContent: false, param };
+  }
+
+  /* -----------------------------------------------------------------------
+   * ANNOUNCE / ALERT with direct URL
+   * ---------------------------------------------------------------------*/
+  if (param && typeof param === 'object' && 'url' in (param as any)) {
+    const type = command === 'alert' ? 'alert' : 'announce';
+    return {
+      isContent: true,
+      contentType: type,
+      param: {
+        item: String((param as any).url),
+        shuffle: false,
+        type,
+      },
+    };
+  }
+
+  /* -----------------------------------------------------------------------
+   * CONTENTPLAY
+   * ---------------------------------------------------------------------*/
   const args = Array.isArray(param) ? param.map(String) : [String(param ?? '')];
   const raw = (args[0] ?? '').trim();
 
-  // verwijder bekende suffixen en trailing noise
+  // shared flags
+  const shuffle = !/\/noshuffle(\/|$)/i.test(raw);
+  const fade = fadeController.parseFadeOptions(raw);
+
+  // strip fade + noshuffle + trailing slashes
   const cleaned = raw
-    .replace(/\/?\??q&ZW5mb3JjZVVzZXI9dHJ1ZQ.*$/i, '') // enforceUser=true noise
-    .replace(/\/noshuffle.*$/i, '')                    // noshuffle
-    .replace(/\/+$/, '');                              // trailing slashes
+    .replace(/\/?\??q&ZW5mb3JjZVVzZXI9dHJ1ZQ.*$/i, '')
+    .replace(/\?q&[A-Za-z0-9+/=]+$/i, '')
+    .replace(/\/noshuffle.*$/i, '')
+    .replace(/\/+$/, '');
 
-  const shuffle = args.some(a => /^(true|1|shuffle)$/i.test(a ?? ''));
+  // detect type
+  let mode: 'contentplay' | 'announce' | 'alert' | 'queue_seek' = 'contentplay';
+  let item: string | null = cleaned;
+  let start_item: string | undefined;
 
-  // parentpath → album/playlist
-  if (cleaned.includes('/parentpath/')) {
+  // announce/alert with URL
+  if (param && typeof param === 'object' && 'url' in (param as any)) {
+    mode = command === 'alert' ? 'alert' : 'announce';
+    item = String((param as any).url);
+
+    // favorite alias fav/<id>
+  } else if (cleaned.startsWith('fav/')) {
+    const zoneId = Number(cleaned.split('/')[1] ?? '');
+    const favoriteId = Number(cleaned.split('/')[2] ?? '');
+    item = await favoritesManager.getAudiopathForFavorite(zoneId, favoriteId);
+
+    // parentpath
+  } else if (cleaned.includes('/parentpath/')) {
     const [child, parent] = cleaned.split('/parentpath/');
-    const startItem = decodeAudiopath(child).split('/').pop();
-    const item = parent.replace(/\/\d+(?:\/noshuffle.*)?$/i, '').replace(/\/+$/, '');
-    return { item, startItem, shuffle };
+    start_item = decodeAudiopath(child).split('/').pop();
+    item = parent.replace(/\/\d+$/i, '').replace(/\/+$/, '');
+
+    // queue seek
+  } else {
+    const decoded = decodeAudiopath(cleaned);
+    if (typeof decoded === 'string' && decoded.startsWith('queue://')) {
+      mode = 'queue_seek';
+      item = decoded.slice('queue://'.length);
+    } else {
+      item = decoded;
+    }
   }
 
-  // altijd decode base64 → audiopath
-  const base64 = cleaned.split(':').pop()?.split('/')[0] ?? '';
-  const item = decodeAudiopath(base64);
-  return { item, shuffle };
+  // unified return
+  return {
+    isContent: true,
+    contentType: mode,
+    param: {
+      type: mode,
+      item,
+      start_item,
+      shuffle,
+      ...(fade.fade ? { fade } : {}),
+    },
+  };
 }

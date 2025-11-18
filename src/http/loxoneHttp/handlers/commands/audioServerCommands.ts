@@ -3,7 +3,6 @@ import { splitUrl, parseNumberPart, decodeSegment } from './utils/commandUtils';
 import { zoneRuntime, zoneStateStore } from '@/runtime/zones';
 import { favoritesManager } from '@/runtime/audioServer/favoritesManager';
 import logger from '@/utils/troxorLogger';
-import { parseFadeOptions } from '@/runtime/zones/utils/fadeController';
 
 /* -------------------------------------------------------------------------- */
 /*  GET /audio/cfg/getroomfavs                                                */
@@ -67,40 +66,12 @@ export async function audioCfgRoomFavs(url: string): Promise<CommandResult> {
 /*  Play a specific favorite                                                  */
 /* -------------------------------------------------------------------------- */
 export async function audioFavoritePlay(url: string): Promise<CommandResult> {
-  const segments = splitUrl(url);
-  const zoneId = parseNumberPart(segments[1], 0);
-  const favoriteId = parseNumberPart(segments[4], 0);
-  const shuffle = /shuffle$/i.test(url) && !/noshuffle$/i.test(url);
-  const [, rawQuery = ''] = url.split('?', 2);
-
-  // Parse fade options (e.g. ?q&ZmFkaW5nJmZhZGluZ1RpbWU9MTIw)
-  const fadeOptions = parseFadeOptions(rawQuery ? `?${rawQuery}` : '');
-
-  const favorite = await favoritesManager.getForPlayback(zoneId, favoriteId);
-  if (!favorite) {
-    return response(url, 'libraryplay', []);
-  }
-
-  const audiopath = favorite.audiopath ?? favorite.rawId;
-
-  // Combine fade options (if any) into play parameters
-  const playParams: any = [audiopath, String(shuffle)];
-  if (fadeOptions.fade) {
-    playParams.push({
-      fade: true,
-      fadeDurationMs: fadeOptions.fadeDurationMs ?? 60_000, // default 1 minute
-    });
-  }
-
-  // Send play command — ZoneRuntime handles fade logic itself
-  await zoneRuntime.sendZoneCommand(zoneId, 'contentplay', playParams);
-
-  const zoneState = zoneStateStore.get(zoneId);
-  if (zoneState) {
-    zoneStateStore.patch(zoneId, { lastFavoriteId: favoriteId });
-  }
-
-  return response(url, 'libraryplay', []); // todo: refine response??
+  const parts = splitUrl(url);
+  const zoneId = parseNumberPart(parts[1], 0);
+  const favoriteId = parseNumberPart(parts[4], 0);
+  const payload = `fav/${zoneId}/${parts.slice(4).join('/')}`;
+  await zoneRuntime.sendZoneCommand(zoneId, 'contentplay', payload);
+  return response(url, 'favoriteplay', [{ zoneId, favoriteId }]);
 }
 
 /* -------------------------------------------------------------------------- */
