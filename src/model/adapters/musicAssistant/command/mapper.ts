@@ -3,7 +3,6 @@ import { getAdapterProp, setAdapterProp } from '@/runtime/zones/types/zoneStateT
 import { MusicAssistantApi } from '../api';
 import { MusicAssistantConfig } from '../types/config';
 import { MusicAssistantCommand } from '../types/command';
-import { dispatch } from '@/runtime/zones/dispatch/commandDispatch';
 import { joinLeaderGeneric, leaveGroupGeneric } from '@/runtime/zones/utils/groupUtils';
 import { CommandHandler } from '@/core/interfaces/commandHandler';
 import { logCommand, logWarn, logDebug } from '@/core/utils/logging';
@@ -50,20 +49,28 @@ export class MusicAssistantCommandMapper implements CommandHandler {
   async handle(cmd: MusicAssistantCommand, param?: any): Promise<boolean> {
     const command = cmd.toLowerCase() as MusicAssistantCommand;
 
-    return await dispatch(command, {
-      play: async () => this.api.play(this.playerId),
-      resume: async () => this.api.play(this.playerId),
-      pause: async () => this.api.pause(this.playerId),
-      stop: async () => this.api.stop(this.playerId),
-      queueplus: async () => this.api.next(this.playerId),
-      queueminus: async () => this.api.previous(this.playerId),
-      position: async () => this.api.position(this.playerId, param),
-      volume: async () => this.adjustVolume(param),
-      repeat: async () => this.handleRepeat(param),
-      shuffle: async () => this.handleShuffle(param),
-      groupjoin: async () => this.joinLeader(),
-      groupleave: async () => this.leaveGroup(),
-    });
+    const handlers: Record<string, (() => Promise<void>) | undefined> = {
+      play:        () => this.api.play(this.playerId),
+      resume:      () => this.api.play(this.playerId),
+      pause:       () => this.api.pause(this.playerId),
+      stop:        () => this.api.stop(this.playerId),
+      queueplus:   () => this.api.next(this.playerId),
+      queueminus:  () => this.api.previous(this.playerId),
+      position:    () => this.api.position(this.playerId, param),
+      volume:      () => this.adjustVolume(param),
+      repeat:      () => this.handleRepeat(param),
+      shuffle:     () => this.handleShuffle(param),
+      groupjoin:   () => this.joinLeader(),
+      groupleave:  () => this.leaveGroup(),
+    };
+
+    const fn = handlers[command];
+    if (!fn) {
+      return false;
+    }
+
+    await fn();
+    return true;
   }
 
   /* -------------------------------------------------------------------------- */

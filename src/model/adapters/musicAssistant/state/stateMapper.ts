@@ -107,7 +107,8 @@ export function mapQueueToState(
 
 export function mapQueueItem(item: any, index: number) {
   const media = item?.media_item ?? item ?? {};
-  const audiopath = buildAudiopath(media.uri, 'track', 'spotify');
+  const unique_id = item.queue_item_id;
+  const audiopath = buildAudiopath(`queue://${unique_id}`, 'track', 'spotify');
   const coverurl = extractCover(media, 128);
 
   return {
@@ -120,7 +121,7 @@ export function mapQueueItem(item: any, index: number) {
     qindex: index,
     station: '',
     title: safeString(media.title ?? media.name ?? item?.name ?? ''),
-    unique_id: item?.queue_item_id,
+    unique_id,
     user: 'nouser',
   };
 }

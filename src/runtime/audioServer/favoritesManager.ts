@@ -5,7 +5,8 @@ import { providerRuntime } from '@/runtime/provider';
 import { extractImageFromTrack } from '@/model/adapters/musicAssistant/utils/imageUtils';
 import { FileType } from '@/core/loxone/types';
 import { notifyRoomFavoritesChanged } from '@/http/loxoneHttp/websocketNotifier';
-import { detectLoxoneItemType } from '@/core/loxone/mediaMapping';
+import { decodeAudiopath, detectLoxoneItemType } from '@/core/loxone/mediaMapping';
+import { zoneStateStore } from '../zones';
 
 /**
  * Saves the updated favorites list to disk and broadcasts the
@@ -158,5 +159,18 @@ export const favoritesManager = {
       return;
     }
     return item;
+  },
+
+  async getAudiopathForFavorite(zoneId: number, favoriteId: number): Promise<string | null> {
+    const favorite = await this.getForPlayback(zoneId, favoriteId);
+    if (!favorite) {
+      return null;
+    }
+
+    const mediaItem = decodeAudiopath(favorite.audiopath);
+
+    // update lastFavoriteId hier (centrale plek)
+    zoneStateStore.patch(zoneId, { lastFavoriteId: favoriteId });
+    return mediaItem;
   },
 };

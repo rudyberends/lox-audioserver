@@ -10,133 +10,122 @@ export interface FadeOptions {
 class FadeController {
   private active = new Map<number, NodeJS.Timeout>();
 
+  /* -------------------------------------------------------------------------- */
+  /* PUBLIC API                                                                 */
+  /* -------------------------------------------------------------------------- */
+
+  public parseFadeOptions(raw: string): FadeOptions {
+    if (!raw) {
+      return {};
+    }
+
+    const idx = raw.indexOf('q&');
+    if (idx === -1) {
+      return {};
+    }
+
+    const b64 = raw.slice(idx + 2);
+    if (!b64) {
+      return {};
+    }
+
+    let decoded: string;
+    try {
+      decoded = Buffer.from(b64, 'base64').toString('utf8').trim();
+    } catch {
+      return {};
+    }
+
+    // verwacht:  "fading&fadingTime=120"
+    if (!decoded.includes('fading')) {
+      return {};
+    }
+
+    const match = decoded.match(/fadingTime=(\d+)/);
+    const sec = match ? Number(match[1]) : undefined;
+
+    return {
+      fade: true,
+      fadeDurationMs: sec ? sec * 1000 : undefined,
+    };
+  }
+
+  /* -------------------------------------------------------------------------- */
+  /* FADE ENGINE                                                                 */
+  /* -------------------------------------------------------------------------- */
+
   /**
-   * Gradually raises volume from 0 → zone.volumes.buzzer (or default)
-   * over the given duration, in smooth 2-second increments.
-   */
+ * Gradually ramps volume from 0 → target as absolute levels.
+ * Uses fixed-time stepping and prevents early fade termination
+ * by sending explicit absolute values instead of relative deltas.
+ */
   public async fadeIn(zoneId: number, durationMs: number): Promise<void> {
-    this.cancel(zoneId); // cancel existing fade
+    this.cancel(zoneId);
 
     const zoneState = zoneStateStore.get(zoneId);
-
     if (!zoneState) {
-      logger.warn(`[FadeController] Zone ${zoneId} not found in state store`);
+      logger.warn(`[FadeController] Zone ${zoneId} not found`);
       return;
     }
 
-    const volumes = (zoneRuntime as any).zones.get(zoneId)?.volumes ?? {};
-    const targetVolume = Number(volumes?.buzzer ?? volumes?.default ?? 50);
-    const steps = Math.max(1, Math.floor(durationMs / 2000)); // every 2s
-    const stepSize = targetVolume / steps;
-    let currentVolume = 0;
+    const zone = (zoneRuntime as any).zones.get(zoneId);
+    const volumes = zone?.volumes ?? {};
 
-    logger.debug(
-      `[FadeController] Fading in zone ${zoneId}: 0 → ${targetVolume} over ${durationMs}ms (${steps} steps of ${stepSize.toFixed(2)})`,
+    // Fade targets the buzzer volume, fallback to default.
+    const target = Math.max(
+      0,
+      Math.min(100, Number(volumes.buzzer ?? volumes.default ?? 50)),
     );
+
+    const intervalMs = 2000; // fixed tick
+    const steps = Math.max(1, Math.round(durationMs / intervalMs));
+    const floatDelta = target / steps;
+
+    let current = 0;
+
+    logger.info(`[FadeController] Fade in zone ${zoneId}: target=${target}, steps=${steps}, delta=${floatDelta.toFixed(2)}`);
 
     // Ensure we start muted
     try {
-      await zoneRuntime.sendZoneCommand(zoneId, 'volume', String(-999)); // mute before fade
-      zoneStateStore.patch(zoneId, { volume: 0 });
-    } catch (err) {
-      logger.warn(`[FadeController] Failed to set initial volume 0 for zone ${zoneId}: ${String(err)}`);
-    }
+      await zoneRuntime.sendZoneCommand(zoneId, 'volume', { absolute: 0 });
+    } catch { /* empty */ }
 
     let step = 0;
+
     const interval = setInterval(async () => {
       step++;
-      currentVolume = Math.min(targetVolume, currentVolume + stepSize);
+
+      current = Math.min(target, floatDelta * step);
 
       try {
-        const currentState = zoneStateStore.get(zoneId);
-        const delta = currentVolume - (currentState?.volume ?? 0);
-        await zoneRuntime.sendZoneCommand(zoneId, 'volume', String(delta));
+        await zoneRuntime.sendZoneCommand(zoneId, 'volume', {
+          absolute: Math.round(current),
+        });
       } catch (err) {
-        logger.warn(`[FadeController] Volume step failed for zone ${zoneId}: ${String(err)}`);
+        logger.warn(`[FadeController] Failed to set fade step: ${String(err)}`);
       }
 
-      if (step >= steps || currentVolume >= targetVolume) {
-        this.cancel(zoneId);
+      if (step >= steps) {
+        clearInterval(interval);
+        this.active.delete(zoneId);
         logger.debug(`[FadeController] Fade complete for zone ${zoneId}`);
       }
-    }, 2000);
+    }, intervalMs);
 
     this.active.set(zoneId, interval);
   }
 
-  /** Cancels an ongoing fade */
+  /** Stop fade */
   public cancel(zoneId: number): void {
-    const existing = this.active.get(zoneId);
-    if (existing) {
-      clearInterval(existing);
-      this.active.delete(zoneId);
-      logger.debug(`[FadeController] Cancelled fade for zone ${zoneId}`);
+    const timer = this.active.get(zoneId);
+    if (!timer) {
+      return;
     }
-  }
-}
 
-export function parseFadeOptions(raw: string): FadeOptions {
-  if (!raw) {
-    return {};
-  }
-  const decoded = decodeURIComponentSafe(raw).trim();
-  if (!decoded.startsWith('?')) {
-    return {};
-  }
+    clearInterval(timer);
+    this.active.delete(zoneId);
 
-  let query = decoded.slice(1);
-  if (!query) {
-    return {};
-  }
-
-  if (query.startsWith('q&')) {
-    const base64Payload = query.slice(2);
-    try {
-      const unpacked = Buffer.from(base64Payload, 'base64').toString('utf8');
-      query = unpacked.startsWith('?') ? unpacked.slice(1) : unpacked;
-    } catch {
-      return {};
-    }
-  }
-
-  if (!query) {
-    return {};
-  }
-
-  const params = new URLSearchParams(query);
-  const fadingFlag =
-    params.has('fading') ||
-    params.get('fading') === '1' ||
-    params.has('fade') ||
-    params.get('fade') === '1' ||
-    params.get('fade')?.toLowerCase() === 'true';
-
-  const fadeTimeParam =
-    params.get('fadingTime') ?? params.get('fadeTime') ?? params.get('fadeDuration');
-
-  let fadeDurationMs: number | undefined;
-  if (fadeTimeParam) {
-    const numeric = Number(fadeTimeParam);
-    if (Number.isFinite(numeric) && numeric >= 0) {
-      fadeDurationMs = Math.round(numeric * 1000);
-    }
-  }
-
-  if (fadingFlag || fadeDurationMs !== undefined) {
-    return {
-      fade: true,
-      fadeDurationMs,
-    };
-  }
-
-  return {};
-}
-
-function decodeURIComponentSafe(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
+    logger.debug(`[FadeController] Fade canceled for zone ${zoneId}`);
   }
 }
 

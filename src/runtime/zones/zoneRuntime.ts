@@ -7,7 +7,8 @@ import type { ZoneEntry } from './types/zoneEntry';
 import type { ZoneVolumeConfig } from '@/config/types';
 import { createDefaultZoneState, ZoneState } from './types/zoneStateTypes';
 import { zoneStateStore } from './zoneStateStore';
-import { ZoneCommandRouter } from './utils/zoneCommandRouter';
+import { fadeController } from './utils/fadeController';
+import { parseLoxoneCommand } from './utils/loxoneCommandParser';
 
 /**
  * =============================================================================
@@ -19,7 +20,6 @@ import { ZoneCommandRouter } from './utils/zoneCommandRouter';
  *  - Initialize and manage all active zones
  *  - Instantiate correct StateMapper and CommandMapper per zone
  *  - Attach optional Content Mappers (e.g. Music Assistant)
- *  - Route runtime commands through {@link ZoneCommandRouter}
  *  - Receive and broadcast zone/queue updates via {@link zoneStateStore}
  *  - Persist configuration updates (name, event volumes, etc.)
  * =============================================================================
@@ -27,9 +27,6 @@ import { ZoneCommandRouter } from './utils/zoneCommandRouter';
 export class ZoneRuntime {
   /** Internal registry of all active zones. */
   private readonly zones = new Map<number, ZoneEntry>();
-
-  /** Shared command router instance used for all zones. */
-  private readonly commandRouter = new ZoneCommandRouter();
 
   /* -------------------------------------------------------------------------- */
   /* Initialization                                                             */
@@ -105,7 +102,6 @@ export class ZoneRuntime {
           `[ZoneRuntime][${name}] Attached content mapper "${providerType}" (playback enabled)`,
         );
 
-        (commandMapper as any).contentAdapterType = providerType;
       } else {
         logger.debug(`[ZoneRuntime][${name}] No content mapper found for type "${providerType}"`);
       }
@@ -270,17 +266,37 @@ export class ZoneRuntime {
   /* Command Routing                                                            */
   /* -------------------------------------------------------------------------- */
 
-  /**
-   * Routes a command to the correct zone using the {@link ZoneCommandRouter}.
-   * This keeps command dispatching logic isolated from the core runtime.
-   */
   public async sendZoneCommand(id: number, command: string, param?: unknown): Promise<void> {
     const zone = this.zones.get(id);
     if (!zone) {
       logger.warn(`[ZoneRuntime] Unknown zone ${id}`);
       return;
     }
-    await this.commandRouter.handle(zone, command, param);
+
+    logger.debug(`[ZoneRuntime][${zone.name}] → ${command} ${JSON.stringify(param ?? '')}`);
+
+    const state = zoneStateStore.get(id);
+    const parsed = await parseLoxoneCommand(command, param, state.volume ?? 25);
+
+    if (parsed.isContent) {
+      if (!zone.contentMapper) {
+        logger.warn(`[ZoneRuntime][${zone.name}] No content mapper available.`);
+        return;
+      }
+
+      // Check for Fade request
+      if (parsed.param.fade) {
+        fadeController.fadeIn(id, parsed.param.fade.fadeDurationMs);
+      }
+
+      await zone.contentMapper.handlePlayCommand({
+        zoneId: id,
+        ...(parsed.param as any),
+      });
+
+      return;
+    }
+    await zone.commandMapper?.handle(command, parsed.param);
   }
 
   /* -------------------------------------------------------------------------- */
