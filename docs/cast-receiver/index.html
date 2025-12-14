@@ -81,12 +81,16 @@
           isPlaying: false,
           lastTimestampUs: 0,
           format: { sampleRate: 44100, channels: 2, bitDepth: 16 },
+          offsetUs: 0,
+          lastClientTimeUs: 0,
         };
 
         const teardownSendspin = () => {
           sendspin.isPlaying = false;
           sendspin.audioQueue = [];
           sendspin.lastTimestampUs = 0;
+          sendspin.offsetUs = 0;
+          sendspin.lastClientTimeUs = 0;
           if (sendspin.audioContext) {
             try {
               sendspin.audioContext.close();
@@ -143,8 +147,9 @@
             }
           }
           const now = ctx.currentTime;
-          // Convert timestampUs to seconds; if in the past, play asap
-          const playAt = Math.max(now + 0.02, timestampUs / 1_000_000);
+          // Translate server ts to local audio clock
+          const localSeconds = (timestampUs - sendspin.offsetUs) / 1_000_000;
+          const playAt = Math.max(now + 0.02, localSeconds);
           const src = ctx.createBufferSource();
           src.buffer = audioBuffer;
           src.connect(ctx.destination);
@@ -204,15 +209,16 @@
               };
               sendSendspin(hello);
               // clock sync
-              sendspin.heartbeat = setInterval(() => {
-                sendSendspin({
-                  type: 'client/time',
-                  payload: { client_transmitted: Date.now() * 1000 },
-                });
-              }, 5000);
-            };
-            ws.onmessage = (ev) => {
-              if (typeof ev.data === 'string') {
+            sendspin.heartbeat = setInterval(() => {
+              sendspin.lastClientTimeUs = Date.now() * 1000;
+              sendSendspin({
+                type: 'client/time',
+                payload: { client_transmitted: sendspin.lastClientTimeUs },
+              });
+            }, 5000);
+          };
+          ws.onmessage = (ev) => {
+            if (typeof ev.data === 'string') {
                 try {
                   const msg = JSON.parse(ev.data);
                   handleSendspinMessage(msg);
@@ -241,6 +247,17 @@
                 type: 'client/state',
                 payload: { player: { state: 'synchronized' } },
               });
+              break;
+            }
+            case 'server/time': {
+              const clientTx = msg.payload?.client_transmitted;
+              const serverRx = msg.payload?.server_received;
+              const serverTx = msg.payload?.server_transmitted;
+              if (typeof clientTx === 'number' && typeof serverRx === 'number' && typeof serverTx === 'number') {
+                // Simple NTP offset estimate
+                const offset = ((serverRx + serverTx) / 2) - clientTx;
+                sendspin.offsetUs = offset;
+              }
               break;
             }
             case 'server/state': {
