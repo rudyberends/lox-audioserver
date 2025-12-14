@@ -199,19 +199,19 @@
           const mediaUrl = payload.streamUrl;
           const contentType = payload.contentType || 'audio/wav';
           const meta = payload.metadata || {};
-          const media = {
+          const loadRequest = new cast.framework.messages.LoadRequestData();
+          loadRequest.autoplay = true;
+          loadRequest.media = {
             contentId: mediaUrl,
             contentType,
-            streamType: 'LIVE',
+            streamType: cast.framework.messages.StreamType.LIVE,
             metadata: meta,
             customData: {
               metadata: meta,
               deviceName: payload.playerName || meta.deviceName,
             },
           };
-          const request = new chrome.cast.media.LoadRequest(media);
-          request.autoplay = true;
-          playerManager.load(request);
+          playerManager.load(loadRequest);
           applyMetadataToPlayer(meta);
           updateOverlay(meta);
           if (payload.playerName) {
