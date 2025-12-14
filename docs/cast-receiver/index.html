@@ -194,11 +194,40 @@
         );
 
         // Custom namespace for live metadata updates without reload
+        const loadStream = (payload) => {
+          if (!payload?.streamUrl) return;
+          const mediaUrl = payload.streamUrl;
+          const contentType = payload.contentType || 'audio/wav';
+          const meta = payload.metadata || {};
+          const media = {
+            contentId: mediaUrl,
+            contentType,
+            streamType: 'LIVE',
+            metadata: meta,
+            customData: {
+              metadata: meta,
+              deviceName: payload.playerName || meta.deviceName,
+            },
+          };
+          const request = new chrome.cast.media.LoadRequest(media);
+          request.autoplay = true;
+          playerManager.load(request);
+          applyMetadataToPlayer(meta);
+          updateOverlay(meta);
+          if (payload.playerName) {
+            badgeEl.textContent = payload.playerName;
+          }
+        };
+
         context.addCustomMessageListener(customNs, (event) => {
           const payload = event?.data;
-          if (payload?.type === 'metadata' && payload.metadata) {
+          if (!payload) return;
+          if (payload.metadata) {
             applyMetadataToPlayer(payload.metadata);
             updateOverlay(payload.metadata);
+          }
+          if (payload.streamUrl) {
+            loadStream(payload);
           }
         });
 
