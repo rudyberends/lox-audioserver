@@ -3,120 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Lox Audiomanager Cast Receiver</title>
+    <title>Cast Receiver</title>
     <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-    <style>
-      :root {
-        color-scheme: dark;
-      }
-      body {
-        margin: 0;
-        background: #0b0d11;
-        color: #e5e7eb;
-        font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-      }
-      .overlay {
-        position: absolute;
-        inset: 0;
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        align-items: center;
-        gap: 24px;
-        padding: 24px;
-        pointer-events: none;
-        background: radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.04), transparent 35%),
-          radial-gradient(circle at 80% 10%, rgba(87, 131, 255, 0.12), transparent 35%),
-          radial-gradient(circle at 50% 80%, rgba(0, 255, 191, 0.06), transparent 40%),
-          linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.35));
-      }
-      .artwork {
-        width: 100%;
-        max-width: 380px;
-        aspect-ratio: 1/1;
-        border-radius: 24px;
-        overflow: hidden;
-        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45), 0 6px 16px rgba(0, 0, 0, 0.35);
-        background: linear-gradient(135deg, #1f2937, #111827);
-      }
-      .artwork img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        display: block;
-      }
-      .meta {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-      .badge {
-        align-self: flex-start;
-        padding: 6px 12px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.08);
-        font-size: 12px;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-      }
-      .title {
-        font-size: clamp(32px, 4vw, 44px);
-        font-weight: 700;
-        line-height: 1.1;
-      }
-      .subtitle {
-        font-size: 18px;
-        color: #cbd5e1;
-      }
-      .album {
-        font-size: 15px;
-        color: #94a3b8;
-      }
-      .footer {
-        position: absolute;
-        right: 24px;
-        bottom: 18px;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        color: #94a3b8;
-        font-size: 13px;
-      }
-      @media (max-width: 900px) {
-        .overlay {
-          grid-template-columns: 1fr;
-          grid-template-rows: auto auto;
-          justify-items: center;
-          text-align: center;
-        }
-        .badge {
-          align-self: center;
-        }
-        .footer {
-          right: 12px;
-          left: 12px;
-          justify-content: center;
-        }
-      }
-    </style>
   </head>
   <body>
     <cast-media-player></cast-media-player>
-    <div class="overlay" id="overlay" hidden>
-      <div class="artwork" id="artwork">
-        <img id="artwork-img" alt="Artwork" />
-      </div>
-      <div class="meta">
-        <div class="badge" id="badge">Lox Audiomanager</div>
-        <div class="title" id="title">Ready</div>
-        <div class="subtitle" id="artist"></div>
-        <div class="album" id="album"></div>
-      </div>
-    </div>
-    <div class="footer">
-      Cast receiver ready · Sendspin / Lox Audiomanager
-    </div>
-
     <script>
       (() => {
         'use strict';
@@ -125,32 +16,17 @@
         const playerManager = context.getPlayerManager();
         const customNs = 'urn:x-cast:lox.sendspin';
 
-        const overlay = document.getElementById('overlay');
-        const titleEl = document.getElementById('title');
-        const artistEl = document.getElementById('artist');
-        const albumEl = document.getElementById('album');
-        const badgeEl = document.getElementById('badge');
-        const artworkEl = document.getElementById('artwork');
-        const artworkImg = document.getElementById('artwork-img');
+        const titleEl = document.createElement('div');
+        const artistEl = document.createElement('div');
+        const albumEl = document.createElement('div');
 
         const updateOverlay = (meta) => {
           const title = meta?.title || 'Playing...';
           const artist = meta?.artist || '';
           const album = meta?.albumName || meta?.album || '';
-          const images = meta?.images || [];
-          const image = images.length ? images[0].url : '';
           titleEl.textContent = title;
           artistEl.textContent = artist;
           albumEl.textContent = album;
-          badgeEl.textContent = meta?.deviceName || 'Lox Audiomanager';
-          if (image) {
-            artworkImg.src = image;
-            artworkEl.hidden = false;
-          } else {
-            artworkImg.removeAttribute('src');
-            artworkEl.hidden = true;
-          }
-          overlay.hidden = false;
         };
 
         const applyMetadataToPlayer = (meta) => {
@@ -194,28 +70,189 @@
         );
 
         // Custom namespace for live metadata updates without reload
-        const loadStream = (payload) => {
-          if (!payload?.streamUrl) return;
-          const mediaUrl = payload.streamUrl;
-          const contentType = payload.contentType || 'audio/wav';
-          const meta = payload.metadata || {};
-          const loadRequest = new cast.framework.messages.LoadRequestData();
-          loadRequest.autoplay = true;
-          loadRequest.media = {
-            contentId: mediaUrl,
-            contentType,
-            streamType: cast.framework.messages.StreamType.LIVE,
-            metadata: meta,
-            customData: {
-              metadata: meta,
-              deviceName: payload.playerName || meta.deviceName,
-            },
+        let sendspin = {
+          ws: null,
+          heartbeat: null,
+          serverUrl: null,
+          playerId: null,
+          playerName: null,
+          audioContext: null,
+          audioQueue: [],
+          isPlaying: false,
+          lastTimestampUs: 0,
+          format: { sampleRate: 44100, channels: 2, bitDepth: 16 },
+        };
+
+        const teardownSendspin = () => {
+          sendspin.isPlaying = false;
+          sendspin.audioQueue = [];
+          sendspin.lastTimestampUs = 0;
+          if (sendspin.audioContext) {
+            try {
+              sendspin.audioContext.close();
+            } catch (err) {
+              console.warn('AudioContext close error', err);
+            }
+          }
+          sendspin.audioContext = null;
+          if (sendspin.heartbeat) {
+            clearInterval(sendspin.heartbeat);
+            sendspin.heartbeat = null;
+          }
+          if (sendspin.ws) {
+            try {
+              sendspin.ws.close();
+            } catch (err) {
+              console.warn('Sendspin WS close error', err);
+            }
+          }
+          sendspin = {
+            ws: null,
+            heartbeat: null,
+            serverUrl: null,
+            playerId: null,
+            playerName: null,
+            audioContext: null,
+            audioQueue: [],
+            isPlaying: false,
+            lastTimestampUs: 0,
+            format: { sampleRate: 44100, channels: 2, bitDepth: 16 },
           };
-          playerManager.load(loadRequest);
-          applyMetadataToPlayer(meta);
-          updateOverlay(meta);
-          if (payload.playerName) {
-            badgeEl.textContent = payload.playerName;
+        };
+
+        const initAudioContext = () => {
+          if (sendspin.audioContext) return sendspin.audioContext;
+          const ctx = new AudioContext({ sampleRate: sendspin.format.sampleRate });
+          sendspin.audioContext = ctx;
+          return ctx;
+        };
+
+        const schedulePcm = (timestampUs, pcmBuffer) => {
+          const ctx = initAudioContext();
+          if (!ctx) return;
+          const channels = sendspin.format.channels || 2;
+          const frameCount = pcmBuffer.byteLength / (2 * channels);
+          const audioBuffer = ctx.createBuffer(channels, frameCount, ctx.sampleRate);
+          const view = new DataView(pcmBuffer.buffer, pcmBuffer.byteOffset, pcmBuffer.byteLength);
+          for (let ch = 0; ch < channels; ch++) {
+            const channelData = audioBuffer.getChannelData(ch);
+            for (let i = 0; i < frameCount; i++) {
+              const sampleIndex = i * channels + ch;
+              const sample = view.getInt16(sampleIndex * 2, true) / 32768;
+              channelData[i] = sample;
+            }
+          }
+          const now = ctx.currentTime;
+          // Convert timestampUs to seconds; if in the past, play asap
+          const playAt = Math.max(now + 0.02, timestampUs / 1_000_000);
+          const src = ctx.createBufferSource();
+          src.buffer = audioBuffer;
+          src.connect(ctx.destination);
+          src.start(playAt);
+          sendspin.lastTimestampUs = timestampUs;
+        };
+
+        const handleAudioChunk = (data) => {
+          if (data.byteLength < 9) return;
+          const view = new DataView(data);
+          const msgType = view.getUint8(0);
+          if (msgType !== 4) return; // player audio chunk
+          const tsHi = view.getUint32(1);
+          const tsLo = view.getUint32(5);
+          const timestampUs = tsHi * 0x100000000 + tsLo;
+          const pcm = new Uint8Array(data, 9);
+          schedulePcm(timestampUs, pcm);
+        };
+
+        const sendSendspin = (obj) => {
+          if (sendspin.ws && sendspin.ws.readyState === WebSocket.OPEN) {
+            sendspin.ws.send(JSON.stringify(obj));
+          }
+        };
+
+        const startSendspin = (payload) => {
+          const { serverUrl, playerId, playerName } = payload;
+          if (!serverUrl || !playerId) return;
+          teardownSendspin();
+          sendspin.serverUrl = serverUrl;
+          sendspin.playerId = playerId;
+          sendspin.playerName = playerName || 'Sendspin Cast';
+          try {
+            const ws = new WebSocket(serverUrl);
+            sendspin.ws = ws;
+            ws.onopen = () => {
+              const hello = {
+                type: 'client/hello',
+                payload: {
+                  client_id: playerId,
+                  name: playerName || 'Sendspin Cast',
+                  version: 1,
+                  supported_roles: ['player@v1', 'metadata@v1'],
+                  player_support: {
+                    supported_formats: [
+                      {
+                        codec: 'pcm',
+                        channels: 2,
+                        sample_rate: 44100,
+                        bit_depth: 16,
+                      },
+                    ],
+                    buffer_capacity: 1024 * 1024 * 4,
+                    supported_commands: [],
+                  },
+                },
+              };
+              sendSendspin(hello);
+              // clock sync
+              sendspin.heartbeat = setInterval(() => {
+                sendSendspin({
+                  type: 'client/time',
+                  payload: { client_transmitted: Date.now() * 1000 },
+                });
+              }, 5000);
+            };
+            ws.onmessage = (ev) => {
+              if (typeof ev.data === 'string') {
+                try {
+                  const msg = JSON.parse(ev.data);
+                  handleSendspinMessage(msg);
+                } catch (err) {
+                  console.warn('Sendspin JSON parse error', err);
+                }
+              } else {
+                const buf = ev.data instanceof ArrayBuffer ? ev.data : ev.data.buffer;
+                handleAudioChunk(new Uint8Array(buf));
+              }
+            };
+            ws.onclose = () => teardownSendspin();
+            ws.onerror = () => teardownSendspin();
+          } catch (err) {
+            console.warn('Sendspin connect error', err);
+            teardownSendspin();
+          }
+        };
+
+        const handleSendspinMessage = (msg) => {
+          if (!msg || !msg.type) return;
+          switch (msg.type) {
+            case 'server/hello': {
+              // immediately report we are synchronized to allow metadata flow
+              sendSendspin({
+                type: 'client/state',
+                payload: { player: { state: 'synchronized' } },
+              });
+              break;
+            }
+            case 'server/state': {
+              const metadata = msg.payload?.metadata;
+              if (metadata) {
+                applyMetadataToPlayer(metadata);
+                updateOverlay(metadata);
+              }
+              break;
+            }
+            default:
+              break;
           }
         };
 
@@ -226,8 +263,9 @@
             applyMetadataToPlayer(payload.metadata);
             updateOverlay(payload.metadata);
           }
-          if (payload.streamUrl) {
-            loadStream(payload);
+          if (payload.serverUrl && payload.playerId) {
+            // Use pure Sendspin path (audio over WS).
+            startSendspin(payload);
           }
         });
 
