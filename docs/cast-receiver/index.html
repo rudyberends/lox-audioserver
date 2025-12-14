@@ -1,241 +1,289 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sendspin Cast Receiver</title>
-    <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-    <style>
-      :root {
-        color-scheme: dark;
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Sendspin Cast Receiver</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c0c0f;
+      --fg: #e8e8ef;
+      --muted: #9ea3af;
+      --accent: #7ee0c3;
+    }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at 20% 20%, #161822, #0c0c0f 60%);
+      color: var(--fg);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+    }
+    main {
+      width: min(800px, 90vw);
+      padding: 24px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.03);
+      box-shadow: 0 20px 80px rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 20px;
+      letter-spacing: 0.02em;
+      color: var(--accent);
+    }
+    #status {
+      font-size: 15px;
+      margin-bottom: 12px;
+    }
+    #debug {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0;
+    }
+  </style>
+  <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+</head>
+<body>
+  <main>
+    <h1>Sendspin Cast Receiver</h1>
+    <div id="status">Booting…</div>
+    <pre id="debug"></pre>
+  </main>
+
+  <script type="module">
+    import { SendspinPlayer } from 'https://unpkg.com/@music-assistant/sendspin-js@0.1.0/dist/index.js';
+
+    const CAST_NS = 'urn:x-cast:sendspin';
+    const statusEl = document.getElementById('status');
+    const debugEl = document.getElementById('debug');
+
+    const castCtx = cast.framework.CastReceiverContext.getInstance();
+    const playerManager = castCtx.getPlayerManager();
+    const PlayerState = cast.framework.messages.PlayerState;
+    const MessageType = cast.framework.messages.MessageType;
+
+    let player;
+    let debugInterval;
+    let providedPlayerId;
+    let providedPlayerName;
+    let providedSyncDelay;
+    let providedCodecs;
+
+    const setStatus = (text) => {
+      statusEl.textContent = text;
+    };
+
+    const setDebug = (text) => {
+      debugEl.textContent = text || '';
+    };
+
+    const getHWVolume = () => {
+      const sys = castCtx.getSystemVolume();
+      return {
+        level: sys?.level ?? 1,
+        muted: sys?.muted ?? false,
+      };
+    };
+
+    const setHWVolume = async (volume, muted) => {
+      try {
+        if (typeof volume === 'number') {
+          await castCtx.setSystemVolume(volume);
+        }
+        if (typeof muted === 'boolean') {
+          await castCtx.setSystemMuted(muted);
+        }
+      } catch (err) {
+        console.warn('Failed to set HW volume', err);
       }
-      body {
-        margin: 0;
-        font-family: "Inter", "Roboto", system-ui, -apple-system, sans-serif;
-        background: #0b0c10;
-        color: #e6e7eb;
+    };
+
+    const genId = () => `cast-${Math.random().toString(16).slice(2, 8)}`;
+
+    const getPlayerId = () => {
+      if (providedPlayerId) return providedPlayerId;
+      const urlId = new URLSearchParams(location.search).get('player_id');
+      const stored = localStorage.getItem('sendspin_player_id');
+      const id = urlId || stored || genId();
+      localStorage.setItem('sendspin_player_id', id);
+      return id;
+    };
+
+    const buildMediaInfo = (meta = {}) => {
+      const info = new cast.framework.messages.MediaInformation();
+      info.contentId = 'sendspin://live';
+      info.contentType = 'audio/raw';
+      info.streamType = cast.framework.messages.StreamType.LIVE;
+      const md = new cast.framework.messages.GenericMediaMetadata();
+      md.title = meta.title || 'Sendspin';
+      md.artist = meta.artist || meta.subtitle || '';
+      md.albumName = meta.album || '';
+      if (meta.cover) {
+        md.images = [{ url: meta.cover }];
       }
-      #status {
-        position: fixed;
-        bottom: 12px;
-        left: 12px;
-        font-size: 14px;
-        opacity: 0.8;
+      info.metadata = md;
+      return info;
+    };
+
+    const pushMediaStatus = (state, meta) => {
+      try {
+        const info = buildMediaInfo(meta || player?.metadata);
+        playerManager.setMediaInformation(info);
+        playerManager.setPlayerState(state);
+        playerManager.sendStatus(playerManager.getStatus());
+      } catch (err) {
+        console.warn('pushMediaStatus failed', err);
       }
-      #debug {
-        position: fixed;
-        bottom: 12px;
-        right: 12px;
-        font-size: 12px;
-        opacity: 0.5;
-        text-align: right;
+    };
+
+    const sendStatusToSender = (payload) => {
+      try {
+        castCtx.sendCustomMessage(CAST_NS, undefined, payload);
+      } catch (err) {
+        console.warn('sendStatusToSender failed', err);
       }
-    </style>
-  </head>
-  <body>
-    <cast-media-player></cast-media-player>
-    <div id="status">Waiting for sender…</div>
-    <div id="debug"></div>
-    <script type="module">
-      import { SendspinPlayer } from 'https://esm.sh/@music-assistant/sendspin-js@0.1.0';
+    };
 
-      (() => {
-        'use strict';
+    const sendPlayerStatus = (p) => {
+      if (!p) return;
+      const hw = getHWVolume();
+      const sync = p.timeSyncInfo || p.syncInfo || {};
+      sendStatusToSender({
+        type: 'player_status',
+        id: p.playerId,
+        state: p.isPlaying ? 'playing' : 'stopped',
+        volume: hw.level,
+        muted: hw.muted,
+        metadata: p.metadata || null,
+        sync: {
+          synced: Boolean(sync.synced),
+          offset: sync.offset ?? sync.syncOffset ?? 0,
+          error: sync.error ?? sync.syncError ?? 0,
+        },
+      });
+    };
 
-        const CAST_NS = 'urn:x-cast:sendspin';
-        const context = cast.framework.CastReceiverContext.getInstance();
-        const playerManager = context.getPlayerManager();
-        const statusEl = document.getElementById('status');
-        const debugEl = document.getElementById('debug');
+    const updateDebug = (p) => {
+      if (!p) return;
+      const sync = p.timeSyncInfo || p.syncInfo || {};
+      const lines = [
+        `Player: ${p.playerId}`,
+        `State : ${p.isPlaying ? 'playing' : 'stopped'}`,
+        `Delay : ${p.syncDelay ?? 0} ms`,
+        `Sync  : synced=${sync.synced} offset=${sync.offset ?? sync.syncOffset ?? 0}ms error=${sync.error ?? sync.syncError ?? 0}ms`,
+        `Buffer: ${(p.bufferFill ?? 0).toFixed(2)}s`,
+      ];
+      setDebug(lines.join('\n'));
+    };
 
-        const setStatus = (text) => (statusEl.textContent = text);
-        const setDebug = (text) => (debugEl.textContent = text);
+    const connectToServer = async (baseUrl) => {
+      if (debugInterval) {
+        clearInterval(debugInterval);
+        debugInterval = undefined;
+      }
+      if (player) {
+        try { player.close?.(); } catch (_) {}
+        try { player.destroy?.(); } catch (_) {}
+        try { player.disconnect?.(); } catch (_) {}
+        player = undefined;
+      }
 
-        const buildMediaInfo = (meta) => {
-          const mediaInfo = new cast.framework.messages.MediaInformation();
-          const metadata = new cast.framework.messages.MusicTrackMediaMetadata();
-          metadata.title = meta?.title || 'Sendspin';
-          metadata.artist = meta?.artist || '';
-          metadata.albumName = meta?.album || '';
-          if (meta?.artwork_url) {
-            metadata.images = [{ url: meta.artwork_url }];
-          }
-          mediaInfo.metadata = metadata;
-          mediaInfo.contentId = 'sendspin://live';
-          mediaInfo.contentType = 'audio/raw';
-          mediaInfo.streamType = cast.framework.messages.StreamType.LIVE;
-          return mediaInfo;
-        };
+      setStatus(`Connecting to ${baseUrl}…`);
 
-        const pushMediaStatus = (state, meta) => {
-          if (!playerManager) return;
-          const info = buildMediaInfo(meta);
-          playerManager.setMediaInformation(info);
-          playerManager.setPlayerState(state);
-          playerManager.broadcastStatus(true);
-        };
+      const playerId = getPlayerId();
+      const playerName =
+        providedPlayerName ||
+        castCtx.getApplicationData()?.displayName ||
+        'Lox Audio Server';
 
-        const castCtx = context;
-        const getHWVolume = () => {
-          const sys = castCtx.getSystemVolume?.();
-          return sys
-            ? { volume: Math.round((sys.level || 0) * 100), muted: !!sys.muted }
-            : { volume: 100, muted: false };
-        };
-        const setHWVolume = (vol, muted) => {
-          try {
-            if (typeof vol === 'number') castCtx.setSystemVolumeLevel?.(Math.max(0, Math.min(1, vol / 100)));
-            if (typeof muted === 'boolean') castCtx.setSystemVolumeMuted?.(muted);
-          } catch (err) {
-            console.warn('HW volume failed', err);
-          }
-        };
+      const syncDelay = providedSyncDelay ?? 0;
+      const codecs = providedCodecs || ['pcm'];
 
-        let providedPlayerId = null;
-        let providedPlayerName = null;
-        let providedSyncDelay = 0;
-        let providedCodecs = null;
-        let player = null;
-
-        const getPlayerId = () => {
-          if (providedPlayerId) {
-            localStorage.setItem('sendspin_player_id', providedPlayerId);
-            return providedPlayerId;
-          }
-          const params = new URLSearchParams(window.location.search);
-          const q = params.get('player_id');
-          if (q) {
-            localStorage.setItem('sendspin_player_id', q);
-            return q;
-          }
-          const stored = localStorage.getItem('sendspin_player_id');
-          if (stored) return stored;
-          const gen = `cast-${Math.random().toString(36).slice(2, 10)}`;
-          localStorage.setItem('sendspin_player_id', gen);
-          return gen;
-        };
-
-        const sendStatusToSender = (status) => {
-          castCtx.sendCustomMessage(CAST_NS, undefined, status);
-        };
-
-        const updateDebug = (p) => {
-          const sync = p.timeSyncInfo;
-          const info = p.syncInfo;
-          setDebug(
-            `${sync.synced ? `offset ${sync.offset}ms ±${sync.error}ms` : 'sync: waiting'} · drift ${info.clockDriftPercent.toFixed(2)}% · error ${info.syncErrorMs.toFixed(1)}ms · resyncs ${info.resyncCount}`,
-          );
-        };
-
-        const sendPlayerStatus = (p) => {
-          const hw = getHWVolume();
-          const sync = p.timeSyncInfo;
-          const info = p.syncInfo;
-          sendStatusToSender({
-            state: p.isPlaying ? 'playing' : 'stopped',
-            volume: hw.volume,
-            muted: hw.muted,
-            sync: { synced: sync.synced, offset: sync.offset, error: sync.error },
-            syncInfo: info,
-          });
-        };
-
-        const connectToServer = async (baseUrl) => {
-          const playerId = getPlayerId();
-          const name = providedPlayerName || 'Sendspin Cast Receiver';
-          setStatus('Connecting…');
-          sendStatusToSender({ state: 'connecting' });
-          player = new SendspinPlayer({
-            playerId,
-            baseUrl,
-            clientName: name,
-            syncDelay: providedSyncDelay,
-            bufferCapacity: 1024 * 1024 * 2,
-            codecs: providedCodecs ?? ['pcm'],
-            useHardwareVolume: true,
-            onVolumeCommand: setHWVolume,
-            getExternalVolume: getHWVolume,
-            useOutputLatencyCompensation: true,
-            onStateChange: (state) => {
-              setStatus(state.isPlaying ? 'Playing' : 'Stopped');
-              sendPlayerStatus(player);
-              pushMediaStatus(
-                state.isPlaying
-                  ? cast.framework.messages.PlayerState.PLAYING
-                  : cast.framework.messages.PlayerState.PAUSED,
-                player.metadata ?? null,
-              );
-              updateDebug(player);
-            },
-          });
-          try {
-            await player.connect();
-            setStatus('Ready');
-            sendStatusToSender({ state: 'connected' });
-            // Announce media status to Cast runtime immediately
-            pushMediaStatus(cast.framework.messages.PlayerState.PAUSED, player.metadata ?? null);
-            setInterval(() => {
-              updateDebug(player);
-              sendPlayerStatus(player);
-              pushMediaStatus(
-                player.isPlaying
-                  ? cast.framework.messages.PlayerState.PLAYING
-                  : cast.framework.messages.PlayerState.PAUSED,
-                player.metadata ?? null,
-              );
-            }, 1000);
-          } catch (err) {
-            console.error('Sendspin connect failed', err);
-            setStatus('Error');
-            sendStatusToSender({ state: 'error', message: 'connect failed' });
-          }
-          window.player = player;
-        };
-
-        // Cast listeners
-        castCtx.addEventListener(cast.framework.system.EventType.SYSTEM_VOLUME_CHANGED, () => {
-          if (player) sendPlayerStatus(player);
-        });
-
-        // Answer GET_STATUS requests with our current pseudo-media status so Cast doesn't log "No media status".
-        playerManager.setMessageInterceptor(
-          cast.framework.messages.MessageType.GET_STATUS,
-          (request) => {
-            const isPlaying = player?.isPlaying ?? false;
+      try {
+        player = new SendspinPlayer({
+          playerId,
+          baseUrl,
+          clientName: playerName,
+          syncDelay,
+          bufferCapacity: 2 * 1024 * 1024,
+          codecs,
+          useHardwareVolume: true,
+          useOutputLatencyCompensation: true,
+          getExternalVolume: getHWVolume,
+          onVolumeCommand: setHWVolume,
+          onStateChange: (state) => {
+            setStatus(state.isPlaying ? 'Playing' : 'Stopped');
+            sendPlayerStatus(player);
             pushMediaStatus(
-              isPlaying
-                ? cast.framework.messages.PlayerState.PLAYING
-                : cast.framework.messages.PlayerState.PAUSED,
-              player?.metadata ?? null,
+              state.isPlaying ? PlayerState.PLAYING : PlayerState.PAUSED,
+              player?.metadata
             );
-            // Allow the default status handling to proceed so Cast sees a response.
-            return request;
+            updateDebug(player);
           },
-        );
-
-        // Custom message handler from sender
-        castCtx.addCustomMessageListener(CAST_NS, (event) => {
-          const data = event?.data;
-          if (!data?.serverUrl) return;
-          if (Array.isArray(data.codecs)) providedCodecs = data.codecs;
-          if (data.playerId) providedPlayerId = data.playerId;
-          if (data.playerName) providedPlayerName = data.playerName;
-          if (typeof data.syncDelay === 'number') providedSyncDelay = data.syncDelay;
-          connectToServer(data.serverUrl);
         });
 
-        const options = new cast.framework.CastReceiverOptions();
-        options.customNamespaces = {
-          [CAST_NS]: cast.framework.system.MessageType.JSON,
-        };
-        options.disableIdleTimeout = true;
-        options.maxInactivity = 3600;
-        castCtx.start(options);
+        await player.connect();
+
         setStatus('Ready');
-        pushMediaStatus(cast.framework.messages.PlayerState.IDLE, null);
-        // Periodically reassure the Cast runtime so it never reports "No media status".
-        setInterval(() => pushMediaStatus(cast.framework.messages.PlayerState.IDLE, null), 15_000);
-      })();
-    </script>
-  </body>
+        sendPlayerStatus(player);
+        pushMediaStatus(PlayerState.PAUSED, player?.metadata);
+        updateDebug(player);
+
+        debugInterval = setInterval(() => {
+          sendPlayerStatus(player);
+          pushMediaStatus(
+            player?.isPlaying ? PlayerState.PLAYING : PlayerState.PAUSED,
+            player?.metadata
+          );
+          updateDebug(player);
+        }, 1000);
+      } catch (err) {
+        setStatus(`Error: ${err?.message || err}`);
+        setDebug(String(err || 'unknown error'));
+      }
+    };
+
+    playerManager.setMessageInterceptor(MessageType.GET_STATUS, () => {
+      pushMediaStatus(PlayerState.PAUSED, player?.metadata);
+      return null;
+    });
+
+    castCtx.addCustomMessageListener(CAST_NS, (event) => {
+      const data = event.data || {};
+      if (!data.serverUrl) {
+        setStatus('Missing serverUrl in cast message');
+        return;
+      }
+      providedPlayerId = data.playerId;
+      providedPlayerName = data.playerName;
+      providedSyncDelay = data.syncDelay;
+      providedCodecs = data.codecs;
+      connectToServer(data.serverUrl);
+    });
+
+    castCtx.addEventListener(
+      cast.framework.system.EventType.SYSTEM_VOLUME_CHANGED,
+      () => sendPlayerStatus(player)
+    );
+
+    castCtx.start({
+      customNamespaces: {
+        [CAST_NS]: cast.framework.system.MessageType.JSON,
+      },
+      disableIdleTimeout: true,
+      maxInactivity: 3600000000,
+    });
+
+    setStatus('Ready (waiting for server)');
+    pushMediaStatus(PlayerState.PAUSED, null);
+  </script>
+</body>
 </html>
