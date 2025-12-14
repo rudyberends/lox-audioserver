@@ -26,6 +26,15 @@
 
         const setStatus = (text) => {
           statusEl.textContent = text;
+          context.setApplicationState?.(text);
+        };
+
+        const setPlayerState = (state) => {
+          try {
+            playerManager.setMediaPlaybackState?.(state);
+          } catch {
+            /* ignore */
+          }
         };
 
         const updateOverlay = (meta) => {
@@ -103,11 +112,13 @@
               streamFormat = msg.payload?.player || null;
               resetAudio();
               setStatus('Streaming…');
+              setPlayerState(cast.framework.messages.PlayerState.PLAYING);
               break;
             case 'stream/clear':
             case 'stream/end':
               resetAudio();
               setStatus('Idle');
+              setPlayerState(cast.framework.messages.PlayerState.IDLE);
               break;
             case 'server/command':
               if (msg.payload?.player?.command === 'volume') {
