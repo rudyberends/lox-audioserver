@@ -8,7 +8,9 @@
   </head>
   <body>
     <cast-media-player></cast-media-player>
-    <script>
+    <script type="module">
+      import { SendspinPlayer } from 'https://unpkg.com/@music-assistant/sendspin-js@latest/dist/esm/index.js';
+
       (() => {
         'use strict';
 
@@ -16,257 +18,114 @@
         const playerManager = context.getPlayerManager();
         const customNs = 'urn:x-cast:sendspin';
 
-        const titleEl = document.createElement('div');
-        const artistEl = document.createElement('div');
-        const albumEl = document.createElement('div');
+        const statusEl = document.createElement('div');
+        statusEl.style.position = 'fixed';
+        statusEl.style.bottom = '12px';
+        statusEl.style.left = '12px';
+        statusEl.style.fontSize = '14px';
+        statusEl.style.opacity = '0.6';
+        statusEl.textContent = 'Waiting for sender...';
+        document.body.appendChild(statusEl);
+
+        const setStatus = (text) => {
+          statusEl.textContent = text;
+        };
 
         const updateOverlay = (meta) => {
-          const title = meta?.title || 'Playing...';
-          const artist = meta?.artist || '';
-          const album = meta?.albumName || meta?.album || '';
-          titleEl.textContent = title;
-          artistEl.textContent = artist;
-          albumEl.textContent = album;
+          const castPlayer = document.querySelector('cast-media-player');
+          if (!castPlayer) return;
+          const mediaInfo = playerManager.getMediaInformation();
+          mediaInfo.metadata = {
+            metadataType: 3,
+            title: meta?.title || '',
+            artist: meta?.artist || '',
+            albumName: meta?.album || meta?.albumName || '',
+            images: meta?.artwork_url ? [{ url: meta.artwork_url }] : undefined,
+          };
+          playerManager.setMediaInformation(mediaInfo);
+          if (meta?.title) castPlayer.mediaInfo = mediaInfo;
         };
 
-        const applyMetadataToPlayer = (meta) => {
-          try {
-            const mediaInformation = playerManager.getMediaInformation();
-            mediaInformation.metadata = meta;
-            playerManager.setMediaInformation(mediaInformation);
-          } catch (err) {
-            console.warn('updateMetadata error', err);
-          }
-        };
-
-        // Intercept LOAD to show device name and metadata from customData
         playerManager.setMessageInterceptor(
           cast.framework.messages.MessageType.LOAD,
-          (data) => {
-            const meta = data?.media?.customData?.metadata;
-            const deviceName = data?.media?.customData?.deviceName;
-            if (deviceName) {
-              badgeEl.textContent = deviceName;
-            }
-            if (meta) {
-              applyMetadataToPlayer(meta);
-              updateOverlay(meta);
-            }
-            return data;
-          }
+          (data) => data,
         );
 
-        // Intercept PLAY to refresh metadata if provided
-        playerManager.setMessageInterceptor(
-          cast.framework.messages.MessageType.PLAY,
-          (data) => {
-            const meta = data?.customData?.metadata;
-            if (meta) {
-              applyMetadataToPlayer(meta);
-              updateOverlay(meta);
-            }
-            return data;
-          }
-        );
+        let player = null;
+        let currentServer = null;
 
-        // Custom namespace for live metadata updates without reload
-        let sendspin = {
-          ws: null,
-          heartbeat: null,
-          serverUrl: null,
-          playerId: null,
-          playerName: null,
-          audioContext: null,
-          audioQueue: [],
-          isPlaying: false,
-          lastTimestampUs: 0,
-          format: { sampleRate: 44100, channels: 2, bitDepth: 16 },
-        };
-
-        const teardownSendspin = () => {
-          sendspin.isPlaying = false;
-          sendspin.audioQueue = [];
-          sendspin.lastTimestampUs = 0;
-          if (sendspin.audioContext) {
-            try {
-              sendspin.audioContext.close();
-            } catch (err) {
-              console.warn('AudioContext close error', err);
-            }
-          }
-          sendspin.audioContext = null;
-          if (sendspin.heartbeat) {
-            clearInterval(sendspin.heartbeat);
-            sendspin.heartbeat = null;
-          }
-          if (sendspin.ws) {
-            try {
-              sendspin.ws.close();
-            } catch (err) {
-              console.warn('Sendspin WS close error', err);
-            }
-          }
-          sendspin = {
-            ws: null,
-            heartbeat: null,
-            serverUrl: null,
-            playerId: null,
-            playerName: null,
-            audioContext: null,
-            audioQueue: [],
-            isPlaying: false,
-            lastTimestampUs: 0,
-            format: { sampleRate: 44100, channels: 2, bitDepth: 16 },
+        const getHardwareVolume = () => {
+          const systemVolume = context.getSystemVolume?.();
+          if (!systemVolume) return { volume: 100, muted: false };
+          return {
+            volume: Math.round((systemVolume.level || 0) * 100),
+            muted: Boolean(systemVolume.muted),
           };
         };
 
-        const initAudioContext = () => {
-          if (sendspin.audioContext) return sendspin.audioContext;
-          const ctx = new AudioContext({ sampleRate: sendspin.format.sampleRate });
-          if (ctx.state === 'suspended' && ctx.resume) {
-            ctx.resume().catch(() => {});
-          }
-          sendspin.audioContext = ctx;
-          return ctx;
-        };
-
-        const schedulePcm = (timestampUs, pcmBuffer) => {
-          const ctx = initAudioContext();
-          if (!ctx) return;
-          const channels = sendspin.format.channels || 2;
-          const frameCount = pcmBuffer.byteLength / (2 * channels);
-          const audioBuffer = ctx.createBuffer(channels, frameCount, ctx.sampleRate);
-          const view = new DataView(pcmBuffer.buffer, pcmBuffer.byteOffset, pcmBuffer.byteLength);
-          for (let ch = 0; ch < channels; ch++) {
-            const channelData = audioBuffer.getChannelData(ch);
-            for (let i = 0; i < frameCount; i++) {
-              const sampleIndex = i * channels + ch;
-              const sample = view.getInt16(sampleIndex * 2, true) / 32768;
-              channelData[i] = sample;
-            }
-          }
-          const now = ctx.currentTime;
-          // For now, play ASAP with a tiny headroom; ignore server timestamp.
-          const playAt = now + 0.05;
-          const src = ctx.createBufferSource();
-          src.buffer = audioBuffer;
-          src.connect(ctx.destination);
-          src.start(playAt);
-          sendspin.lastTimestampUs = timestampUs;
-        };
-
-        const handleAudioChunk = (data) => {
-          if (data.byteLength < 9) return;
-          const view = new DataView(data);
-          const msgType = view.getUint8(0);
-          if (msgType !== 4) return; // player audio chunk
-          const tsHi = view.getUint32(1);
-          const tsLo = view.getUint32(5);
-          const timestampUs = tsHi * 0x100000000 + tsLo;
-          const pcm = new Uint8Array(data, 9);
-          console.log('Sendspin audio chunk', { bytes: pcm.byteLength, ts: timestampUs });
-          schedulePcm(timestampUs, pcm);
-        };
-
-        const sendSendspin = (obj) => {
-          if (sendspin.ws && sendspin.ws.readyState === WebSocket.OPEN) {
-            sendspin.ws.send(JSON.stringify(obj));
-          }
-        };
-
-        const startSendspin = (payload) => {
-          const { serverUrl, playerId, playerName } = payload;
-          if (!serverUrl || !playerId) return;
-          teardownSendspin();
-          sendspin.serverUrl = serverUrl;
-          sendspin.playerId = playerId;
-          sendspin.playerName = playerName || 'Sendspin Cast';
+        const setHardwareVolume = (volume, muted) => {
           try {
-            const ws = new WebSocket(serverUrl);
-            sendspin.ws = ws;
-            ws.onopen = () => {
-              const hello = {
-                type: 'client/hello',
-                payload: {
-                  client_id: playerId,
-                  name: playerName || 'Sendspin Cast',
-                  version: 1,
-                  supported_roles: ['player@v1', 'metadata@v1'],
-                  player_support: {
-                    supported_formats: [
-                      {
-                        codec: 'pcm',
-                        channels: 2,
-                        sample_rate: 44100,
-                        bit_depth: 16,
-                      },
-                    ],
-                    buffer_capacity: 1024 * 1024 * 4,
-                    supported_commands: [],
-                  },
-                },
-              };
-              sendSendspin(hello);
-              // clock sync
-            sendspin.heartbeat = setInterval(() => {
-            sendSendspin({
-              type: 'client/time',
-              payload: { client_transmitted: Date.now() * 1000 },
-            });
-          }, 5000);
-        };
-            ws.onmessage = (ev) => {
-              if (typeof ev.data === 'string') {
-                try {
-                  const msg = JSON.parse(ev.data);
-                  handleSendspinMessage(msg);
-                } catch (err) {
-                  console.warn('Sendspin JSON parse error', err);
-                }
-                return;
-              }
-              if (ev.data instanceof ArrayBuffer) {
-                handleAudioChunk(new Uint8Array(ev.data));
-                return;
-              }
-              if (ev.data instanceof Blob) {
-                ev.data.arrayBuffer().then((buf) => {
-                  handleAudioChunk(new Uint8Array(buf));
-                }).catch((err) => {
-                  console.warn('Sendspin blob decode error', err);
-                });
-                return;
-              }
-            };
-            ws.onclose = () => teardownSendspin();
-            ws.onerror = () => teardownSendspin();
+            if (typeof volume === 'number') {
+              context.setSystemVolumeLevel?.(Math.max(0, Math.min(1, volume / 100)));
+            }
+            if (typeof muted === 'boolean') {
+              context.setSystemVolumeMuted?.(muted);
+            }
           } catch (err) {
-            console.warn('Sendspin connect error', err);
-            teardownSendspin();
+            console.warn('Set HW volume failed', err);
           }
         };
 
-        const handleSendspinMessage = (msg) => {
-          if (!msg || !msg.type) return;
-          switch (msg.type) {
-            case 'server/hello': {
-              // immediately report we are synchronized to allow metadata flow
-              sendSendspin({
-                type: 'client/state',
-                payload: { player: { state: 'synchronized' } },
-              });
-              break;
+        const ensurePlayer = (serverUrl, playerId, playerName, syncDelay, codecs) => {
+          if (player && currentServer === serverUrl) {
+            return player;
+          }
+          if (player) {
+            try {
+              player.disconnect();
+            } catch {
+              /* ignore */
             }
-            case 'server/state': {
-              const metadata = msg.payload?.metadata;
-              if (metadata) {
-                applyMetadataToPlayer(metadata);
-                updateOverlay(metadata);
+          }
+          currentServer = serverUrl;
+          player = new SendspinPlayer({
+            playerId: playerId || `cast-${Math.random().toString(36).slice(2, 8)}`,
+            baseUrl: serverUrl,
+            clientName: playerName || 'Sendspin Cast',
+            syncDelay: typeof syncDelay === 'number' ? syncDelay : 0,
+            bufferCapacity: 1024 * 1024 * 4,
+            codecs: Array.isArray(codecs) && codecs.length ? codecs : ['pcm'],
+            audioOutputMode: 'direct',
+            useHardwareVolume: true,
+            onVolumeCommand: setHardwareVolume,
+            getExternalVolume: getHardwareVolume,
+            useOutputLatencyCompensation: true,
+            onStateChange: (state) => {
+              const vol = getHardwareVolume();
+              setStatus(state.isPlaying ? `Playing · ${vol.volume}%` : 'Connected');
+              if (state.metadata) {
+                updateOverlay(state.metadata);
               }
-              break;
+            },
+          });
+          return player;
+        };
+
+        const connectPlayer = async (payload) => {
+          const { serverUrl, playerId, playerName, syncDelay, codecs, metadata } = payload;
+          if (!serverUrl) return;
+          const vol = getHardwareVolume();
+          setStatus('Connecting...');
+          const p = ensurePlayer(serverUrl, playerId, playerName, syncDelay, codecs);
+          try {
+            await p.connect();
+            setStatus(`Ready · ${vol.volume}%`);
+            if (metadata) {
+              updateOverlay(metadata);
             }
-            default:
-              break;
+          } catch (err) {
+            console.warn('Sendspin connect failed', err);
+            setStatus('Connect failed');
           }
         };
 
@@ -274,22 +133,15 @@
           const payload = event?.data;
           if (!payload) return;
           if (payload.metadata) {
-            applyMetadataToPlayer(payload.metadata);
             updateOverlay(payload.metadata);
           }
-          if (payload.serverUrl && payload.playerId) {
-            // Use pure Sendspin path (audio over WS).
-            startSendspin(payload);
-          }
+          void connectPlayer(payload);
         });
 
-        // Register custom namespace so Cast accepts our messages (otherwise Cast drops them as
-        // NotSupportedNamespace before they reach the receiver page).
         const options = new cast.framework.CastReceiverOptions();
         options.customNamespaces = {
           [customNs]: cast.framework.system.MessageType.JSON,
         };
-        // Keep alive while we stream raw PCM over WS.
         options.disableIdleTimeout = true;
         context.start(options);
       })();
