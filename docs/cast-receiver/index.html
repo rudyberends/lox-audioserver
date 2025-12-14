@@ -197,6 +197,22 @@
           if (player) sendPlayerStatus(player);
         });
 
+        // Answer GET_STATUS requests with our current pseudo-media status so Cast doesn't log "No media status".
+        playerManager.setMessageInterceptor(
+          cast.framework.messages.MessageType.GET_STATUS,
+          (request) => {
+            const isPlaying = player?.isPlaying ?? false;
+            pushMediaStatus(
+              isPlaying
+                ? cast.framework.messages.PlayerState.PLAYING
+                : cast.framework.messages.PlayerState.PAUSED,
+              player?.metadata ?? null,
+            );
+            // Allow the default status handling to proceed so Cast sees a response.
+            return request;
+          },
+        );
+
         // Custom message handler from sender
         castCtx.addCustomMessageListener(CAST_NS, (event) => {
           const data = event?.data;
