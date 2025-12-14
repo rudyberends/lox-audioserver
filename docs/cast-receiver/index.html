@@ -14,7 +14,7 @@
 
         const context = cast.framework.CastReceiverContext.getInstance();
         const playerManager = context.getPlayerManager();
-        const customNs = 'urn:x-cast:lox.sendspin';
+        const customNs = 'urn:x-cast:sendspin';
 
         const titleEl = document.createElement('div');
         const artistEl = document.createElement('div');
@@ -283,7 +283,15 @@
           }
         });
 
-        context.start();
+        // Register custom namespace so Cast accepts our messages (otherwise Cast drops them as
+        // NotSupportedNamespace before they reach the receiver page).
+        const options = new cast.framework.CastReceiverOptions();
+        options.customNamespaces = {
+          [customNs]: cast.framework.system.MessageType.JSON,
+        };
+        // Keep alive while we stream raw PCM over WS.
+        options.disableIdleTimeout = true;
+        context.start(options);
       })();
     </script>
   </body>
