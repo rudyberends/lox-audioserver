@@ -8,16 +8,13 @@
   </head>
   <body>
     <cast-media-player></cast-media-player>
-    <script type="module">
-      import { SendspinPlayer } from 'https://unpkg.com/@music-assistant/sendspin-js@latest/dist/esm/index.js';
-
+    <script>
       (() => {
         'use strict';
 
         const context = cast.framework.CastReceiverContext.getInstance();
         const playerManager = context.getPlayerManager();
         const customNs = 'urn:x-cast:sendspin';
-
         const statusEl = document.createElement('div');
         statusEl.style.position = 'fixed';
         statusEl.style.bottom = '12px';
@@ -51,8 +48,19 @@
           (data) => data,
         );
 
-        let player = null;
+        // --- Minimal Sendspin client (PCM only) --------------------------------
+        let ws = null;
         let currentServer = null;
+        let playerId = null;
+        let playerName = 'Sendspin Cast';
+        let audioCtx = null;
+        let streamFormat = null;
+        let playHead = 0;
+
+        const resetAudio = () => {
+          playHead = 0;
+          streamFormat = null;
+        };
 
         const getHardwareVolume = () => {
           const systemVolume = context.getSystemVolume?.();
@@ -76,66 +84,160 @@
           }
         };
 
-        const ensurePlayer = (serverUrl, playerId, playerName, syncDelay, codecs) => {
-          if (player && currentServer === serverUrl) {
-            return player;
+        const sendJson = (obj) => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(obj));
           }
-          if (player) {
+        };
+
+        const handleServerMessage = (msg) => {
+          switch (msg.type) {
+            case 'server/hello':
+              sendState();
+              break;
+            case 'server/time':
+              // Acknowledge by echoing client/time with now
+              sendJson({ type: 'client/time', payload: { client_transmitted: performance.now() * 1000 } });
+              break;
+            case 'stream/start':
+              streamFormat = msg.payload?.player || null;
+              resetAudio();
+              setStatus('Streaming…');
+              break;
+            case 'stream/clear':
+            case 'stream/end':
+              resetAudio();
+              setStatus('Idle');
+              break;
+            case 'server/command':
+              if (msg.payload?.player?.command === 'volume') {
+                const vol = msg.payload.player.volume ?? null;
+                const mute = msg.payload.player.mute ?? null;
+                setHardwareVolume(vol, mute);
+              }
+              break;
+            default:
+              break;
+          }
+        };
+
+        const sendHello = () => {
+          const vol = getHardwareVolume();
+          sendJson({
+            type: 'client/hello',
+            payload: {
+              client_id: playerId,
+              name: playerName,
+              version: 1,
+              supported_roles: ['player@v1', 'metadata@v1'],
+              player_support: {
+                supported_formats: [
+                  { codec: 'pcm', channels: 2, sample_rate: 48000, bit_depth: 16 },
+                  { codec: 'pcm', channels: 2, sample_rate: 44100, bit_depth: 16 },
+                ],
+                buffer_capacity: 1024 * 1024 * 4,
+                supported_commands: ['volume', 'mute'],
+              },
+            },
+          });
+          sendState(vol);
+        };
+
+        const sendState = (volObj) => {
+          const vol = volObj || getHardwareVolume();
+          sendJson({
+            type: 'client/state',
+            payload: {
+              player: {
+                state: 'synchronized',
+                volume: vol.volume,
+                muted: vol.muted,
+              },
+            },
+          });
+        };
+
+        const decodePcmToBuffer = (arrayBuffer) => {
+          if (!streamFormat) return null;
+          const { channels = 2, sample_rate = 48000 } = streamFormat;
+          const view = new DataView(arrayBuffer);
+          const bytesPerSample = 2;
+          const frameCount = Math.floor(arrayBuffer.byteLength / (bytesPerSample * channels));
+          const audioBuffer = audioCtx.createBuffer(channels, frameCount, sample_rate);
+          for (let ch = 0; ch < channels; ch++) {
+            const channelData = audioBuffer.getChannelData(ch);
+            for (let i = 0; i < frameCount; i++) {
+              const idx = (i * channels + ch) * bytesPerSample;
+              const sample = view.getInt16(idx, true);
+              channelData[i] = sample / 32768;
+            }
+          }
+          return audioBuffer;
+        };
+
+        const playChunk = (audioBuffer) => {
+          if (!audioBuffer) return;
+          if (!playHead) {
+            playHead = audioCtx.currentTime + 0.2;
+          }
+          const startAt = Math.max(audioCtx.currentTime + 0.05, playHead);
+          const source = audioCtx.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(audioCtx.destination);
+          source.start(startAt);
+          playHead = startAt + audioBuffer.duration;
+        };
+
+        const connectWs = (serverUrl, payload) => {
+          if (ws) {
             try {
-              player.disconnect();
+              ws.close();
             } catch {
               /* ignore */
             }
           }
           currentServer = serverUrl;
-          player = new SendspinPlayer({
-            playerId: playerId || `cast-${Math.random().toString(36).slice(2, 8)}`,
-            baseUrl: serverUrl,
-            clientName: playerName || 'Sendspin Cast',
-            syncDelay: typeof syncDelay === 'number' ? syncDelay : 0,
-            bufferCapacity: 1024 * 1024 * 4,
-            codecs: Array.isArray(codecs) && codecs.length ? codecs : ['pcm'],
-            audioOutputMode: 'direct',
-            useHardwareVolume: true,
-            onVolumeCommand: setHardwareVolume,
-            getExternalVolume: getHardwareVolume,
-            useOutputLatencyCompensation: true,
-            onStateChange: (state) => {
-              const vol = getHardwareVolume();
-              setStatus(state.isPlaying ? `Playing · ${vol.volume}%` : 'Connected');
-              if (state.metadata) {
-                updateOverlay(state.metadata);
+          playerId = payload.playerId || `cast-${Math.random().toString(36).slice(2, 8)}`;
+          playerName = payload.playerName || 'Sendspin Cast';
+          audioCtx = audioCtx || new AudioContext();
+          ws = new WebSocket(serverUrl);
+          ws.binaryType = 'arraybuffer';
+          ws.onopen = () => {
+            setStatus('Connected');
+            sendHello();
+            if (payload.metadata) updateOverlay(payload.metadata);
+          };
+          ws.onmessage = (event) => {
+            if (typeof event.data === 'string') {
+              try {
+                handleServerMessage(JSON.parse(event.data));
+              } catch {
+                /* ignore */
               }
-            },
-          });
-          return player;
-        };
-
-        const connectPlayer = async (payload) => {
-          const { serverUrl, playerId, playerName, syncDelay, codecs, metadata } = payload;
-          if (!serverUrl) return;
-          const vol = getHardwareVolume();
-          setStatus('Connecting...');
-          const p = ensurePlayer(serverUrl, playerId, playerName, syncDelay, codecs);
-          try {
-            await p.connect();
-            setStatus(`Ready · ${vol.volume}%`);
-            if (metadata) {
-              updateOverlay(metadata);
+              return;
             }
-          } catch (err) {
-            console.warn('Sendspin connect failed', err);
-            setStatus('Connect failed');
-          }
+            const audioBuffer = decodePcmToBuffer(event.data);
+            playChunk(audioBuffer);
+          };
+          ws.onclose = () => {
+            setStatus('Disconnected');
+            resetAudio();
+          };
+          ws.onerror = () => {
+            setStatus('WebSocket error');
+          };
         };
 
         context.addCustomMessageListener(customNs, (event) => {
           const payload = event?.data;
-          if (!payload) return;
-          if (payload.metadata) {
-            updateOverlay(payload.metadata);
+          if (!payload?.serverUrl) return;
+          // Ignore duplicate connects to the same server
+          if (currentServer === payload.serverUrl && ws && ws.readyState === WebSocket.OPEN) {
+            if (payload.metadata) updateOverlay(payload.metadata);
+            return;
           }
-          void connectPlayer(payload);
+          resetAudio();
+          connectWs(payload.serverUrl, payload);
         });
 
         const options = new cast.framework.CastReceiverOptions();
