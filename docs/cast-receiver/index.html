@@ -123,6 +123,9 @@
         const initAudioContext = () => {
           if (sendspin.audioContext) return sendspin.audioContext;
           const ctx = new AudioContext({ sampleRate: sendspin.format.sampleRate });
+          if (ctx.state === 'suspended' && ctx.resume) {
+            ctx.resume().catch(() => {});
+          }
           sendspin.audioContext = ctx;
           return ctx;
         };
@@ -161,6 +164,7 @@
           const tsLo = view.getUint32(5);
           const timestampUs = tsHi * 0x100000000 + tsLo;
           const pcm = new Uint8Array(data, 9);
+          console.log('Sendspin audio chunk', { bytes: pcm.byteLength, ts: timestampUs });
           schedulePcm(timestampUs, pcm);
         };
 
@@ -211,17 +215,27 @@
             });
           }, 5000);
         };
-          ws.onmessage = (ev) => {
-            if (typeof ev.data === 'string') {
+            ws.onmessage = (ev) => {
+              if (typeof ev.data === 'string') {
                 try {
                   const msg = JSON.parse(ev.data);
                   handleSendspinMessage(msg);
                 } catch (err) {
                   console.warn('Sendspin JSON parse error', err);
                 }
-              } else {
-                const buf = ev.data instanceof ArrayBuffer ? ev.data : ev.data.buffer;
-                handleAudioChunk(new Uint8Array(buf));
+                return;
+              }
+              if (ev.data instanceof ArrayBuffer) {
+                handleAudioChunk(new Uint8Array(ev.data));
+                return;
+              }
+              if (ev.data instanceof Blob) {
+                ev.data.arrayBuffer().then((buf) => {
+                  handleAudioChunk(new Uint8Array(buf));
+                }).catch((err) => {
+                  console.warn('Sendspin blob decode error', err);
+                });
+                return;
               }
             };
             ws.onclose = () => teardownSendspin();
