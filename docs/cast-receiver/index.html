@@ -44,11 +44,36 @@
 
         const CAST_NS = 'urn:x-cast:sendspin';
         const context = cast.framework.CastReceiverContext.getInstance();
+        const playerManager = context.getPlayerManager();
         const statusEl = document.getElementById('status');
         const debugEl = document.getElementById('debug');
 
         const setStatus = (text) => (statusEl.textContent = text);
         const setDebug = (text) => (debugEl.textContent = text);
+
+        const buildMediaInfo = (meta) => {
+          const mediaInfo = new cast.framework.messages.MediaInformation();
+          const metadata = new cast.framework.messages.MusicTrackMediaMetadata();
+          metadata.title = meta?.title || 'Sendspin';
+          metadata.artist = meta?.artist || '';
+          metadata.albumName = meta?.album || '';
+          if (meta?.artwork_url) {
+            metadata.images = [{ url: meta.artwork_url }];
+          }
+          mediaInfo.metadata = metadata;
+          mediaInfo.contentId = 'sendspin://live';
+          mediaInfo.contentType = 'audio/raw';
+          mediaInfo.streamType = cast.framework.messages.StreamType.LIVE;
+          return mediaInfo;
+        };
+
+        const pushMediaStatus = (state, meta) => {
+          if (!playerManager) return;
+          const info = buildMediaInfo(meta);
+          playerManager.setMediaInformation(info);
+          playerManager.setPlayerState(state);
+          playerManager.broadcastStatus(true);
+        };
 
         const castCtx = context;
         const getHWVolume = () => {
@@ -134,6 +159,12 @@
             onStateChange: (state) => {
               setStatus(state.isPlaying ? 'Playing' : 'Stopped');
               sendPlayerStatus(player);
+              pushMediaStatus(
+                state.isPlaying
+                  ? cast.framework.messages.PlayerState.PLAYING
+                  : cast.framework.messages.PlayerState.PAUSED,
+                player.metadata ?? null,
+              );
               updateDebug(player);
             },
           });
@@ -141,9 +172,17 @@
             await player.connect();
             setStatus('Ready');
             sendStatusToSender({ state: 'connected' });
+            // Announce media status to Cast runtime immediately
+            pushMediaStatus(cast.framework.messages.PlayerState.PAUSED, player.metadata ?? null);
             setInterval(() => {
               updateDebug(player);
               sendPlayerStatus(player);
+              pushMediaStatus(
+                player.isPlaying
+                  ? cast.framework.messages.PlayerState.PLAYING
+                  : cast.framework.messages.PlayerState.PAUSED,
+                player.metadata ?? null,
+              );
             }, 1000);
           } catch (err) {
             console.error('Sendspin connect failed', err);
@@ -177,6 +216,9 @@
         options.maxInactivity = 3600;
         castCtx.start(options);
         setStatus('Ready');
+        pushMediaStatus(cast.framework.messages.PlayerState.IDLE, null);
+        // Periodically reassure the Cast runtime so it never reports "No media status".
+        setInterval(() => pushMediaStatus(cast.framework.messages.PlayerState.IDLE, null), 15_000);
       })();
     </script>
   </body>
