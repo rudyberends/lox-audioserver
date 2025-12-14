@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lox Audiomanager Cast Receiver</title>
+    <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        background: #0b0d11;
+        color: #e5e7eb;
+        font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+      .overlay {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        align-items: center;
+        gap: 24px;
+        padding: 24px;
+        pointer-events: none;
+        background: radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.04), transparent 35%),
+          radial-gradient(circle at 80% 10%, rgba(87, 131, 255, 0.12), transparent 35%),
+          radial-gradient(circle at 50% 80%, rgba(0, 255, 191, 0.06), transparent 40%),
+          linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.35));
+      }
+      .artwork {
+        width: 100%;
+        max-width: 380px;
+        aspect-ratio: 1/1;
+        border-radius: 24px;
+        overflow: hidden;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45), 0 6px 16px rgba(0, 0, 0, 0.35);
+        background: linear-gradient(135deg, #1f2937, #111827);
+      }
+      .artwork img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .meta {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .badge {
+        align-self: flex-start;
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .title {
+        font-size: clamp(32px, 4vw, 44px);
+        font-weight: 700;
+        line-height: 1.1;
+      }
+      .subtitle {
+        font-size: 18px;
+        color: #cbd5e1;
+      }
+      .album {
+        font-size: 15px;
+        color: #94a3b8;
+      }
+      .footer {
+        position: absolute;
+        right: 24px;
+        bottom: 18px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: #94a3b8;
+        font-size: 13px;
+      }
+      @media (max-width: 900px) {
+        .overlay {
+          grid-template-columns: 1fr;
+          grid-template-rows: auto auto;
+          justify-items: center;
+          text-align: center;
+        }
+        .badge {
+          align-self: center;
+        }
+        .footer {
+          right: 12px;
+          left: 12px;
+          justify-content: center;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <cast-media-player></cast-media-player>
+    <div class="overlay" id="overlay" hidden>
+      <div class="artwork" id="artwork">
+        <img id="artwork-img" alt="Artwork" />
+      </div>
+      <div class="meta">
+        <div class="badge" id="badge">Lox Audiomanager</div>
+        <div class="title" id="title">Ready</div>
+        <div class="subtitle" id="artist"></div>
+        <div class="album" id="album"></div>
+      </div>
+    </div>
+    <div class="footer">
+      Cast receiver ready · Sendspin / Lox Audiomanager
+    </div>
+
+    <script>
+      (() => {
+        'use strict';
+
+        const context = cast.framework.CastReceiverContext.getInstance();
+        const playerManager = context.getPlayerManager();
+        const customNs = 'urn:x-cast:lox.sendspin';
+
+        const overlay = document.getElementById('overlay');
+        const titleEl = document.getElementById('title');
+        const artistEl = document.getElementById('artist');
+        const albumEl = document.getElementById('album');
+        const badgeEl = document.getElementById('badge');
+        const artworkEl = document.getElementById('artwork');
+        const artworkImg = document.getElementById('artwork-img');
+
+        const updateOverlay = (meta) => {
+          const title = meta?.title || 'Playing...';
+          const artist = meta?.artist || '';
+          const album = meta?.albumName || meta?.album || '';
+          const images = meta?.images || [];
+          const image = images.length ? images[0].url : '';
+          titleEl.textContent = title;
+          artistEl.textContent = artist;
+          albumEl.textContent = album;
+          badgeEl.textContent = meta?.deviceName || 'Lox Audiomanager';
+          if (image) {
+            artworkImg.src = image;
+            artworkEl.hidden = false;
+          } else {
+            artworkImg.removeAttribute('src');
+            artworkEl.hidden = true;
+          }
+          overlay.hidden = false;
+        };
+
+        const applyMetadataToPlayer = (meta) => {
+          try {
+            const mediaInformation = playerManager.getMediaInformation();
+            mediaInformation.metadata = meta;
+            playerManager.setMediaInformation(mediaInformation);
+          } catch (err) {
+            console.warn('updateMetadata error', err);
+          }
+        };
+
+        // Intercept LOAD to show device name and metadata from customData
+        playerManager.setMessageInterceptor(
+          cast.framework.messages.MessageType.LOAD,
+          (data) => {
+            const meta = data?.media?.customData?.metadata;
+            const deviceName = data?.media?.customData?.deviceName;
+            if (deviceName) {
+              badgeEl.textContent = deviceName;
+            }
+            if (meta) {
+              applyMetadataToPlayer(meta);
+              updateOverlay(meta);
+            }
+            return data;
+          }
+        );
+
+        // Intercept PLAY to refresh metadata if provided
+        playerManager.setMessageInterceptor(
+          cast.framework.messages.MessageType.PLAY,
+          (data) => {
+            const meta = data?.customData?.metadata;
+            if (meta) {
+              applyMetadataToPlayer(meta);
+              updateOverlay(meta);
+            }
+            return data;
+          }
+        );
+
+        // Custom namespace for live metadata updates without reload
+        context.addCustomMessageListener(customNs, (event) => {
+          const payload = event?.data;
+          if (payload?.type === 'metadata' && payload.metadata) {
+            applyMetadataToPlayer(payload.metadata);
+            updateOverlay(payload.metadata);
+          }
+        });
+
+        context.start();
+      })();
+    </script>
+  </body>
+</html>
