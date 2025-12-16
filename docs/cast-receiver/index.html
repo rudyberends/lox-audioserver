@@ -292,12 +292,27 @@
     };
 
     playerManager.setMessageInterceptor(MessageType.GET_STATUS, () => {
-      pushMediaStatus(PlayerState.PAUSED);
-      return null;
+      pushMediaStatus(player?.isPlaying ? PlayerState.PLAYING : PlayerState.PAUSED);
+      const status = playerManager.getStatus ? playerManager.getStatus() : null;
+      if (!status) {
+        console.warn('[SendspinCast] GET_STATUS requested but no status available');
+      }
+      return status;
     });
 
     castCtx.addCustomMessageListener(CAST_NS, (event) => {
-      const data = event.data || {};
+      const raw = event.data;
+      console.debug('[SendspinCast] message', raw);
+      const data =
+        typeof raw === 'string'
+          ? (() => {
+              try {
+                return JSON.parse(raw);
+              } catch {
+                return {};
+              }
+            })()
+          : raw || {};
       if (data.type === 'metadata' && data.payload) {
         const payload = typeof data.payload === 'string' ? JSON.parse(data.payload || 'null') : data.payload;
         applyExternalMetadata(payload || null);
