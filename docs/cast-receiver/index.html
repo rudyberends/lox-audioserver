@@ -298,8 +298,9 @@
 
     castCtx.addCustomMessageListener(CAST_NS, (event) => {
       const data = event.data || {};
-      if (data.type === 'metadata') {
-        applyExternalMetadata(data.payload || null);
+      if (data.type === 'metadata' && data.payload) {
+        const payload = typeof data.payload === 'string' ? JSON.parse(data.payload || 'null') : data.payload;
+        applyExternalMetadata(payload || null);
         return;
       }
       const serverUrl = data.serverUrl ?? data.payload?.serverUrl;
