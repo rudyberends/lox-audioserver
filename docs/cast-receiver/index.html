@@ -302,14 +302,6 @@
         setDebug(`Provided serverUrl was invalid: ${baseUrl ?? 'empty'}`);
         return;
       }
-      if (location.protocol === 'https:' && normalized.startsWith('ws:')) {
-        setStatus('Error: kan geen ws:// openen vanuit een HTTPS-pagina');
-        setDebug(
-          `De receiver is via HTTPS geladen, waardoor insecure WebSocket (${normalized}) wordt geblokkeerd.\n` +
-            'Open deze pagina via HTTP of gebruik een wss:// endpoint.'
-        );
-        return;
-      }
       setStatus(`Connecting to ${normalized}…`);
 
       const playerId = getPlayerId();
@@ -321,7 +313,32 @@
       const syncDelay = providedSyncDelay ?? 0;
       const codecs = providedCodecs || ['pcm'];
 
-      const attachMetadataIntercept = (p) => {
+      const patchSendspinPlayer = (p) => {
+        if (!p || p._loxPatchedConnect) return;
+        p._loxPatchedConnect = true;
+        // Preserve query params (tunnel=cast/zone/player) when opening WS.
+        const originalConnect = p.connect.bind(p);
+        p.connect = async () => {
+          const url = normalized;
+          p.wsUrl = url;
+          return p.wsManager.connect(
+            url,
+            () => {
+              console.log('Sendspin: Using player_id:', p.config.playerId);
+              p.protocolHandler.sendClientHello();
+            },
+            (event) => {
+              p.protocolHandler.handleMessage(event);
+            },
+            (error) => {
+              console.error('Sendspin: WebSocket error', error);
+            },
+            () => {
+              console.log('Sendspin: Connection closed');
+            },
+          );
+        };
+
         // sendspin-js v0.4.x ignores server/state metadata; intercept and reuse it for CAF UI.
         const protocol = p?.protocolHandler;
         if (!protocol || protocol._loxPatched) return;
@@ -362,7 +379,7 @@
         // sendspin-js doesn't expose the id on the instance; stash it for debug/status payloads.
         player.playerId = playerId;
         player.syncDelay = syncDelay;
-        attachMetadataIntercept(player);
+        patchSendspinPlayer(player);
 
         await player.connect();
 
