@@ -77,6 +77,8 @@
     let providedSyncDelay;
     let providedCodecs;
     let externalMetadata = null;
+    let lastMetadataSignature = null;
+    let lastProgressSignature = null;
 
     const setStatus = (text) => {
       statusEl.textContent = text;
@@ -88,6 +90,8 @@
 
     const resetExternalMetadata = () => {
       externalMetadata = null;
+      lastMetadataSignature = null;
+      lastProgressSignature = null;
     };
 
     const getActiveMetadata = () => externalMetadata || player?.metadata || null;
@@ -109,8 +113,26 @@
 
     const applyExternalMetadata = (payload) => {
       mergeExternalMetadata(payload);
-      pushMediaStatus(player?.isPlaying ? PlayerState.PLAYING : PlayerState.PAUSED);
-      if (player) {
+      const current = getActiveMetadata();
+      const metaSignature = JSON.stringify({
+        title: current?.title ?? null,
+        artist: current?.artist ?? null,
+        album: current?.album ?? null,
+        artwork_url: current?.artwork_url ?? null,
+        track: current?.track ?? null,
+        shuffle: current?.shuffle ?? null,
+        repeat: current?.repeat ?? null,
+      });
+      const progressSignature = JSON.stringify(current?.progress ?? null);
+      const metaChanged = metaSignature !== lastMetadataSignature;
+      const progressChanged = progressSignature !== lastProgressSignature;
+      if (!metaChanged && !progressChanged) return;
+      lastMetadataSignature = metaSignature;
+      lastProgressSignature = progressSignature;
+      if (metaChanged) {
+        pushMediaStatus(player?.isPlaying ? PlayerState.PLAYING : PlayerState.PAUSED);
+      }
+      if (player && (metaChanged || progressChanged)) {
         sendPlayerStatus(player);
         updateDebug(player);
       }
@@ -280,6 +302,14 @@
         setDebug(`Provided serverUrl was invalid: ${baseUrl ?? 'empty'}`);
         return;
       }
+      if (location.protocol === 'https:' && normalized.startsWith('ws:')) {
+        setStatus('Error: kan geen ws:// openen vanuit een HTTPS-pagina');
+        setDebug(
+          `De receiver is via HTTPS geladen, waardoor insecure WebSocket (${normalized}) wordt geblokkeerd.\n` +
+            'Open deze pagina via HTTP of gebruik een wss:// endpoint.'
+        );
+        return;
+      }
       setStatus(`Connecting to ${normalized}…`);
 
       const playerId = getPlayerId();
@@ -290,6 +320,25 @@
 
       const syncDelay = providedSyncDelay ?? 0;
       const codecs = providedCodecs || ['pcm'];
+
+      const attachMetadataIntercept = (p) => {
+        // sendspin-js v0.4.x ignores server/state metadata; intercept and reuse it for CAF UI.
+        const protocol = p?.protocolHandler;
+        if (!protocol || protocol._loxPatched) return;
+        const original = protocol.handleServerMessage.bind(protocol);
+        protocol.handleServerMessage = (message) => {
+          try {
+            const meta = message?.payload?.metadata;
+            if (message?.type === 'server/state' && meta) {
+              applyExternalMetadata(meta);
+            }
+          } catch (err) {
+            console.warn('Failed to apply metadata from server/state', err);
+          }
+          return original(message);
+        };
+        protocol._loxPatched = true;
+      };
 
       try {
         player = new SendspinPlayer({
@@ -310,6 +359,10 @@
             updateDebug(player);
           },
         });
+        // sendspin-js doesn't expose the id on the instance; stash it for debug/status payloads.
+        player.playerId = playerId;
+        player.syncDelay = syncDelay;
+        attachMetadataIntercept(player);
 
         await player.connect();
 
