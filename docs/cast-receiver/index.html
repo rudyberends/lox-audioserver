@@ -187,16 +187,18 @@
       info.contentId = 'sendspin://live';
       info.contentType = 'audio/raw';
       info.streamType = cast.framework.messages.StreamType.LIVE;
-      const md = new cast.framework.messages.GenericMediaMetadata();
+      info.metadataType = cast.framework.messages.MetadataType.MUSIC_TRACK;
+      const md = new cast.framework.messages.MusicTrackMediaMetadata();
       const currentMeta = meta || {};
-      const cover =
-        currentMeta.cover || currentMeta.artwork_url || currentMeta.image || null;
+      const cover = currentMeta.cover || currentMeta.artwork_url || currentMeta.image || null;
       md.title = currentMeta.title || 'Sendspin';
       md.artist = currentMeta.artist || currentMeta.subtitle || '';
       md.albumName = currentMeta.album || '';
-      if (cover) {
-        md.images = [{ url: cover }];
-      }
+      md.trackNumber = currentMeta.track ?? null;
+      md.releaseDate = currentMeta.year ? String(currentMeta.year) : undefined;
+      md.metadataType = cast.framework.messages.MetadataType.MUSIC_TRACK;
+      md.songName = md.title;
+      if (cover) md.images = [{ url: cover }];
       info.metadata = md;
       return info;
     };
@@ -316,11 +318,11 @@
       const syncDelay = providedSyncDelay ?? 0;
       const codecs = providedCodecs || ['pcm'];
 
-    const patchSendspinPlayer = (p) => {
-      if (!p || p._loxPatchedConnect) return;
-      p._loxPatchedConnect = true;
-      // Preserve query params (tunnel=cast/zone/player) when opening WS.
-      const originalConnect = p.connect.bind(p);
+      const patchSendspinPlayer = (p) => {
+        if (!p || p._loxPatchedConnect) return;
+        p._loxPatchedConnect = true;
+        // Preserve query params (tunnel=cast/zone/player) when opening WS.
+        const originalConnect = p.connect.bind(p);
       p.connect = async () => {
         const url = normalized;
         p.wsUrl = url;
@@ -346,6 +348,47 @@
         // sendspin-js v0.4.x ignores server/state metadata; intercept and reuse it for CAF UI.
         const protocol = p?.protocolHandler;
         if (!protocol || protocol._loxPatched) return;
+        // Advertise metadata/artwork support so the server can push richer state.
+        const originalHello = protocol.sendClientHello.bind(protocol);
+        protocol.sendClientHello = () => {
+          try {
+            const hello = {
+              type: 'client/hello',
+              payload: {
+                client_id: protocol.playerId,
+                name: protocol.clientName,
+                version: 1,
+                supported_roles: ['player@v1', 'metadata@v1', 'artwork@v1'],
+                device_info: {
+                  product_name: (typeof navigator !== 'undefined' && navigator.vendor) || 'Unknown',
+                  manufacturer: (typeof navigator !== 'undefined' && navigator.vendor) || 'Unknown',
+                  software_version:
+                    (typeof navigator !== 'undefined' && navigator.userAgent) || 'Unknown',
+                },
+                player_support: {
+                  supported_formats: protocol.getSupportedFormats(),
+                  buffer_capacity: protocol.bufferCapacity,
+                  supported_commands: ['volume', 'mute'],
+                },
+                // Offer a single artwork channel; the server can downscale if needed.
+                'artwork@v1_support': {
+                  channels: [
+                    {
+                      source: 'album',
+                      format: 'jpeg',
+                      media_width: 800,
+                      media_height: 800,
+                    },
+                  ],
+                },
+              },
+            };
+            protocol.wsManager.send(hello);
+          } catch (err) {
+            console.warn('[SendspinCast] custom hello failed, falling back', err);
+            originalHello();
+          }
+        };
         const original = protocol.handleServerMessage.bind(protocol);
         protocol.handleServerMessage = (message) => {
           if (message?.type === 'server/state' && message?.payload?.metadata) {
