@@ -358,7 +358,8 @@
                 client_id: protocol.playerId,
                 name: protocol.clientName,
                 version: 1,
-                supported_roles: ['player@v1', 'controller@v1', 'metadata@v1', 'artwork@v1'],
+                supported_roles: ['player@v1'],
+                //supported_roles: ['player@v1', 'metadata@v1', 'artwork@v1'],
                 device_info: {
                   product_name: (typeof navigator !== 'undefined' && navigator.vendor) || 'Unknown',
                   manufacturer: (typeof navigator !== 'undefined' && navigator.vendor) || 'Unknown',
@@ -368,9 +369,6 @@
                 player_support: {
                   supported_formats: protocol.getSupportedFormats(),
                   buffer_capacity: protocol.bufferCapacity,
-                  supported_commands: ['volume', 'mute'],
-                },
-                'controller@v1_support': {
                   supported_commands: ['volume', 'mute'],
                 },
                 // Offer a single artwork channel; the server can downscale if needed.
