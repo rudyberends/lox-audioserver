@@ -118,8 +118,10 @@
 
     const getHWVolume = () => {
       const sys = castCtx.getSystemVolume();
+      const level = sys?.level ?? 1;
       return {
-        level: sys?.level ?? 1,
+        // Normalise to 0-100 as verwacht door sendspin-js
+        volume: Math.round(level * 100),
         muted: sys?.muted ?? false,
       };
     };
@@ -127,7 +129,8 @@
     const setHWVolume = async (volume, muted) => {
       try {
         if (typeof volume === 'number') {
-          await castCtx.setSystemVolume(volume);
+          // Cast SDK verwacht 0.0 - 1.0
+          await castCtx.setSystemVolume(volume / 100);
         }
         if (typeof muted === 'boolean') {
           await castCtx.setSystemMuted(muted);
@@ -205,7 +208,7 @@
         type: 'player_status',
         id: p.playerId,
         state: p.isPlaying ? 'playing' : 'stopped',
-        volume: hw.level,
+        volume: hw.volume,
         muted: hw.muted,
         metadata: getActiveMetadata(),
         sync: {
