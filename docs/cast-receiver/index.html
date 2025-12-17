@@ -242,6 +242,25 @@
       setDebug(lines.join('\n'));
     };
 
+    const normalizeWsUrl = (raw) => {
+      if (!raw) return null;
+      let s = String(raw).trim();
+      if (!s) return null;
+      if (s.startsWith('//')) {
+        s = `ws:${s}`;
+      } else if (/^https?:\/\//i.test(s)) {
+        s = s.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+      } else if (!/^wss?:\/\//i.test(s)) {
+        s = `ws://${s}`;
+      }
+      try {
+        // Ensure absolute URL; if relative, resolve against current origin
+        return new URL(s, location.href).toString();
+      } catch {
+        return null;
+      }
+    };
+
     const connectToServer = async (baseUrl) => {
       if (debugInterval) {
         clearInterval(debugInterval);
@@ -255,7 +274,13 @@
       }
 
       resetExternalMetadata();
-      setStatus(`Connecting to ${baseUrl}…`);
+      const normalized = normalizeWsUrl(baseUrl);
+      if (!normalized) {
+        setStatus('Error: ongeldig server-adres');
+        setDebug(`Provided serverUrl was invalid: ${baseUrl ?? 'empty'}`);
+        return;
+      }
+      setStatus(`Connecting to ${normalized}…`);
 
       const playerId = getPlayerId();
       const playerName =
@@ -269,7 +294,7 @@
       try {
         player = new SendspinPlayer({
           playerId,
-          baseUrl,
+          baseUrl: normalized,
           clientName: playerName,
           syncDelay,
           bufferCapacity: 2 * 1024 * 1024,
