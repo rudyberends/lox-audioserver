@@ -199,6 +199,10 @@
     };
 
     const sendStatusToSender = (payload) => {
+      // In browser-only testing there are no cast senders; skip to avoid CAF errors.
+      if (typeof castCtx.getSenders === 'function' && castCtx.getSenders().length === 0) {
+        return;
+      }
       try {
         castCtx.sendCustomMessage(CAST_NS, undefined, payload);
       } catch (err) {
