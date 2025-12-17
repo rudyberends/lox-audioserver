@@ -113,6 +113,7 @@
 
     const applyExternalMetadata = (payload) => {
       mergeExternalMetadata(payload);
+      console.log('[SendspinCast] metadata received', payload);
       const current = getActiveMetadata();
       const metaSignature = JSON.stringify({
         title: current?.title ?? null,
@@ -130,9 +131,11 @@
       lastMetadataSignature = metaSignature;
       lastProgressSignature = progressSignature;
       if (metaChanged) {
+        console.log('[SendspinCast] pushing CAF media status', current);
         pushMediaStatus(player?.isPlaying ? PlayerState.PLAYING : PlayerState.PAUSED);
       }
       if (player && (metaChanged || progressChanged)) {
+        console.log('[SendspinCast] sending player status update');
         sendPlayerStatus(player);
         updateDebug(player);
       }
@@ -313,19 +316,20 @@
       const syncDelay = providedSyncDelay ?? 0;
       const codecs = providedCodecs || ['pcm'];
 
-      const patchSendspinPlayer = (p) => {
-        if (!p || p._loxPatchedConnect) return;
-        p._loxPatchedConnect = true;
-        // Preserve query params (tunnel=cast/zone/player) when opening WS.
-        const originalConnect = p.connect.bind(p);
-        p.connect = async () => {
-          const url = normalized;
-          p.wsUrl = url;
-          return p.wsManager.connect(
-            url,
-            () => {
-              console.log('Sendspin: Using player_id:', p.config.playerId);
-              p.protocolHandler.sendClientHello();
+    const patchSendspinPlayer = (p) => {
+      if (!p || p._loxPatchedConnect) return;
+      p._loxPatchedConnect = true;
+      // Preserve query params (tunnel=cast/zone/player) when opening WS.
+      const originalConnect = p.connect.bind(p);
+      p.connect = async () => {
+        const url = normalized;
+        p.wsUrl = url;
+        console.debug('[SendspinCast] connecting WS', url, 'player', p.config.playerId);
+        return p.wsManager.connect(
+          url,
+          () => {
+            console.log('Sendspin: Using player_id:', p.config.playerId);
+            p.protocolHandler.sendClientHello();
             },
             (event) => {
               p.protocolHandler.handleMessage(event);
@@ -344,6 +348,9 @@
         if (!protocol || protocol._loxPatched) return;
         const original = protocol.handleServerMessage.bind(protocol);
         protocol.handleServerMessage = (message) => {
+          if (message?.type === 'server/state' && message?.payload?.metadata) {
+            console.debug('[SendspinCast] server/state metadata', message.payload.metadata);
+          }
           try {
             const meta = message?.payload?.metadata;
             if (message?.type === 'server/state' && meta) {
@@ -400,6 +407,7 @@
     };
 
     const handleCastPayload = (raw) => {
+      console.debug('[SendspinCast] cast payload', raw);
       const data =
         typeof raw === 'string'
           ? (() => {
@@ -419,6 +427,10 @@
       }
 
       const serverUrl = data.serverUrl ?? data.payload?.serverUrl;
+      const initialMetadata = data.metadata ?? data.payload?.metadata;
+      if (initialMetadata) {
+        applyExternalMetadata(initialMetadata);
+      }
       if (!serverUrl) {
         setStatus('Missing serverUrl in cast message');
         return;
