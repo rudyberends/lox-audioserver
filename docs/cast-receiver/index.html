@@ -79,6 +79,10 @@
     let externalMetadata = null;
     let lastMetadataSignature = null;
     let lastProgressSignature = null;
+    let lastStatusSignature = null;
+    let lastStatusSentAt = 0;
+    const MIN_STATUS_INTERVAL_MS = 1000;
+    const FORCE_STATUS_INTERVAL_MS = 5000;
 
     const setStatus = (text) => {
       statusEl.textContent = text;
@@ -241,7 +245,7 @@
       if (!p) return;
       const hw = getHWVolume();
       const sync = p.timeSyncInfo || p.syncInfo || {};
-      sendStatusToSender({
+      const payload = {
         type: 'player_status',
         id: p.playerId,
         state: p.isPlaying ? 'playing' : 'stopped',
@@ -253,7 +257,22 @@
           offset: sync.offset ?? sync.syncOffset ?? 0,
           error: sync.error ?? sync.syncError ?? 0,
         },
+      };
+      const now = Date.now();
+      const signature = JSON.stringify({
+        state: payload.state,
+        volume: payload.volume,
+        muted: payload.muted,
+        offset: payload.sync.offset,
+        error: payload.sync.error,
       });
+      const changed = signature !== lastStatusSignature;
+      const due = now - lastStatusSentAt > (changed ? MIN_STATUS_INTERVAL_MS : FORCE_STATUS_INTERVAL_MS);
+      if (changed || due) {
+        lastStatusSignature = signature;
+        lastStatusSentAt = now;
+        sendStatusToSender(payload);
+      }
     };
 
     const updateDebug = (p) => {
@@ -315,8 +334,9 @@
         castCtx.getApplicationData()?.displayName ||
         'Lox Audio Server';
 
-      const syncDelay = providedSyncDelay ?? 0;
-      const codecs = providedCodecs || ['pcm'];
+      const syncDelay = providedSyncDelay ?? -300;
+      // Prefer FLAC then PCM; allow override from payload.
+      const codecs = providedCodecs || ['flac', 'pcm'];
 
       const patchSendspinPlayer = (p) => {
         if (!p || p._loxPatchedConnect) return;
