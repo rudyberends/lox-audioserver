@@ -240,7 +240,10 @@
       ws = new WebSocket(url);
       ws.binaryType = 'arraybuffer';
       setStatus(`Connecting ${url}…`);
-      ws.onopen = () => setStatus('Connected', true, false);
+      ws.onopen = () => {
+        setStatus('Connected', true, false);
+        sendHello();
+      };
       ws.onmessage = (event) => {
         if (!(event.data instanceof ArrayBuffer)) return;
         handleData(new Uint8Array(event.data));
@@ -303,6 +306,48 @@
         case 3: handleSettings(body); break;
         default: break;
       }
+    };
+
+    const nowUs = () => {
+      const t = performance.now();
+      return Math.floor(t * 1000);
+    };
+
+    const encodeMessage = (type, id, refersTo, payload) => {
+      const header = new ArrayBuffer(26);
+      const view = new DataView(header);
+      const ts = nowUs();
+      const sec = Math.floor(ts / 1_000_000);
+      const usec = Math.floor(ts - sec * 1_000_000);
+      view.setUint16(0, type, true);
+      view.setUint16(2, id & 0xffff, true);
+      view.setUint16(4, refersTo & 0xffff, true);
+      view.setInt32(6, sec, true);
+      view.setInt32(10, usec, true);
+      view.setInt32(14, sec, true);
+      view.setInt32(18, usec, true);
+      view.setUint32(22, payload.byteLength, true);
+      const out = new Uint8Array(26 + payload.byteLength);
+      out.set(new Uint8Array(header), 0);
+      out.set(new Uint8Array(payload), 26);
+      return out;
+    };
+
+    const sendHello = () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const id = nextId = (nextId % 0xffff) + 1;
+      const hello = {
+        ID: provided.clientId || 'snap-web',
+        MAC: provided.clientId || 'snap-web',
+        Instance: 1,
+      };
+      const json = textEncoder.encode(JSON.stringify(hello));
+      const body = new ArrayBuffer(4 + json.byteLength);
+      const view = new DataView(body);
+      view.setUint32(0, json.byteLength, true);
+      new Uint8Array(body).set(json, 4);
+      const msg = encodeMessage(5, id, 0, body);
+      ws.send(msg);
     };
 
     const handleSettings = (body) => {
