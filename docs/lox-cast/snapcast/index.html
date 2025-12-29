@@ -99,6 +99,8 @@
     let ws = null;
     let rpc = null;
     let inbound = new Uint8Array(0);
+    let reconnectTimer = null;
+    let currentUrl = null;
     let audioCtx = null;
     let gainNode = null;
     let currentFormat = null;
@@ -232,6 +234,8 @@
     const connectStream = async (url) => {
       await ensureAudio();
       if (ws) { try { ws.close(); } catch {} }
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      currentUrl = url;
       inbound = new Uint8Array(0);
       currentFormat = null;
       baseTimestampUs = null;
@@ -248,8 +252,22 @@
         if (!(event.data instanceof ArrayBuffer)) return;
         handleData(new Uint8Array(event.data));
       };
-      ws.onclose = () => setStatus('Disconnected', false, true);
-      ws.onerror = () => setStatus('WebSocket error', false, true);
+      ws.onclose = () => {
+        setStatus('Disconnected', false, true);
+        scheduleReconnect();
+      };
+      ws.onerror = () => {
+        setStatus('WebSocket error', false, true);
+        scheduleReconnect();
+      };
+    };
+
+    const scheduleReconnect = () => {
+      if (reconnectTimer || !currentUrl) return;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectStream(currentUrl);
+      }, 2000);
     };
 
     const handleCastPayload = (raw) => {
