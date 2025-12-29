@@ -1,0 +1,445 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Snapcast Cast Receiver</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0d12;
+      --fg: #e7ecf4;
+      --muted: #9ca3af;
+      --accent: #7ae0c6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(120% 100% at 15% 15%, #13182b, #0b0d12 50%), #0b0d12;
+      color: var(--fg);
+      font-family: "Inter Tight", "SF Pro Display", system-ui, -apple-system, sans-serif;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    main {
+      width: min(800px, 92vw);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 24px 90px rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(6px);
+    }
+    h1 { margin: 0 0 8px; font-size: 20px; color: var(--accent); }
+    .status { margin: 6px 0; font-size: 15px; }
+    .status.ok { color: var(--accent); }
+    .status.err { color: #f29f9f; }
+    .np {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 12px;
+      align-items: center;
+    }
+    .cover {
+      width: 120px;
+      height: 120px;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .text { display: grid; gap: 4px; color: var(--muted); }
+    .text strong { color: var(--fg); font-size: 17px; }
+    pre {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  </style>
+  <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+</head>
+<body>
+  <main>
+    <h1>Snapcast Cast Receiver</h1>
+    <div id="status" class="status">Booting…</div>
+    <div class="np">
+      <div class="cover"><img id="npCover" alt="Cover"></div>
+      <div class="text">
+        <div><strong id="npTitle">Title</strong></div>
+        <div id="npArtist">Artist</div>
+        <div id="npAlbum">Album</div>
+      </div>
+    </div>
+    <pre id="debug"></pre>
+  </main>
+
+  <script type="module">
+    const CAST_NS = 'urn:x-cast:snapcast';
+    const statusEl = document.getElementById('status');
+    const debugEl = document.getElementById('debug');
+    const npTitle = document.getElementById('npTitle');
+    const npArtist = document.getElementById('npArtist');
+    const npAlbum = document.getElementById('npAlbum');
+    const npCover = document.getElementById('npCover');
+
+    const castCtx = cast.framework.CastReceiverContext.getInstance();
+    const playerManager = castCtx.getPlayerManager();
+    const PlayerState = cast.framework.messages.PlayerState;
+    const MessageType = cast.framework.messages.MessageType;
+
+    let ws = null;
+    let rpc = null;
+    let inbound = new Uint8Array(0);
+    let audioCtx = null;
+    let gainNode = null;
+    let currentFormat = null;
+    let baseTimestampUs = null;
+    let baseAudioTime = 0;
+    let scheduledUntil = 0;
+    let playbackDelaySec = 0.4;
+    const MAX_AHEAD_SEC = 6;
+    let nextId = Math.floor(Math.random() * 5000) + 1;
+    const textDecoder = new TextDecoder();
+    const textEncoder = new TextEncoder();
+    let provided = { serverUrl: null, streamId: null, clientId: null };
+
+    const setStatus = (text, ok = false, err = false) => {
+      statusEl.textContent = text;
+      statusEl.classList.toggle('ok', ok);
+      statusEl.classList.toggle('err', err);
+      logDebug();
+    };
+
+    const logDebug = () => {
+      const ahead = audioCtx ? Math.max(0, scheduledUntil - audioCtx.currentTime) : 0;
+      const lines = [
+        `State: ${ws ? ws.readyState : 'closed'}`,
+        `Stream: ${provided.streamId || 'default'}`,
+        `Ahead: ${ahead.toFixed(2)}s`,
+        `Format: ${currentFormat ? `${currentFormat.sampleRate}Hz ${currentFormat.channels}ch ${currentFormat.bitDepth}bit` : 'waiting'}`,
+      ];
+      debugEl.textContent = lines.join('\n');
+    };
+
+    const applyMetadata = (meta) => {
+      if (!meta) return;
+      npTitle.textContent = meta.title || 'Title';
+      npArtist.textContent = Array.isArray(meta.artist) ? meta.artist.join(', ') : meta.artist || 'Artist';
+      npAlbum.textContent = meta.album || '';
+      if (meta.artUrl) {
+        npCover.src = meta.artUrl;
+      } else {
+        npCover.removeAttribute('src');
+      }
+      pushMediaStatus(meta);
+    };
+
+    const pushMediaStatus = (meta) => {
+      try {
+        const info = new cast.framework.messages.MediaInformation();
+        info.contentId = 'snapcast://live';
+        info.contentType = 'audio/raw';
+        info.streamType = cast.framework.messages.StreamType.LIVE;
+        info.metadataType = cast.framework.messages.MetadataType.MUSIC_TRACK;
+        const md = new cast.framework.messages.MusicTrackMediaMetadata();
+        md.title = meta?.title || 'Snapcast';
+        md.artist = meta?.artist ? (Array.isArray(meta.artist) ? meta.artist.join(', ') : meta.artist) : '';
+        md.albumName = meta?.album || '';
+        if (meta?.artUrl) md.images = [{ url: meta.artUrl }];
+        info.metadata = md;
+        playerManager.setMediaInformation(info);
+        if (typeof playerManager.setPlayerState === 'function') {
+          playerManager.setPlayerState(PlayerState.PLAYING);
+          playerManager.sendStatus(playerManager.getStatus());
+        }
+      } catch (err) {
+        console.warn('pushMediaStatus failed', err);
+      }
+    };
+
+    const ensureAudio = async () => {
+      if (!audioCtx) {
+        audioCtx = new AudioContext();
+        gainNode = audioCtx.createGain();
+        gainNode.connect(audioCtx.destination);
+      }
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+    };
+
+    const normalizeWsUrl = (raw) => {
+      if (!raw) return null;
+      let s = String(raw).trim();
+      if (!s) return null;
+      if (s.startsWith('//')) s = `ws:${s}`;
+      if (/^https?:\/\//i.test(s)) {
+        s = s.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+      } else if (!/^wss?:\/\//i.test(s)) {
+        s = `ws://${s}`;
+      }
+      try { return new URL(s, location.href).toString(); } catch { return null; }
+    };
+
+    const buildRpcUrl = (baseUrl) => {
+      if (!baseUrl) return null;
+      try {
+        const u = new URL(baseUrl);
+        u.pathname = '/snapcast/jsonrpc';
+        u.search = '';
+        return u.toString();
+      } catch { return null; }
+    };
+
+    const connectRpc = () => {
+      const rpcUrl = buildRpcUrl(provided.serverUrl || normalizeWsUrl(provided.serverUrl));
+      if (!rpcUrl) return;
+      if (rpc) { try { rpc.close(); } catch {} rpc = null; }
+      rpc = new WebSocket(rpcUrl);
+      rpc.onopen = () => {
+        rpc?.send(JSON.stringify({ id: 1, jsonrpc: '2.0', method: 'Server.GetStatus' }));
+      };
+      rpc.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.result?.streams) {
+            const stream = pickStream(data.result.streams);
+            if (stream?.properties?.metadata) applyMetadata(stream.properties.metadata);
+          } else if (data.method === 'Server.OnUpdate') {
+            const stream = pickStream(data.params?.server?.streams);
+            if (stream?.properties?.metadata) applyMetadata(stream.properties.metadata);
+          }
+        } catch {
+          // ignore
+        }
+      };
+      rpc.onclose = () => { rpc = null; };
+    };
+
+    const pickStream = (streams) => {
+      if (!Array.isArray(streams)) return null;
+      if (provided.streamId) return streams.find((s) => s.id === provided.streamId) || streams[0] || null;
+      return streams[0] || null;
+    };
+
+    const connectStream = async (url) => {
+      await ensureAudio();
+      if (ws) { try { ws.close(); } catch {} }
+      inbound = new Uint8Array(0);
+      currentFormat = null;
+      baseTimestampUs = null;
+      baseAudioTime = 0;
+      scheduledUntil = audioCtx.currentTime;
+      ws = new WebSocket(url);
+      ws.binaryType = 'arraybuffer';
+      setStatus(`Connecting ${url}…`);
+      ws.onopen = () => setStatus('Connected', true, false);
+      ws.onmessage = (event) => {
+        if (!(event.data instanceof ArrayBuffer)) return;
+        handleData(new Uint8Array(event.data));
+      };
+      ws.onclose = () => setStatus('Disconnected', false, true);
+      ws.onerror = () => setStatus('WebSocket error', false, true);
+    };
+
+    const handleCastPayload = (raw) => {
+      const data = typeof raw === 'string' ? (() => { try { return JSON.parse(raw); } catch { return {}; } })() : raw || {};
+      const serverUrl = data.serverUrl ?? data.payload?.serverUrl;
+      const streamId = data.streamId ?? data.payload?.streamId;
+      const clientId = data.clientId ?? data.payload?.clientId;
+      if (!serverUrl) {
+        setStatus('Missing serverUrl', false, true);
+        return;
+      }
+      provided = { serverUrl: normalizeWsUrl(serverUrl), streamId: streamId || null, clientId: clientId || null };
+      const url = provided.streamId
+        ? `${provided.serverUrl}${provided.serverUrl.includes('?') ? '&' : '?'}stream=${encodeURIComponent(provided.streamId)}`
+        : provided.serverUrl;
+      connectStream(url);
+      connectRpc();
+    };
+
+    window.handleCastPayload = handleCastPayload;
+
+    const handleData = (data) => {
+      inbound = concatBuffers(inbound, data);
+      while (inbound.length >= 26) {
+        const header = parseHeader(inbound);
+        if (!header) break;
+        const total = 26 + header.size;
+        if (inbound.length < total) break;
+        const body = inbound.slice(26, total);
+        inbound = inbound.slice(total);
+        handleMessage(header, body);
+      }
+    };
+
+    const parseHeader = (buffer) => {
+      try {
+        const view = new DataView(buffer.buffer, buffer.byteOffset, 26);
+        return {
+          type: view.getUint16(0, true),
+          id: view.getUint16(2, true),
+          refersTo: view.getUint16(4, true),
+          sent: { sec: view.getInt32(6, true), usec: view.getInt32(10, true) },
+          size: view.getUint32(22, true),
+        };
+      } catch {
+        return null;
+      }
+    };
+
+    const handleMessage = (header, body) => {
+      switch (header.type) {
+        case 1: handleCodecHeader(body); break;
+        case 2: handleAudioChunk(body); break;
+        case 3: handleSettings(body); break;
+        default: break;
+      }
+    };
+
+    const handleSettings = (body) => {
+      if (body.byteLength < 4) return;
+      const len = new DataView(body.buffer, body.byteOffset, 4).getUint32(0, true);
+      const jsonBytes = body.slice(4, 4 + len);
+      try {
+        const parsed = JSON.parse(textDecoder.decode(jsonBytes));
+        if (typeof parsed.bufferMs === 'number') {
+          playbackDelaySec = Math.max(0.1, parsed.bufferMs / 1000);
+        }
+      } catch { /* ignore */ }
+    };
+
+    const handleCodecHeader = (body) => {
+      if (body.byteLength < 4) return;
+      const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
+      const codecLen = view.getUint32(0, true);
+      const codecName = textDecoder.decode(body.slice(4, 4 + codecLen));
+      const wavLen = view.getUint32(4 + codecLen, true);
+      const wavOffset = 8 + codecLen;
+      if (wavOffset + wavLen > body.byteLength) return;
+      if (codecName.trim().toLowerCase() !== 'pcm') return;
+      const wav = new DataView(body.buffer, body.byteOffset + wavOffset, wavLen);
+      const channels = wav.getUint16(22, true);
+      const sampleRate = wav.getUint32(24, true);
+      const bitDepth = wav.getUint16(34, true);
+      currentFormat = { channels, sampleRate, bitDepth };
+      baseTimestampUs = null;
+      baseAudioTime = audioCtx ? audioCtx.currentTime + playbackDelaySec : 0;
+      setStatus(`Ready (${channels}ch ${sampleRate}Hz)`, true, false);
+    };
+
+    const handleAudioChunk = (body) => {
+      if (!currentFormat || body.byteLength < 12 || !audioCtx || !gainNode) return;
+      const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
+      const sec = view.getInt32(0, true);
+      const usec = view.getInt32(4, true);
+      const size = view.getUint32(8, true);
+      if (12 + size > body.byteLength) return;
+      const pcm = body.slice(12, 12 + size);
+      const timestampUs = sec * 1_000_000 + usec;
+      schedulePcm(timestampUs, pcm);
+    };
+
+    const schedulePcm = (timestampUs, pcm) => {
+      const bytesPerFrame = (currentFormat.bitDepth / 8) * currentFormat.channels;
+      if (bytesPerFrame <= 0) return;
+      const frames = Math.floor(pcm.byteLength / bytesPerFrame);
+      if (frames <= 0) return;
+      const duration = frames / currentFormat.sampleRate;
+
+      if (!baseTimestampUs) {
+        baseTimestampUs = timestampUs;
+        baseAudioTime = Math.max(audioCtx.currentTime + playbackDelaySec, audioCtx.currentTime + 0.05);
+        scheduledUntil = baseAudioTime;
+      }
+
+      const relativeSec = (timestampUs - baseTimestampUs) / 1_000_000;
+      let startAt = baseAudioTime + relativeSec;
+      const minStart = audioCtx.currentTime + 0.03;
+      const maxStart = audioCtx.currentTime + MAX_AHEAD_SEC;
+      if (startAt < minStart) {
+        const delta = minStart - startAt;
+        baseAudioTime += delta;
+        startAt = minStart;
+      } else if (startAt > maxStart) {
+        baseTimestampUs = timestampUs;
+        baseAudioTime = audioCtx.currentTime + playbackDelaySec;
+        startAt = baseAudioTime;
+        scheduledUntil = startAt;
+      }
+      const buffer = audioCtx.createBuffer(currentFormat.channels, frames, audioCtx.sampleRate);
+      writePcmToBuffer(buffer, pcm, currentFormat);
+      const source = audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.playbackRate.value = currentFormat.sampleRate / audioCtx.sampleRate;
+      source.connect(gainNode);
+      try {
+        source.start(startAt);
+        scheduledUntil = Math.max(scheduledUntil, startAt + duration * source.playbackRate.value);
+      } catch { /* ignore */ }
+      logDebug();
+    };
+
+    const writePcmToBuffer = (buffer, pcm, format) => {
+      const bytesPerFrame = (format.bitDepth / 8) * format.channels;
+      const frames = Math.min(buffer.length, Math.floor(pcm.byteLength / bytesPerFrame));
+      let offset = 0;
+      for (let frame = 0; frame < frames; frame++) {
+        for (let ch = 0; ch < format.channels; ch++) {
+          const value = readSample(pcm, offset, format.bitDepth);
+          buffer.getChannelData(ch)[frame] = value;
+          offset += format.bitDepth / 8;
+        }
+      }
+    };
+
+    const readSample = (pcm, offset, bitDepth) => {
+      const view = new DataView(pcm.buffer, pcm.byteOffset + offset, pcm.byteLength - offset);
+      switch (bitDepth) {
+        case 16: return Math.max(-1, Math.min(1, view.getInt16(0, true) / 32768));
+        case 24: {
+          const b0 = pcm[offset]; const b1 = pcm[offset + 1]; const b2 = pcm[offset + 2];
+          const sample = (b2 << 16) | (b1 << 8) | b0;
+          const signed = sample & 0x800000 ? sample | ~0xffffff : sample;
+          return Math.max(-1, Math.min(1, signed / 0x7fffff));
+        }
+        case 32: return Math.max(-1, Math.min(1, view.getInt32(0, true) / 2147483648));
+        default: return 0;
+      }
+    };
+
+    const concatBuffers = (a, b) => {
+      const out = new Uint8Array(a.length + b.length);
+      out.set(a, 0);
+      out.set(b, a.length);
+      return out;
+    };
+
+    playerManager.setMessageInterceptor(MessageType.GET_STATUS, () => {
+      pushMediaStatus();
+      const status = playerManager.getStatus ? playerManager.getStatus() : null;
+      return status;
+    });
+
+    castCtx.addCustomMessageListener(CAST_NS, (event) => {
+      handleCastPayload(event.data);
+    });
+
+    castCtx.start({
+      customNamespaces: { [CAST_NS]: cast.framework.system.MessageType.JSON },
+      disableIdleTimeout: true,
+      maxInactivity: 3600000000,
+    });
+
+    setStatus('Ready (waiting for sender)');
+  </script>
+</body>
+</html>
