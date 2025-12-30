@@ -1,0 +1,14 @@
+services:
+  loxoneaudioserver:
+    container_name: lox-audioserver
+    image: ghcr.io/rudyberends/lox-audioserver:latest
+    hostname: lox-audioserver
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    # privileged caps (and security-opt) needed to mount smb folders within the container
+    cap_add:
+      - SYS_ADMIN
+      - DAC_READ_SEARCH

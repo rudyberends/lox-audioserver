@@ -1,0 +1,5 @@
+{
+  "resolveFullPaths": true,
+  "ignoreExtensions": true,
+  "exclude": ["http", "fs", "path", "url"]
+}

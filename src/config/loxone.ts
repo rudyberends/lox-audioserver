@@ -1,0 +1,121 @@
+import type { EnvironmentConfig } from '@/config/environment';
+
+export type LoxoneServerName = 'appHttp' | 'msHttp';
+
+export interface LoxoneHttpServerConfig {
+  name: LoxoneServerName;
+  port: number;
+  identification: string;
+}
+
+export interface LoxoneMdnsConfig {
+  name: string;
+  type: string;
+  host?: string;
+  hostname: string;
+  deviceType: string;
+  version: string;
+  txtVersion: string;
+  deviceInstance: string;
+  port: number;
+}
+
+export interface LoxoneHttpConfig {
+  firmwareVersion: string;
+  apiVersion: string;
+  sessionToken: string;
+  macAddress: string;
+  servers: LoxoneHttpServerConfig[];
+  mdns: LoxoneMdnsConfig;
+}
+
+const DEFAULT_FIRMWARE_VERSION = 'LWSS V 16.1.10.01';
+const DEFAULT_API_VERSION = '~API:1.6~';
+const DEFAULT_SESSION =
+  '8WahwAfULwEQce9Yu0qIE9L7QMkXFHbi0M9ch9vKcgYArPPojXHpSiNcq0fT3lqL';
+const DEFAULT_MAC = '504F94FF1BB3';
+const DEFAULT_MDNS_NAME = 'audioserver';
+const DEFAULT_MDNS_HOSTNAME = 'audioserver';
+const DEFAULT_MDNS_TYPE = 'http';
+const DEFAULT_MDNS_DEVICE_TYPE = 'Audioserver';
+const DEFAULT_MDNS_VERSION = '16.00.09.16';
+const DEFAULT_MDNS_TXT_VERSION = '2';
+const DEFAULT_MDNS_DEVICE_INSTANCE = '2';
+
+/**
+ * Builds the configuration for the emulated Loxone HTTP servers.
+ */
+export function buildLoxoneHttpConfig(env: EnvironmentConfig): LoxoneHttpConfig {
+  const firmwareVersion = DEFAULT_FIRMWARE_VERSION;
+  const apiVersion = DEFAULT_API_VERSION;
+  const sessionToken = DEFAULT_SESSION;
+  const macAddress = DEFAULT_MAC;
+
+  return {
+    firmwareVersion,
+    apiVersion,
+    sessionToken,
+    macAddress,
+    servers: [
+      {
+        name: 'appHttp',
+        port: env.loxoneAppPort,
+        identification: formatIdentification(
+          'appHttp',
+          firmwareVersion,
+          apiVersion,
+          macAddress,
+          sessionToken,
+        ),
+      },
+      {
+        name: 'msHttp',
+        port: env.loxoneMiniserverPort,
+        identification: formatIdentification(
+          'msHttp',
+          firmwareVersion,
+          apiVersion,
+          macAddress,
+          sessionToken,
+        ),
+      },
+    ],
+    mdns: buildLoxoneMdnsConfig(env),
+  };
+}
+
+function buildLoxoneMdnsConfig(env: EnvironmentConfig): LoxoneMdnsConfig {
+  const envOrDefault = (raw: string | undefined, fallback: string): string => {
+    const value = raw?.trim();
+    return value ? value : fallback;
+  };
+  const envOrOptional = (raw: string | undefined): string | undefined => {
+    const value = raw?.trim();
+    return value || undefined;
+  };
+
+  return {
+    name: envOrDefault(process.env.LOXONE_MDNS_NAME, DEFAULT_MDNS_NAME),
+    type: envOrDefault(process.env.LOXONE_MDNS_TYPE, DEFAULT_MDNS_TYPE),
+    host: envOrOptional(process.env.LOXONE_MDNS_HOST) ?? env.hostname,
+    hostname: envOrDefault(process.env.LOXONE_MDNS_HOSTNAME, DEFAULT_MDNS_HOSTNAME),
+    deviceType: envOrDefault(process.env.LOXONE_MDNS_DEVICE_TYPE, DEFAULT_MDNS_DEVICE_TYPE),
+    version: envOrDefault(process.env.LOXONE_MDNS_VERSION, DEFAULT_MDNS_VERSION),
+    txtVersion: envOrDefault(process.env.LOXONE_MDNS_TXT_VERSION, DEFAULT_MDNS_TXT_VERSION),
+    deviceInstance: envOrDefault(process.env.LOXONE_MDNS_DEVICE_INSTANCE, DEFAULT_MDNS_DEVICE_INSTANCE),
+    port: env.loxoneAppPort,
+  };
+}
+
+function formatIdentification(
+  name: LoxoneServerName,
+  firmware: string,
+  api: string,
+  mac: string,
+  session: string,
+): string {
+  const base =
+    name === 'msHttp' ? `MINISERVER V ${firmware} ${mac}` : firmware;
+
+  return `${base} | ${api} | Session-Token: ${session}`;
+}

@@ -1,0 +1,752 @@
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import fs from 'node:fs';
+import { PassThrough } from 'node:stream';
+import os from 'node:os';
+import ffmpegStatic from 'ffmpeg-static';
+import { createLogger } from '@/core/logging/logger';
+import {
+  audioResampler,
+  pcmCodecFromBitDepth,
+  pcmFormatFromBitDepth,
+  type AudioOutputSettings,
+} from '@/modules/audio/utils/audioFormat';
+
+export type PlaybackSource =
+  | { kind: 'file'; path: string; loop?: boolean; padTailSec?: number; preDelayMs?: number }
+  | {
+      kind: 'url';
+      url: string;
+      headers?: Record<string, string>;
+      decryptionKey?: string;
+      tlsVerifyHost?: string;
+      inputFormat?: string;
+      logLevel?: string;
+    }
+  | {
+      kind: 'pipe';
+      path: string;
+      format?: 's16le' | 's32le' | 's16be';
+      sampleRate?: number;
+      channels?: number;
+      /** Optional shared readable stream to feed directly (bypasses URL). */
+      stream?: NodeJS.ReadableStream;
+    };
+
+export type OutputProfile = 'mp3' | 'pcm' | 'opus' | 'flac';
+
+export class AudioSession {
+  private readonly log = createLogger('Audio', 'Session');
+  private readonly subscribers = new Set<PassThrough>();
+  private readonly subscriberLabels = new Map<PassThrough, string>();
+  private subscriberCounter = 0;
+  private process?: ChildProcessWithoutNullStreams;
+  private ending = false;
+  private readonly ffmpegPath =
+    process.env.AUDIO_FFMPEG_PATH ||
+    process.env.FFMPEG_PATH ||
+    (typeof ffmpegStatic === 'string' && ffmpegStatic ? ffmpegStatic : 'ffmpeg');
+
+  private readonly bufferQueue: Buffer[] = [];
+  private bufferBytes = 0;
+  private readonly maxBufferBytes: number;
+  private readonly maxSubscriberLagBytes = 1024 * 1024; // guard slow clients
+  private firstChunkLogged = false;
+  private firstChunkPromise: Promise<boolean> | null = null;
+  private firstChunkResolve: ((value: boolean) => void) | null = null;
+  private bytesSinceLog = 0;
+  private lastLogTs = 0;
+  private totalBytes = 0;
+  private lastBps = 0;
+  private lastBpsTs = 0;
+  private restartAttempts = 0;
+  private readonly targetLeadMs: number;
+  private lastStderrLine: string | null = null;
+  private lastStderrAt: number | null = null;
+  private lastErrorMessage: string | null = null;
+  private lastErrorAt: number | null = null;
+  private lastExitCode: number | null = null;
+  private lastExitSignal: string | null = null;
+  private lastExitAt: number | null = null;
+  private startTs: number | null = null;
+  private subscriberDropCount = 0;
+  private lastSubscriberDropAt: number | null = null;
+  private readonly sourcePadTailSec?: number;
+  private readonly sourcePreDelayMs?: number;
+  private debugTapStream?: fs.WriteStream;
+  private readonly debugTapEnabled: boolean;
+
+  constructor(
+    private readonly zoneId: number,
+    private readonly source: PlaybackSource,
+    private readonly profile: OutputProfile,
+    private readonly onTerminated: () => void,
+    private readonly outputSettings: AudioOutputSettings,
+  ) {
+    const candidate = outputSettings.prebufferBytes;
+    this.sourcePadTailSec =
+      this.source.kind === 'file' && !this.source.loop ? this.source.padTailSec : undefined;
+    this.sourcePreDelayMs =
+      this.source.kind === 'file' && !this.source.loop ? this.source.preDelayMs : undefined;
+    this.debugTapEnabled =
+      this.profile === 'pcm' &&
+      this.source.kind === 'file' &&
+      typeof this.source.path === 'string' &&
+      this.source.path.includes('/alerts/');
+    // Adaptive lead: base on CPU/mem to keep startup snappy on fast boxes and stable on slow ones.
+    const cores = Math.max(os.cpus()?.length ?? 1, 1);
+    const memGb = Math.max(os.totalmem() / (1024 * 1024 * 1024), 0.5);
+    this.targetLeadMs =
+      cores >= 8 && memGb >= 8 ? 1000 : cores >= 4 && memGb >= 4 ? 1800 : memGb >= 2 ? 2500 : 3200;
+    if (!Number.isFinite(candidate) || candidate <= 0) {
+      // Allow disabling the rolling buffer; we still stream live without caching chunks.
+      this.maxBufferBytes = 0;
+    } else {
+      // Allow larger prebuffer when upstream requests it (e.g., Sendspin wants ~5s).
+      // Keep a safety cap to avoid unbounded memory; 4MB is still modest.
+      const hardMax = 1024 * 1024 * 4;
+      const hardMin = 1024 * 32; // keep a minimal guard when enabled
+      const requested = Math.min(candidate, hardMax);
+      this.maxBufferBytes = Math.max(requested, hardMin);
+    }
+  }
+
+  public start(): void {
+    if (this.process) {
+      return;
+    }
+    this.firstChunkLogged = false;
+    this.firstChunkPromise = new Promise((resolve) => {
+      this.firstChunkResolve = resolve;
+    });
+    this.log.info('audio session buffer config', {
+      zoneId: this.zoneId,
+      maxBufferBytes: this.maxBufferBytes,
+      targetLeadMs: this.targetLeadMs,
+      outputSampleRate: this.outputSettings.sampleRate,
+      outputChannels: this.outputSettings.channels,
+      outputBitDepth: this.outputSettings.pcmBitDepth,
+      profile: this.profile,
+    });
+
+    if (this.source.kind === 'pipe' && this.source.stream) {
+      const pipeSource = this.source as typeof this.source & { stream: NodeJS.ReadableStream };
+      // Feed the stream through ffmpeg with -re to pace output.
+      const fmt = this.source.format ?? 's16le';
+      const sr = this.source.sampleRate ?? this.outputSettings.sampleRate;
+      const ch = this.source.channels ?? 2;
+      // Always apply -re so ffmpeg throttles to real-time. Without it, ffmpeg may read
+      // from the upstream pipe as fast as possible which makes the Sendspin timestamps
+      // run ahead of wall clock and causes the client to speed up to ~104%.
+      const inputArgs = [
+        ...this.buildLowLatencyArgs({ includeProbe: false }),
+        '-re',
+        '-f',
+        fmt,
+        '-ar',
+        String(sr),
+        '-ac',
+        String(ch),
+        '-i',
+        'pipe:0',
+      ];
+      const outputArgs = this.buildOutputArgs();
+      const args = ['-hide_banner', '-loglevel', this.getLogLevel(), ...inputArgs, ...outputArgs, 'pipe:1'];
+
+      this.log.debug('spawning ffmpeg (pipe stream)', {
+        zoneId: this.zoneId,
+        args,
+        inputFormat: fmt,
+        inputSampleRate: sr,
+        inputChannels: ch,
+        outputSampleRate: this.outputSettings.sampleRate,
+        outputChannels: this.outputSettings.channels,
+        outputBitDepth: this.outputSettings.pcmBitDepth,
+        profile: this.profile,
+      });
+      this.startTs = Date.now();
+      let proc: ChildProcessWithoutNullStreams;
+      proc = this.spawnFfmpeg(args, {
+        restartOnFailure: true,
+        logFirstChunk: false,
+        stdinStream: pipeSource.stream,
+        onExit: () => {
+          try {
+            pipeSource.stream.unpipe(proc.stdin);
+          } catch {
+            /* ignore */
+          }
+        },
+      });
+
+      // Monitor incoming source stream for pacing visibility.
+      let sourceBytesSinceLog = 0;
+      let sourceLastLogTs = 0;
+      let sourceFirstChunkLogged = false;
+      pipeSource.stream.on('data', (chunk: Buffer) => {
+        if (!chunk?.length) {
+          return;
+        }
+        sourceBytesSinceLog += chunk.length;
+        if (!sourceFirstChunkLogged) {
+          sourceFirstChunkLogged = true;
+          this.log.info('pipe source first chunk', {
+            zoneId: this.zoneId,
+            bytes: chunk.length,
+            format: fmt,
+            sampleRate: sr,
+            channels: ch,
+          });
+        }
+        const now = Date.now();
+        if (!sourceLastLogTs) {
+          sourceLastLogTs = now;
+          return;
+        }
+        const elapsed = now - sourceLastLogTs;
+        if (elapsed >= 1000) {
+          const bps = Math.round((sourceBytesSinceLog / elapsed) * 1000);
+          this.log.spam('pipe source throughput', {
+            zoneId: this.zoneId,
+            bytesPerSec: bps,
+          });
+          sourceLastLogTs = now;
+          sourceBytesSinceLog = 0;
+        }
+      });
+
+      this.process = proc;
+      this.restartAttempts = 0;
+      return;
+    }
+
+    const args = [
+      '-hide_banner',
+      '-loglevel',
+      this.getLogLevel(),
+      ...this.buildInputArgs(),
+      ...this.buildOutputArgs(),
+      'pipe:1',
+    ];
+
+    this.log.debug('spawning ffmpeg', {
+      zoneId: this.zoneId,
+      args,
+      outputSampleRate: this.outputSettings.sampleRate,
+      outputChannels: this.outputSettings.channels,
+      outputBitDepth: this.outputSettings.pcmBitDepth,
+      profile: this.profile,
+    });
+    this.startTs = Date.now();
+    const proc = this.spawnFfmpeg(args, { restartOnFailure: false, logFirstChunk: true });
+
+    this.process = proc;
+    this.restartAttempts = 0;
+  }
+
+  private spawnFfmpeg(
+    args: string[],
+    options: {
+      restartOnFailure?: boolean;
+      logFirstChunk?: boolean;
+      stdinStream?: NodeJS.ReadableStream;
+      onExit?: () => void;
+    } = {},
+  ): ChildProcessWithoutNullStreams {
+    const proc = spawn(this.ffmpegPath, args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: process.env,
+    }) as ChildProcessWithoutNullStreams;
+
+    if (options.stdinStream) {
+      options.stdinStream.pipe(proc.stdin);
+      options.stdinStream.on('error', (err: any) => {
+        this.log.warn('pipe source error', {
+          zoneId: this.zoneId,
+          message: err?.message || String(err),
+        });
+        proc.stdin.destroy();
+      });
+      proc.stdin.on('error', (err: any) => {
+        if (err?.code === 'EPIPE') {
+          this.log.debug('ffmpeg stdin closed (EPIPE)', { zoneId: this.zoneId });
+        } else {
+          this.log.warn('ffmpeg stdin error', {
+            zoneId: this.zoneId,
+            message: err?.message || String(err),
+          });
+        }
+      });
+    }
+
+    proc.stdout.on('data', (chunk: Buffer) => {
+      if (!chunk?.length) {
+        return;
+      }
+      if (options.logFirstChunk !== false && !this.firstChunkLogged) {
+        this.firstChunkLogged = true;
+        if (this.firstChunkResolve) {
+          this.firstChunkResolve(true);
+          this.firstChunkResolve = null;
+        }
+        this.log.info('ffmpeg first chunk', {
+          zoneId: this.zoneId,
+          profile: this.profile,
+          bytes: chunk.length,
+        });
+      }
+      if (this.maxBufferBytes > 0 && this.bufferBytes < this.maxBufferBytes) {
+        this.bufferQueue.push(chunk);
+        this.bufferBytes += chunk.length;
+        while (this.bufferBytes > this.maxBufferBytes && this.bufferQueue.length > 0) {
+          const removed = this.bufferQueue.shift();
+          if (removed) {
+            this.bufferBytes -= removed.length;
+          }
+        }
+      }
+      this.recordBytes(chunk.length);
+      this.writeToSubscribers(chunk);
+    });
+
+    proc.stdout.on('close', () => {
+      this.log.debug('ffmpeg stdout closed', { zoneId: this.zoneId });
+    });
+
+    proc.stderr?.on('data', (chunk: Buffer) => {
+      const message = chunk.toString().trim();
+      if (message) {
+        this.lastStderrLine = message;
+        this.lastStderrAt = Date.now();
+        this.log.debug('ffmpeg stderr', { zoneId: this.zoneId, message });
+      }
+    });
+
+    proc.on('exit', (code, signal) => {
+      this.lastExitAt = Date.now();
+      const runMs =
+        this.startTs != null && this.lastExitAt != null ? this.lastExitAt - this.startTs : null;
+      const earlyExit = runMs !== null && (runMs < 1000 || this.totalBytes < 200 * 1024);
+      this.lastExitCode = typeof code === 'number' ? code : null;
+      this.lastExitSignal = signal ?? null;
+      this.log.info('ffmpeg exited', {
+        zoneId: this.zoneId,
+        code,
+        signal,
+        stderr: this.lastStderrLine ?? undefined,
+        stderrAt: this.lastStderrAt ?? undefined,
+        totalBytes: this.totalBytes,
+        bufferedBytes: this.bufferBytes,
+        subscribers: this.subscribers.size,
+        runMs,
+        earlyExit,
+      });
+      options.onExit?.();
+      const shouldRestart =
+        options.restartOnFailure === true && !this.ending && code !== 0;
+      this.cleanup({ suppressTermination: shouldRestart });
+      if (shouldRestart) {
+        this.restartAttempts += 1;
+        setTimeout(() => this.start(), Math.min(500, 100 * this.restartAttempts));
+      }
+    });
+
+    proc.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') {
+        this.log.error('ffmpeg binary not found', {
+          zoneId: this.zoneId,
+          path: this.ffmpegPath,
+          hint: 'Install ffmpeg or set AUDIO_FFMPEG_PATH/FFMPEG_PATH env variables',
+        });
+      } else {
+        this.log.error('ffmpeg error', { zoneId: this.zoneId, message: error.message });
+      }
+      this.lastErrorMessage = error.message;
+      this.lastErrorAt = Date.now();
+      this.cleanup();
+    });
+
+    return proc;
+  }
+
+  private getLogLevel(): string {
+    if (this.source.kind === 'url' && this.source.logLevel) {
+      return this.source.logLevel;
+    }
+    return 'error';
+  }
+
+  private buildLowLatencyArgs(options: { includeProbe?: boolean } = {}): string[] {
+    const args = ['-fflags', 'nobuffer'];
+    if (options.includeProbe !== false) {
+      args.push('-probesize', '32k', '-analyzeduration', '0');
+    }
+    return args;
+  }
+
+  private buildInputArgs(): string[] {
+    if (this.source.kind === 'url') {
+      const headerLines = this.source.headers ? this.formatHeaders(this.source.headers) : '';
+      const headerArgs = headerLines ? ['-headers', headerLines] : [];
+      const decryptionArgs = this.source.decryptionKey ? ['-decryption_key', this.source.decryptionKey] : [];
+      const needsTlsVerifyHost = Boolean(this.source.tlsVerifyHost && /^https:/i.test(this.source.url));
+      const tlsArgs = needsTlsVerifyHost ? ['-tls_verify', '0', '-verifyhost', this.source.tlsVerifyHost!] : [];
+      const inputFormatArgs = this.source.inputFormat ? ['-f', this.source.inputFormat] : [];
+      return [
+        ...this.buildLowLatencyArgs(),
+        '-reconnect',
+        '1',
+        '-reconnect_streamed',
+        '1',
+        '-reconnect_delay_max',
+        '5',
+        ...tlsArgs,
+        ...decryptionArgs,
+        ...headerArgs,
+        ...inputFormatArgs,
+        '-i',
+        this.source.url,
+      ];
+    }
+
+    if (this.source.kind === 'pipe') {
+      const sampleRate = this.source.sampleRate ?? this.outputSettings.sampleRate;
+      const channels = this.source.channels ?? this.outputSettings.channels;
+      const format = this.source.format ?? 's16le';
+      return [
+        ...this.buildLowLatencyArgs({ includeProbe: false }),
+        '-re',
+        '-f',
+        format,
+        '-ar',
+        String(sampleRate),
+        '-ac',
+        String(channels),
+        '-i',
+        this.source.path,
+      ];
+    }
+
+    const inputs: string[] = [];
+    const hasPreDelay = Boolean(this.source.preDelayMs && this.source.preDelayMs > 0);
+    if (hasPreDelay) {
+      const durationSec = Math.max(0, (this.source.preDelayMs ?? 0) / 1000);
+      inputs.push(
+        '-f',
+        'lavfi',
+        '-t',
+        durationSec.toFixed(3),
+        '-i',
+        `anullsrc=cl=${this.outputSettings.channels}:r=${this.outputSettings.sampleRate}`,
+      );
+    }
+
+    const loopArgs = this.source.loop ? ['-stream_loop', '-1'] : [];
+    // Pace file sources in real-time so downstream transports (e.g., Snapcast) don’t get flooded.
+    const realTimeArg = ['-re'];
+    inputs.push(...this.buildLowLatencyArgs(), ...loopArgs, ...realTimeArg, '-i', this.source.path);
+    return inputs;
+  }
+
+  private formatHeaders(headers: Record<string, string>): string {
+    const lines = Object.entries(headers)
+      .filter(([, value]) => typeof value === 'string' && value.length > 0)
+      .map(([key, value]) => `${key}: ${value}`);
+    if (!lines.length) {
+      return '';
+    }
+    return `${lines.join('\r\n')}\r\n`;
+  }
+
+  private buildOutputArgs(): string[] {
+    const { sampleRate, channels, pcmBitDepth, mp3Bitrate, fixedGainDb } = this.outputSettings;
+    const useConcatWithSilence =
+      this.source.kind === 'file' && !this.source.loop && this.sourcePreDelayMs && this.sourcePreDelayMs > 0;
+
+    const buildFilterArgs = (): { filterArgs: string[] } => {
+      const filters: string[] = [];
+      if (Number.isFinite(fixedGainDb) && fixedGainDb !== 0) {
+        filters.push(`volume=${fixedGainDb}dB`);
+      }
+      if (audioResampler.name === 'soxr') {
+        filters.push(
+          `aresample=resampler=soxr:precision=${audioResampler.precision}:cutoff=${audioResampler.cutoff}:async=1`,
+        );
+      }
+
+      if (useConcatWithSilence) {
+        const chain: string[] = ['[0:a][1:a]concat=n=2:v=0:a=1'];
+        if (this.sourcePadTailSec && this.sourcePadTailSec > 0) {
+          chain.push(`apad=pad_dur=${this.sourcePadTailSec}`);
+        }
+        chain.push(...filters);
+        const filterComplex = `${chain.join(',')}[outa]`;
+        return { filterArgs: ['-filter_complex', filterComplex, '-map', '[outa]'] };
+      }
+
+      if (this.sourcePadTailSec && this.sourcePadTailSec > 0) {
+        filters.unshift(`apad=pad_dur=${this.sourcePadTailSec}`);
+      }
+      return { filterArgs: filters.length ? ['-af', filters.join(',')] : [] };
+    };
+
+    const { filterArgs } = buildFilterArgs();
+    switch (this.profile) {
+      case 'pcm': {
+        const pcmCodec = pcmCodecFromBitDepth(pcmBitDepth);
+        const pcmFormat = pcmFormatFromBitDepth(pcmBitDepth);
+        return [
+          '-vn',
+          '-acodec',
+          pcmCodec,
+          '-ar',
+          String(sampleRate),
+          '-ac',
+          String(channels),
+          ...filterArgs,
+          '-f',
+          pcmFormat,
+        ];
+      }
+      case 'opus': {
+        const bitrate = mp3Bitrate || '160k';
+        return [
+          '-vn',
+          '-acodec',
+          'libopus',
+          '-application',
+          'audio',
+          '-b:a',
+          bitrate,
+          '-ar',
+          String(sampleRate),
+          '-ac',
+          String(channels),
+          ...filterArgs,
+          '-f',
+          'opus',
+        ];
+      }
+      case 'flac': {
+        return [
+          '-vn',
+          '-acodec',
+          'flac',
+          '-compression_level',
+          '5',
+          '-ar',
+          String(sampleRate),
+          '-ac',
+          String(channels),
+          ...filterArgs,
+          '-f',
+          'flac',
+        ];
+      }
+      case 'mp3':
+      default:
+        return [
+          '-vn',
+          '-acodec',
+          'libmp3lame',
+          '-ar',
+          String(sampleRate),
+          '-ac',
+          String(channels),
+          '-b:a',
+          mp3Bitrate,
+          ...filterArgs,
+          '-f',
+          'mp3',
+        ];
+    }
+  }
+
+  public stop(): void {
+    if (this.ending) {
+      return;
+    }
+    this.ending = true;
+    if (this.process) {
+      this.process.kill('SIGTERM');
+    } else {
+      this.cleanup();
+    }
+  }
+
+  public async waitForFirstChunk(timeoutMs = 2000): Promise<boolean> {
+    if (this.firstChunkLogged) {
+      return true;
+    }
+    const pending = this.firstChunkPromise;
+    if (!pending) {
+      return false;
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs);
+      void pending.then((ok) => {
+        clearTimeout(timer);
+        resolve(ok);
+      });
+    });
+  }
+
+  public createSubscriber(options: { primeWithBuffer?: boolean; label?: string } = {}): PassThrough | null {
+    if (!this.process) {
+      return null;
+    }
+    const stream = new PassThrough({ highWaterMark: 1024 * 512 });
+    // Prime the subscriber with buffered audio to prevent initial starvation unless disabled.
+    if (options.primeWithBuffer !== false && this.bufferQueue.length) {
+      for (const chunk of this.bufferQueue) {
+        stream.write(chunk);
+      }
+    }
+    this.subscribers.add(stream);
+    const label = options.label ?? `sub-${++this.subscriberCounter}`;
+    this.subscriberLabels.set(stream, label);
+    this.log.debug('audio subscriber attached', {
+      zoneId: this.zoneId,
+      profile: this.profile,
+      label,
+      subscriberCount: this.subscribers.size,
+    });
+    const remove = () => {
+      if (this.subscribers.delete(stream)) {
+        const tag = this.subscriberLabels.get(stream);
+        this.subscriberLabels.delete(stream);
+        this.log.debug('audio subscriber detached', {
+          zoneId: this.zoneId,
+          profile: this.profile,
+          label: tag ?? label,
+          subscriberCount: this.subscribers.size,
+        });
+      }
+    };
+    stream.on('close', remove);
+    stream.on('error', remove);
+    return stream;
+  }
+
+  public getStats(): {
+    profile: OutputProfile;
+    bps: number | null;
+    bufferedBytes: number;
+    totalBytes: number;
+    lastUpdated: number | null;
+    subscribers: number;
+    restarts: number;
+    lastError: string | null;
+    lastErrorAt: number | null;
+    lastStderr: string | null;
+    lastStderrAt: number | null;
+    lastExitCode: number | null;
+    lastExitSignal: string | null;
+    lastExitAt: number | null;
+    subscriberDrops: number;
+    lastSubscriberDropAt: number | null;
+    } {
+    const subscriberCount = Math.max(1, this.subscribers.size);
+    return {
+      profile: this.profile,
+      bps: this.lastBpsTs ? this.lastBps : null,
+      bufferedBytes: this.bufferBytes,
+      totalBytes: this.totalBytes,
+      lastUpdated: this.lastBpsTs || null,
+      subscribers: subscriberCount,
+      restarts: this.restartAttempts,
+      lastError: this.lastErrorMessage,
+      lastErrorAt: this.lastErrorAt,
+      lastStderr: this.lastStderrLine,
+      lastStderrAt: this.lastStderrAt,
+      lastExitCode: this.lastExitCode,
+      lastExitSignal: this.lastExitSignal,
+      lastExitAt: this.lastExitAt,
+      subscriberDrops: this.subscriberDropCount,
+      lastSubscriberDropAt: this.lastSubscriberDropAt,
+    };
+  }
+
+  private cleanup(options: { suppressTermination?: boolean } = {}): void {
+    const suppressTermination = options.suppressTermination === true;
+    this.bytesSinceLog = 0;
+    this.lastLogTs = 0;
+    if (this.firstChunkResolve) {
+      this.firstChunkResolve(false);
+      this.firstChunkResolve = null;
+    }
+    this.firstChunkPromise = null;
+    if (this.process) {
+      this.process.removeAllListeners();
+      this.process.stdout?.removeAllListeners();
+      this.process.stderr?.removeAllListeners();
+      this.process = undefined;
+    }
+    for (const subscriber of this.subscribers) {
+      if (!subscriber.writableEnded) {
+        subscriber.end();
+      }
+    }
+    if (this.debugTapStream) {
+      try {
+        this.debugTapStream.end();
+      } catch {
+        /* ignore */
+      }
+      this.debugTapStream = undefined;
+    }
+    this.subscribers.clear();
+    if (!suppressTermination) {
+      this.onTerminated();
+    }
+  }
+
+  private writeToSubscribers(chunk: Buffer): void {
+    for (const subscriber of Array.from(this.subscribers)) {
+      if (subscriber.writableEnded) {
+        this.subscribers.delete(subscriber);
+        continue;
+      }
+      const ok = subscriber.write(chunk);
+      if (!ok) {
+        const pending = (subscriber as any)?._writableState?.length ?? 0;
+        if (pending > this.maxSubscriberLagBytes) {
+          subscriber.destroy();
+          this.subscribers.delete(subscriber);
+          this.subscriberDropCount += 1;
+          this.lastSubscriberDropAt = Date.now();
+        }
+      }
+    }
+  }
+
+  private maybeLogThroughput(): void {
+    const now = Date.now();
+    if (!this.lastLogTs) {
+      this.lastLogTs = now;
+      return;
+    }
+    const elapsed = now - this.lastLogTs;
+    if (elapsed < 1000) {
+      return;
+    }
+    const bytesPerSec = Math.round((this.bytesSinceLog / elapsed) * 1000);
+    this.lastBps = bytesPerSec;
+    this.lastBpsTs = now;
+    this.log.spam('pipe throughput', {
+      zoneId: this.zoneId,
+      profile: this.profile,
+      bytesPerSec,
+      bufferBytes: this.bufferBytes,
+      subscribers: this.subscribers.size,
+      labels: Array.from(this.subscriberLabels.values()),
+    });
+    this.lastLogTs = now;
+    this.bytesSinceLog = 0;
+  }
+
+  private recordBytes(length: number): void {
+    this.bytesSinceLog += length;
+    this.totalBytes += length;
+    this.maybeLogThroughput();
+  }
+}

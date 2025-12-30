@@ -1,0 +1,219 @@
+import { createLogger } from '@/core/logging/logger';
+import {
+  audioManager,
+  type CoverArtPayload,
+  type PlaybackMetadata,
+  type PlaybackSession,
+  type PlaybackSource,
+} from '@/modules/audio';
+import type { PlayerEvent, PlayerEventMap, PlayerMode, PlayerState } from '@/modules/audio/player/types';
+
+type Listener<T> = (payload: T) => void;
+
+export class ZonePlayer {
+  private readonly log = createLogger('Audio', `Player:${this.zoneId}`);
+  private readonly listeners = new Map<PlayerEvent, Set<Listener<any>>>();
+  private state: PlayerState = { mode: 'stopped', time: 0, duration: 0, playbackSource: null };
+  private tickTimer?: NodeJS.Timeout;
+  private lastTickAt = 0;
+  private endedEmitted = false;
+
+  constructor(
+    private readonly zoneId: number,
+    private readonly zoneName: string,
+    private readonly sourceMac: string,
+    private readonly requiresPcm: boolean,
+  ) {}
+
+  public playUri(uri: string, metadata?: PlaybackMetadata): PlaybackSession | null {
+    const session = audioManager.startPlayback(this.zoneId, uri, metadata, this.requiresPcm);
+    if (!session) {
+      this.emit('error', 'no playback source resolved');
+      return null;
+    }
+    this.endedEmitted = false;
+    this.startTicker();
+    this.state = {
+      mode: 'playing',
+      time: 0,
+      duration: session.duration ?? metadata?.duration ?? 0,
+      metadata: metadata ?? session.metadata,
+      sourceLabel: uri,
+      playbackSource: session.playbackSource,
+    };
+    this.emit('started', session);
+    return session;
+  }
+
+  public playExternal(
+    label: string,
+    playbackSource: PlaybackSource | null,
+    metadata?: PlaybackMetadata,
+  ): PlaybackSession | null {
+    const session = audioManager.startExternalPlayback(
+      this.zoneId,
+      label,
+      playbackSource,
+      metadata,
+      this.requiresPcm,
+    );
+    if (!session) {
+      this.emit('error', 'no playback source resolved');
+      return null;
+    }
+    this.endedEmitted = false;
+    this.startTicker();
+    this.state = {
+      mode: 'playing',
+      time: 0,
+      duration: session.duration ?? metadata?.duration ?? 0,
+      metadata: metadata ?? session.metadata,
+      sourceLabel: label,
+      playbackSource: session.playbackSource,
+    };
+    this.emit('started', session);
+    return session;
+  }
+
+  public pause(): PlaybackSession | null {
+    const session = audioManager.pausePlayback(this.zoneId);
+    if (session) {
+      this.state.mode = 'paused';
+      this.stopTicker();
+      this.emit('paused', session);
+    }
+    return session;
+  }
+
+  public resume(): PlaybackSession | null {
+    const session = audioManager.resumePlayback(this.zoneId);
+    if (session) {
+      this.state.mode = 'playing';
+      this.endedEmitted = false;
+      this.startTicker();
+      this.emit('resumed', session);
+    }
+    return session;
+  }
+
+  public stop(reason?: string): PlaybackSession | null {
+    const session = audioManager.stopPlayback(this.zoneId);
+    this.stopTicker();
+    this.state.mode = 'stopped';
+    this.state.time = 0;
+    this.state.duration = 0;
+    this.state.playbackSource = null;
+    this.endedEmitted = false;
+    if (reason) {
+      this.emit('error', reason);
+    }
+    this.emit('stopped', session);
+    return session;
+  }
+
+  public updateMetadata(metadata: PlaybackMetadata): void {
+    const session = audioManager.updateSessionMetadata(this.zoneId, metadata);
+    if (session) {
+      this.state.metadata = metadata;
+      if (metadata.duration && metadata.duration > 0) {
+        this.state.duration = metadata.duration;
+      }
+      this.emit('metadata', metadata);
+    }
+  }
+
+  public updateTiming(elapsed: number, duration: number): void {
+    audioManager.updateSessionTiming(this.zoneId, elapsed, duration);
+    this.state.time = elapsed;
+    this.state.duration = duration;
+    this.lastTickAt = Date.now();
+    this.emit('position', elapsed, duration);
+    this.maybeEmitEnded();
+  }
+
+  public updateCover(cover?: CoverArtPayload): string | undefined {
+    const relative = audioManager.updateSessionCover(this.zoneId, cover);
+    this.emit('cover', relative);
+    return relative;
+  }
+
+  public setVolume(level: number): void {
+    this.emit('volume', level);
+  }
+
+  public getSession(): PlaybackSession | null {
+    return audioManager.getSession(this.zoneId);
+  }
+
+  public getState(): PlayerState {
+    return this.state;
+  }
+
+  public on<E extends PlayerEvent>(event: E, listener: PlayerEventMap[E]): () => void {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
+    }
+    this.listeners.get(event)!.add(listener as Listener<any>);
+    return () => {
+      this.listeners.get(event)?.delete(listener as Listener<any>);
+    };
+  }
+
+  private emit<E extends PlayerEvent>(event: E, ...args: Parameters<PlayerEventMap[E]>): void {
+    const listeners = this.listeners.get(event);
+    if (!listeners?.size) return;
+    listeners.forEach((fn) => {
+      try {
+        (fn as any)(...args);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.warn('player listener error', { zoneId: this.zoneId, event, message });
+      }
+    });
+  }
+
+  private startTicker(): void {
+    this.stopTicker();
+    this.lastTickAt = Date.now();
+    this.tickTimer = setInterval(() => this.tick(), 1000);
+  }
+
+  private stopTicker(): void {
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = undefined;
+    }
+  }
+
+  private tick(): void {
+    if (this.state.mode !== 'playing') {
+      return;
+    }
+    const now = Date.now();
+    const deltaSeconds = Math.floor(Math.max(0, now - this.lastTickAt) / 1000);
+    if (deltaSeconds <= 0) {
+      return;
+    }
+    this.lastTickAt = now;
+    const nextTime = this.state.duration > 0
+      ? Math.min(this.state.time + deltaSeconds, this.state.duration)
+      : this.state.time + deltaSeconds;
+    if (nextTime !== this.state.time) {
+      this.state.time = nextTime;
+      this.emit('position', this.state.time, this.state.duration);
+      this.maybeEmitEnded();
+    }
+  }
+
+  private maybeEmitEnded(): void {
+    if (this.endedEmitted) {
+      return;
+    }
+    if (this.state.duration > 0 && this.state.time >= this.state.duration) {
+      this.endedEmitted = true;
+      this.stopTicker();
+      const session = this.getSession();
+      this.emit('ended', session);
+    }
+  }
+}

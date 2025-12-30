@@ -1,0 +1,255 @@
+import { createLogger } from '@/core/logging/logger';
+import { customRadioStore } from '@/modules/content/providers/customRadioStore';
+import type {
+  ContentFolder,
+  ContentFolderItem,
+  RadioMenuEntry,
+  RadioStation,
+} from '@/modules/content/types';
+import { TuneInClient } from '@/modules/content/providers/tuneinClient';
+
+const DEFAULT_ICON =
+  'https://extended-app-content.s3.eu-central-1.amazonaws.com/audioZone/services/Icon-TuneIn.svg';
+
+const DEMO_STATIONS: RadioStation[] = [
+  {
+    id: 'tunein_s6707',
+    name: 'BBC Radio 1',
+    stream: 'http://stream.live.vc.bbcmedia.co.uk/bbc_radio_one',
+    coverurl: DEFAULT_ICON,
+  },
+  {
+    id: 'tunein_s2475',
+    name: 'NPO Radio 2',
+    stream: 'http://icecast.omroep.nl/radio2-bb-mp3',
+    coverurl: DEFAULT_ICON,
+  },
+  {
+    id: 'tunein_s129237',
+    name: 'KEXP 90.3 FM',
+    stream: 'http://live-mp3-128.kexp.org/kexp128.mp3',
+    coverurl: DEFAULT_ICON,
+  },
+];
+
+const log = createLogger('Content', 'TuneIn');
+
+export interface TuneInProviderOptions {
+  username?: string;
+}
+
+/**
+ * Unified provider that exposes TuneIn favourites under the `local` entry
+ * and keeps the legacy `custom` list for manually defined streams.
+ */
+export class TuneInProvider {
+  private readonly username?: string;
+  private readonly api = new TuneInClient();
+
+  constructor(options: TuneInProviderOptions = {}) {
+    this.username = options.username?.trim();
+  }
+
+  public getStations(): RadioStation[] {
+    return DEMO_STATIONS;
+  }
+
+  /**
+   * Resolve a station by its stream URL (checks custom + local presets).
+   */
+  public async resolveStationByStream(streamUrl: string): Promise<RadioStation | null> {
+    const normalized = streamUrl.trim().toLowerCase();
+    if (!normalized) return null;
+    const stations = [
+      ...(await this.getCustomStations()),
+      ...(await this.getLocalStations()),
+    ];
+    const match = stations.find((s) => s.stream?.trim().toLowerCase() === normalized);
+    return match ?? null;
+  }
+
+  public async getMenuEntries(): Promise<RadioMenuEntry[]> {
+    return [
+      {
+        cmd: 'local',
+        icon: DEFAULT_ICON,
+        name: 'TuneIn Presets',
+        root: 'start',
+      },
+      {
+        cmd: 'custom',
+        icon: DEFAULT_ICON,
+        name: 'Custom Streams',
+        root: 'start',
+        editable: true,
+      },
+    ];
+  }
+
+  public async getFolder(
+    service: string,
+    folderId: string,
+    offset: number,
+    limit: number,
+  ): Promise<ContentFolder | null> {
+    if (folderId !== 'start') {
+      return null;
+    }
+
+    const stations =
+      service === 'custom' ? await this.getCustomStations() : await this.getLocalStations();
+    const items = this.mapStationsToItems(stations, offset, limit);
+
+    return {
+      id: folderId,
+      name: service === 'custom' ? 'Custom Radio' : 'TuneIn Presets',
+      start: offset,
+      totalitems: stations.length,
+      items,
+    };
+  }
+
+  public async search(
+    query: string,
+    limits: { station?: number; custom?: number } = {},
+  ): Promise<{ station: ContentFolderItem[]; custom: ContentFolderItem[] }> {
+    const stationLimit = limits.station ?? 50;
+    const customLimit = limits.custom ?? 50;
+
+    let outlines: unknown[] = [];
+    try {
+      outlines = await this.api.search(query, this.username);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.warn('tunein search failed', { message, query });
+    }
+
+    const stations = await this.mapTuneInItems(outlines);
+    const stationItems = stations
+      .slice(0, stationLimit)
+      .map<ContentFolderItem>((station) => this.toSearchItem(station));
+
+    const customStations = await this.getCustomStations();
+    const filteredCustom = customStations.filter((s) =>
+      s.name.toLowerCase().includes(query.toLowerCase()),
+    );
+    const customItems = filteredCustom
+      .slice(0, customLimit)
+      .map<ContentFolderItem>((station) => this.toSearchItem(station));
+
+    return { station: stationItems, custom: customItems };
+  }
+
+  private async getLocalStations(): Promise<RadioStation[]> {
+    if (!this.username) {
+      return DEMO_STATIONS;
+    }
+
+    try {
+      const outlines = await this.api.browsePresets(this.username);
+      const stations = await this.mapTuneInItems(outlines);
+      return stations.length ? stations : DEMO_STATIONS;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.warn('failed to load TuneIn presets', { message });
+      return DEMO_STATIONS;
+    }
+  }
+
+  private async getCustomStations(): Promise<RadioStation[]> {
+    const entries = await customRadioStore.list();
+    return entries.map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      stream: entry.stream,
+      coverurl: entry.coverurl ?? DEFAULT_ICON,
+    }));
+  }
+
+  private async mapTuneInItems(outlines: unknown[]): Promise<RadioStation[]> {
+    const tasks = outlines.map(async (raw): Promise<RadioStation | null> => {
+      const item = raw as {
+        type?: string;
+        preset_id?: string;
+        guide_id?: string;
+        URL?: string;
+        text?: string;
+        image?: string;
+        playing_image?: string;
+      };
+
+      if (!item || item.type !== 'audio') {
+        return null;
+      }
+
+      const id = item.preset_id ?? item.guide_id;
+      if (!id) {
+        return null;
+      }
+
+      const stream = await this.resolveStreamUrl(id, item.URL);
+      if (!stream) {
+        return null;
+      }
+
+      return {
+        id,
+        name: item.text ?? 'Unknown station',
+        stream,
+        coverurl: item.image ?? item.playing_image ?? DEFAULT_ICON,
+      } satisfies RadioStation;
+    });
+
+    const resolved = await Promise.all(tasks);
+    return resolved.filter((station): station is RadioStation => Boolean(station));
+  }
+
+  private async resolveStreamUrl(id: string, fallback?: string): Promise<string | null> {
+    try {
+      const outlines = await this.api.tune(id);
+      const match = outlines.find((entry) => entry && typeof (entry as any).url === 'string') as
+        | { url?: string }
+        | undefined;
+      return match?.url ?? fallback ?? null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.debug('tunein tune failed', { id, message });
+      return fallback ?? null;
+    }
+  }
+
+  private mapStationsToItems(
+    stations: RadioStation[],
+    offset: number,
+    limit: number,
+  ): ContentFolderItem[] {
+    return stations.slice(offset, offset + limit).map<ContentFolderItem>((station) => ({
+      id: station.id,
+      name: station.name,
+      title: station.name,
+      type: 2,
+      audiopath: station.stream,
+      coverurl: station.coverurl ?? DEFAULT_ICON,
+      items: 0,
+    }));
+  }
+
+  private toSearchItem(station: RadioStation): ContentFolderItem {
+    const cover = station.coverurl ?? DEFAULT_ICON;
+    return {
+      id: station.id,
+      name: station.name,
+      title: station.name,
+      audiopath: station.stream,
+      coverurl: cover,
+      thumbnail: cover,
+      type: 2,
+      tag: 'radio',
+      provider: 'tunein',
+      items: 0,
+      // Keep a "station" field similar to legacy payloads so clients can show the stream URL.
+      ...(station.stream ? { station: station.stream } : {}),
+      contentType: 'audio/mpeg',
+    } as ContentFolderItem;
+  }
+}

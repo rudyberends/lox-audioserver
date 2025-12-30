@@ -1,0 +1,39 @@
+# Git & CI/CD
+.git
+.gitignore
+.github/
+.devcontainer/
+.vscode/
+
+# Docker build files
+Dockerfile*
+.dockerignore
+
+# Editor & tooling configs
+.editorconfig
+.eslintrc
+.eslintignore
+.prettierrc
+nodemon.json
+
+# Dependencies
+node_modules/
+
+# Local build artifacts
+dist/
+coverage/
+logs/
+log/
+*.log
+
+# Local data / runtime
+data/
+tmp/
+.cache/
+
+# OS / IDE junk
+.DS_Store
+Thumbs.db
+npm-debug.log
+yarn-debug.log
+yarn-error.log

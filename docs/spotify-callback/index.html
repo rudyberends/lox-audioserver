@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Spotify OAuth Redirect</title>
+  </head>
+  <body>
+    <script>
+      'use strict';
+      const urlParams = new URLSearchParams(window.location.search);
+      const redirectUrl = decodeURIComponent(urlParams.get('state') || '');
+      const code = encodeURIComponent(urlParams.get('code') || '');
+
+      let finalUrl = '';
+      if (redirectUrl && code) {
+        finalUrl = redirectUrl.includes('?')
+          ? `${redirectUrl}&code=${code}`
+          : `${redirectUrl}?code=${code}`;
+      }
+
+      if (finalUrl) {
+        window.location.replace(finalUrl);
+      } else {
+        document.write('<p>Missing redirect information.</p>');
+      }
+    </script>
+  </body>
+</html>
+

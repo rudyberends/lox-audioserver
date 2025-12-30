@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title>Default Cover</title>
+  <desc>Abstract default cover art for Lox AudioServer</desc>
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1ed760" stop-opacity="0.85"/>
+      <stop offset="60%" stop-color="#111720" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#0b0f17" stop-opacity="1"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="#0d1119"/>
+  <rect x="12" y="12" width="488" height="488" rx="32" fill="url(#g)"/>
+  <circle cx="180" cy="332" r="62" fill="none" stroke="#d7e2f2" stroke-width="10" opacity="0.8"/>
+  <circle cx="332" cy="260" r="52" fill="none" stroke="#d7e2f2" stroke-width="10" opacity="0.65"/>
+  <path d="M270 150v180c0 28-22 50-50 50s-50-22-50-50 22-50 50-50c13 0 25 5 34 13V150h16z" fill="#d7e2f2" opacity="0.9"/>
+  <path d="M290 138v150c0 23 19 42 42 42s42-19 42-42-19-42-42-42c-11 0-22 4-30 11V138h-12z" fill="#c5d4e6" opacity="0.75"/>
+  <circle cx="260" cy="260" r="238" fill="none" stroke="#ffffff" stroke-opacity="0.05" stroke-width="18"/>
+  <circle cx="260" cy="260" r="208" fill="none" stroke="#ffffff" stroke-opacity="0.04" stroke-width="12"/>
+</svg>

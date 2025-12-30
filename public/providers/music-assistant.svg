@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Music Assistant">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="18" fill="url(#g)"/>
+  <path d="M45 92a14 14 0 1 1 0-28h7v-34l32-8v42h-7a14 14 0 1 1 0 8h-9v-36l-10 3v33h-13z" fill="#fff"/>
+</svg>

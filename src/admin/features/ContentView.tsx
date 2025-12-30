@@ -1,0 +1,2288 @@
+import React from 'react';
+import { createPortal } from 'react-dom';
+import './ContentView.css';
+import { getConfig } from '../services/setupApi';
+import {
+  updateContentConfig,
+  fetchLibraryStatus,
+  fetchLibraryCovers,
+  uploadLibraryAudio,
+  triggerLibraryRescan,
+  deleteSpotifyAccount,
+  fetchSpotifyAuthLink,
+  fetchLibraryStorages,
+  createLibraryStorage,
+  fetchCustomRadioStations,
+  createCustomRadioStation,
+  deleteCustomRadioStation,
+  createSpotifyBridge,
+  deleteSpotifyBridge,
+} from '../services/contentApi';
+import type {
+  LibraryStorage,
+  CustomRadioEntry,
+  LibraryCoverSample,
+  SpotifyBridgeConfig,
+  CreateSpotifyBridgePayload,
+} from '../services/contentApi';
+import { fetchAlertFiles, revertAlertFile as revertAlertFileApi, uploadAlertFile } from '../services/alertsApi';
+import type { AlertFile } from '../services/alertsApi';
+import { purgeFavorites, purgeRecents } from '../services/zonesApi';
+import { API_BASE } from '../config/apiConfig';
+import { useGlobalAlert } from '../components/GlobalAlert';
+
+type ContentConfigResponse = {
+  config?: {
+    content?: {
+      radio?: {
+        tuneInUsername?: string | null;
+      };
+      spotify?: {
+        clientId?: string | null;
+        accounts?: SpotifyAccountConfig[];
+      };
+      library?: {
+        enabled?: boolean;
+        autoScan?: boolean;
+      };
+    };
+  };
+};
+
+type SpotifyAccountConfig = {
+  id?: string;
+  displayName?: string;
+  name?: string;
+  user?: string;
+  email?: string;
+  product?: string;
+};
+
+type SpotifyBridgeConfig = {
+};
+type ScanStatus = 0 | 1 | 2;
+
+const AUDIO_EXTENSIONS = new Set(['.mp3', '.flac', '.m4a', '.aac', '.ogg', '.wav']);
+
+type StorageFormState = {
+  name: string;
+  server: string;
+  folder: string;
+  type: string;
+  username: string;
+  password: string;
+  guest: boolean;
+};
+
+type CustomRadioFormState = {
+  name: string;
+  stream: string;
+  coverurl: string;
+};
+
+type BridgeFormState = {
+  provider: 'musicassistant' | 'applemusic';
+  host: string;
+  port: number;
+  apiKey: string;
+  userToken: string;
+};
+
+type FileSystemEntry = {
+  isFile: boolean;
+  isDirectory: boolean;
+  fullPath?: string;
+};
+
+type FileSystemFileEntry = FileSystemEntry & {
+  file: (success: (file: File) => void, error?: () => void) => void;
+};
+
+type FileSystemDirectoryEntry = FileSystemEntry & {
+  createReader: () => FileSystemDirectoryReader;
+};
+
+type FileSystemDirectoryReader = {
+  readEntries: (success: (entries: FileSystemEntry[]) => void, error?: () => void) => void;
+};
+
+type DroppedUpload = {
+  file: File;
+  relativePath?: string;
+};
+
+type AlertPlaybackRowProps = {
+  alert: AlertFile;
+  alertsSaving: boolean;
+  isActive: boolean;
+  onActivate: (alertId: string) => void;
+  onDeactivate: (alertId: string) => void;
+  onUpload: (alertId: string, file: File | null) => Promise<void>;
+  onRevert: (alertId: string) => Promise<void>;
+};
+
+function formatScanStatus(status: ScanStatus | null): { label: string; tone: 'idle' | 'active' | 'error' } {
+  if (status === 1) return { label: 'Scanning', tone: 'active' };
+  if (status === 2) return { label: 'Error', tone: 'error' };
+  return { label: 'Idle', tone: 'idle' };
+}
+
+function getAlertFriendlyName(alertId: string): string {
+  if (alertId === 'firealarm') return 'Fire alarm';
+  return alertId.charAt(0).toUpperCase() + alertId.slice(1);
+}
+
+function isAudioFilename(name: string): boolean {
+  const parts = name.toLowerCase().split('.');
+  if (parts.length < 2) return false;
+  return AUDIO_EXTENSIONS.has(`.${parts.pop()}`);
+}
+
+function normalizeRelativePath(pathValue: string | undefined | null): string | undefined {
+  if (!pathValue) return undefined;
+  const cleaned = pathValue.replace(/\\/g, '/').replace(/^\/+/, '');
+  const parts = cleaned.split('/').filter((part) => part && part !== '.' && part !== '..');
+  if (parts.length === 0) return undefined;
+  return parts.map((part) => part.replace(/[^A-Za-z0-9._-]/g, '_')).join('/');
+}
+
+async function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
+  const entries: FileSystemEntry[] = [];
+  return new Promise((resolve) => {
+    const readBatch = (): void => {
+      reader.readEntries(
+        (batch) => {
+          if (batch.length === 0) {
+            resolve(entries);
+            return;
+          }
+          entries.push(...batch);
+          readBatch();
+        },
+        () => resolve(entries),
+      );
+    };
+    readBatch();
+  });
+}
+
+async function collectFilesFromEntry(entry: FileSystemEntry | null, out: DroppedUpload[]): Promise<void> {
+  if (!entry) return;
+  if (entry.isFile) {
+    const file = await new Promise<File | null>((resolve) => {
+      (entry as FileSystemFileEntry).file(
+        (value) => resolve(value),
+        () => resolve(null),
+      );
+    });
+    if (file) {
+      const relativePath = normalizeRelativePath(entry.fullPath);
+      out.push({ file, relativePath });
+    }
+    return;
+  }
+  if (entry.isDirectory) {
+    const reader = (entry as FileSystemDirectoryEntry).createReader();
+    const children = await readAllEntries(reader);
+    for (const child of children) {
+      await collectFilesFromEntry(child, out);
+    }
+  }
+}
+
+async function collectFilesFromDataTransfer(dataTransfer: DataTransfer): Promise<DroppedUpload[]> {
+  const items = Array.from(dataTransfer.items ?? []);
+  const files: DroppedUpload[] = [];
+  if (items.length > 0) {
+    for (const item of items) {
+      if (item.kind !== 'file') continue;
+      const entry = (item as any).webkitGetAsEntry?.() as FileSystemEntry | null;
+      if (entry) {
+        await collectFilesFromEntry(entry, files);
+      } else {
+        const file = item.getAsFile();
+        if (file) files.push({ file, relativePath: normalizeRelativePath(file.webkitRelativePath) });
+      }
+    }
+  }
+  if (files.length === 0) {
+    files.push(
+      ...Array.from(dataTransfer.files ?? []).map((file) => ({
+        file,
+        relativePath: normalizeRelativePath(file.webkitRelativePath),
+      })),
+    );
+  }
+  return files;
+}
+
+function AlertPlaybackRow({
+  alert,
+  alertsSaving,
+  isActive,
+  onActivate,
+  onDeactivate,
+  onUpload,
+  onRevert,
+}: AlertPlaybackRowProps): JSX.Element {
+  const audioRef = React.useRef<HTMLAudioElement | null>(null);
+  const pendingSeekRef = React.useRef<number | null>(null);
+  const [currentTime, setCurrentTime] = React.useState(0);
+  const [duration, setDuration] = React.useState(0);
+  const [playing, setPlaying] = React.useState(false);
+  const [dragActive, setDragActive] = React.useState(false);
+
+  const resolveDuration = (audio: HTMLAudioElement): number => {
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
+      return audio.duration;
+    }
+    if (audio.seekable?.length) {
+      const end = audio.seekable.end(audio.seekable.length - 1);
+      if (Number.isFinite(end) && end > 0) return end;
+    }
+    if (audio.buffered?.length) {
+      const end = audio.buffered.end(audio.buffered.length - 1);
+      if (Number.isFinite(end) && end > 0) return end;
+    }
+    return 0;
+  };
+
+  React.useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const syncTime = (): void => {
+      setDuration(resolveDuration(audio));
+      setCurrentTime(audio.currentTime);
+    };
+    const applyPendingSeek = (): void => {
+      const pending = pendingSeekRef.current;
+      if (pending === null) return;
+      const resolvedDuration = resolveDuration(audio);
+      if (!resolvedDuration) return;
+      const newTime = (pending / 100) * resolvedDuration;
+      audio.currentTime = newTime;
+      setCurrentTime(newTime);
+      pendingSeekRef.current = null;
+    };
+    const handleLoadedMetadata = (): void => {
+      syncTime();
+      applyPendingSeek();
+    };
+    const handlePlay = (): void => {
+      setPlaying(true);
+      onActivate(alert.id);
+    };
+    const handlePause = (): void => {
+      setPlaying(false);
+    };
+    const handleEnded = (): void => {
+      setPlaying(false);
+      setCurrentTime(0);
+      onDeactivate(alert.id);
+    };
+    audio.addEventListener('timeupdate', syncTime);
+    audio.addEventListener('durationchange', syncTime);
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    audio.addEventListener('play', handlePlay);
+    audio.addEventListener('pause', handlePause);
+    audio.addEventListener('ended', handleEnded);
+    if (audio.readyState >= 1) {
+      handleLoadedMetadata();
+    }
+    return () => {
+      audio.removeEventListener('timeupdate', syncTime);
+      audio.removeEventListener('durationchange', syncTime);
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.removeEventListener('play', handlePlay);
+      audio.removeEventListener('pause', handlePause);
+      audio.removeEventListener('ended', handleEnded);
+    };
+  }, [alert.id, onActivate, onDeactivate]);
+
+  React.useEffect(() => {
+    if (!isActive && playing) {
+      const audio = audioRef.current;
+      audio?.pause();
+    }
+  }, [isActive, playing]);
+
+  React.useEffect(() => {
+    setCurrentTime(0);
+    setDuration(0);
+    setPlaying(false);
+    pendingSeekRef.current = null;
+    audioRef.current?.load();
+  }, [alert.url]);
+
+  React.useEffect(() => {
+    if (!playing) return undefined;
+    let raf: number;
+    const tick = (): void => {
+      const audio = audioRef.current;
+      if (audio) {
+        setCurrentTime(audio.currentTime);
+        if (Number.isFinite(audio.duration) && audio.duration > 0) {
+          setDuration(audio.duration);
+        }
+      }
+      raf = window.requestAnimationFrame(tick);
+    };
+    raf = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(raf);
+  }, [playing]);
+
+  const togglePlayback = (): void => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playing) {
+      audio.pause();
+      onDeactivate(alert.id);
+      return;
+    }
+    onActivate(alert.id);
+    void audio.play();
+  };
+
+  const handleSeek = (value: number): void => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const resolvedDuration = resolveDuration(audio);
+    if (!resolvedDuration) {
+      pendingSeekRef.current = value;
+      audio.load();
+      return;
+    }
+    const newTime = (value / 100) * resolvedDuration;
+    audio.currentTime = newTime;
+    setCurrentTime(newTime);
+  };
+
+  const fallbackDuration =
+    duration > 0
+      ? duration
+      : audioRef.current && Number.isFinite(audioRef.current.duration) && audioRef.current.duration > 0
+        ? audioRef.current.duration
+        : 0;
+  const sliderValue = fallbackDuration > 0 ? Math.min((currentTime / fallbackDuration) * 100, 100) : 0;
+
+  return (
+    <div className="content-alerts-item">
+      <div className="content-alerts-item__header">
+        <span className="content-alerts-item__title">{getAlertFriendlyName(alert.id)}</span>
+        <span className="content-alerts-item__filename">{alert.filename}</span>
+      </div>
+      <div className="content-alerts-player">
+        <button type="button" className={`content-alerts-playbutton ${playing ? 'is-playing' : ''}`} onClick={togglePlayback}>
+          {playing ? (
+            <svg width="14" height="16" viewBox="0 0 14 16" aria-hidden="true" focusable="false">
+              <rect x="0" y="0" width="4" height="16" rx="1.5" fill="#ffffff" />
+              <rect x="10" y="0" width="4" height="16" rx="1.5" fill="#ffffff" />
+            </svg>
+          ) : (
+            <svg width="16" height="18" viewBox="0 0 16 18" aria-hidden="true" focusable="false">
+              <path d="M2 1L15 9L2 17V1Z" fill="#ffffff" />
+            </svg>
+          )}
+          <span className="sr-only">
+            {playing ? 'Pause' : 'Play'} {getAlertFriendlyName(alert.id)}
+          </span>
+        </button>
+        <div className="content-alerts-track">
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={0.5}
+            value={sliderValue}
+            onChange={(e) => handleSeek(Number(e.target.value))}
+            aria-label={`${getAlertFriendlyName(alert.id)} playback position`}
+          />
+        </div>
+      </div>
+      <audio ref={audioRef} src={alert.url} preload="auto" className="content-alerts-hidden-audio">
+        Your browser does not support the audio element.
+      </audio>
+      <div
+        className={`content-alerts-dropzone ${dragActive ? 'is-active' : ''} ${alertsSaving ? 'is-disabled' : ''}`}
+        onDragEnter={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!alertsSaving) setDragActive(true);
+        }}
+        onDragOver={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = 'copy';
+        }}
+        onDragLeave={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setDragActive(false);
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setDragActive(false);
+          if (alertsSaving) return;
+          const file = event.dataTransfer.files?.[0] ?? null;
+          void onUpload(alert.id, file);
+        }}
+      >
+        <div className="content-alerts-dropzone__title">
+          {alertsSaving ? 'Uploading…' : 'Drop MP3 here'}
+        </div>
+        <div className="content-alerts-dropzone__meta">or click to upload</div>
+        <input
+          type="file"
+          accept="audio/mpeg,audio/mp3"
+          disabled={alertsSaving}
+          onChange={(e) => {
+            const file = e.target.files?.[0] ?? null;
+            void onUpload(alert.id, file);
+            e.target.value = '';
+          }}
+        />
+      </div>
+      <div className="content-alerts-actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={!alert.hasBackup || alertsSaving}
+          onClick={() => {
+            void onRevert(alert.id);
+          }}
+        >
+          Revert to original
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function resolveAccountKey(account: SpotifyAccountConfig | undefined | null): string | null {
+  if (!account) return null;
+  return account.id ?? account.user ?? account.email ?? account.displayName ?? account.name ?? null;
+}
+
+const createEmptyStorageForm = (): StorageFormState => ({
+  name: '',
+  server: '',
+  folder: '',
+  type: 'smb',
+  username: '',
+  password: '',
+  guest: false,
+});
+
+const createEmptyCustomRadioForm = (): CustomRadioFormState => ({
+  name: '',
+  stream: '',
+  coverurl: '',
+});
+
+const createEmptyBridgeForm = (): BridgeFormState => ({
+  provider: 'musicassistant',
+  host: '127.0.0.1',
+  port: 8095,
+  apiKey: '',
+  userToken: '',
+});
+
+function normalizeBridge(bridge: SpotifyBridgeConfig): SpotifyBridgeConfig {
+  const provider = (bridge.provider || '').toLowerCase();
+  if (provider === 'musicassistant') {
+    return { ...bridge, provider: 'musicassistant' };
+  }
+  return bridge;
+}
+
+function sortStorages(entries: LibraryStorage[]): LibraryStorage[] {
+  return [...entries].sort((a, b) => {
+    const left = (a.name || `${a.server}/${a.folder}` || '').toLowerCase();
+    const right = (b.name || `${b.server}/${b.folder}` || '').toLowerCase();
+    if (left < right) return -1;
+    if (left > right) return 1;
+    return 0;
+  });
+}
+
+export default function ContentView(): JSX.Element {
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const [radioUsername, setRadioUsername] = React.useState('');
+  const [initialRadioUsername, setInitialRadioUsername] = React.useState('');
+  const [radioSaving, setRadioSaving] = React.useState(false);
+  const [radioFeedback, setRadioFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(
+    null,
+  );
+
+  const [spotifyClientId, setSpotifyClientId] = React.useState('');
+  const [initialSpotifyClientId, setInitialSpotifyClientId] = React.useState('');
+  const [spotifySaving, setSpotifySaving] = React.useState(false);
+  const [spotifyFeedback, setSpotifyFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(
+    null,
+  );
+  const [spotifyAccounts, setSpotifyAccounts] = React.useState<SpotifyAccountConfig[]>([]);
+  const [deletingAccountId, setDeletingAccountId] = React.useState<string | null>(null);
+  const [addingSpotifyAccount, setAddingSpotifyAccount] = React.useState(false);
+  const [spotifyRefreshPending, setSpotifyRefreshPending] = React.useState(false);
+  const [spotifyBridges, setSpotifyBridges] = React.useState<SpotifyBridgeConfig[]>([]);
+  const [bridgeModalOpen, setBridgeModalOpen] = React.useState(false);
+  const [bridgeForm, setBridgeForm] = React.useState<BridgeFormState>(() => createEmptyBridgeForm());
+  const [bridgeSubmitting, setBridgeSubmitting] = React.useState(false);
+  const [bridgeFeedback, setBridgeFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [bridgeDeletingId, setBridgeDeletingId] = React.useState<string | null>(null);
+
+  const [libraryStatus, setLibraryStatus] = React.useState<ScanStatus | null>(null);
+  const [libraryTrackCount, setLibraryTrackCount] = React.useState<number | null>(null);
+  const [libraryAlbumCount, setLibraryAlbumCount] = React.useState<number | null>(null);
+  const [libraryArtistCount, setLibraryArtistCount] = React.useState<number | null>(null);
+  const [libraryLoading, setLibraryLoading] = React.useState(true);
+  const [libraryError, setLibraryError] = React.useState<string | null>(null);
+  const [libraryMessage, setLibraryMessage] = React.useState<string | null>(null);
+  const [libraryActionPending, setLibraryActionPending] = React.useState(false);
+  const [libraryCovers, setLibraryCovers] = React.useState<LibraryCoverSample[]>([]);
+  const [libraryCoversLoading, setLibraryCoversLoading] = React.useState(true);
+  const [libraryCoversError, setLibraryCoversError] = React.useState<string | null>(null);
+  const libraryStatusRef = React.useRef<ScanStatus | null>(null);
+  const [libraryUploading, setLibraryUploading] = React.useState(false);
+  const [libraryUploadFeedback, setLibraryUploadFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(
+    null,
+  );
+  const [libraryDragActive, setLibraryDragActive] = React.useState(false);
+  const libraryFileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [libraryStorages, setLibraryStorages] = React.useState<LibraryStorage[]>([]);
+  const [storageLoading, setStorageLoading] = React.useState(true);
+  const [storageError, setStorageError] = React.useState<string | null>(null);
+  const [storageFeedback, setStorageFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(
+    null,
+  );
+  const [storageSubmitting, setStorageSubmitting] = React.useState(false);
+  const [storageForm, setStorageForm] = React.useState<StorageFormState>(() => createEmptyStorageForm());
+  const [storageModalOpen, setStorageModalOpen] = React.useState(false);
+  const [customRadios, setCustomRadios] = React.useState<CustomRadioEntry[]>([]);
+  const [customRadioLoading, setCustomRadioLoading] = React.useState(true);
+  const [customRadioError, setCustomRadioError] = React.useState<string | null>(null);
+  const [customRadioSubmitting, setCustomRadioSubmitting] = React.useState(false);
+  const [customRadioFeedback, setCustomRadioFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(
+    null,
+  );
+  const [customRadioForm, setCustomRadioForm] = React.useState<CustomRadioFormState>(() => createEmptyCustomRadioForm());
+  const [customRadioModalOpen, setCustomRadioModalOpen] = React.useState(false);
+  const [alerts, setAlerts] = React.useState<AlertFile[]>([]);
+  const [alertsLoading, setAlertsLoading] = React.useState(true);
+  const [alertsError, setAlertsError] = React.useState<string | null>(null);
+  const [alertsSaving, setAlertsSaving] = React.useState(false);
+  const [alertsMessage, setAlertsMessage] = React.useState<string | null>(null);
+  const [activeAlertId, setActiveAlertId] = React.useState<string | null>(null);
+  const [favoritesPurging, setFavoritesPurging] = React.useState(false);
+  const [recentsPurging, setRecentsPurging] = React.useState(false);
+  const [favoritesPurgeFeedback, setFavoritesPurgeFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [recentsPurgeFeedback, setRecentsPurgeFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const spotifyAccountBaselineRef = React.useRef(0);
+  const { push: pushAlert } = useGlobalAlert();
+  const modalOpen = customRadioModalOpen || bridgeModalOpen || storageModalOpen;
+
+  const renderModal = React.useCallback(
+    (node: React.ReactNode): React.ReactPortal | null => {
+      if (typeof document === 'undefined') return null;
+      return createPortal(node, document.body);
+    },
+    [],
+  );
+
+  const radioDirty = radioUsername !== initialRadioUsername;
+  const spotifyDirty = spotifyClientId !== initialSpotifyClientId;
+  const storageFormValid = React.useMemo(() => {
+    return (
+      storageForm.name.trim().length > 0 &&
+      storageForm.server.trim().length > 0 &&
+      storageForm.folder.trim().length > 0 &&
+      storageForm.type.trim().length > 0
+    );
+  }, [storageForm]);
+  const customRadioFormValid = React.useMemo(() => {
+    return customRadioForm.name.trim().length > 0 && customRadioForm.stream.trim().length > 0;
+  }, [customRadioForm]);
+  const bridgeFormValid = React.useMemo(() => {
+    if (!bridgeForm.provider.trim()) return false;
+    if (bridgeForm.provider === 'musicassistant') {
+      return bridgeForm.host.trim().length > 0 && bridgeForm.apiKey.trim().length > 0;
+    }
+    if (bridgeForm.provider === 'applemusic') {
+      return bridgeForm.userToken.trim().length > 0;
+    }
+    return true;
+  }, [bridgeForm]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    async function load(): Promise<void> {
+      try {
+        const cfg = (await getConfig()) as ContentConfigResponse;
+        if (cancelled) return;
+        const content = cfg.config?.content ?? {};
+        const currentRadio = content.radio?.tuneInUsername ?? '';
+        const currentSpotify = content.spotify?.clientId ?? '';
+        setRadioUsername(currentRadio);
+        setInitialRadioUsername(currentRadio);
+        setSpotifyClientId(currentSpotify);
+        setInitialSpotifyClientId(currentSpotify);
+        setSpotifyAccounts(Array.isArray(content.spotify?.accounts) ? content.spotify!.accounts! : []);
+        setSpotifyBridges(
+          Array.isArray(content.spotify?.bridges)
+            ? content.spotify!.bridges!.map((bridge) => normalizeBridge(bridge))
+            : [],
+        );
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Failed to load content configuration');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const refreshSpotifyAccounts = React.useCallback(async (): Promise<number | null> => {
+    try {
+      const cfg = (await getConfig()) as ContentConfigResponse;
+      const accounts = Array.isArray(cfg.config?.content?.spotify?.accounts)
+        ? cfg.config!.content!.spotify!.accounts!
+        : [];
+      setSpotifyAccounts(accounts);
+      return accounts.length;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const scheduleSpotifyAccountRefresh = React.useCallback((): void => {
+    spotifyAccountBaselineRef.current = spotifyAccounts.length;
+    setSpotifyRefreshPending(true);
+  }, [spotifyAccounts.length]);
+
+  React.useEffect(() => {
+    if (!spotifyRefreshPending) return undefined;
+    let cancelled = false;
+    let attempts = 0;
+    const tick = async (): Promise<void> => {
+      const count = await refreshSpotifyAccounts();
+      if (cancelled) return;
+      attempts += 1;
+      if (count !== null && count !== spotifyAccountBaselineRef.current) {
+        setSpotifyRefreshPending(false);
+        return;
+      }
+      if (attempts >= 6) {
+        setSpotifyRefreshPending(false);
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => {
+      void tick();
+    }, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [refreshSpotifyAccounts, spotifyRefreshPending]);
+
+  const refreshLibraryStatus = React.useCallback(
+    async (withLoading = false): Promise<void> => {
+      if (withLoading) {
+        setLibraryLoading(true);
+        setLibraryError(null);
+      }
+      try {
+        const payload = await fetchLibraryStatus();
+        setLibraryStatus(payload.status ?? 0);
+        setLibraryTrackCount(payload.trackCount ?? null);
+        setLibraryAlbumCount(payload.albumCount ?? null);
+        setLibraryArtistCount(payload.artistCount ?? null);
+      } catch (err) {
+        setLibraryError(err instanceof Error ? err.message : 'Failed to load library status');
+      } finally {
+        setLibraryLoading(false);
+      }
+    },
+    [],
+  );
+
+  React.useEffect(() => {
+    void refreshLibraryStatus(true);
+  }, [refreshLibraryStatus]);
+
+  React.useEffect(() => {
+    const feeds = [
+      radioFeedback,
+      spotifyFeedback,
+      bridgeFeedback,
+      libraryUploadFeedback,
+      storageFeedback,
+      customRadioFeedback,
+      favoritesPurgeFeedback,
+      recentsPurgeFeedback,
+      libraryMessage ? { type: 'success' as const, message: libraryMessage } : null,
+      alertsMessage ? { type: 'success' as const, message: alertsMessage } : null,
+      libraryError ? { type: 'error' as const, message: libraryError } : null,
+      storageError ? { type: 'error' as const, message: storageError } : null,
+      customRadioError ? { type: 'error' as const, message: customRadioError } : null,
+      alertsError ? { type: 'error' as const, message: alertsError } : null,
+      libraryCoversError ? { type: 'error' as const, message: libraryCoversError } : null,
+    ].filter(Boolean) as { type: 'success' | 'error'; message: string }[];
+
+    const latest = feeds[feeds.length - 1];
+    if (latest) {
+      pushAlert(latest);
+    }
+  }, [
+    alertsError,
+    alertsMessage,
+    bridgeFeedback,
+    customRadioError,
+    customRadioFeedback,
+    favoritesPurgeFeedback,
+    libraryCoversError,
+    libraryError,
+    libraryMessage,
+    libraryUploadFeedback,
+    pushAlert,
+    radioFeedback,
+    recentsPurgeFeedback,
+    spotifyFeedback,
+    storageError,
+    storageFeedback,
+  ]);
+
+  React.useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const className = 'modal-open';
+    if (modalOpen) {
+      document.body.classList.add(className);
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'auto' });
+      }
+    } else {
+      document.body.classList.remove(className);
+    }
+    return () => {
+      document.body.classList.remove(className);
+    };
+  }, [modalOpen]);
+
+  const refreshLibraryCovers = React.useCallback(async (withLoading = false): Promise<void> => {
+    if (withLoading) {
+      setLibraryCoversLoading(true);
+      setLibraryCoversError(null);
+    }
+    try {
+      const payload = await fetchLibraryCovers(8);
+      setLibraryCovers(Array.isArray(payload.covers) ? payload.covers : []);
+    } catch (err) {
+      setLibraryCovers([]);
+      setLibraryCoversError(err instanceof Error ? err.message : 'Failed to load library covers');
+    } finally {
+      setLibraryCoversLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void refreshLibraryCovers(true);
+  }, [refreshLibraryCovers]);
+
+  const refreshLibraryStorages = React.useCallback(async (): Promise<void> => {
+    setStorageLoading(true);
+    setStorageError(null);
+    try {
+      const payload = await fetchLibraryStorages();
+      setLibraryStorages(sortStorages(Array.isArray(payload.storages) ? payload.storages : []));
+    } catch (err) {
+      setLibraryStorages([]);
+      setStorageError(err instanceof Error ? err.message : 'Failed to load shares');
+    } finally {
+      setStorageLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void refreshLibraryStorages();
+  }, [refreshLibraryStorages]);
+
+  const refreshCustomRadios = React.useCallback(async (): Promise<void> => {
+    setCustomRadioLoading(true);
+    setCustomRadioError(null);
+    try {
+      const payload = await fetchCustomRadioStations();
+      setCustomRadios(Array.isArray(payload.stations) ? payload.stations : []);
+    } catch (err) {
+      setCustomRadios([]);
+      setCustomRadioError(err instanceof Error ? err.message : 'Failed to load custom stations');
+    } finally {
+      setCustomRadioLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void refreshCustomRadios();
+  }, [refreshCustomRadios]);
+
+  const refreshAlerts = React.useCallback(async (): Promise<void> => {
+    setAlertsLoading(true);
+    setAlertsError(null);
+    try {
+      const payload = await fetchAlertFiles();
+      setAlerts(Array.isArray(payload.alerts) ? payload.alerts : []);
+    } catch (err) {
+      setAlerts([]);
+      setAlertsError(err instanceof Error ? err.message : 'Failed to load alerts');
+    } finally {
+      setAlertsLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void refreshAlerts();
+  }, [refreshAlerts]);
+
+  const openStorageModal = (): void => {
+    setStorageModalOpen(true);
+    setStorageFeedback(null);
+  };
+
+  const closeStorageModal = (resetFeedback = true): void => {
+    setStorageModalOpen(false);
+    if (resetFeedback) {
+      setStorageFeedback(null);
+    }
+    setStorageForm(createEmptyStorageForm());
+  };
+
+  const openCustomRadioModal = (): void => {
+    setCustomRadioModalOpen(true);
+    setCustomRadioFeedback(null);
+  };
+
+  const closeCustomRadioModal = (resetFeedback = true): void => {
+    setCustomRadioModalOpen(false);
+    if (resetFeedback) {
+      setCustomRadioFeedback(null);
+    }
+    setCustomRadioForm(createEmptyCustomRadioForm());
+  };
+
+  const openBridgeModal = (): void => {
+    setBridgeModalOpen(true);
+    setBridgeFeedback(null);
+  };
+
+  const closeBridgeModal = (resetFeedback = true): void => {
+    setBridgeModalOpen(false);
+    if (resetFeedback) {
+      setBridgeFeedback(null);
+    }
+    setBridgeForm(createEmptyBridgeForm());
+  };
+
+  React.useEffect(() => {
+    if (libraryStatus !== 1) return undefined;
+    const timer = window.setInterval(() => {
+      void refreshLibraryStatus(false);
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [libraryStatus, refreshLibraryStatus]);
+
+  React.useEffect(() => {
+    const prev = libraryStatusRef.current;
+    libraryStatusRef.current = libraryStatus;
+    if (prev === 1 && libraryStatus === 0) {
+      void refreshLibraryCovers(false);
+    }
+  }, [libraryStatus, refreshLibraryCovers]);
+
+  const handleSaveRadio = async (): Promise<void> => {
+    if (!radioDirty || radioSaving) return;
+    setRadioSaving(true);
+    setRadioFeedback(null);
+    try {
+      await updateContentConfig({
+        radio: { tuneInUsername: radioUsername.trim() || null },
+      });
+      setInitialRadioUsername(radioUsername);
+      setRadioFeedback({ type: 'success', message: 'Radio content saved' });
+    } catch (err) {
+      setRadioFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to save radio content',
+      });
+    } finally {
+      setRadioSaving(false);
+    }
+  };
+
+  const handleSaveSpotify = async (): Promise<void> => {
+    if (!spotifyDirty || spotifySaving) return;
+    setSpotifySaving(true);
+    setSpotifyFeedback(null);
+    try {
+      await updateContentConfig({
+        spotify: { clientId: spotifyClientId.trim() || null },
+      });
+      setInitialSpotifyClientId(spotifyClientId);
+      setSpotifyFeedback({ type: 'success', message: 'Spotify content saved' });
+    } catch (err) {
+      setSpotifyFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to save Spotify content',
+      });
+    } finally {
+      setSpotifySaving(false);
+    }
+  };
+
+  const handleDeleteSpotifyAccount = async (accountKey: string): Promise<void> => {
+    if (!accountKey || deletingAccountId === accountKey) return;
+    setDeletingAccountId(accountKey);
+    setSpotifyFeedback(null);
+    try {
+      await deleteSpotifyAccount(accountKey);
+      setSpotifyAccounts((prev) =>
+        prev.filter((account) => resolveAccountKey(account) !== accountKey),
+      );
+      setSpotifyFeedback({ type: 'success', message: 'Spotify account removed' });
+    } catch (err) {
+      setSpotifyFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to remove Spotify account',
+      });
+    } finally {
+      setDeletingAccountId(null);
+    }
+  };
+
+  const handleAddSpotifyAccount = async (): Promise<void> => {
+    if (addingSpotifyAccount) return;
+    setAddingSpotifyAccount(true);
+    setSpotifyFeedback(null);
+    try {
+      const { link } = await fetchSpotifyAuthLink();
+      if (!link) {
+        throw new Error('No auth link available');
+      }
+      window.open(link, '_blank', 'noopener,noreferrer');
+      setSpotifyFeedback({
+        type: 'success',
+        message: 'Follow the Spotify login flow to complete account linking.',
+      });
+      scheduleSpotifyAccountRefresh();
+    } catch (err) {
+      setSpotifyFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to start Spotify login',
+      });
+    } finally {
+      setAddingSpotifyAccount(false);
+    }
+  };
+
+  const handleLibraryRescan = async (): Promise<void> => {
+    setLibraryActionPending(true);
+    setLibraryMessage(null);
+    setLibraryError(null);
+    try {
+      await triggerLibraryRescan();
+      setLibraryMessage('Library rescan started');
+      await refreshLibraryStatus(false);
+    } catch (err) {
+      setLibraryError(err instanceof Error ? err.message : 'Failed to trigger rescan');
+    } finally {
+      setLibraryActionPending(false);
+    }
+  };
+
+  const handleLibraryUploadFiles = async (files: DroppedUpload[]): Promise<void> => {
+    if (libraryUploading) return;
+    const audioFiles = files.filter((entry) => isAudioFilename(entry.file.name));
+    if (audioFiles.length === 0) {
+      setLibraryUploadFeedback({
+        type: 'error',
+        message: 'No supported audio files found.',
+      });
+      return;
+    }
+    setLibraryUploading(true);
+    setLibraryUploadFeedback(null);
+    setLibraryError(null);
+    try {
+      for (const entry of audioFiles) {
+        const base64 = await fileToBase64(entry.file);
+        const relativePath = normalizeRelativePath(
+          entry.relativePath ?? entry.file.webkitRelativePath,
+        );
+        await uploadLibraryAudio(entry.file.name, base64, relativePath);
+      }
+      const skipped = files.length - audioFiles.length;
+      const suffix = skipped > 0 ? ` (${skipped} skipped)` : '';
+      setLibraryUploadFeedback({
+        type: 'success',
+        message: `Uploaded ${audioFiles.length} file${audioFiles.length === 1 ? '' : 's'}${suffix}. Library rescan started.`,
+      });
+      void refreshLibraryStatus(true);
+    } catch (err) {
+      setLibraryUploadFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to upload audio',
+      });
+    } finally {
+      setLibraryUploading(false);
+    }
+  };
+
+  const handleAddLibraryStorage = async (): Promise<void> => {
+    if (storageSubmitting || !storageFormValid) return;
+    setStorageSubmitting(true);
+    setStorageFeedback(null);
+    try {
+      const payload = await createLibraryStorage({
+        name: storageForm.name.trim(),
+        server: storageForm.server.trim(),
+        folder: storageForm.folder.trim(),
+        type: storageForm.type.trim(),
+        guest: storageForm.guest,
+        username: storageForm.guest ? undefined : storageForm.username.trim() || undefined,
+        password: storageForm.guest ? undefined : storageForm.password.trim() || undefined,
+      });
+      setLibraryStorages((prev) => {
+        const filtered = prev.filter((entry) => entry.id !== payload.storage.id);
+        return sortStorages([...filtered, payload.storage]);
+      });
+      setStorageFeedback({ type: 'success', message: 'Share added successfully' });
+      setStorageError(null);
+      closeStorageModal(false);
+    } catch (err) {
+      setStorageFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to add share',
+      });
+    } finally {
+      setStorageSubmitting(false);
+    }
+  };
+
+  const updateStorageForm = (patch: Partial<StorageFormState>): void => {
+    setStorageForm((prev) => ({ ...prev, ...patch }));
+  };
+  const updateCustomRadioForm = (patch: Partial<CustomRadioFormState>): void => {
+    setCustomRadioForm((prev) => ({ ...prev, ...patch }));
+  };
+  const updateBridgeForm = (patch: Partial<BridgeFormState>): void => {
+    setBridgeForm((prev) => ({ ...prev, ...patch }));
+  };
+
+  const fileToBase64 = async (file: File): Promise<string> => {
+    const buffer = await file.arrayBuffer();
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    bytes.forEach((b) => {
+      binary += String.fromCharCode(b);
+    });
+    return window.btoa(binary);
+  };
+
+  const handleDropFiles = async (dataTransfer: DataTransfer): Promise<void> => {
+    const files = await collectFilesFromDataTransfer(dataTransfer);
+    if (files.length === 0) {
+      setLibraryUploadFeedback({ type: 'error', message: 'No files detected in drop.' });
+      return;
+    }
+    await handleLibraryUploadFiles(files);
+  };
+
+  const handleAlertUpload = async (alertId: string, file: File | null): Promise<void> => {
+    if (!file) return;
+    setAlertsSaving(true);
+    setAlertsMessage(null);
+    setAlertsError(null);
+    try {
+      const base64 = await fileToBase64(file);
+      await uploadAlertFile(alertId, base64);
+      await refreshAlerts();
+      setAlertsMessage('Alert updated successfully');
+    } catch (err) {
+      setAlertsError(err instanceof Error ? err.message : 'Failed to update alert');
+    } finally {
+      setAlertsSaving(false);
+    }
+  };
+
+  const handleAlertRevert = async (alertId: string): Promise<void> => {
+    setAlertsSaving(true);
+    setAlertsMessage(null);
+    setAlertsError(null);
+    try {
+      await revertAlertFileApi(alertId);
+      await refreshAlerts();
+      setAlertsMessage('Alert restored to original');
+    } catch (err) {
+      setAlertsError(err instanceof Error ? err.message : 'Failed to revert alert');
+    } finally {
+      setAlertsSaving(false);
+    }
+  };
+
+  const handleFavoritesPurge = async (): Promise<void> => {
+    if (favoritesPurging) return;
+    setFavoritesPurging(true);
+    setFavoritesPurgeFeedback(null);
+    try {
+      await purgeFavorites();
+      setFavoritesPurgeFeedback({ type: 'success', message: 'Favorites purged for all zones' });
+    } catch (err) {
+      setFavoritesPurgeFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to purge favorites',
+      });
+    } finally {
+      setFavoritesPurging(false);
+    }
+  };
+
+  const handleRecentsPurge = async (): Promise<void> => {
+    if (recentsPurging) return;
+    setRecentsPurging(true);
+    setRecentsPurgeFeedback(null);
+    try {
+      await purgeRecents();
+      setRecentsPurgeFeedback({ type: 'success', message: 'Recently played entries purged' });
+    } catch (err) {
+      setRecentsPurgeFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to purge recently played history',
+      });
+    } finally {
+      setRecentsPurging(false);
+    }
+  };
+
+  const handleCustomRadioAdd = async (): Promise<void> => {
+    if (customRadioSubmitting || !customRadioFormValid) return;
+    setCustomRadioSubmitting(true);
+    setCustomRadioFeedback(null);
+    try {
+      const station = await createCustomRadioStation({
+        name: customRadioForm.name.trim(),
+        stream: customRadioForm.stream.trim(),
+        coverurl: customRadioForm.coverurl.trim() || undefined,
+      });
+      setCustomRadios((prev) => [...prev, station]);
+      setCustomRadioFeedback({ type: 'success', message: 'Station added' });
+      setCustomRadioForm(createEmptyCustomRadioForm());
+    } catch (err) {
+      setCustomRadioFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to add station',
+      });
+    } finally {
+      setCustomRadioSubmitting(false);
+    }
+  };
+
+  const handleCustomRadioDelete = async (id: string): Promise<void> => {
+    if (!id) return;
+    setCustomRadioFeedback(null);
+    try {
+      await deleteCustomRadioStation(id);
+      setCustomRadios((prev) => prev.filter((station) => station.id !== id));
+      setCustomRadioFeedback({ type: 'success', message: 'Station removed' });
+    } catch (err) {
+      setCustomRadioFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to remove station',
+      });
+    }
+  };
+
+  const handleBridgeAdd = async (): Promise<void> => {
+    if (bridgeSubmitting || !bridgeFormValid) return;
+    setBridgeSubmitting(true);
+    setBridgeFeedback(null);
+    const provider = bridgeForm.provider.toLowerCase() as BridgeFormState['provider'];
+    const payload: CreateSpotifyBridgePayload = {
+      provider,
+    };
+    if (provider === 'musicassistant') {
+      payload.host = bridgeForm.host.trim() || '127.0.0.1';
+      payload.port =
+        typeof bridgeForm.port === 'number' && Number.isFinite(bridgeForm.port) && bridgeForm.port > 0
+          ? Math.round(bridgeForm.port)
+          : 8095;
+      payload.apiKey = bridgeForm.apiKey.trim();
+    }
+    if (provider === 'applemusic') {
+      if (bridgeForm.userToken.trim()) payload.userToken = bridgeForm.userToken.trim();
+    }
+    try {
+      const { bridge } = await createSpotifyBridge(payload);
+      setSpotifyBridges((prev) => {
+        const normalized = normalizeBridge(bridge);
+        const filtered = prev.filter((b) => (b.id || '').toLowerCase() !== normalized.id.toLowerCase());
+        return [...filtered, normalized];
+      });
+      setBridgeFeedback({ type: 'success', message: 'Bridge added' });
+      closeBridgeModal(false);
+    } catch (err) {
+      setBridgeFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to add bridge',
+      });
+    } finally {
+      setBridgeSubmitting(false);
+    }
+  };
+
+  const handleBridgeDelete = async (id: string): Promise<void> => {
+    if (!id || bridgeDeletingId === id) return;
+    setBridgeDeletingId(id);
+    setBridgeFeedback(null);
+    try {
+      await deleteSpotifyBridge(id);
+      setSpotifyBridges((prev) => prev.filter((bridge) => bridge.id !== id));
+      setBridgeFeedback({ type: 'success', message: 'Bridge removed' });
+    } catch (err) {
+      setBridgeFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to remove bridge',
+      });
+    } finally {
+      setBridgeDeletingId(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="content-layout">
+        <div className="content-shell">
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="content-layout">
+        <div className="content-shell">
+          <p className="content-error">{error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  const statusMeta = formatScanStatus(libraryStatus);
+  const renderHeroStatValue = (value: number | null, loadingState: boolean): string => {
+    if (loadingState) return '…';
+    if (value == null) return '–';
+    return value.toString();
+  };
+  const heroStats = [
+    { label: 'Custom stations', value: customRadios.length, loading: customRadioLoading },
+    {
+      label: 'Library tracks',
+      value: libraryTrackCount ?? 0,
+      loading: libraryLoading || libraryTrackCount == null,
+    },
+    { label: 'Spotify accounts', value: spotifyAccounts.length, loading: false },
+    {
+      label: 'Active bridges',
+      value: spotifyBridges.filter((bridge) => bridge.enabled !== false).length,
+      loading: false,
+    },
+  ];
+  const hasSpotifyClientId = spotifyClientId.trim().length > 0;
+  const clientIdStatusLabel = hasSpotifyClientId ? 'Client ID set' : 'Client ID required';
+
+  return (
+    <div className="content-layout">
+      <div className="content-shell">
+        <div className="content-hero">
+          <div className="content-hero__copy">
+            <p className="page-hero__eyebrow">AudioServer sources</p>
+            <h1 className="page-hero__title">Content</h1>
+            <p className="page-hero__subtitle">
+              A consolidated view of AudioServer content: built-in Loxone services, external bridges, and alerts for your installation.
+            </p>
+          </div>
+          <ul className="content-hero__stats">
+            {heroStats.map((stat) => (
+              <li key={stat.label}>
+                <span className="content-hero__stat-label">{stat.label}</span>
+                <span className="content-hero__stat-value">{renderHeroStatValue(stat.value, stat.loading)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      <section className="content-section">
+        <header className="content-section__header">
+          <div>
+            <p className="content-section__eyebrow">Music sources</p>
+            <h2>Music sources</h2>
+            <p>Radio, Spotify, and custom bridges available to every zone.</p>
+          </div>
+        </header>
+        <div className="content-section__body">
+        <div className="content-subsection">
+          <div className="content-subsection__header">
+            <p className="content-section__eyebrow">Built-in services</p>
+            <p className="content-body-copy">
+              Radio, Spotify, and the on-device library mirror what the native Loxone experience offers.
+            </p>
+          </div>
+          <div className="content-grid content-grid--stacked">
+            <article className="content-card">
+              <header>
+                <div>
+                  <h3>Radio content</h3>
+                  <p>
+                    TuneIn powers the radio catalog—adding a TuneIn username exposes your personal presets, while search scans the
+                    full TuneIn service. Custom stations are also supported. You can create them here or using the Loxone app.
+                  </p>
+                </div>
+              </header>
+              <div className="content-pane content-pane--split">
+                <div className="content-subtile">
+                  <div className="content-pane__section">
+                    <div className="content-section__subheader">
+                      <p className="content-section__eyebrow">TuneIn</p>
+                      <p className="content-body-copy content-body-copy--muted">
+                        Add your TuneIn username to expose your personal presets.
+                      </p>
+                    </div>
+                    <div className="content-form">
+                      <label htmlFor="tunein-username">TuneIn username</label>
+                      <input
+                        id="tunein-username"
+                        type="text"
+                        autoComplete="off"
+                        value={radioUsername}
+                        onChange={(e) => setRadioUsername(e.target.value)}
+                        placeholder="e.g. mytuneinaccount"
+                      />
+                    </div>
+                    <div className="content-actions">
+                      <button type="button" onClick={handleSaveRadio} disabled={!radioDirty || radioSaving}>
+                        {radioSaving ? 'Saving…' : 'Save radio content'}
+                      </button>
+                      {/* feedback routed to global alert */}
+                    </div>
+                  </div>
+                </div>
+                <div className="content-subtile">
+                  <div className="content-pane__section">
+                    <div className="content-section__subheader">
+                      <p className="content-section__eyebrow">Custom radio</p>
+                      <p className="content-body-copy content-body-copy--muted">
+                        Configure custom radio streams here or using the Loxone app.
+                      </p>
+                    </div>
+                    <div className="content-custom-radio-header">
+                      <aside className="content-custom-radio-count">
+                        {customRadioLoading
+                          ? 'Loading…'
+                          : `${customRadios.length} station${customRadios.length === 1 ? '' : 's'} configured`}
+                      </aside>
+                      <button type="button" className="secondary" onClick={openCustomRadioModal}>
+                        Add custom station
+                      </button>
+                    </div>
+                    {!customRadioModalOpen && customRadioFeedback && (
+                      <></>
+                    )}
+                    {customRadioLoading ? (
+                      <p className="content-body-copy content-body-copy--muted">Loading custom stations…</p>
+                    ) : customRadioError ? (
+                      <></>
+                    ) : customRadios.length > 0 ? (
+                      <ul className="content-custom-radio-list">
+                        {customRadios.map((station) => (
+                          <li key={station.id}>
+                            <div className="content-custom-radio-item">
+                              {station.coverurl && (
+                                <div className="content-custom-radio-coverart">
+                                  <img src={station.coverurl} alt={`${station.name} cover`} />
+                                </div>
+                              )}
+                              <div className="content-custom-radio-info">
+                                <span className="content-custom-radio-name">{station.name}</span>
+                                <a
+                                  className="content-custom-radio-stream"
+                                  href={station.stream}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title={station.stream}
+                                >
+                                  {station.stream}
+                                </a>
+                                {station.coverurl && (
+                                  <a
+                                    className="content-custom-radio-cover"
+                                    href={station.coverurl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title={station.coverurl}
+                                  >
+                                    {station.coverurl}
+                                  </a>
+                                )}
+                              </div>
+                              <button type="button" className="danger-link" onClick={() => handleCustomRadioDelete(station.id)}>
+                                Remove
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article className="content-card">
+              <header>
+                <div>
+                  <h3>Spotify content</h3>
+                  <p>
+                    Multi-account Spotify is supported out of the box. Create a Spotify app, copy the Client ID, and paste it below.
+                    No client secret is needed. You can link accounts here or in the Loxone app after the Client ID is set.
+                  </p>
+                </div>
+              </header>
+              <div className="content-pane content-pane--split">
+                <div className="content-subtile">
+                  <div className="content-pane__section">
+                    <div className="content-section__subheader">
+                      <p className="content-section__eyebrow">Client ID</p>
+                      <p className="content-body-copy content-body-copy--muted">
+                        Configure the Spotify app details and paste the Client ID below.
+                      </p>
+                    </div>
+                    <div className="content-form">
+                      <div className="content-input-hint">
+                        Create a new app at{' '}
+                        <a href="https://developer.spotify.com/dashboard/create" target="_blank" rel="noreferrer">
+                          developer.spotify.com/dashboard/create
+                        </a>
+                        .
+                      </div>
+                      <table className="content-input-table">
+                        <tbody>
+                          <tr>
+                            <th scope="row">App name</th>
+                            <td><code>lox-audioserver</code></td>
+                          </tr>
+                          <tr>
+                            <th scope="row">Redirect URI</th>
+                            <td><code>https://rudyberends.github.io/lox-audioserver/spotify-callback</code></td>
+                          </tr>
+                          <tr>
+                            <th scope="row">Enable APIs</th>
+                            <td>Web API, Web Playback SDK</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <label htmlFor="spotify-client-id">Input your client id here</label>
+                      <input
+                        id="spotify-client-id"
+                        type="text"
+                        autoComplete="off"
+                        value={spotifyClientId}
+                        onChange={(e) => setSpotifyClientId(e.target.value)}
+                        placeholder="26faeb2006ba44ed89ac34f9344670e2"
+                      />
+                    </div>
+                  </div>
+                  <div className="content-actions content-actions--spaced">
+                    <button type="button" className="primary" onClick={handleSaveSpotify} disabled={!spotifyDirty || spotifySaving}>
+                      {spotifySaving ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                </div>
+                <div className="content-subtile">
+                  <div className="content-pane__section">
+                    <div className="content-section__subheader">
+                      <p className="content-section__eyebrow">Accounts</p>
+                      <p className="content-body-copy content-body-copy--muted">
+                        Link Spotify accounts here or in the Loxone app after setting the Client ID.
+                      </p>
+                    </div>
+                    {spotifyAccounts.length > 0 ? (
+                      <div className="content-account-list">
+                        <span className="content-account-list__label">Configured accounts</span>
+                        <ul>
+                          {spotifyAccounts.map((account, index) => {
+                            const accountKey = resolveAccountKey(account) ?? `account-${index}`;
+                            const removableKey = resolveAccountKey(account);
+                            return (
+                              <li key={accountKey}>
+                                <div className="content-account-details">
+                                  <span className="content-account-name">{account.displayName ?? account.name ?? account.user}</span>
+                                  {account.email && <span className="content-account-meta">{account.email}</span>}
+                                </div>
+                                {removableKey && (
+                                  <button
+                                    type="button"
+                                    className="content-account-remove"
+                                    onClick={() => handleDeleteSpotifyAccount(removableKey)}
+                                    disabled={deletingAccountId === removableKey}
+                                  >
+                                    {deletingAccountId === removableKey ? 'Removing…' : 'Remove'}
+                                  </button>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    ) : (
+                      <p className="content-body-copy content-body-copy--muted">No Spotify accounts linked yet.</p>
+                    )}
+                    <div className="content-divider-row" />
+                    <div className="content-actions content-actions--spotify">
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={handleAddSpotifyAccount}
+                        disabled={addingSpotifyAccount || !hasSpotifyClientId}
+                      >
+                        {addingSpotifyAccount ? 'Opening…' : 'Add Spotify account'}
+                      </button>
+                      <span className="content-note">Spotify login may be blocked by popup blockers; allow popups to complete linking.</span>
+                    </div>
+                  </div>
+                  {/* feedback routed to global alert */}
+                </div>
+              </div>
+            </article>
+
+            <article className="content-card">
+              <header className="content-card__header content-card__header--stacked">
+                <div>
+                  <h3>Library</h3>
+                  <p>
+                    Loxone supports local and network libraries—we emulate the same experience. Drop files under
+                    <code>data/music/local</code>, upload audio here, or add SMB shares here or in the Loxone app.
+                  </p>
+                </div>
+                <div className="content-library-header-meta">
+                  <div className="content-library-coverstrip" aria-label="Library cover art">
+                    {libraryCoversLoading ? (
+                      <span className="content-note">Loading cover art…</span>
+                    ) : libraryCoversError ? (
+                      <></>
+                    ) : libraryCovers.length > 0 ? (
+                      <div className="content-library-covers content-library-covers--compact">
+                        {libraryCovers.map((cover, index) => (
+                          <div
+                            key={`${cover.album}-${cover.artist}-${index}`}
+                            className="content-library-cover content-library-cover--compact"
+                            title={`${cover.album} · ${cover.artist}`}
+                          >
+                            <img src={cover.coverurl} alt={`${cover.album} cover`} loading="lazy" />
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          className="content-library-cover content-library-cover--compact content-library-rescan"
+                          onClick={handleLibraryRescan}
+                          disabled={libraryActionPending}
+                          aria-label="Rescan library"
+                        >
+                          <svg
+                            className={`content-library-rescan__icon ${libraryActionPending ? 'is-spinning' : ''}`}
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            aria-hidden="true"
+                          >
+                            <path
+                              d="M20 6v4h-4"
+                              stroke="currentColor"
+                              strokeWidth="1.8"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                            <path
+                              d="M20 10a8 8 0 1 0 2.3 5.6"
+                              stroke="currentColor"
+                              strokeWidth="1.8"
+                              strokeLinecap="round"
+                            />
+                          </svg>
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="content-note">No cover art available yet.</span>
+                    )}
+                  </div>
+                  <div className="content-library-overlay">
+                    <span className="content-library-overlay__item">
+                      {libraryLoading ? 'Scanning…' : `${libraryTrackCount ?? 0} tracks`}
+                    </span>
+                    <span className="content-library-overlay__item">
+                      {libraryLoading ? '…' : `${libraryAlbumCount ?? 0} albums`}
+                    </span>
+                    <span className="content-library-overlay__item">
+                      {libraryLoading ? '…' : `${libraryArtistCount ?? 0} artists`}
+                    </span>
+                  </div>
+                </div>
+              </header>
+              <div className="content-pane content-pane--split">
+                <section className="content-subtile">
+                  <h4>Configured shares</h4>
+                  <p className="content-body-copy">
+                    These shares map NAS folders and SMB/CIFS exports into the local library. We broadcast updates to the Loxone
+                    apps immediately after a change.
+                  </p>
+                  {storageLoading ? (
+                    <p className="content-body-copy content-body-copy--muted">Loading shares…</p>
+                  ) : storageError ? (
+                    <></>
+                  ) : libraryStorages.length > 0 ? (
+                    <ul className="library-storage-list">
+                      {libraryStorages.map((storage) => (
+                        <li key={storage.id}>
+                          <div>
+                            <span className="library-storage-name">{storage.name}</span>
+                            <span className="library-storage-meta">
+                              {storage.server}
+                              {storage.folder ? ` / ${storage.folder}` : ''}
+                            </span>
+                            <span className="library-storage-auth">
+                              {storage.guest
+                                ? 'Guest access'
+                                : storage.username
+                                  ? `User: ${storage.username}`
+                                  : 'Credentials required'}
+                            </span>
+                          </div>
+                          <span className="library-storage-type">{storage.type.toUpperCase()}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="content-body-copy content-body-copy--muted">
+                      No network shares configured. Add a share to expose remote music folders.
+                    </p>
+                  )}
+                  <div className="content-actions content-actions--library">
+                    <button type="button" onClick={openStorageModal}>
+                      Add share
+                    </button>
+                  </div>
+                </section>
+                <section className="content-subtile">
+                  <div className="content-pane__section">
+                    <div className="content-section__subheader">
+                      <p className="content-section__eyebrow">Library actions</p>
+                      <p className="content-body-copy content-body-copy--muted">
+                        Manage shares and trigger a rescan when new music is added.
+                      </p>
+                    </div>
+                    <div
+                      className={`content-dropzone ${libraryDragActive ? 'is-active' : ''} ${
+                        libraryUploading ? 'is-disabled' : ''
+                      }`}
+                      role="button"
+                      tabIndex={libraryUploading ? -1 : 0}
+                      onClick={() => {
+                        if (libraryUploading) return;
+                        libraryFileInputRef.current?.click();
+                      }}
+                      onKeyDown={(event) => {
+                        if (libraryUploading) return;
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          libraryFileInputRef.current?.click();
+                        }
+                      }}
+                      onDragEnter={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (!libraryUploading) setLibraryDragActive(true);
+                      }}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        event.dataTransfer.dropEffect = 'copy';
+                      }}
+                      onDragLeave={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setLibraryDragActive(false);
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setLibraryDragActive(false);
+                        if (libraryUploading) return;
+                        void handleDropFiles(event.dataTransfer);
+                      }}
+                    >
+                    <div className="content-dropzone__title">
+                        <span className="content-dropzone__icon" aria-hidden="true">
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                            <path d="M12 3v10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                            <path d="M8 7l4-4 4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                            <path d="M4 14v3.2A2.8 2.8 0 0 0 6.8 20h10.4A2.8 2.8 0 0 0 20 17.2V14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                          </svg>
+                        </span>
+                        {libraryUploading ? 'Uploading…' : 'Drop audio here'}
+                      </div>
+                      <div className="content-dropzone__meta">or click to select a file</div>
+                      <div className="content-dropzone__hint">MP3, FLAC, M4A, AAC, OGG, WAV</div>
+                      <input
+                        type="file"
+                        accept="audio/mp3,audio/flac,audio/x-flac,audio/m4a,audio/aac,audio/ogg,audio/wav"
+                        multiple
+                        ref={libraryFileInputRef}
+                        disabled={libraryUploading}
+                        onChange={(e) => {
+                          const files = Array.from(e.target.files ?? []).map((file) => ({
+                            file,
+                            relativePath: normalizeRelativePath(file.webkitRelativePath),
+                          }));
+                          void handleLibraryUploadFiles(files);
+                          e.target.value = '';
+                        }}
+                      />
+                    </div>
+                    {/* feedback routed to global alert */}
+                  </div>
+                </section>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <div className="content-subsection">
+            <div className="content-subsection__header">
+              <p className="content-section__eyebrow">Bridges</p>
+              <h3 className="content-bridges-title">External providers</h3>
+              <p className="content-body-copy">
+              Loxone only supports Spotify. To expose other services inside the app we introduce the concept of bridge providers.
+              A bridge provider is a proxy layer inside lox-audioserver that exposes a non-Spotify service as a Spotify account.
+              Each bridge maps one external service to one virtual Spotify account, so Loxone can list and use multiple unsupported
+              sources side by side without conflicts.
+              </p>
+            </div>
+          <article className="content-bridges-panel">
+            <div className="content-bridges-panel__copy">
+              <p className="content-section__eyebrow">Spotify bridges</p>
+              <h4>Route other providers through Spotify</h4>
+              <p className="content-body-copy">
+                Configure your bridge providers here. Each bridge presents an external service as its own Spotify account,
+                so multiple sources can live side by side in the Loxone app without conflicts.
+              </p>
+                <div className="content-bridges-actions">
+                  <button type="button" className="secondary" onClick={openBridgeModal}>
+                    Add bridge
+                  </button>
+                </div>
+              {/* feedback routed to global alert */}
+            </div>
+            <div className="content-bridges-panel__list">
+              {spotifyBridges.length > 0 ? (
+                <ul className="content-bridges-list">
+                  {spotifyBridges.map((bridge) => (
+                    <li key={bridge.id}>
+                      <div className="content-bridges-header">
+                        <span className="content-bridges-name">{bridge.label}</span>
+                        <span className={`content-bridges-status ${bridge.enabled === false ? 'is-disabled' : 'is-enabled'}`}>
+                          {bridge.enabled === false ? 'Disabled' : 'Enabled'}
+                        </span>
+                      </div>
+                      <dl className="content-bridges-details">
+                        <dt>Provider id</dt>
+                        <dd>{bridge.id}</dd>
+                      </dl>
+                      <div className="content-bridges-actions-row">
+                        <button
+                          type="button"
+                          className="danger-link"
+                          onClick={() => handleBridgeDelete(bridge.id)}
+                          disabled={bridgeDeletingId === bridge.id}
+                        >
+                          {bridgeDeletingId === bridge.id ? 'Removing…' : 'Remove'}
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="content-bridges-empty">
+                  <p className="content-body-copy">No bridges configured.</p>
+                  <span className="content-note">Add a bridge to expose Music Assistant or Apple Music instantly.</span>
+                </div>
+              )}
+            </div>
+          </article>
+        </div>
+
+        </div>
+      </section>
+
+      <section className="content-section">
+        <header className="content-section__header">
+          <div>
+            <p className="content-section__eyebrow">System services</p>
+            <h2>System services</h2>
+            <p>Voice announcements, per-zone storage, and maintenance tools.</p>
+          </div>
+        </header>
+        <div className="content-section__body">
+        <div className="content-grid">
+          <article className="content-card">
+          <header>
+            <div>
+              <h3>Text-to-speech</h3>
+              <p>
+                The built-in TTS manager handles announcements and spoken alerts through Google TTS on the AudioServer. Additional
+                configuration hooks will surface here in a future release.
+              </p>
+            </div>
+          </header>
+          <p className="content-body-copy content-body-copy--muted">
+            TTS is automatically available for all zones; no extra setup is required right now.
+          </p>
+          </article>
+
+          <article className="content-card">
+          <header>
+            <div>
+              <h3>Favorites & recently played</h3>
+              <p>
+                Zone favorites and history are stored locally per AudioServer zone to mirror Loxone’s behavior. Controls will
+                hook into those stores directly.
+              </p>
+            </div>
+          </header>
+          <p className="content-body-copy">
+            Use the purge actions below to clear favorites or recently played history for all zones.
+          </p>
+          <div className="content-purge-row">
+            <div className="content-purge-actions">
+              <button type="button" className="secondary" onClick={handleFavoritesPurge} disabled={favoritesPurging}>
+                {favoritesPurging ? 'Purging…' : 'Purge favorites'}
+              </button>
+              <button type="button" className="secondary" onClick={handleRecentsPurge} disabled={recentsPurging}>
+                {recentsPurging ? 'Purging…' : 'Purge recently played'}
+              </button>
+            </div>
+            <div className="content-purge-feedback">
+              {/* feedback routed to global alert */}
+            </div>
+          </div>
+          </article>
+        </div>
+        </div>
+      </section>
+
+      <section className="content-section">
+        <header className="content-section__header">
+          <div>
+            <p className="content-section__eyebrow">Alerts</p>
+            <h2>Built-in alerts</h2>
+            <p>The siren, bell, and buzzer files that ship with the AudioServer—swap them out or preview them inline.</p>
+          </div>
+        </header>
+        <div className="content-section__body">
+        <article className="content-card content-card--wide">
+          <header className="content-card__header">
+            <div>
+              <h3>Alerts</h3>
+              <p>
+                Replace the built-in alarm, fire alarm, bell, and buzzer sounds. Preview them here and upload new MP3 files as needed.
+              </p>
+            </div>
+          </header>
+          {alertsLoading ? (
+            <p className="content-body-copy content-body-copy--muted">Loading alerts…</p>
+          ) : alertsError ? (
+            <></>
+          ) : (
+            <div className="content-alerts-grid">
+              {alerts.map((alert) => (
+                <AlertPlaybackRow
+                  key={alert.id}
+                  alert={alert}
+                  alertsSaving={alertsSaving}
+                  isActive={activeAlertId === alert.id}
+                  onActivate={(id) => setActiveAlertId(id)}
+                  onDeactivate={(id) => {
+                    setActiveAlertId((current) => (current === id ? null : current));
+                  }}
+                  onUpload={handleAlertUpload}
+                  onRevert={handleAlertRevert}
+                />
+              ))}
+            </div>
+          )}
+          {/* feedback routed to global alert */}
+        </article>
+        </div>
+      </section>
+      {customRadioModalOpen &&
+        renderModal(
+          <div
+            className="content-modal-backdrop"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="custom-radio-modal-title"
+            onClick={() => closeCustomRadioModal(true)}
+          >
+            <div className="content-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="content-modal-header">
+                <div>
+                  <h4 id="custom-radio-modal-title">Add custom station</h4>
+                  <p className="content-body-copy">
+                    Provide a label and stream URL. Stations sync to the same store Loxone reads from.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="content-modal-close"
+                  aria-label="Close"
+                  onClick={() => closeCustomRadioModal(true)}
+                  disabled={customRadioSubmitting}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="content-custom-radio-form">
+                <div className="content-custom-radio-field">
+                  <label htmlFor="custom-radio-name">Station name</label>
+                  <input
+                    id="custom-radio-name"
+                    type="text"
+                    value={customRadioForm.name}
+                    onChange={(e) => updateCustomRadioForm({ name: e.target.value })}
+                    placeholder="Studio Stream"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="content-custom-radio-field">
+                  <label htmlFor="custom-radio-stream">Stream URL</label>
+                  <input
+                    id="custom-radio-stream"
+                    type="text"
+                    value={customRadioForm.stream}
+                    onChange={(e) => updateCustomRadioForm({ stream: e.target.value })}
+                    placeholder="https://example.com/stream.mp3"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="content-custom-radio-field">
+                  <label htmlFor="custom-radio-cover">Cover image URL (optional)</label>
+                  <input
+                    id="custom-radio-cover"
+                    type="text"
+                    value={customRadioForm.coverurl}
+                    onChange={(e) => updateCustomRadioForm({ coverurl: e.target.value })}
+                    placeholder="https://example.com/logo.jpg"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="content-actions">
+                  <button type="button" onClick={handleCustomRadioAdd} disabled={!customRadioFormValid || customRadioSubmitting}>
+                    {customRadioSubmitting ? 'Adding…' : 'Add station'}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => closeCustomRadioModal(true)}
+                    disabled={customRadioSubmitting}
+                  >
+                    Cancel
+                  </button>
+                  {/* feedback routed to global alert */}
+                </div>
+              </div>
+            </div>
+          </div>,
+        )}
+      {bridgeModalOpen &&
+        renderModal(
+          <div
+            className="content-modal-backdrop"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="bridge-modal-title"
+            onClick={() => closeBridgeModal(true)}
+          >
+            <div className="content-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="content-modal-header">
+                <div>
+                  <h4 id="bridge-modal-title">Add bridge</h4>
+                  <p className="content-body-copy">
+                    Expose bridged service as a Spotify-compatible source.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="content-modal-close"
+                  aria-label="Close"
+                  onClick={() => closeBridgeModal(true)}
+                  disabled={bridgeSubmitting}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="content-custom-radio-form">
+                <div className="content-custom-radio-field">
+                  <label htmlFor="bridge-provider">Provider</label>
+                  <select
+                    id="bridge-provider"
+                    className="content-input-select"
+                    value={bridgeForm.provider}
+                    onChange={(e) => updateBridgeForm({ provider: e.target.value as BridgeFormState['provider'] })}
+                    disabled={bridgeSubmitting}
+                  >
+                    <option value="musicassistant">Music Assistant</option>
+                    <option value="applemusic">Apple Music</option>
+                  </select>
+                </div>
+                <div className="content-bridge-provider-info">
+                  {bridgeForm.provider === 'musicassistant' ? (
+                    <>
+                      <h5>Music Assistant</h5>
+                      <p>
+                        Music Assistant aggregates many services into one library. That full library is exposed in Loxone under a
+                        single "Music Assistant" Spotify account. If you want to expose a specific service, create a dedicated account in
+                        Music Assistant, apply a provider filter, and use that account’s API key here. Multiple instances of the
+                        bridge are allowed, so you can expose every service under its own Spotify account.
+                      </p>
+                      <span className="content-bridge-badge">Requires Music Assistant 2.7+</span>
+                    </>
+                  ) : (
+                    <>
+                      <h5>Apple Music</h5>
+                      <p>
+                        Apple Music bridge uses a Media User Token from music.apple.com to read catalog content.
+                        Grab a fresh token from your browser session and paste it below.
+                      </p>
+                    </>
+                  )}
+                </div>
+                {bridgeForm.provider === 'musicassistant' && (
+                  <div className="content-bridge-form-grid">
+                    <div className="content-custom-radio-field">
+                      <label htmlFor="bridge-host">Host</label>
+                      <input
+                        id="bridge-host"
+                        type="text"
+                        value={bridgeForm.host}
+                        onChange={(e) => updateBridgeForm({ host: e.target.value })}
+                        placeholder="127.0.0.1"
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className="content-custom-radio-field">
+                      <label htmlFor="bridge-port">Port</label>
+                      <input
+                        id="bridge-port"
+                        type="number"
+                        value={bridgeForm.port}
+                        onChange={(e) => updateBridgeForm({ port: Number(e.target.value) || 0 })}
+                        placeholder="8095"
+                        min={1}
+                      />
+                    </div>
+                    <div className="content-custom-radio-field">
+                      <label htmlFor="bridge-apikey">API key</label>
+                      <p className="content-body-copy content-body-copy--muted">
+                        Music Assistant requires authentication. Generate a long-lived token under your Music Assistant account settings.
+                      </p>
+                      <input
+                        id="bridge-apikey"
+                        type="text"
+                        value={bridgeForm.apiKey}
+                        onChange={(e) => updateBridgeForm({ apiKey: e.target.value })}
+                        placeholder="token"
+                        autoComplete="off"
+                      />
+                    </div>
+                  </div>
+                )}
+                {bridgeForm.provider === 'applemusic' && (
+                  <div className="content-bridge-form-grid">
+                    <div className="content-custom-radio-field">
+                      <label htmlFor="bridge-usertoken">Media user token</label>
+                      <p className="content-body-copy content-body-copy--muted">
+                        Paste a Media User Token from your music.apple.com session.
+                      </p>
+                      <input
+                        id="bridge-usertoken"
+                        type="text"
+                        value={bridgeForm.userToken}
+                        onChange={(e) => updateBridgeForm({ userToken: e.target.value })}
+                        placeholder="Media user token"
+                        autoComplete="off"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="content-actions">
+                <button type="button" onClick={handleBridgeAdd} disabled={!bridgeFormValid || bridgeSubmitting}>
+                  {bridgeSubmitting ? 'Adding…' : 'Add bridge'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => closeBridgeModal(true)}
+                  disabled={bridgeSubmitting}
+                >
+                  Cancel
+                </button>
+                {/* feedback routed to global alert */}
+              </div>
+            </div>
+          </div>,
+        )}
+      {storageModalOpen &&
+        renderModal(
+          <div
+            className="content-modal-backdrop"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="storage-modal-title"
+            onClick={() => closeStorageModal(true)}
+          >
+            <div className="content-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="content-modal-header">
+                <div>
+                  <h4 id="storage-modal-title">Add network share</h4>
+                  <p className="content-body-copy">
+                    Provide the network details of your NAS or SMB share. Credentials are optional when guest access is enabled.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="content-modal-close"
+                  aria-label="Close"
+                  onClick={() => closeStorageModal(true)}
+                  disabled={storageSubmitting}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="library-storage-form">
+                <div className="library-storage-form-field">
+                  <label htmlFor="storage-name">Display name</label>
+                  <input
+                    id="storage-name"
+                    type="text"
+                    value={storageForm.name}
+                    onChange={(e) => updateStorageForm({ name: e.target.value })}
+                    placeholder="Studio NAS"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="library-storage-form__row">
+                  <div className="library-storage-form-field">
+                    <label htmlFor="storage-server">Server hostname / IP</label>
+                    <input
+                      id="storage-server"
+                      type="text"
+                      value={storageForm.server}
+                      onChange={(e) => updateStorageForm({ server: e.target.value })}
+                      placeholder="192.168.1.20"
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div className="library-storage-form-field">
+                    <label htmlFor="storage-folder">Share / folder</label>
+                    <input
+                      id="storage-folder"
+                      type="text"
+                      value={storageForm.folder}
+                      onChange={(e) => updateStorageForm({ folder: e.target.value })}
+                      placeholder="Music"
+                      autoComplete="off"
+                    />
+                  </div>
+                </div>
+                <div className="library-storage-form__row">
+                  <div className="library-storage-form-field">
+                    <label htmlFor="storage-type">Type</label>
+                    <input
+                      id="storage-type"
+                      type="text"
+                      value={storageForm.type}
+                      onChange={(e) => updateStorageForm({ type: e.target.value })}
+                      placeholder="smb"
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div className="library-storage-form-field">
+                    <label htmlFor="storage-username">Username</label>
+                    <input
+                      id="storage-username"
+                      type="text"
+                      value={storageForm.username}
+                      onChange={(e) => updateStorageForm({ username: e.target.value })}
+                      placeholder="user"
+                      autoComplete="off"
+                      disabled={storageForm.guest}
+                    />
+                  </div>
+                  <div className="library-storage-form-field">
+                    <label htmlFor="storage-password">Password</label>
+                    <input
+                      id="storage-password"
+                      type="password"
+                      value={storageForm.password}
+                      onChange={(e) => updateStorageForm({ password: e.target.value })}
+                      placeholder="••••••••"
+                      autoComplete="new-password"
+                      disabled={storageForm.guest}
+                    />
+                  </div>
+                </div>
+                <label className="library-storage-checkbox" htmlFor="storage-guest">
+                  <input
+                    id="storage-guest"
+                    type="checkbox"
+                    checked={storageForm.guest}
+                    onChange={(e) =>
+                      updateStorageForm({
+                        guest: e.target.checked,
+                        ...(e.target.checked ? { username: '', password: '' } : {}),
+                      })
+                    }
+                  />
+                  Allow guest access (no credentials)
+                </label>
+              </div>
+              <div className="content-actions library-storage-actions">
+                <button type="button" onClick={handleAddLibraryStorage} disabled={!storageFormValid || storageSubmitting}>
+                  {storageSubmitting ? 'Adding…' : 'Add share'}
+                </button>
+                <button type="button" className="secondary" onClick={() => closeStorageModal(true)} disabled={storageSubmitting}>
+                  Cancel
+                </button>
+                {/* feedback routed to global alert */}
+              </div>
+            </div>
+          </div>,
+        )}
+      </div>
+    </div>
+  );
+}
