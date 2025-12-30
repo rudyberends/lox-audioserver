@@ -34,7 +34,5 @@ COPY --from=builder --chown=node:node /app/public ./public
 COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/package*.json ./
 RUN mkdir -p /app/data && chown -R node:node /app/data
-USER node
-
 # Start the application
 CMD ["node", "dist/server.js"]
