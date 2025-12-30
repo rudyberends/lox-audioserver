@@ -14,7 +14,6 @@ import { generateQueueId } from '@/modules/zones/helpers/queueHelpers';
 
 type StreamEntry = {
   playerId: string;
-  streamUrl: string;
 };
 
 type MusicAssistantPlaybackResult = {
@@ -79,7 +78,7 @@ class SendspinClient {
     private readonly zoneId: number,
     private readonly providerId: string,
     private readonly log: ReturnType<typeof createLogger>,
-    private readonly onStream?: {
+  private readonly onStream?: {
       start?: (zoneId: number, playerId: string, stream: PassThrough, fmt: StreamFormat) => void;
       stop?: (zoneId: number, playerId: string) => void;
       metadata?: (zoneId: number, playerId: string, metadata: PlaybackMetadata) => void;
@@ -712,7 +711,6 @@ class SendspinClient {
 
 class MusicAssistantStreamService {
   private readonly log = createLogger('Input', 'MAplayer');
-  private readonly streamStopDebounceMs = 1500;
   private host: string | null = null;
   private port = 8095;
   private apiKey?: string;
@@ -723,17 +721,17 @@ class MusicAssistantStreamService {
   private zonePlayers = new Map<number, string>();
   private subs = new Map<number, () => void>();
   private queueFetches = new Map<number, number>();
-  private pendingUrlResolvers = new Map<number, { resolve: (url: string | null) => void; timer: NodeJS.Timeout }>();
   private keepAliveTimers = new Map<number, NodeJS.Timeout>();
   private playingState = new Map<number, boolean>();
-  private urlVersion = new Map<number, number>();
   private sendspinClients = new Map<number, SendspinClient>();
   private lastMetadata = new Map<number, PlaybackMetadata>();
   private lastMetadataKeys = new Map<number, string[]>();
   private lastStreamStartAt = new Map<number, number>();
-  private streamStopTimers = new Map<number, NodeJS.Timeout>();
   private lastVolume = new Map<number, number>();
   private lastPauseAt = new Map<number, number>();
+  private switchAwayHandlers: {
+    onSwitchAway?: (zoneId: number) => void;
+  } = {};
   // Tracks in-flight serviceplay requests so sendspin doesn't double-start playback.
   private pendingStreamRequests = new Map<number, number>();
   private streamRequestSeq = 0;
@@ -748,6 +746,41 @@ class MusicAssistantStreamService {
 
   public setInputHandlers(handlers: typeof this.inputHandlers): void {
     this.inputHandlers = handlers;
+  }
+
+  public setSwitchAwayHandlers(handlers: typeof this.switchAwayHandlers): void {
+    this.switchAwayHandlers = handlers;
+  }
+
+  public async switchAway(zoneId: number): Promise<void> {
+    const api = this.getApi();
+    if (!api) {
+      return;
+    }
+    const playerId =
+      this.zonePlayers.get(zoneId) ??
+      this.streams.get(zoneId)?.playerId ??
+      Array.from(this.playerToZone.entries()).find(([, zid]) => zid === zoneId)?.[0] ??
+      '';
+    if (!playerId) {
+      return;
+    }
+    try {
+      this.log.info('music assistant switch away: stopping and clearing queue', { zoneId, playerId });
+      await api.playerCommand(playerId, 'stop');
+      try {
+        await api.clearQueue(playerId);
+      } catch (err) {
+        this.log.debug('music assistant clear queue failed (ignored)', {
+          zoneId,
+          playerId,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.warn('music assistant switch away failed', { zoneId, playerId, message });
+    }
   }
 
   public getProviderId(): string {
@@ -766,10 +799,6 @@ class MusicAssistantStreamService {
     }
     this.sendspinClients.clear();
     this.playerToZone.clear();
-    for (const timer of this.streamStopTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.streamStopTimers.clear();
     this.lastStreamStartAt.clear();
     this.pendingStreamRequests.clear();
     try {
@@ -825,6 +854,10 @@ class MusicAssistantStreamService {
     } catch {
       return undefined;
     }
+  }
+
+  private resolveZoneName(zoneId: number): string {
+    return this.resolveZoneConfig(zoneId)?.name || `zone-${zoneId}`;
   }
 
   public async listPlayers(): Promise<MusicAssistantPlayer[]> {
@@ -906,8 +939,7 @@ class MusicAssistantStreamService {
       return existingEntry;
     }
 
-    const streamUrl = `http://${this.host}:${this.port}/builtin_player/flow/${playerId}.mp3`;
-    const entry: StreamEntry = { playerId, streamUrl };
+    const entry: StreamEntry = { playerId };
     this.streams.set(zoneId, entry);
     this.startKeepAlive(zoneId, playerId);
     return entry;
@@ -925,10 +957,20 @@ class MusicAssistantStreamService {
       return null;
     }
     const entry = this.streams.get(zoneId);
-    if (!entry) {
+    const sendspin = this.sendspinClients.get(zoneId);
+    const active = sendspin?.getActiveStream() ?? null;
+    if (!active) {
       return null;
     }
-    return this.buildPlaybackSource(entry.streamUrl);
+    const fmt = active.format;
+    return {
+      kind: 'pipe',
+      path: `sendspin:${entry?.playerId ?? 'ma'}`,
+      format: fmt.bitDepth && fmt.bitDepth > 16 ? 's32le' : 's16le',
+      sampleRate: fmt.sampleRate || 48000,
+      channels: fmt.channels || 2,
+      stream: active.stream,
+    };
   }
 
   /**
@@ -1027,6 +1069,9 @@ class MusicAssistantStreamService {
       this.lastMetadataKeys.set(zoneId, Object.keys(options.metadata));
     }
 
+    // Mark intent to play so we don't treat early stream/end from previous track as a real stop
+    this.playingState.set(zoneId, true);
+
     const mediaId = this.decodeMediaId(audiopath);
     if (!mediaId) {
       this.log.warn('music assistant media id not resolved', { zoneId, audiopath });
@@ -1058,12 +1103,7 @@ class MusicAssistantStreamService {
           startIndex: options?.startIndex ?? null,
         });
         await api.connect();
-        const ok = await api.playMedia(entry.playerId, playTarget, playOpts);
-        if (!ok && !sendspin) {
-          this.log.warn('music assistant play_media failed', { zoneId, playerId: entry.playerId });
-          this.resolvePendingStream(zoneId, null);
-          this.reportPlaybackError(zoneId, 'music assistant play failed');
-        }
+        await api.playMedia(entry.playerId, playTarget, playOpts);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.log.warn('music assistant play_media failed', { zoneId, message });
@@ -1089,8 +1129,6 @@ class MusicAssistantStreamService {
     }
 
     try {
-      // Prepare to await stream either via sendspin or PLAY_MEDIA.
-      const awaitedUrl = this.awaitNextStreamUrl(zoneId);
       if (sendspin && !sendspin.isReady()) {
         try {
           await sendspin.connect();
@@ -1099,11 +1137,8 @@ class MusicAssistantStreamService {
           this.log.warn('sendspin reconnect before play_media failed', { zoneId, message });
         }
       }
-      const awaitedSendspin = sendspin?.awaitStream(8000);
-
       await playMedia();
-
-      const sendspinStream = awaitedSendspin ? await awaitedSendspin : null;
+      const sendspinStream = sendspin ? await this.waitForSendspinStream(zoneId, sendspin) : null;
       if (sendspinStream) {
         const fmt = sendspinStream.format;
         this.playingState.set(zoneId, true);
@@ -1127,35 +1162,15 @@ class MusicAssistantStreamService {
         };
       }
 
-      const resolvedUrl = await awaitedUrl;
-      if (!resolvedUrl) {
-        this.log.warn('music assistant stream not resolved (sendspin and url both missing)', {
-          zoneId,
-          playerId: entry.playerId,
-          audiopath: mediaId,
-          parent: parentMediaId || null,
-          startIndex: options?.startIndex ?? null,
-          flow: Boolean(options?.flow),
-          hasSendspin: Boolean(sendspin),
-          sendspinAttached: false,
-        });
-        this.reportPlaybackError(zoneId, 'music assistant stream unavailable');
-        return { playbackSource: null };
-      }
-
-      if (options?.flow) {
-        const flowUrl = this.buildAbsoluteUrl(zoneId, '', entry.playerId);
-        if (!flowUrl) {
-          return { playbackSource: null };
-        }
-        this.streams.set(zoneId, { playerId: entry.playerId, streamUrl: flowUrl });
-        this.playingState.set(zoneId, true);
-        this.startKeepAlive(zoneId, entry.playerId);
-        return { playbackSource: this.buildPlaybackSource(flowUrl) };
-      }
-      this.playingState.set(zoneId, true);
-      this.startKeepAlive(zoneId, entry.playerId);
-      return { playbackSource: this.buildPlaybackSource(resolvedUrl) };
+      this.log.warn('music assistant sendspin stream not resolved', {
+        zoneId,
+        playerId: entry.playerId,
+        audiopath: mediaId,
+        parent: parentMediaId || null,
+        startIndex: options?.startIndex ?? null,
+      });
+      this.reportPlaybackError(zoneId, 'music assistant stream unavailable');
+      return { playbackSource: null };
     } finally {
       this.clearPendingStreamRequest(zoneId, requestToken);
     }
@@ -1259,15 +1274,9 @@ class MusicAssistantStreamService {
         void this.enrichMetadataFromApi(zoneId, mediaId);
       }
       this.playingState.set(zoneId, true);
-      const rawUrl = (evt?.data as any)?.media_url || (evt?.data as any)?.url || '';
-      const streamUrl = this.buildAbsoluteUrl(zoneId, rawUrl, playerId);
-      if (!streamUrl) {
-        return;
-      }
-      this.streams.set(zoneId, { playerId, streamUrl });
-      this.resolvePendingStream(zoneId, streamUrl);
+      this.streams.set(zoneId, { playerId });
       this.startKeepAlive(zoneId, playerId);
-      this.log.info('music assistant stream updated', { zoneId, streamUrl });
+      this.log.info('music assistant stream updated', { zoneId, playerId });
       return;
     }
     if (type === 'PAUSE') {
@@ -1308,6 +1317,19 @@ class MusicAssistantStreamService {
   private handlePlayerEvent(zoneId: number, playerId: string, evt: Record<string, any>): void {
     const data = evt?.data ?? {};
     const current = data.current_media ?? data.media ?? data.item ?? null;
+    const available = typeof data.available === 'boolean' ? data.available : undefined;
+    if (available === false) {
+      this.log.info('music assistant player unavailable; attempting re-register', { zoneId, playerId });
+      void this.registerZone(zoneId, this.resolveZoneName(zoneId), this.resolveZoneConfig(zoneId));
+    }
+    if (typeof data.state === 'string') {
+      const normalized = data.state.toLowerCase();
+      if (normalized === 'playing') {
+        this.playingState.set(zoneId, true);
+      } else if (normalized === 'paused' || normalized === 'idle' || normalized === 'off') {
+        this.playingState.set(zoneId, false);
+      }
+    }
     if (!current) {
       return;
     }
@@ -1549,64 +1571,6 @@ class MusicAssistantStreamService {
     return url;
   }
 
-  private buildAbsoluteUrl(zoneId: number, path: string, playerId: string): string | null {
-    if (!this.host) {
-      return null;
-    }
-    const version = (this.urlVersion.get(zoneId) ?? 0) + 1;
-    this.urlVersion.set(zoneId, version);
-
-    const appendVersion = (url: string): string => {
-      if (url.includes('?')) {
-        return `${url}&v=${version}`;
-      }
-      return `${url}?v=${version}`;
-    };
-
-    if (path && path.startsWith('http')) {
-      return appendVersion(path);
-    }
-    const base =
-      path && path.trim()
-        ? path.startsWith('/')
-          ? `http://${this.host}:${this.port}${path}`
-          : `http://${this.host}:${this.port}/${path}`
-        : `http://${this.host}:${this.port}/builtin_player/flow/${playerId}.mp3`;
-
-    return appendVersion(base);
-  }
-
-  private buildPlaybackSource(url: string): PlaybackSource {
-    const token = this.apiKey?.trim();
-    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
-    return headers ? { kind: 'url', url, headers } : { kind: 'url', url };
-  }
-
-  private awaitNextStreamUrl(zoneId: number, timeoutMs = 5000): Promise<string | null> {
-    const existing = this.pendingUrlResolvers.get(zoneId);
-    if (existing) {
-      clearTimeout(existing.timer);
-      existing.resolve(null);
-    }
-    return new Promise<string | null>((resolve) => {
-      const timer = setTimeout(() => {
-        this.pendingUrlResolvers.delete(zoneId);
-        resolve(null);
-      }, timeoutMs);
-      this.pendingUrlResolvers.set(zoneId, { resolve, timer });
-    });
-  }
-
-  private resolvePendingStream(zoneId: number, url: string | null): void {
-    const pending = this.pendingUrlResolvers.get(zoneId);
-    if (!pending) {
-      return;
-    }
-    clearTimeout(pending.timer);
-    this.pendingUrlResolvers.delete(zoneId);
-    pending.resolve(url);
-  }
-
   private decodeBase64Deep(value: string): string {
     let current = value;
     for (let i = 0; i < 4; i += 1) {
@@ -1731,11 +1695,6 @@ class MusicAssistantStreamService {
       return;
     }
     this.lastStreamStartAt.set(zoneId, Date.now());
-    const pendingStop = this.streamStopTimers.get(zoneId);
-    if (pendingStop) {
-      clearTimeout(pendingStop);
-      this.streamStopTimers.delete(zoneId);
-    }
     const meta = this.lastMetadata.get(zoneId);
     const source: PlaybackSource = {
       kind: 'pipe',
@@ -1788,31 +1747,15 @@ class MusicAssistantStreamService {
     if (!this.inputHandlers?.stopPlayback) {
       return;
     }
-    const pendingStop = this.streamStopTimers.get(zoneId);
-    if (pendingStop) {
-      clearTimeout(pendingStop);
-    }
-    if (this.recentlyPaused(zoneId, 8000)) {
-      this.log.debug('music assistant stream stop suppressed; recent pause', {
+    if (this.playingState.get(zoneId) === true) {
+      this.log.debug('music assistant stream stop ignored; MA still playing', {
         zoneId,
         playerId,
       });
       return;
     }
-    const sinceStartMs = Math.max(0, Date.now() - (this.lastStreamStartAt.get(zoneId) ?? 0));
-    if (sinceStartMs < this.streamStopDebounceMs) {
-      this.log.debug('music assistant stream stop debounced', {
-        zoneId,
-        playerId,
-        sinceStartMs,
-      });
-    }
-    const timer = setTimeout(() => {
-      this.streamStopTimers.delete(zoneId);
-      this.log.info('music assistant input stream stop', { zoneId, playerId });
-      this.inputHandlers?.stopPlayback?.(zoneId);
-    }, this.streamStopDebounceMs);
-    this.streamStopTimers.set(zoneId, timer);
+    this.log.info('music assistant input stream stop', { zoneId, playerId });
+    this.inputHandlers?.stopPlayback?.(zoneId);
   }
 
   private handleInputMetadata(zoneId: number, playerId: string, metadata: PlaybackMetadata): void {
@@ -1993,6 +1936,27 @@ class MusicAssistantStreamService {
       const message = err instanceof Error ? err.message : String(err);
       this.log.debug('music assistant metadata lookup failed', { zoneId, mediaId: decoded, provider: ref.provider || 'library', message });
     }
+  }
+
+  private async waitForSendspinStream(
+    zoneId: number,
+    client: SendspinClient,
+    baseTimeoutMs = 8000,
+  ): Promise<{ stream: PassThrough; format: StreamFormat } | null> {
+    const maxWaitMs = this.playingState.get(zoneId) === true ? Math.max(15000, baseTimeoutMs) : baseTimeoutMs;
+    const deadline = Date.now() + maxWaitMs;
+    while (Date.now() < deadline) {
+      const remaining = Math.max(1000, deadline - Date.now());
+      const chunk = await client.awaitStream(Math.min(5000, remaining));
+      if (chunk) {
+        return chunk;
+      }
+      if (this.playingState.get(zoneId) !== true) {
+        break;
+      }
+    }
+    this.log.warn('sendspin stream await exceeded max wait', { zoneId, maxWaitMs, playing: this.playingState.get(zoneId) });
+    return null;
   }
 }
 

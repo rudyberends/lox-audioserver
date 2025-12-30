@@ -12,6 +12,10 @@ export type MusicAssistantInputHandlers = {
   updateTiming?: (zoneId: number, elapsed: number, duration: number) => void;
 };
 
+export type MusicAssistantSwitchAwayHandlers = {
+  onSwitchAway?: (zoneId: number) => void;
+};
+
 /**
  * Thin input wrapper around MusicAssistantStreamService so zoneManager can treat
  * Music Assistant similar to other inputs (Spotify/AirPlay).
@@ -21,8 +25,9 @@ export type MusicAssistantInputHandlers = {
 export class MusicAssistantInputService {
   private readonly log = createLogger('Audio', 'MAInput');
 
-  public configure(handlers?: MusicAssistantInputHandlers): void {
+  public configure(handlers?: MusicAssistantInputHandlers, switchAwayHandlers?: MusicAssistantSwitchAwayHandlers): void {
     musicAssistantStreamService.setInputHandlers(handlers ?? null);
+    musicAssistantStreamService.setSwitchAwayHandlers(switchAwayHandlers ?? {});
     musicAssistantStreamService.configureFromConfig();
   }
 
@@ -69,6 +74,10 @@ export class MusicAssistantInputService {
 
   public shutdown(): void {
     // Stream service cleans up refs on configure; nothing extra yet.
+  }
+
+  public async switchAway(zoneId: number): Promise<void> {
+    await musicAssistantStreamService.switchAway(zoneId);
   }
 }
 
