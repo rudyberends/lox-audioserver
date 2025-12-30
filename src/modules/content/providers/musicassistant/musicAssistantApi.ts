@@ -300,6 +300,13 @@ export class MusicAssistantApi {
     return Array.isArray(result) ? result : [];
   }
 
+  public async clearQueue(queueId: string): Promise<boolean> {
+    if (!queueId) return false;
+    const payload: Record<string, unknown> = { queue_id: queueId };
+    const result = await this.safeRpc<any>('player_queues/clear', payload, false);
+    return Boolean(result);
+  }
+
   public async playerCommand(
     playerId: string,
     command: string,
