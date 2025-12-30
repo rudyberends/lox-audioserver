@@ -475,7 +475,7 @@ class SendspinClient {
       this.streamFormat = null;
       this.lastStreamEndedAt = Date.now();
       this.log.info('sendspin stream cleared', { playerId: this.playerId, type: msg.type });
-      this.onStream?.stop?.(this.zoneId, this.playerId);
+      // Do not stop on stream/end; rely on MA state/STOP for session teardown.
       return;
     }
     if (msg.type === 'metadata') {
@@ -732,6 +732,7 @@ class MusicAssistantStreamService {
   private switchAwayHandlers: {
     onSwitchAway?: (zoneId: number) => void;
   } = {};
+  private lastPlayIntentAt = new Map<number, number>();
   // Tracks in-flight serviceplay requests so sendspin doesn't double-start playback.
   private pendingStreamRequests = new Map<number, number>();
   private streamRequestSeq = 0;
@@ -1071,6 +1072,7 @@ class MusicAssistantStreamService {
 
     // Mark intent to play so we don't treat early stream/end from previous track as a real stop
     this.playingState.set(zoneId, true);
+    this.lastPlayIntentAt.set(zoneId, Date.now());
 
     const mediaId = this.decodeMediaId(audiopath);
     if (!mediaId) {
@@ -1284,6 +1286,10 @@ class MusicAssistantStreamService {
       return;
     }
     if (type === 'STOP') {
+      if (this.recentPlayIntent(zoneId, 5000)) {
+        this.log.debug('music assistant STOP ignored; recent play intent', { zoneId, playerId });
+        return;
+      }
       this.playingState.set(zoneId, false);
       this.stopKeepAlive(zoneId);
       this.removeSubscription(zoneId);
@@ -1754,6 +1760,13 @@ class MusicAssistantStreamService {
       });
       return;
     }
+    if (this.recentPlayIntent(zoneId, 6000)) {
+      this.log.debug('music assistant stream stop ignored; recent play intent', {
+        zoneId,
+        playerId,
+      });
+      return;
+    }
     this.log.info('music assistant input stream stop', { zoneId, playerId });
     this.inputHandlers?.stopPlayback?.(zoneId);
   }
@@ -1957,6 +1970,11 @@ class MusicAssistantStreamService {
     }
     this.log.warn('sendspin stream await exceeded max wait', { zoneId, maxWaitMs, playing: this.playingState.get(zoneId) });
     return null;
+  }
+
+  private recentPlayIntent(zoneId: number, ms: number): boolean {
+    const ts = this.lastPlayIntentAt.get(zoneId);
+    return typeof ts === 'number' && Date.now() - ts < ms;
   }
 }
 
