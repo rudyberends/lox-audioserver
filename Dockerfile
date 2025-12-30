@@ -23,6 +23,7 @@ RUN npm prune --omit=dev
 FROM node:20-bookworm-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        ca-certificates \
         cifs-utils \
         keyutils \
         nfs-common \
