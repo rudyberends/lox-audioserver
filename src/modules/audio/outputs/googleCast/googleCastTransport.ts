@@ -1,14 +1,82 @@
 import util from 'node:util';
+import { networkInterfaces } from 'node:os';
 import { createLogger } from '@/core/logging/logger';
 import type { PlaybackSession } from '@/modules/audio';
 import { getSystemConfig } from '@/domain/config/configStore';
 import type { HttpPreferences, PreferredOutput, TransportConfigDefinition, ZoneTransport } from '@/modules/audio/outputs/types';
 import { notifyTransportState } from '@/modules/audio/outputs/queueUpdater';
+import { isHttpUrl } from '@/modules/audio/utils/coverArt';
 
 // castv2-client has no bundled types; import via require to avoid TS resolution issues.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const castv2: any = require('castv2-client');
 const { Client: CastClient, DefaultMediaReceiver } = castv2;
+
+let castMediaControllerPatched = false;
+const patchCastMediaController = (): void => {
+  if (castMediaControllerPatched) return;
+  castMediaControllerPatched = true;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const MediaController = require('castv2-client/lib/controllers/media') as any;
+    if (!MediaController?.prototype || MediaController.prototype.__safePatched) {
+      return;
+    }
+    MediaController.prototype.__safePatched = true;
+
+    MediaController.prototype.load = function load(media: any, options: any, callback: any): void {
+      let opts = options;
+      let cb = callback;
+      if (typeof opts === 'function') {
+        cb = opts;
+        opts = {};
+      }
+      cb = cb || (() => {});
+      const data: any = {
+        type: 'LOAD',
+        autoplay: opts?.autoplay,
+        currentTime: opts?.currentTime,
+        activeTrackIds: opts?.activeTrackIds,
+      };
+      data.media = media;
+      this.request(data, (err: any, response: any) => {
+        if (err) return cb(err);
+        if (response?.type === 'LOAD_FAILED') {
+          return cb(new Error('Load failed'));
+        }
+        if (response?.type === 'LOAD_CANCELLED') {
+          return cb(new Error('Load cancelled'));
+        }
+        const status = response?.status?.[0];
+        if (!status) {
+          return cb(new Error('Load missing status'));
+        }
+        return cb(null, status);
+      });
+    };
+
+    MediaController.prototype.sessionRequest = function sessionRequest(data: any, callback: any): void {
+      const cb = callback || (() => {});
+      if (!this.currentSession?.mediaSessionId) {
+        cb(new Error('Missing media session'));
+        return;
+      }
+      data.mediaSessionId = this.currentSession.mediaSessionId;
+      this.request(data, (err: any, response: any) => {
+        if (err) return cb(err);
+        const status = response?.status?.[0];
+        if (!status) {
+          return cb(new Error('Session request missing status'));
+        }
+        return cb(null, status);
+      });
+    };
+  } catch {
+    // Keep default behavior if patching fails.
+  }
+};
+
+patchCastMediaController();
 export interface GoogleCastTransportConfig {
   host: string;
   name?: string;
@@ -36,6 +104,8 @@ export class GoogleCastTransport implements ZoneTransport {
   private lastMediaSessionId: number | null = null;
   private lastMetadataSignature: string | null = null;
   private lastMetadataUpdateAt = 0;
+  private lastMetadataLoadAttemptAt = 0;
+  private metadataLoadCooldownUntil = 0;
 
   constructor(
     private readonly zoneId: number,
@@ -111,10 +181,6 @@ export class GoogleCastTransport implements ZoneTransport {
 
   public async updateMetadata(session: PlaybackSession | null): Promise<void> {
     if (!session) return;
-    if (!this.receiver) {
-      this.log.debug('Google Cast metadata skipped; no receiver yet', { zoneId: this.zoneId });
-      return;
-    }
 
     const signature = this.buildMediaSignature(session);
     if (signature === this.lastMetadataSignature) {
@@ -123,19 +189,26 @@ export class GoogleCastTransport implements ZoneTransport {
     if (Date.now() - this.lastMetadataUpdateAt < 1500) {
       return;
     }
+    const receiver = this.receiver;
+    if (!receiver) {
+      this.log.debug('Google Cast metadata skipped; no receiver yet', { zoneId: this.zoneId });
+      this.lastMetadataSignature = signature;
+      this.lastMetadataUpdateAt = Date.now();
+      return;
+    }
 
     this.log.info('Google Cast metadata update', {
       zoneId: this.zoneId,
       title: session.metadata?.title,
       artist: session.metadata?.artist,
-      elapsedMs: session.elapsed,
-      durationMs: session.duration,
+      elapsedSec: session.elapsed,
+      durationSec: session.duration,
     });
 
     const media = this.buildMedia(session);
-    const status: any = await util.promisify((cb: any) => this.receiver.getStatus(cb))().catch(() => null);
+    const status: any = await util.promisify((cb: any) => receiver.getStatus(cb))().catch(() => null);
     const isLiveStream = !media.duration || media.streamType === 'LIVE';
-    const controller = (this.receiver as any)?.media;
+    const controller = (receiver as any)?.media;
     if (controller && status) {
       controller.currentSession = status;
     }
@@ -147,12 +220,10 @@ export class GoogleCastTransport implements ZoneTransport {
       updated = await this.pushMetadataUpdate(media.metadata, media.customData ?? {});
     }
     if (!updated) {
-      const shouldAutoplay = status?.playerState !== 'PAUSED';
-      const opts = {
-        autoplay: shouldAutoplay,
-        currentTime: status?.currentTime ?? 0,
-      };
-      await util.promisify((cb: any) => this.receiver.load(media, opts, cb))().catch(() => {});
+      // Avoid re-loading media on every metadata tick; it causes Cast to reset/buffer.
+      this.lastMetadataSignature = signature;
+      this.lastMetadataUpdateAt = Date.now();
+      return;
     }
     this.lastMetadataSignature = signature;
     this.lastMetadataUpdateAt = Date.now();
@@ -160,12 +231,12 @@ export class GoogleCastTransport implements ZoneTransport {
 
   public getPreferredOutput(): PreferredOutput {
     // Cast typically prefers MP3/AAC streams; stick with MP3 profile at 44.1kHz.
-    return { profile: 'mp3', sampleRate: 44100, channels: 2 };
+    return { profile: 'mp3', sampleRate: 44100, channels: 2, prebufferBytes: 1024 * 256 };
   }
 
   public getHttpPreferences(): HttpPreferences {
-    // Chunked works well for Cast; disable ICY metadata.
-    return { httpProfile: 'chunked', icyEnabled: false };
+    // Cast is happier with a stable Content-Length; disable ICY metadata.
+    return { httpProfile: 'forced_content_length', icyEnabled: false };
   }
 
   private async connect(): Promise<void> {
@@ -197,6 +268,10 @@ export class GoogleCastTransport implements ZoneTransport {
     } catch {}
     this.client = null;
     this.receiver = null;
+    this.lastLoadSignature = null;
+    this.lastMetadataSignature = null;
+    this.lastMediaSessionId = null;
+    this.lastLoadAt = 0;
   }
 
   private async loadStream(session: PlaybackSession): Promise<void> {
@@ -206,46 +281,27 @@ export class GoogleCastTransport implements ZoneTransport {
     if (this.lastLoadSignature === signature && Date.now() - this.lastLoadAt < 1000) {
       return;
     }
+
+    let receiver = await this.ensureReceiver();
+    let loaded = await this.loadMedia(receiver, media, {
+      autoplay: true,
+      currentTime: session.elapsed ? session.elapsed : 0,
+    });
+    if (!loaded) {
+      this.receiver = null;
+      receiver = await this.ensureReceiver();
+      loaded = await this.loadMedia(receiver, media, {
+        autoplay: true,
+        currentTime: session.elapsed ? session.elapsed : 0,
+      });
+    }
+    if (!loaded) {
+      return;
+    }
     this.lastLoadSignature = signature;
     this.lastMetadataSignature = signature;
     this.lastLoadAt = Date.now();
-
-    const receiver = await this.ensureReceiver();
-    await new Promise<void>((resolve, reject) => {
-      receiver.load(
-        media,
-        {
-          autoplay: true,
-          currentTime: session.elapsed ? session.elapsed / 1000 : 0,
-        },
-        (loadErr: any) => {
-          if (loadErr) {
-            this.log.warn('Google Cast load error', { zoneId: this.zoneId, message: loadErr?.message });
-            reject(loadErr);
-            return;
-          }
-          this.log.info('Google Cast stream loaded', { zoneId: this.zoneId });
-          resolve();
-        },
-      );
-    });
-    // Ensure playback starts; some devices remain paused after load.
-    try {
-      const status: any = await util.promisify((cb: any) => receiver.getStatus(cb))();
-      if (status?.mediaSessionId) {
-        this.lastMediaSessionId = status.mediaSessionId;
-      }
-      const shouldPlay =
-        status?.mediaSessionId && status?.playerState && status.playerState !== 'PLAYING';
-      if (shouldPlay) {
-        await util.promisify((cb: any) => receiver.play(cb))();
-      }
-    } catch (err: any) {
-      this.log.debug('Google Cast play after load failed', {
-        zoneId: this.zoneId,
-        message: err?.message,
-      });
-    }
+    await this.ensurePlayback(receiver);
   }
 
   private async stopStream(): Promise<void> {
@@ -316,7 +372,8 @@ export class GoogleCastTransport implements ZoneTransport {
   }
 
   private buildMedia(session: PlaybackSession): any {
-    const { baseUrl, streamUrl, coverUrl } = this.resolveStreamUrls(session);
+    const { baseUrl, streamUrl } = this.resolveStreamUrls(session);
+    const coverUrl = this.resolveCoverUrl(session);
     const meta = (session.metadata ?? {}) as {
       title?: string;
       artist?: string;
@@ -325,15 +382,15 @@ export class GoogleCastTransport implements ZoneTransport {
       station?: string;
       duration?: number;
     };
-    const durationMs = session.duration || meta.duration || 0;
-    const durationSec = durationMs > 0 ? durationMs / 1000 : undefined;
-    const streamType = durationSec && durationSec > 0 ? 'BUFFERED' : 'LIVE';
-    const currentTimeSec = session.elapsed ? session.elapsed / 1000 : 0;
+    const durationSec = session.duration || meta.duration || 0;
+    const normalizedDuration = durationSec > 0 ? durationSec : undefined;
+    const streamType = normalizedDuration && normalizedDuration > 0 ? 'BUFFERED' : 'LIVE';
+    const currentTimeSec = session.elapsed ? session.elapsed : 0;
     return {
       contentId: streamUrl,
       contentType: 'audio/mpeg',
       streamType,
-      duration: durationSec,
+      duration: normalizedDuration,
       currentTime: currentTimeSec,
       metadata: {
         metadataType: 3, // MUSIC_TRACK
@@ -344,7 +401,7 @@ export class GoogleCastTransport implements ZoneTransport {
         customData: {
           zoneId: this.zoneId,
           source: session.source,
-          duration: durationMs || null,
+          duration: normalizedDuration || null,
           station: meta.station ?? null,
         },
       },
@@ -362,26 +419,26 @@ export class GoogleCastTransport implements ZoneTransport {
       subtitle?: string;
       album?: string;
     };
-    const durationMs = session.duration || (meta as any).duration || 0;
+    const durationSec = session.duration || (meta as any).duration || 0;
     return JSON.stringify({
       streamUrl,
       title: meta?.title,
       artist: meta?.artist ?? (meta as any)?.subtitle,
       album: (meta as any)?.album,
       coverUrl,
-      durationMs,
+      durationSec,
     });
   }
 
   private resolveStreamUrls(session: PlaybackSession): { baseUrl: string; streamUrl: string; coverUrl?: string } {
-    const cfg = getSystemConfig() as any;
-    const ip = cfg?.audioserver?.ip;
-    const baseUrl = ip ? `http://${ip}:7090` : '';
+    const baseUrl = this.resolveBaseUrl();
     const streamPath = session.stream?.url || `/streams/${this.zoneId}/current.mp3`;
-    const coverPath = session.stream?.coverUrl;
-    const streamUrl = `${baseUrl}${streamPath}`;
-    const coverUrl = coverPath ? `${baseUrl}${coverPath}` : undefined;
-    return { baseUrl, streamUrl, coverUrl };
+    const streamUrl = this.appendQueryParam(
+      isHttpUrl(streamPath) ? streamPath : `${baseUrl}${streamPath}`,
+      'prime',
+      '0',
+    );
+    return { baseUrl, streamUrl };
   }
 
   private async pushMetadataUpdate(metadata: any, customData: Record<string, any>): Promise<boolean> {
@@ -406,5 +463,100 @@ export class GoogleCastTransport implements ZoneTransport {
       });
       return false;
     }
+  }
+
+  private async loadMedia(
+    receiver: any,
+    media: any,
+    options: { autoplay?: boolean; currentTime?: number } = {},
+  ): Promise<boolean> {
+    return await new Promise((resolve) => {
+      receiver.load(
+        media,
+        {
+          autoplay: options.autoplay ?? true,
+          currentTime: options.currentTime ?? 0,
+        },
+        (loadErr: any) => {
+          if (loadErr) {
+            this.log.warn('Google Cast load error', { zoneId: this.zoneId, message: loadErr?.message });
+            const message = loadErr?.message ?? '';
+            if (typeof message === 'string' && message.toLowerCase().includes('load cancelled')) {
+              this.metadataLoadCooldownUntil = Date.now() + 3000;
+            }
+            resolve(false);
+            return;
+          }
+          this.log.info('Google Cast stream loaded', { zoneId: this.zoneId });
+          resolve(true);
+        },
+      );
+    });
+  }
+
+  private async ensurePlayback(receiver: any): Promise<void> {
+    try {
+      const status: any = await util.promisify((cb: any) => receiver.getStatus(cb))();
+      if (status?.mediaSessionId) {
+        this.lastMediaSessionId = status.mediaSessionId;
+      }
+      const shouldPlay =
+        status?.mediaSessionId && status?.playerState && status.playerState !== 'PLAYING';
+      if (shouldPlay) {
+        await util.promisify((cb: any) => receiver.play(cb))();
+      }
+    } catch (err: any) {
+      this.log.debug('Google Cast play after load failed', {
+        zoneId: this.zoneId,
+        message: err?.message,
+      });
+    }
+  }
+
+  private resolveBaseUrl(): string {
+    const sys = getSystemConfig() as any;
+    const host =
+      sys?.audioserver?.ip?.trim() ||
+      process.env.HTTP_PUBLIC_HOST ||
+      process.env.PUBLIC_HOST ||
+      process.env.HTTP_HOST ||
+      process.env.HOST ||
+      this.pickLocalAddress();
+    const port = Number(process.env.HTTP_PORT ?? process.env.PORT ?? 7090);
+    return `http://${host}:${port}`;
+  }
+
+  private appendQueryParam(url: string, key: string, value: string): string {
+    try {
+      const parsed = new URL(url);
+      parsed.searchParams.set(key, value);
+      return parsed.toString();
+    } catch {
+      return url;
+    }
+  }
+
+  private resolveCoverUrl(session: PlaybackSession): string | undefined {
+    const cover = session.metadata?.coverurl;
+    if (!cover) {
+      return undefined;
+    }
+    const trimmed = cover.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    return isHttpUrl(trimmed) ? trimmed : undefined;
+  }
+
+  private pickLocalAddress(): string {
+    const nets = networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name] || []) {
+        if (net.family === 'IPv4' && !net.internal && net.address) {
+          return net.address;
+        }
+      }
+    }
+    return '127.0.0.1';
   }
 }
