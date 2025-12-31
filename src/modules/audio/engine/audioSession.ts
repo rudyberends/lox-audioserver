@@ -92,11 +92,8 @@ export class AudioSession {
       this.source.kind === 'file' &&
       typeof this.source.path === 'string' &&
       this.source.path.includes('/alerts/');
-    // Adaptive lead: base on CPU/mem to keep startup snappy on fast boxes and stable on slow ones.
-    const cores = Math.max(os.cpus()?.length ?? 1, 1);
-    const memGb = Math.max(os.totalmem() / (1024 * 1024 * 1024), 0.5);
-    this.targetLeadMs =
-      cores >= 8 && memGb >= 8 ? 1000 : cores >= 4 && memGb >= 4 ? 1800 : memGb >= 2 ? 2500 : 3200;
+    // Fixed lead to reduce startup latency across outputs.
+    this.targetLeadMs = 1000;
     if (!Number.isFinite(candidate) || candidate <= 0) {
       // Allow disabling the rolling buffer; we still stream live without caching chunks.
       this.maxBufferBytes = 0;

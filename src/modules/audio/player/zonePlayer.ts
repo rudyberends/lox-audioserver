@@ -112,18 +112,14 @@ export class ZonePlayer {
   }
 
   public updateMetadata(metadata: PlaybackMetadata): void {
-    const session = audioManager.updateSessionMetadata(this.zoneId, metadata);
-    if (session) {
-      this.state.metadata = metadata;
-      if (metadata.duration && metadata.duration > 0) {
-        this.state.duration = metadata.duration;
-      }
-      this.emit('metadata', metadata);
+    this.state.metadata = metadata;
+    if (metadata.duration && metadata.duration > 0) {
+      this.state.duration = metadata.duration;
     }
+    this.emit('metadata', metadata);
   }
 
   public updateTiming(elapsed: number, duration: number): void {
-    audioManager.updateSessionTiming(this.zoneId, elapsed, duration);
     this.state.time = elapsed;
     this.state.duration = duration;
     this.lastTickAt = Date.now();

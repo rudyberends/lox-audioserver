@@ -1898,6 +1898,50 @@ class ZoneManager {
       ctx.lastZoneBroadcastAt = now;
       notifyZoneStateChanged(ctx.state);
     }
+    const session = audioManager.getSession(zoneId);
+    if (session) {
+      if ('time' in patch || 'duration' in patch) {
+        const elapsed = typeof ctx.state.time === 'number' ? ctx.state.time : session.elapsed;
+        const duration = typeof ctx.state.duration === 'number' ? ctx.state.duration : session.duration;
+        audioManager.updateSessionTiming(zoneId, elapsed, duration);
+      }
+      const hasMetadataUpdate =
+        'title' in patch ||
+        'artist' in patch ||
+        'album' in patch ||
+        'coverurl' in patch ||
+        'station' in patch ||
+        'audiopath' in patch;
+      if (hasMetadataUpdate) {
+        const base = session.metadata ?? { title: '', artist: '', album: '' };
+        const nextMetadata = {
+          title: ctx.state.title || base.title,
+          artist: ctx.state.artist || base.artist,
+          album: ctx.state.album || base.album,
+          coverurl: ctx.state.coverurl || base.coverurl,
+          duration: typeof ctx.state.duration === 'number' && ctx.state.duration > 0 ? ctx.state.duration : base.duration,
+          audiopath: ctx.state.audiopath || base.audiopath,
+          station: ctx.state.station || base.station,
+          trackId: base.trackId,
+          stationIndex: base.stationIndex,
+          queue: base.queue,
+          queueIndex: base.queueIndex,
+        };
+        const prev = session.metadata;
+        const unchanged =
+          prev &&
+          prev.title === nextMetadata.title &&
+          prev.artist === nextMetadata.artist &&
+          prev.album === nextMetadata.album &&
+          prev.coverurl === nextMetadata.coverurl &&
+          prev.duration === nextMetadata.duration &&
+          prev.audiopath === nextMetadata.audiopath &&
+          prev.station === nextMetadata.station;
+        if (!unchanged) {
+          audioManager.updateSessionMetadata(zoneId, nextMetadata);
+        }
+      }
+    }
     this.notifyTransportMetadata(zoneId, ctx, patch);
   }
 
@@ -2304,7 +2348,6 @@ class ZoneManager {
       'album' in patch ||
       'coverurl' in patch ||
       'duration' in patch ||
-      'time' in patch ||
       'station' in patch ||
       'sourceName' in patch;
     if (!touchesMeta) {

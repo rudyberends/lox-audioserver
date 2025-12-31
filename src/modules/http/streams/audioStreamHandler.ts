@@ -73,8 +73,10 @@ export class AudioStreamHandler {
     const icyNameOverride = httpPrefs?.icyName ?? audioOutputSettings.httpIcyName;
 
     const clientLabel = this.buildClientLabel(req, isWav ? 'pcm' : 'mp3');
+    const primeWithBuffer = this.shouldPrimeWithBuffer(req);
     let audioStream = audioStreamEngine.createStream(zoneId, isWav ? 'pcm' : 'mp3', {
       label: clientLabel,
+      primeWithBuffer,
     });
     if (!audioStream && session.playbackSource) {
       const profiles =
@@ -84,6 +86,7 @@ export class AudioStreamHandler {
       audioStreamEngine.start(zoneId, session.playbackSource, profiles as any);
       audioStream = audioStreamEngine.createStream(zoneId, isWav ? 'pcm' : 'mp3', {
         label: clientLabel,
+        primeWithBuffer,
       });
     }
     if (!audioStream) {
@@ -308,6 +311,23 @@ export class AudioStreamHandler {
     }
     const header = req.headers['icy-metadata'] ?? req.headers['icy-metadata'.toLowerCase()];
     return String(header ?? '').trim() === '1';
+  }
+
+  private shouldPrimeWithBuffer(req: IncomingMessage): boolean {
+    const rawUrl = req.url ?? '';
+    if (!rawUrl) {
+      return true;
+    }
+    try {
+      const url = new URL(rawUrl, 'http://localhost');
+      const value = url.searchParams.get('prime');
+      if (value === '0' || value === 'false') {
+        return false;
+      }
+    } catch {
+      return true;
+    }
+    return true;
   }
 
   private pipeWithIcyMetadata(
