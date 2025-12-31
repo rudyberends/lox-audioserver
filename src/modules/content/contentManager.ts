@@ -201,8 +201,12 @@ export class ContentManager {
     const desc: Record<string, string[]> = {};
     const providerTypes = new Set<string>();
     for (const account of this.spotify.listAccounts()) {
+      if (account.fake) {
+        providerTypes.add('spotify');
+        continue;
+      }
       if (account.provider) {
-        providerTypes.add(account.provider);
+        providerTypes.add(account.provider.toLowerCase());
       }
     }
     if (providerTypes.size === 0) {
