@@ -3,6 +3,7 @@ import { decodeAudiopath } from '@/modules/audio/utils/audiopath';
 import { resolveDataDir } from '@/core/utils/file';
 import type { PlaybackSource } from '@/modules/audio/engine/audioSession';
 import { createLogger } from '@/core/logging/logger';
+import { buildProxyUrl } from '@/modules/audio/utils/urlProxy';
 
 const musicRoot = path.resolve(resolveDataDir('music'));
 const alertsRoot = path.resolve(process.cwd(), 'public', 'alerts');
@@ -46,7 +47,8 @@ export function resolvePlaybackSource(audiopath: string): PlaybackSource | null 
   }
 
   if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
-    return { kind: 'url', url: decoded };
+    const proxied = buildProxyUrl(decoded);
+    return { kind: 'url', url: proxied ?? decoded };
   }
 
   // Anything else (e.g. provider-specific URIs such as spotify:track:abc) is transport-only.

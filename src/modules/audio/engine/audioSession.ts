@@ -101,7 +101,7 @@ export class AudioSession {
       // Allow larger prebuffer when upstream requests it (e.g., Sendspin wants ~5s).
       // Keep a safety cap to avoid unbounded memory; 4MB is still modest.
       const hardMax = 1024 * 1024 * 4;
-      const hardMin = 1024 * 32; // keep a minimal guard when enabled
+      const hardMin = 1024 * 8; // keep a small guard when enabled
       const requested = Math.min(candidate, hardMax);
       this.maxBufferBytes = Math.max(requested, hardMin);
     }

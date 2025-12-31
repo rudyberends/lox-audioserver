@@ -10,6 +10,7 @@ import { SendspinGateway } from '@/modules/http/sendspin/sendspinGateway';
 import { sendspinClientConnector } from '@/modules/http/sendspin/sendspinClientConnector';
 import { SnapcastGateway } from '@/modules/http/snapcast/snapcastGateway';
 import { AudioStreamHandler } from '@/modules/http/streams/audioStreamHandler';
+import { AudioProxyHandler } from '@/modules/http/streams/audioProxyHandler';
 import { getSystemConfig } from '@/domain/config/configStore';
 import { networkInterfaces } from 'node:os';
 
@@ -22,6 +23,7 @@ export class HttpService {
   private readonly music: MusicStreamingHandler;
   private readonly staticFiles: StaticFileHandler;
   private readonly audioStream: AudioStreamHandler;
+  private readonly audioProxy: AudioProxyHandler;
   private readonly sendspin = new SendspinGateway();
   private readonly snapcast = new SnapcastGateway();
   private server?: http.Server;
@@ -35,6 +37,7 @@ export class HttpService {
     this.music = new MusicStreamingHandler(config.musicDir);
     this.staticFiles = new StaticFileHandler(config.publicDir);
     this.audioStream = new AudioStreamHandler();
+    this.audioProxy = new AudioProxyHandler();
   }
 
   public async start(): Promise<void> {
@@ -118,6 +121,11 @@ export class HttpService {
 
     if (this.adminApi.matches(pathname)) {
       await this.adminApi.handle(req, res);
+      return;
+    }
+
+    if (this.audioProxy.matches(pathname)) {
+      await this.audioProxy.handle(req, res);
       return;
     }
 

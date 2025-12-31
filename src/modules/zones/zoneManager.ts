@@ -24,6 +24,7 @@ import { registerPlayer, unregisterPlayer, clearPlayers } from '@/modules/audio/
 import { buildZoneTransports } from '@/modules/audio/outputs';
 import type { ZoneTransport } from '@/modules/audio/outputs/types';
 import { decodeAudiopath, encodeAudiopath, detectServiceFromAudiopath } from '@/modules/audio/utils/audiopath';
+import { audioOutputSettings } from '@/modules/audio/utils/audioFormat';
 import { airplayInputService } from '@/modules/audio/inputs/airplay/airplayInputService';
 import { audioManager } from '@/modules/audio';
 import { spotifyInputService } from '@/modules/audio/inputs/spotify/spotifyInputService';
@@ -871,6 +872,11 @@ class ZoneManager {
     metadata?: PlaybackMetadata,
   ): Promise<PlaybackSession | null> {
     // Apply preferred output from the primary target transport so we can resample/format accordingly.
+    let override:
+      | (Partial<import('@/modules/audio/utils/audioFormat').AudioOutputSettings> & {
+          profile?: import('@/modules/audio/audioManager').OutputProfile;
+        })
+      | null = null;
     const primaryOutput =
       (ctx.activeOutput
         ? ctx.transports.find((transport) => transport.type === ctx.activeOutput)
@@ -878,9 +884,7 @@ class ZoneManager {
     if (primaryOutput && typeof (primaryOutput as any).getPreferredOutput === 'function') {
       const pref = (primaryOutput as any).getPreferredOutput?.();
       if (pref) {
-        const override: Partial<import('@/modules/audio/utils/audioFormat').AudioOutputSettings> & {
-          profile?: import('@/modules/audio/audioManager').OutputProfile;
-        } = {};
+        override = {};
         if (typeof pref.sampleRate === 'number') {
           override.sampleRate = pref.sampleRate;
         }
@@ -896,11 +900,21 @@ class ZoneManager {
         if (typeof pref.prebufferBytes === 'number' && pref.prebufferBytes > 0) {
           override.prebufferBytes = pref.prebufferBytes;
         }
-        audioManager.setPreferredOutputSettings(ctx.id, override);
       }
-    } else {
-      audioManager.setPreferredOutputSettings(ctx.id, null);
     }
+    if (this.shouldReducePrebuffer(ctx, audiopath)) {
+      const radioPrebufferBytes = 8 * 1024;
+      const current =
+        typeof override?.prebufferBytes === 'number'
+          ? override.prebufferBytes
+          : audioOutputSettings.prebufferBytes;
+      const clamped = Math.min(current, radioPrebufferBytes);
+      if (!override) {
+        override = {};
+      }
+      override.prebufferBytes = clamped;
+    }
+    audioManager.setPreferredOutputSettings(ctx.id, override);
     if (primaryOutput && typeof (primaryOutput as any).getHttpPreferences === 'function') {
       const prefs = (primaryOutput as any).getHttpPreferences?.();
       if (prefs) {
@@ -1767,7 +1781,7 @@ class ZoneManager {
     if (activeAlert.snapshot.mode === 'play') {
       const current = ctx.queueController.current();
       if (current) {
-        const session = await this.startQueuePlayback(ctx, current.audiopath, {
+    const session = await this.startQueuePlayback(ctx, current.audiopath, {
           title: current.title,
           artist: current.artist,
           album: current.album,
@@ -1806,6 +1820,20 @@ class ZoneManager {
     } else if (activeAlert.snapshot.mode === 'stop') {
       this.patchState(zoneId, { mode: 'stop', clientState: 'on', power: 'on' });
     }
+  }
+
+  private shouldReducePrebuffer(ctx: ZoneContext, audiopath: string): boolean {
+    const decoded = decodeAudiopath(audiopath) || audiopath;
+    if (!decoded) {
+      return false;
+    }
+    if (!/^https?:/i.test(decoded)) {
+      return false;
+    }
+    if (detectServiceFromAudiopath(decoded) === 'radio') {
+      return true;
+    }
+    return ctx.queue.authority === 'local';
   }
 
   private createAlertSnapshot(ctx: ZoneContext): AlertSnapshot {
