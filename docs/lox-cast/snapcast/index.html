@@ -272,19 +272,36 @@
 
     const handleCastPayload = (raw) => {
       const data = typeof raw === 'string' ? (() => { try { return JSON.parse(raw); } catch { return {}; } })() : raw || {};
-      const serverUrl = data.serverUrl ?? data.payload?.serverUrl;
-      const streamId = data.streamId ?? data.payload?.streamId;
-      const clientId = data.clientId ?? data.payload?.clientId;
+      const payload = data.payload || data;
+      const type = payload.type || 'setup';
+      const meta = payload.metadata || null;
+      if (meta) {
+        applyMetadata(meta);
+      }
+      if (type === 'metadata') {
+        return;
+      }
+      const serverUrl = payload.serverUrl;
+      const streamId = payload.streamId;
+      const clientId = payload.clientId;
       if (!serverUrl) {
         setStatus('Missing serverUrl', false, true);
         return;
       }
-      provided = { serverUrl: normalizeWsUrl(serverUrl), streamId: streamId || null, clientId: clientId || null };
-      const url = provided.streamId
-        ? `${provided.serverUrl}${provided.serverUrl.includes('?') ? '&' : '?'}stream=${encodeURIComponent(provided.streamId)}`
-        : provided.serverUrl;
-      connectStream(url);
-      connectRpc();
+      const normalized = normalizeWsUrl(serverUrl);
+      const nextProvided = { serverUrl: normalized, streamId: streamId || null, clientId: clientId || null };
+      const streamChanged =
+        !provided.serverUrl ||
+        provided.serverUrl !== nextProvided.serverUrl ||
+        provided.streamId !== nextProvided.streamId;
+      provided = nextProvided;
+      if (streamChanged) {
+        const url = provided.streamId
+          ? `${provided.serverUrl}${provided.serverUrl.includes('?') ? '&' : '?'}stream=${encodeURIComponent(provided.streamId)}`
+          : provided.serverUrl;
+        connectStream(url);
+        connectRpc();
+      }
     };
 
     window.handleCastPayload = handleCastPayload;

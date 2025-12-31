@@ -482,15 +482,16 @@
             })()
           : raw || {};
 
-      if (data.type === 'metadata' && data.payload) {
-        const payload =
-          typeof data.payload === 'string' ? JSON.parse(data.payload || 'null') : data.payload;
-        applyExternalMetadata(payload || null);
+      const payload = data.payload || data;
+      if (payload.type === 'metadata') {
+        const metaPayload =
+          typeof payload.payload === 'string' ? JSON.parse(payload.payload || 'null') : payload.payload ?? payload.metadata;
+        applyExternalMetadata(metaPayload || null);
         return;
       }
 
-      const serverUrl = data.serverUrl ?? data.payload?.serverUrl;
-      const initialMetadata = data.metadata ?? data.payload?.metadata;
+      const serverUrl = payload.serverUrl;
+      const initialMetadata = payload.metadata;
       if (initialMetadata) {
         applyExternalMetadata(initialMetadata);
       }
@@ -499,10 +500,13 @@
         return;
       }
 
-      providedPlayerId = data.playerId ?? data.payload?.playerId;
-      providedPlayerName = data.playerName ?? data.payload?.playerName;
-      providedSyncDelay = data.syncDelay ?? data.payload?.syncDelay;
-      providedCodecs = data.codecs ?? data.payload?.codecs;
+      providedPlayerId = payload.playerId;
+      providedPlayerName = payload.playerName;
+      providedSyncDelay = payload.syncDelay;
+      providedCodecs = payload.codecs;
+      if (normalizeWsUrl(serverUrl) === normalizeWsUrl(provided?.serverUrl)) {
+        return;
+      }
       connectToServer(serverUrl);
     };
 
