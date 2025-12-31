@@ -306,7 +306,7 @@ class ZoneManager {
       spotifyInputService.stopActiveSession(zoneId, reason);
     }
     if (prevInput === 'musicassistant') {
-      void musicAssistantInputService.playerCommand(zoneId, 'stop');
+      void musicAssistantInputService.switchAway(zoneId);
     }
   }
 
