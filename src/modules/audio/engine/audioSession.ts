@@ -32,7 +32,7 @@ export type PlaybackSource =
       stream?: NodeJS.ReadableStream;
     };
 
-export type OutputProfile = 'mp3' | 'pcm' | 'opus' | 'flac';
+export type OutputProfile = 'mp3' | 'aac' | 'pcm' | 'opus' | 'flac';
 
 export class AudioSession {
   private readonly log = createLogger('Audio', 'Session');
@@ -502,6 +502,23 @@ export class AudioSession {
 
     const { filterArgs } = buildFilterArgs();
     switch (this.profile) {
+      case 'aac': {
+        const bitrate = mp3Bitrate || '160k';
+        return [
+          '-vn',
+          '-acodec',
+          'aac',
+          '-ar',
+          String(sampleRate),
+          '-ac',
+          String(channels),
+          '-b:a',
+          bitrate,
+          ...filterArgs,
+          '-f',
+          'adts',
+        ];
+      }
       case 'pcm': {
         const pcmCodec = pcmCodecFromBitDepth(pcmBitDepth);
         const pcmFormat = pcmFormatFromBitDepth(pcmBitDepth);

@@ -147,16 +147,17 @@ class AudioManager {
       this.log.debug('playback resumed (reusing pipe session)', { zoneId, source: session.source });
       return session;
     }
-    const handles = this.createStreamHandles(zoneId);
-    session.stream = handles.stream;
-    session.pcmStream = handles.pcmStream;
-    const effectiveOutput = this.getEffectiveOutputSettings(zoneId);
-    const outputSignature = this.buildOutputSignature(effectiveOutput);
     const profiles = this.computeProfiles(
       session.playbackSource,
       this.zonePcmPreference.get(zoneId) ?? true,
       session.profiles,
     );
+    const streamProfile = profiles.includes('aac') ? 'aac' : 'mp3';
+    const handles = this.createStreamHandles(zoneId, streamProfile);
+    session.stream = handles.stream;
+    session.pcmStream = handles.pcmStream;
+    const effectiveOutput = this.getEffectiveOutputSettings(zoneId);
+    const outputSignature = this.buildOutputSignature(effectiveOutput);
     audioStreamEngine.start(zoneId, session.playbackSource, profiles, effectiveOutput);
     session.profiles = profiles;
     session.outputSettings = outputSignature;
@@ -230,13 +231,17 @@ class AudioManager {
     return session;
   }
 
-  private createStreamHandles(zoneId: number): { stream: AudioStreamHandle; pcmStream: AudioStreamHandle } {
+  private createStreamHandles(
+    zoneId: number,
+    streamProfile: OutputProfile = 'mp3',
+  ): { stream: AudioStreamHandle; pcmStream: AudioStreamHandle } {
     const id = `${zoneId}-${randomUUID()}`;
     const basePath = `/streams/${zoneId}/${id}`;
     const createdAt = Date.now();
+    const streamExt = streamProfile === 'aac' ? 'aac' : 'mp3';
     const stream: AudioStreamHandle = {
       id,
-      url: `${basePath}.mp3`,
+      url: `${basePath}.${streamExt}`,
       coverUrl: `${basePath}/cover`,
       createdAt,
     };
@@ -357,7 +362,8 @@ class AudioManager {
         audioStreamEngine.start(zoneId, playbackSource, profiles, effectiveOutput);
       }
     }
-    const { stream, pcmStream } = this.createStreamHandles(zoneId);
+    const streamProfile = profiles.includes('aac') ? 'aac' : 'mp3';
+    const { stream, pcmStream } = this.createStreamHandles(zoneId, streamProfile);
     const session: PlaybackSession = {
       zoneId,
       source: label,

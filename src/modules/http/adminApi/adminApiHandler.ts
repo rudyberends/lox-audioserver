@@ -19,6 +19,7 @@ import { TRANSPORT_DEFINITIONS } from '@/modules/audio/outputs';
 import { discoverAirplayDevices } from '@/modules/audio/outputs/airplay/airplayDiscovery';
 import { discoverGoogleCastDevices } from '@/modules/audio/outputs/googleCast/googleCastDiscovery';
 import { discoverDlnaDevices } from '@/modules/audio/outputs/dlna/dlnaDiscovery';
+import { discoverSonosDevices } from '@/modules/audio/outputs/sonos/sonosDiscovery';
 import { sendspinCore } from '@/modules/http/sendspin/sendspinCore';
 import { discoverSpotifyConnectDevices } from '@/modules/audio/outputs/spotify/spotifyConnectDiscovery';
 import { zoneManager } from '@/modules/zones/zoneManager';
@@ -181,6 +182,11 @@ export class AdminApiHandler {
         method: 'GET',
         pattern: /^\/transports\/dlna\/devices$/,
         handler: async (req, res) => this.handleDlnaDiscovery(req, res),
+      },
+      {
+        method: 'GET',
+        pattern: /^\/transports\/sonos\/devices$/,
+        handler: async (req, res) => this.handleSonosDiscovery(req, res),
       },
       {
         method: 'GET',
@@ -676,6 +682,39 @@ export class AdminApiHandler {
     } catch (err) {
       this.log.warn('dlna discovery failed', { err });
       this.sendJson(res, 500, { error: 'dlna-discovery-failed' });
+    }
+  }
+
+  private async handleSonosDiscovery(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    try {
+      const url = new URL(req.url ?? '', 'http://localhost');
+      const preferredName = url.searchParams.get('name')?.trim() || undefined;
+      const householdId = url.searchParams.get('householdId')?.trim() || undefined;
+      const activeHost = url.searchParams.get('host')?.trim() || undefined;
+      const networkScan = url.searchParams.get('networkScan')?.trim();
+      const allowNetworkScan =
+        typeof networkScan === 'string' &&
+        ['true', '1', 'yes', 'on'].includes(networkScan.toLowerCase());
+      const devices = await discoverSonosDevices({
+        preferredName,
+        householdId,
+        allowNetworkScan,
+      });
+      const payload = devices.map((device) => ({
+        id: device.udn || device.host,
+        host: device.host,
+        name: device.name ?? device.roomName,
+        roomName: device.roomName,
+        householdId: device.householdId,
+        active: activeHost ? device.host === activeHost : undefined,
+      }));
+      this.sendJson(res, 200, { devices: payload });
+    } catch (err) {
+      this.log.warn('sonos discovery failed', { err });
+      this.sendJson(res, 500, { error: 'sonos-discovery-failed' });
     }
   }
 

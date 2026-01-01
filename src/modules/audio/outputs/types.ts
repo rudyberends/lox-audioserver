@@ -3,7 +3,7 @@ import type { PcmBitDepth } from '@/modules/audio/utils/audioFormat';
 import type { HttpProfile } from '@/modules/audio/utils/audioFormat';
 
 export type PreferredOutput = {
-  profile: 'pcm' | 'opus' | 'flac' | 'mp3';
+  profile: 'pcm' | 'opus' | 'flac' | 'mp3' | 'aac';
   sampleRate?: number;
   channels?: number;
   bitDepth?: PcmBitDepth;

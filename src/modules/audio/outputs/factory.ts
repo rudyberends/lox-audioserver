@@ -39,6 +39,11 @@ import {
   SNAPCAST_CAST_TRANSPORT_DEFINITION,
   type SnapcastCastTransportConfig,
 } from '@/modules/audio/outputs/googleCast/snapcastCastTransport';
+import {
+  SonosTransport,
+  SONOS_TRANSPORT_DEFINITION,
+  type SonosTransportConfig,
+} from '@/modules/audio/outputs/sonos/sonosTransport';
 import { getSystemConfig } from '@/domain/config/configStore';
 
 type TransportDefinitions =
@@ -49,7 +54,8 @@ type TransportDefinitions =
   | typeof SENDSPIN_TRANSPORT_DEFINITION
   | typeof GOOGLE_CAST_TRANSPORT_DEFINITION
   | typeof SENDSPIN_CAST_TRANSPORT_DEFINITION
-  | typeof SNAPCAST_CAST_TRANSPORT_DEFINITION;
+  | typeof SNAPCAST_CAST_TRANSPORT_DEFINITION
+  | typeof SONOS_TRANSPORT_DEFINITION;
 
 export const TRANSPORT_DEFINITIONS: TransportDefinitions[] = [
   DLNA_TRANSPORT_DEFINITION,
@@ -60,6 +66,7 @@ export const TRANSPORT_DEFINITIONS: TransportDefinitions[] = [
   GOOGLE_CAST_TRANSPORT_DEFINITION,
   SENDSPIN_CAST_TRANSPORT_DEFINITION,
   SNAPCAST_CAST_TRANSPORT_DEFINITION,
+  SONOS_TRANSPORT_DEFINITION,
 ];
 const log = createLogger('Transport', 'Factory');
 
@@ -119,6 +126,12 @@ export function buildZoneTransports(zone: ZoneConfig): ZoneTransport[] {
       if (transport) {
         transports.push(transport);
         hasSpotifyController = true;
+      }
+    }
+    if (id === 'sonos') {
+      const transport = createSonosTransport(entry, zone);
+      if (transport) {
+        transports.push(transport);
       }
     }
   }
@@ -245,6 +258,30 @@ function createAirplayTransport(zone: ZoneConfig): ZoneTransport | null {
     },
     initialVolume,
   );
+}
+
+function createSonosTransport(
+  config: ZoneTransportConfig,
+  zone: ZoneConfig,
+): ZoneTransport | null {
+  const rawHost = (config as Record<string, unknown>).host;
+  const rawControlUrl = (config as Record<string, unknown>).controlUrl;
+  const host = typeof rawHost === 'string' ? rawHost.trim() : '';
+  const controlUrl = typeof rawControlUrl === 'string' ? rawControlUrl.trim() : '';
+
+  log.info('Sonos transport registered', {
+    zoneId: zone.id,
+    host,
+    controlUrl: controlUrl || undefined,
+  });
+
+  return new SonosTransport(zone.id, zone.name, {
+    host,
+    controlUrl,
+    networkScan: (config as Record<string, unknown>).networkScan,
+    householdId: (config as Record<string, unknown>).householdId as string | undefined,
+    deviceName: (config as Record<string, unknown>).deviceName as string | undefined,
+  } as SonosTransportConfig);
 }
 
 function createSnapcastTransport(

@@ -7,12 +7,14 @@ import {
   getTransportDefinitions,
   discoverAirplayDevices,
   discoverGoogleCastDevices,
+  discoverSonosDevices,
   discoverSendspinClients,
   discoverSnapcastClients,
   discoverSpotifyDevices,
   discoverMusicAssistantPlayers,
   type AirplayDevice,
   type GoogleCastDevice,
+  type SonosDevice,
   type SendspinClient,
   type SpotifyDevice,
   type MusicAssistantPlayer,
@@ -1124,6 +1126,9 @@ function ZoneOutputEditor({
   const [sendspinClients, setSendspinClients] = React.useState<SendspinClient[] | null>(null);
   const [discoveringSendspin, setDiscoveringSendspin] = React.useState(false);
   const [sendspinError, setSendspinError] = React.useState<string | null>(null);
+  const [sonosDevices, setSonosDevices] = React.useState<SonosDevice[] | null>(null);
+  const [discoveringSonos, setDiscoveringSonos] = React.useState(false);
+  const [sonosError, setSonosError] = React.useState<string | null>(null);
   const [snapcastClients, setSnapcastClients] = React.useState<{ clientId: string; streamId?: string; connected?: boolean; connectedAt?: number }[] | null>(null);
   const [discoveringSnapcast, setDiscoveringSnapcast] = React.useState(false);
   const [snapcastError, setSnapcastError] = React.useState<string | null>(null);
@@ -1144,6 +1149,12 @@ function ZoneOutputEditor({
       ? fieldValues.clientId || (primary as any)?.clientId || ''
       : primary?.id === 'sendspin'
         ? (primary as any)?.clientId ?? ''
+        : '';
+  const activeSonosHost =
+    selectedId === 'sonos'
+      ? fieldValues.host || (primary as any)?.host || ''
+      : primary?.id === 'sonos'
+        ? (primary as any)?.host ?? ''
         : '';
   const activeSendspinCastHost =
     selectedId === 'sendspin'
@@ -1191,6 +1202,7 @@ function ZoneOutputEditor({
   const isGoogleCast = selectedDefinition?.id === 'googleCast';
   const isSendspin = selectedDefinition?.id === 'sendspin';
   const isSnapcast = selectedDefinition?.id === 'snapcast';
+  const isSonos = selectedDefinition?.id === 'sonos';
 
   React.useEffect(() => {
     if (!isAirplay) {
@@ -1208,7 +1220,12 @@ function ZoneOutputEditor({
       setSendspinError(null);
       setDiscoveringSendspin(false);
     }
-  }, [isAirplay, isGoogleCast, isSendspin]);
+    if (!isSonos) {
+      setSonosDevices(null);
+      setSonosError(null);
+      setDiscoveringSonos(false);
+    }
+  }, [isAirplay, isGoogleCast, isSendspin, isSonos]);
 
   React.useEffect(() => {
     if (isAirplay && !airplayDevices && !discoveringAirplay) {
@@ -1233,6 +1250,12 @@ function ZoneOutputEditor({
       void handleSendspinDiscovery();
     }
   }, [isSendspin, sendspinClients, discoveringSendspin]);
+
+  React.useEffect(() => {
+    if (isSonos && !sonosDevices && !discoveringSonos) {
+      void handleSonosDiscovery();
+    }
+  }, [isSonos, sonosDevices, discoveringSonos]);
 
   function persist(transportId: string, values: Record<string, string>): void {
     if (!transportId) {
@@ -1277,6 +1300,14 @@ function ZoneOutputEditor({
       setSendspinError(null);
       setDiscoveringSendspin(false);
       void handleSendspinDiscovery();
+      return;
+    }
+    if (nextId === 'sonos') {
+      onChange(null);
+      setSonosDevices(null);
+      setSonosError(null);
+      setDiscoveringSonos(false);
+      void handleSonosDiscovery();
       return;
     }
     persist(nextId, nextValues);
@@ -1431,6 +1462,46 @@ function ZoneOutputEditor({
     }
   }
 
+  async function handleSonosDiscovery(): Promise<void> {
+    if (!isSonos || discoveringSonos) return;
+    setDiscoveringSonos(true);
+    setSonosError(null);
+    try {
+      const devices = await discoverSonosDevices({
+        host: activeSonosHost,
+      });
+      setSonosDevices(devices);
+      if (!devices.length) {
+        setSonosError('No Sonos devices found.');
+      }
+    } catch (err) {
+      setSonosDevices([]);
+      setSonosError(
+        err instanceof Error ? err.message : typeof err === 'string' ? err : 'Discovery failed',
+      );
+    } finally {
+      setDiscoveringSonos(false);
+    }
+  }
+
+  function applySonosDevice(device: SonosDevice): void {
+    if (!selectedId) {
+      setSelectedId('sonos');
+    }
+    const payload: ZoneTransportConfig = {
+      id: 'sonos',
+      host: device.host,
+      deviceName: device.name ?? device.roomName ?? '',
+      householdId: device.householdId,
+    };
+    setFieldValues({
+      host: device.host,
+      deviceName: device.name ?? device.roomName ?? '',
+      householdId: device.householdId ?? '',
+    });
+    onChange(payload);
+  }
+
   function applySendspinClient(client: SendspinClient): void {
     if (!selectedId) {
       setSelectedId('sendspin');
@@ -1504,6 +1575,7 @@ function ZoneOutputEditor({
     googleCast: '/providers/cast.svg',
     sendspin: '/providers/sendspin.svg',
     snapcast: '/providers/snapcast.svg',
+    sonos: '/providers/sonos.svg',
   };
   const airplayLoaded = airplayDevices !== null;
   const airplayDeviceItems = airplayDevices ?? [];
@@ -1555,6 +1627,15 @@ function ZoneOutputEditor({
       : [];
   const sendspinLoaded = sendspinClients !== null;
   const sendspinDeviceItems = sendspinClients ?? [];
+  const sonosLoaded = sonosDevices !== null;
+  const sonosDeviceItems = sonosDevices ?? [];
+  const activeSonosMatch =
+    activeSonosHost && sonosDeviceItems.find((device) => device.host === activeSonosHost);
+  const activeSonosLabel =
+    activeSonosMatch?.name ||
+    fieldValues.deviceName ||
+    ((primary as any)?.deviceName as string | undefined) ||
+    tailLabel(activeSonosHost);
   const activeSendspinMatch =
     activeSendspinId && sendspinDeviceItems.find((client) => client.clientId === activeSendspinId);
   const activeSendspinLabel =
@@ -1578,6 +1659,20 @@ function ZoneOutputEditor({
       ]
     : activeSendspinId
       ? [{ device: activeSendspinMatch, host: activeSendspinId, active: true }]
+      : [];
+  const sonosTiles = sonosLoaded
+    ? [
+        ...sonosDeviceItems.map((device) => ({
+          device,
+          host: device.host,
+          active: device.active ?? (activeSonosHost && device.host === activeSonosHost),
+        })),
+        ...(!activeSonosMatch && activeSonosHost
+          ? [{ device: activeSonosMatch, host: activeSonosHost, active: true }]
+          : []),
+      ]
+    : activeSonosHost
+      ? [{ device: activeSonosMatch, host: activeSonosHost, active: true }]
       : [];
 
   return (
@@ -1788,6 +1883,67 @@ function ZoneOutputEditor({
             )}
         </div>
       )}
+        {isSonos && (
+          <div className="zone-output-discovery">
+            {sonosError && <p className="zone-output-error">{sonosError}</p>}
+            <div className="zone-output-discovery-panel zone-output-discovery-panel--visible">
+              <div className="zone-output-discovery-panel__header">
+                <p className="zone-output-discovery-panel__title">Devices</p>
+                <p className="zone-output-discovery-panel__copy">Tap a device to route audio instantly.</p>
+              </div>
+              <div className="zone-output-device-grid">
+                {sonosTiles.map((item, index) => {
+                  const device = item.device;
+                  if (!device) {
+                    return (
+                      <div
+                        key={`sonos-active-${item.host || index}`}
+                        className="zone-output-device is-active"
+                      >
+                        <span className="zone-output-device__badge">Active</span>
+                        <span className="zone-output-device__name">{activeSonosLabel}</span>
+                        <span className="zone-output-device__type">Sonos</span>
+                      </div>
+                    );
+                  }
+                  const friendly = parseFriendlyName(device.name || device.roomName || device.host);
+                  return (
+                    <button
+                      key={device.id}
+                      type="button"
+                      className={`zone-output-device${item.active ? ' is-active' : ''}`}
+                      onClick={() => applySonosDevice(device)}
+                      disabled={saving}
+                    >
+                      {item.active && <span className="zone-output-device__badge">Active</span>}
+                      <span className="zone-output-device__name">{friendly.primary}</span>
+                      <span className="zone-output-device__type">
+                        {friendly.secondary || (device.householdId ? `Sonos ${device.householdId}` : 'Sonos')}
+                      </span>
+                    </button>
+                  );
+                })}
+                {(!sonosLoaded || sonosDeviceItems.length === 0) &&
+                  Array.from({ length: 3 }).map((_, idx) => (
+                    <div key={`sonos-placeholder-${idx}`} className="zone-output-device zone-output-device--placeholder">
+                      <span className="zone-output-device__name">Sonos device</span>
+                      <span className="zone-output-device__type">Discovering…</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+            <div className="zone-output-discovery-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => void handleSonosDiscovery()}
+                disabled={saving || discoveringSonos}
+              >
+                {discoveringSonos ? 'Refreshing…' : 'Refresh list'}
+              </button>
+            </div>
+          </div>
+        )}
           {isSendspin && (
             <div className="zone-output-discovery">
               {sendspinError && <p className="zone-output-error">{sendspinError}</p>}
@@ -2175,6 +2331,12 @@ function describeTransport(config: ZoneTransportConfig | null): string {
     }
   }
   if (id === 'dlna') {
+    const host = readStringField(record, 'host');
+    if (host) return host;
+    const controlUrl = readStringField(record, 'controlUrl');
+    if (controlUrl) return controlUrl;
+  }
+  if (id === 'sonos') {
     const host = readStringField(record, 'host');
     if (host) return host;
     const controlUrl = readStringField(record, 'controlUrl');

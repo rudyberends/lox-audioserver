@@ -34,6 +34,7 @@ export class AudioStreamHandler {
     const resourceToken = extra?.split(/[?#]/)[0] ?? '';
     const streamId = this.stripExtension(streamToken);
     const isWav = streamToken.endsWith('.wav');
+    const isAac = streamToken.endsWith('.aac');
     const zoneId = Number(zoneStr);
     const isCoverRequest = resourceToken === 'cover';
     if (!Number.isFinite(zoneId) || !streamId) {
@@ -72,9 +73,10 @@ export class AudioStreamHandler {
     const icyIntervalOverride = httpPrefs?.icyInterval ?? audioOutputSettings.httpIcyInterval;
     const icyNameOverride = httpPrefs?.icyName ?? audioOutputSettings.httpIcyName;
 
-    const clientLabel = this.buildClientLabel(req, isWav ? 'pcm' : 'mp3');
+    const outputProfile = isWav ? 'pcm' : isAac ? 'aac' : 'mp3';
+    const clientLabel = this.buildClientLabel(req, outputProfile);
     const primeWithBuffer = this.shouldPrimeWithBuffer(req);
-    let audioStream = audioStreamEngine.createStream(zoneId, isWav ? 'pcm' : 'mp3', {
+    let audioStream = audioStreamEngine.createStream(zoneId, outputProfile, {
       label: clientLabel,
       primeWithBuffer,
     });
@@ -83,8 +85,9 @@ export class AudioStreamHandler {
         session.playbackSource.kind === 'pipe'
           ? (['mp3', 'pcm'] as const)
           : (['mp3', 'pcm'] as const);
-      audioStreamEngine.start(zoneId, session.playbackSource, profiles as any);
-      audioStream = audioStreamEngine.createStream(zoneId, isWav ? 'pcm' : 'mp3', {
+      const withAac = isAac ? (['aac', ...profiles] as const) : profiles;
+      audioStreamEngine.start(zoneId, session.playbackSource, withAac as any);
+      audioStream = audioStreamEngine.createStream(zoneId, outputProfile, {
         label: clientLabel,
         primeWithBuffer,
       });
@@ -95,7 +98,7 @@ export class AudioStreamHandler {
       return;
     }
 
-    const contentType = isWav ? 'audio/wav' : 'audio/mpeg';
+    const contentType = isWav ? 'audio/wav' : isAac ? 'audio/aac' : 'audio/mpeg';
     recordStreamRequest({
       zoneId,
       streamId,
@@ -107,7 +110,7 @@ export class AudioStreamHandler {
     const contentLength = icyEnabled
       ? null
       : this.estimateContentLength(
-          isWav ? 'pcm' : 'mp3',
+          outputProfile,
           durationSeconds,
           httpProfile,
           outputSettings,
@@ -402,7 +405,7 @@ export class AudioStreamHandler {
   }
 
   private estimateContentLength(
-    profile: 'pcm' | 'mp3',
+    profile: 'pcm' | 'mp3' | 'aac',
     durationSeconds: number | null,
     httpProfile: HttpProfile,
     output: AudioOutputSettings,

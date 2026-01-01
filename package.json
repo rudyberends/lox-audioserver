@@ -68,6 +68,7 @@
     "vite": "^7.2.2"
   },
   "dependencies": {
+    "@lox-audio-server/sonos": "^0.1.0",
     "better-sqlite3": "^12.5.0",
     "bonjour-service": "^1.3.0",
     "castv2-client": "^1.2.0",

@@ -98,6 +98,19 @@ export interface MusicAssistantPlayer {
   deviceId?: string;
 }
 
+export type SonosDeviceResponse = {
+  devices?: SonosDevice[];
+};
+
+export interface SonosDevice {
+  id: string;
+  host: string;
+  name?: string;
+  roomName?: string;
+  householdId?: string;
+  active?: boolean;
+}
+
 export async function getTransportDefinitions(): Promise<TransportConfigDefinition[]> {
   const res = await fetch(`${API_BASE}/transports`);
   if (!res.ok) {
@@ -143,6 +156,30 @@ export async function discoverDlnaDevices(host?: string): Promise<DlnaDevice[]> 
     throw new Error(text || 'Failed to discover DLNA devices');
   }
   const payload = (await res.json()) as DlnaDeviceResponse;
+  return payload.devices ?? [];
+}
+
+export async function discoverSonosDevices(params?: {
+  name?: string;
+  householdId?: string;
+  networkScan?: boolean;
+  host?: string;
+}): Promise<SonosDevice[]> {
+  const search = new URLSearchParams();
+  if (params?.name) search.set('name', params.name);
+  if (params?.householdId) search.set('householdId', params.householdId);
+  if (typeof params?.networkScan === 'boolean') search.set('networkScan', String(params.networkScan));
+  if (params?.host) search.set('host', params.host);
+  const suffix = search.toString();
+  const url = suffix
+    ? `${API_BASE}/transports/sonos/devices?${suffix}`
+    : `${API_BASE}/transports/sonos/devices`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || 'Failed to discover Sonos devices');
+  }
+  const payload = (await res.json()) as SonosDeviceResponse;
   return payload.devices ?? [];
 }
 
