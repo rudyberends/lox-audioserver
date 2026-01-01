@@ -31,6 +31,7 @@ import { spotifyInputService } from '@/modules/audio/inputs/spotify/spotifyInput
 import { musicAssistantInputService } from '@/modules/audio/inputs/musicassistant/musicAssistantInputService';
 import { appleMusicInputService } from '@/modules/audio/inputs/applemusic/appleMusicInputService';
 import { deezerInputService } from '@/modules/audio/inputs/deezer/deezerInputService';
+import { tidalInputService } from '@/modules/audio/inputs/tidal/tidalInputService';
 import {
   setQueueUpdateHandler,
   setTransportErrorHandler,
@@ -80,6 +81,7 @@ export type QueueAuthority =
   | 'musicassistant'
   | 'applemusic'
   | 'deezer'
+  | 'tidal'
   | 'airplay'
   | `external:${string}`;
 
@@ -200,9 +202,9 @@ export interface ZoneContext {
   /**
    * Explicit input mode so commands/volume can be gated consistently.
    * queue: local queue/streams, spotify: Spotify Connect, airplay: AirPlay input,
-   * musicassistant: MA stream proxy, applemusic: Apple Music stream proxy, deezer: Deezer stream proxy
+   * musicassistant: MA stream proxy, applemusic: Apple Music stream proxy, deezer: Deezer stream proxy, tidal: Tidal stream proxy
    */
-  inputMode: 'queue' | 'spotify' | 'airplay' | 'musicassistant' | 'applemusic' | 'deezer' | 'alert' | null;
+  inputMode: 'queue' | 'spotify' | 'airplay' | 'musicassistant' | 'applemusic' | 'deezer' | 'tidal' | 'alert' | null;
   alert?: ActiveAlertState;
 }
 
@@ -328,6 +330,9 @@ class ZoneManager {
       if (this.isDeezerAudiopath(item.audiopath)) {
         return 'deezer';
       }
+      if (this.isTidalAudiopath(item.audiopath)) {
+        return 'tidal';
+      }
       if (this.isSpotifyAudiopath(item.audiopath)) {
         return 'spotify';
       }
@@ -452,7 +457,8 @@ class ZoneManager {
       mode === 'spotify' ||
       mode === 'musicassistant' ||
       mode === 'applemusic' ||
-      mode === 'deezer'
+      mode === 'deezer' ||
+      mode === 'tidal'
     );
   }
 
@@ -518,6 +524,7 @@ class ZoneManager {
     musicAssistantInputService.configure(this.musicAssistantInputHandlers);
     appleMusicInputService.configure();
     deezerInputService.configure();
+    tidalInputService.configure();
     this.refreshMusicAssistantProviderId();
     await musicAssistantInputService.syncZones(zoneConfigs);
     this.log.info('zones registered', { count: this.zones.size });
@@ -551,6 +558,7 @@ class ZoneManager {
     musicAssistantInputService.configure(this.musicAssistantInputHandlers);
     appleMusicInputService.configure();
     deezerInputService.configure();
+    tidalInputService.configure();
     this.refreshMusicAssistantProviderId();
     await musicAssistantInputService.syncZones(allZones);
 
@@ -657,7 +665,10 @@ class ZoneManager {
     const parentContext = this.parseParentContext(uri);
     const isAppleMusicUri = this.isAppleMusicAudiopath(uri);
     const isDeezerUri = this.isDeezerAudiopath(uri);
-    let resolvedTarget = parentContext?.parent ?? (isAppleMusicUri || isDeezerUri ? uri : decodeAudiopath(uri));
+    const isTidalUri = this.isTidalAudiopath(uri);
+    let resolvedTarget =
+      parentContext?.parent ??
+      (isAppleMusicUri || isDeezerUri || isTidalUri ? uri : decodeAudiopath(uri));
     let stationUri = parentContext?.parent ? normalizeSpotifyAudiopath(parentContext.parent) : '';
     let normalizedTarget = normalizeSpotifyAudiopath(resolvedTarget);
     const isMusicAssistantInitial = this.isMusicAssistantAudiopath(uri) || this.isMusicAssistantAudiopath(resolvedTarget);
@@ -680,6 +691,7 @@ class ZoneManager {
     const isMusicAssistant = this.isMusicAssistantAudiopath(queueAudiopath) || this.isMusicAssistantAudiopath(resolvedTarget);
     const isAppleMusic = this.isAppleMusicAudiopath(queueAudiopath) || this.isAppleMusicAudiopath(resolvedTarget);
     const isDeezer = this.isDeezerAudiopath(queueAudiopath) || this.isDeezerAudiopath(resolvedTarget);
+    const isTidal = this.isTidalAudiopath(queueAudiopath) || this.isTidalAudiopath(resolvedTarget);
     const nextInput: ZoneContext['inputMode'] =
       this.isSpotifyAudiopath(queueAudiopath)
         ? 'spotify'
@@ -689,7 +701,9 @@ class ZoneManager {
             ? 'applemusic'
             : isDeezer
               ? 'deezer'
-              : 'queue';
+              : isTidal
+                ? 'tidal'
+                : 'queue';
     if (isMusicAssistant && type === 'serviceplay' && this.isActiveInput(ctx, 'musicassistant')) {
       if (this.isSameAudiopath(ctx, queueAudiopath)) {
         this.log.debug('playContent ignored; musicassistant already playing target', {
@@ -806,7 +820,7 @@ class ZoneManager {
           normalizeSpotifyAudiopath(fallbackAudiopath),
           ctx.name,
           enrichedMetadata,
-          isMusicAssistant || isAppleMusic || isDeezer ? 5 : 0,
+          isMusicAssistant || isAppleMusic || isDeezer || isTidal ? 5 : 0,
         ),
       ];
 
@@ -831,9 +845,11 @@ class ZoneManager {
         ? 'applemusic'
         : isDeezer
           ? 'deezer'
-          : this.isSpotifyAudiopath(queueAudiopath)
-            ? 'spotify'
-            : 'local';
+          : isTidal
+            ? 'tidal'
+            : this.isSpotifyAudiopath(queueAudiopath)
+              ? 'spotify'
+              : 'local';
     this.log.debug('queue rebuilt', {
       zoneId: ctx.id,
       items: queueItems.length,
@@ -947,6 +963,7 @@ class ZoneManager {
     const isMusicAssistant = this.isMusicAssistantAudiopath(audiopath);
     const isAppleMusic = this.isAppleMusicAudiopath(audiopath);
     const isDeezer = this.isDeezerAudiopath(audiopath);
+    const isTidal = this.isTidalAudiopath(audiopath);
     const nextInput: ZoneContext['inputMode'] =
       isSpotify
         ? 'spotify'
@@ -956,7 +973,9 @@ class ZoneManager {
             ? 'applemusic'
             : isDeezer
               ? 'deezer'
-              : 'queue';
+              : isTidal
+                ? 'tidal'
+                : 'queue';
     const prevInput = ctx.inputMode;
     this.setInputMode(ctx, nextInput);
     this.stopExternalInputSessions(ctx.id, prevInput, nextInput);
@@ -1029,6 +1048,23 @@ class ZoneManager {
       this.log.warn('deezer stream not ready; skipping playback', { zoneId: ctx.id });
       return null;
     }
+    if (isTidal) {
+      const result = await tidalInputService.startStreamForAudiopath(
+        ctx.id,
+        ctx.name,
+        audiopath,
+      );
+      const meta = { ...enrichedMetadata, audiotype: 5 } as PlaybackMetadata;
+      if (result.playbackSource) {
+        return ctx.player.playExternal('tidal', result.playbackSource, meta);
+      }
+      if (result.transportOnly) {
+        return ctx.player.playExternal('tidal', null, meta);
+      }
+      this.handlePlaybackError(ctx.id, 'tidal stream unavailable', 'transport');
+      this.log.warn('tidal stream not ready; skipping playback', { zoneId: ctx.id });
+      return null;
+    }
     if (isSpotify) {
       const offloadEnabled = ctx.config.inputs?.spotify?.offload === true;
       const accountId = parseSpotifyUser(audiopath);
@@ -1081,7 +1117,7 @@ class ZoneManager {
       return;
     }
     const normalized = label.toLowerCase();
-    if (!['airplay', 'spotify', 'musicassistant', 'applemusic', 'deezer'].includes(normalized)) {
+    if (!['airplay', 'spotify', 'musicassistant', 'applemusic', 'deezer', 'tidal'].includes(normalized)) {
       return;
     }
     const mode = normalized as ZoneContext['inputMode'];
@@ -1105,7 +1141,9 @@ class ZoneManager {
             ? 'musicassistant'
             : mode === 'deezer'
               ? 'deezer'
-              : 'applemusic';
+              : mode === 'tidal'
+                ? 'tidal'
+                : 'applemusic';
     ctx.inputAdapter.playInput(label, playbackSource, metadata);
   }
 
@@ -1145,7 +1183,7 @@ class ZoneManager {
     if (!ctx) {
       return;
     }
-    const allowedInputs = new Set(['spotify', 'airplay', 'musicassistant', 'applemusic', 'deezer']);
+    const allowedInputs = new Set(['spotify', 'airplay', 'musicassistant', 'applemusic', 'deezer', 'tidal']);
     if (ctx.activeInput && !allowedInputs.has(ctx.activeInput)) {
       return;
     }
@@ -1212,7 +1250,7 @@ class ZoneManager {
     if (!ctx) {
       return undefined;
     }
-    const allowedInputs = new Set(['spotify', 'airplay', 'musicassistant', 'applemusic', 'deezer']);
+    const allowedInputs = new Set(['spotify', 'airplay', 'musicassistant', 'applemusic', 'deezer', 'tidal']);
     if (ctx.activeInput && !allowedInputs.has(ctx.activeInput)) {
       return undefined;
     }
@@ -1232,7 +1270,7 @@ class ZoneManager {
     if (!ctx) {
       return;
     }
-    const allowedInputs = new Set(['spotify', 'airplay', 'musicassistant', 'applemusic', 'deezer']);
+    const allowedInputs = new Set(['spotify', 'airplay', 'musicassistant', 'applemusic', 'deezer', 'tidal']);
     if (ctx.activeInput && !allowedInputs.has(ctx.activeInput)) {
       return;
     }
@@ -1304,8 +1342,11 @@ class ZoneManager {
     const isDeezerParent =
       Boolean(parentProvider && deezerInputService.isDeezerProvider(parentProvider)) ||
       /deezer/i.test(parentRaw);
+    const isTidalParent =
+      Boolean(parentProvider && tidalInputService.isTidalProvider(parentProvider)) ||
+      /tidal/i.test(parentRaw);
     return {
-      parent: (isAppleMusicParent || isDeezerParent)
+      parent: (isAppleMusicParent || isDeezerParent || isTidalParent)
         ? normalizeSpotifyAudiopath(parentRaw)
         : decodeAudiopath(parentRaw),
       // Keep the original provider wrapper (e.g., spotify@bridge:track:...) for the item so routing stays intact.
@@ -1378,6 +1419,7 @@ class ZoneManager {
           : detectServiceFromAudiopath(rawPath));
     const isAppleMusic = !forceSpotify && (service === 'applemusic' || /applemusic/i.test(rawPath));
     const isDeezer = !forceSpotify && (service === 'deezer' || /deezer/i.test(rawPath));
+    const isTidal = !forceSpotify && (service === 'tidal' || /tidal/i.test(rawPath));
 
     // Local library content
     if (!forceSpotify && (decoded.startsWith('library:') || decoded.startsWith('library-'))) {
@@ -1507,6 +1549,56 @@ class ZoneManager {
           return mapFolderItemsToQueue([track], zoneName, 5, user);
         }
         this.log.debug('deezer queue track lookup failed', {
+          providerId,
+          folderId,
+          trackId,
+        });
+      }
+      const allItems: ContentFolderItem[] = [];
+      const pageSize = 50;
+      let offset = 0;
+      let total = Number.MAX_SAFE_INTEGER;
+      while (offset < total) {
+        const folder = await contentManager.getServiceFolder(providerId, user, folderId, offset, pageSize);
+        const items = folder?.items ?? [];
+        if (items.length === 0) {
+          break;
+        }
+        allItems.push(...items);
+        total = Number.isFinite(folder?.totalitems) ? (folder as any).totalitems : Number.MAX_SAFE_INTEGER;
+        offset += items.length;
+        if (items.length < pageSize) {
+          break;
+        }
+        if (allItems.length >= 1000) {
+          break;
+        }
+      }
+      if (allItems.length) {
+        return mapFolderItemsToQueue(allItems, zoneName, 5, user, station ?? decoded);
+      }
+    }
+
+    // Tidal bridge content
+    if (!forceSpotify && (isTidal || service === 'tidal' || /tidal/i.test(rawPath))) {
+      const providerId = rawClean.split(':')[0] || 'tidal';
+      const user = providerId.split('@')[1] ?? 'tidal';
+      const sourcePath =
+        (station && station.trim()
+          ? station
+          : decoded || rawAudiopath || uri || '') || '';
+      const folderId = sourcePath
+        .replace(/^spotify@[^:]+:/i, '')
+        .replace(/^tidal@[^:]+:/i, '')
+        .replace(/^spotify:/i, '')
+        .replace(/^tidal:/i, '');
+      if (/^track:/i.test(folderId)) {
+        const trackId = folderId.split(':').slice(1).join(':');
+        const track = await contentManager.getServiceTrack(providerId, user, `track:${trackId}`);
+        if (track) {
+          return mapFolderItemsToQueue([track], zoneName, 5, user);
+        }
+        this.log.debug('tidal queue track lookup failed', {
           providerId,
           folderId,
           trackId,
@@ -2553,6 +2645,9 @@ class ZoneManager {
     if (this.isDeezerAudiopath(decoded)) {
       return false;
     }
+    if (this.isTidalAudiopath(decoded)) {
+      return false;
+    }
     return lower.includes('spotify:') || lower.startsWith('spotify@');
   }
 
@@ -2609,6 +2704,26 @@ class ZoneManager {
       return true;
     }
     return decoded.toLowerCase().includes('deezer');
+  }
+
+  private isTidalAudiopath(audiopath: string | null | undefined): boolean {
+    if (!audiopath) {
+      return false;
+    }
+    const raw = String(audiopath);
+    const rawProvider = raw.split(':')[0] ?? '';
+    if (rawProvider && tidalInputService.isTidalProvider(rawProvider)) {
+      return true;
+    }
+    if (raw.toLowerCase().includes('tidal')) {
+      return true;
+    }
+    const decoded = decodeAudiopath(raw) || raw;
+    const providerSegment = decoded.split(':')[0] ?? '';
+    if (providerSegment && tidalInputService.isTidalProvider(providerSegment)) {
+      return true;
+    }
+    return decoded.toLowerCase().includes('tidal');
   }
 
   private isMusicAssistantAudiopath(audiopath: string | null | undefined): boolean {
@@ -2971,6 +3086,9 @@ function getInputAudioType(ctx: ZoneContext): number | null {
     return 5;
   }
   if (ctx.inputMode === 'deezer' || lowerAudiopath.includes('deezer')) {
+    return 5;
+  }
+  if (ctx.inputMode === 'tidal' || lowerAudiopath.includes('tidal')) {
     return 5;
   }
   if (

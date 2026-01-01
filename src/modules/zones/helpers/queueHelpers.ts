@@ -25,6 +25,9 @@ export function normalizeSpotifyAudiopath(value: string): string {
   if (/deezer/i.test(cleaned)) {
     return cleaned;
   }
+  if (/tidal/i.test(cleaned)) {
+    return cleaned;
+  }
   if (cleaned.startsWith('spotify:') && !cleaned.startsWith('spotify@')) {
     const bareIdMatch = /^spotify:([A-Za-z0-9]{22})$/i.exec(cleaned);
     if (bareIdMatch) {

@@ -81,12 +81,14 @@ type CustomRadioFormState = {
 };
 
 type BridgeFormState = {
-  provider: 'musicassistant' | 'applemusic' | 'deezer';
+  provider: 'musicassistant' | 'applemusic' | 'deezer' | 'tidal';
   host: string;
   port: number;
   apiKey: string;
   userToken: string;
   deezerArl: string;
+  tidalAccessToken: string;
+  tidalCountryCode: string;
 };
 
 type FileSystemEntry = {
@@ -488,6 +490,8 @@ const createEmptyBridgeForm = (): BridgeFormState => ({
   apiKey: '',
   userToken: '',
   deezerArl: '',
+  tidalAccessToken: '',
+  tidalCountryCode: 'US',
 });
 
 function normalizeBridge(bridge: SpotifyBridgeConfig): SpotifyBridgeConfig {
@@ -614,6 +618,9 @@ export default function ContentView(): JSX.Element {
     }
     if (bridgeForm.provider === 'applemusic') {
       return bridgeForm.userToken.trim().length > 0;
+    }
+    if (bridgeForm.provider === 'tidal') {
+      return bridgeForm.tidalAccessToken.trim().length > 0;
     }
     return true;
   }, [bridgeForm]);
@@ -1230,6 +1237,14 @@ export default function ContentView(): JSX.Element {
     }
     if (provider === 'deezer') {
       if (bridgeForm.deezerArl.trim()) payload.deezerArl = bridgeForm.deezerArl.trim();
+    }
+    if (provider === 'tidal') {
+      if (bridgeForm.tidalAccessToken.trim()) {
+        payload.tidalAccessToken = bridgeForm.tidalAccessToken.trim();
+      }
+      if (bridgeForm.tidalCountryCode.trim()) {
+        payload.tidalCountryCode = bridgeForm.tidalCountryCode.trim().toUpperCase();
+      }
     }
     try {
       const { bridge } = await createSpotifyBridge(payload);
@@ -2061,6 +2076,7 @@ export default function ContentView(): JSX.Element {
                     <option value="musicassistant">Music Assistant</option>
                     <option value="applemusic">Apple Music</option>
                     <option value="deezer">Deezer</option>
+                    <option value="tidal">Tidal</option>
                   </select>
                 </div>
                 <div className="content-bridge-provider-info">
@@ -2090,6 +2106,14 @@ export default function ContentView(): JSX.Element {
                       <h5>Deezer</h5>
                       <p>
                         Deezer bridge reads public catalog data. Add your ARL cookie to access private playlists or account-specific data.
+                      </p>
+                    </>
+                  )}
+                  {bridgeForm.provider === 'tidal' && (
+                    <>
+                      <h5>Tidal</h5>
+                      <p>
+                        Tidal bridge uses an access token from your Tidal account. Provide a valid token and country code to enable catalog and playback.
                       </p>
                     </>
                   )}
@@ -2166,6 +2190,36 @@ export default function ContentView(): JSX.Element {
                         onChange={(e) => updateBridgeForm({ deezerArl: e.target.value })}
                         placeholder="ARL"
                         autoComplete="off"
+                      />
+                    </div>
+                  </div>
+                )}
+                {bridgeForm.provider === 'tidal' && (
+                  <div className="content-bridge-form-grid">
+                    <div className="content-custom-radio-field">
+                      <label htmlFor="bridge-tidal-token">Access token</label>
+                      <p className="content-body-copy content-body-copy--muted">
+                        Paste a Tidal access token from your device authorization flow.
+                      </p>
+                      <input
+                        id="bridge-tidal-token"
+                        type="text"
+                        value={bridgeForm.tidalAccessToken}
+                        onChange={(e) => updateBridgeForm({ tidalAccessToken: e.target.value })}
+                        placeholder="Access token"
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className="content-custom-radio-field">
+                      <label htmlFor="bridge-tidal-country">Country code</label>
+                      <input
+                        id="bridge-tidal-country"
+                        type="text"
+                        value={bridgeForm.tidalCountryCode}
+                        onChange={(e) => updateBridgeForm({ tidalCountryCode: e.target.value })}
+                        placeholder="US"
+                        autoComplete="off"
+                        maxLength={2}
                       />
                     </div>
                   </div>

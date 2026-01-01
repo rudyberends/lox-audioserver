@@ -1282,7 +1282,9 @@ export class AdminApiHandler {
           ? 'Music Assistant'
           : provider === 'deezer'
             ? 'Deezer'
-            : id;
+            : provider === 'tidal'
+              ? 'Tidal'
+              : id;
 
     const bridge: SpotifyBridgeConfig = {
       id,
@@ -1303,6 +1305,14 @@ export class AdminApiHandler {
         typeof body?.developerToken === 'string' && body.developerToken.trim() ? body.developerToken.trim() : undefined,
       userToken: typeof body?.userToken === 'string' && body.userToken.trim() ? body.userToken.trim() : undefined,
       deezerArl: typeof body?.deezerArl === 'string' && body.deezerArl.trim() ? body.deezerArl.trim() : undefined,
+      tidalAccessToken:
+        typeof body?.tidalAccessToken === 'string' && body.tidalAccessToken.trim()
+          ? body.tidalAccessToken.trim()
+          : undefined,
+      tidalCountryCode:
+        typeof body?.tidalCountryCode === 'string' && body.tidalCountryCode.trim()
+          ? body.tidalCountryCode.trim().toUpperCase()
+          : undefined,
     };
 
     try {

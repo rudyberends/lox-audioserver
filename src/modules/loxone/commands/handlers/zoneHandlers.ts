@@ -71,7 +71,7 @@ export async function audioServicePlay(command: string) {
         if (
           rest.startsWith('spotify:') &&
           maybeUser &&
-          (/applemusic/i.test(maybeUser) || /deezer/i.test(maybeUser))
+          (/applemusic/i.test(maybeUser) || /deezer/i.test(maybeUser) || /tidal/i.test(maybeUser))
         ) {
           return `spotify@${maybeUser}:${rest.replace(/^spotify:/i, '')}`;
         }

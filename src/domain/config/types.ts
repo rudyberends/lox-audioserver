@@ -96,6 +96,10 @@ export interface SpotifyBridgeConfig {
   userToken?: string;
   /** Optional Deezer ARL cookie if provider === 'deezer' */
   deezerArl?: string;
+  /** Optional Tidal access token if provider === 'tidal' */
+  tidalAccessToken?: string;
+  /** Optional Tidal country code if provider === 'tidal' */
+  tidalCountryCode?: string;
   /** When true, register all zones as players up front; otherwise register on-demand. */
   registerAll?: boolean;
 }

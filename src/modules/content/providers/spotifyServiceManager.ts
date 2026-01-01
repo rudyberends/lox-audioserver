@@ -18,6 +18,7 @@ import {
 import { FakeSpotifyAccountProvider } from '@/modules/content/providers/spotify/fakeSpotifyAccountProvider';
 import { AppleMusicProvider } from '@/modules/content/providers/applemusic/appleMusicProvider';
 import { DeezerProvider } from '@/modules/content/providers/deezer/deezerProvider';
+import { TidalProvider } from '@/modules/content/providers/tidal/tidalProvider';
 import { MusicAssistantBridgeProvider } from '@/modules/content/providers/musicassistant/musicAssistantBridgeProvider';
 import { resolveSpotifyClientId } from '@/modules/content/providers/spotify/utils';
 import { resolveDataDir } from '@/core/utils/file';
@@ -30,12 +31,14 @@ const PROVIDER_ICONS: Record<string, string> = {
   applemusic: '/providers/apple-music.svg',
   musicassistant: '/providers/music-assistant.svg',
   deezer: 'https://extended-app-content.s3.eu-central-1.amazonaws.com/audioZone/services/Icon-Deezer.svg',
+  tidal: 'https://extended-app-content.s3.eu-central-1.amazonaws.com/audioZone/services/Icon-Tidal.svg',
 };
 const PROVIDER_NAMES: Record<string, string> = {
   spotify: 'Spotify',
   applemusic: 'Apple Music',
   musicassistant: 'Music Assistant',
   deezer: 'Deezer',
+  tidal: 'Tidal',
 };
 
 export interface SpotifyServiceDevice {
@@ -58,7 +61,7 @@ export class SpotifyServiceManager {
 
   private providers = new Map<
     ProviderId,
-    SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider
+    SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider | TidalProvider
   >();
   private accounts: SpotifyAccountState[] = [];
   private bridges: SpotifyBridgeConfig[] = [];
@@ -320,6 +323,15 @@ export class SpotifyServiceManager {
     }
 
     if (provider instanceof DeezerProvider) {
+      const { result, user: bridgeUser, providerId } = await provider.search(
+        query,
+        limits,
+        maxLimit,
+      );
+      return { result, user: bridgeUser, providerId };
+    }
+
+    if (provider instanceof TidalProvider) {
       const { result, user: bridgeUser, providerId } = await provider.search(
         query,
         limits,
@@ -715,7 +727,7 @@ export class SpotifyServiceManager {
   private resolveProvider(
     service: string,
     user: string,
-  ): SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider | null {
+  ): SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider | TidalProvider | null {
     const candidateIds: ProviderId[] = [];
     if (service) {
       candidateIds.push(this.normalizeServiceId(service));
@@ -736,7 +748,7 @@ export class SpotifyServiceManager {
   }
 
   private isRealSpotifyProvider(
-    provider: SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider | null | undefined,
+    provider: SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider | TidalProvider | null | undefined,
   ): provider is SpotifyAccountProvider {
     if (!provider || !(provider instanceof SpotifyAccountProvider)) {
       return false;
@@ -846,6 +858,17 @@ export class SpotifyServiceManager {
           providerId,
           label: labelOverride,
           arl: bridge.deezerArl,
+        });
+        this.providers.set(providerId, provider);
+        continue;
+      }
+
+      if (providerType === 'tidal') {
+        const provider = new TidalProvider({
+          providerId,
+          label: labelOverride,
+          accessToken: bridge.tidalAccessToken,
+          countryCode: bridge.tidalCountryCode,
         });
         this.providers.set(providerId, provider);
         continue;

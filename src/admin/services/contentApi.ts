@@ -129,6 +129,8 @@ export type SpotifyBridgeConfig = {
   developerToken?: string;
   userToken?: string;
   deezerArl?: string;
+  tidalAccessToken?: string;
+  tidalCountryCode?: string;
   registerAll?: boolean;
 };
 
@@ -140,6 +142,8 @@ export type CreateSpotifyBridgePayload = {
   developerToken?: string;
   userToken?: string;
   deezerArl?: string;
+  tidalAccessToken?: string;
+  tidalCountryCode?: string;
   registerAll?: boolean;
 };
 

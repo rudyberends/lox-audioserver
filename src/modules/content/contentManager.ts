@@ -369,6 +369,33 @@ export class ContentManager {
       }
     }
 
+    if (detectedService === 'tidal') {
+      const providerSegment = (audiopath.split(':')[0] ?? '').trim();
+      const trackMatch = audiopath.match(/^([^:]+):track:(.+)$/i);
+      if (trackMatch) {
+        const rawId = trackMatch[2] ?? '';
+        const providerId = providerSegment || 'tidal';
+        const track = await this.getServiceTrack(
+          providerId,
+          providerId.split('@')[1] ?? '',
+          `track:${rawId}`,
+        );
+        if (track) {
+          return {
+            title: track.title ?? track.name ?? '',
+            artist: track.artist ?? '',
+            album: track.album ?? '',
+            coverurl: track.coverurl ?? '',
+          };
+        }
+        this.log.debug('tidal metadata unresolved', {
+          audiopath,
+          providerId,
+          trackId: rawId,
+        });
+      }
+    }
+
     if (audiopath.startsWith('library:')) {
       return this.library.resolveItem(audiopath);
     }

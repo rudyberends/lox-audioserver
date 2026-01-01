@@ -3,7 +3,7 @@ import type { SpotifyAccountConfig as ConfigSpotifyAccountConfig } from '@/domai
 export interface ContentServiceAccount {
   id: string;
   label: string;
-  provider: 'spotify' | 'applemusic' | 'musicassistant' | 'deezer' | string;
+  provider: 'spotify' | 'applemusic' | 'musicassistant' | 'deezer' | 'tidal' | string;
   fake?: boolean;
   product?: string;
 }
