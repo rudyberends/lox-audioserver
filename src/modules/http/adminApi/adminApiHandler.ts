@@ -1275,7 +1275,14 @@ export class AdminApiHandler {
 
     const generatedId = `bridge-${provider}-${Math.random().toString(36).slice(2, 8)}`;
     const id = typeof body?.id === 'string' && body.id.trim() ? body.id.trim() : generatedId;
-    const defaultLabel = provider === 'applemusic' ? 'Apple Music' : provider === 'musicassistant' ? 'Music Assistant' : id;
+    const defaultLabel =
+      provider === 'applemusic'
+        ? 'Apple Music'
+        : provider === 'musicassistant'
+          ? 'Music Assistant'
+          : provider === 'deezer'
+            ? 'Deezer'
+            : id;
 
     const bridge: SpotifyBridgeConfig = {
       id,
@@ -1295,6 +1302,7 @@ export class AdminApiHandler {
       developerToken:
         typeof body?.developerToken === 'string' && body.developerToken.trim() ? body.developerToken.trim() : undefined,
       userToken: typeof body?.userToken === 'string' && body.userToken.trim() ? body.userToken.trim() : undefined,
+      deezerArl: typeof body?.deezerArl === 'string' && body.deezerArl.trim() ? body.deezerArl.trim() : undefined,
     };
 
     try {

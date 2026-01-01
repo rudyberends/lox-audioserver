@@ -70,7 +70,7 @@ function stripRoutingSuffix(path: string): string {
  */
 export function detectServiceFromAudiopath(
   p: string,
-): 'spotify' | 'radio' | 'library' | 'musicassistant' | 'applemusic' {
+): 'spotify' | 'radio' | 'library' | 'musicassistant' | 'applemusic' | 'deezer' {
   const raw = (p || '').toLowerCase();
   if (
     raw.includes('musicassistant') ||
@@ -82,6 +82,9 @@ export function detectServiceFromAudiopath(
   if (raw.includes('applemusic')) {
     return 'applemusic';
   }
+  if (raw.includes('deezer')) {
+    return 'deezer';
+  }
   const decoded = decodeAudiopath(p);
   const lower = decoded.toLowerCase();
   if (lower.includes('musicassistant') || lower.startsWith('musicassistant')) {
@@ -89,6 +92,9 @@ export function detectServiceFromAudiopath(
   }
   if (lower.includes('applemusic')) {
     return 'applemusic';
+  }
+  if (lower.includes('deezer')) {
+    return 'deezer';
   }
   if (/(tunein|radio)/.test(lower)) {
     return 'radio';
@@ -128,6 +134,7 @@ export function inferAudiotype(uri: string): number {
   if (
     lower.includes('musicassistant') ||
     lower.includes('applemusic') ||
+    lower.includes('deezer') ||
     lower.startsWith('spotify:') ||
     lower.startsWith('spotify@')
   ) {

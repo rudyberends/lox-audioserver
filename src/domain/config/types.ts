@@ -94,6 +94,8 @@ export interface SpotifyBridgeConfig {
   /** Optional Apple Music tokens if provider === 'applemusic' */
   developerToken?: string;
   userToken?: string;
+  /** Optional Deezer ARL cookie if provider === 'deezer' */
+  deezerArl?: string;
   /** When true, register all zones as players up front; otherwise register on-demand. */
   registerAll?: boolean;
 }

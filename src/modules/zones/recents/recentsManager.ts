@@ -237,6 +237,10 @@ export const recentsManager = {
       const type = lower.includes('album') ? 7 : 2;
       return { service: 'spotify', serviceType: 3, type };
     }
+    if (detectedService === 'deezer') {
+      const type = lower.includes('album') ? 7 : 2;
+      return { service: 'spotify', serviceType: 3, type };
+    }
     return { service: 'custom', serviceType: 3, type: 3 };
   },
 

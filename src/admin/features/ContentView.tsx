@@ -81,11 +81,12 @@ type CustomRadioFormState = {
 };
 
 type BridgeFormState = {
-  provider: 'musicassistant' | 'applemusic';
+  provider: 'musicassistant' | 'applemusic' | 'deezer';
   host: string;
   port: number;
   apiKey: string;
   userToken: string;
+  deezerArl: string;
 };
 
 type FileSystemEntry = {
@@ -486,6 +487,7 @@ const createEmptyBridgeForm = (): BridgeFormState => ({
   port: 8095,
   apiKey: '',
   userToken: '',
+  deezerArl: '',
 });
 
 function normalizeBridge(bridge: SpotifyBridgeConfig): SpotifyBridgeConfig {
@@ -1225,6 +1227,9 @@ export default function ContentView(): JSX.Element {
     }
     if (provider === 'applemusic') {
       if (bridgeForm.userToken.trim()) payload.userToken = bridgeForm.userToken.trim();
+    }
+    if (provider === 'deezer') {
+      if (bridgeForm.deezerArl.trim()) payload.deezerArl = bridgeForm.deezerArl.trim();
     }
     try {
       const { bridge } = await createSpotifyBridge(payload);
@@ -2055,10 +2060,11 @@ export default function ContentView(): JSX.Element {
                   >
                     <option value="musicassistant">Music Assistant</option>
                     <option value="applemusic">Apple Music</option>
+                    <option value="deezer">Deezer</option>
                   </select>
                 </div>
                 <div className="content-bridge-provider-info">
-                  {bridgeForm.provider === 'musicassistant' ? (
+                  {bridgeForm.provider === 'musicassistant' && (
                     <>
                       <h5>Music Assistant</h5>
                       <p>
@@ -2069,12 +2075,21 @@ export default function ContentView(): JSX.Element {
                       </p>
                       <span className="content-bridge-badge">Requires Music Assistant 2.7+</span>
                     </>
-                  ) : (
+                  )}
+                  {bridgeForm.provider === 'applemusic' && (
                     <>
                       <h5>Apple Music</h5>
                       <p>
                         Apple Music bridge uses a Media User Token from music.apple.com to read catalog content.
                         Grab a fresh token from your browser session and paste it below.
+                      </p>
+                    </>
+                  )}
+                  {bridgeForm.provider === 'deezer' && (
+                    <>
+                      <h5>Deezer</h5>
+                      <p>
+                        Deezer bridge reads public catalog data. Add your ARL cookie to access private playlists or account-specific data.
                       </p>
                     </>
                   )}
@@ -2132,6 +2147,24 @@ export default function ContentView(): JSX.Element {
                         value={bridgeForm.userToken}
                         onChange={(e) => updateBridgeForm({ userToken: e.target.value })}
                         placeholder="Media user token"
+                        autoComplete="off"
+                      />
+                    </div>
+                  </div>
+                )}
+                {bridgeForm.provider === 'deezer' && (
+                  <div className="content-bridge-form-grid">
+                    <div className="content-custom-radio-field">
+                      <label htmlFor="bridge-deezer-arl">ARL cookie (optional)</label>
+                      <p className="content-body-copy content-body-copy--muted">
+                        Paste your Deezer ARL cookie if you want to access private playlists or recommendations.
+                      </p>
+                      <input
+                        id="bridge-deezer-arl"
+                        type="text"
+                        value={bridgeForm.deezerArl}
+                        onChange={(e) => updateBridgeForm({ deezerArl: e.target.value })}
+                        placeholder="ARL"
                         autoComplete="off"
                       />
                     </div>

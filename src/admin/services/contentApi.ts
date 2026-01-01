@@ -128,6 +128,7 @@ export type SpotifyBridgeConfig = {
   apiKey?: string;
   developerToken?: string;
   userToken?: string;
+  deezerArl?: string;
   registerAll?: boolean;
 };
 
@@ -138,6 +139,7 @@ export type CreateSpotifyBridgePayload = {
   apiKey?: string;
   developerToken?: string;
   userToken?: string;
+  deezerArl?: string;
   registerAll?: boolean;
 };
 
