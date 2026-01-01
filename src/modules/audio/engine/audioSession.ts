@@ -74,6 +74,11 @@ export class AudioSession {
   private readonly sourcePreDelayMs?: number;
   private debugTapStream?: fs.WriteStream;
   private readonly debugTapEnabled: boolean;
+  private pipeSourceStream?: NodeJS.ReadableStream;
+  private pipeSourceDataListener?: (chunk: Buffer) => void;
+  private pipeSourceErrorListener?: (err: any) => void;
+  private killTimer?: NodeJS.Timeout;
+  private readonly killTimeoutMs: number;
 
   constructor(
     private readonly zoneId: number,
@@ -105,6 +110,7 @@ export class AudioSession {
       const requested = Math.min(candidate, hardMax);
       this.maxBufferBytes = Math.max(requested, hardMin);
     }
+    this.killTimeoutMs = this.loadKillTimeoutMs();
   }
 
   public start(): void {
@@ -127,6 +133,8 @@ export class AudioSession {
 
     if (this.source.kind === 'pipe' && this.source.stream) {
       const pipeSource = this.source as typeof this.source & { stream: NodeJS.ReadableStream };
+      this.detachPipeSourceListeners();
+      this.pipeSourceStream = pipeSource.stream;
       // Feed the stream through ffmpeg with -re to pace output.
       const fmt = this.source.format ?? 's16le';
       const sr = this.source.sampleRate ?? this.outputSettings.sampleRate;
@@ -179,7 +187,7 @@ export class AudioSession {
       let sourceBytesSinceLog = 0;
       let sourceLastLogTs = 0;
       let sourceFirstChunkLogged = false;
-      pipeSource.stream.on('data', (chunk: Buffer) => {
+      this.pipeSourceDataListener = (chunk: Buffer) => {
         if (!chunk?.length) {
           return;
         }
@@ -209,7 +217,8 @@ export class AudioSession {
           sourceLastLogTs = now;
           sourceBytesSinceLog = 0;
         }
-      });
+      };
+      pipeSource.stream.on('data', this.pipeSourceDataListener);
 
       this.process = proc;
       this.restartAttempts = 0;
@@ -256,13 +265,18 @@ export class AudioSession {
 
     if (options.stdinStream) {
       options.stdinStream.pipe(proc.stdin);
-      options.stdinStream.on('error', (err: any) => {
+      if (this.pipeSourceStream && this.pipeSourceErrorListener) {
+        this.pipeSourceStream.off('error', this.pipeSourceErrorListener);
+      }
+      this.pipeSourceStream = options.stdinStream;
+      this.pipeSourceErrorListener = (err: any) => {
         this.log.warn('pipe source error', {
           zoneId: this.zoneId,
           message: err?.message || String(err),
         });
         proc.stdin.destroy();
-      });
+      };
+      options.stdinStream.on('error', this.pipeSourceErrorListener);
       proc.stdin.on('error', (err: any) => {
         if (err?.code === 'EPIPE') {
           this.log.debug('ffmpeg stdin closed (EPIPE)', { zoneId: this.zoneId });
@@ -565,6 +579,7 @@ export class AudioSession {
     this.ending = true;
     if (this.process) {
       this.process.kill('SIGTERM');
+      this.armKillTimer();
     } else {
       this.cleanup();
     }
@@ -642,7 +657,7 @@ export class AudioSession {
     subscriberDrops: number;
     lastSubscriberDropAt: number | null;
     } {
-    const subscriberCount = Math.max(1, this.subscribers.size);
+    const subscriberCount = this.subscribers.size;
     return {
       profile: this.profile,
       bps: this.lastBpsTs ? this.lastBps : null,
@@ -667,6 +682,8 @@ export class AudioSession {
     const suppressTermination = options.suppressTermination === true;
     this.bytesSinceLog = 0;
     this.lastLogTs = 0;
+    this.clearKillTimer();
+    this.detachPipeSourceListeners();
     if (this.firstChunkResolve) {
       this.firstChunkResolve(false);
       this.firstChunkResolve = null;
@@ -745,5 +762,45 @@ export class AudioSession {
     this.bytesSinceLog += length;
     this.totalBytes += length;
     this.maybeLogThroughput();
+  }
+
+  private armKillTimer(): void {
+    this.clearKillTimer();
+    this.killTimer = setTimeout(() => {
+      if (this.process && !this.process.killed) {
+        this.process.kill('SIGKILL');
+      }
+    }, this.killTimeoutMs);
+  }
+
+  private clearKillTimer(): void {
+    if (this.killTimer) {
+      clearTimeout(this.killTimer);
+      this.killTimer = undefined;
+    }
+  }
+
+  private loadKillTimeoutMs(): number {
+    const raw = process.env.AUDIO_FFMPEG_KILL_MS;
+    if (!raw) {
+      return 2000;
+    }
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return 2000;
+    }
+    return parsed;
+  }
+
+  private detachPipeSourceListeners(): void {
+    if (this.pipeSourceStream && this.pipeSourceDataListener) {
+      this.pipeSourceStream.off('data', this.pipeSourceDataListener);
+    }
+    if (this.pipeSourceStream && this.pipeSourceErrorListener) {
+      this.pipeSourceStream.off('error', this.pipeSourceErrorListener);
+    }
+    this.pipeSourceStream = undefined;
+    this.pipeSourceDataListener = undefined;
+    this.pipeSourceErrorListener = undefined;
   }
 }

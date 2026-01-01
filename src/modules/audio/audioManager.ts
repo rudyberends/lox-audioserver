@@ -484,6 +484,13 @@ class AudioManager {
   ): void {
     const session = this.sessions.get(zoneId);
     if (!session) return;
+    if (reason === 'pause') {
+      this.log.debug('engine stopped for pause; keeping session', {
+        zoneId,
+        source: session.source,
+      });
+      return;
+    }
     this.sessions.delete(zoneId);
     this.log.warn('playback session terminated by engine', {
       zoneId,
