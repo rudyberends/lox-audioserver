@@ -58,12 +58,26 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Define release build metadata
+        if: ${{ steps.version_after.outputs.version != steps.version_before.outputs.version }}
+        id: release_meta
+        shell: bash
+        run: |
+          VERSION="${{ steps.version_after.outputs.version }}"
+          BUILD_TS=""
+          if [ "${{ env.TARGET_BRANCH }}" = "beta" ]; then
+            BUILD_TS=$(date -u +%Y%m%d%H%M%S)
+            VERSION="${VERSION}-beta"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_ts=$BUILD_TS" >> "$GITHUB_OUTPUT"
+
       - name: Define Docker tags
         id: tags
         shell: bash
         run: |
           if [ "${{ env.TARGET_BRANCH }}" = "beta" ]; then
-            echo "tags=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ steps.version_after.outputs.version }},ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:beta" >> "$GITHUB_OUTPUT"
+            echo "tags=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ steps.version_after.outputs.version }},ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:beta,ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:beta-${{ steps.release_meta.outputs.build_ts }}" >> "$GITHUB_OUTPUT"
           else
             echo "tags=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ steps.version_after.outputs.version }},ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest" >> "$GITHUB_OUTPUT"
           fi
@@ -92,6 +106,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            BUILD_VERSION=${{ steps.release_meta.outputs.version }}
+            BUILD_TIMESTAMP=${{ steps.release_meta.outputs.build_ts }}
 
   testing:
     if: ${{ github.ref_name == 'testing' }}
@@ -130,10 +147,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Define testing build metadata
+        id: testing_meta
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          BUILD_TS=$(date -u +%Y%m%d%H%M%S)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_ts=$BUILD_TS" >> "$GITHUB_OUTPUT"
+
       - name: Build and push Docker image (testing)
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:testing
+          tags: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:testing,ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:testing-${{ steps.testing_meta.outputs.build_ts }}
+          build-args: |
+            BUILD_VERSION=${{ steps.testing_meta.outputs.version }}
+            BUILD_TIMESTAMP=${{ steps.testing_meta.outputs.build_ts }}

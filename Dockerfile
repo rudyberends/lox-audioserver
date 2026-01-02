@@ -21,6 +21,10 @@ RUN npm prune --omit=dev
 
 # Stage 2: Runtime image with mount tools
 FROM node:20-bookworm-slim AS runtime
+ARG BUILD_VERSION
+ARG BUILD_TIMESTAMP
+ENV APP_VERSION=${BUILD_VERSION}
+ENV BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \

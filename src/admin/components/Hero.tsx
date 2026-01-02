@@ -66,7 +66,7 @@ export default function Hero(): JSX.Element {
         <div className="hero-heading">
           <h1>
             {APP_TITLE}
-            <span className="hero-version">{version ? `v${version}` : 'Development build'} !! for testing !!</span>
+            <span className="hero-version">{version ? `v${version}` : 'Development build'}</span>
           </h1>
         </div>
 

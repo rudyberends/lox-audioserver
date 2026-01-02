@@ -449,9 +449,10 @@ export class AdminApiHandler {
     try {
       const cfg = getConfig();
       const pkgVersion = this.readPackageVersion();
+      const buildVersion = this.readBuildVersion(pkgVersion);
 
       const payload = {
-        version: pkgVersion,
+        version: buildVersion,
         uptime: Math.floor(process.uptime()),
         name: cfg.system.audioserver.name ?? 'Unconfigured',
         serial: cfg.system.audioserver.macId ?? '',
@@ -499,6 +500,14 @@ export class AdminApiHandler {
     } catch {
       return 'dev';
     }
+  }
+
+  private readBuildVersion(pkgVersion: string): string {
+    const envVersion = process.env.APP_VERSION || process.env.BUILD_VERSION;
+    const envTimestamp = process.env.BUILD_TIMESTAMP || process.env.BUILD_DATE;
+    const baseVersion = envVersion || pkgVersion;
+    if (envTimestamp) return `${baseVersion}-${envTimestamp}`;
+    return baseVersion;
   }
 
   private readonly hiddenTransportIds = new Set(['spotify', 'sendspin-cast', 'dlna']);
