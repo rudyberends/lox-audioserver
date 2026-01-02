@@ -21,6 +21,7 @@ export type PlaybackSource =
       tlsVerifyHost?: string;
       inputFormat?: string;
       logLevel?: string;
+      realTime?: boolean;
     }
   | {
       kind: 'pipe';
@@ -402,6 +403,7 @@ export class AudioSession {
       const needsTlsVerifyHost = Boolean(this.source.tlsVerifyHost && /^https:/i.test(this.source.url));
       const tlsArgs = needsTlsVerifyHost ? ['-tls_verify', '0', '-verifyhost', this.source.tlsVerifyHost!] : [];
       const inputFormatArgs = this.source.inputFormat ? ['-f', this.source.inputFormat] : [];
+      const realtimeArgs = this.source.realTime ? ['-re'] : [];
       return [
         ...this.buildLowLatencyArgs(),
         '-reconnect',
@@ -414,6 +416,7 @@ export class AudioSession {
         ...decryptionArgs,
         ...headerArgs,
         ...inputFormatArgs,
+        ...realtimeArgs,
         '-i',
         this.source.url,
       ];

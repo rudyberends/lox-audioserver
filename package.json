@@ -79,6 +79,7 @@
     "ndjson": "^2.0.0",
     "node-libraop": "^0.1.0",
     "node-librespot": "^0.3.1",
+    "egoroof-blowfish": "^4.0.1",
     "node-rsa": "^1.1.1",
     "node-tunein-api": "^0.1.0",
     "protobufjs": "^8.0.0",
