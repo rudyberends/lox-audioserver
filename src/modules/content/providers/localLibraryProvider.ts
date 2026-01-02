@@ -2,7 +2,7 @@ import type { Dirent, Stats } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import * as mm from 'music-metadata';
-import sharp from 'sharp';
+import { Jimp, JimpMime } from 'jimp';
 import { createLogger } from '@/core/logging/logger';
 import { ensureDir, resolveDataDir } from '@/core/utils/file';
 import type {
@@ -726,10 +726,18 @@ export class LocalLibraryProvider {
     const outPath = path.join(dir, fileName);
 
     await ensureDir(dir);
-    const buffer = await sharp(picture.data)
-      .resize({ width: 500, height: 500, fit: 'inside', withoutEnlargement: true })
-      .toFormat(extension === '.png' ? 'png' : 'jpeg')
-      .toBuffer();
+    const image = await Jimp.read(picture.data);
+    const maxSize = 500;
+    const width = image.bitmap.width;
+    const height = image.bitmap.height;
+    const scale = Math.min(1, maxSize / width, maxSize / height);
+    if (scale < 1) {
+      image.scale(scale);
+    }
+    const buffer =
+      extension === '.png'
+        ? await image.getBuffer(JimpMime.png)
+        : await image.getBuffer(JimpMime.jpeg, { quality: 85 });
 
     await fsp.writeFile(outPath, buffer);
     return fileName;
