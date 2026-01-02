@@ -482,7 +482,7 @@ class ZoneManager {
       return {};
     }
     const audiotype = getInputAudioType(ctx);
-    const stationForState = current.audiotype === 4 ? current.station : '';
+    const stationForState = current.audiotype === 1 || current.audiotype === 4 ? current.station : '';
     const patch: Partial<LoxoneZoneState> = {
       title: current.title,
       artist: current.artist,
@@ -623,6 +623,17 @@ class ZoneManager {
       };
     }
 
+    if (isRadioAudiopath(ctx.state.audiopath, ctx.state.audiotype)) {
+      return {
+        id: zoneId,
+        items: [],
+        shuffle: ctx.queue.shuffle,
+        start: 0,
+        totalitems: 0,
+        authority: ctx.queue.authority,
+      };
+    }
+
     const slice = ctx.queue.items.slice(start, start + limit).map((item) => ({
       ...item,
       // Loxone kan geen spotify@username prefixes aan; strip alleen voor output.
@@ -714,12 +725,16 @@ class ZoneManager {
       }
     }
     this.stopExternalInputSessions(zoneId, ctx.inputMode ?? null, nextInput);
-    const stationValue =
+    let stationValue =
       parentContext?.parent && isMusicAssistant
         ? parentContext.parent
         : parentContext?.parent
           ? sanitizeStation(parentContext.parent, normalizedTarget)
           : stationUri;
+    const isRadio = isRadioAudiopath(resolvedTarget) || isRadioAudiopath(uri);
+    if (isRadio && !stationValue && metadata?.title?.trim()) {
+      stationValue = metadata.title.trim();
+    }
     this.log.info('playContent', {
       zoneId,
       type,
@@ -750,7 +765,9 @@ class ZoneManager {
       });
       if (session) {
         void recentsManager.record(zoneId, current);
-        notifyQueueUpdated(zoneId, ctx.queue.items.length);
+        if (!isRadioAudiopath(current.audiopath, current.audiotype)) {
+          notifyQueueUpdated(zoneId, ctx.queue.items.length);
+        }
       } else {
         this.log.warn('playback skipped; no playable source resolved', {
           zoneId,
@@ -806,9 +823,12 @@ class ZoneManager {
         /* ignore */
       }
     }
-    const queueItems = expandedQueue.length
+    const queueAudioType = isMusicAssistant || isAppleMusic || isDeezer || isTidal ? 5 : isRadio ? 1 : 0;
+    let queueItems = expandedQueue.length
       ? expandedQueue.map((item) => ({
         ...item,
+        audiopath: isRadio ? toRadioAudiopath(item.audiopath) : item.audiopath,
+        audiotype: isRadio ? 1 : item.audiotype,
         station: parentContext?.parent
           ? isMusicAssistant
             ? parentContext.parent
@@ -817,12 +837,21 @@ class ZoneManager {
       }))
       : [
         createQueueItem(
-          normalizeSpotifyAudiopath(fallbackAudiopath),
+          isRadio ? toRadioAudiopath(fallbackAudiopath) : normalizeSpotifyAudiopath(fallbackAudiopath),
           ctx.name,
           enrichedMetadata,
-          isMusicAssistant || isAppleMusic || isDeezer || isTidal ? 5 : 0,
+          queueAudioType,
         ),
       ];
+    if (isRadio) {
+      queueItems = queueItems.map((item) => ({
+        ...item,
+        title: '',
+        artist: '',
+        album: '',
+        duration: 0,
+      }));
+    }
 
     // determine the starting index
     let startIndex = parentContext?.startIndex ?? 0;
@@ -882,7 +911,9 @@ class ZoneManager {
     });
     if (session) {
       void recentsManager.record(zoneId, current);
-      notifyQueueUpdated(zoneId, ctx.queue.items.length);
+      if (!isRadio) {
+        notifyQueueUpdated(zoneId, ctx.queue.items.length);
+      }
     } else {
       this.log.warn('playback skipped; no playable source resolved', {
         zoneId,
@@ -2026,7 +2057,7 @@ class ZoneManager {
     if (!/^https?:/i.test(decoded)) {
       return false;
     }
-    if (detectServiceFromAudiopath(decoded) === 'radio') {
+    if (isRadioAudiopath(audiopath)) {
       return true;
     }
     return ctx.queue.authority === 'local';
@@ -2095,13 +2126,34 @@ class ZoneManager {
       return;
     }
 
+    const mergedForType = { ...ctx.state, ...patch } as LoxoneZoneState;
+    const isRadioState = isRadioAudiopath(mergedForType.audiopath, mergedForType.audiotype);
+    const desiredType = resolveLoxoneType(mergedForType.audiopath, mergedForType.audiotype);
+    if (desiredType !== mergedForType.type) {
+      patch.type = desiredType;
+    }
+    if (isRadioState) {
+      if (!('audiotype' in patch) || patch.audiotype !== 1) {
+        patch.audiotype = 1;
+      }
+      if (!('time' in patch) || patch.time !== 0) {
+        patch.time = 0;
+      }
+      if (!('duration' in patch) || patch.duration !== 0) {
+        patch.duration = 0;
+      }
+      if ('title' in patch && patch.title) {
+        patch.title = '';
+      }
+    }
+
     // Prevent overwriting a valid duration with zero/invalid values.
     if ('duration' in patch) {
       const nextDuration = patch.duration;
       const currentDuration = ctx.state.duration;
-      if (typeof nextDuration !== 'number' || nextDuration <= 0) {
+      if (typeof nextDuration !== 'number' || (!isRadioState && nextDuration <= 0)) {
         delete (patch as any).duration;
-      } else if (typeof currentDuration === 'number' && currentDuration > 0) {
+      } else if (!isRadioState && typeof currentDuration === 'number' && currentDuration > 0) {
         // keep the larger of the known durations
         (patch as any).duration = Math.max(nextDuration, currentDuration);
       }
@@ -2455,6 +2507,12 @@ class ZoneManager {
     player.on('position', (time, duration) => {
       const ctx = this.zones.get(zoneId);
       if (!ctx) {
+        return;
+      }
+      if (isRadioAudiopath(ctx.state.audiopath, ctx.state.audiotype)) {
+        if (ctx.state.time !== 0 || ctx.state.duration !== 0) {
+          this.patchState(zoneId, { time: 0, duration: 0 });
+        }
         return;
       }
       const now = Date.now();
@@ -2898,7 +2956,9 @@ class ZoneManager {
         }
       });
     }
-    notifyQueueUpdated(zoneId, ctx.queue.items.length);
+    if (!isRadioAudiopath(current.audiopath, current.audiotype)) {
+      notifyQueueUpdated(zoneId, ctx.queue.items.length);
+    }
   }
 
   private async resolveTrackDuration(audiopath: string): Promise<number> {
@@ -3102,7 +3162,44 @@ function getInputAudioType(ctx: ZoneContext): number | null {
   ) {
     return 5;
   }
+  if (detectServiceFromAudiopath(audiopath) === 'radio') {
+    return 1;
+  }
   return null;
+}
+
+function isRadioAudiopath(audiopath: string | undefined, audiotype?: number | null): boolean {
+  if (audiotype === 1 || audiotype === 4) {
+    return true;
+  }
+  const raw = (audiopath ?? '').trim();
+  if (!raw) {
+    return false;
+  }
+  if (detectServiceFromAudiopath(raw) === 'radio') {
+    return true;
+  }
+  const decoded = decodeAudiopath(raw);
+  if (!decoded) {
+    return false;
+  }
+  return detectServiceFromAudiopath(decoded) === 'radio';
+}
+
+function toRadioAudiopath(audiopath: string | undefined): string {
+  const raw = (audiopath ?? '').trim();
+  if (!raw) {
+    return '';
+  }
+  const lower = raw.toLowerCase();
+  if (lower.startsWith('tunein:') || lower.startsWith('radio:')) {
+    return raw;
+  }
+  return encodeAudiopath(raw, 'station', 'tunein', true);
+}
+
+function resolveLoxoneType(audiopath: string | undefined, audiotype?: number | null): number {
+  return isRadioAudiopath(audiopath, audiotype) ? 2 : 3;
 }
 
 function resolveSourceName(

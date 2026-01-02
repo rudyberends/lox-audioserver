@@ -88,6 +88,9 @@ export function detectServiceFromAudiopath(
   if (raw.includes('tidal')) {
     return 'tidal';
   }
+  if (raw.startsWith('tunein:') || raw.startsWith('radio:') || raw.includes('tunein')) {
+    return 'radio';
+  }
   const decoded = decodeAudiopath(p);
   const lower = decoded.toLowerCase();
   if (lower.includes('musicassistant') || lower.startsWith('musicassistant')) {
@@ -102,7 +105,7 @@ export function detectServiceFromAudiopath(
   if (lower.includes('tidal')) {
     return 'tidal';
   }
-  if (/(tunein|radio)/.test(lower)) {
+  if (lower.startsWith('tunein:') || lower.startsWith('radio:') || /(tunein|radio)/.test(lower)) {
     return 'radio';
   }
   if (lower.startsWith('spotify:') || lower.startsWith('spotify@')) {
