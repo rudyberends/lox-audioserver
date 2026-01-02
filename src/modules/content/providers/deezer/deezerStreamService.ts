@@ -6,7 +6,8 @@ import { decodeAudiopath } from '@/modules/audio/utils/audiopath';
 import { notifyTransportError } from '@/modules/audio/outputs/queueUpdater';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID, createCipheriv, createHash } from 'node:crypto';
-import { Transform, Readable } from 'node:stream';
+import { Transform, Readable, PassThrough } from 'node:stream';
+import { once } from 'node:events';
 const { Blowfish } = require('egoroof-blowfish');
 
 const DEEZER_TRACK_URL = 'https://www.deezer.com/us/track';
@@ -22,6 +23,7 @@ const DEEZER_AES_KEY = 'jo6aey6haid2Teih';
 const DEEZER_BF_KEY = Buffer.from('g4el58wc0zvf9na1', 'utf8');
 const DEEZER_BF_IV = Buffer.from('0001020304050607', 'hex');
 const BLOCK_SIZE = 2048;
+const DEEZER_JITTER_BUFFER_BYTES = 1024 * 1024 * 2;
 
 type DeezerPlaybackResult = {
   playbackSource: PlaybackSource | null;
@@ -96,6 +98,48 @@ class DeezerDecryptStream extends Transform {
   }
 }
 
+class DeezerJitterBuffer extends Transform {
+  private bufferedBytes = 0;
+  private bufferedChunks: Buffer[] = [];
+  private released = false;
+  constructor(private readonly minBytes: number) {
+    super();
+  }
+
+  public _transform(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+    if (!this.released) {
+      this.bufferedChunks.push(chunk);
+      this.bufferedBytes += chunk.length;
+      if (this.bufferedBytes >= this.minBytes) {
+        for (const buffered of this.bufferedChunks) {
+          this.push(buffered);
+        }
+        this.bufferedChunks = [];
+        this.released = true;
+      }
+      callback();
+      return;
+    }
+    this.push(chunk);
+    callback();
+  }
+
+  public _flush(callback: (error?: Error | null) => void): void {
+    if (!this.released) {
+      for (const buffered of this.bufferedChunks) {
+        this.push(buffered);
+      }
+      this.bufferedChunks = [];
+    }
+    callback();
+  }
+}
+
+function formatContentType(format?: number): string {
+  if (format === 9) return 'audio/flac';
+  return 'audio/mpeg';
+}
+
 export class DeezerStreamService {
   private readonly log = createLogger('Content', 'DeezerStream');
   private readonly bridgesByProvider = new Map<string, SpotifyBridgeConfig>();
@@ -148,6 +192,7 @@ export class DeezerStreamService {
       urls = [gwStream.url];
       blowfishKey = calcBlowfishKey(gwStream.songId);
       usedMethod = 'gw';
+      formatHint = gwStream.format;
     } else {
       const song = await this.fetchSongData(request);
       if (!song) {
@@ -215,7 +260,8 @@ export class DeezerStreamService {
       playbackSource: {
         kind: 'url',
         url: streamUrl,
-        realTime: true,
+        realTime: false,
+        lowLatency: false,
       },
     };
   }
@@ -277,7 +323,7 @@ export class DeezerStreamService {
 
   private async fetchGwStream(
     request: DeezerTrackRequest,
-  ): Promise<{ url: string; songId: string; size?: number } | null> {
+  ): Promise<{ url: string; songId: string; size?: number; format?: number } | null> {
     const arl = request.bridge.deezerArl?.trim();
     if (!arl) {
       this.log.debug('deezer gw stream skipped; missing arl');
@@ -329,7 +375,7 @@ export class DeezerStreamService {
       this.log.warn('deezer gw stream url missing', { trackId: request.trackId });
       return null;
     }
-    return { url: stream.url, songId, size: stream.size };
+    return { url: stream.url, songId, size: stream.size, format: mapGwFormatToId(stream.format) };
   }
 
   private async fetchGwUserData(
@@ -579,32 +625,13 @@ export class DeezerStreamService {
     };
     req.on('close', cleanup);
 
-    const upstream = await fetchWithFallback(session.urls, session.headers, controller.signal);
-    if (!upstream.response || !upstream.response.ok || !upstream.response.body) {
-      this.log.warn('deezer proxy upstream failed', {
-        sessionId,
-        url: upstream.lastUrl,
-        status: upstream.lastStatus,
-        error: upstream.lastError,
-        errorCode: upstream.lastErrorCode,
-        errorName: upstream.lastErrorName,
-        errorCause: upstream.lastErrorCause,
-      });
-      res.writeHead(502);
-      res.end();
-      cleanup();
-      return;
-    }
-
-    const contentType = upstream.response.headers.get('content-type') || 'audio/mpeg';
+    const contentType = formatContentType(session.format);
     const responseHeaders: Record<string, string> = { 'Content-Type': contentType };
-    if (typeof session.estimatedSize === 'number' && session.estimatedSize > 0) {
-      responseHeaders['Content-Length'] = String(session.estimatedSize);
-    }
     res.writeHead(200, responseHeaders);
     const decryptStream = new DeezerDecryptStream(session.blowfishKey);
-    const stream = Readable.fromWeb(upstream.response.body as any);
-    stream.pipe(decryptStream).pipe(res);
+    const jitterBuffer = new DeezerJitterBuffer(DEEZER_JITTER_BUFFER_BYTES);
+    const stream = createRetryStream(session, controller.signal, this.log);
+    stream.pipe(decryptStream).pipe(jitterBuffer).pipe(res);
 
     stream.on('error', () => {
       cleanup();
@@ -770,65 +797,124 @@ function resolveFormatCandidates(song: DeezerSongData): number[] {
   return resolved.length ? resolved : [3, 1];
 }
 
-async function fetchWithFallback(
-  urls: string[],
-  headers: Record<string, string>,
-  signal: AbortSignal,
-): Promise<{
-  response: Response | null;
-  lastStatus?: number;
-  lastUrl?: string;
-  lastError?: string;
-  lastErrorCode?: string;
-  lastErrorName?: string;
-  lastErrorCause?: string;
-}> {
-  let lastStatus: number | undefined;
-  let lastUrl: string | undefined;
-  let lastError: string | undefined;
-  let lastErrorCode: string | undefined;
-  let lastErrorName: string | undefined;
-  let lastErrorCause: string | undefined;
-  for (const url of urls) {
-    try {
-      lastUrl = url;
-      const res = await fetch(url, { headers, signal });
-      if (res.ok) {
-        return { response: res, lastStatus: res.status, lastUrl: url };
-      }
-      lastStatus = res.status;
-    } catch (err) {
-      if ((err as any)?.name === 'AbortError') {
-        return {
-          response: null,
-          lastStatus,
-          lastUrl,
-          lastError,
-          lastErrorCode,
-          lastErrorName,
-          lastErrorCause,
-        };
-      }
-      lastError = err instanceof Error ? err.message : String(err);
-      lastErrorName = err instanceof Error ? err.name : undefined;
-      lastErrorCode = (err as any)?.code ? String((err as any).code) : undefined;
-      lastErrorCause =
-        (err as any)?.cause instanceof Error
-          ? (err as any).cause.message
-          : (err as any)?.cause
-            ? String((err as any).cause)
-            : undefined;
-    }
+function mapGwFormatToId(format?: string): number | undefined {
+  switch ((format || '').toUpperCase()) {
+    case 'FLAC':
+      return 9;
+    case 'MP3_320':
+      return 3;
+    case 'MP3_128':
+      return 1;
+    default:
+      return undefined;
   }
-  return {
-    response: null,
-    lastStatus,
-    lastUrl,
-    lastError,
-    lastErrorCode,
-    lastErrorName,
-    lastErrorCause,
+}
+
+function createRetryStream(
+  session: DeezerProxySession,
+  signal: AbortSignal,
+  log: ReturnType<typeof createLogger>,
+): PassThrough {
+  const out = new PassThrough();
+  let offset = 0;
+  let buffer = Buffer.alloc(0);
+  let pumping = false;
+
+  const pump = async (): Promise<void> => {
+    if (pumping) return;
+    pumping = true;
+    let attempts = 0;
+    const maxAttempts = Math.max(3, session.urls.length * 4);
+    const stallTimeoutMs = 4000;
+
+    while (!signal.aborted && !out.destroyed) {
+      let fetched = false;
+      for (const url of session.urls) {
+        if (signal.aborted || out.destroyed) {
+          pumping = false;
+          return;
+        }
+        attempts += 1;
+        if (attempts > maxAttempts) {
+          out.destroy(new Error('deezer retry limit reached'));
+          pumping = false;
+          return;
+        }
+        try {
+          const headers: Record<string, string> = { ...session.headers };
+          const resumeOffset = offset + buffer.length;
+          if (resumeOffset > 0) {
+            headers.Range = `bytes=${resumeOffset}-`;
+          }
+          const requestController = new AbortController();
+          const onAbort = () => requestController.abort();
+          signal.addEventListener('abort', onAbort, { once: true });
+          const res = await fetch(url, { headers, signal: requestController.signal });
+          if (!res.ok || !res.body) {
+            signal.removeEventListener('abort', onAbort);
+            continue;
+          }
+          if (resumeOffset > 0 && res.status !== 206) {
+            signal.removeEventListener('abort', onAbort);
+            continue;
+          }
+          fetched = true;
+          const body = Readable.fromWeb(res.body as any);
+          let idleTimer: NodeJS.Timeout | null = null;
+          const resetIdleTimer = (): void => {
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => {
+              requestController.abort();
+            }, stallTimeoutMs);
+          };
+          resetIdleTimer();
+          for await (const chunk of body) {
+            if (signal.aborted || out.destroyed) {
+              if (idleTimer) clearTimeout(idleTimer);
+              signal.removeEventListener('abort', onAbort);
+              pumping = false;
+              return;
+            }
+            resetIdleTimer();
+            const incoming = Buffer.from(chunk as Buffer);
+            buffer = Buffer.concat([buffer, incoming]);
+            while (buffer.length >= BLOCK_SIZE) {
+              const block = buffer.subarray(0, BLOCK_SIZE);
+              buffer = buffer.subarray(BLOCK_SIZE);
+              offset += block.length;
+              if (!out.write(block)) {
+                await once(out, 'drain');
+              }
+            }
+          }
+          if (idleTimer) clearTimeout(idleTimer);
+          signal.removeEventListener('abort', onAbort);
+        } catch (err) {
+          log.debug('deezer proxy retry fetch failed', {
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      if (!fetched) {
+        out.destroy(new Error('deezer proxy upstream failed'));
+        pumping = false;
+        return;
+      }
+      if (buffer.length > 0) {
+        offset += buffer.length;
+        out.write(buffer);
+        buffer = Buffer.alloc(0);
+      }
+      out.end();
+      pumping = false;
+      return;
+    }
+    pumping = false;
   };
+
+  pump().catch((err) => out.destroy(err));
+  return out;
 }
 
 export const deezerStreamService = new DeezerStreamService();

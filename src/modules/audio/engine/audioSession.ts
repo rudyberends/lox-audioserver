@@ -22,6 +22,7 @@ export type PlaybackSource =
       inputFormat?: string;
       logLevel?: string;
       realTime?: boolean;
+      lowLatency?: boolean;
     }
   | {
       kind: 'pipe';
@@ -395,8 +396,13 @@ export class AudioSession {
     return args;
   }
 
+  private buildBufferedArgs(): string[] {
+    return ['-probesize', '256k', '-analyzeduration', '1M'];
+  }
+
   private buildInputArgs(): string[] {
     if (this.source.kind === 'url') {
+      const lowLatency = this.source.lowLatency !== false;
       const headerLines = this.source.headers ? this.formatHeaders(this.source.headers) : '';
       const headerArgs = headerLines ? ['-headers', headerLines] : [];
       const decryptionArgs = this.source.decryptionKey ? ['-decryption_key', this.source.decryptionKey] : [];
@@ -405,7 +411,7 @@ export class AudioSession {
       const inputFormatArgs = this.source.inputFormat ? ['-f', this.source.inputFormat] : [];
       const realtimeArgs = this.source.realTime ? ['-re'] : [];
       return [
-        ...this.buildLowLatencyArgs(),
+        ...(lowLatency ? this.buildLowLatencyArgs() : this.buildBufferedArgs()),
         '-reconnect',
         '1',
         '-reconnect_streamed',
