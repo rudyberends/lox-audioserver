@@ -106,6 +106,7 @@ export function registerRoutes(
   router.registerPrefix('audio', 'audio/cfg/playeropts', placeholder('playeropts'));
   router.registerPrefix('audio', 'audio/cfg/playername', configHandlers.playerName);
   router.registerPrefix('audio', 'audio/cfg/identify', configHandlers.identify);
+  router.registerPrefix('audio', 'audio/cfg/geteq', configHandlers.getEq);
   router.registerPrefix('audio', 'audio/cfg/restart', configHandlers.restart);
   router.registerPrefix('audio', 'audio/cfg/speakertype', placeholder('speakertype'));
   router.registerPrefix('audio', 'audio/cfg/groupopts', placeholder('groupopts'));

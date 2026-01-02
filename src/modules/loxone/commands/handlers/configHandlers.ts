@@ -214,6 +214,7 @@ export function createConfigHandlers(config: LoxoneHttpConfig, options: ConfigHa
       await loxoneConfigService.applyEventVolumes(parsed);
       return buildResponse(command, 'seteventvolumes', { success: true });
     }),
+    getEq: handler((command) => buildResponse(command, 'geteq', [])),
     playerName: handler(async (command) => {
       const encoded = getSegment(command, 3);
       if (!encoded) {
