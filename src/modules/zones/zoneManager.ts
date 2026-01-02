@@ -212,6 +212,7 @@ class ZoneManager {
   private readonly log = createLogger('Zones', 'Manager');
   private readonly zones = new Map<number, ZoneContext>();
   private initialized = false;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
   private readonly musicAssistantFlowMode = process.env.MUSICASSISTANT_FLOW_MODE !== 'false';
   private readonly musicAssistantInputHandlers = {
     startPlayback: (zoneId: number, label: string, source: PlaybackSource, metadata?: PlaybackMetadata) => {
@@ -259,6 +260,23 @@ class ZoneManager {
     } catch {
       setMusicAssistantProviderId(MUSIC_ASSISTANT_PROVIDER_DEFAULT);
     }
+  }
+
+  private startHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      return;
+    }
+    const intervalMs = 60_000;
+    this.heartbeatTimer = setInterval(() => {
+      const now = Date.now();
+      for (const ctx of this.zones.values()) {
+        if (!ctx.state) {
+          continue;
+        }
+        ctx.lastZoneBroadcastAt = now;
+        notifyZoneStateChanged(ctx.state);
+      }
+    }, intervalMs);
   }
 
   /** Minimal trace helper to see who drives volume changes. */
@@ -510,6 +528,7 @@ class ZoneManager {
       await loadStoredConfig();
       const cfg = getStoredConfig();
       await this.replaceAll(cfg.zones, cfg.inputs);
+      this.startHeartbeat();
       this.initialized = true;
     }
   }
@@ -731,9 +750,24 @@ class ZoneManager {
         : parentContext?.parent
           ? sanitizeStation(parentContext.parent, normalizedTarget)
           : stationUri;
-    const isRadio = isRadioAudiopath(resolvedTarget) || isRadioAudiopath(uri);
+    let isRadio = isRadioAudiopath(resolvedTarget) || isRadioAudiopath(uri);
+    if (!isRadio) {
+      const decodedTarget = decodeAudiopath(resolvedTarget) || resolvedTarget;
+      const decodedUri = decodeAudiopath(uri) || uri;
+      const isHttpStream =
+        /^https?:\/\//i.test(decodedTarget) || /^https?:\/\//i.test(decodedUri);
+      if (isHttpStream && !(metadata?.duration && metadata.duration > 0)) {
+        isRadio = true;
+      }
+    }
+    if (isRadio && !stationValue && metadata?.station?.trim()) {
+      stationValue = metadata.station.trim();
+    }
     if (isRadio && !stationValue && metadata?.title?.trim()) {
       stationValue = metadata.title.trim();
+    }
+    if (isRadio && !stationValue) {
+      stationValue = deriveRadioStationLabel(resolvedTarget) ?? deriveRadioStationLabel(uri) ?? '';
     }
     this.log.info('playContent', {
       zoneId,
@@ -762,6 +796,7 @@ class ZoneManager {
         audiopath: current.audiopath,
         station: current.station,
         stationIndex: ctx.queueController.currentIndex(),
+        isRadio: isRadioAudiopath(current.audiopath, current.audiotype),
       });
       if (session) {
         void recentsManager.record(zoneId, current);
@@ -850,6 +885,7 @@ class ZoneManager {
         artist: '',
         album: '',
         duration: 0,
+        station: stationValue ?? item.station ?? '',
       }));
     }
 
@@ -908,6 +944,7 @@ class ZoneManager {
       trackId: enrichedMetadata?.trackId,
       station: stationForPlayback,
       stationIndex: ctx.queueController.currentIndex(),
+      isRadio,
     });
     if (session) {
       void recentsManager.record(zoneId, current);
@@ -2008,7 +2045,7 @@ class ZoneManager {
     if (activeAlert.snapshot.mode === 'play') {
       const current = ctx.queueController.current();
       if (current) {
-    const session = await this.startQueuePlayback(ctx, current.audiopath, {
+        const session = await this.startQueuePlayback(ctx, current.audiopath, {
           title: current.title,
           artist: current.artist,
           album: current.album,
@@ -2016,6 +2053,7 @@ class ZoneManager {
           audiopath: current.audiopath,
           duration: current.duration,
           station: current.station,
+          isRadio: isRadioAudiopath(current.audiopath, current.audiotype),
         });
         if (session) {
           const isMusicAssistant = this.isMusicAssistantAudiopath(current.audiopath);
@@ -2141,6 +2179,12 @@ class ZoneManager {
       }
       if (!('duration' in patch) || patch.duration !== 0) {
         patch.duration = 0;
+      }
+      if (!mergedForType.station?.trim()) {
+        const fallbackStation = deriveRadioStationLabel(mergedForType.audiopath);
+        if (fallbackStation) {
+          patch.station = fallbackStation;
+        }
       }
       if ('title' in patch && patch.title) {
         patch.title = '';
@@ -3025,6 +3069,7 @@ class ZoneManager {
       audiopath: item.audiopath,
       duration: item.duration,
       station: item.station,
+      isRadio: isRadioAudiopath(item.audiopath, item.audiotype),
     });
     if (session) {
       const sourceName = resolveSourceName(item.audiotype ?? getInputAudioType(ctx), ctx, item);
@@ -3200,6 +3245,24 @@ function toRadioAudiopath(audiopath: string | undefined): string {
 
 function resolveLoxoneType(audiopath: string | undefined, audiotype?: number | null): number {
   return isRadioAudiopath(audiopath, audiotype) ? 2 : 3;
+}
+
+function deriveRadioStationLabel(audiopath: string | undefined): string | undefined {
+  const raw = (audiopath ?? '').trim();
+  if (!raw) {
+    return undefined;
+  }
+  const decoded = decodeAudiopath(raw) ?? raw;
+  if (!/^https?:\/\//i.test(decoded)) {
+    return undefined;
+  }
+  try {
+    const url = new URL(decoded);
+    const host = url.hostname.replace(/^www\./i, '').trim();
+    return host || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveSourceName(

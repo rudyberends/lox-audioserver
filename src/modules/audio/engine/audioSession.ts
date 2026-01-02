@@ -23,6 +23,7 @@ export type PlaybackSource =
       logLevel?: string;
       realTime?: boolean;
       lowLatency?: boolean;
+      restartOnFailure?: boolean;
     }
   | {
       kind: 'pipe';
@@ -245,7 +246,10 @@ export class AudioSession {
       profile: this.profile,
     });
     this.startTs = Date.now();
-    const proc = this.spawnFfmpeg(args, { restartOnFailure: false, logFirstChunk: true });
+    const proc = this.spawnFfmpeg(args, {
+      restartOnFailure: this.source.kind === 'url' && this.source.restartOnFailure === true,
+      logFirstChunk: true,
+    });
 
     this.process = proc;
     this.restartAttempts = 0;

@@ -400,14 +400,17 @@ export class ContentManager {
       return this.library.resolveItem(audiopath);
     }
 
-    if (audiopath.startsWith('http://') || audiopath.startsWith('https://')) {
-      const station = await this.tunein.resolveStationByStream(audiopath);
+    const httpCandidate =
+      /^https?:\/\//i.test(audiopath) ? audiopath : /^https?:\/\//i.test(decodedPath) ? decodedPath : '';
+    if (httpCandidate) {
+      const station = await this.tunein.resolveStationByStream(httpCandidate);
       if (station) {
         return {
           title: station.name || '',
           artist: '',
           album: '',
           coverurl: station.coverurl ?? '',
+          station: station.name || '',
         };
       }
     }

@@ -106,7 +106,9 @@ export function createQueueItem(
   const duration =
     typeof metadata?.duration === 'number' && metadata.duration > 0
       ? Math.round(metadata.duration)
-      : 120;
+      : inferredType === 1
+        ? 0
+        : 120;
   const station = sanitizeStation(metadata?.station, normalizedUri);
   return {
     album: metadata?.album ?? '',
@@ -142,7 +144,9 @@ export async function mapFolderItemsToQueue(
     duration: Math.round(
       (Number((item as any).duration ?? 0) ?? 0) > 0
         ? Number((item as any).duration ?? 0)
-        : 120,
+        : audioType === 1
+          ? 0
+          : 120,
     ),
     qindex: 0,
     station:

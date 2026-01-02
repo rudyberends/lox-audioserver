@@ -23,6 +23,7 @@ function emit(
  * Pushes the current zone state to all Loxone clients.
  */
 export function notifyZoneStateChanged(state: LoxoneZoneState): void {
+  log.spam('audio_event payload', { state });
   emit({ audio_event: [state] }, 'audio_event', { zoneId: state.playerid });
 }
 

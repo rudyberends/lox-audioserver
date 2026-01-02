@@ -13,6 +13,7 @@ export interface PlaybackMetadata {
   album: string;
   coverurl?: string;
   duration?: number;
+  isRadio?: boolean;
   /** Optional absolute audiopath/uri (e.g. spotify:track:abc123) to preserve in queue. */
   audiopath?: string;
   /** Optional provider-specific track id (e.g. spotify track id). */
@@ -270,11 +271,15 @@ class AudioManager {
     metadata?: PlaybackMetadata,
     requiresPcm?: boolean,
   ): PlaybackSession | null {
+    const effectiveSource =
+      playbackSource?.kind === 'url' && metadata?.isRadio
+        ? { ...playbackSource, restartOnFailure: true }
+        : playbackSource;
     this.log.info('startWithResolvedSource', {
       zoneId,
       label,
-      sourceKind: playbackSource?.kind ?? null,
-      hasStream: playbackSource ? 'stream' in playbackSource && !!(playbackSource as any).stream : false,
+      sourceKind: effectiveSource?.kind ?? null,
+      hasStream: effectiveSource ? 'stream' in effectiveSource && !!(effectiveSource as any).stream : false,
     });
     const existing = this.sessions.get(zoneId);
     const effectivePcmPreference =
@@ -339,27 +344,27 @@ class AudioManager {
 
     const wantsHandoff =
       label.toLowerCase() === 'applemusic' &&
-      playbackSource?.kind === 'url' &&
+      effectiveSource?.kind === 'url' &&
       Boolean(existing);
     if (!wantsHandoff) {
       audioStreamEngine.stop(zoneId, 'switch');
     }
-    if (!playbackSource && !transportOnly) {
+    if (!effectiveSource && !transportOnly) {
       this.log.warn('unable to resolve playback source; skipping session', {
         zoneId,
         source: label,
       });
       return null;
     }
-    if (playbackSource) {
-      this.log.info('starting audio engine', { zoneId, kind: playbackSource.kind, profiles, handoff: wantsHandoff });
+    if (effectiveSource) {
+      this.log.info('starting audio engine', { zoneId, kind: effectiveSource.kind, profiles, handoff: wantsHandoff });
       if (wantsHandoff) {
-        audioStreamEngine.startWithHandoff(zoneId, playbackSource, profiles, effectiveOutput, {
+        audioStreamEngine.startWithHandoff(zoneId, effectiveSource, profiles, effectiveOutput, {
           waitProfile: 'pcm',
           timeoutMs: 8000,
         });
       } else {
-        audioStreamEngine.start(zoneId, playbackSource, profiles, effectiveOutput);
+        audioStreamEngine.start(zoneId, effectiveSource, profiles, effectiveOutput);
       }
     }
     const streamProfile = profiles.includes('aac') ? 'aac' : 'mp3';
@@ -375,7 +380,7 @@ class AudioManager {
       duration: metadata?.duration ?? 0,
       startedAt: Date.now(),
       updatedAt: Date.now(),
-      playbackSource,
+      playbackSource: effectiveSource,
       cover: undefined,
       profiles,
       outputSettings: outputSignature,

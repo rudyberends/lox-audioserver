@@ -45,6 +45,9 @@ export interface TuneInProviderOptions {
 export class TuneInProvider {
   private readonly username?: string;
   private readonly api = new TuneInClient();
+  private readonly searchCache = new Map<string, { station: RadioStation; seenAt: number }>();
+  private readonly searchCacheTtlMs = 30 * 60 * 1000;
+  private readonly searchCacheMaxSize = 200;
 
   constructor(options: TuneInProviderOptions = {}) {
     this.username = options.username?.trim();
@@ -56,6 +59,13 @@ export class TuneInProvider {
   public async resolveStationByStream(streamUrl: string): Promise<RadioStation | null> {
     const normalized = this.normalizeStreamUrl(streamUrl);
     if (!normalized) return null;
+    const cached = this.searchCache.get(normalized);
+    if (cached) {
+      if (Date.now() - cached.seenAt <= this.searchCacheTtlMs) {
+        return cached.station;
+      }
+      this.searchCache.delete(normalized);
+    }
     const stations = [
       ...(await this.getCustomStations()),
       ...(await this.getLocalStations()),
@@ -127,11 +137,13 @@ export class TuneInProvider {
     }
 
     const stations = await this.mapTuneInItems(outlines);
+    this.cacheStations(stations);
     const stationItems = stations
       .slice(0, stationLimit)
       .map<ContentFolderItem>((station) => this.toSearchItem(station));
 
     const customStations = await this.getCustomStations();
+    this.cacheStations(customStations);
     const filteredCustom = customStations.filter((s) =>
       s.name.toLowerCase().includes(normalizedQuery.toLowerCase()),
     );
@@ -231,6 +243,30 @@ export class TuneInProvider {
       return normalized;
     } catch {
       return raw.replace(/\/$/, '');
+    }
+  }
+
+  private cacheStations(stations: RadioStation[]): void {
+    if (!stations.length) return;
+    const now = Date.now();
+    for (const station of stations) {
+      const key = this.normalizeStreamUrl(station.stream);
+      if (!key) continue;
+      this.searchCache.set(key, { station, seenAt: now });
+    }
+    if (this.searchCache.size <= this.searchCacheMaxSize) {
+      return;
+    }
+    let oldestKey: string | null = null;
+    let oldestSeenAt = Number.POSITIVE_INFINITY;
+    for (const [key, value] of this.searchCache.entries()) {
+      if (value.seenAt < oldestSeenAt) {
+        oldestSeenAt = value.seenAt;
+        oldestKey = key;
+      }
+    }
+    if (oldestKey) {
+      this.searchCache.delete(oldestKey);
     }
   }
 
