@@ -699,20 +699,6 @@
   border-color: var(--color-text);
 }
 
-.zone-controller-chip {
-  border: 1px solid rgba(15, 15, 15, 0.08);
-  border-radius: 12px;
-  padding: 0.45rem 0.6rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.18rem;
-  min-width: 180px;
-  flex: 1 1 0;
-  background: #ffffff;
-  text-align: left;
-  color: #0f0f0f;
-}
-
 .zone-chip-eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -726,7 +712,6 @@
     flex-direction: column;
   }
 
-  .zone-controller-chip,
   .zone-output-chip {
     flex: 1 1 100%;
   }

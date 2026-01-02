@@ -11,15 +11,13 @@ import {
   discoverSendspinClients,
   discoverSnapcastClients,
   discoverSpotifyDevices,
-  discoverMusicAssistantPlayers,
   type AirplayDevice,
   type GoogleCastDevice,
   type SonosDevice,
   type SendspinClient,
   type SpotifyDevice,
-  type MusicAssistantPlayer,
 } from '../services/transportsApi';
-import type { ZoneInputConfig, ZoneTransportConfig, SpotifyBridgeConfig } from '@/domain/config/types';
+import type { ZoneInputConfig, ZoneTransportConfig } from '@/domain/config/types';
 import type { TransportConfigDefinition } from '@/modules/audio/outputs/types';
 import type { SpotifyAccountConfig } from '@/domain/config/types';
 
@@ -52,7 +50,6 @@ interface ConfigResponse {
     };
     content?: {
       spotify?: {
-        bridges?: SpotifyBridgeConfig[];
         accounts?: SpotifyAccountConfig[];
       };
     };
@@ -80,12 +77,14 @@ export default function ZonesView(): JSX.Element {
   const [error, setError] = React.useState<string | null>(null);
   const [extensionPlaceholders, setExtensionPlaceholders] = React.useState<ExtensionPlaceholder[]>([]);
   const [saving, setSaving] = React.useState(false);
-  const [activeZoneModal, setActiveZoneModal] = React.useState<{ zoneId: number; groupLabel?: string; type: 'output' | 'spotify' | 'musicassistant' } | null>(null);
+  const [activeZoneModal, setActiveZoneModal] = React.useState<{
+    zoneId: number;
+    groupLabel?: string;
+    type: 'output' | 'spotify';
+  } | null>(null);
   const [transportDefinitions, setTransportDefinitions] = React.useState<TransportConfigDefinition[]>([]);
-  const [musicAssistantAvailable, setMusicAssistantAvailable] = React.useState(false);
   const [hasSpotifyAccounts, setHasSpotifyAccounts] = React.useState(false);
   const [spotifyDiscovery, setSpotifyDiscovery] = React.useState<Record<number, SpotifyDiscoveryState>>({});
-  const [musicAssistantDiscovery, setMusicAssistantDiscovery] = React.useState<Record<number, MusicAssistantDiscoveryState>>({});
   const [maintenanceState, setMaintenanceState] = React.useState<Record<number, ZoneMaintenanceIndicator>>({});
   const [outputFilter, setOutputFilter] = React.useState<'all' | 'assigned' | 'unassigned'>('all');
   const modalOpen = Boolean(activeZoneModal);
@@ -105,7 +104,6 @@ export default function ZonesView(): JSX.Element {
         const base = (data.config?.system?.audioserver?.macId ?? '').toUpperCase();
         const hasAccounts = spotifyAccounts.length > 0;
         setHasSpotifyAccounts(hasAccounts);
-        setMusicAssistantAvailable(hasMusicAssistantBridge(data.config?.content?.spotify?.bridges ?? []));
         setBaseSerial(base);
         setTransportDefinitions(definitions);
         const sanitizedZones = rawZones.map((zone) => {
@@ -342,11 +340,6 @@ export default function ZonesView(): JSX.Element {
           current.spotify.offload = false;
           delete (current.spotify as Record<string, unknown>).deviceId;
         }
-      } else if (badge.type === 'musicassistant') {
-        current.musicassistant = {
-          ...(current.musicassistant ?? { publishName: zone.name }),
-          enabled: !badge.enabled,
-        };
       }
       void handleInputChange(zone.id, current);
     },
@@ -407,60 +400,6 @@ export default function ZonesView(): JSX.Element {
       enabled: true,
       offload: true,
       deviceId: device.deviceId,
-    };
-    void handleInputChange(zone.id, next);
-  }
-
-  async function handleMusicAssistantDiscovery(zoneId: number): Promise<void> {
-    setMusicAssistantDiscovery((prev) => ({
-      ...prev,
-      [zoneId]: {
-        devices: prev[zoneId]?.devices ?? [],
-        loading: true,
-        error: null,
-      },
-    }));
-    try {
-      const devices = await discoverMusicAssistantPlayers();
-      setMusicAssistantDiscovery((prev) => ({
-        ...prev,
-        [zoneId]: {
-          devices,
-          loading: false,
-          error: devices.length ? null : 'No Music Assistant players found.',
-        },
-      }));
-    } catch (err) {
-      setMusicAssistantDiscovery((prev) => ({
-        ...prev,
-        [zoneId]: {
-          devices: prev[zoneId]?.devices ?? [],
-          loading: false,
-          error: err instanceof Error ? err.message : 'Discovery failed',
-        },
-      }));
-    }
-  }
-
-  function handleMusicAssistantOffloadToggle(zone: Zone, enabled: boolean): void {
-    const next = deriveZoneInputs(zone);
-    const base = next.musicassistant ?? { publishName: zone.name, enabled: true };
-    next.musicassistant = { ...base, enabled: true, offload: enabled };
-    if (!enabled) {
-      delete (next.musicassistant as Record<string, unknown>).deviceId;
-    }
-    void handleInputChange(zone.id, next);
-  }
-
-  function handleMusicAssistantDeviceApply(zone: Zone, device: MusicAssistantPlayer): void {
-    const deviceId = device.deviceId || device.id;
-    if (!deviceId) return;
-    const next = deriveZoneInputs(zone);
-    next.musicassistant = {
-      ...(next.musicassistant ?? { publishName: zone.name, enabled: true }),
-      enabled: true,
-      offload: true,
-      deviceId,
     };
     void handleInputChange(zone.id, next);
   }
@@ -585,7 +524,7 @@ export default function ZonesView(): JSX.Element {
                   )}
                   {group.zones.map((zone) => {
                     const zoneInputs = deriveZoneInputs(zone);
-                    const inputBadges = buildInputBadges(zoneInputs, musicAssistantAvailable, hasSpotifyAccounts);
+                    const inputBadges = buildInputBadges(zoneInputs, hasSpotifyAccounts);
                     const primaryTransport = getPrimaryTransport(zone);
                     const outputsLabel = primaryTransport ? describeTransport(primaryTransport) : 'No output';
                     const outputType = primaryTransport
@@ -603,15 +542,6 @@ export default function ZonesView(): JSX.Element {
                   const spotifyDevices = discoveryState?.devices ?? [];
                   const selectedSpotifyDevice =
                     selectedSpotifyDeviceId && spotifyDevices.find((device) => device.deviceId === selectedSpotifyDeviceId);
-                  const maConfig = zoneInputs.musicassistant ?? { enabled: true, publishName: zone.name, offload: false };
-                  const maEnabled = maConfig.enabled ?? false;
-                  const maOffloadEnabled = maConfig.offload === true;
-                  const selectedMaDeviceId = maConfig.deviceId ?? '';
-                  const maDiscovery = musicAssistantDiscovery[zone.id];
-                  const maDevices = maDiscovery?.devices ?? [];
-                  const selectedMaDevice =
-                    selectedMaDeviceId &&
-                    maDevices.find((device) => (device.deviceId || device.id) === selectedMaDeviceId);
                   let spotifyStatusLabel = hasSpotifyAccounts ? 'Spotify Connect disabled' : 'Spotify account required';
                   let spotifyStatusHint = hasSpotifyAccounts
                     ? 'Enable to publish this room as a Spotify client'
@@ -625,18 +555,6 @@ export default function ZonesView(): JSX.Element {
                       spotifyStatusHint = 'Internal player';
                     }
                   }
-                  let maStatusLabel = 'Music Assistant disabled';
-                  let maStatusHint = 'Not registered as a Music Assistant player';
-                  if (maEnabled) {
-                    if (maOffloadEnabled) {
-                      maStatusLabel = selectedMaDevice?.name ?? selectedMaDeviceId ?? 'Select device';
-                      maStatusHint = 'Offloaded player';
-                    } else {
-                      maStatusLabel = 'Internal player';
-                      maStatusHint = 'Internal player';
-                    }
-                  }
-
                   const zoneOrigin = zone.source || group.label || 'AudioServer';
                   const maintenance = maintenanceState[zone.id] ?? {};
                   const hasWebPlayer =
@@ -713,34 +631,8 @@ export default function ZonesView(): JSX.Element {
                                     </button>
                                   </div>
                                 )}
-                                {badge.type === 'musicassistant' && (
-                                  <div className="zone-input-hint">
-                                    <span>{maStatusHint}</span>
-                                    <button
-                                      type="button"
-                                      className="zone-link-button"
-                                      onClick={() =>
-                                        setActiveZoneModal({ zoneId: zone.id, groupLabel: group.label, type: 'musicassistant' })
-                                      }
-                                      disabled={!badge.enabled}
-                                    >
-                                      Configure
-                                    </button>
-                                  </div>
-                                )}
                               </div>
                             ))}
-                          </div>
-                        </div>
-                        <div className="zone-divider" />
-                        <div className="zone-section">
-                          <div className="zone-section-head">
-                            <p className="zone-section-label">Controller</p>
-                          </div>
-                          <div className="zone-output-row">
-                            <div className="zone-controller-chip" title="Built-in controller manages volume and metadata">
-                              <span className="zone-output-name">Internal Controller</span>
-                            </div>
                           </div>
                         </div>
                         <div className="zone-divider" />
@@ -924,55 +816,6 @@ export default function ZonesView(): JSX.Element {
               </div>
             </div>,
           )}
-        {activeZoneInfo?.zone &&
-          activeZoneModal?.type === 'musicassistant' &&
-          renderModal(
-            <div className="zones-modal-backdrop" onClick={closeZoneModal} role="dialog" aria-modal="true">
-              <div className="zones-modal" onClick={(event) => event.stopPropagation()}>
-                <div className="zones-modal__body">
-                  <section className="zone-detail-block">
-                    <div className="zone-detail-row">
-                      <p className="zone-section-title">Music Assistant routing</p>
-                      <button type="button" className="zones-modal-close" onClick={closeZoneModal} aria-label="Close Music Assistant settings">
-                        ×
-                      </button>
-                    </div>
-                    <div className="zone-detail-stack">
-                      <div className="zone-detail-explainer">
-                        <p className="zone-detail-text muted">
-                          Music Assistant does not provide direct stream URLs, so playback always goes through a player controlled via the
-                          Music Assistant API.
-                        </p>
-                        <ul className="zone-detail-list">
-                          <li>
-                            Default: lox-audioserver registers a Sendspin player per zone. These players are visible in Music Assistant.
-                            Music Assistant can play to these players, and the zone output handles the audio.
-                          </li>
-                          <li>
-                            Offload: play directly on an existing Music Assistant player; audio bypasses lox-audioserver outputs while
-                            state/control still sync to Loxone.
-                          </li>
-                        </ul>
-                        <p className="zone-detail-text zone-detail-note">
-                          When input is disabled, no visible players appear in Music Assistant; a hidden player is created on demand when
-                          content is selected.
-                        </p>
-                      </div>
-                    </div>
-                    <ZoneMusicAssistantOffloadSection
-                      zone={activeZoneInfo.zone}
-                      config={deriveZoneInputs(activeZoneInfo.zone).musicassistant ?? { enabled: true, publishName: activeZoneInfo.zone.name }}
-                      discovery={musicAssistantDiscovery[activeZoneInfo.zone.id]}
-                      saving={saving}
-                      onToggle={(enabled) => handleMusicAssistantOffloadToggle(activeZoneInfo.zone, enabled)}
-                      onDiscover={() => handleMusicAssistantDiscovery(activeZoneInfo.zone.id)}
-                      onApply={(device) => handleMusicAssistantDeviceApply(activeZoneInfo.zone, device)}
-                    />
-                  </section>
-                </div>
-              </div>
-            </div>,
-          )}
       </div>
     </div>
   );
@@ -1034,27 +877,11 @@ function buildSourceDirectory(audioServer?: AudioServerConfig): Record<string, S
   return directory;
 }
 
-function hasMusicAssistantBridge(bridges: SpotifyBridgeConfig[] | undefined | null): boolean {
-  if (!bridges || !Array.isArray(bridges)) return false;
-  return bridges.some((bridge) => {
-    if (!bridge) return false;
-    const provider = (bridge.provider || '').toLowerCase();
-    const id = (bridge.id || '').toLowerCase();
-    const label = (bridge.label || '').toLowerCase();
-    if (bridge.enabled === false) return false;
-    return (
-      provider === 'musicassistant' ||
-      id === 'musicassistant' ||
-      label.includes('music assistant')
-    );
-  });
-}
-
 type InputBadge = {
   key: string;
   label: string;
   enabled: boolean;
-  type?: 'airplay' | 'spotify' | 'musicassistant';
+  type?: 'airplay' | 'spotify';
   muted?: boolean;
   subtle?: boolean;
   disabled?: boolean;
@@ -1064,12 +891,6 @@ type SpotifyDiscoveryState = {
   loading: boolean;
   error: string | null;
   devices: SpotifyDevice[];
-};
-
-type MusicAssistantDiscoveryState = {
-  loading: boolean;
-  error: string | null;
-  devices: MusicAssistantPlayer[];
 };
 
 type ZoneMaintenanceIndicator = {
@@ -1093,16 +914,6 @@ type ZoneSpotifyOffloadProps = {
   onToggle: (enabled: boolean) => void;
   onDiscover: () => void;
   onApply: (device: SpotifyDevice) => void;
-};
-
-type ZoneMusicAssistantOffloadProps = {
-  zone: Zone;
-  config: ZoneInputConfig['musicassistant'] | null | undefined;
-  discovery?: MusicAssistantDiscoveryState;
-  saving: boolean;
-  onToggle: (enabled: boolean) => void;
-  onDiscover: () => void;
-  onApply: (device: MusicAssistantPlayer) => void;
 };
 
 function ZoneOutputEditor({
@@ -2156,103 +1967,6 @@ function ZoneSpotifyOffloadSection({
   );
 }
 
-function ZoneMusicAssistantOffloadSection({
-  zone,
-  config,
-  discovery,
-  saving,
-  onToggle,
-  onDiscover,
-  onApply,
-}: ZoneMusicAssistantOffloadProps): JSX.Element {
-  const effectiveConfig = config ?? { enabled: true, publishName: zone.name, offload: false };
-  const inputEnabled = effectiveConfig.enabled !== false;
-  const offloadEnabled = effectiveConfig.offload === true;
-  const selectedDeviceId = effectiveConfig.deviceId ?? '';
-  const selectedDevice =
-    selectedDeviceId && discovery?.devices
-      ? discovery.devices.find((device) => (device.deviceId || device.id) === selectedDeviceId)
-      : null;
-  const routingLabel = offloadEnabled ? 'Offload to existing player' : 'Sendspin player (default)';
-  const inputLabel = inputEnabled ? 'Enabled' : 'Disabled';
-  const inputMeta = inputEnabled
-    ? 'Visible in Music Assistant'
-    : 'Hidden in Music Assistant; created on demand';
-  const playerLabel = inputEnabled
-    ? offloadEnabled
-      ? selectedDevice?.name ?? (selectedDeviceId || 'Select a player')
-      : 'Sendspin player for this zone'
-    : 'Hidden player on demand';
-
-  React.useEffect(() => {
-    if (!offloadEnabled || discovery?.loading || (discovery?.devices?.length ?? 0) > 0) return;
-    onDiscover();
-  }, [offloadEnabled, discovery?.loading, discovery?.devices, onDiscover]);
-
-  return (
-    <div className="zone-spotify-offload">
-      <div className="zone-spotify-offload__summary">
-        <div className="zone-spotify-offload__summary-item">
-          <span className="zone-spotify-offload__summary-label">Input</span>
-          <span className="zone-spotify-offload__summary-value">{inputLabel}</span>
-          <span className="zone-spotify-offload__summary-meta">{inputMeta}</span>
-        </div>
-        <div className="zone-spotify-offload__summary-item">
-          <span className="zone-spotify-offload__summary-label">Routing</span>
-          <span className="zone-spotify-offload__summary-value">{routingLabel}</span>
-        </div>
-        <div className="zone-spotify-offload__summary-item">
-          <span className="zone-spotify-offload__summary-label">Player</span>
-          <span className="zone-spotify-offload__summary-value">{playerLabel}</span>
-        </div>
-      </div>
-      <div className="zone-spotify-offload__header">
-        <div>
-          <p className="zone-spotify-offload__title">Use offload</p>
-        </div>
-        <label className="zone-switch">
-          <input
-            type="checkbox"
-            checked={offloadEnabled}
-            disabled={saving}
-            onChange={(event) => onToggle(event.target.checked)}
-          />
-          <span className="zone-switch-slider" />
-        </label>
-      </div>
-      {offloadEnabled && (
-        <>
-          {discovery?.error && <p className="zone-spotify-error">{discovery.error}</p>}
-          {discovery?.devices && discovery.devices.length > 0 && (
-            <div className="zone-spotify-device-grid">
-              {discovery.devices.map((device) => {
-                const id = device.deviceId || device.id || 'unknown';
-                const isSelected = id === selectedDeviceId;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    className={`zone-spotify-device${isSelected ? ' zone-spotify-device--selected' : ''}`}
-                    onClick={() => onApply(device)}
-                    disabled={saving}
-                  >
-                    <span className="zone-spotify-device__name">{device.name ?? id}</span>
-                    <span className="zone-spotify-device__meta">ID: {id}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          <div className="zone-spotify-offload__actions">
-            <button type="button" className="secondary" onClick={onDiscover} disabled={discovery?.loading || saving}>
-              {discovery?.loading ? 'Scanning…' : 'Rescan'}
-            </button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
 
 function deriveZoneInputs(zone: Zone): ZoneInputConfig {
   return zone.inputs ? { ...buildDefaultInputs(zone), ...zone.inputs } : buildDefaultInputs(zone);
@@ -2269,16 +1983,11 @@ function buildDefaultInputs(zone: Zone): ZoneInputConfig {
       publishName: zone.name,
       offload: false,
     },
-    musicassistant: {
-      enabled: true,
-      publishName: zone.name,
-      offload: false,
-    },
     lineIn: null,
   };
 }
 
-function buildInputBadges(inputs: ZoneInputConfig, includeMusicAssistant?: boolean, spotifyAllowed?: boolean): InputBadge[] {
+function buildInputBadges(inputs: ZoneInputConfig, spotifyAllowed?: boolean): InputBadge[] {
   const badges: InputBadge[] = [
     {
       key: 'airplay',
@@ -2294,15 +2003,6 @@ function buildInputBadges(inputs: ZoneInputConfig, includeMusicAssistant?: boole
       type: 'spotify',
     },
   ];
-
-  if (includeMusicAssistant) {
-    badges.push({
-      key: 'musicassistant',
-      label: 'Music Assistant',
-      enabled: inputs.musicassistant?.enabled ?? false,
-      type: 'musicassistant',
-    });
-  }
 
   return badges;
 }
