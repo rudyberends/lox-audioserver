@@ -216,6 +216,26 @@ export async function deleteCustomRadioStation(id: string): Promise<void> {
   }
 }
 
+export type TuneInValidationResponse = {
+  valid: boolean;
+  presetCount?: number;
+  error?: string;
+  message?: string;
+};
+
+export async function validateTuneInUsername(username: string): Promise<TuneInValidationResponse> {
+  const res = await fetch(`${API_BASE}/content/radio/tunein/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || 'Failed to validate TuneIn username');
+  }
+  return (await res.json()) as TuneInValidationResponse;
+}
+
 export type LibraryStorage = {
   id: string;
   name: string;

@@ -15,6 +15,7 @@ import {
   fetchCustomRadioStations,
   createCustomRadioStation,
   deleteCustomRadioStation,
+  validateTuneInUsername,
   createSpotifyBridge,
   deleteSpotifyBridge,
 } from '../services/contentApi';
@@ -522,6 +523,11 @@ export default function ContentView(): JSX.Element {
   const [radioFeedback, setRadioFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(
     null,
   );
+  const [radioPresetCount, setRadioPresetCount] = React.useState<number | null>(null);
+  const [radioValidationMessage, setRadioValidationMessage] = React.useState<string | null>(null);
+  const [radioValidationStatus, setRadioValidationStatus] = React.useState<'idle' | 'checking' | 'valid' | 'invalid' | 'error'>(
+    'idle',
+  );
 
   const [spotifyClientId, setSpotifyClientId] = React.useState('');
   const [initialSpotifyClientId, setInitialSpotifyClientId] = React.useState('');
@@ -625,6 +631,46 @@ export default function ContentView(): JSX.Element {
     return true;
   }, [bridgeForm]);
 
+  const validateTuneIn = React.useCallback(
+    async (value: string): Promise<{ ok: boolean; message?: string }> => {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        setRadioPresetCount(null);
+        setRadioValidationMessage(null);
+        setRadioValidationStatus('idle');
+        return { ok: true };
+      }
+      setRadioValidationStatus('checking');
+      setRadioValidationMessage(null);
+      try {
+        const result = await validateTuneInUsername(trimmed);
+        if (result.valid) {
+          const count = Number.isFinite(result.presetCount) ? Number(result.presetCount) : null;
+          setRadioPresetCount(count);
+          setRadioValidationStatus('valid');
+          const message =
+            count !== null
+              ? `${count} preset${count === 1 ? '' : 's'} found.`
+            : 'TuneIn username verified.';
+          setRadioValidationMessage(message);
+          return { ok: true, message };
+        }
+        setRadioPresetCount(null);
+        setRadioValidationStatus('invalid');
+        const message = result.message ?? 'TuneIn username not found.';
+        setRadioValidationMessage(message);
+        return { ok: false, message };
+      } catch (err) {
+        setRadioPresetCount(null);
+        setRadioValidationStatus('error');
+        const message = 'Unable to verify the TuneIn username right now.';
+        setRadioValidationMessage(message);
+        return { ok: false, message };
+      }
+    },
+    [],
+  );
+
   React.useEffect(() => {
     let cancelled = false;
     async function load(): Promise<void> {
@@ -644,6 +690,9 @@ export default function ContentView(): JSX.Element {
             ? content.spotify!.bridges!.map((bridge) => normalizeBridge(bridge))
             : [],
         );
+        if (currentRadio.trim()) {
+          void validateTuneIn(currentRadio);
+        }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Failed to load content configuration');
@@ -656,7 +705,7 @@ export default function ContentView(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [validateTuneIn]);
 
   const refreshSpotifyAccounts = React.useCallback(async (): Promise<number | null> => {
     try {
@@ -915,15 +964,18 @@ export default function ContentView(): JSX.Element {
   }, [libraryStatus, refreshLibraryCovers]);
 
   const handleSaveRadio = async (): Promise<void> => {
-    if (!radioDirty || radioSaving) return;
+    if (radioSaving) return;
     setRadioSaving(true);
     setRadioFeedback(null);
     try {
+      const trimmed = radioUsername.trim();
       await updateContentConfig({
-        radio: { tuneInUsername: radioUsername.trim() || null },
+        radio: { tuneInUsername: trimmed || null },
       });
-      setInitialRadioUsername(radioUsername);
+      setRadioUsername(trimmed);
+      setInitialRadioUsername(trimmed);
       setRadioFeedback({ type: 'success', message: 'Radio content saved' });
+      await validateTuneIn(trimmed);
     } catch (err) {
       setRadioFeedback({
         type: 'error',
@@ -1324,6 +1376,28 @@ export default function ContentView(): JSX.Element {
   ];
   const hasSpotifyClientId = spotifyClientId.trim().length > 0;
   const clientIdStatusLabel = hasSpotifyClientId ? 'Client ID set' : 'Client ID required';
+  const tuneInStatusLabel = (() => {
+    switch (radioValidationStatus) {
+      case 'checking':
+        return 'Checking';
+      case 'valid':
+        return 'Verified';
+      case 'invalid':
+        return 'Not found';
+      case 'error':
+        return 'Error';
+      default:
+        return '';
+    }
+  })();
+  const tuneInStatusTone =
+    radioValidationStatus === 'valid' || radioValidationStatus === 'checking'
+      ? 'active'
+      : radioValidationStatus === 'invalid'
+        ? 'warn'
+        : radioValidationStatus === 'error'
+          ? 'error'
+          : 'idle';
 
   return (
     <div className="content-layout">
@@ -1388,12 +1462,60 @@ export default function ContentView(): JSX.Element {
                         type="text"
                         autoComplete="off"
                         value={radioUsername}
-                        onChange={(e) => setRadioUsername(e.target.value)}
+                        onChange={(e) => {
+                          setRadioUsername(e.target.value);
+                          setRadioPresetCount(null);
+                          setRadioValidationMessage(null);
+                          setRadioValidationStatus('idle');
+                          setRadioFeedback(null);
+                        }}
+                        onBlur={() => {
+                          void validateTuneIn(radioUsername);
+                        }}
                         placeholder="e.g. mytuneinaccount"
                       />
+                      {(radioValidationStatus !== 'idle' || radioValidationMessage) && (
+                        <div className="content-tunein-status">
+                          {radioValidationStatus !== 'idle' && (
+                            <span className={`content-status-pill tone-${tuneInStatusTone}`}>
+                              {tuneInStatusLabel}
+                            </span>
+                          )}
+                          {radioValidationStatus === 'valid' && typeof radioPresetCount === 'number' && (
+                            <span className="content-tunein-count">
+                              {radioPresetCount} preset{radioPresetCount === 1 ? '' : 's'}
+                            </span>
+                          )}
+                          {radioValidationStatus === 'checking' && (
+                            <span className="content-tunein-message">Checking presets…</span>
+                          )}
+                          {radioValidationStatus !== 'checking' &&
+                            radioValidationMessage &&
+                            (radioValidationStatus !== 'valid' || radioPresetCount == null) && (
+                            <span
+                              className={
+                                radioValidationStatus === 'invalid' || radioValidationStatus === 'error'
+                                  ? 'content-tunein-message is-error'
+                                  : 'content-tunein-message'
+                              }
+                            >
+                              {radioValidationMessage}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                     <div className="content-actions">
-                      <button type="button" onClick={handleSaveRadio} disabled={!radioDirty || radioSaving}>
+                      <button
+                        type="button"
+                        onPointerDown={() => {
+                          void handleSaveRadio();
+                        }}
+                        onClick={() => {
+                          void handleSaveRadio();
+                        }}
+                        disabled={radioSaving}
+                      >
                         {radioSaving ? 'Saving…' : 'Save radio content'}
                       </button>
                       {/* feedback routed to global alert */}

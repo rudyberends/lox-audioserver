@@ -31,6 +31,7 @@ import { listAlertFiles, revertAlertFile, updateAlertFile } from '@/modules/aler
 import { favoritesManager } from '@/modules/zones/favorites/favoritesManager';
 import { recentsManager } from '@/modules/zones/recents/recentsManager';
 import { customRadioStore } from '@/modules/content/providers/customRadioStore';
+import { TuneInClient } from '@/modules/content/providers/tunein/tuneinClient';
 import { notifyReloadMusicApp } from '@/modules/loxone/ws/notifier';
 import { groupManager } from '@/modules/groups/groupManager';
 import { audioManager } from '@/modules/audio';
@@ -270,6 +271,11 @@ export class AdminApiHandler {
         method: 'POST',
         pattern: /^\/content\/radio\/custom$/,
         handler: async (req, res) => this.handleCustomRadioAdd(req, res),
+      },
+      {
+        method: 'POST',
+        pattern: /^\/content\/radio\/tunein\/validate$/,
+        handler: async (req, res) => this.handleTuneInValidate(req, res),
       },
       {
         method: 'DELETE',
@@ -1106,6 +1112,34 @@ export class AdminApiHandler {
     } catch (err) {
       this.log.warn('custom radio delete failed', { err, stationId });
       this.sendJson(res, 500, { error: 'custom-radio-delete-failed' });
+    }
+  }
+
+  private async handleTuneInValidate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = (await this.readJsonBody(req)) as { username?: string } | null;
+    const username = typeof body?.username === 'string' ? body.username.trim() : '';
+    if (!username) {
+      this.sendJson(res, 400, { error: 'invalid-tunein-username' });
+      return;
+    }
+    try {
+      const api = new TuneInClient();
+      const outlines = await api.browsePresets(username);
+      const presetCount = Array.isArray(outlines)
+        ? outlines.filter((entry: any) => entry && entry.type === 'audio').length
+        : 0;
+      this.sendJson(res, 200, { valid: true, presetCount });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const isInvalid = /(TuneIn error|HTTP 4\d\d)/i.test(message);
+      this.log.warn('tunein validation failed', { message, username });
+      this.sendJson(res, 200, {
+        valid: false,
+        error: isInvalid ? 'tunein-username-invalid' : 'tunein-validate-failed',
+        message: isInvalid
+          ? 'TuneIn username not found.'
+          : 'Unable to verify the TuneIn username right now.',
+      });
     }
   }
 

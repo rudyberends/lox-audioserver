@@ -564,6 +564,32 @@
   color: var(--color-text);
 }
 
+.content-tunein-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.6rem;
+  align-items: center;
+  margin-top: 0.45rem;
+}
+
+.content-tunein-count {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(17, 17, 17, 0.08);
+  color: var(--color-text);
+}
+
+.content-tunein-message {
+  font-size: var(--text-sm);
+  color: var(--color-subtle);
+}
+
+.content-tunein-message.is-error {
+  color: var(--color-danger);
+}
+
 .content-account-list {
   border: 1px solid var(--color-border);
   border-radius: 14px;

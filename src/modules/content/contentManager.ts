@@ -10,7 +10,7 @@ import type {
 } from '@/modules/content/types';
 import { decodeAudiopath, detectServiceFromAudiopath } from '@/modules/audio/utils/audiopath';
 import { LocalLibraryProvider, type LibraryCoverSample, type LibraryStats } from '@/modules/content/providers/localLibraryProvider';
-import { TuneInProvider, type TuneInProviderOptions } from '@/modules/content/providers/tuneinProvider';
+import { TuneInProvider, type TuneInProviderOptions } from '@/modules/content/providers/tunein/tuneinProvider';
 import {
   SpotifyServiceManager,
   getSharedSpotifyManager,

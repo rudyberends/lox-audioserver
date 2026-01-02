@@ -6,7 +6,7 @@ import type {
   RadioMenuEntry,
   RadioStation,
 } from '@/modules/content/types';
-import { TuneInClient } from '@/modules/content/providers/tuneinClient';
+import { TuneInClient } from '@/modules/content/providers/tunein/tuneinClient';
 
 const DEFAULT_ICON =
   'https://extended-app-content.s3.eu-central-1.amazonaws.com/audioZone/services/Icon-TuneIn.svg';
@@ -50,21 +50,19 @@ export class TuneInProvider {
     this.username = options.username?.trim();
   }
 
-  public getStations(): RadioStation[] {
-    return DEMO_STATIONS;
-  }
-
   /**
    * Resolve a station by its stream URL (checks custom + local presets).
    */
   public async resolveStationByStream(streamUrl: string): Promise<RadioStation | null> {
-    const normalized = streamUrl.trim().toLowerCase();
+    const normalized = this.normalizeStreamUrl(streamUrl);
     if (!normalized) return null;
     const stations = [
       ...(await this.getCustomStations()),
       ...(await this.getLocalStations()),
     ];
-    const match = stations.find((s) => s.stream?.trim().toLowerCase() === normalized);
+    const match = stations.find(
+      (s) => this.normalizeStreamUrl(s.stream) === normalized,
+    );
     return match ?? null;
   }
 
@@ -113,15 +111,19 @@ export class TuneInProvider {
     query: string,
     limits: { station?: number; custom?: number } = {},
   ): Promise<{ station: ContentFolderItem[]; custom: ContentFolderItem[] }> {
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) {
+      return { station: [], custom: [] };
+    }
     const stationLimit = limits.station ?? 50;
     const customLimit = limits.custom ?? 50;
 
     let outlines: unknown[] = [];
     try {
-      outlines = await this.api.search(query, this.username);
+      outlines = await this.api.search(normalizedQuery, this.username);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      log.warn('tunein search failed', { message, query });
+      log.warn('tunein search failed', { message, query: normalizedQuery });
     }
 
     const stations = await this.mapTuneInItems(outlines);
@@ -131,7 +133,7 @@ export class TuneInProvider {
 
     const customStations = await this.getCustomStations();
     const filteredCustom = customStations.filter((s) =>
-      s.name.toLowerCase().includes(query.toLowerCase()),
+      s.name.toLowerCase().includes(normalizedQuery.toLowerCase()),
     );
     const customItems = filteredCustom
       .slice(0, customLimit)
@@ -215,6 +217,20 @@ export class TuneInProvider {
       const message = error instanceof Error ? error.message : String(error);
       log.debug('tunein tune failed', { id, message });
       return fallback ?? null;
+    }
+  }
+
+  private normalizeStreamUrl(streamUrl: string | undefined): string {
+    const raw = streamUrl?.trim().toLowerCase();
+    if (!raw) return '';
+    try {
+      const url = new URL(raw);
+      url.hash = '';
+      url.search = '';
+      const normalized = url.toString().replace(/\/$/, '');
+      return normalized;
+    } catch {
+      return raw.replace(/\/$/, '');
     }
   }
 
