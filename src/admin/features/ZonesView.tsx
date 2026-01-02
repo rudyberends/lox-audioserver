@@ -734,17 +734,11 @@ export default function ZonesView(): JSX.Element {
                             and capabilities can vary.
                           </p>
                           <ul className="zone-detail-list">
-                            <li>You can run without an output, but only sources that support offload will play.</li>
-                            <li>When an output is selected, offload is still honored for sources that support it.</li>
                             <li>
                               Sendspin/Snapcast are the preferred protocols for best compatibility. You can also run Sendspin and Snapcast
                               over Google Cast, so it works with any player that supports Cast.
                             </li>
                           </ul>
-                          <p className="zone-detail-text zone-detail-note">
-                            Offload can break sync. Because lox-audioserver does not control the stream or clock drift, it cannot guarantee
-                            perfectly synced playback across zones.
-                          </p>
                         </div>
                         <div className="zone-output-modal__layout">
                           <aside className="zone-output-modal__summary-card">
@@ -1036,7 +1030,12 @@ function ZoneOutputEditor({
       setSonosError(null);
       setDiscoveringSonos(false);
     }
-  }, [isAirplay, isGoogleCast, isSendspin, isSonos]);
+    if (!isSnapcast) {
+      setSnapcastClients(null);
+      setSnapcastError(null);
+      setDiscoveringSnapcast(false);
+    }
+  }, [isAirplay, isGoogleCast, isSendspin, isSonos, isSnapcast]);
 
   React.useEffect(() => {
     if (isAirplay && !airplayDevices && !discoveringAirplay) {
@@ -1067,6 +1066,12 @@ function ZoneOutputEditor({
       void handleSonosDiscovery();
     }
   }, [isSonos, sonosDevices, discoveringSonos]);
+
+  React.useEffect(() => {
+    if (isSnapcast && !snapcastClients && !discoveringSnapcast) {
+      void handleSnapcastDiscovery();
+    }
+  }, [isSnapcast, snapcastClients, discoveringSnapcast]);
 
   function persist(transportId: string, values: Record<string, string>): void {
     if (!transportId) {
@@ -1119,6 +1124,14 @@ function ZoneOutputEditor({
       setSonosError(null);
       setDiscoveringSonos(false);
       void handleSonosDiscovery();
+      return;
+    }
+    if (nextId === 'snapcast') {
+      onChange(null);
+      setSnapcastClients(null);
+      setSnapcastError(null);
+      setDiscoveringSnapcast(false);
+      void handleSnapcastDiscovery();
       return;
     }
     persist(nextId, nextValues);
