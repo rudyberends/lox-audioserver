@@ -8,7 +8,7 @@ import {
 import { createLogger } from '@/core/logging/logger';
 import type { LoxoneHttpConfig } from '@/config/loxone';
 import { LoxoneCommandProcessor, type LoxoneCommandProcessorOptions } from '@/modules/loxone/http/commandProcessor';
-import { LoxoneMdnsAdvertiser } from '@/modules/loxone/http/loxoneMdnsAdvertiser';
+import { LoxoneUdpDiscovery } from '@/modules/loxone/http/loxoneUdpDiscovery';
 import type { LoxoneServerOptions } from '@/modules/loxone/http/types';
 import { formatCommand } from '@/modules/loxone/commands/utils/commandFormatter';
 import {
@@ -34,7 +34,7 @@ export class LoxoneHttpService {
   private readonly log = createLogger('LoxoneHttp');
   private readonly processor: LoxoneCommandProcessor;
   private readonly servers: ServerRuntime[] = [];
-  private readonly mdnsAdvertiser = new LoxoneMdnsAdvertiser();
+  private readonly udpDiscovery = new LoxoneUdpDiscovery();
 
   constructor(
     private readonly config: LoxoneHttpConfig,
@@ -52,7 +52,7 @@ export class LoxoneHttpService {
       this.servers.push(runtime);
     }
 
-    this.advertiseMdns();
+    this.udpDiscovery.start(this.config);
 
     this.log.info('loxone servers ready', {
       ports: this.config.servers.map((s) => s.port).join(', '),
@@ -60,7 +60,7 @@ export class LoxoneHttpService {
   }
 
   public async stop(): Promise<void> {
-    this.mdnsAdvertiser.stop();
+    this.udpDiscovery.stop();
     for (const runtime of this.servers) {
       await new Promise<void>((resolve) => runtime.httpServer.close(() => resolve()));
       runtime.wsServer.closeAllConnections();
@@ -194,18 +194,5 @@ export class LoxoneHttpService {
     }
 
     return chunks.length ? Buffer.concat(chunks) : undefined;
-  }
-
-  private advertiseMdns(): void {
-    const appServer = this.config.servers.find((server) => server.name === 'appHttp');
-    if (!appServer) {
-      this.log.warn('skipping mDNS advertisement; app server missing');
-      return;
-    }
-
-    this.mdnsAdvertiser.publish(
-      { ...this.config.mdns, port: appServer.port },
-      this.options.host,
-    );
   }
 }
