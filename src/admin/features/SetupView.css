@@ -369,6 +369,14 @@
   font-size: var(--text-sm);
 }
 
+.pairing-step-meta {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--color-text);
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+}
+
 .pairing-step-complete,
 .pairing-step-pending,
 .pairing-step-required {

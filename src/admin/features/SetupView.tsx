@@ -141,6 +141,7 @@ export default function SetupView(): JSX.Element {
   const zones = Array.isArray((cfg as any).zones) ? (cfg as any).zones : [];
   const miniserverIp = miniserver.ip ?? '—';
   const miniserverSerial = miniserver.serial ?? '—';
+  const audioServerSerial = audioserver.macId ?? status?.serial ?? '—';
   const lastUpdatedRaw = (cfg as any).updatedAt ?? status?.timestamp ?? null;
   const lastUpdated = formatTimestamp(lastUpdatedRaw);
   const configCrc =
@@ -355,7 +356,11 @@ export default function SetupView(): JSX.Element {
                 <ol className="pairing-steps">
                   <RequiredStep
                     title="Add an Audio Server in Loxone Config"
-                    description="Use IP of this service and the AudioServer serial from your configuration."
+                    description={
+                      <>
+                        Use this AudioServer serial: {audioServerSerial}.
+                      </>
+                    }
                   />
                   <RequiredStep
                     title="Configure audio zones"
@@ -384,7 +389,7 @@ function PairingStep({
   pendingLabel = 'Pending',
 }: {
   title: string;
-  description: string;
+  description: React.ReactNode;
   complete: boolean;
   pendingLabel?: string;
 }): JSX.Element {
@@ -409,7 +414,7 @@ function RequiredStep({
   description,
 }: {
   title: string;
-  description: string;
+  description: React.ReactNode;
 }): JSX.Element {
   return (
     <li className="pairing-step-required">
