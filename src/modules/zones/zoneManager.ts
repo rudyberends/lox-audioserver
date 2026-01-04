@@ -825,11 +825,18 @@ class ZoneManager {
 
     const queueSourcePath =
       isAppleMusic && parentContext?.parent ? parentContext.parent : uri;
+    const targetForQueueBuild = normalizeSpotifyAudiopath(resolvedTarget || '');
+    const shouldLimitQueueBuild = Boolean(
+      targetForQueueBuild &&
+      /(library-)?(album|playlist|artist):/i.test(targetForQueueBuild),
+    );
+    const queueBuildLimit = shouldLimitQueueBuild ? 50 : undefined;
     const expandedQueue = await this.buildQueueForUri(
       resolvedTarget,
       ctx.name,
       stationUri || undefined,
       queueSourcePath,
+      queueBuildLimit ? { maxItems: queueBuildLimit } : undefined,
     );
     this.log.debug('queue build resolved', {
       zoneId,
@@ -977,6 +984,18 @@ class ZoneManager {
     ctx.queueController.setItems(queueItems, clampedIndex);
     ctx.queue.shuffle = false;
     ctx.queue.repeat = 0;
+    if (queueBuildLimit && expandedQueue.length >= queueBuildLimit) {
+      const token = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      ctx.metadata.queueFillToken = token;
+      void this.fillQueueInBackground(
+        ctx,
+        resolvedTarget,
+        ctx.name,
+        stationUri || undefined,
+        queueSourcePath,
+        token,
+      );
+    }
 
     const current = ctx.queueController.current();
     if (!current) {
@@ -1520,6 +1539,7 @@ class ZoneManager {
     zoneName: string,
     station?: string,
     rawAudiopath?: string,
+    options?: { maxItems?: number },
   ): Promise<QueueItem[]> {
     const stripRoutingSuffixLocal = (value: string): string =>
       value
@@ -1538,6 +1558,7 @@ class ZoneManager {
     if (!decoded) {
       return [];
     }
+    const maxItems = typeof options?.maxItems === 'number' && options.maxItems > 0 ? options.maxItems : undefined;
     const pickSourcePath = (): string => {
       if (station && station.trim()) {
         return station.trim();
@@ -1568,7 +1589,8 @@ class ZoneManager {
       const folder = await contentManager.getMediaFolder(decoded, 0, 500);
       if (folder?.items?.length) {
         // local library items are not radio; do not propagate station
-        return mapFolderItemsToQueue(folder.items, zoneName, 0, 'nouser', '');
+        const trimmed = maxItems ? folder.items.slice(0, maxItems) : folder.items;
+        return mapFolderItemsToQueue(trimmed, zoneName, 0, 'nouser', '');
       }
       const meta = await contentManager.resolveMetadata(decoded);
       if (meta) {
@@ -1609,12 +1631,16 @@ class ZoneManager {
         if (items.length < pageSize) {
           break;
         }
+        if (maxItems && allItems.length >= maxItems) {
+          break;
+        }
         if (allItems.length >= 1000) {
           break;
         }
       }
       if (allItems.length) {
-        return mapFolderItemsToQueue(allItems, zoneName, 5, user, station ?? rawClean);
+        const trimmed = maxItems ? allItems.slice(0, maxItems) : allItems;
+        return mapFolderItemsToQueue(trimmed, zoneName, 5, user, station ?? rawClean);
       }
     }
 
@@ -1656,12 +1682,16 @@ class ZoneManager {
         if (items.length < pageSize) {
           break;
         }
+        if (maxItems && allItems.length >= maxItems) {
+          break;
+        }
         if (allItems.length >= 1000) {
           break;
         }
       }
       if (allItems.length) {
-        return mapFolderItemsToQueue(allItems, zoneName, 5, user, station ?? rawClean);
+        const trimmed = maxItems ? allItems.slice(0, maxItems) : allItems;
+        return mapFolderItemsToQueue(trimmed, zoneName, 5, user, station ?? rawClean);
       }
     }
 
@@ -1703,12 +1733,16 @@ class ZoneManager {
         if (items.length < pageSize) {
           break;
         }
+        if (maxItems && allItems.length >= maxItems) {
+          break;
+        }
         if (allItems.length >= 1000) {
           break;
         }
       }
       if (allItems.length) {
-        return mapFolderItemsToQueue(allItems, zoneName, 5, user, station ?? rawClean);
+        const trimmed = maxItems ? allItems.slice(0, maxItems) : allItems;
+        return mapFolderItemsToQueue(trimmed, zoneName, 5, user, station ?? rawClean);
       }
     }
 
@@ -1750,12 +1784,16 @@ class ZoneManager {
         if (items.length < pageSize) {
           break;
         }
+        if (maxItems && allItems.length >= maxItems) {
+          break;
+        }
         if (allItems.length >= 1000) {
           break;
         }
       }
       if (allItems.length) {
-        return mapFolderItemsToQueue(allItems, zoneName, 5, user, station ?? rawClean);
+        const trimmed = maxItems ? allItems.slice(0, maxItems) : allItems;
+        return mapFolderItemsToQueue(trimmed, zoneName, 5, user, station ?? rawClean);
       }
     }
 
@@ -1793,16 +1831,62 @@ class ZoneManager {
         if (items.length < pageSize) {
           break;
         }
+        if (maxItems && allItems.length >= maxItems) {
+          break;
+        }
         if (allItems.length >= 1000) {
           break;
         }
       }
       if (allItems.length) {
-        return mapFolderItemsToQueue(allItems, zoneName, 5, user, station ?? decoded);
+        const trimmed = maxItems ? allItems.slice(0, maxItems) : allItems;
+        return mapFolderItemsToQueue(trimmed, zoneName, 5, user, station ?? decoded);
       }
     }
 
     return [];
+  }
+
+  private async fillQueueInBackground(
+    ctx: ZoneContext,
+    resolvedTarget: string,
+    zoneName: string,
+    station: string | undefined,
+    rawAudiopath: string | undefined,
+    token: string,
+  ): Promise<void> {
+    try {
+      const fullQueue = await this.buildQueueForUri(resolvedTarget, zoneName, station, rawAudiopath);
+      if (!fullQueue.length) {
+        return;
+      }
+      if (ctx.metadata.queueFillToken !== token) {
+        return;
+      }
+      if (ctx.queue.items.length >= fullQueue.length) {
+        return;
+      }
+      const current = ctx.queueController.current()?.audiopath ?? '';
+      const normalizedCurrent = normalizeSpotifyAudiopath(current || '');
+      const nextIndex = fullQueue.findIndex(
+        (item) => normalizeSpotifyAudiopath(item.audiopath) === normalizedCurrent,
+      );
+      const startIndex = nextIndex >= 0 ? nextIndex : ctx.queueController.currentIndex();
+      ctx.queueController.setItems(fullQueue, startIndex);
+      ctx.queue.shuffle = false;
+      ctx.queue.repeat = 0;
+      notifyQueueUpdated(ctx.id, ctx.queue.items.length);
+      this.log.debug('queue filled in background', {
+        zoneId: ctx.id,
+        items: ctx.queue.items.length,
+        startIndex,
+      });
+    } catch (err) {
+      this.log.debug('queue background fill failed', {
+        zoneId: ctx.id,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   public handleCommand(zoneId: number, command: string, payload?: string): void {

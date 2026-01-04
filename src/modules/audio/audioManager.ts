@@ -350,8 +350,9 @@ class AudioManager {
       return existing;
     }
 
+    const isAppleMusic = label.toLowerCase() === 'applemusic';
     const wantsHandoff =
-      label.toLowerCase() === 'applemusic' &&
+      isAppleMusic &&
       effectiveSource?.kind === 'url' &&
       Boolean(existing);
     if (!wantsHandoff) {
@@ -369,7 +370,7 @@ class AudioManager {
       if (wantsHandoff) {
         audioStreamEngine.startWithHandoff(zoneId, effectiveSource, profiles, effectiveOutput, {
           waitProfile: 'pcm',
-          timeoutMs: 8000,
+          timeoutMs: isAppleMusic ? 15000 : 8000,
         });
       } else {
         audioStreamEngine.start(zoneId, effectiveSource, profiles, effectiveOutput);
