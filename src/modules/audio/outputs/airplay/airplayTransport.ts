@@ -304,6 +304,12 @@ export class AirPlayTransport implements ZoneTransport {
     return { profile: 'pcm', sampleRate: 44100, channels: 2, bitDepth: 16 };
   }
 
+  public getLatencyMs(): number {
+    const base = airplayGroupController.getBaseStartOffsetMs();
+    const preloadMs = Math.round(this.flowSession.getPreloadSeconds() * 1000);
+    return Math.max(0, base + preloadMs);
+  }
+
   public async dispose(): Promise<void> {
     await this.stop(null);
     airplayGroupController.unregister(this.zoneId);

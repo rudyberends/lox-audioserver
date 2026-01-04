@@ -994,6 +994,15 @@ class ZoneManager {
       (ctx.activeOutput
         ? ctx.transports.find((transport) => transport.type === ctx.activeOutput)
         : null) ?? this.selectPlayOutputs(ctx.transports, null)[0] ?? null;
+    const outputTargets =
+      ctx.activeOutput !== null
+        ? ctx.transports.filter((transport) => transport.type === ctx.activeOutput)
+        : this.selectPlayOutputs(ctx.transports, null);
+    const latencyMs = outputTargets
+      .map((transport) => transport.getLatencyMs?.())
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+      .reduce((max, value) => Math.max(max, value), 0);
+    ctx.player.setEndGuardMs(latencyMs);
     if (primaryOutput && typeof (primaryOutput as any).getPreferredOutput === 'function') {
       const pref = (primaryOutput as any).getPreferredOutput?.();
       if (pref) {

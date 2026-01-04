@@ -244,6 +244,11 @@ export class AirplayFlowSession {
     return this.streamedBytes / this.bytesPerSecond;
   }
 
+  public getPreloadSeconds(): number {
+    if (!this.bytesPerSecond) return 0;
+    return this.preloadBytes / this.bytesPerSecond;
+  }
+
   public setOutputFormat(sampleRate: number, channels: number, bitDepth: number): void {
     if (!Number.isFinite(sampleRate) || !Number.isFinite(channels) || !Number.isFinite(bitDepth)) {
       return;

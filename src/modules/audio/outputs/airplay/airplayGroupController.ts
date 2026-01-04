@@ -30,6 +30,10 @@ class AirplayGroupController {
     this.leaderStartMs.delete(zoneId);
   }
 
+  public getBaseStartOffsetMs(): number {
+    return this.baseStartOffsetMs;
+  }
+
   /**
    * If the given transport is not the group leader but its leader is active,
    * attach to the leader's multiroom session instead of playing locally.

@@ -776,6 +776,7 @@ export class AppleMusicStreamService {
       headers: resolved.headers,
       decryptionKey,
       tlsVerifyHost: resolved.tlsVerifyHost,
+      realTime: true,
     };
   }
 
@@ -793,6 +794,7 @@ export class AppleMusicStreamService {
       decryptionKey,
       tlsVerifyHost: resolved.tlsVerifyHost,
       inputFormat: 'mov',
+      realTime: true,
     };
   }
 
@@ -898,7 +900,7 @@ export class AppleMusicStreamService {
     const { host, port, sessionId } = await this.ensureProxySession(streamUrl, headers, decryptionKey);
     const url = `http://${host}:${port}/applemusic/${sessionId}/playlist.m3u8`;
     await this.logInputDetails('proxy', streamUrl, headers, 'hls', sessionId);
-    return { kind: 'url', url, inputFormat: 'hls' };
+    return { kind: 'url', url, inputFormat: 'hls', realTime: true };
   }
 
   private async logInputDetails(

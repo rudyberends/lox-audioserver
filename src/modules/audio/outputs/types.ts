@@ -31,6 +31,8 @@ export interface ZoneTransport {
   updateMetadata?(session: PlaybackSession | null): Promise<void> | void;
   /** Optional preferred output format for this transport (used to drive resampling/profile). */
   getPreferredOutput?(): PreferredOutput | null;
+  /** Optional estimated output latency/buffer in milliseconds. */
+  getLatencyMs?(): number | null;
   /** Optional HTTP streaming preferences for transports that pull via HTTP (e.g. DLNA/Cast). */
   getHttpPreferences?(): HttpPreferences | null;
   dispose(): Promise<void> | void;

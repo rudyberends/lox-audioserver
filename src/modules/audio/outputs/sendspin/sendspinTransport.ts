@@ -207,6 +207,10 @@ export class SendspinTransport implements ZoneTransport {
     };
   }
 
+  public getLatencyMs(): number {
+    return Math.max(0, Math.round(this.targetLeadUs / 1000));
+  }
+
   /** Push a volume change down to the client (used by zone manager). */
   public setVolume(level: number): void {
     const vol = Math.min(100, Math.max(0, Math.round(level)));

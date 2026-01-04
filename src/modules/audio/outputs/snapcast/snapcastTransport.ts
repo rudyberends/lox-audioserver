@@ -88,6 +88,10 @@ export class SnapcastTransport implements ZoneTransport {
     return { profile: 'pcm', sampleRate: 48000, channels: 2, bitDepth: 16 };
   }
 
+  public getLatencyMs(): number | null {
+    return null;
+  }
+
   public async dispose(): Promise<void> {
     this.stopStream();
     snapcastGroupController.unregister(this.zoneId);

@@ -18,6 +18,7 @@ export class ZonePlayer {
   private lastTickAt = 0;
   private endedEmitted = false;
   private tickerToken = 0;
+  private endGuardSec = 0;
 
   constructor(
     private readonly zoneId: number,
@@ -105,6 +106,7 @@ export class ZonePlayer {
     this.state.duration = 0;
     this.state.playbackSource = null;
     this.endedEmitted = false;
+    this.endGuardSec = 0;
     if (reason) {
       this.emit('error', reason);
     }
@@ -126,6 +128,11 @@ export class ZonePlayer {
     this.lastTickAt = Date.now();
     this.emit('position', elapsed, duration);
     this.maybeEmitEnded();
+  }
+
+  public setEndGuardMs(ms: number): void {
+    const safe = Number.isFinite(ms) ? Math.max(0, ms) : 0;
+    this.endGuardSec = safe / 1000;
   }
 
   public updateCover(cover?: CoverArtPayload): string | undefined {
@@ -188,6 +195,8 @@ export class ZonePlayer {
       if (this.tickerToken !== token) {
         return;
       }
+      this.state.time = 0;
+      this.emit('position', this.state.time, this.state.duration);
       this.lastTickAt = Date.now();
       if (!ready) {
         this.log.debug('ticker started without first chunk', { zoneId: this.zoneId, timeoutMs });
@@ -228,7 +237,8 @@ export class ZonePlayer {
     if (this.endedEmitted) {
       return;
     }
-    if (this.state.duration > 0 && this.state.time >= this.state.duration) {
+    const effectiveDuration = this.state.duration > 0 ? this.state.duration + this.endGuardSec : 0;
+    if (effectiveDuration > 0 && this.state.time >= effectiveDuration) {
       this.endedEmitted = true;
       this.stopTicker();
       const session = this.getSession();
