@@ -766,6 +766,7 @@ export class LocalLibraryProvider {
       artist: normalized.artist,
       album: normalized.album,
       coverurl: this.buildCoverUrl(normalized),
+      duration: normalized.duration,
     };
   }
 }

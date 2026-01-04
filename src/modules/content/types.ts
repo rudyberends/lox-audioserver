@@ -80,6 +80,7 @@ export interface ContentItemMetadata {
   artist: string;
   album: string;
   coverurl?: string;
+  duration?: number;
   station?: string;
 }
 

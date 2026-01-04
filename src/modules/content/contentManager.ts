@@ -300,6 +300,7 @@ export class ContentManager {
             artist: track.artist ?? '',
             album: track.album ?? '',
             coverurl: track.coverurl ?? '',
+            duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
           };
         }
       }
@@ -331,6 +332,7 @@ export class ContentManager {
             artist: track.artist ?? '',
             album: track.album ?? '',
             coverurl: track.coverurl ?? '',
+            duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
           };
         }
         this.log.debug('apple music metadata unresolved', {
@@ -359,6 +361,7 @@ export class ContentManager {
             artist: track.artist ?? '',
             album: track.album ?? '',
             coverurl: track.coverurl ?? '',
+            duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
           };
         }
         this.log.debug('deezer metadata unresolved', {
@@ -386,6 +389,7 @@ export class ContentManager {
             artist: track.artist ?? '',
             album: track.album ?? '',
             coverurl: track.coverurl ?? '',
+            duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
           };
         }
         this.log.debug('tidal metadata unresolved', {
@@ -432,6 +436,7 @@ export class ContentManager {
             artist: track.artist ?? '',
             album: track.album ?? '',
             coverurl: track.coverurl ?? '',
+            duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
           };
         }
       }

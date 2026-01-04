@@ -847,12 +847,55 @@ class ZoneManager {
           station: stationValue ?? (metadata as any)?.station,
         }
         : metadata;
-    if ((isMusicAssistant || isAppleMusic) && (!enrichedMetadata || !enrichedMetadata.title || !enrichedMetadata.artist)) {
+
+    const mergeMetadata = (
+      base: PlaybackMetadata | undefined,
+      incoming: Awaited<ReturnType<typeof contentManager.resolveMetadata>>,
+    ): PlaybackMetadata | undefined => {
+      if (!incoming) {
+        return base;
+      }
+      const merged: PlaybackMetadata = {
+        title: '',
+        artist: '',
+        album: '',
+        ...(base ?? {}),
+      };
+      const assignText = (key: 'title' | 'artist' | 'album' | 'coverurl') => {
+        const current = typeof merged[key] === 'string' ? merged[key].trim() : '';
+        const candidate = typeof incoming[key] === 'string' ? incoming[key].trim() : '';
+        if (!current && candidate) {
+          merged[key] = candidate as any;
+        }
+      };
+      assignText('title');
+      assignText('artist');
+      assignText('album');
+      assignText('coverurl');
+      if (typeof incoming.duration === 'number' && incoming.duration > 0) {
+        const current = typeof merged.duration === 'number' ? merged.duration : 0;
+        if (!current || current <= 0) {
+          merged.duration = incoming.duration;
+        }
+      }
+      if (stationValue && (!merged.station || !merged.station.trim())) {
+        merged.station = stationValue;
+      }
+      return merged;
+    };
+
+    const shouldResolveMetadata =
+      !isRadio &&
+      (!enrichedMetadata?.duration ||
+        ((isMusicAssistant || isAppleMusic) &&
+          (!enrichedMetadata || !enrichedMetadata.title || !enrichedMetadata.artist)));
+
+    if (shouldResolveMetadata) {
       try {
         const metaTarget = parentContext?.startItem ?? queueAudiopath;
         const meta = await contentManager.resolveMetadata(metaTarget);
         if (meta) {
-          enrichedMetadata = { ...meta, station: stationValue };
+          enrichedMetadata = mergeMetadata(enrichedMetadata, meta);
         }
       } catch {
         /* ignore */
