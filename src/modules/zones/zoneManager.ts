@@ -1380,6 +1380,14 @@ class ZoneManager {
     assignPatch('audiopath', metadata.audiopath);
     if (typeof metadata.duration === 'number' && metadata.duration > 0) {
       patch.duration = Math.round(metadata.duration);
+    } else if (
+      metadata.audiopath &&
+      current &&
+      normalizeSpotifyAudiopath(metadata.audiopath) === normalizeSpotifyAudiopath(current.audiopath) &&
+      typeof current.duration === 'number' &&
+      current.duration > 0
+    ) {
+      patch.duration = Math.round(current.duration);
     }
     if (didSeek && current) {
       patch.qindex = ctx.queueController.currentIndex();
@@ -2338,13 +2346,23 @@ class ZoneManager {
       }
     }
 
+    const isStopping = patch.mode === 'stop';
+    const trackChanged =
+      typeof patch.audiopath === 'string' &&
+      patch.audiopath.trim().length > 0 &&
+      normalizeSpotifyAudiopath(patch.audiopath) !== normalizeSpotifyAudiopath(ctx.state.audiopath);
     // Prevent overwriting a valid duration with zero/invalid values.
     if ('duration' in patch) {
       const nextDuration = patch.duration;
       const currentDuration = ctx.state.duration;
-      if (typeof nextDuration !== 'number' || (!isRadioState && nextDuration <= 0)) {
+      if (typeof nextDuration !== 'number' || (!isRadioState && !isStopping && nextDuration <= 0)) {
         delete (patch as any).duration;
-      } else if (!isRadioState && typeof currentDuration === 'number' && currentDuration > 0) {
+      } else if (
+        !isRadioState &&
+        !trackChanged &&
+        typeof currentDuration === 'number' &&
+        currentDuration > 0
+      ) {
         // keep the larger of the known durations
         (patch as any).duration = Math.max(nextDuration, currentDuration);
       }
@@ -2693,7 +2711,7 @@ class ZoneManager {
       if (ctxLocal) {
         this.dispatchTransports(ctxLocal, transports, 'stop', session);
       }
-      this.patchState(zoneId, { mode: 'stop', clientState: 'on', power: 'on' });
+      this.patchState(zoneId, { mode: 'stop', clientState: 'on', power: 'on', time: 0, duration: 0 });
     });
     player.on('position', (time, duration) => {
       const ctx = this.zones.get(zoneId);
