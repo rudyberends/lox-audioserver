@@ -26,11 +26,22 @@ export class AirplayFlowSession {
   private readonly backlog: Buffer[] = [];
   private backlogBytes = 0;
   private readonly maxBacklogBytes = 1024 * 2048; // 2MB rolling buffer for late joiners
+  private readonly chunkQueue: Buffer[] = [];
+  private chunkQueueBytes = 0;
+  private chunkTimer: NodeJS.Timeout | null = null;
+  private readonly chunkDurationMs = 1000;
+  private readonly maxChunkQueueSeconds = 10;
+  private chunkSizeBytes = 44100 * 2 * 2;
+  private preloadBytes = 44100 * 2 * 2;
+  private preloadComplete = false;
+  private lastTrimLogAt = 0;
   private sourceAttached = false;
   private streamedBytes = 0;
   private bytesPerSecond = 44100 * 2 * 2;
   private pendingEndTimer: NodeJS.Timeout | null = null;
   private pendingEndStream: PassThrough | null = null;
+  private lastMetricsLogAt = 0;
+  private readonly metricsLogIntervalMs = 2000;
 
   constructor(private readonly zoneId: number) {}
 
@@ -67,10 +78,11 @@ export class AirplayFlowSession {
           this.primeClient(existing);
         }
         existing.volume = volume;
+        this.ensureChunker();
         return;
       }
       if (hasSharedSource && !existing.feed) {
-        existing.feed = new PassThrough({ highWaterMark: 1024 * 512 });
+        existing.feed = new PassThrough({ highWaterMark: 1024 * 2048 });
         existing.buffer = new ClientBuffer(
           (chunk) => {
             if (!existing.feed!.writableEnded && !existing.feed!.destroyed) {
@@ -106,7 +118,7 @@ export class AirplayFlowSession {
       return;
     }
 
-    const feed = hasSharedSource ? new PassThrough({ highWaterMark: 1024 * 512 }) : null;
+    const feed = hasSharedSource ? new PassThrough({ highWaterMark: 1024 * 2048 }) : null;
     const buffer =
       feed &&
       new ClientBuffer(
@@ -148,6 +160,7 @@ export class AirplayFlowSession {
 
     this.clients.set(clientId, client);
     await sender.start(inputUrl, volume, hasSharedSource ? feed : null, ntpStart ?? undefined);
+    this.ensureChunker();
     this.log.info('airplay client started', {
       zoneId: this.zoneId,
       clientId,
@@ -172,6 +185,7 @@ export class AirplayFlowSession {
       Array.from(this.clients.values()).map((c) => this.stopClientSafe(c.id)),
     );
     this.clients.clear();
+    this.stopChunker();
     this.detachSharedStream();
     if (this.sharedStream && !this.sharedStream.destroyed) {
       try {
@@ -184,6 +198,9 @@ export class AirplayFlowSession {
     this.backlog.length = 0;
     this.backlogBytes = 0;
     this.streamedBytes = 0;
+    this.chunkQueue.length = 0;
+    this.chunkQueueBytes = 0;
+    this.preloadComplete = false;
   }
 
   public getClient(clientId: ClientId): FlowClient | undefined {
@@ -204,6 +221,24 @@ export class AirplayFlowSession {
     }
   }
 
+  public resetBuffers(reason?: string): void {
+    if (reason) {
+      this.log.debug('airplay flow buffers reset', { zoneId: this.zoneId, reason });
+    }
+    this.backlog.length = 0;
+    this.backlogBytes = 0;
+    this.streamedBytes = 0;
+    this.chunkQueue.length = 0;
+    this.chunkQueueBytes = 0;
+    this.preloadComplete = false;
+    for (const client of this.clients.values()) {
+      client.buffer?.reset();
+      if (client.ready) {
+        client.buffer?.ready();
+      }
+    }
+  }
+
   public getSecondsStreamed(): number {
     if (!this.streamedBytes) return 0;
     return this.streamedBytes / this.bytesPerSecond;
@@ -221,6 +256,8 @@ export class AirplayFlowSession {
       return;
     }
     this.bytesPerSecond = sampleRate * channels * bytesPerSample;
+    this.chunkSizeBytes = Math.max(1, Math.round((this.bytesPerSecond * this.chunkDurationMs) / 1000));
+    this.preloadBytes = Math.max(1, this.bytesPerSecond);
   }
 
   public async stopClientSafe(clientId: ClientId): Promise<void> {
@@ -244,6 +281,9 @@ export class AirplayFlowSession {
       }
       this.clients.delete(clientId);
       this.log.info('airplay client stopped', { zoneId: this.zoneId, clientId });
+      if (this.clients.size === 0) {
+        this.stopChunker();
+      }
     }
   }
 
@@ -310,7 +350,6 @@ export class AirplayFlowSession {
     if (!chunk?.length) {
       return;
     }
-    this.streamedBytes += chunk.length;
     // Maintain a rolling backlog for late joiners.
     if (this.backlogBytes < this.maxBacklogBytes) {
       this.backlog.push(chunk);
@@ -320,9 +359,8 @@ export class AirplayFlowSession {
       const removed = this.backlog.shift();
       if (removed) this.backlogBytes -= removed.length;
     }
-    for (const client of this.clients.values()) {
-      client.buffer?.push(chunk);
-    }
+    this.enqueueChunk(chunk);
+    this.maybeLogMetrics();
   }
 
   private handleSourceEnd(stream?: PassThrough): void {
@@ -352,6 +390,9 @@ export class AirplayFlowSession {
     this.backlog.length = 0;
     this.backlogBytes = 0;
     this.streamedBytes = 0;
+    this.chunkQueue.length = 0;
+    this.chunkQueueBytes = 0;
+    this.preloadComplete = false;
     for (const client of this.clients.values()) {
       client.buffer?.reset();
       client.ready = false;
@@ -365,6 +406,9 @@ export class AirplayFlowSession {
     this.backlog.length = 0;
     this.backlogBytes = 0;
     this.streamedBytes = 0;
+    this.chunkQueue.length = 0;
+    this.chunkQueueBytes = 0;
+    this.preloadComplete = false;
     for (const client of this.clients.values()) {
       client.buffer?.flush();
       client.feed?.end();
@@ -379,6 +423,117 @@ export class AirplayFlowSession {
       client.buffer?.push(chunk);
     }
   }
+
+  private enqueueChunk(chunk: Buffer): void {
+    if (!chunk?.length) return;
+    const maxBytes = Math.max(1, this.bytesPerSecond * this.maxChunkQueueSeconds);
+    if (this.chunkQueueBytes + chunk.length > maxBytes) {
+      const now = Date.now();
+      if (now - this.lastTrimLogAt > this.metricsLogIntervalMs) {
+        this.lastTrimLogAt = now;
+        this.log.debug('airplay flow chunk queue drop', {
+          zoneId: this.zoneId,
+          maxBytes,
+          queuedBytes: this.chunkQueueBytes,
+          incomingBytes: chunk.length,
+        });
+      }
+      return;
+    }
+    this.chunkQueue.push(chunk);
+    this.chunkQueueBytes += chunk.length;
+  }
+
+  private ensureChunker(): void {
+    if (this.chunkTimer || this.clients.size === 0) {
+      return;
+    }
+    this.chunkTimer = setTimeout(() => this.runChunker(), this.chunkDurationMs);
+  }
+
+  private stopChunker(): void {
+    if (!this.chunkTimer) return;
+    clearTimeout(this.chunkTimer);
+    this.chunkTimer = null;
+  }
+
+  private runChunker(): void {
+    this.chunkTimer = null;
+    if (this.clients.size === 0) {
+      return;
+    }
+    if (!this.preloadComplete) {
+      if (this.chunkQueueBytes >= this.preloadBytes) {
+        this.preloadComplete = true;
+        this.log.debug('airplay flow preload complete', {
+          zoneId: this.zoneId,
+          preloadBytes: this.preloadBytes,
+        });
+      } else {
+        this.chunkTimer = setTimeout(() => this.runChunker(), this.chunkDurationMs);
+        return;
+      }
+    }
+    const next = this.popChunk(this.chunkSizeBytes);
+    if (next) {
+      for (const client of this.clients.values()) {
+        client.buffer?.push(next);
+      }
+      this.streamedBytes += next.length;
+    }
+    this.chunkTimer = setTimeout(() => this.runChunker(), this.chunkDurationMs);
+  }
+
+  private popChunk(targetBytes: number): Buffer | null {
+    if (this.chunkQueueBytes < targetBytes || this.chunkQueue.length === 0) {
+      return null;
+    }
+    let remaining = targetBytes;
+    const parts: Buffer[] = [];
+    while (remaining > 0 && this.chunkQueue.length > 0) {
+      const head = this.chunkQueue[0];
+      if (head.length <= remaining) {
+        parts.push(head);
+        remaining -= head.length;
+        this.chunkQueue.shift();
+        this.chunkQueueBytes -= head.length;
+      } else {
+        parts.push(head.subarray(0, remaining));
+        this.chunkQueue[0] = head.subarray(remaining);
+        this.chunkQueueBytes -= remaining;
+        remaining = 0;
+      }
+    }
+    return parts.length === 1 ? parts[0] : Buffer.concat(parts);
+  }
+
+  private maybeLogMetrics(): void {
+    const now = Date.now();
+    if (now - this.lastMetricsLogAt < this.metricsLogIntervalMs) {
+      return;
+    }
+    this.lastMetricsLogAt = now;
+    let ready = 0;
+    const clientStats = Array.from(this.clients.values()).map((client) => {
+      if (client.ready) ready += 1;
+      return {
+        id: client.id,
+        ready: client.ready,
+        bufferBytes: client.buffer?.getBufferedBytes() ?? 0,
+        feedBytes: (client.feed as any)?.readableLength ?? 0,
+      };
+    });
+    this.log.debug('airplay flow metrics', {
+      zoneId: this.zoneId,
+      clients: this.clients.size,
+      ready,
+      backlogBytes: this.backlogBytes,
+      chunkQueueBytes: this.chunkQueueBytes,
+      preloadComplete: this.preloadComplete,
+      streamedSeconds: Number(this.getSecondsStreamed().toFixed(2)),
+      clientStats,
+    });
+  }
 }
 
 class ClientBuffer {
@@ -389,7 +544,7 @@ class ClientBuffer {
   constructor(
     private readonly write: (chunk: Buffer) => void,
     private readonly onError: (err: unknown) => void,
-    private readonly maxBytes = 1024 * 512,
+    private readonly maxBytes = 1024 * 3072,
   ) {}
 
   public push(chunk: Buffer): void {
@@ -427,6 +582,10 @@ class ClientBuffer {
     this.queue.length = 0;
     this.bytes = 0;
     this.readyFlag = false;
+  }
+
+  public getBufferedBytes(): number {
+    return this.bytes;
   }
 
   private safeWrite(chunk: Buffer): void {

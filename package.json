@@ -76,7 +76,7 @@
     "egoroof-blowfish": "^4.0.1",
     "ffmpeg-static": "^5.3.0",
     "jimp": "^1.6.0",
-    "lox-airplay-sender": "^0.1.0",
+    "lox-airplay-sender": "0.3.1",
     "music-metadata": "^7.14.0",
     "ndjson": "^2.0.0",
     "node-libraop": "^0.1.0",

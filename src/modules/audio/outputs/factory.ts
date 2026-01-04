@@ -245,6 +245,8 @@ function createAirplayTransport(zone: ZoneConfig): ZoneTransport | null {
   }
   const name = (rawEntry as any)?.name;
   const password = (rawEntry as any)?.password;
+  const debug = (rawEntry as any)?.debug;
+  const forceAp2 = (rawEntry as any)?.forceAp2;
   const port = Number(rawPort);
   const initialVolume = clampVolume(zone.volumes?.default);
   return new AirPlayTransport(
@@ -255,6 +257,8 @@ function createAirplayTransport(zone: ZoneConfig): ZoneTransport | null {
       name,
       password,
       port: Number.isFinite(port) ? port : undefined,
+      debug: typeof debug === 'boolean' ? debug : undefined,
+      forceAp2: typeof forceAp2 === 'boolean' ? forceAp2 : undefined,
     },
     initialVolume,
   );

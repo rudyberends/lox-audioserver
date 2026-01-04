@@ -9,12 +9,14 @@ import { AirplayStreamSession } from '@/modules/audio/outputs/airplay/airplayStr
 import { AirplayFlowSession } from '@/modules/audio/outputs/airplay/airplayFlowSession';
 import { airplayGroupController } from '@/modules/audio/outputs/airplay/airplayGroupController';
 import { notifyTransportError } from '@/modules/audio/outputs/queueUpdater';
+import type { AirplaySenderOverrides } from '@/modules/audio/outputs/airplay/airplaySender';
 
 export interface AirPlayTransportConfig {
   host: string;
   port?: number;
   name?: string;
   password?: string;
+  debug?: boolean;
   /** Force AirPlay2 even if RAOP is available. */
   forceAp2?: boolean;
 }
@@ -55,6 +57,13 @@ export const AIRPLAY_TRANSPORT_DEFINITION: TransportConfigDefinition = {
       placeholder: 'Optional password',
       description: 'Only needed for protected AirPlay devices.',
     },
+    {
+      id: 'debug',
+      label: 'Debug logging',
+      type: 'text',
+      placeholder: 'true',
+      description: 'Enable verbose AirPlay sender debug logs (true/false).',
+    },
   ],
 };
 
@@ -78,7 +87,7 @@ export class AirPlayTransport implements ZoneTransport {
   private readonly streamSession: AirplayStreamSession;
   private readonly flowSession: AirplayFlowSession;
   private readonly clientId: string;
-  private readonly startDelayMs = 150; // simple barrier; later can use NTP
+  private readonly startDelayMs = 500; // simple barrier; later can use NTP
   private attachedLeaderId: number | null = null;
   private readonly pcmStartTimeoutMs = 8000;
   private readonly pcmPipeTimeoutMs = 20000;
@@ -89,6 +98,16 @@ export class AirPlayTransport implements ZoneTransport {
     config: AirPlayTransportConfig,
     initialVolume?: number,
   ) {
+    const configOverrides: AirplaySenderOverrides = {
+      packets_in_buffer: 340,
+      stream_latency: 250,
+      // TODO: tune sync_period; temporarily higher to reduce sync noise.
+      sync_period: 70000,
+      jump_forward_threshold_ms: 240,
+      jump_forward_lead_ms: 180,
+      control_sync_base_delay_ms: 2,
+      control_sync_jitter_ms: 3,
+    };
     const port = typeof config.port === 'number' ? config.port : undefined;
     const forceAp2 = typeof config.forceAp2 === 'boolean' ? config.forceAp2 : port === 7000 ? true : undefined;
     this.sender = new AirplaySender(
@@ -98,6 +117,8 @@ export class AirPlayTransport implements ZoneTransport {
         password: config.password?.trim() || undefined,
         name: (config.name || zoneName).trim(),
         forceAp2,
+        debug: config.debug === true,
+        config: configOverrides,
       },
       { zoneId, zoneName },
     );
@@ -118,6 +139,9 @@ export class AirPlayTransport implements ZoneTransport {
   }
 
   public async play(session: PlaybackSession): Promise<void> {
+    const isNewTrack = Boolean(
+      this.lastSession && this.lastSession.stream?.id !== session.stream?.id,
+    );
     this.lastSession = session;
     if (!session.playbackSource) {
       this.log.warn('AirPlay transport skipped; no playback source', { zoneId: this.zoneId });
@@ -125,19 +149,20 @@ export class AirPlayTransport implements ZoneTransport {
       return;
     }
     const outputSettings = audioManager.getOutputSettings(this.zoneId);
-    if (outputSettings) {
-      this.flowSession.setOutputFormat(
-        outputSettings.sampleRate,
-        outputSettings.channels,
-        outputSettings.pcmBitDepth,
-      );
-      this.log.info('AirPlay output format', {
-        zoneId: this.zoneId,
-        sampleRate: outputSettings.sampleRate,
-        channels: outputSettings.channels,
-        pcmBitDepth: outputSettings.pcmBitDepth,
-      });
-    }
+    const effectiveOutput = audioManager.getEffectiveOutputSettings(this.zoneId);
+    const resolvedOutput = outputSettings ?? effectiveOutput;
+    this.flowSession.setOutputFormat(
+      resolvedOutput.sampleRate,
+      resolvedOutput.channels,
+      resolvedOutput.pcmBitDepth,
+    );
+    this.streamSession.setPlaybackSource(session.playbackSource, effectiveOutput);
+    this.log.info('AirPlay output format', {
+      zoneId: this.zoneId,
+      sampleRate: resolvedOutput.sampleRate,
+      channels: resolvedOutput.channels,
+      pcmBitDepth: resolvedOutput.pcmBitDepth,
+    });
     this.log.info('AirPlay play requested', {
       zoneId: this.zoneId,
       zoneName: this.zoneName,
@@ -153,6 +178,9 @@ export class AirPlayTransport implements ZoneTransport {
     }
     const effectiveStream = directStream ?? existing?.stream ?? null;
     this.lastInputUrl = effectiveStream ? 'shared' : null;
+    if (isNewTrack) {
+      this.flowSession.resetBuffers('new_track');
+    }
     if (this.clientStarted || this.starting || this.running) {
       // Sender already active (or starting); keep the session and just refresh stream + volume.
       if (effectiveStream) {
@@ -185,7 +213,7 @@ export class AirPlayTransport implements ZoneTransport {
     }
 
     // For pipe inputs (e.g. embedded librespot) avoid ntpstart to reduce cliap2 timing errors.
-    const ntpStart = airplayGroupController.ensureStartNtp(this.zoneId);
+    const ntpStart = undefined;
 
     this.log.info('AirPlay starting stream', {
       zoneId: this.zoneId,
@@ -206,6 +234,7 @@ export class AirPlayTransport implements ZoneTransport {
       this.scheduleRetry();
       return;
     }
+    const primeBacklog = !isNewTrack;
     try {
       await this.flowSession.startClient(
         this.clientId,
@@ -214,6 +243,7 @@ export class AirPlayTransport implements ZoneTransport {
         effectiveStream,
         this.currentVolume,
         ntpStart,
+        primeBacklog,
       );
       setTimeout(() => this.flowSession.markReady(this.clientId), this.startDelayMs);
       this.running = true;

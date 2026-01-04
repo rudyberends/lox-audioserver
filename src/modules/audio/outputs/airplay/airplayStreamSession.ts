@@ -1,6 +1,8 @@
 import { PassThrough } from 'node:stream';
 import { createLogger } from '@/core/logging/logger';
+import { AudioSession, type PlaybackSource } from '@/modules/audio/engine/audioSession';
 import { audioStreamEngine } from '@/modules/audio/engine/audioStreamEngine';
+import type { AudioOutputSettings } from '@/modules/audio/utils/audioFormat';
 
 /**
  * Minimal shared PCM stream session for AirPlay.
@@ -13,6 +15,10 @@ export class AirplayStreamSession {
   private source: PassThrough | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
+  private localSourceKey: string | null = null;
+  private localPlaybackSource: PlaybackSource | null = null;
+  private localOutputSettings: AudioOutputSettings | null = null;
+  private localSession: AudioSession | null = null;
 
   constructor(private readonly zoneId: number) {}
 
@@ -41,18 +47,85 @@ export class AirplayStreamSession {
     return this.stream;
   }
 
+  public setPlaybackSource(
+    playbackSource: PlaybackSource | null,
+    outputSettings: AudioOutputSettings,
+  ): void {
+    const useLocal = playbackSource?.kind === 'url';
+    const nextKey = useLocal
+      ? [
+          playbackSource.url,
+          playbackSource.inputFormat ?? '',
+          String(outputSettings.sampleRate),
+          String(outputSettings.channels),
+          String(outputSettings.pcmBitDepth),
+        ].join('|')
+      : null;
+    if (nextKey === this.localSourceKey) {
+      return;
+    }
+    this.localSourceKey = nextKey;
+    this.localPlaybackSource = useLocal
+      ? { ...playbackSource, realTime: true }
+      : null;
+    this.localOutputSettings = useLocal ? outputSettings : null;
+    this.stopLocalSession();
+    if (this.stream && !this.stream.destroyed) {
+      this.ensureSource();
+    }
+  }
+
   private ensureSource(): void {
     if (!this.stream || this.stream.destroyed) return;
     if (this.source && !this.source.destroyed && !(this.source as any).readableEnded) {
       return;
     }
-    const next = audioStreamEngine.createStream(this.zoneId, 'pcm', { label: 'airplay' });
+    const next = this.createSourceStream();
     if (!next) {
       this.source = null;
       this.scheduleReconnect();
       return;
     }
     this.attachSource(next);
+  }
+
+  private createSourceStream(): PassThrough | null {
+    if (this.localPlaybackSource) {
+      if (!this.localSession) {
+        this.startLocalSession();
+      }
+      const subscriber = this.localSession?.createSubscriber({
+        label: 'airplay-local',
+        primeWithBuffer: false,
+      });
+      return subscriber ?? null;
+    }
+    return audioStreamEngine.createStream(this.zoneId, 'pcm', { label: 'airplay' });
+  }
+
+  private startLocalSession(): void {
+    if (!this.localPlaybackSource || !this.localOutputSettings) {
+      return;
+    }
+    this.stopLocalSession();
+    this.localSession = new AudioSession(
+      this.zoneId,
+      this.localPlaybackSource,
+      'pcm',
+      () => {
+        /* handled by reconnect */
+      },
+      this.localOutputSettings,
+    );
+    this.localSession.start();
+  }
+
+  private stopLocalSession(): void {
+    if (!this.localSession) {
+      return;
+    }
+    this.localSession.stop();
+    this.localSession = null;
   }
 
   private attachSource(next: PassThrough): void {
@@ -88,7 +161,7 @@ export class AirplayStreamSession {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (!this.stream || this.stream.destroyed) return;
-      const next = audioStreamEngine.createStream(this.zoneId, 'pcm', { label: 'airplay' });
+      const next = this.createSourceStream();
       if (next) {
         this.attachSource(next);
         return;
@@ -106,6 +179,7 @@ export class AirplayStreamSession {
 
   public dispose(): void {
     this.clearReconnect();
+    this.stopLocalSession();
     if (this.source && !this.source.destroyed) {
       try {
         this.source.destroy();

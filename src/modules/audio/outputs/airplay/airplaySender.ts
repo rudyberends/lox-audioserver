@@ -2,6 +2,7 @@ import { Readable } from 'node:stream';
 import { networkInterfaces } from 'node:os';
 import { createLogger } from '@/core/logging/logger';
 import { LoxAirplaySender } from 'lox-airplay-sender';
+export type AirplaySenderOverrides = Record<string, unknown>;
 import { discoverAirplayDevices } from '@/modules/audio/outputs/airplay/airplayDiscovery';
 import { ntpToUnixMs } from '@/modules/audio/outputs/airplay/airplayNtp';
 
@@ -16,6 +17,8 @@ export interface AirplaySenderConfig {
   mdnsHostname?: string;
   address?: string;
   disableDiscovery?: boolean;
+  debug?: boolean;
+  config?: AirplaySenderOverrides;
 }
 
 export class AirplaySender {
@@ -139,6 +142,9 @@ export class AirplaySender {
       airplay2,
       txt: resolved.txt ?? fallbackTxt,
       startTimeMs,
+      debug: this.config.debug ?? process.env.AIRPLAY_DEBUG === '1',
+      metrics: true,
+    config: this.config.config,
       log: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: unknown) => {
         const payload: Record<string, unknown> = {
           host: this.config.host,
@@ -163,13 +169,21 @@ export class AirplaySender {
     };
 
     const ok = sender.start(opts, (evt: any) => {
-      this.log.debug('airplay sender event', {
+      const basePayload = {
         event: evt?.event,
         message: evt?.message,
         host: this.config.host,
         zoneId: this.context?.zoneId,
         zoneName: this.context?.zoneName,
-      });
+      };
+      if (evt?.event === 'metrics') {
+        this.log.debug('airplay sender metrics', {
+          ...basePayload,
+          detail: evt?.detail,
+        });
+        return;
+      }
+      this.log.debug('airplay sender event', basePayload);
     });
     if (!ok) {
       this.log.warn('airplay sender start returned false', { host: this.config.host });
@@ -234,7 +248,7 @@ export class AirplaySender {
         }),
     );
     this.flowBuffers.add(flow);
-    const readyTimer = setTimeout(() => flow.ready(), 200);
+    const readyTimer = setTimeout(() => flow.ready(), 700);
     const cleanup = () => {
       clearTimeout(readyTimer);
       this.flowBuffers.delete(flow);
@@ -380,8 +394,8 @@ class FlowBuffer {
   constructor(
     private readonly write: (chunk: Buffer) => void,
     private readonly onError: (err: unknown) => void,
-    private readonly flushSize = 1024 * 128,
-    private readonly maxSize = 1024 * 512,
+    private readonly flushSize = 1024 * 384,
+    private readonly maxSize = 1024 * 2048,
   ) {}
 
   public push(chunk: Buffer): void {
