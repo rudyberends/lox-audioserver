@@ -17,6 +17,7 @@ export class ZonePlayer {
   private tickTimer?: NodeJS.Timeout;
   private lastTickAt = 0;
   private endedEmitted = false;
+  private tickerToken = 0;
 
   constructor(
     private readonly zoneId: number,
@@ -32,7 +33,7 @@ export class ZonePlayer {
       return null;
     }
     this.endedEmitted = false;
-    this.startTicker();
+    this.startTickerWhenReady(session);
     this.state = {
       mode: 'playing',
       time: 0,
@@ -62,7 +63,7 @@ export class ZonePlayer {
       return null;
     }
     this.endedEmitted = false;
-    this.startTicker();
+    this.startTickerWhenReady(session);
     this.state = {
       mode: 'playing',
       time: 0,
@@ -174,7 +175,29 @@ export class ZonePlayer {
     this.tickTimer = setInterval(() => this.tick(), 1000);
   }
 
+  private startTickerWhenReady(session: PlaybackSession | null): void {
+    this.stopTicker();
+    const token = ++this.tickerToken;
+    if (!session?.playbackSource) {
+      return;
+    }
+    const profiles = session.profiles ?? [];
+    const profile = profiles.includes('pcm') ? 'pcm' : profiles[0] ?? 'mp3';
+    const timeoutMs = 15000;
+    void audioManager.waitForFirstChunk(this.zoneId, profile, timeoutMs).then((ready) => {
+      if (this.tickerToken !== token) {
+        return;
+      }
+      this.lastTickAt = Date.now();
+      if (!ready) {
+        this.log.debug('ticker started without first chunk', { zoneId: this.zoneId, timeoutMs });
+      }
+      this.tickTimer = setInterval(() => this.tick(), 1000);
+    });
+  }
+
   private stopTicker(): void {
+    this.tickerToken += 1;
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = undefined;

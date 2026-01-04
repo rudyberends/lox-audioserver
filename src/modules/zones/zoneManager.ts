@@ -904,17 +904,26 @@ class ZoneManager {
 
     // reset queue with resolved items
     const clampedIndex = clamp(startIndex, 0, queueItems.length - 1);
-    ctx.queue.authority = isMusicAssistant
-      ? 'musicassistant'
-      : isAppleMusic
-        ? 'applemusic'
-        : isDeezer
-          ? 'deezer'
-          : isTidal
-            ? 'tidal'
-            : this.isSpotifyAudiopath(queueAudiopath)
-              ? 'spotify'
-              : 'local';
+    const bridgeProvider =
+      this.resolveBridgeProvider(queueAudiopath) ??
+      this.resolveBridgeProvider(resolvedTarget) ??
+      this.resolveBridgeProvider(uri);
+    const forceLocalQueue =
+      isAppleMusic ||
+      (this.isSpotifyAudiopath(queueAudiopath) && Boolean(bridgeProvider && bridgeProvider !== 'spotify'));
+    ctx.queue.authority = forceLocalQueue
+      ? 'local'
+      : isMusicAssistant
+        ? 'musicassistant'
+        : isAppleMusic
+          ? 'applemusic'
+          : isDeezer
+            ? 'deezer'
+            : isTidal
+              ? 'tidal'
+              : this.isSpotifyAudiopath(queueAudiopath)
+                ? 'spotify'
+                : 'local';
     this.log.debug('queue rebuilt', {
       zoneId: ctx.id,
       items: queueItems.length,

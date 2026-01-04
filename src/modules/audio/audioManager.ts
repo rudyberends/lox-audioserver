@@ -232,6 +232,14 @@ class AudioManager {
     return session;
   }
 
+  public waitForFirstChunk(
+    zoneId: number,
+    profile: OutputProfile = 'mp3',
+    timeoutMs = 2000,
+  ): Promise<boolean> {
+    return audioStreamEngine.waitForFirstChunk(zoneId, profile, timeoutMs);
+  }
+
   private createStreamHandles(
     zoneId: number,
     streamProfile: OutputProfile = 'mp3',
