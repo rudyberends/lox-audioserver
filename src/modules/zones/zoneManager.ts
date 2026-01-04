@@ -1538,6 +1538,19 @@ class ZoneManager {
     if (!decoded) {
       return [];
     }
+    const pickSourcePath = (): string => {
+      if (station && station.trim()) {
+        return station.trim();
+      }
+      const candidate = (decoded || rawAudiopath || uri || '').trim();
+      if (candidate.includes(':')) {
+        return candidate;
+      }
+      if (rawClean && rawClean.includes(':')) {
+        return rawClean;
+      }
+      return candidate;
+    };
     const isMusicAssistant = bridgeProvider === 'musicassistant' || (!forceSpotify && this.isMusicAssistantAudiopath(rawPath));
     const service =
       bridgeProvider ||
@@ -1567,10 +1580,7 @@ class ZoneManager {
     // Music Assistant bridge content
     if (!forceSpotify && (isMusicAssistant || service === 'musicassistant' || /musicassistant/i.test(rawPath))) {
       const user = getMusicAssistantUserId();
-      const sourcePath =
-        (station && station.trim()
-          ? station
-          : decoded || rawAudiopath || uri || '') || '';
+      const sourcePath = pickSourcePath();
       const folderId = sourcePath
         .replace(/^spotify@[^:]+:/i, '')
         .replace(/^musicassistant@[^:]+:/i, '')
@@ -1604,7 +1614,7 @@ class ZoneManager {
         }
       }
       if (allItems.length) {
-        return mapFolderItemsToQueue(allItems, zoneName, 5, user, station ?? decoded);
+        return mapFolderItemsToQueue(allItems, zoneName, 5, user, station ?? rawClean);
       }
     }
 
@@ -1612,10 +1622,7 @@ class ZoneManager {
     if (!forceSpotify && (isAppleMusic || service === 'applemusic' || /applemusic/i.test(rawPath))) {
       const providerId = rawClean.split(':')[0] || 'applemusic';
       const user = providerId.split('@')[1] ?? 'applemusic';
-      const sourcePath =
-        (station && station.trim()
-          ? station
-          : decoded || rawAudiopath || uri || '') || '';
+      const sourcePath = pickSourcePath();
       const folderId = sourcePath
         .replace(/^spotify@[^:]+:/i, '')
         .replace(/^applemusic@[^:]+:/i, '')
@@ -1654,7 +1661,7 @@ class ZoneManager {
         }
       }
       if (allItems.length) {
-        return mapFolderItemsToQueue(allItems, zoneName, 5, user, station ?? decoded);
+        return mapFolderItemsToQueue(allItems, zoneName, 5, user, station ?? rawClean);
       }
     }
 
@@ -1662,10 +1669,7 @@ class ZoneManager {
     if (!forceSpotify && (isDeezer || service === 'deezer' || /deezer/i.test(rawPath))) {
       const providerId = rawClean.split(':')[0] || 'deezer';
       const user = providerId.split('@')[1] ?? 'deezer';
-      const sourcePath =
-        (station && station.trim()
-          ? station
-          : decoded || rawAudiopath || uri || '') || '';
+      const sourcePath = pickSourcePath();
       const folderId = sourcePath
         .replace(/^spotify@[^:]+:/i, '')
         .replace(/^deezer@[^:]+:/i, '')
@@ -1704,7 +1708,7 @@ class ZoneManager {
         }
       }
       if (allItems.length) {
-        return mapFolderItemsToQueue(allItems, zoneName, 5, user, station ?? decoded);
+        return mapFolderItemsToQueue(allItems, zoneName, 5, user, station ?? rawClean);
       }
     }
 
@@ -1712,10 +1716,7 @@ class ZoneManager {
     if (!forceSpotify && (isTidal || service === 'tidal' || /tidal/i.test(rawPath))) {
       const providerId = rawClean.split(':')[0] || 'tidal';
       const user = providerId.split('@')[1] ?? 'tidal';
-      const sourcePath =
-        (station && station.trim()
-          ? station
-          : decoded || rawAudiopath || uri || '') || '';
+      const sourcePath = pickSourcePath();
       const folderId = sourcePath
         .replace(/^spotify@[^:]+:/i, '')
         .replace(/^tidal@[^:]+:/i, '')
@@ -1754,12 +1755,13 @@ class ZoneManager {
         }
       }
       if (allItems.length) {
-        return mapFolderItemsToQueue(allItems, zoneName, 5, user, station ?? decoded);
+        return mapFolderItemsToQueue(allItems, zoneName, 5, user, station ?? rawClean);
       }
     }
 
     // Spotify content
-    const spotifyCandidate = forceSpotify ? rawClean : decoded;
+    const spotifyCandidate =
+      forceSpotify || decoded.includes(':') ? decoded : rawClean;
     if (spotifyCandidate.startsWith('spotify@') || spotifyCandidate.startsWith('spotify:')) {
       const user = spotifyCandidate.startsWith('spotify@')
         ? parseSpotifyUser(spotifyCandidate)

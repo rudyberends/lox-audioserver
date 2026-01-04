@@ -149,14 +149,7 @@ export async function mapFolderItemsToQueue(
           : 120,
     ),
     qindex: 0,
-    station:
-      (() => {
-        const ap = item.audiopath ?? item.id ?? '';
-        if (ap.startsWith('library:')) {
-          return '';
-        }
-        return station ?? '';
-      })(),
+    station: audioType === 1 || audioType === 4 ? station ?? '' : '',
     title: item.title ?? item.name ?? zoneName,
     unique_id: generateQueueId(),
     user:
