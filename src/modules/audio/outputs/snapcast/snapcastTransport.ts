@@ -83,6 +83,15 @@ export class SnapcastTransport implements ZoneTransport {
     this.stopStream();
   }
 
+  public setVolume(level: number): void {
+    const clamped = Math.min(100, Math.max(0, Math.round(level)));
+    const targetClientIds = this.baseClientIds.length > 0 ? this.baseClientIds : this.effectiveClientIds;
+    if (targetClientIds.length === 0) {
+      return;
+    }
+    snapcastCore.setClientVolumes(targetClientIds, clamped);
+  }
+
   public getPreferredOutput(): PreferredOutput {
     // Snapclient defaults: PCM, 48kHz/16-bit stereo.
     return { profile: 'pcm', sampleRate: 48000, channels: 2, bitDepth: 16 };

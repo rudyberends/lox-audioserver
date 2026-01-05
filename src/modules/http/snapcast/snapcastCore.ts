@@ -6,6 +6,7 @@ import type { RawData } from 'ws';
 import { createLogger } from '@/core/logging/logger';
 import { audioOutputSettings, type AudioOutputSettings } from '@/modules/audio/utils/audioFormat';
 import { audioManager } from '@/modules/audio/audioManager';
+import { zoneManager } from '@/modules/zones/zoneManager';
 
 type SnapcastClient = {
   socket: WebSocket;
@@ -14,6 +15,43 @@ type SnapcastClient = {
   streamId: string;
   lastHelloId: number | null;
   connectedAt: number;
+};
+
+type SnapcastVolume = {
+  muted: boolean;
+  percent: number;
+};
+
+type SnapcastClientConfig = {
+  instance: number;
+  latency: number;
+  name: string;
+  volume: SnapcastVolume;
+  host: {
+    arch: string;
+    ip: string;
+    mac: string;
+    name: string;
+    os: string;
+  };
+  snapclient: {
+    name: string;
+    protocolVersion: number;
+    version: string;
+  };
+};
+
+type SnapcastGroupState = {
+  id: string;
+  name: string;
+  muted: boolean;
+  streamId: string;
+  clientIds: Set<string>;
+};
+
+type RpcStream = {
+  id: string;
+  uri: string;
 };
 
 type ActiveStream = {
@@ -51,6 +89,10 @@ class SnapcastCore {
   private clientToStream = new Map<string, string>();
   private rpcInterval: NodeJS.Timeout | null = null;
   private readonly streamSignatures = new Map<string, string>();
+  private readonly clientConfigs = new Map<string, SnapcastClientConfig>();
+  private readonly groupConfigs = new Map<string, SnapcastGroupState>();
+  private readonly streamMuteSnapshots = new Map<string, number>();
+  private readonly rpcStreams = new Map<string, RpcStream>();
 
   constructor() {
     this.wsServer.on('connection', (socket, req) => {
@@ -129,20 +171,16 @@ class SnapcastCore {
     let pushed = false;
     for (const client of this.clients) {
       if (client.clientId === clientId) {
-        const previousStream = client.streamId;
         connected = true;
         if (client.streamId !== streamId) {
-          client.streamId = streamId;
+          this.updateClientStream(client, streamId);
         }
         const output =
           this.streams.get(streamId)?.output ??
           this.streams.values().next().value?.output ??
           audioOutputSettings;
-        this.sendSettingsAndHeader(client, output, client.lastHelloId ?? 0);
+        this.sendSettings(client, output, 0, true);
         pushed = true;
-        if (previousStream !== streamId) {
-          this.updateFlowControl(previousStream);
-        }
       }
     }
     this.log.info('snapcast client stream mapped', { clientId, streamId, connected, pushed });
@@ -215,7 +253,7 @@ class SnapcastCore {
     // Reassign already-connected clients whose ID maps to this stream.
     for (const client of this.clients) {
       if (clientIds.includes(client.clientId ?? '')) {
-        client.streamId = streamId;
+        this.updateClientStream(client, streamId);
         this.log.info('snapcast client reassigned to stream', { clientId: client.clientId, streamId });
       }
     }
@@ -239,6 +277,15 @@ class SnapcastCore {
     this.streamSignatures.delete(streamId);
   }
 
+  public setClientVolumes(clientIds: string[], volume: number, muted?: boolean): void {
+    if (!clientIds.length) return;
+    const clamped = Math.min(100, Math.max(0, Math.round(volume)));
+    for (const clientId of clientIds) {
+      this.applyClientVolume(clientId, clamped, muted);
+    }
+    this.sendServerUpdate();
+  }
+
   public clearStream(zoneId?: number | string): void {
     if (zoneId != null) {
       const zoneNum = typeof zoneId === 'string' ? Number(zoneId) : zoneId;
@@ -251,6 +298,10 @@ class SnapcastCore {
             if (streamId === id) {
               this.clientToStream.delete(clientId);
             }
+          }
+          const group = this.findGroupByStreamId(id);
+          if (group && group.id === id && group.clientIds.size === 0) {
+            this.groupConfigs.delete(group.id);
           }
         }
       }
@@ -278,13 +329,29 @@ class SnapcastCore {
       this.consumeData(client, Buffer.isBuffer(data) ? data : Buffer.from(data));
     });
     socket.on('close', () => {
+      if (client.clientId) {
+        this.sendClientNotification('Client.OnDisconnect', {
+          client: this.buildClientStatus(client, false),
+          id: client.clientId,
+        });
+        this.removeClientFromGroup(client.clientId, client.streamId);
+      }
       this.clients.delete(client);
       this.updateFlowControl(client.streamId);
+      this.sendServerUpdate();
     });
     socket.on('error', (error) => {
       this.log.debug('snapcast client error', { message: (error as Error).message });
+      if (client.clientId) {
+        this.sendClientNotification('Client.OnDisconnect', {
+          client: this.buildClientStatus(client, false),
+          id: client.clientId,
+        });
+        this.removeClientFromGroup(client.clientId, client.streamId);
+      }
       this.clients.delete(client);
       this.updateFlowControl(client.streamId);
+      this.sendServerUpdate();
     });
     this.updateFlowControl(client.streamId);
   }
@@ -346,6 +413,9 @@ class SnapcastCore {
       case 5: // Hello
         this.handleHello(client, header, body);
         break;
+      case 7: // Client Info
+        this.handleClientInfo(client, body);
+        break;
       case 4: // Time
         this.handleTime(client, header);
         break;
@@ -359,19 +429,62 @@ class SnapcastCore {
     try {
       const jsonLen = body.readUInt32LE(0);
       const jsonStr = body.slice(4, 4 + jsonLen).toString('utf8');
-      const parsed = JSON.parse(jsonStr) as { ID?: string; MAC?: string; Instance?: number };
+      const parsed = JSON.parse(jsonStr) as {
+        ID?: string;
+        MAC?: string;
+        Instance?: number;
+        Arch?: string;
+        HostName?: string;
+        OS?: string;
+        Version?: string;
+        ClientName?: string;
+        SnapStreamProtocolVersion?: number;
+      };
       const instance = typeof parsed.Instance === 'number' && parsed.Instance > 1 ? `#${parsed.Instance}` : '';
-      const previousStream = client.streamId;
       client.clientId = `${parsed.ID || parsed.MAC || 'client'}${instance}`;
       client.lastHelloId = header.id;
+      const config = this.ensureClientConfig(client.clientId, parsed.Instance);
+      if (typeof parsed.Arch === 'string') {
+        config.host.arch = parsed.Arch;
+      }
+      if (typeof parsed.HostName === 'string') {
+        config.host.name = parsed.HostName;
+      }
+      if (typeof parsed.OS === 'string') {
+        config.host.os = parsed.OS;
+      }
+      if (typeof parsed.MAC === 'string') {
+        config.host.mac = parsed.MAC;
+      }
+      const remoteIp = (client.socket as any)?._socket?.remoteAddress;
+      if (typeof remoteIp === 'string') {
+        config.host.ip = remoteIp;
+      }
+      if (typeof parsed.ClientName === 'string') {
+        config.snapclient.name = parsed.ClientName;
+      }
+      if (typeof parsed.Version === 'string') {
+        config.snapclient.version = parsed.Version;
+      }
+      if (typeof parsed.SnapStreamProtocolVersion === 'number') {
+        config.snapclient.protocolVersion = parsed.SnapStreamProtocolVersion;
+      }
       this.log.info('snapcast client connected', { clientId: client.clientId, requestedStream: client.streamId });
       const mappedStream = this.clientToStream.get(client.clientId);
       if (mappedStream) {
-        client.streamId = mappedStream;
+        this.updateClientStream(client, mappedStream);
         this.log.info('snapcast client mapped to stream', { clientId: client.clientId, streamId: mappedStream });
       }
-      if (previousStream !== client.streamId) {
-        this.updateFlowControl(previousStream);
+      if (client.clientId) {
+        this.applyZoneVolumeToClient(client.clientId, client.streamId);
+      }
+      if (client.clientId) {
+        this.addClientToGroup(client.clientId, client.streamId);
+        this.sendClientNotification('Client.OnConnect', {
+          client: this.buildClientStatus(client, true),
+          id: client.clientId,
+        });
+        this.sendServerUpdate();
       }
     } catch (error) {
       this.log.warn('failed to parse snapcast Hello', { message: (error as Error).message });
@@ -380,8 +493,121 @@ class SnapcastCore {
     const activeStream = this.streams.get(client.streamId);
     const activeOutput = activeStream?.output ?? audioOutputSettings;
 
-    this.sendSettingsAndHeader(client, activeOutput, header.id);
+    this.sendSettings(client, activeOutput, header.id, true);
     this.updateFlowControl(client.streamId);
+  }
+
+  private handleClientInfo(client: SnapcastClient, body: Buffer): void {
+    try {
+      const jsonLen = body.readUInt32LE(0);
+      const jsonStr = body.slice(4, 4 + jsonLen).toString('utf8');
+      const parsed = JSON.parse(jsonStr) as { volume?: number; muted?: boolean };
+      const clientId = client.clientId;
+      if (!clientId) {
+        return;
+      }
+      const config = this.ensureClientConfig(clientId);
+      if (typeof parsed.volume === 'number' && Number.isFinite(parsed.volume)) {
+        config.volume.percent = Math.min(100, Math.max(0, Math.round(parsed.volume)));
+      }
+      if (typeof parsed.muted === 'boolean') {
+        config.volume.muted = parsed.muted;
+      }
+      this.sendClientNotification('Client.OnVolumeChanged', {
+        id: clientId,
+        volume: { muted: config.volume.muted, percent: config.volume.percent },
+      });
+      this.sendServerUpdate();
+    } catch (error) {
+      this.log.warn('failed to parse snapcast client info', { message: (error as Error).message });
+    }
+  }
+
+  private applyClientVolume(clientId: string, volume: number, muted?: boolean): void {
+    if (!clientId) return;
+    const config = this.ensureClientConfig(clientId);
+    config.volume.percent = Math.min(100, Math.max(0, Math.round(volume)));
+    if (typeof muted === 'boolean') {
+      config.volume.muted = muted;
+    }
+    const client = this.findClientById(clientId);
+    if (client && client.socket.readyState === WebSocket.OPEN) {
+      const output =
+        this.streams.get(client.streamId)?.output ??
+        this.streams.values().next().value?.output ??
+        audioOutputSettings;
+      this.sendSettings(client, output, 0, false);
+    }
+    this.sendClientNotification('Client.OnVolumeChanged', {
+      id: clientId,
+      volume: { muted: config.volume.muted, percent: config.volume.percent },
+    });
+  }
+
+  private applyZoneVolumeToClient(clientId: string, streamId: string): void {
+    const active = this.streams.get(streamId);
+    if (!active) {
+      return;
+    }
+    const zoneVolume = zoneManager.getZoneState(active.zoneId)?.volume;
+    if (typeof zoneVolume !== 'number' || !Number.isFinite(zoneVolume)) {
+      return;
+    }
+    const config = this.ensureClientConfig(clientId);
+    config.volume.percent = Math.min(100, Math.max(0, Math.round(zoneVolume)));
+  }
+
+  private handleStreamAdd(
+    params: any,
+    reply: (result: any) => any,
+    error: (code: number, message: string) => any,
+  ): any {
+    const streamUri = typeof params.streamUri === 'string' ? params.streamUri : '';
+    if (!streamUri) {
+      return error(-32602, 'Invalid params');
+    }
+    const parsed = this.parseStreamUri(streamUri);
+    if (!parsed || !parsed.id) {
+      return error(-32602, 'Invalid params');
+    }
+    const streamId = parsed.id;
+    this.rpcStreams.set(streamId, { id: streamId, uri: streamUri });
+    this.getOrCreateGroup(streamId, streamId);
+    this.sendServerUpdate();
+    return reply({ stream_id: streamId });
+  }
+
+  private parseStreamUri(uri: string): {
+    id: string;
+    scheme: string;
+    host: string;
+    path: string;
+    fragment: string;
+    query: Record<string, string>;
+  } | null {
+    try {
+      const url = new URL(uri);
+      const query: Record<string, string> = {};
+      url.searchParams.forEach((value, key) => {
+        query[key] = value;
+      });
+      const name = url.searchParams.get('name') ?? url.searchParams.get('stream') ?? '';
+      const pathTail = url.pathname ? url.pathname.split('/').filter(Boolean).pop() ?? '' : '';
+      const id = (name || pathTail || uri).trim();
+      if (!id) {
+        return null;
+      }
+      return {
+        id,
+        scheme: url.protocol.replace(':', ''),
+        host: url.host,
+        path: url.pathname,
+        fragment: url.hash.replace('#', ''),
+        query,
+      };
+    } catch {
+      return null;
+    }
   }
 
   private handleTime(client: SnapcastClient, header: { id: number; sent: { sec: number; usec: number }; received: { sec: number; usec: number } }): void {
@@ -539,18 +765,22 @@ class SnapcastCore {
     let pushed = 0;
     for (const client of this.clients) {
       if (client.streamId === streamId && client.socket.readyState === WebSocket.OPEN) {
-        this.sendSettingsAndHeader(client, output, client.lastHelloId ?? 0);
+        this.sendSettings(client, output, 0, true);
         pushed += 1;
       }
     }
     this.log.debug('snapcast pushed settings to clients', { streamId, count: pushed });
   }
 
-  private sendSettingsAndHeader(
+  private sendSettings(
     client: SnapcastClient,
     output: AudioOutputSettings,
     refersTo: number,
+    includeHeader: boolean,
   ): void {
+    const config = this.getClientConfig(client.clientId ?? '');
+    const group = this.findGroupByStreamId(client.streamId);
+    const muted = config.volume.muted || (group?.muted ?? false);
     const settings = this.encodeJsonMessage(3, refersTo, {
       bufferMs: (() => {
         const computed = output.prebufferBytes
@@ -563,14 +793,16 @@ class SnapcastCore {
         }
         return Math.min(computed, MAX_BUFFER_MS);
       })(),
-      latency: 0,
-      volume: 100,
-      muted: false,
+      latency: Number.isFinite(config.latency) ? config.latency : 0,
+      volume: config.volume.percent,
+      muted,
     });
     client.socket.send(settings);
 
-    const wavHeader = this.buildPcmCodecHeader(output.sampleRate, output.channels, output.pcmBitDepth);
-    client.socket.send(wavHeader);
+    if (includeHeader) {
+      const wavHeader = this.buildPcmCodecHeader(output.sampleRate, output.channels, output.pcmBitDepth);
+      client.socket.send(wavHeader);
+    }
   }
 
   private updateFlowControl(streamId: string): void {
@@ -592,23 +824,362 @@ class SnapcastCore {
     try {
       payload = JSON.parse(raw.toString());
     } catch {
+      socket.send(
+        JSON.stringify({
+          id: null,
+          jsonrpc: '2.0',
+          error: { code: -32700, message: 'Parse error' },
+        }),
+      );
       return;
     }
     if (!payload || typeof payload !== 'object') return;
-    if (payload.method === 'Server.GetStatus') {
-      const result = this.buildStatus();
-      socket.send(JSON.stringify({ id: payload.id ?? null, jsonrpc: '2.0', result }));
-      return;
+    const requests = Array.isArray(payload) ? payload : [payload];
+    const responses: any[] = [];
+    for (const request of requests) {
+      const response = this.handleRpcRequest(request);
+      if (response) {
+        responses.push(response);
+      }
     }
-    // Unsupported; respond with basic error so clients don't hang.
-    if (payload.id !== undefined) {
-      socket.send(
-        JSON.stringify({
-          id: payload.id,
-          jsonrpc: '2.0',
-          error: { code: -32601, message: 'Method not found' },
-        }),
-      );
+    if (responses.length > 0) {
+      socket.send(JSON.stringify(Array.isArray(payload) ? responses : responses[0]));
+    }
+  }
+
+  private handleRpcRequest(request: any): any | null {
+    if (!request || typeof request !== 'object' || typeof request.method !== 'string') {
+      if (request?.id === undefined) return null;
+      return {
+        id: request.id ?? null,
+        jsonrpc: '2.0',
+        error: { code: -32600, message: 'Invalid request' },
+      };
+    }
+    const id = request.id ?? null;
+    const method = request.method;
+    const params = request.params ?? {};
+    const reply = (result: any) => ({ id, jsonrpc: '2.0', result });
+    const error = (code: number, message: string) => ({ id, jsonrpc: '2.0', error: { code, message } });
+
+    switch (method) {
+      case 'Server.GetRPCVersion':
+        return reply({ major: 2, minor: 0, patch: 0 });
+      case 'Server.GetStatus': {
+        const status = this.buildStatus();
+        return reply({ server: status });
+      }
+      case 'Client.GetStatus': {
+        const clientId = typeof params.id === 'string' ? params.id : '';
+        const client = this.findClientById(clientId);
+        if (client) {
+          return reply({ client: this.buildClientStatus(client, client.socket.readyState === WebSocket.OPEN) });
+        }
+        if (!clientId || !this.clientConfigs.has(clientId)) {
+          return error(-32602, 'Invalid params');
+        }
+        return reply({ client: this.buildClientStatusFromConfig(clientId, false) });
+      }
+      case 'Client.SetVolume': {
+        const clientId = typeof params.id === 'string' ? params.id : '';
+        const volume = params.volume;
+        if (!clientId || !volume || typeof volume !== 'object') {
+          return error(-32602, 'Invalid params');
+        }
+        const muted = typeof volume.muted === 'boolean' ? volume.muted : false;
+        const percent = Number(volume.percent);
+        if (!Number.isFinite(percent)) {
+          return error(-32602, 'Value for volume must be an int');
+        }
+        const clamped = Math.min(100, Math.max(0, Math.round(percent)));
+        this.setClientVolume(clientId, { muted, percent: clamped });
+        const client = this.findClientById(clientId);
+        if (client && client.socket.readyState === WebSocket.OPEN) {
+          const output =
+            this.streams.get(client.streamId)?.output ??
+            this.streams.values().next().value?.output ??
+            audioOutputSettings;
+          this.sendSettings(client, output, 0, false);
+        }
+        this.sendClientNotification('Client.OnVolumeChanged', { id: clientId, volume: { muted, percent: clamped } });
+        this.sendServerUpdate();
+        return reply({ volume: { muted, percent: clamped } });
+      }
+      case 'Client.SetLatency': {
+        const clientId = typeof params.id === 'string' ? params.id : '';
+        const latency = Number(params.latency);
+        if (!clientId || !Number.isFinite(latency)) {
+          return error(-32602, 'Invalid params');
+        }
+        const clamped = Math.max(0, Math.round(latency));
+        this.ensureClientConfig(clientId).latency = clamped;
+        const client = this.findClientById(clientId);
+        if (client && client.socket.readyState === WebSocket.OPEN) {
+          const output =
+            this.streams.get(client.streamId)?.output ??
+            this.streams.values().next().value?.output ??
+            audioOutputSettings;
+          this.sendSettings(client, output, 0, false);
+        }
+        this.sendClientNotification('Client.OnLatencyChanged', { id: clientId, latency: clamped });
+        this.sendServerUpdate();
+        return reply({ latency: clamped });
+      }
+      case 'Client.SetName': {
+        const clientId = typeof params.id === 'string' ? params.id : '';
+        const name = typeof params.name === 'string' ? params.name : '';
+        if (!clientId) {
+          return error(-32602, 'Invalid params');
+        }
+        this.ensureClientConfig(clientId).name = name;
+        this.sendClientNotification('Client.OnNameChanged', { id: clientId, name });
+        this.sendServerUpdate();
+        return reply({ name });
+      }
+      case 'Group.GetStatus': {
+        const groupId = typeof params.id === 'string' ? params.id : '';
+        const group = this.groupConfigs.get(groupId);
+        if (!group) {
+          return error(-32602, 'Invalid params');
+        }
+        return reply({ group: this.buildGroupStatusFromGroup(group) });
+      }
+      case 'Group.SetMute': {
+        const groupId = typeof params.id === 'string' ? params.id : '';
+        const mute = params.mute;
+        if (!groupId || typeof mute !== 'boolean') {
+          return error(-32602, 'Invalid params');
+        }
+        const group = this.getOrCreateGroup(groupId, groupId);
+        group.muted = mute;
+        const active = this.streams.get(group.streamId);
+        if (active) {
+          for (const client of this.clients) {
+            if (client.streamId === group.streamId && client.socket.readyState === WebSocket.OPEN) {
+              this.sendSettings(client, active.output, 0, false);
+            }
+          }
+        }
+        this.sendClientNotification('Group.OnMute', { id: groupId, mute });
+        this.sendServerUpdate();
+        return reply({ mute });
+      }
+      case 'Group.SetStream': {
+        const groupId = typeof params.id === 'string' ? params.id : '';
+        const streamId = typeof params.stream_id === 'string' ? params.stream_id : '';
+        if (!groupId || !streamId) {
+          return error(-32602, 'Invalid params');
+        }
+        const group = this.getOrCreateGroup(groupId, streamId);
+        group.streamId = streamId;
+        for (const clientId of group.clientIds) {
+          this.setClientStream(clientId, streamId);
+        }
+        this.sendClientNotification('Group.OnStreamChanged', { id: groupId, stream_id: streamId });
+        this.sendServerUpdate();
+        return reply({ stream_id: streamId });
+      }
+      case 'Group.SetClients': {
+        const groupId = typeof params.id === 'string' ? params.id : '';
+        const clients = Array.isArray(params.clients)
+          ? params.clients.filter((c: unknown) => typeof c === 'string')
+          : null;
+        if (!groupId || !clients) {
+          return error(-32602, 'Invalid params');
+        }
+        const group = this.getOrCreateGroup(groupId, groupId);
+        group.clientIds = new Set(clients);
+        for (const clientId of group.clientIds) {
+          this.setClientStream(clientId, group.streamId);
+        }
+        const status = this.buildStatus();
+        this.sendServerUpdate();
+        return reply({ server: status });
+      }
+      case 'Group.SetName': {
+        const groupId = typeof params.id === 'string' ? params.id : '';
+        const name = typeof params.name === 'string' ? params.name : '';
+        if (!groupId) {
+          return error(-32602, 'Invalid params');
+        }
+        const group = this.getOrCreateGroup(groupId, groupId);
+        group.name = name;
+        this.sendClientNotification('Group.OnNameChanged', { id: groupId, name });
+        this.sendServerUpdate();
+        return reply({ name });
+      }
+      case 'Server.DeleteClient': {
+        const clientId = typeof params.id === 'string' ? params.id : '';
+        const client = this.findClientById(clientId);
+        if (!clientId) {
+          return error(-32602, 'Invalid params');
+        }
+        if (!client && !this.clientConfigs.has(clientId)) {
+          return error(-32602, 'Invalid params');
+        }
+        if (client) {
+          try {
+            client.socket.close();
+          } catch {
+            /* ignore */
+          }
+          this.clients.delete(client);
+          this.removeClientFromGroup(clientId, client.streamId);
+        }
+        this.clientConfigs.delete(clientId);
+        try {
+          for (const group of this.groupConfigs.values()) {
+            group.clientIds.delete(clientId);
+          }
+        } catch {
+          /* ignore */
+        }
+        const status = this.buildStatus();
+        this.sendServerUpdate();
+        return reply({ server: status });
+      }
+      case 'Stream.Control': {
+        const streamId = typeof params.id === 'string' ? params.id : '';
+        const command = typeof params.command === 'string' ? params.command : '';
+        if (!streamId || !command) {
+          return error(-32602, "Parameter 'commmand' is missing");
+        }
+        const stream = this.streams.get(streamId);
+        if (!stream) {
+          return error(-32603, 'Stream not found');
+        }
+        const zoneId = stream.zoneId;
+        switch (command) {
+          case 'play':
+            zoneManager.handleCommand(zoneId, 'play');
+            return reply('ok');
+          case 'pause':
+            zoneManager.handleCommand(zoneId, 'pause');
+            return reply('ok');
+          case 'stop':
+            zoneManager.handleCommand(zoneId, 'stop');
+            return reply('ok');
+          case 'next':
+            zoneManager.handleCommand(zoneId, 'queueplus');
+            return reply('ok');
+          case 'previous':
+            zoneManager.handleCommand(zoneId, 'queueminus');
+            return reply('ok');
+          case 'setPosition': {
+            const position = Number(params.position ?? params.param);
+            if (!Number.isFinite(position)) {
+              return error(-32602, "setPosition requires parameter 'position'");
+            }
+            zoneManager.handleCommand(zoneId, 'position', String(position));
+            return reply('ok');
+          }
+          case 'seek': {
+            const offset = Number(params.offset ?? params.param);
+            if (!Number.isFinite(offset)) {
+              return error(-32602, "seek requires parameter 'offset'");
+            }
+            const session = audioManager.getSession(zoneId);
+            const target = (session?.elapsed ?? 0) + offset;
+            zoneManager.handleCommand(zoneId, 'position', String(target));
+            return reply('ok');
+          }
+          default:
+            return error(-32602, `Command '${command}' not supported`);
+        }
+      }
+      case 'Stream.SetProperty': {
+        const streamId = typeof params.id === 'string' ? params.id : '';
+        const property = typeof params.property === 'string' ? params.property : '';
+        if (!streamId || !property) {
+          return error(-32602, "Parameter 'property' is missing");
+        }
+        const stream = this.streams.get(streamId);
+        if (!stream) {
+          return error(-32603, 'Stream not found');
+        }
+        const zoneId = stream.zoneId;
+        if (property === 'volume') {
+          const value = Number(params.value);
+          if (!Number.isFinite(value)) {
+            return error(-32602, 'Value for volume must be an int');
+          }
+          zoneManager.handleCommand(zoneId, 'volume_set', String(value));
+          return reply('ok');
+        }
+        if (property === 'mute') {
+          if (typeof params.value !== 'boolean') {
+            return error(-32602, 'Value for mute must be bool');
+          }
+          const mute = params.value;
+          if (mute) {
+            const snapshot = zoneManager.getZoneState(zoneId)?.volume ?? 0;
+            this.streamMuteSnapshots.set(streamId, snapshot);
+            zoneManager.handleCommand(zoneId, 'volume_set', '0');
+          } else {
+            const restore = this.streamMuteSnapshots.get(streamId);
+            if (typeof restore === 'number') {
+              zoneManager.handleCommand(zoneId, 'volume_set', String(restore));
+              this.streamMuteSnapshots.delete(streamId);
+            }
+          }
+          return reply('ok');
+        }
+        if (property === 'shuffle') {
+          if (typeof params.value !== 'boolean') {
+            return error(-32602, 'Value for shuffle must be bool');
+          }
+          zoneManager.setShuffle(zoneId, params.value);
+          return reply('ok');
+        }
+        if (property === 'loopStatus') {
+          if (typeof params.value !== 'string') {
+            return error(-32602, "Value for loopStatus must be one of 'none', 'track', 'playlist'");
+          }
+          if (params.value === 'none') {
+            zoneManager.setRepeatMode(zoneId, 'off');
+            return reply('ok');
+          }
+          if (params.value === 'track') {
+            zoneManager.setRepeatMode(zoneId, 'one');
+            return reply('ok');
+          }
+          if (params.value === 'playlist') {
+            zoneManager.setRepeatMode(zoneId, 'all');
+            return reply('ok');
+          }
+          return error(-32602, "Value for loopStatus must be one of 'none', 'track', 'playlist'");
+        }
+        if (property === 'rate') {
+          if (!Number.isFinite(Number(params.value))) {
+            return error(-32602, 'Value for rate must be float');
+          }
+          return error(-32603, 'Stream property rate not supported');
+        }
+        return error(-32602, `Property '${property}' not supported`);
+      }
+      case 'Stream.AddStream':
+        return this.handleStreamAdd(params, reply, error);
+      case 'Stream.RemoveStream': {
+        const streamId = typeof params.id === 'string' ? params.id : '';
+        if (!streamId) {
+          return error(-32602, 'Invalid params');
+        }
+        if (!this.streams.has(streamId) && !this.rpcStreams.has(streamId)) {
+          return error(-32603, 'Stream not found');
+        }
+        this.rpcStreams.delete(streamId);
+        this.clearStream(streamId);
+        for (const [groupId, group] of this.groupConfigs.entries()) {
+          if (groupId === streamId || group.streamId === streamId) {
+            this.groupConfigs.delete(groupId);
+          }
+        }
+        this.sendServerUpdate();
+        return reply({ stream_id: streamId });
+      }
+      default:
+        if (request.id === undefined) return null;
+        return error(-32601, 'Method not found');
     }
   }
 
@@ -657,12 +1228,8 @@ class SnapcastCore {
 
   private buildStatus(): any {
     const serverMeta = this.buildServerMeta();
-    const streams = Array.from(this.streams.values()).map((stream) =>
-      this.buildStreamStatus(stream),
-    );
-    const groups = Array.from(this.streams.values()).map((stream) =>
-      this.buildGroupStatus(stream),
-    );
+    const streams = this.buildStreamStatusList();
+    const groups = this.buildGroupStatusList();
     return {
       server: serverMeta,
       streams,
@@ -693,6 +1260,7 @@ class SnapcastCore {
   private buildStreamStatus(active: ActiveStream): any {
     const session = audioManager.getSession(active.zoneId);
     const meta = session?.metadata;
+    const zoneState = zoneManager.getZoneState(active.zoneId);
     const metadata = meta
       ? {
           title: meta.title ?? undefined,
@@ -705,6 +1273,8 @@ class SnapcastCore {
     const playbackStatus =
       session?.state === 'playing' ? 'playing' : session?.state === 'paused' ? 'paused' : 'stopped';
     const position = session?.elapsed ?? undefined;
+    const loopStatus =
+      zoneState?.plrepeat === 1 ? 'track' : zoneState?.plrepeat === 2 ? 'playlist' : 'none';
     return {
       id: active.streamId,
       status: playbackStatus === 'playing' ? 'playing' : 'idle',
@@ -715,9 +1285,9 @@ class SnapcastCore {
         canPause: false,
         canPlay: false,
         canSeek: false,
-        loopStatus: 'none',
-        shuffle: false,
-        volume: 100,
+        loopStatus,
+        shuffle: zoneState?.plshuffle === 1,
+        volume: zoneState?.volume ?? 100,
         playbackStatus,
         position,
         metadata,
@@ -733,34 +1303,138 @@ class SnapcastCore {
     };
   }
 
-  private buildGroupStatus(active: ActiveStream): any {
-    const clients = Array.from(this.clients)
-      .filter((c) => c.streamId === active.streamId)
-      .map((c) => ({
-        id: c.clientId ?? 'unknown',
-        connected: c.socket.readyState === WebSocket.OPEN,
-        config: {
-          instance: 1,
-          latency: 0,
-          name: c.clientId ?? '',
-          volume: { muted: false, percent: 100 },
-        },
-        host: {
-          arch: 'web',
-          ip: '',
-          mac: '',
-          name: c.clientId ?? 'client',
-          os: '',
-        },
-        snapclient: { name: 'snapclient', protocolVersion: 2, version: '0.0.0' },
-        lastSeen: { sec: Math.floor(Date.now() / 1000), usec: 0 },
-      }));
+  private buildStreamStatusList(): any[] {
+    const activeStreams = Array.from(this.streams.values()).map((stream) =>
+      this.buildStreamStatus(stream),
+    );
+    const rpcOnly = Array.from(this.rpcStreams.values())
+      .filter((stream) => !this.streams.has(stream.id))
+      .map((stream) => this.buildRpcStreamStatus(stream));
+    return [...activeStreams, ...rpcOnly];
+  }
+
+  private buildRpcStreamStatus(stream: RpcStream): any {
+    const uri = this.parseStreamUri(stream.uri);
     return {
-      id: active.streamId,
-      name: '',
-      muted: false,
-      stream_id: active.streamId,
+      id: stream.id,
+      status: 'idle',
+      properties: {
+        canControl: false,
+        canGoNext: false,
+        canGoPrevious: false,
+        canPause: false,
+        canPlay: false,
+        canSeek: false,
+        loopStatus: 'none',
+        shuffle: false,
+        volume: 100,
+        playbackStatus: 'stopped',
+        position: undefined,
+        metadata: undefined,
+      },
+      uri: uri
+        ? {
+            raw: stream.uri,
+            scheme: uri.scheme,
+            host: uri.host,
+            path: uri.path,
+            fragment: uri.fragment,
+            query: uri.query,
+          }
+        : {
+            raw: stream.uri,
+            scheme: '',
+            host: '',
+            path: '',
+            fragment: '',
+            query: {},
+          },
+    };
+  }
+
+  private buildGroupStatus(active: ActiveStream): any {
+    const group = this.getOrCreateGroup(active.streamId, active.streamId);
+    return this.buildGroupStatusFromGroup(group);
+  }
+
+  private buildGroupStatusList(): any[] {
+    const streams = new Set(Array.from(this.streams.values()).map((stream) => stream.streamId));
+    this.rpcStreams.forEach((stream) => streams.add(stream.id));
+    for (const streamId of streams) {
+      this.getOrCreateGroup(streamId, streamId);
+    }
+    return Array.from(this.groupConfigs.values()).map((group) => this.buildGroupStatusFromGroup(group));
+  }
+
+  private buildGroupStatusFromGroup(group: SnapcastGroupState): any {
+    const clients = Array.from(group.clientIds).map((id) => {
+      const live = this.findClientById(id);
+      if (live) {
+        return this.buildClientStatus(live, live.socket.readyState === WebSocket.OPEN);
+      }
+      return this.buildClientStatusFromConfig(id, false);
+    });
+    return {
+      id: group.id,
+      name: group.name,
+      muted: group.muted,
+      stream_id: group.streamId,
       clients,
+    };
+  }
+
+  private buildClientStatus(client: SnapcastClient, connected: boolean): any {
+    const clientId = client.clientId ?? 'unknown';
+    const config = this.getClientConfig(clientId);
+    return {
+      id: clientId,
+      connected,
+      config: {
+        instance: config.instance,
+        latency: config.latency,
+        name: config.name,
+        volume: { muted: config.volume.muted, percent: config.volume.percent },
+      },
+      host: {
+        arch: config.host.arch || 'web',
+        ip: config.host.ip,
+        mac: config.host.mac,
+        name: config.host.name || config.name || clientId,
+        os: config.host.os,
+      },
+      snapclient: {
+        name: config.snapclient.name || 'snapclient',
+        protocolVersion: config.snapclient.protocolVersion || 2,
+        version: config.snapclient.version || '0.0.0',
+      },
+      lastSeen: { sec: Math.floor(Date.now() / 1000), usec: 0 },
+    };
+  }
+
+  private buildClientStatusFromConfig(clientId: string, connected: boolean): any {
+    const config = this.getClientConfig(clientId);
+    return {
+      id: clientId,
+      connected,
+      config: {
+        instance: config.instance,
+        latency: config.latency,
+        name: config.name,
+        volume: { muted: config.volume.muted, percent: config.volume.percent },
+      },
+      host: {
+        arch: config.host.arch || 'web',
+        ip: config.host.ip,
+        mac: config.host.mac,
+        name: config.host.name || config.name || clientId,
+        os: config.host.os,
+      },
+      snapclient: {
+        name: config.snapclient.name || 'snapclient',
+        protocolVersion: config.snapclient.protocolVersion || 2,
+        version: config.snapclient.version || '0.0.0',
+      },
+      lastSeen: { sec: Math.floor(Date.now() / 1000), usec: 0 },
     };
   }
 
@@ -774,6 +1448,152 @@ class SnapcastCore {
       }
     }
     return '127.0.0.1';
+  }
+
+  private ensureClientConfig(clientId: string, instance?: number): SnapcastClientConfig {
+    const parsedInstance = this.parseInstance(clientId, instance);
+    const existing = this.clientConfigs.get(clientId);
+    if (existing) {
+      existing.instance = parsedInstance;
+      return existing;
+    }
+    const config: SnapcastClientConfig = {
+      instance: parsedInstance,
+      latency: 0,
+      name: '',
+      volume: { muted: false, percent: 100 },
+      host: {
+        arch: '',
+        ip: '',
+        mac: '',
+        name: '',
+        os: '',
+      },
+      snapclient: {
+        name: 'snapclient',
+        protocolVersion: 2,
+        version: '0.0.0',
+      },
+    };
+    this.clientConfigs.set(clientId, config);
+    return config;
+  }
+
+  private getClientConfig(clientId: string): SnapcastClientConfig {
+    return this.ensureClientConfig(clientId);
+  }
+
+  private getClientVolume(clientId: string | null): SnapcastVolume {
+    if (!clientId) {
+      return { muted: false, percent: 100 };
+    }
+    return this.ensureClientConfig(clientId).volume;
+  }
+
+  private setClientVolume(clientId: string, volume: SnapcastVolume): void {
+    const config = this.ensureClientConfig(clientId);
+    config.volume = volume;
+  }
+
+  private parseInstance(clientId: string, instance?: number): number {
+    if (typeof instance === 'number' && instance > 0) {
+      return Math.floor(instance);
+    }
+    const match = /#(\d+)$/.exec(clientId);
+    if (match) {
+      const parsed = Number(match[1]);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+    return 1;
+  }
+
+  private findClientById(clientId: string): SnapcastClient | null {
+    for (const client of this.clients) {
+      if (client.clientId === clientId) {
+        return client;
+      }
+    }
+    return null;
+  }
+
+  private updateClientStream(client: SnapcastClient, streamId: string): void {
+    if (client.streamId === streamId) {
+      return;
+    }
+    const previous = client.streamId;
+    if (client.clientId) {
+      this.removeClientFromGroup(client.clientId, previous);
+    }
+    client.streamId = streamId;
+    if (client.clientId) {
+      this.addClientToGroup(client.clientId, streamId);
+    }
+    this.updateFlowControl(previous);
+    this.updateFlowControl(streamId);
+  }
+
+  private addClientToGroup(clientId: string, streamId: string): void {
+    const group = this.findGroupByStreamId(streamId) ?? this.getOrCreateGroup(streamId, streamId);
+    group.clientIds.add(clientId);
+  }
+
+  private removeClientFromGroup(clientId: string, streamId: string): void {
+    const group = this.findGroupByStreamId(streamId);
+    if (group) {
+      group.clientIds.delete(clientId);
+    }
+  }
+
+  private findGroupByStreamId(streamId: string): SnapcastGroupState | null {
+    for (const group of this.groupConfigs.values()) {
+      if (group.streamId === streamId) {
+        return group;
+      }
+    }
+    return null;
+  }
+
+  private getOrCreateGroup(id: string, streamId: string): SnapcastGroupState {
+    const existing = this.groupConfigs.get(id);
+    if (existing) {
+      return existing;
+    }
+    const group: SnapcastGroupState = {
+      id,
+      name: '',
+      muted: false,
+      streamId,
+      clientIds: new Set(),
+    };
+    this.groupConfigs.set(id, group);
+    return group;
+  }
+
+  private sendClientNotification(method: string, params: Record<string, unknown>): void {
+    if (this.rpcClients.size === 0) return;
+    const payload = JSON.stringify({ jsonrpc: '2.0', method, params });
+    for (const client of Array.from(this.rpcClients)) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(payload);
+      }
+    }
+  }
+
+  private sendServerUpdate(): void {
+    if (this.rpcClients.size === 0) return;
+    const status = this.buildStatus();
+    const payload = JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'Server.OnUpdate',
+      params: { server: status },
+    });
+    for (const client of Array.from(this.rpcClients)) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(payload);
+      }
+    }
   }
 }
 
