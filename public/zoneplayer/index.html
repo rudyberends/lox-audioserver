@@ -1182,10 +1182,58 @@
         resetIdleFullscreen();
       });
 
+      let rpcRequestId = 1;
+
+      const sendSnapcastRpc = (payload) => {
+        const rpcUrl = buildRpcUrl();
+        if (!rpcUrl) return;
+        const sendPayload = (socket) => {
+          try {
+            socket.send(JSON.stringify(payload));
+          } catch {
+            /* ignore */
+          }
+        };
+        if (metaSocket && metaSocket.readyState === WebSocket.OPEN) {
+          sendPayload(metaSocket);
+          return;
+        }
+        const temp = new WebSocket(rpcUrl);
+        temp.onopen = () => {
+          sendPayload(temp);
+          setTimeout(() => {
+            try { temp.close(); } catch {}
+          }, 200);
+        };
+      };
+
+      const sendControl = (action) => {
+        if (currentProtocol !== 'snapcast') return;
+        const streamId = zoneSelect.value.trim();
+        if (!streamId) return;
+        let command = action;
+        if (action === 'prev') command = 'previous';
+        if (action === 'playpause') command = 'playPause';
+        const payload = {
+          id: rpcRequestId++,
+          jsonrpc: '2.0',
+          method: 'Stream.Control',
+          params: {
+            id: streamId,
+            command,
+            params: {},
+          },
+        };
+        sendSnapcastRpc(payload);
+      };
+
       document.querySelectorAll('.player-controls button[data-action]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const action = btn.getAttribute('data-action');
           console.info('[Player controls] action clicked', action);
+          if (action) {
+            sendControl(action);
+          }
           setStatus(`${status} · ${action} pressed`, status === 'Connected' || status.startsWith('Ready'), false);
           resetIdleFullscreen();
         });

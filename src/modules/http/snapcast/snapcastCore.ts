@@ -1039,8 +1039,10 @@ class SnapcastCore {
         return reply({ server: status });
       }
       case 'Stream.Control': {
-        const streamId = typeof params.id === 'string' ? params.id : '';
+        const streamId =
+          typeof params.id === 'string' ? params.id : typeof params.stream_id === 'string' ? params.stream_id : '';
         const command = typeof params.command === 'string' ? params.command : '';
+        const commandParams = params && typeof params.params === 'object' ? params.params : {};
         if (!streamId || !command) {
           return error(-32602, "Parameter 'commmand' is missing");
         }
@@ -1056,6 +1058,15 @@ class SnapcastCore {
           case 'pause':
             zoneManager.handleCommand(zoneId, 'pause');
             return reply('ok');
+          case 'playPause': {
+            const session = audioManager.getSession(zoneId);
+            if (session?.state === 'playing') {
+              zoneManager.handleCommand(zoneId, 'pause');
+            } else {
+              zoneManager.handleCommand(zoneId, 'play');
+            }
+            return reply('ok');
+          }
           case 'stop':
             zoneManager.handleCommand(zoneId, 'stop');
             return reply('ok');
@@ -1066,7 +1077,7 @@ class SnapcastCore {
             zoneManager.handleCommand(zoneId, 'queueminus');
             return reply('ok');
           case 'setPosition': {
-            const position = Number(params.position ?? params.param);
+            const position = Number(commandParams.position ?? params.position ?? params.param);
             if (!Number.isFinite(position)) {
               return error(-32602, "setPosition requires parameter 'position'");
             }
@@ -1074,7 +1085,7 @@ class SnapcastCore {
             return reply('ok');
           }
           case 'seek': {
-            const offset = Number(params.offset ?? params.param);
+            const offset = Number(commandParams.offset ?? params.offset ?? params.param);
             if (!Number.isFinite(offset)) {
               return error(-32602, "seek requires parameter 'offset'");
             }
@@ -1261,13 +1272,15 @@ class SnapcastCore {
     const session = audioManager.getSession(active.zoneId);
     const meta = session?.metadata;
     const zoneState = zoneManager.getZoneState(active.zoneId);
+    const hasSession = Boolean(session);
+    const duration = meta?.duration ?? session?.duration ?? undefined;
     const metadata = meta
       ? {
           title: meta.title ?? undefined,
           artist: meta.artist ? [meta.artist] : undefined,
           album: meta.album ?? undefined,
           artUrl: meta.coverurl ?? session?.stream?.coverUrl,
-          duration: meta.duration ?? session?.duration ?? undefined,
+          duration,
         }
       : undefined;
     const playbackStatus =
@@ -1279,12 +1292,12 @@ class SnapcastCore {
       id: active.streamId,
       status: playbackStatus === 'playing' ? 'playing' : 'idle',
       properties: {
-        canControl: false,
-        canGoNext: false,
-        canGoPrevious: false,
-        canPause: false,
-        canPlay: false,
-        canSeek: false,
+        canControl: hasSession,
+        canGoNext: hasSession,
+        canGoPrevious: hasSession,
+        canPause: hasSession,
+        canPlay: hasSession,
+        canSeek: hasSession && typeof duration === 'number' && duration > 0,
         loopStatus,
         shuffle: zoneState?.plshuffle === 1,
         volume: zoneState?.volume ?? 100,
