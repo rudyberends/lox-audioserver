@@ -9,10 +9,10 @@ import type {
   StreamHandle,
   ConnectEvent,
   LibrespotErrorCode,
-} from 'node-librespot';
+} from '@lox-audioserver/node-librespot';
 
-const log = createLogger('Audio', 'node-librespot');
-type NativeAddon = typeof import('node-librespot') & {
+const log = createLogger('Audio', '@lox-audioserver/node-librespot');
+type NativeAddon = typeof import('@lox-audioserver/node-librespot') & {
   loginWithAccessToken: (
     accessToken: string,
     deviceName?: string,
@@ -21,7 +21,7 @@ type NativeAddon = typeof import('node-librespot') & {
 type NativeStreamHandle = Pick<StreamHandle, 'stop' | 'sampleRate' | 'channels'>;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const addon: NativeAddon = require('node-librespot') as NativeAddon;
+const addon: NativeAddon = require('@lox-audioserver/node-librespot') as NativeAddon;
 // Default to quieter native logging; only warnings/errors by default.
 try {
   if (typeof (addon as any).setLogLevel === 'function') {

@@ -5,7 +5,8 @@ import { getPlayer } from '@/modules/audio/player/playerRegistry';
 import os from 'node:os';
 import http from 'node:http';
 import { PassThrough } from 'stream';
-import { startReceiver, stopReceiver, type RaopEvent, type ReceiverOptions } from 'node-libraop';
+import { startReceiver, stopReceiver } from '@lox-audioserver/node-libraop';
+import type { RaopEvent, ReceiverOptions } from '@lox-audioserver/node-libraop/dist/types';
 
 export interface AirplayInstanceController {
   startPlayback(
