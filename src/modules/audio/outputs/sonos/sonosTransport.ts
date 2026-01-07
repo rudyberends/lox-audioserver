@@ -8,7 +8,7 @@ import type {
   TransportConfigDefinition,
   ZoneTransport,
 } from '@/modules/audio/outputs/types';
-import { SonosClient } from '@lox-audioserver/sonos';
+import { SonosClient } from '@lox-audioserver/node-sonos';
 import { resolveDlnaEndpoints } from '@/modules/audio/outputs/dlna/dlnaDiscovery';
 import { resolveSessionCover, isHttpUrl } from '@/modules/audio/utils/coverArt';
 import { decodeAudiopath } from '@/modules/audio/utils/audiopath';
