@@ -16,7 +16,7 @@ RUN apt-get update \
 
 RUN npm ci
 COPY . .
-RUN npm run build && npm run build:admin
+RUN npm run build
 RUN npm prune --omit=dev
 
 # Stage 2: Runtime image with mount tools
