@@ -5,8 +5,9 @@ import { getPlayer } from '@/modules/audio/player/playerRegistry';
 import os from 'node:os';
 import http from 'node:http';
 import { PassThrough } from 'stream';
-import { startReceiver, stopReceiver } from '@lox-audioserver/node-libraop';
-import type { RaopEvent, ReceiverOptions } from '@lox-audioserver/node-libraop/dist/types';
+import * as libraop from '@lox-audioserver/node-libraop';
+import { startReceiver, stopReceiver, setLogHandler } from '@lox-audioserver/node-libraop';
+import type { LogEntry, RaopEvent, ReceiverOptions } from '@lox-audioserver/node-libraop/dist/types';
 
 export interface AirplayInstanceController {
   startPlayback(
@@ -26,6 +27,9 @@ export interface AirplayInstanceController {
 
 const DEFAULT_SAMPLE_RATE = 44100;
 const DEFAULT_CHANNELS = 2;
+const libraopLog = createLogger('Input', 'AirPlayLibraop');
+let libraopLogHandlerConfigured = false;
+type LibraopRemoteCommand = 'play' | 'pause' | 'stop' | 'next' | 'prev' | 'previous';
 
 export class AirplayInstance {
   private readonly log: ComponentLogger;
@@ -40,8 +44,8 @@ export class AirplayInstance {
   private lastPublishedMetadata?: string;
   private currentVolume = 0;
   private sessionActive = false;
-  private currentElapsedMs = 0;
-  private currentDurationMs = 0;
+  private currentElapsedSec = 0;
+  private currentDurationSec = 0;
   private receiverHandle: number | null = null;
   private httpRequest: http.ClientRequest | null = null;
   private httpResponse: http.IncomingMessage | null = null;
@@ -79,8 +83,8 @@ export class AirplayInstance {
     await this.stopServer();
     this.sessionActive = false;
     this.isPlaying = false;
-    this.currentElapsedMs = 0;
-    this.currentDurationMs = 0;
+    this.currentElapsedSec = 0;
+    this.currentDurationSec = 0;
     this.pcmBytesTotal = 0;
     this.lastTimingPushMs = 0;
     this.stopping = false;
@@ -128,6 +132,29 @@ export class AirplayInstance {
       host,
     };
     this.httpHost = host;
+    const libraopLogLevel = process.env.AIRPLAY_LIBRAOP_LOG as LogEntry['level'] | undefined;
+    if (!libraopLogHandlerConfigured && libraopLogLevel) {
+      libraopLogHandlerConfigured = true;
+      setLogHandler((entry: LogEntry) => {
+        const payload = { source: entry.source, timestamp: entry.timestamp, line: entry.line };
+        switch (entry.level) {
+          case 'error':
+            libraopLog.error('libraop', payload);
+            break;
+          case 'warn':
+            libraopLog.warn('libraop', payload);
+            break;
+          case 'debug':
+          case 'sdebug':
+            libraopLog.debug('libraop', payload);
+            break;
+          default:
+            libraopLog.info('libraop', payload);
+            break;
+        }
+      }, libraopLogLevel);
+      this.log.info('libraop log handler enabled', { zoneId: this.zoneId });
+    }
     this.log.info('starting AirPlay receiver', {
       zoneId: this.zoneId,
       portBase,
@@ -203,6 +230,7 @@ export class AirplayInstance {
   }
 
   private handleRaopEvent(event: RaopEvent): void {
+    this.log.debug('airplay raop event', { zoneId: this.zoneId, type: event.type });
     switch (event.type) {
       case 'stream':
         this.log.info('airplay stream announced', { zoneId: this.zoneId, port: event.port });
@@ -229,6 +257,9 @@ export class AirplayInstance {
           title: event.title,
           artist: event.artist,
           album: event.album,
+          durationMs: (event as any).durationMs,
+          duration: (event as any).duration,
+          elapsedMs: (event as any).elapsedMs,
         });
         break;
       case 'artwork':
@@ -236,6 +267,9 @@ export class AirplayInstance {
           title: event.title,
           artist: event.artist,
           album: event.album,
+          durationMs: (event as any).durationMs,
+          duration: (event as any).duration,
+          elapsedMs: (event as any).elapsedMs,
           artwork: event.data,
         });
         break;
@@ -280,11 +314,45 @@ export class AirplayInstance {
   public sendRemoteCommand(
     command: 'Play' | 'Pause' | 'PlayPause' | 'Stop' | 'Next' | 'Previous' | 'ToggleMute',
   ): void {
-    this.log.debug('remote command noop (airplay server)', { zoneId: this.zoneId, command });
+    const handle = this.receiverHandle;
+    const remoteCommand = this.resolveRemoteCommand(command);
+    const sender = (libraop as Record<string, unknown>).sendRemoteCommand as
+      | ((receiverHandle: number, cmd: LibraopRemoteCommand) => boolean)
+      | undefined;
+    if (!handle || !remoteCommand || typeof sender !== 'function') {
+      this.log.debug('remote command unavailable (airplay server)', {
+        zoneId: this.zoneId,
+        command,
+        hasHandle: Boolean(handle),
+        hasSender: typeof sender === 'function',
+        mapped: remoteCommand ?? null,
+      });
+      return;
+    }
+    const sent = sender(handle, remoteCommand);
+    if (!sent) {
+      this.log.warn('airplay remote command not sent', { zoneId: this.zoneId, command });
+    }
   }
 
   public setRemoteVolume(percent: number): void {
-    this.log.debug('remote volume noop (airplay server)', { zoneId: this.zoneId, percent });
+    const handle = this.receiverHandle;
+    const setVolume = (libraop as Record<string, unknown>).setRemoteVolume as
+      | ((receiverHandle: number, volume: number) => boolean)
+      | undefined;
+    if (!handle || typeof setVolume !== 'function') {
+      this.log.debug('remote volume unavailable (airplay server)', {
+        zoneId: this.zoneId,
+        percent,
+        hasHandle: Boolean(handle),
+        hasSetter: typeof setVolume === 'function',
+      });
+      return;
+    }
+    const sent = setVolume(handle, percent);
+    if (!sent) {
+      this.log.warn('airplay remote volume not sent', { zoneId: this.zoneId, percent });
+    }
   }
 
   private startHttpStream(port: number | undefined): void {
@@ -323,7 +391,7 @@ export class AirplayInstance {
           this.log.info('airplay http stream ended', { zoneId: this.zoneId });
           this.stopHttpStream();
           if (!this.stopping) {
-            this.handlePlaybackPause();
+            this.handlePlaybackStop();
           }
         });
         res.on('error', (error) => {
@@ -332,6 +400,9 @@ export class AirplayInstance {
             message: error instanceof Error ? error.message : String(error),
           });
           this.stopHttpStream();
+          if (!this.stopping) {
+            this.handlePlaybackStop();
+          }
         });
       },
     );
@@ -341,6 +412,9 @@ export class AirplayInstance {
         message: error instanceof Error ? error.message : String(error),
       });
       this.stopHttpStream();
+      if (!this.stopping) {
+        this.handlePlaybackStop();
+      }
     });
     req.on('close', () => {
       this.httpRequest = null;
@@ -376,6 +450,8 @@ export class AirplayInstance {
     }
     if (!this.sessionActive) {
       this.handlePlaybackStart();
+    } else if (!this.isPlaying) {
+      this.handlePlaybackResume();
     }
     const ok = this.pcmStream.write(payload);
     if (!ok) {
@@ -423,6 +499,29 @@ export class AirplayInstance {
     }
   }
 
+  private resolveRemoteCommand(
+    command: 'Play' | 'Pause' | 'PlayPause' | 'Stop' | 'Next' | 'Previous' | 'ToggleMute',
+  ): LibraopRemoteCommand | null {
+    switch (command) {
+      case 'Play':
+        return 'play';
+      case 'Pause':
+        return 'pause';
+      case 'PlayPause':
+        return this.isPlaying ? 'pause' : 'play';
+      case 'Stop':
+        return 'stop';
+      case 'Next':
+        return 'next';
+      case 'Previous':
+        return 'prev';
+      case 'ToggleMute':
+        return null;
+      default:
+        return null;
+    }
+  }
+
   private applyMetadataFromObject(metadata: Record<string, unknown>): void {
     const readString = (keys: string[]): string | undefined => {
       for (const key of keys) {
@@ -449,6 +548,9 @@ export class AirplayInstance {
       return undefined;
     };
 
+    const prevTitle = this.currentMetadata.title ?? '';
+    const prevArtist = this.currentMetadata.artist ?? '';
+    const prevAlbum = this.currentMetadata.album ?? '';
     const title = readString(['title', 'name', 'songName', 'Song Name']);
     const artist = readString(['artist', 'Artist']);
     const album = readString(['album', 'albumName', 'Album']);
@@ -491,20 +593,50 @@ export class AirplayInstance {
       }
     }
 
+    const durationMs = readNumber(['durationMs', 'totalTimeMs', 'lengthMs']);
     const durationSeconds = readNumber(['duration', 'totalTime', 'length']);
-    if (durationSeconds && durationSeconds > 0) {
-      this.currentDurationMs = Math.round(durationSeconds * 1000);
-      this.currentMetadata.duration = this.currentDurationMs;
+    const durationProvided = (durationMs !== undefined && durationMs > 0) || (durationSeconds !== undefined && durationSeconds > 0);
+    if (durationMs && durationMs > 0) {
+      this.currentDurationSec = Math.max(0, Math.round(durationMs / 1000));
+      this.currentMetadata.duration = this.currentDurationSec;
+    } else if (durationSeconds && durationSeconds > 0) {
+      this.currentDurationSec = Math.max(0, Math.round(durationSeconds));
+      this.currentMetadata.duration = this.currentDurationSec;
     }
+    const elapsedMs = readNumber(['positionMs', 'elapsedMs', 'progressMs', 'playbackPositionMs']);
     const elapsedSeconds = readNumber(['position', 'elapsedTime', 'progress', 'playbackPosition']);
-    if (elapsedSeconds !== undefined) {
-      const elapsedMs = Math.max(0, Math.round(elapsedSeconds * 1000));
-      this.currentElapsedMs = elapsedMs;
+    const elapsedProvided = elapsedMs !== undefined || elapsedSeconds !== undefined;
+    if (elapsedProvided) {
+      const elapsedSec = Math.max(0, Math.round(elapsedMs !== undefined ? elapsedMs / 1000 : elapsedSeconds!));
+      this.currentElapsedSec = elapsedSec;
       const player = getPlayer(this.zoneId);
       if (player) {
-        player.updateTiming(elapsedMs, this.currentDurationMs);
+        player.updateTiming(elapsedSec, this.currentDurationSec);
       } else {
-        this.controller.updateTiming(this.zoneId, elapsedMs, this.currentDurationMs);
+        this.controller.updateTiming(this.zoneId, elapsedSec, this.currentDurationSec);
+      }
+    }
+
+    const resolvedTitle = this.currentMetadata.title ?? '';
+    const resolvedArtist = this.currentMetadata.artist ?? '';
+    const resolvedAlbum = this.currentMetadata.album ?? '';
+    const trackChanged =
+      (title && resolvedTitle !== prevTitle) ||
+      (artist && resolvedArtist !== prevArtist) ||
+      (album && resolvedAlbum !== prevAlbum);
+    if (trackChanged) {
+      this.pcmBytesTotal = 0;
+      this.currentElapsedSec = 0;
+      this.lastTimingPushMs = 0;
+      if (!durationProvided) {
+        this.currentDurationSec = 0;
+        this.currentMetadata.duration = undefined;
+      }
+      const player = getPlayer(this.zoneId);
+      if (player) {
+        player.updateTiming(0, this.currentDurationSec);
+      } else {
+        this.controller.updateTiming(this.zoneId, 0, this.currentDurationSec);
       }
     }
 
@@ -539,8 +671,8 @@ export class AirplayInstance {
       );
       this.pcmBytesTotal = 0;
       this.lastTimingPushMs = Date.now();
-      this.currentElapsedMs = 0;
-      this.currentDurationMs = this.currentMetadata.duration || 0;
+      this.currentElapsedSec = 0;
+      this.currentDurationSec = this.currentMetadata.duration || 0;
       this.publishMetadata();
       return;
     }
@@ -599,6 +731,7 @@ export class AirplayInstance {
       artist: this.currentMetadata.artist ?? '',
       album: this.currentMetadata.album ?? '',
       coverurl: this.coverUrl,
+      duration: this.currentMetadata.duration,
     };
   }
 
@@ -629,8 +762,8 @@ export class AirplayInstance {
 
   private resetMetadata(clearCoverArt = false): void {
     this.currentMetadata = {};
-    this.currentElapsedMs = 0;
-    this.currentDurationMs = 0;
+    this.currentElapsedSec = 0;
+    this.currentDurationSec = 0;
     this.pcmLogged = false;
     this.pcmBytesTotal = 0;
     this.lastTimingPushMs = 0;
@@ -679,21 +812,21 @@ export class AirplayInstance {
     }
     this.pcmBytesTotal += bytes;
     const elapsedSeconds = Math.floor(this.pcmBytesTotal / (bytesPerFrame * sampleRate));
-    const elapsedMs = elapsedSeconds * 1000;
-    const durationMs = this.currentDurationMs || this.currentMetadata.duration || 0;
+    const elapsedSec = elapsedSeconds;
+    const durationSec = this.currentDurationSec || this.currentMetadata.duration || 0;
     const now = Date.now();
     const shouldPublish =
-      elapsedMs !== this.currentElapsedMs || now - this.lastTimingPushMs >= 1000;
+      elapsedSec !== this.currentElapsedSec || now - this.lastTimingPushMs >= 1000;
     if (!shouldPublish) {
       return;
     }
-    this.currentElapsedMs = elapsedMs;
+    this.currentElapsedSec = elapsedSec;
     this.lastTimingPushMs = now;
     const player = getPlayer(this.zoneId);
     if (player) {
-      player.updateTiming(elapsedMs, durationMs);
+      player.updateTiming(elapsedSec, durationSec);
     } else {
-      this.controller.updateTiming(this.zoneId, elapsedMs, durationMs);
+      this.controller.updateTiming(this.zoneId, elapsedSec, durationSec);
     }
   }
 

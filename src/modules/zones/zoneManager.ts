@@ -3379,10 +3379,14 @@ function getInputAudioType(ctx: ZoneContext): number | null {
 }
 
 function isRadioAudiopath(audiopath: string | undefined, audiotype?: number | null): boolean {
+  const raw = (audiopath ?? '').trim();
+  const lower = raw.toLowerCase();
+  if (lower.startsWith('airplay://')) {
+    return false;
+  }
   if (audiotype === 1 || audiotype === 4) {
     return true;
   }
-  const raw = (audiopath ?? '').trim();
   if (!raw) {
     return false;
   }
