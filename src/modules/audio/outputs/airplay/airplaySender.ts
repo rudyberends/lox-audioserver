@@ -1,7 +1,7 @@
 import { Readable } from 'node:stream';
 import { networkInterfaces } from 'node:os';
 import { createLogger } from '@/core/logging/logger';
-import { LoxAirplaySender } from 'lox-airplay-sender';
+import { LoxAirplaySender } from '@lox-audioserver/node-airplay-sender';
 export type AirplaySenderOverrides = Record<string, unknown>;
 import { discoverAirplayDevices } from '@/modules/audio/outputs/airplay/airplayDiscovery';
 import { ntpToUnixMs } from '@/modules/audio/outputs/airplay/airplayNtp';
