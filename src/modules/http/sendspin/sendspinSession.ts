@@ -84,6 +84,8 @@ export class SendspinSession {
   private warnedMissingMute = false;
   private connectionReason: 'discovery' | 'playback' | 'cast-tunnel';
   private readonly connectionMeta: SendspinConnectionMeta;
+  private initialStateReceived = false;
+  private initialStateTimer: NodeJS.Timeout | null = null;
 
   private activeStream = false;
   private streamFormat: PlayerFormat = {
@@ -223,12 +225,26 @@ export class SendspinSession {
     }
 
     if (!this.ready) {
-      if (msg.type !== 'client/hello') return;
+      if (msg.type !== 'client/hello') {
+        log.warn('client message before hello; closing connection', {
+          clientId: this.clientId ?? 'unknown',
+          type: msg?.type ?? 'unknown',
+        });
+        try {
+          this.ws.close(1008, 'expected client/hello first');
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
       this.handleHello(msg.payload);
       return;
     }
 
     switch (msg.type) {
+      case 'client/hello':
+        log.warn('duplicate client/hello ignored', { clientId: this.clientId ?? 'unknown' });
+        break;
       case 'client/time':
         this.handleTime(msg.payload);
         break;
@@ -237,6 +253,9 @@ export class SendspinSession {
         break;
       case 'client/command':
         this.handleCommand(msg.payload);
+        break;
+      case 'client/goodbye':
+        this.handleGoodbye(msg.payload);
         break;
       case 'stream/request-format':
         this.handleFormatRequest(msg.payload);
@@ -466,6 +485,10 @@ export class SendspinSession {
 
   public destroy(): void {
     this.activeStream = false;
+    if (this.initialStateTimer) {
+      clearTimeout(this.initialStateTimer);
+      this.initialStateTimer = null;
+    }
     if (this.hooks.onDisconnected) {
       try {
         this.hooks.onDisconnected(this);
@@ -547,6 +570,8 @@ export class SendspinSession {
       },
     });
 
+    this.startInitialStateTimeout();
+
     // After the handshake, notify the transport that the client is ready.
     if (this.hooks.onIdentified) {
       try {
@@ -609,8 +634,20 @@ export class SendspinSession {
   }
 
   private handleState(payload: any): void {
+    if (!this.initialStateReceived) {
+      this.initialStateReceived = true;
+      if (this.initialStateTimer) {
+        clearTimeout(this.initialStateTimer);
+        this.initialStateTimer = null;
+      }
+    }
     const player = payload?.player ?? payload;
-    const state = typeof player?.state === 'string' ? (player.state as string) : undefined;
+    const state =
+      typeof payload?.state === 'string'
+        ? (payload.state as string)
+        : typeof player?.state === 'string'
+          ? (player.state as string)
+          : undefined;
     const volume =
       typeof player?.volume === 'number' ? (player.volume as number) : undefined;
     const muted =
@@ -672,6 +709,16 @@ export class SendspinSession {
     }
   }
 
+  private handleGoodbye(payload: any): void {
+    const reason = typeof payload?.reason === 'string' ? payload.reason : 'unknown';
+    this.logClientMessage('client/goodbye', { reason }, 'info');
+    try {
+      this.ws.close(1000, 'client goodbye');
+    } catch {
+      /* ignore */
+    }
+  }
+
   private handleFormatRequest(payload: any): void {
     const playerReq = payload?.player;
     if (playerReq) {
@@ -694,7 +741,15 @@ export class SendspinSession {
 
     const artworkReq = payload?.artwork;
     if (artworkReq && typeof artworkReq.channel === 'number') {
-      const idx = Math.max(0, Math.min(3, Math.floor(artworkReq.channel)));
+      const idx = Math.floor(artworkReq.channel);
+      if (idx < 0 || idx >= this.artworkChannels.length) {
+        log.warn('client/stream request invalid artwork channel', {
+          clientId: this.clientId,
+          channel: artworkReq.channel,
+          available: this.artworkChannels.length,
+        });
+        return;
+      }
       const source: 'album' | 'artist' | 'none' =
         artworkReq.source === 'artist' ? 'artist' : artworkReq.source === 'none' ? 'none' : 'album';
       const format: 'jpeg' | 'png' | 'bmp' =
@@ -758,26 +813,21 @@ export class SendspinSession {
 
     const isSupported = (fmt: any): boolean =>
       fmt?.codec === 'opus' || fmt?.codec === 'flac' || fmt?.codec === 'pcm';
-    const matchesDesired = (fmt: any): boolean => {
-      if (!isSupported(fmt)) return false;
-      if (typeof fmt.sample_rate === 'number' && fmt.sample_rate !== audioOutputSettings.sampleRate) return false;
-      if (typeof fmt.channels === 'number' && fmt.channels !== audioOutputSettings.channels) return false;
-      if (typeof fmt.bit_depth === 'number' && fmt.bit_depth !== audioOutputSettings.pcmBitDepth) return false;
-      return true;
-    };
-    const preferred =
-      supportedFormats.find(matchesDesired) ??
-      supportedFormats.find(isSupported);
+    const hasValidNumbers = (fmt: any): boolean =>
+      typeof fmt.sample_rate === 'number' && fmt.sample_rate > 0
+      && typeof fmt.channels === 'number' && fmt.channels > 0
+      && typeof fmt.bit_depth === 'number' && fmt.bit_depth > 0;
+    const preferred = supportedFormats.find((fmt) => isSupported(fmt) && hasValidNumbers(fmt));
     if (preferred) {
       const codec: PlayerFormat['codec'] =
         preferred.codec === 'opus' ? 'opus' : preferred.codec === 'flac' ? 'flac' : 'pcm';
       this.streamFormat = {
         codec,
-        sampleRate: preferred.sample_rate ?? audioOutputSettings.sampleRate,
-        channels: preferred.channels ?? audioOutputSettings.channels,
-        bitDepth: preferred.bit_depth ?? audioOutputSettings.pcmBitDepth,
+        sampleRate: preferred.sample_rate,
+        channels: preferred.channels,
+        bitDepth: preferred.bit_depth,
       };
-      log.info('Using negotiated format from client support', {
+      log.info('Using client-preferred format', {
         clientId: this.clientId,
         codec: this.streamFormat.codec,
         sampleRate: this.streamFormat.sampleRate,
@@ -855,5 +905,27 @@ export class SendspinSession {
     this.connectionMeta.playerId = context.playerId ?? this.connectionMeta.playerId;
     this.connectionMeta.tunnel = context.tunnel ?? this.connectionMeta.tunnel;
     this.connectionMeta.remote = context.remote ?? this.connectionMeta.remote;
+  }
+
+  private startInitialStateTimeout(): void {
+    if (!this.roles.includes('player@v1')) {
+      return;
+    }
+    if (this.initialStateReceived || this.initialStateTimer) {
+      return;
+    }
+    this.initialStateTimer = setTimeout(() => {
+      if (this.initialStateReceived) {
+        return;
+      }
+      log.warn('client/hello missing required initial state; closing connection', {
+        clientId: this.clientId ?? 'unknown',
+      });
+      try {
+        this.ws.close(1008, 'initial state timeout');
+      } catch {
+        /* ignore */
+      }
+    }, 5000);
   }
 }

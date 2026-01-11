@@ -125,8 +125,8 @@ export class SendspinTransport implements ZoneTransport {
   /** Actual output format of the current ffmpeg pipeline. */
   private activeOutputFormat: SendspinFormat | null = null;
   private anchorLeadUs = SendspinTransport.resolveAnchorLeadUs();
-  // Match aiosendspin's 5s source buffer target to keep clients well-buffered.
-  private readonly targetLeadUs = Math.max(this.anchorLeadUs, 5_000_000);
+  // Keep target lead aligned with the configured anchor for low-latency playback.
+  private readonly targetLeadUs = this.anchorLeadUs;
   private lastMetadataSignature: string | null = null;
   private lastStreamSignature: string | null = null;
   private pcmRemainder: Buffer | null = null;
@@ -599,6 +599,12 @@ export class SendspinTransport implements ZoneTransport {
       const frameBytes = frameSamples * bytesPerSample;
       let pcmFrameBuffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
       let flacBlocksizeSamples = 0;
+      let lastSendWallUs: number | null = null;
+      let jitterSumUs = 0;
+      let jitterMaxUs = 0;
+      let jitterSamples = 0;
+      let waitLeadUs = 0;
+      let waitCapacityUs = 0;
       const parseFlacBlocksize = (headerBuf: Buffer): number => {
         // STREAMINFO: min blocksize @8-9, max blocksize @10-11 (big-endian)
         try {
@@ -620,9 +626,9 @@ export class SendspinTransport implements ZoneTransport {
       const pendingFrames: Array<{ data: Buffer; durationUs: number }> = [];
       let pendingDurationUs = 0;
       let streamingStarted = false;
-      const prepareBufferMarginUs = 2_500_000; // align with MA buffer margin for stale detection
+      const prepareBufferMarginUs = Math.max(500_000, Math.min(2_500_000, this.targetLeadUs));
       const sendTransmissionMarginUs = 100_000; // align with MA send margin (network + client processing)
-      const targetBufferUs = 5_000_000; // match MA source buffer target duration
+      const targetBufferUs = this.targetLeadUs;
       const backpressureCapacityBytes =
         sendspinCore.getPlayerBufferCapacity(this.clientId) || this.maxBufferedBytes || 0;
       const bufferedForCapacity: Array<{ endUs: number; byteCount: number }> = [];
@@ -717,13 +723,27 @@ export class SendspinTransport implements ZoneTransport {
         while (tsUs - serverNowUs() > this.targetLeadUs + overbufferMarginUs) {
           const deltaUs = tsUs - serverNowUs() - this.targetLeadUs;
           const waitMs = Math.max(5, Math.min(200, Math.floor(deltaUs / 1000)));
-          pcmStream.pause();
+          if (this.targetLeadUs > 2_000_000) {
+            pcmStream.pause();
+          }
           await new Promise((resolve) => setTimeout(resolve, waitMs));
-          pcmStream.resume();
+          if (this.targetLeadUs > 2_000_000) {
+            pcmStream.resume();
+          }
         }
       };
 
       const emitFrame = (frameTsUs: number, frameData: Buffer, durationUs: number): void => {
+        if (lastSendWallUs !== null) {
+          const nowUs = serverNowUs();
+          const intervalUs = nowUs - lastSendWallUs;
+          const expectedUs = durationUs;
+          const deltaUs = Math.abs(intervalUs - expectedUs);
+          jitterSumUs += deltaUs;
+          jitterMaxUs = Math.max(jitterMaxUs, deltaUs);
+          jitterSamples += 1;
+        }
+        lastSendWallUs = serverNowUs();
         const targetLeadUs = this.targetLeadUs;
         const lead = frameTsUs - serverNowUs();
         this.lastLeadUs = lead;
@@ -751,7 +771,8 @@ export class SendspinTransport implements ZoneTransport {
         }
 
         chunkCount += 1;
-        if (chunkCount <= 3 || chunkCount % 500 === 0) {
+        if (chunkCount <= 3 || chunkCount % 100 === 0) {
+          const avgJitterUs = jitterSamples ? Math.round(jitterSumUs / jitterSamples) : 0;
           const leadNow = frameTsUs - serverNowUs();
           const logPayload: Record<string, number | string | null> = {
             zoneId: this.zoneId,
@@ -762,6 +783,10 @@ export class SendspinTransport implements ZoneTransport {
             modeledDriftUs:
               this.playStartUs !== null ? frameTsUs - this.playStartUs - modeledTimelineUs : null,
             leadErrorUs: leadNow - this.targetLeadUs,
+            jitterAvgUs: avgJitterUs,
+            jitterMaxUs,
+            waitLeadUs,
+            waitCapacityUs,
           };
           if (isPcm) {
             logPayload.frames = Math.floor(frameData.length / bytesPerSample);
@@ -826,9 +851,13 @@ export class SendspinTransport implements ZoneTransport {
           }
         }
         if (!options.skipLeadGate) {
+          const before = serverNowUs();
           await waitUntilLeadInRange(timestampUs);
+          waitLeadUs += Math.max(0, serverNowUs() - before);
         }
+        const capBefore = serverNowUs();
         await waitForCapacity(frameData.length);
+        waitCapacityUs += Math.max(0, serverNowUs() - capBefore);
         ensureStreamStart();
         emitFrame(timestampUs, frameData, durationUs);
       };
@@ -842,7 +871,7 @@ export class SendspinTransport implements ZoneTransport {
           }
           streamingStarted = true;
           for (const frame of pendingFrames) {
-            await sendScheduledFrame(frame.data, frame.durationUs, { skipLeadGate: true });
+            await sendScheduledFrame(frame.data, frame.durationUs);
           }
           pendingFrames.length = 0;
           pendingDurationUs = 0;
@@ -1441,7 +1470,7 @@ export class SendspinTransport implements ZoneTransport {
     // Default to 1.0s lead (aiosendspin reference); override via SENDSPIN_LEAD_MS.
     const raw = process.env.SENDSPIN_LEAD_MS;
     const parsed = raw ? Number(raw) : NaN;
-    const defaultMs = 1000;
+    const defaultMs = 1500;
     const leadMs = Number.isFinite(parsed) ? parsed : defaultMs;
     const clampedMs = Math.max(300, Math.min(8000, Math.round(leadMs)));
     return clampedMs * 1000;
