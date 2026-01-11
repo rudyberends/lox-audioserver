@@ -23,7 +23,11 @@ import { SpotifyInputAdapter } from '@/modules/audio/player/spotifyInputAdapter'
 import { registerPlayer, unregisterPlayer, clearPlayers } from '@/modules/audio/player/playerRegistry';
 import { buildZoneTransports } from '@/modules/audio/outputs';
 import type { ZoneTransport } from '@/modules/audio/outputs/types';
-import { decodeAudiopath, encodeAudiopath, detectServiceFromAudiopath } from '@/modules/audio/utils/audiopath';
+import {
+  decodeAudiopath,
+  encodeAudiopath,
+  detectServiceFromAudiopath,
+} from '@/modules/audio/utils/audiopath';
 import { audioOutputSettings } from '@/modules/audio/utils/audioFormat';
 import { airplayInputService } from '@/modules/audio/inputs/airplay/airplayInputService';
 import { audioManager } from '@/modules/audio';
@@ -68,6 +72,7 @@ export interface QueueItem {
   audiotype: number;
   coverurl: string;
   duration: number;
+  originalIndex?: number;
   qindex: number;
   station: string;
   title: string;
@@ -499,7 +504,7 @@ class ZoneManager {
     if (!current) {
       return {};
     }
-    const audiotype = getInputAudioType(ctx);
+    const audiotype = getStateAudiotype(ctx, current);
     const stationForState = current.audiotype === 1 || current.audiotype === 4 ? current.station : '';
     const patch: Partial<LoxoneZoneState> = {
       title: current.title,
@@ -511,6 +516,7 @@ class ZoneManager {
       qindex: ctx.queueController.currentIndex(),
       qid: current.unique_id,
       duration: typeof current.duration === 'number' ? Math.max(0, Math.round(current.duration)) : 0,
+      type: getStateFileType(),
       queueAuthority: ctx.queue.authority,
     };
     if (audiotype !== null) {
@@ -653,13 +659,20 @@ class ZoneManager {
       };
     }
 
-    const slice = ctx.queue.items.slice(start, start + limit).map((item) => ({
-      ...item,
-      // Loxone kan geen spotify@username prefixes aan; strip alleen voor output.
-      audiopath: sanitizeAudiopathForOutput(item.audiopath),
-      // Mask station for local/library items so they don't show as radio entries.
-      station: (item.audiopath ?? '').startsWith('library:') ? '' : item.station ?? '',
-    }));
+    if (ctx.queue.shuffle && !ctx.metadata.queueShuffled) {
+      this.reorderQueue(ctx, 'shuffle', { keepCurrent: true, shuffleUpcoming: true });
+    }
+
+    const slice = ctx.queue.items.slice(start, start + limit).map((item) => {
+      const { originalIndex: _originalIndex, ...rest } = item;
+      return {
+        ...rest,
+        // Loxone kan geen spotify@username prefixes aan; strip alleen voor output.
+        audiopath: sanitizeAudiopathForOutput(item.audiopath),
+        // Mask station for local/library items so they don't show as radio entries.
+        station: (item.audiopath ?? '').startsWith('library:') ? '' : item.station ?? '',
+      };
+    });
     this.log.debug('getQueue', {
       zoneId,
       start,
@@ -982,8 +995,27 @@ class ZoneManager {
       authority: ctx.queue.authority,
     });
     ctx.queueController.setItems(queueItems, clampedIndex);
-    ctx.queue.shuffle = false;
+    ctx.metadata.queueShuffled = false;
+    const pendingShuffle = ctx.metadata.pendingShuffle;
+    if (typeof pendingShuffle === 'boolean') {
+      ctx.queue.shuffle = pendingShuffle;
+      delete ctx.metadata.pendingShuffle;
+      this.patchState(zoneId, { plshuffle: pendingShuffle ? 1 : 0 });
+    } else {
+      ctx.queue.shuffle = false;
+    }
     ctx.queue.repeat = 0;
+    if (ctx.queue.shuffle) {
+      const preserveCurrent = typeof pendingShuffle !== 'boolean';
+      this.reorderQueue(ctx, 'shuffle', {
+        keepCurrent: preserveCurrent,
+        shuffleUpcoming: preserveCurrent,
+      });
+      if (!preserveCurrent) {
+        ctx.queueController.setCurrentIndex(0);
+        this.patchState(zoneId, { qindex: 0 });
+      }
+    }
     if (queueBuildLimit && expandedQueue.length >= queueBuildLimit) {
       const token = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
       ctx.metadata.queueFillToken = token;
@@ -1880,9 +1912,15 @@ class ZoneManager {
         (item) => normalizeSpotifyAudiopath(item.audiopath) === normalizedCurrent,
       );
       const startIndex = nextIndex >= 0 ? nextIndex : ctx.queueController.currentIndex();
+      const prevShuffle = ctx.queue.shuffle;
+      const prevRepeat = ctx.queue.repeat;
       ctx.queueController.setItems(fullQueue, startIndex);
-      ctx.queue.shuffle = false;
-      ctx.queue.repeat = 0;
+      ctx.metadata.queueShuffled = false;
+      ctx.queue.shuffle = prevShuffle;
+      ctx.queue.repeat = prevRepeat;
+      if (ctx.queue.shuffle) {
+        this.reorderQueue(ctx, 'shuffle', { keepCurrent: true, shuffleUpcoming: true });
+      }
       notifyQueueUpdated(ctx.id, ctx.queue.items.length);
       this.log.debug('queue filled in background', {
         zoneId: ctx.id,
@@ -2074,6 +2112,20 @@ class ZoneManager {
           }
         }
         break;
+      case 'shuffle': {
+        const normalized =
+          typeof payload === 'string' ? payload.trim().toLowerCase() : '';
+        let enabled: boolean | null = null;
+        if (['enable', 'on', '1', 'true'].includes(normalized)) {
+          enabled = true;
+        } else if (['disable', 'off', '0', 'false'].includes(normalized)) {
+          enabled = false;
+        }
+        const next =
+          enabled ?? !ctx.queue.shuffle;
+        this.setShuffle(zoneId, next);
+        break;
+      }
       default:
         break;
     }
@@ -2211,13 +2263,8 @@ class ZoneManager {
           isRadio: isRadioAudiopath(current.audiopath, current.audiotype),
         });
         if (session) {
-          const isMusicAssistant = this.isMusicAssistantAudiopath(current.audiopath);
-          const resumedAudiotype = isMusicAssistant ? 5 : current.audiotype === 5 ? 0 : current.audiotype;
-          const sourceName = resolveSourceName(
-            isMusicAssistant ? 5 : current.audiotype,
-            ctx,
-            current,
-          );
+          const resumedAudiotype = getStateAudiotype(ctx, current);
+          const sourceName = resolveSourceName(resumedAudiotype, ctx, current);
           this.patchState(zoneId, {
             title: current.title,
             artist: current.artist,
@@ -2230,7 +2277,8 @@ class ZoneManager {
             mode: 'play',
             clientState: 'on',
             power: 'on',
-            audiotype: resumedAudiotype,
+            ...(resumedAudiotype != null ? { audiotype: resumedAudiotype } : {}),
+            type: getStateFileType(),
             ...(sourceName ? { sourceName } : {}),
           });
         }
@@ -2499,7 +2547,11 @@ class ZoneManager {
           patch.station = current.station;
           patch.qindex = idx;
           patch.qid = current.unique_id;
-          patch.audiotype = current.audiotype === 5 ? 0 : current.audiotype;
+          patch.type = getStateFileType();
+          const stateAudiotype = getStateAudiotype(ctx, current);
+          if (stateAudiotype != null) {
+            patch.audiotype = stateAudiotype;
+          }
         }
       }
     }
@@ -2561,8 +2613,29 @@ class ZoneManager {
     if (!ctx) {
       return;
     }
+    const wasEnabled = ctx.queue.shuffle;
     ctx.queue.shuffle = enabled;
     this.patchState(zoneId, { plshuffle: enabled ? 1 : 0 });
+    if (enabled === wasEnabled) {
+      if (enabled && !ctx.metadata.queueShuffled) {
+        this.reorderQueue(ctx, 'shuffle', { keepCurrent: true, shuffleUpcoming: true });
+      } else if (!enabled && ctx.metadata.queueShuffled) {
+        this.reorderQueue(ctx, 'unshuffle', { keepCurrent: true, shuffleUpcoming: true });
+      }
+      return;
+    }
+    this.reorderQueue(ctx, enabled ? 'shuffle' : 'unshuffle', {
+      keepCurrent: true,
+      shuffleUpcoming: true,
+    });
+  }
+
+  public setPendingShuffle(zoneId: number, enabled: boolean): void {
+    const ctx = this.zones.get(zoneId);
+    if (!ctx) {
+      return;
+    }
+    ctx.metadata.pendingShuffle = enabled;
   }
 
   public setRepeatMode(zoneId: number, mode: 'off' | 'one' | 'all'): void {
@@ -2573,6 +2646,80 @@ class ZoneManager {
     const repeat = mode === 'one' ? 1 : mode === 'all' ? 2 : 0;
     ctx.queue.repeat = repeat;
     this.patchState(zoneId, { plrepeat: repeat });
+  }
+
+  private reorderQueue(
+    ctx: ZoneContext,
+    mode: 'shuffle' | 'unshuffle',
+    opts: { keepCurrent: boolean; shuffleUpcoming?: boolean },
+  ): void {
+    if (!ctx.queue.items.length) {
+      return;
+    }
+    let reordered = ctx.queue.items.slice();
+    const currentIndex = opts.keepCurrent ? ctx.queueController.currentIndex() : 0;
+    if (mode === 'shuffle') {
+      if (opts.keepCurrent) {
+        if (opts.shuffleUpcoming) {
+          const head = reordered.slice(0, currentIndex + 1);
+          const tail = reordered.slice(currentIndex + 1);
+          for (let i = tail.length - 1; i > 0; i -= 1) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [tail[i], tail[j]] = [tail[j], tail[i]];
+          }
+          reordered = head.concat(tail);
+        } else {
+          const current = ctx.queueController.current();
+          if (!current) {
+            return;
+          }
+          const currentItem = reordered[currentIndex];
+          const rest = reordered.filter((_, idx) => idx !== currentIndex);
+          for (let i = rest.length - 1; i > 0; i -= 1) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [rest[i], rest[j]] = [rest[j], rest[i]];
+          }
+          const insertAt = clamp(currentIndex, 0, rest.length);
+          rest.splice(insertAt, 0, currentItem);
+          reordered = rest;
+        }
+      } else {
+        const pickIndex = Math.floor(Math.random() * reordered.length);
+        const picked = reordered.splice(pickIndex, 1)[0];
+        for (let i = reordered.length - 1; i > 0; i -= 1) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [reordered[i], reordered[j]] = [reordered[j], reordered[i]];
+        }
+        reordered = [picked, ...reordered];
+      }
+    } else {
+      if (opts.keepCurrent && opts.shuffleUpcoming) {
+        const head = reordered.slice(0, currentIndex + 1);
+        const tail = reordered.slice(currentIndex + 1).sort(
+          (a, b) => (a.originalIndex ?? 0) - (b.originalIndex ?? 0),
+        );
+        reordered = head.concat(tail);
+      } else {
+        reordered = reordered.sort(
+          (a, b) => (a.originalIndex ?? 0) - (b.originalIndex ?? 0),
+        );
+      }
+    }
+    if (opts.keepCurrent) {
+      const current = ctx.queueController.current();
+      if (!current) {
+        return;
+      }
+      ctx.queueController.setItems(reordered, currentIndex);
+    } else {
+      ctx.queueController.setItems(reordered, 0);
+    }
+    ctx.metadata.queueShuffled = mode === 'shuffle';
+    this.patchState(ctx.id, {
+      qindex: ctx.queueController.currentIndex(),
+      plshuffle: ctx.queue.shuffle ? 1 : 0,
+    });
+    notifyQueueUpdated(ctx.id, ctx.queue.items.length);
   }
 
   private registerZone(config: ZoneConfig): void {
@@ -3137,13 +3284,9 @@ class ZoneManager {
     const nextTitle = sanitizeTitle(current.title, fallback);
     const useTitle =
       nextTitle !== (ctx.state.title ?? '') || (current.title && !nextTitle.startsWith(ctx.name));
-    const isMusicAssistant = this.isMusicAssistantAudiopath(current.audiopath);
-    const displayAudiotype = isMusicAssistant
-      ? 5
-      : current.audiotype === 5
-        ? 0
-        : current.audiotype;
-    const sourceName = resolveSourceName(isMusicAssistant ? 5 : current.audiotype, ctx, current);
+    const stateAudiotype = getStateAudiotype(ctx, current);
+    const displayAudiotype = stateAudiotype ?? current.audiotype;
+    const sourceName = resolveSourceName(displayAudiotype, ctx, current);
     this.patchState(zoneId, {
       ...(useTitle ? { title: nextTitle } : {}),
       artist: current.artist,
@@ -3153,7 +3296,8 @@ class ZoneManager {
       station: current.station,
       qindex: ctx.queueController.currentIndex(),
       qid: current.unique_id,
-      audiotype: displayAudiotype,
+      type: getStateFileType(),
+      ...(displayAudiotype != null ? { audiotype: displayAudiotype } : {}),
       duration: duration > 0 ? duration : undefined,
       queueAuthority: ctx.queue.authority,
       ...(sourceName ? { sourceName } : {}),
@@ -3237,7 +3381,8 @@ class ZoneManager {
       isRadio: isRadioAudiopath(item.audiopath, item.audiotype),
     });
     if (session) {
-      const sourceName = resolveSourceName(item.audiotype ?? getInputAudioType(ctx), ctx, item);
+      const stateAudiotype = getStateAudiotype(ctx, item);
+      const sourceName = resolveSourceName(stateAudiotype ?? item.audiotype ?? null, ctx, item);
       this.patchState(zoneId, {
         title: item.title,
         artist: item.artist,
@@ -3250,7 +3395,8 @@ class ZoneManager {
         mode: 'play',
         clientState: 'on',
         power: 'on',
-        audiotype: item.audiotype ?? getInputAudioType(ctx) ?? 0,
+        ...(stateAudiotype != null ? { audiotype: stateAudiotype } : {}),
+        type: getStateFileType(),
         duration: typeof item.duration === 'number' ? Math.max(0, Math.round(item.duration)) : undefined,
         queueAuthority: ctx.queue.authority,
         ...(sourceName ? { sourceName } : {}),
@@ -3312,7 +3458,8 @@ class ZoneManager {
       station: next.station,
     });
     if (session) {
-      const sourceName = resolveSourceName(next.audiotype, ctx, next);
+      const stateAudiotype = getStateAudiotype(ctx, next);
+      const sourceName = resolveSourceName(stateAudiotype ?? next.audiotype ?? null, ctx, next);
       this.patchState(ctx.id, {
         title: next.title,
         artist: next.artist,
@@ -3325,7 +3472,8 @@ class ZoneManager {
         mode: 'play',
         clientState: 'on',
         power: 'on',
-        audiotype: next.audiotype,
+        ...(stateAudiotype != null ? { audiotype: stateAudiotype } : {}),
+        type: getStateFileType(),
         ...(sourceName ? { sourceName } : {}),
         time: 0,
       });
@@ -3339,27 +3487,43 @@ class ZoneManager {
   }
 }
 
-function getInputAudioType(ctx: ZoneContext): number | null {
+function getInputAudioType(ctx: ZoneContext, audiopathOverride?: string): number | null {
   const current = ctx.queueController.current();
-  const audiopath = current?.audiopath ?? ctx.state.audiopath ?? '';
+  const audiopath = audiopathOverride ?? current?.audiopath ?? ctx.state.audiopath ?? '';
   const lowerAudiopath = audiopath.toLowerCase();
   const maProvider = getMusicAssistantProviderId().toLowerCase();
   const maUser = getMusicAssistantUserId().toLowerCase();
+  const isBridgeProvider = /^spotify@bridge-[^:]+:/i.test(lowerAudiopath);
+  const isBridgeApple = isBridgeProvider && /bridge-applemusic/i.test(lowerAudiopath);
+  const isBridgeDeezer = isBridgeProvider && /bridge-deezer/i.test(lowerAudiopath);
+  const isBridgeTidal = isBridgeProvider && /bridge-tidal/i.test(lowerAudiopath);
   // Prefer the active input mode when available, otherwise fall back to URI heuristics.
   if (ctx.inputMode === 'airplay' || audiopath.startsWith('airplay://')) {
     return 4;
   }
-  if (ctx.inputMode === 'spotify' || audiopath.startsWith('spotify://') || audiopath.startsWith('spotify:')) {
-    return 5;
+  if (isBridgeApple || isBridgeDeezer || isBridgeTidal) {
+    return 2;
   }
-  if (ctx.inputMode === 'applemusic' || lowerAudiopath.includes('applemusic')) {
-    return 5;
+  if (
+    ctx.inputMode === 'applemusic' ||
+    lowerAudiopath.includes('applemusic') ||
+    isBridgeApple
+  ) {
+    return 2;
   }
-  if (ctx.inputMode === 'deezer' || lowerAudiopath.includes('deezer')) {
-    return 5;
+  if (
+    ctx.inputMode === 'deezer' ||
+    lowerAudiopath.includes('deezer') ||
+    isBridgeDeezer
+  ) {
+    return 2;
   }
-  if (ctx.inputMode === 'tidal' || lowerAudiopath.includes('tidal')) {
-    return 5;
+  if (
+    ctx.inputMode === 'tidal' ||
+    lowerAudiopath.includes('tidal') ||
+    isBridgeTidal
+  ) {
+    return 2;
   }
   if (
     ctx.inputMode === 'musicassistant' ||
@@ -3370,12 +3534,31 @@ function getInputAudioType(ctx: ZoneContext): number | null {
     (maUser && lowerAudiopath.startsWith(`musicassistant@${maUser}`)) ||
     lowerAudiopath.includes('musicassistant')
   ) {
+    return 2;
+  }
+  if (ctx.inputMode === 'spotify' || audiopath.startsWith('spotify://') || audiopath.startsWith('spotify:')) {
     return 5;
   }
   if (detectServiceFromAudiopath(audiopath) === 'radio') {
     return 1;
   }
   return null;
+}
+
+function getStateAudiotype(ctx: ZoneContext, item?: QueueItem | null): number | null {
+  const audiopath = item?.audiopath ?? ctx.queueController.current()?.audiopath ?? ctx.state.audiopath ?? '';
+  if (/^spotify@bridge-[^:]+:track:/i.test(audiopath)) {
+    return 0;
+  }
+  const resolved = getInputAudioType(ctx, audiopath);
+  if (resolved != null) {
+    return resolved;
+  }
+  return item?.audiotype ?? ctx.state.audiotype ?? null;
+}
+
+function getStateFileType(): number {
+  return 2;
 }
 
 function isRadioAudiopath(audiopath: string | undefined, audiotype?: number | null): boolean {
@@ -3412,8 +3595,8 @@ function toRadioAudiopath(audiopath: string | undefined): string {
   return encodeAudiopath(raw, 'station', 'tunein', true);
 }
 
-function resolveLoxoneType(audiopath: string | undefined, audiotype?: number | null): number {
-  return isRadioAudiopath(audiopath, audiotype) ? 2 : 3;
+function resolveLoxoneType(_audiopath: string | undefined, _audiotype?: number | null): number {
+  return 2;
 }
 
 function deriveRadioStationLabel(audiopath: string | undefined): string | undefined {

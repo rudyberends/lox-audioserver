@@ -15,7 +15,11 @@ export class QueueController {
   constructor(private readonly queue: QueueState) {}
 
   public setItems(items: QueueItem[], startIndex = 0): void {
-    this.queue.items = items.map((item, idx) => ({ ...item, qindex: idx }));
+    this.queue.items = items.map((item, idx) => ({
+      ...item,
+      originalIndex: item.originalIndex ?? idx,
+      qindex: idx,
+    }));
     this.queue.currentIndex = clamp(startIndex, 0, Math.max(0, this.queue.items.length - 1));
   }
 
@@ -74,7 +78,11 @@ export class QueueController {
     if (!Array.isArray(items) || !items.length) {
       return null;
     }
-    this.queue.items = items.map((item, idx) => ({ ...item, qindex: idx }));
+    this.queue.items = items.map((item, idx) => ({
+      ...item,
+      originalIndex: item.originalIndex ?? idx,
+      qindex: idx,
+    }));
     this.queue.currentIndex = clamp(currentIndex, 0, items.length - 1);
     return this.current();
   }

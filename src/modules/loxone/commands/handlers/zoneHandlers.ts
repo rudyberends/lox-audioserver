@@ -57,7 +57,11 @@ export async function audioLibraryPlay(command: string) {
 }
 
 export async function audioServicePlay(command: string) {
-  return playToZone(command, 'serviceplay', (parts) => {
+  const parts = splitCommand(command);
+  const zoneId = parseNumberPart(parts[1], 0);
+  const hasNoShuffle = /\/noshuffle(?:\/|$)/i.test(command);
+  zoneManager.setPendingShuffle(zoneId, !hasNoShuffle);
+  const response = await playToZone(command, 'serviceplay', (parts) => {
     const decoded = extractPayload(parts.slice(4));
     const withoutNouser = decoded.startsWith('nouser/')
       ? decoded.slice('nouser/'.length)
@@ -82,6 +86,7 @@ export async function audioServicePlay(command: string) {
 
     return withoutNouser;
   });
+  return response;
 }
 
 export async function audioPlayUrl(command: string) {

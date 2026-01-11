@@ -149,7 +149,7 @@ export function registerRoutes(
 
   router.registerRegex(
     'audio',
-    /^audio\/(?:cfg\/)?\d+\/(on|off|play|pause|resume|position|volume|queueplus|queueminus|shuffle|repeat)(?:\/[+-]?\d+)?\/?$/,
+    /^audio\/(?:cfg\/)?\d+\/(on|off|play|pause|resume|position|volume|queueplus|queueminus|repeat|shuffle(?:\/(?:enable|disable|on|off|1|0))?)(?:\/[+-]?\d+)?\/?$/,
     audioDynamicCommand,
   );
 }
