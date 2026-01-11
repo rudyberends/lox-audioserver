@@ -2556,6 +2556,21 @@ class ZoneManager {
       ctx.transportTimingActive = false;
       ctx.lastTransportTimingAt = 0;
     }
+    if (
+      state.status === 'stopped' &&
+      typeof state.position === 'number' &&
+      typeof state.duration === 'number' &&
+      state.duration > 0 &&
+      ctx.player.getState().mode === 'playing'
+    ) {
+      const position = Math.round(state.position);
+      const duration = Math.round(state.duration);
+      if (position >= Math.max(0, duration - 1)) {
+        // Force end-of-track even with output latency guard.
+        ctx.player.setEndGuardMs(0);
+        ctx.player.updateTiming(duration, duration);
+      }
+    }
     const normalizedUri = state.uri ? normalizeSpotifyAudiopath(state.uri) : null;
     if (normalizedUri && ctx.queue.items.length) {
       const idx = ctx.queue.items.findIndex(

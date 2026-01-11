@@ -5,7 +5,7 @@ import type { PlaybackSource, OutputProfile } from '@/modules/audio/engine/audio
 export type { PlaybackSource, OutputProfile } from '@/modules/audio/engine/audioSession';
 import { resolvePlaybackSource } from '@/modules/audio/utils/sourceResolver';
 import { audioOutputSettings, type AudioOutputSettings, type HttpProfile } from '@/modules/audio/utils/audioFormat';
-import { notifyTransportError } from '@/modules/audio/outputs/queueUpdater';
+import { notifyTransportError, notifyTransportState } from '@/modules/audio/outputs/queueUpdater';
 
 export interface PlaybackMetadata {
   title: string;
@@ -504,6 +504,17 @@ class AudioManager {
   ): void {
     const session = this.sessions.get(zoneId);
     if (!session) return;
+    const duration = session.duration ?? session.metadata?.duration ?? 0;
+    const elapsedFromClock = session.startedAt
+      ? Math.round(Math.max(0, Date.now() - session.startedAt) / 1000)
+      : session.elapsed;
+    const observedElapsed = Math.max(session.elapsed ?? 0, elapsedFromClock);
+    const shouldEmitEnded =
+      !reason &&
+      session.state === 'playing' &&
+      duration > 0 &&
+      !session.metadata?.isRadio &&
+      observedElapsed >= Math.max(0, duration - 1);
     if (reason === 'pause') {
       this.log.debug('engine stopped for pause; keeping session', {
         zoneId,
@@ -516,6 +527,14 @@ class AudioManager {
       zoneId,
       source: session.source,
     });
+    if (shouldEmitEnded) {
+      notifyTransportState(zoneId, {
+        status: 'stopped',
+        position: duration,
+        duration,
+        uri: session.metadata?.audiopath,
+      });
+    }
     if (reason) {
       this.log.debug('suppressing transport error; engine stopped intentionally', {
         zoneId,
