@@ -33,7 +33,7 @@ export function resolvePlaybackSource(audiopath: string): PlaybackSource | null 
       log.warn('failed to normalize alerts path', { audiopath: decoded });
       return null;
     }
-    return { kind: 'file', path: normalized, preDelayMs: 10000, padTailSec: 10 };
+    return { kind: 'file', path: normalized, preDelayMs: 2000, padTailSec: 2 };
   }
 
   if (decoded.startsWith('alerts-loop://')) {
@@ -43,7 +43,7 @@ export function resolvePlaybackSource(audiopath: string): PlaybackSource | null 
       log.warn('failed to normalize alerts loop path', { audiopath: decoded });
       return null;
     }
-    return { kind: 'file', path: normalized, loop: true };
+    return { kind: 'file', path: normalized, loop: true, preDelayMs: 2000, padTailSec: 2 };
   }
 
   if (decoded.startsWith('http://') || decoded.startsWith('https://')) {

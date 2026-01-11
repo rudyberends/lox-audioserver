@@ -45,6 +45,7 @@ import {
 } from '@/modules/loxone/commands/handlers/groupHandlers';
 import {
   audioGroupedAlert,
+  audioCfgUploadAudiouploadAdd,
   audioPlayUploadedAlert,
 } from '@/modules/loxone/commands/handlers/alertHandlers';
 
@@ -116,7 +117,7 @@ export function registerRoutes(
   router.registerPrefix('audio', 'audio/cfg/timezone', placeholder('timezone'));
   router.registerPrefix('audio', 'audio/cfg/servicecfg/getlink', configHandlers.serviceCfgGetLink);
   router.registerPrefix('audio', 'audio/cfg/servicecfg/delete', configHandlers.serviceCfgDelete);
-  router.registerPrefix('audio', 'audio/cfg/upload/audioupload/add/', placeholder('upload/audioupload/add'));
+  router.registerPrefix('audio', 'audio/cfg/upload/audioupload/add/', audioCfgUploadAudiouploadAdd);
 
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/status\/?$/, audioGetStatus);
   router.registerRegex(
