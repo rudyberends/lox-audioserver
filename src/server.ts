@@ -43,8 +43,8 @@ async function handleReinitialize(): Promise<boolean> {
 }
 
 async function startServices(): Promise<void> {
-  const config = loadConfig();
   const storedConfig = await loadStoredConfig();
+  const config = loadConfig(storedConfig.system?.audioserver?.macId);
   const logLevel = storedConfig.system?.logging?.consoleLevel ?? config.env.logLevel;
   logManager.configure({ level: logLevel });
   const log = createLogger('Server');

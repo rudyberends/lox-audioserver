@@ -1,4 +1,5 @@
 import type { EnvironmentConfig } from '@/config/environment';
+import { DEFAULT_MAC_ID } from '@/core/utils/mac';
 
 export type LoxoneServerName = 'appHttp' | 'msHttp';
 
@@ -33,7 +34,6 @@ const DEFAULT_FIRMWARE_VERSION = 'LWSS V 16.1.10.01';
 const DEFAULT_API_VERSION = '~API:1.6~';
 const DEFAULT_SESSION =
   '8WahwAfULwEQce9Yu0qIE9L7QMkXFHbi0M9ch9vKcgYArPPojXHpSiNcq0fT3lqL';
-const DEFAULT_MAC = '504F94FF1BB3';
 const DEFAULT_MDNS_NAME = 'audioserver';
 const DEFAULT_MDNS_HOSTNAME = 'audioserver';
 const DEFAULT_MDNS_TYPE = 'http';
@@ -45,17 +45,20 @@ const DEFAULT_MDNS_DEVICE_INSTANCE = '2';
 /**
  * Builds the configuration for the emulated Loxone HTTP servers.
  */
-export function buildLoxoneHttpConfig(env: EnvironmentConfig): LoxoneHttpConfig {
+export function buildLoxoneHttpConfig(
+  env: EnvironmentConfig,
+  macAddress?: string,
+): LoxoneHttpConfig {
   const firmwareVersion = DEFAULT_FIRMWARE_VERSION;
   const apiVersion = DEFAULT_API_VERSION;
   const sessionToken = DEFAULT_SESSION;
-  const macAddress = DEFAULT_MAC;
+  const resolvedMacAddress = macAddress?.trim() || DEFAULT_MAC_ID;
 
   return {
     firmwareVersion,
     apiVersion,
     sessionToken,
-    macAddress,
+    macAddress: resolvedMacAddress,
     servers: [
       {
         name: 'appHttp',
@@ -64,7 +67,7 @@ export function buildLoxoneHttpConfig(env: EnvironmentConfig): LoxoneHttpConfig 
           'appHttp',
           firmwareVersion,
           apiVersion,
-          macAddress,
+          resolvedMacAddress,
           sessionToken,
         ),
       },
@@ -75,7 +78,7 @@ export function buildLoxoneHttpConfig(env: EnvironmentConfig): LoxoneHttpConfig 
           'msHttp',
           firmwareVersion,
           apiVersion,
-          macAddress,
+          resolvedMacAddress,
           sessionToken,
         ),
       },

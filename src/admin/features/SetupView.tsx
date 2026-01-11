@@ -1,7 +1,7 @@
 import React from 'react';
 import './SetupView.css';
 import { fetchStatus, StatusResponse } from '../services/statusApi';
-import { clearServerConfig, getConfig, importServerConfig, reinitializeServer } from '../services/setupApi';
+import { clearServerConfig, getConfig, importServerConfig, reinitializeServer, updateAudioServerIp, updateAudioServerMacId } from '../services/setupApi';
 
 interface SetupConfig {
   config: {
@@ -11,6 +11,7 @@ interface SetupConfig {
     };
     audioserver?: {
       paired?: boolean;
+      macId?: string;
     };
     zones?: unknown[];
     adapters?: unknown[];
@@ -24,6 +25,14 @@ export default function SetupView(): JSX.Element {
   const [status, setStatus] = React.useState<StatusResponse | null>(null);
   const [statusLoading, setStatusLoading] = React.useState(true);
   const [restarting, setRestarting] = React.useState(false);
+  const [ipInput, setIpInput] = React.useState('');
+  const [ipDirty, setIpDirty] = React.useState(false);
+  const [ipSaving, setIpSaving] = React.useState(false);
+  const [ipModalOpen, setIpModalOpen] = React.useState(false);
+  const [macIdInput, setMacIdInput] = React.useState('');
+  const [macDirty, setMacDirty] = React.useState(false);
+  const [macSaving, setMacSaving] = React.useState(false);
+  const [macModalOpen, setMacModalOpen] = React.useState(false);
 
   React.useEffect(() => {
     getConfig()
@@ -115,6 +124,23 @@ export default function SetupView(): JSX.Element {
     };
   }, [status, data]);
 
+  const configuredMacId =
+    ((data as any)?.config?.system?.audioserver?.macId as string | undefined) ?? '';
+  const configuredIp =
+    ((data as any)?.config?.system?.audioserver?.ip as string | undefined) ?? '';
+
+  React.useEffect(() => {
+    if (!macDirty) {
+      setMacIdInput(configuredMacId);
+    }
+  }, [configuredMacId, macDirty]);
+
+  React.useEffect(() => {
+    if (!ipDirty) {
+      setIpInput(configuredIp);
+    }
+  }, [configuredIp, ipDirty]);
+
   if (loading) {
     return (
       <div className="setup-layout">
@@ -138,10 +164,10 @@ export default function SetupView(): JSX.Element {
   const system = (cfg as any).system ?? {};
   const miniserver = system.miniserver ?? {};
   const audioserver = system.audioserver ?? {};
-  const zones = Array.isArray((cfg as any).zones) ? (cfg as any).zones : [];
   const miniserverIp = miniserver.ip ?? '—';
   const miniserverSerial = miniserver.serial ?? '—';
   const audioServerSerial = audioserver.macId ?? status?.serial ?? '—';
+  const audioServerIp = audioserver.ip ?? '—';
   const lastUpdatedRaw = (cfg as any).updatedAt ?? status?.timestamp ?? null;
   const lastUpdated = formatTimestamp(lastUpdatedRaw);
   const configCrc =
@@ -150,21 +176,12 @@ export default function SetupView(): JSX.Element {
     null;
 
   const isPaired = Boolean(status?.paired);
-  const zoneCount = zones.length;
-
-  const getPrimaryTransport = (zone: any): any => {
-    if (!zone) return null;
-    if (zone.transport) return zone.transport;
-    if (Array.isArray(zone.transports) && zone.transports.length > 0) {
-      return zone.transports[0];
-    }
-    return null;
-  };
-
-  const hasAdapters = zones.some((zone: any) => Boolean(getPrimaryTransport(zone)));
-  const hasUnassignedZones = zones.some((zone: any) => !getPrimaryTransport(zone));
-  const unassignedCount = zones.filter((zone: any) => !getPrimaryTransport(zone)).length;
-  const configuredCount = zones.filter((zone: any) => Boolean(getPrimaryTransport(zone))).length;
+  const macIdTrimmed = macIdInput.trim();
+  const macIdChanged = macIdTrimmed !== configuredMacId.trim();
+  const macIdValid = macIdTrimmed.length > 0;
+  const ipTrimmed = ipInput.trim();
+  const ipChanged = ipTrimmed !== configuredIp.trim();
+  const ipValid = ipTrimmed.length > 0;
 
   function formatTimestamp(value: string | null | undefined): string | null {
     if (!value || typeof value !== 'string') return null;
@@ -188,6 +205,36 @@ export default function SetupView(): JSX.Element {
               </div>
           <div className="setup-metrics setup-metrics--hero">
             <div className="setup-metric">
+              <p className="setup-metric__label">AudioServer IP</p>
+              <button
+                type="button"
+                className="setup-metric__value setup-metric__link"
+                onClick={() => {
+                  setIpModalOpen(true);
+                  setIpInput(configuredIp);
+                  setIpDirty(false);
+                }}
+              >
+                {audioServerIp}
+              </button>
+              <p className="setup-metric__hint">Reported by Miniserver</p>
+            </div>
+            <div className="setup-metric">
+              <p className="setup-metric__label">AudioServer serial</p>
+              <button
+                type="button"
+                className="setup-metric__value setup-metric__link"
+                onClick={() => {
+                  setMacModalOpen(true);
+                  setMacIdInput(configuredMacId);
+                  setMacDirty(false);
+                }}
+              >
+                {configuredMacId || '—'}
+              </button>
+              <p className="setup-metric__hint">Click to override</p>
+            </div>
+            <div className="setup-metric">
               <p className="setup-metric__label">Miniserver IP</p>
               <p className="setup-metric__value">{miniserverIp}</p>
               <p className="setup-metric__hint">Detected during pairing</p>
@@ -196,16 +243,6 @@ export default function SetupView(): JSX.Element {
               <p className="setup-metric__label">Miniserver serial</p>
               <p className="setup-metric__value">{miniserverSerial}</p>
               <p className="setup-metric__hint">Synced from project</p>
-            </div>
-            <div className="setup-metric">
-              <p className="setup-metric__label">Zones</p>
-              <p className="setup-metric__value">{zoneCount}</p>
-              <p className="setup-metric__hint">Configured in Loxone</p>
-            </div>
-            <div className="setup-metric">
-              <p className="setup-metric__label">Assigned outputs</p>
-              <p className="setup-metric__value">{configuredCount}</p>
-              <p className="setup-metric__hint">{unassignedCount > 0 ? `${unassignedCount} need outputs` : 'All routed'}</p>
             </div>
           </div>
         </header>
@@ -335,6 +372,7 @@ export default function SetupView(): JSX.Element {
                 </button>
               </div>
             </article>
+
           </div>
 
           <article className="setup-card pairing">
@@ -378,6 +416,182 @@ export default function SetupView(): JSX.Element {
           </article>
         </div>
       </section>
+      {macModalOpen && (
+        <div
+          className="setup-modal-backdrop"
+          onClick={() => setMacModalOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="macid-modal-title"
+        >
+          <div
+            className="setup-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="setup-modal-header">
+              <div>
+                <p className="page-hero__eyebrow">AudioServer</p>
+                <h3 id="macid-modal-title">Override macId</h3>
+                <p className="setup-card__hint">Provide a 12-character MAC (hex, no separators).</p>
+              </div>
+              <button
+                type="button"
+                className="setup-modal-close"
+                onClick={() => setMacModalOpen(false)}
+                aria-label="Close macId override"
+              >
+                ✕
+              </button>
+            </div>
+            <form
+              className="setup-form"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (!macIdTrimmed) {
+                  setMacIdInput(configuredMacId);
+                  setMacDirty(false);
+                  setMacModalOpen(false);
+                  return;
+                }
+                setMacSaving(true);
+                try {
+                  await updateAudioServerMacId(macIdTrimmed);
+                  const fresh = (await getConfig()) as SetupConfig;
+                  setData(fresh);
+                  setMacDirty(false);
+                  setMacModalOpen(false);
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : String(err));
+                } finally {
+                  setMacSaving(false);
+                }
+              }}
+            >
+              <div className="form-control">
+                <label htmlFor="macid-input">Serial / macId</label>
+                <input
+                  id="macid-input"
+                  value={macIdInput}
+                  placeholder="Auto-detected"
+                  onChange={(event) => {
+                    setMacIdInput(event.target.value);
+                    setMacDirty(true);
+                  }}
+                />
+              </div>
+              <div className="setup-actions">
+                <button
+                  type="submit"
+                  className="primary"
+                  disabled={macSaving || !macIdChanged || !macIdValid}
+                >
+                  {macSaving ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={macSaving}
+                  onClick={() => {
+                    setMacIdInput(configuredMacId);
+                    setMacDirty(false);
+                    setMacModalOpen(false);
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {ipModalOpen && (
+        <div
+          className="setup-modal-backdrop"
+          onClick={() => setIpModalOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="ip-modal-title"
+        >
+          <div
+            className="setup-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="setup-modal-header">
+              <div>
+                <p className="page-hero__eyebrow">AudioServer</p>
+                <h3 id="ip-modal-title">Override IP</h3>
+                <p className="setup-card__hint">Provide the IP used for pairing and status.</p>
+              </div>
+              <button
+                type="button"
+                className="setup-modal-close"
+                onClick={() => setIpModalOpen(false)}
+                aria-label="Close IP override"
+              >
+                ✕
+              </button>
+            </div>
+            <form
+              className="setup-form"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (!ipTrimmed) {
+                  setIpInput(configuredIp);
+                  setIpDirty(false);
+                  setIpModalOpen(false);
+                  return;
+                }
+                setIpSaving(true);
+                try {
+                  await updateAudioServerIp(ipTrimmed);
+                  const fresh = (await getConfig()) as SetupConfig;
+                  setData(fresh);
+                  setIpDirty(false);
+                  setIpModalOpen(false);
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : String(err));
+                } finally {
+                  setIpSaving(false);
+                }
+              }}
+            >
+              <div className="form-control">
+                <label htmlFor="ip-input">AudioServer IP</label>
+                <input
+                  id="ip-input"
+                  value={ipInput}
+                  placeholder="Auto-detected"
+                  onChange={(event) => {
+                    setIpInput(event.target.value);
+                    setIpDirty(true);
+                  }}
+                />
+              </div>
+              <div className="setup-actions">
+                <button
+                  type="submit"
+                  className="primary"
+                  disabled={ipSaving || !ipChanged || !ipValid}
+                >
+                  {ipSaving ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={ipSaving}
+                  onClick={() => {
+                    setIpInput(configuredIp);
+                    setIpDirty(false);
+                    setIpModalOpen(false);
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

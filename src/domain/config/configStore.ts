@@ -5,6 +5,8 @@ import {
   resolveDataDir,
   writeJson,
 } from '@/core/utils/file';
+import { defaultMacId } from '@/core/utils/mac';
+import { defaultLocalIp } from '@/core/utils/net';
 import type { AudioServerConfig, RawAudioConfig, ZoneConfig } from '@/domain/config/types';
 
 const CONFIG_PATH = resolveDataDir('config.json');
@@ -132,10 +134,10 @@ function defaultConfig(): AudioServerConfig {
     system: {
       miniserver: { ip: '', serial: '' },
       audioserver: {
-        ip: '',
+        ip: defaultLocalIp(),
         name: 'Unconfigured',
         uuid: '',
-        macId: '504F94FF1BB3',
+        macId: defaultMacId(),
         paired: false,
         extensions: [],
       },

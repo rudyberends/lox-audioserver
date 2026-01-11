@@ -5,6 +5,8 @@ import os from 'node:os';
 import { resolve } from 'node:path';
 import { createLogger, logManager, type LogLevel } from '@/core/logging/logger';
 import { logBuffer } from '@/core/logging/logBuffer';
+import { defaultMacId, normalizeMacId } from '@/core/utils/mac';
+import { defaultLocalIp } from '@/core/utils/net';
 import { getConfig, updateConfig } from '@/domain/config/configStore';
 import {
   handleSpotifyOAuthCallback,
@@ -1624,6 +1626,7 @@ export class AdminApiHandler {
     const isZonesUpdate = pathname.endsWith('/config/zones');
     const isContentUpdate = pathname.endsWith('/config/content');
     const isInputsUpdate = pathname.endsWith('/config/inputs');
+    const isSystemUpdate = pathname.endsWith('/config/system');
 
     if (req.method === 'GET' && (pathname.endsWith('/config') || pathname.endsWith('/config/'))) {
       const cfg = getConfig();
@@ -1633,8 +1636,12 @@ export class AdminApiHandler {
     }
 
     if (req.method === 'POST' && isClear) {
+      const currentMacId = getConfig()?.system?.audioserver?.macId;
       await updateConfig((cfg) => {
         Object.assign(cfg, this.defaultConfig());
+        if (currentMacId) {
+          cfg.system.audioserver.macId = currentMacId;
+        }
       });
       await this.reloadZones();
       this.sendJson(res, 204, {});
@@ -1717,6 +1724,66 @@ export class AdminApiHandler {
         }
       });
       await this.reloadZones();
+      this.sendJson(res, 204, {});
+      return;
+    }
+
+    if (req.method === 'POST' && isSystemUpdate) {
+      const body = (await this.readJsonBody(req)) as
+        | {
+            audioserver?: { macId?: string; ip?: string };
+          }
+        | null;
+      if (!body || typeof body !== 'object') {
+        this.sendJson(res, 400, { error: 'invalid-system-payload' });
+        return;
+      }
+      if (!body.audioserver || typeof body.audioserver !== 'object') {
+        this.sendJson(res, 400, { error: 'invalid-audioserver-payload' });
+        return;
+      }
+      const rawMac = body.audioserver.macId;
+      const rawIp = body.audioserver.ip;
+      if (typeof rawMac !== 'string' && typeof rawIp !== 'string') {
+        this.sendJson(res, 400, { error: 'invalid-system-payload' });
+        return;
+      }
+      let normalizedMac: string | null = null;
+      if (typeof rawMac === 'string') {
+        const trimmed = rawMac.trim();
+        if (!trimmed) {
+          this.sendJson(res, 400, { error: 'invalid-macid' });
+          return;
+        }
+        const normalized = normalizeMacId(trimmed);
+        if (!normalized || normalized.length !== 12) {
+          this.sendJson(res, 400, { error: 'invalid-macid' });
+          return;
+        }
+        normalizedMac = normalized;
+      }
+      let normalizedIp: string | null = null;
+      if (typeof rawIp === 'string') {
+        const trimmedIp = rawIp.trim();
+        if (!trimmedIp) {
+          this.sendJson(res, 400, { error: 'invalid-ip' });
+          return;
+        }
+        normalizedIp = trimmedIp;
+      }
+
+      await updateConfig((cfg) => {
+        if (!cfg.system) cfg.system = this.defaultConfig().system;
+        if (!cfg.system.audioserver) {
+          cfg.system.audioserver = this.defaultConfig().system.audioserver;
+        }
+        if (normalizedMac) {
+          cfg.system.audioserver.macId = normalizedMac;
+        }
+        if (normalizedIp) {
+          cfg.system.audioserver.ip = normalizedIp;
+        }
+      });
       this.sendJson(res, 204, {});
       return;
     }
@@ -1819,10 +1886,10 @@ export class AdminApiHandler {
       system: {
         miniserver: { ip: '', serial: '' },
         audioserver: {
-          ip: '',
+          ip: defaultLocalIp(),
           name: 'Unconfigured',
           uuid: '',
-          macId: '504F94FF1BB3',
+          macId: defaultMacId(),
           paired: false,
           extensions: [],
         },

@@ -30,3 +30,27 @@ export async function reinitializeServer(): Promise<void> {
     throw new Error(text || 'Failed to reinitialize');
   }
 }
+
+export async function updateAudioServerMacId(macId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/config/system`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ audioserver: { macId } }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || 'Failed to update macId');
+  }
+}
+
+export async function updateAudioServerIp(ip: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/config/system`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ audioserver: { ip } }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || 'Failed to update ip');
+  }
+}

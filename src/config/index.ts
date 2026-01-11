@@ -5,12 +5,12 @@ import { buildLoxoneHttpConfig } from '@/config/loxone';
 /**
  * Aggregates all configuration builders into a single bootstrap helper.
  */
-export const loadConfig = () => {
+export const loadConfig = (macId?: string) => {
   const env = loadEnvironment();
   return {
     env,
     http: buildHttpServerConfig(env),
-    loxone: buildLoxoneHttpConfig(env),
+    loxone: buildLoxoneHttpConfig(env, macId),
   };
 };
 
