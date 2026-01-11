@@ -2126,6 +2126,33 @@ class ZoneManager {
         this.setShuffle(zoneId, next);
         break;
       }
+      case 'repeat': {
+        const normalized =
+          typeof payload === 'string' ? payload.trim().toLowerCase() : '';
+        let next: number | null = null;
+        if (normalized) {
+          if (['off', 'none', '0'].includes(normalized)) {
+            next = 0;
+          } else if (['all', 'queue', '1'].includes(normalized)) {
+            next = 1;
+          } else if (['one', 'track', '3'].includes(normalized)) {
+            next = 3;
+          }
+        }
+        if (next === null) {
+          const current = ctx.queue.repeat ?? 0;
+          if (current === 0) {
+            next = 1;
+          } else if (current === 1) {
+            next = 3;
+          } else {
+            next = 0;
+          }
+        }
+        this.patchState(zoneId, { plrepeat: next });
+        ctx.queue.repeat = next;
+        break;
+      }
       default:
         break;
     }
@@ -2643,7 +2670,7 @@ class ZoneManager {
     if (!ctx) {
       return;
     }
-    const repeat = mode === 'one' ? 1 : mode === 'all' ? 2 : 0;
+    const repeat = mode === 'one' ? 3 : mode === 'all' ? 1 : 0;
     ctx.queue.repeat = repeat;
     this.patchState(zoneId, { plrepeat: repeat });
   }

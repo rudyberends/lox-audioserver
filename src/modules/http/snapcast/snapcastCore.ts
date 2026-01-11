@@ -1287,7 +1287,7 @@ class SnapcastCore {
       session?.state === 'playing' ? 'playing' : session?.state === 'paused' ? 'paused' : 'stopped';
     const position = session?.elapsed ?? undefined;
     const loopStatus =
-      zoneState?.plrepeat === 1 ? 'track' : zoneState?.plrepeat === 2 ? 'playlist' : 'none';
+      zoneState?.plrepeat === 3 ? 'track' : zoneState?.plrepeat === 1 ? 'playlist' : 'none';
     return {
       id: active.streamId,
       status: playbackStatus === 'playing' ? 'playing' : 'idle',

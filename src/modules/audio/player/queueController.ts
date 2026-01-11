@@ -47,7 +47,7 @@ export class QueueController {
     const shuffle = this.queue.shuffle ?? false;
     const currentIndex = this.queue.currentIndex;
 
-    if (repeat === 1) {
+    if (repeat === 3) {
       return currentIndex;
     }
     if (shuffle && size > 1) {
@@ -58,7 +58,7 @@ export class QueueController {
     if (incremented < size) {
       return incremented;
     }
-    if (repeat === 2) {
+    if (repeat === 1 || repeat === 2) {
       return 0;
     }
     return -1;

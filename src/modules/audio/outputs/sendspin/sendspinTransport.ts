@@ -1252,9 +1252,9 @@ export class SendspinTransport implements ZoneTransport {
           ? Number(meta?.trackId)
           : null;
     const repeatMode: 'off' | 'one' | 'all' | null =
-      zoneState?.plrepeat === 1
+      zoneState?.plrepeat === 3
         ? 'one'
-        : zoneState?.plrepeat === 2
+        : zoneState?.plrepeat === 1
           ? 'all'
           : 'off';
     const shuffleMode: boolean | null =
