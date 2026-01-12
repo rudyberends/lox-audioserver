@@ -207,9 +207,16 @@ export class TuneInProvider {
         return null;
       }
 
+      let name = item.text;
+      if (name) {
+        name = name.replace(/^(?:\d+\.\d+ \| )?(.+?)(?: \([^)]+\))?$/, '$1'); // removes frequency and genre if present in name
+      } else {
+        name = 'Unknown station';
+      }
+
       return {
         id,
-        name: item.text ?? 'Unknown station',
+        name,
         stream,
         coverurl: item.image ?? item.playing_image ?? DEFAULT_ICON,
       } satisfies RadioStation;
