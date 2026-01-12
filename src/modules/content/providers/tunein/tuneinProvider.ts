@@ -207,6 +207,13 @@ export class TuneInProvider {
         return null;
       }
 
+      let coverurl = item.image ?? item.playing_image;
+      if (coverurl) {
+        coverurl = coverurl.replace(/q(?=\.[^.]*$)/, 'd'); // replaces `q` char before file extension to `d` to get 300x300 pixel squared cover
+      } else {
+        coverurl = DEFAULT_ICON;
+      }
+
       let name = item.text;
       if (name) {
         name = name.replace(/^(?:\d+\.\d+ \| )?(.+?)(?: \([^)]+\))?$/, '$1'); // removes frequency and genre if present in name
@@ -218,7 +225,7 @@ export class TuneInProvider {
         id,
         name,
         stream,
-        coverurl: item.image ?? item.playing_image ?? DEFAULT_ICON,
+        coverurl,
       } satisfies RadioStation;
     });
 
