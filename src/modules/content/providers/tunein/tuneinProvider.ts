@@ -190,9 +190,10 @@ export class TuneInProvider {
         text?: string;
         image?: string;
         playing_image?: string;
+        key?: string;
       };
 
-      if (!item || item.type !== 'audio') {
+      if (!item || item.type !== 'audio' || item.key === 'unavailable') {
         return null;
       }
 
