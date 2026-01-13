@@ -82,6 +82,7 @@ export class AudioSession {
   private pipeSourceErrorListener?: (err: any) => void;
   private killTimer?: NodeJS.Timeout;
   private readonly killTimeoutMs: number;
+  private discardSubscribersOnStop = false;
 
   constructor(
     private readonly zoneId: number,
@@ -602,11 +603,12 @@ export class AudioSession {
     }
   }
 
-  public stop(): void {
+  public stop(discardSubscribers = false): void {
     if (this.ending) {
       return;
     }
     this.ending = true;
+    this.discardSubscribersOnStop = discardSubscribers;
     if (this.process) {
       this.process.kill('SIGTERM');
       this.armKillTimer();
@@ -726,7 +728,12 @@ export class AudioSession {
       this.process = undefined;
     }
     for (const subscriber of this.subscribers) {
-      if (!subscriber.writableEnded) {
+      if (subscriber.writableEnded) {
+        continue;
+      }
+      if (this.discardSubscribersOnStop) {
+        subscriber.destroy();
+      } else {
         subscriber.end();
       }
     }
@@ -739,6 +746,7 @@ export class AudioSession {
       this.debugTapStream = undefined;
     }
     this.subscribers.clear();
+    this.discardSubscribersOnStop = false;
     if (!suppressTermination) {
       this.onTerminated();
     }

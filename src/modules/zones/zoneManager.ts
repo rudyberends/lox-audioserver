@@ -793,6 +793,9 @@ class ZoneManager {
     if (isRadio && !stationValue) {
       stationValue = deriveRadioStationLabel(resolvedTarget) ?? deriveRadioStationLabel(uri) ?? '';
     }
+    if (isRadio && stationValue?.trim() && !isLikelyHostLabel(stationValue)) {
+      ctx.metadata.radioStationFallback = stationValue.trim();
+    }
     this.log.info('playContent', {
       zoneId,
       type,
@@ -1447,6 +1450,38 @@ class ZoneManager {
     }
     if (ctx.queue.authority) {
       patch.queueAuthority = ctx.queue.authority;
+    }
+    if (Object.keys(patch).length > 0) {
+      this.patchState(zoneId, patch);
+    }
+  }
+
+  public updateRadioMetadata(zoneId: number, metadata: { title: string; artist: string }): void {
+    const ctx = this.zones.get(zoneId);
+    if (!ctx) {
+      return;
+    }
+    if (ctx.state.mode !== 'play' || !isRadioAudiopath(ctx.state.audiopath, ctx.state.audiotype)) {
+      return;
+    }
+    const patch: Partial<LoxoneZoneState> = {};
+    if (metadata.title) {
+      patch.title = sanitizeTitle(metadata.title, fallbackTitle(ctx.state.title, ctx.name));
+    }
+    const artist = metadata.artist ?? '';
+    patch.artist = artist;
+    if (artist.trim()) {
+      if (ctx.state.station) {
+        ctx.metadata.radioStationFallback = ctx.state.station;
+      }
+      patch.station = '';
+    } else if (!ctx.state.station) {
+      const fallback = typeof ctx.metadata.radioStationFallback === 'string'
+        ? ctx.metadata.radioStationFallback
+        : '';
+      if (fallback) {
+        patch.station = fallback;
+      }
     }
     if (Object.keys(patch).length > 0) {
       this.patchState(zoneId, patch);
@@ -2421,6 +2456,8 @@ class ZoneManager {
       patch.type = desiredType;
     }
     if (isRadioState) {
+      const artistValue =
+        typeof mergedForType.artist === 'string' ? mergedForType.artist.trim() : '';
       if (!('audiotype' in patch) || patch.audiotype !== 1) {
         patch.audiotype = 1;
       }
@@ -2430,14 +2467,19 @@ class ZoneManager {
       if (!('duration' in patch) || patch.duration !== 0) {
         patch.duration = 0;
       }
-      if (!mergedForType.station?.trim()) {
-        const fallbackStation = deriveRadioStationLabel(mergedForType.audiopath);
-        if (fallbackStation) {
-          patch.station = fallbackStation;
+      if (artistValue) {
+        if (ctx.state.station) {
+          ctx.metadata.radioStationFallback = ctx.state.station;
         }
-      }
-      if ('title' in patch && patch.title) {
-        patch.title = '';
+        patch.station = '';
+      } else if (!mergedForType.station?.trim()) {
+        const fallback =
+          typeof ctx.metadata.radioStationFallback === 'string'
+            ? ctx.metadata.radioStationFallback
+            : '';
+        if (fallback) {
+          patch.station = fallback;
+        }
       }
     }
 
@@ -3683,6 +3725,17 @@ function deriveRadioStationLabel(audiopath: string | undefined): string | undefi
   } catch {
     return undefined;
   }
+}
+
+function isLikelyHostLabel(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (/\s/.test(trimmed)) {
+    return false;
+  }
+  return /^[a-z0-9.-]+$/i.test(trimmed) && trimmed.includes('.');
 }
 
 function resolveSourceName(

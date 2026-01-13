@@ -4,6 +4,7 @@ import { audioStreamEngine } from '@/modules/audio/engine/audioStreamEngine';
 import type { PlaybackSource, OutputProfile } from '@/modules/audio/engine/audioSession';
 export type { PlaybackSource, OutputProfile } from '@/modules/audio/engine/audioSession';
 import { resolvePlaybackSource } from '@/modules/audio/utils/sourceResolver';
+import { decodeAudiopath } from '@/modules/audio/utils/audiopath';
 import { audioOutputSettings, type AudioOutputSettings, type HttpProfile } from '@/modules/audio/utils/audioFormat';
 import { notifyTransportError, notifyTransportState } from '@/modules/audio/outputs/queueUpdater';
 
@@ -79,6 +80,46 @@ class AudioManager {
     );
   }
 
+  private decorateRadioSource(
+    zoneId: number,
+    source: PlaybackSource | null,
+    metadata?: PlaybackMetadata,
+    rawSource?: string,
+  ): PlaybackSource | null {
+    if (!source || source.kind !== 'url' || !metadata?.isRadio) {
+      return source;
+    }
+    const headers: Record<string, string> = { ...(source.headers ?? {}) };
+    headers['Icy-MetaData'] = '1';
+    if (this.isProxyUrl(source.url)) {
+      headers['X-Loxone-Zone'] = String(zoneId);
+    }
+    const realTime = this.shouldUseRealTime(rawSource);
+    return { ...source, headers, ...(realTime ? { realTime: true } : {}) };
+  }
+
+  private isProxyUrl(url: string): boolean {
+    try {
+      const parsed = new URL(url);
+      return parsed.pathname === '/streams/proxy';
+    } catch {
+      return false;
+    }
+  }
+
+  private shouldUseRealTime(rawSource?: string): boolean {
+    if (!rawSource) {
+      return false;
+    }
+    const rawLower = rawSource.toLowerCase();
+    if (rawLower.startsWith('tunein:') || rawLower.startsWith('radio:') || rawLower.includes('tunein')) {
+      return true;
+    }
+    const decoded = decodeAudiopath(rawSource);
+    const decodedLower = (decoded || '').toLowerCase();
+    return decodedLower.startsWith('tunein:') || decodedLower.startsWith('radio:') || decodedLower.includes('tunein');
+  }
+
   public startPlayback(
     zoneId: number,
     source: string,
@@ -88,7 +129,12 @@ class AudioManager {
     if (typeof requiresPcm === 'boolean') {
       this.zonePcmPreference.set(zoneId, requiresPcm);
     }
-    const playbackSource = resolvePlaybackSource(source);
+    const playbackSource = this.decorateRadioSource(
+      zoneId,
+      resolvePlaybackSource(source),
+      metadata,
+      source,
+    );
     return this.startWithResolvedSource(zoneId, source, playbackSource, metadata, requiresPcm);
   }
 
@@ -102,7 +148,8 @@ class AudioManager {
     if (typeof requiresPcm === 'boolean') {
       this.zonePcmPreference.set(zoneId, requiresPcm);
     }
-    return this.startWithResolvedSource(zoneId, label, playbackSource, metadata, requiresPcm);
+    const decorated = this.decorateRadioSource(zoneId, playbackSource, metadata);
+    return this.startWithResolvedSource(zoneId, label, decorated, metadata, requiresPcm);
   }
 
   public pausePlayback(zoneId: number): PlaybackSession | null {
@@ -113,7 +160,7 @@ class AudioManager {
     // For pipe-based sources (e.g. embedded librespot), keep the engine alive so
     // downstream transports (AirPlay/DLNA) don't thrash on quick pauses/track changes.
     if (session.playbackSource?.kind !== 'pipe') {
-      audioStreamEngine.stop(zoneId, 'pause');
+      audioStreamEngine.stop(zoneId, 'pause', { discardSubscribers: true });
     }
     session.state = 'paused';
     session.updatedAt = Date.now();
@@ -173,7 +220,7 @@ class AudioManager {
     if (!session) {
       return null;
     }
-    audioStreamEngine.stop(zoneId, 'stop');
+    audioStreamEngine.stop(zoneId, 'stop', { discardSubscribers: true });
     this.sessions.delete(zoneId);
     this.log.debug('playback stopped', { zoneId, source: session.source });
     return session;
@@ -341,7 +388,7 @@ class AudioManager {
             pcmBitDepth: outputSignature.pcmBitDepth,
             profiles,
           });
-          audioStreamEngine.stop(zoneId, 'reconfigure');
+          audioStreamEngine.stop(zoneId, 'reconfigure', { discardSubscribers: true });
         }
         audioStreamEngine.start(zoneId, playbackSource, profiles, effectiveOutput);
       }
@@ -356,7 +403,7 @@ class AudioManager {
       effectiveSource?.kind === 'url' &&
       Boolean(existing);
     if (!wantsHandoff) {
-      audioStreamEngine.stop(zoneId, 'switch');
+      audioStreamEngine.stop(zoneId, 'switch', { discardSubscribers: true });
     }
     if (!effectiveSource && !transportOnly) {
       this.log.warn('unable to resolve playback source; skipping session', {

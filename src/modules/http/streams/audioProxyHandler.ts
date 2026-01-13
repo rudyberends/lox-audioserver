@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 import { networkInterfaces } from 'node:os';
 import { createLogger } from '@/core/logging/logger';
+import { zoneManager } from '@/modules/zones/zoneManager';
 import {
   decodeHeaders,
   encodeHeaders,
@@ -13,6 +14,7 @@ const MAX_PLAYLIST_BYTES = 1024 * 1024;
 
 export class AudioProxyHandler {
   private readonly log = createLogger('Http', 'AudioProxy');
+  private readonly lastIcyTitleByZone = new Map<number, string>();
 
   public matches(pathname: string): boolean {
     return pathname === '/streams/proxy';
@@ -60,6 +62,7 @@ export class AudioProxyHandler {
     const contentLength = upstream.headers.get('content-length');
     const acceptRanges = upstream.headers.get('accept-ranges');
     const icyMetaInt = upstream.headers.get('icy-metaint');
+    const zoneId = this.resolveZoneId(req);
 
     if (upstream.ok && this.isPlaylistResponse(contentType, upstream.url)) {
       await this.respondPlaylist(res, upstream, contentType, extraHeaders);
@@ -85,6 +88,12 @@ export class AudioProxyHandler {
 
     res.writeHead(upstream.status || 200, headers);
     const stream = Readable.fromWeb(upstream.body as any);
+    if (zoneId && icyMetaInt) {
+      const metaInt = Number(icyMetaInt);
+      if (Number.isFinite(metaInt) && metaInt > 0) {
+        this.attachIcyMetadataListener(stream, metaInt, zoneId);
+      }
+    }
     stream.on('error', (error) => {
       this.log.warn('proxy stream failed', {
         target,
@@ -217,6 +226,113 @@ export class AudioProxyHandler {
       const proxied = this.wrapProxyUrl(uri, baseUrl, headers);
       return `URI="${proxied}"`;
     });
+  }
+
+  private resolveZoneId(req: IncomingMessage): number | null {
+    const header = req.headers['x-loxone-zone'];
+    const raw = Array.isArray(header) ? header[0] : header;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return null;
+    }
+    return parsed;
+  }
+
+  private attachIcyMetadataListener(
+    stream: Readable,
+    metaInt: number,
+    zoneId: number,
+  ): void {
+    let bytesUntilMeta = metaInt;
+    let metaRemaining = 0;
+    let metaChunks: Buffer[] = [];
+
+    const handleMetadata = (payload: Buffer) => {
+      const update = this.parseIcyMetadata(payload);
+      if (!update) {
+        return;
+      }
+      const last = this.lastIcyTitleByZone.get(zoneId);
+      if (last === update.title) {
+        return;
+      }
+      this.lastIcyTitleByZone.set(zoneId, update.title);
+      zoneManager.updateRadioMetadata(zoneId, update);
+    };
+
+    const onData = (chunk: Buffer) => {
+      let offset = 0;
+      while (offset < chunk.length) {
+        if (metaRemaining > 0) {
+          const take = Math.min(metaRemaining, chunk.length - offset);
+          metaChunks.push(chunk.subarray(offset, offset + take));
+          offset += take;
+          metaRemaining -= take;
+          if (metaRemaining === 0) {
+            const payload = Buffer.concat(metaChunks);
+            metaChunks = [];
+            handleMetadata(payload);
+            bytesUntilMeta = metaInt;
+          }
+          continue;
+        }
+        if (bytesUntilMeta > 0) {
+          const skip = Math.min(bytesUntilMeta, chunk.length - offset);
+          offset += skip;
+          bytesUntilMeta -= skip;
+          if (bytesUntilMeta > 0) {
+            continue;
+          }
+        }
+        if (bytesUntilMeta === 0) {
+          if (offset >= chunk.length) {
+            break;
+          }
+          const length = chunk.readUInt8(offset);
+          offset += 1;
+          metaRemaining = length * 16;
+          if (metaRemaining === 0) {
+            bytesUntilMeta = metaInt;
+          }
+        }
+      }
+    };
+
+    const cleanup = () => {
+      stream.off('data', onData);
+    };
+
+    stream.on('data', onData);
+    stream.on('end', cleanup);
+    stream.on('close', cleanup);
+    stream.on('error', cleanup);
+  }
+
+  private parseIcyMetadata(payload: Buffer): { title: string; artist: string } | null {
+    const text = payload.toString('utf8').replace(/\0/g, '').trim();
+    if (!text) {
+      return null;
+    }
+    const match =
+      /StreamTitle='([^']*)'/i.exec(text) ??
+      /StreamTitle=\"([^\"]*)\"/i.exec(text);
+    const rawTitle = match?.[1]?.trim() ?? '';
+    if (!rawTitle) {
+      return null;
+    }
+    const normalized = rawTitle.replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      return null;
+    }
+    let artist = '';
+    let title = normalized;
+    const separator = ' - ';
+    const idx = normalized.indexOf(separator);
+    if (idx > 0) {
+      artist = normalized.slice(0, idx).trim();
+      title = normalized.slice(idx + separator.length).trim();
+    }
+    return { title, artist };
   }
 
   private wrapProxyUrl(

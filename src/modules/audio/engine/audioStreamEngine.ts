@@ -67,7 +67,7 @@ export class AudioStreamEngine {
     profiles: OutputProfile[] = ['mp3'],
     outputSettings?: AudioOutputSettings,
   ): void {
-    this.stop(zoneId, 'replace');
+    this.stop(zoneId, 'replace', { discardSubscribers: true });
     const profileMap = new Map<OutputProfile, AudioSession>();
     const effectiveOutput = outputSettings ?? this.outputSettings;
     profiles.forEach((profile) => {
@@ -151,19 +151,24 @@ export class AudioStreamEngine {
       }
       if (existing) {
         this.stopReasons.set(existing, 'switch');
-        existing.forEach((session) => session.stop());
+        existing.forEach((session) => session.stop(true));
       }
       this.log.info('audio handoff complete', { zoneId });
     })();
   }
 
-  public stop(zoneId: number, reason = 'stop'): void {
+  public stop(
+    zoneId: number,
+    reason = 'stop',
+    options: { discardSubscribers?: boolean } = {},
+  ): void {
     const existing = this.sessions.get(zoneId);
     if (!existing) {
       return;
     }
     this.stopReasons.set(existing, reason);
-    existing.forEach((session) => session.stop());
+    const discardSubscribers = options.discardSubscribers === true;
+    existing.forEach((session) => session.stop(discardSubscribers));
     this.sessions.delete(zoneId);
     this.log.info('audio session stopped', { zoneId });
   }
