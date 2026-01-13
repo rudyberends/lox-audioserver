@@ -17,7 +17,7 @@ export type InputsUpdatePayload = {
   airplay?: { enabled?: boolean };
   spotify?: { enabled?: boolean };
   bluetooth?: { enabled?: boolean };
-  lineIn?: { source?: string | null };
+  lineIn?: { inputs?: Array<Record<string, unknown>> | null };
 };
 
 export async function updateContentConfig(payload: ContentUpdatePayload): Promise<void> {

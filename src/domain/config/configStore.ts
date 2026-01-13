@@ -23,6 +23,7 @@ class ConfigStore {
       defaultConfig(),
       true,
     );
+    normalizeInputs(this.config);
     normalizeZones(this.config);
     return this.config;
   }
@@ -38,12 +39,7 @@ class ConfigStore {
     if (!this.config) {
       throw new Error('configuration not loaded');
     }
-    if (!this.config.inputs) {
-      this.config.inputs = {};
-    }
-    if (!this.config.inputs.spotify) {
-      this.config.inputs.spotify = { enabled: true };
-    }
+    normalizeInputs(this.config);
     normalizeZones(this.config);
   }
 
@@ -68,6 +64,7 @@ class ConfigStore {
     }
 
     await mutator(this.config!);
+    normalizeInputs(this.config!);
     normalizeZones(this.config!);
     await this.save();
     return this.config!;
@@ -115,6 +112,7 @@ export async function updateConfig(
   return store.patch(async (cfg) => {
     const before = serializeConfig(cfg);
     await mutator(cfg);
+    normalizeInputs(cfg);
     normalizeZones(cfg);
     const after = serializeConfig(cfg);
     if (before !== after) {
@@ -168,7 +166,7 @@ function defaultConfig(): AudioServerConfig {
         enabled: false,
       },
       lineIn: {
-        source: null,
+        inputs: [],
       },
     },
     zones: [],
@@ -215,4 +213,29 @@ function normalizeZoneInputs(zone: ZoneConfig): void {
 function normalizeZones(config: AudioServerConfig): void {
   if (!config.zones) return;
   config.zones.forEach((zone) => normalizeZoneInputs(zone));
+}
+
+function normalizeInputs(config: AudioServerConfig): void {
+  if (!config.inputs) {
+    config.inputs = {};
+  }
+  if (!config.inputs.airplay) {
+    config.inputs.airplay = { enabled: true };
+  }
+  if (!config.inputs.spotify) {
+    config.inputs.spotify = { enabled: true };
+  }
+  if (!config.inputs.bluetooth) {
+    config.inputs.bluetooth = { enabled: false };
+  }
+  if (!config.inputs.lineIn) {
+    config.inputs.lineIn = { inputs: [] };
+  } else {
+    if ('source' in config.inputs.lineIn) {
+      delete (config.inputs.lineIn as any).source;
+    }
+    if (!Array.isArray(config.inputs.lineIn.inputs)) {
+      config.inputs.lineIn.inputs = [];
+    }
+  }
 }

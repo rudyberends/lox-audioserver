@@ -48,6 +48,12 @@ import {
   audioCfgUploadAudiouploadAdd,
   audioPlayUploadedAlert,
 } from '@/modules/loxone/commands/handlers/alertHandlers';
+import {
+  audioCfgGetInputs,
+  audioCfgInputRename,
+  audioCfgInputType,
+  audioLineIn,
+} from '@/modules/loxone/commands/handlers/inputHandlers';
 
 export interface RouteDependencies {
   config: LoxoneHttpConfig;
@@ -86,6 +92,9 @@ export function registerRoutes(
   router.registerPrefix('audio', 'audio/cfg/radios/add', placeholder('radios/add'));
   router.registerPrefix('audio', 'audio/cfg/radios/delete', placeholder('radios/delete'));
   router.registerPrefix('audio', 'audio/cfg/getradios', audioCfgGetRadios);
+  router.registerPrefix('audio', 'audio/cfg/getinputs', audioCfgGetInputs);
+  router.registerRegex('audio', /^audio\/cfg\/input\/[^/]+\/rename\//, audioCfgInputRename);
+  router.registerRegex('audio', /^audio\/cfg\/input\/[^/]+\/type\//, audioCfgInputType);
   router.registerPrefix('audio', 'audio/cfg/getservicefolder', audioCfgGetServiceFolder);
   router.registerPrefix('audio', 'audio/cfg/getplaylists2', audioCfgGetPlaylists);
   router.registerPrefix('audio', 'audio/cfg/isfollowed', audioCfgIsFollowed);
@@ -136,6 +145,7 @@ export function registerRoutes(
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/roomfav\/play\//, audioFavoritePlay);
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/roomfav\/plus$/, audioRoomFavPlus);
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/playurl\/.+$/, audioPlayUrl);
+  router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/linein(?:\/.*)?$/, audioLineIn);
 
   router.registerRegex('audio', /^audio\/grouped\/(pause|play|resume|stop)\//, audioGroupedPlayback);
   router.registerRegex('audio', /^audio\/grouped\/volume\//, audioGroupedVolume);

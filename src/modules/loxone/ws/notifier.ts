@@ -83,6 +83,13 @@ export function notifyRecentlyPlayedChanged(zoneId: number, timestamp: number): 
 }
 
 /**
+ * Signals that the line-in inputs list changed.
+ */
+export function notifyLineInChanged(): void {
+  emit({ lineinchanged_event: [] }, 'lineinchanged_event');
+}
+
+/**
  * Emits a Loxone-compatible `rescan_event` for local library progress.
  */
 export function notifyRescan(status: 0 | 1 | 2, folders?: number, files?: number): void {

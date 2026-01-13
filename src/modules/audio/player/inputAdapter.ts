@@ -35,7 +35,9 @@ export class InputAdapter {
         ? 4
         : label === 'spotify' || resolvedUri.startsWith('spotify:')
           ? 5
-          : 0;
+          : label === 'linein'
+            ? 3
+            : 0;
     const item = createQueueItem(
       normalizeSpotifyAudiopath(resolvedUri),
       this.deps.zoneName,
@@ -57,6 +59,7 @@ export class InputAdapter {
         clientState: 'on',
         power: 'on',
         audiotype: audioType,
+        ...(label === 'linein' ? { type: 6 } : {}),
         sourceName:
           audioType === 5
             ? 'musicassistant'

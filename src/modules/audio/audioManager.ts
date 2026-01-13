@@ -556,6 +556,16 @@ class AudioManager {
     }
     // Attempt to restart once for pipe sources to recover from transient ffmpeg exits.
     if (session.playbackSource?.kind === 'pipe') {
+      const pipeStream = (session.playbackSource as { stream?: NodeJS.ReadableStream }).stream;
+      const streamEnded = Boolean(
+        pipeStream &&
+          ((pipeStream as { readableEnded?: boolean }).readableEnded ||
+            (pipeStream as { destroyed?: boolean }).destroyed),
+      );
+      if (streamEnded) {
+        this.log.info('pipe source ended; skipping restart', { zoneId, source: session.source });
+        return;
+      }
       setTimeout(() => {
         this.startWithResolvedSource(
           zoneId,

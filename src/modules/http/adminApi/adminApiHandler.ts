@@ -1688,12 +1688,12 @@ export class AdminApiHandler {
     }
 
     if (req.method === 'POST' && isInputsUpdate) {
-      const body = (await this.readJsonBody(req)) as
+          const body = (await this.readJsonBody(req)) as
         | {
             airplay?: { enabled?: boolean };
             spotify?: { enabled?: boolean };
             bluetooth?: { enabled?: boolean };
-            lineIn?: { source?: string | null };
+            lineIn?: { inputs?: Array<Record<string, unknown>> | null };
           }
         | null;
       if (!body || typeof body !== 'object') {
@@ -1715,12 +1715,9 @@ export class AdminApiHandler {
             enabled: Boolean(body.bluetooth.enabled),
           };
         }
-        if (body.lineIn && typeof body.lineIn === 'object' && 'source' in body.lineIn) {
-          const source =
-            typeof body.lineIn.source === 'string' && body.lineIn.source.trim().length > 0
-              ? body.lineIn.source.trim()
-              : null;
-          cfg.inputs!.lineIn = { ...(cfg.inputs!.lineIn ?? {}), source };
+        if (body.lineIn && typeof body.lineIn === 'object' && 'inputs' in body.lineIn) {
+          const inputs = Array.isArray(body.lineIn.inputs) ? body.lineIn.inputs : [];
+          cfg.inputs!.lineIn = { ...(cfg.inputs!.lineIn ?? {}), inputs };
         }
       });
       await this.reloadZones();
@@ -1924,7 +1921,7 @@ export class AdminApiHandler {
           enabled: false,
         },
         lineIn: {
-          source: null,
+          inputs: [],
         },
       },
       zones: [],

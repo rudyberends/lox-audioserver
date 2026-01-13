@@ -161,7 +161,7 @@ export interface GlobalBluetoothConfig {
 }
 
 export interface GlobalLineInConfig {
-  source?: string | null;
+  inputs?: LineInInputConfig[] | null;
 }
 
 export interface ZoneAirplayConfig {
@@ -209,6 +209,13 @@ export interface ZoneLineInConfig {
   enabled: boolean;
   device?: string;
   format?: string;
+}
+
+export interface LineInInputConfig {
+  id?: string;
+  name?: string;
+  iconType?: number;
+  source?: Record<string, unknown> | null;
 }
 
 export interface RawAudioConfig {

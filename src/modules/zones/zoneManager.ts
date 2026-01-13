@@ -207,9 +207,20 @@ export interface ZoneContext {
   /**
    * Explicit input mode so commands/volume can be gated consistently.
    * queue: local queue/streams, spotify: Spotify Connect, airplay: AirPlay input,
-   * musicassistant: MA stream proxy, applemusic: Apple Music stream proxy, deezer: Deezer stream proxy, tidal: Tidal stream proxy
+   * musicassistant: MA stream proxy, applemusic: Apple Music stream proxy, deezer: Deezer stream proxy,
+   * tidal: Tidal stream proxy, linein: PCM ingest input
    */
-  inputMode: 'queue' | 'spotify' | 'airplay' | 'musicassistant' | 'applemusic' | 'deezer' | 'tidal' | 'alert' | null;
+  inputMode:
+    | 'queue'
+    | 'spotify'
+    | 'airplay'
+    | 'musicassistant'
+    | 'applemusic'
+    | 'deezer'
+    | 'tidal'
+    | 'linein'
+    | 'alert'
+    | null;
   alert?: ActiveAlertState;
 }
 
@@ -921,7 +932,14 @@ class ZoneManager {
         /* ignore */
       }
     }
-    const queueAudioType = isMusicAssistant || isAppleMusic || isDeezer || isTidal ? 5 : isRadio ? 1 : 0;
+    const isLineIn = type === 'linein';
+    const queueAudioType = isLineIn
+      ? 3
+      : isMusicAssistant || isAppleMusic || isDeezer || isTidal
+        ? 5
+        : isRadio
+          ? 1
+          : 0;
     let queueItems = expandedQueue.length
       ? expandedQueue.map((item) => ({
         ...item,
@@ -1297,7 +1315,7 @@ class ZoneManager {
       return;
     }
     const normalized = label.toLowerCase();
-    if (!['airplay', 'spotify', 'musicassistant', 'applemusic', 'deezer', 'tidal'].includes(normalized)) {
+    if (!['airplay', 'spotify', 'musicassistant', 'applemusic', 'deezer', 'tidal', 'linein'].includes(normalized)) {
       return;
     }
     const mode = normalized as ZoneContext['inputMode'];
@@ -1323,6 +1341,8 @@ class ZoneManager {
               ? 'deezer'
               : mode === 'tidal'
                 ? 'tidal'
+                : mode === 'linein'
+                  ? 'local'
                 : 'applemusic';
     ctx.inputAdapter.playInput(label, playbackSource, metadata);
   }
@@ -1363,7 +1383,7 @@ class ZoneManager {
     if (!ctx) {
       return;
     }
-    const allowedInputs = new Set(['spotify', 'airplay', 'musicassistant', 'applemusic', 'deezer', 'tidal']);
+    const allowedInputs = new Set(['spotify', 'airplay', 'musicassistant', 'applemusic', 'deezer', 'tidal', 'linein']);
     if (ctx.activeInput && !allowedInputs.has(ctx.activeInput)) {
       return;
     }
@@ -3543,6 +3563,9 @@ function getInputAudioType(ctx: ZoneContext, audiopathOverride?: string): number
   if (ctx.inputMode === 'airplay' || audiopath.startsWith('airplay://')) {
     return 4;
   }
+  if (ctx.inputMode === 'linein' || audiopath.startsWith('linein://')) {
+    return 3;
+  }
   if (isBridgeApple || isBridgeDeezer || isBridgeTidal) {
     return 2;
   }
@@ -3637,7 +3660,10 @@ function toRadioAudiopath(audiopath: string | undefined): string {
   return encodeAudiopath(raw, 'station', 'tunein', true);
 }
 
-function resolveLoxoneType(_audiopath: string | undefined, _audiotype?: number | null): number {
+function resolveLoxoneType(_audiopath: string | undefined, audiotype?: number | null): number {
+  if (audiotype === 3) {
+    return 6;
+  }
   return 2;
 }
 
