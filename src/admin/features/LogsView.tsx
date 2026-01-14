@@ -52,6 +52,19 @@ function trimLogContent(content: string, limit: number): string {
   return content.slice(content.length - limit);
 }
 
+type LogTone = 'error' | 'warn' | 'info' | 'debug' | 'trace';
+
+function classifyLogLine(line: string): LogTone | null {
+  if (!line) return null;
+  const value = line.toLowerCase();
+  if (/\b(error|fatal|err)\b/.test(value)) return 'error';
+  if (/\b(warn|warning)\b/.test(value)) return 'warn';
+  if (/\b(info|notice)\b/.test(value)) return 'info';
+  if (/\b(debug)\b/.test(value)) return 'debug';
+  if (/\b(trace)\b/.test(value)) return 'trace';
+  return null;
+}
+
 export default function LogsView(): JSX.Element {
   const [state, setState] = React.useState<LogsState>({
     content: '',
@@ -258,6 +271,10 @@ export default function LogsView(): JSX.Element {
   }, [state.content, filterText]);
 
   const displayContent = filteredContent;
+  const displayLines = React.useMemo(() => {
+    if (!displayContent) return [];
+    return displayContent.split('\n');
+  }, [displayContent]);
 
   const metaBadges: string[] = [];
   const updatedLabel = formatTimestamp(state.updatedAt);
@@ -371,7 +388,23 @@ export default function LogsView(): JSX.Element {
             aria-label="Log output"
           >
             <pre className="logs-output__content">
-              {displayContent || (state.loading ? '' : 'No log entries yet.')}
+              {displayLines.length > 0
+                ? displayLines.map((line, index) => {
+                    const tone = classifyLogLine(line);
+                    const suffix = index < displayLines.length - 1 ? '\n' : '';
+                    return (
+                      <span
+                        key={`${index}-${line.slice(0, 24)}`}
+                        className={tone ? `log-line log-line--${tone}` : 'log-line'}
+                      >
+                        {line}
+                        {suffix}
+                      </span>
+                    );
+                  })
+                : state.loading
+                  ? ''
+                  : 'No log entries yet.'}
             </pre>
           </div>
         )}

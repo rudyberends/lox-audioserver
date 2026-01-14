@@ -12,12 +12,14 @@ import {
   fetchSpotifyAuthLink,
   fetchLibraryStorages,
   createLibraryStorage,
+  deleteLibraryStorage,
   fetchCustomRadioStations,
   createCustomRadioStation,
   deleteCustomRadioStation,
   validateTuneInUsername,
   createSpotifyBridge,
   deleteSpotifyBridge,
+  updateInputsConfig,
 } from '../services/contentApi';
 import type {
   LibraryStorage,
@@ -47,6 +49,11 @@ type ContentConfigResponse = {
         autoScan?: boolean;
       };
     };
+    inputs?: {
+      lineIn?: {
+        inputs?: LineInInputConfig[] | null;
+      };
+    };
   };
 };
 
@@ -62,6 +69,16 @@ type SpotifyAccountConfig = {
 type SpotifyBridgeConfig = {
 };
 type ScanStatus = 0 | 1 | 2;
+
+type LineInInputConfig = {
+  id?: string;
+  name?: string;
+  iconType?: LineInIconType;
+  source?: {
+    type?: LineInSourceType;
+    [key: string]: unknown;
+  } | null;
+};
 
 const AUDIO_EXTENSIONS = new Set(['.mp3', '.flac', '.m4a', '.aac', '.ogg', '.wav']);
 
@@ -91,6 +108,26 @@ type BridgeFormState = {
   tidalAccessToken: string;
   tidalCountryCode: string;
 };
+
+type LineInFormState = {
+  name: string;
+  iconType: LineInIconType;
+  sourceType: LineInSourceType;
+};
+
+enum LineInIconType {
+  LineIn = 0,
+  CdPlayer = 1,
+  Computer = 2,
+  IMac = 3,
+  IPod = 4,
+  Mobile = 5,
+  Radio = 6,
+  Screen = 7,
+  TurnTable = 8,
+}
+
+type LineInSourceType = 'ingest';
 
 type FileSystemEntry = {
   isFile: boolean;
@@ -124,6 +161,8 @@ type AlertPlaybackRowProps = {
   onUpload: (alertId: string, file: File | null) => Promise<void>;
   onRevert: (alertId: string) => Promise<void>;
 };
+
+type ContentFilterKey = 'radio' | 'library' | 'spotify' | 'linein' | 'custom' | 'system' | 'alerts';
 
 function formatScanStatus(status: ScanStatus | null): { label: string; tone: 'idle' | 'active' | 'error' } {
   if (status === 1) return { label: 'Scanning', tone: 'active' };
@@ -495,6 +534,24 @@ const createEmptyBridgeForm = (): BridgeFormState => ({
   tidalCountryCode: 'US',
 });
 
+const createEmptyLineInForm = (): LineInFormState => ({
+  name: '',
+  iconType: LineInIconType.CdPlayer,
+  sourceType: 'ingest',
+});
+
+const normalizeLineInInputs = (inputs: LineInInputConfig[]): LineInInputConfig[] => {
+  return inputs.map((entry, index) => ({
+    id: entry.id ?? `linein-${index}-${entry.name ?? 'input'}`,
+    name: entry.name,
+    iconType: typeof entry.iconType === 'number' ? entry.iconType : LineInIconType.CdPlayer,
+    source: {
+      type: entry.source?.type ?? 'ingest',
+      ...(entry.source ?? {}),
+    },
+  }));
+};
+
 function normalizeBridge(bridge: SpotifyBridgeConfig): SpotifyBridgeConfig {
   const provider = (bridge.provider || '').toLowerCase();
   if (provider === 'musicassistant') {
@@ -541,6 +598,8 @@ export default function ContentView(): JSX.Element {
   const [spotifyRefreshPending, setSpotifyRefreshPending] = React.useState(false);
   const [spotifyBridges, setSpotifyBridges] = React.useState<SpotifyBridgeConfig[]>([]);
   const [bridgeModalOpen, setBridgeModalOpen] = React.useState(false);
+  const [bridgeEditingId, setBridgeEditingId] = React.useState<string | null>(null);
+  const [bridgeEditingLabel, setBridgeEditingLabel] = React.useState<string | null>(null);
   const [bridgeForm, setBridgeForm] = React.useState<BridgeFormState>(() => createEmptyBridgeForm());
   const [bridgeSubmitting, setBridgeSubmitting] = React.useState(false);
   const [bridgeFeedback, setBridgeFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -567,12 +626,18 @@ export default function ContentView(): JSX.Element {
   const [libraryStorages, setLibraryStorages] = React.useState<LibraryStorage[]>([]);
   const [storageLoading, setStorageLoading] = React.useState(true);
   const [storageError, setStorageError] = React.useState<string | null>(null);
+  const [deletingStorageId, setDeletingStorageId] = React.useState<string | null>(null);
   const [storageFeedback, setStorageFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(
     null,
   );
   const [storageSubmitting, setStorageSubmitting] = React.useState(false);
   const [storageForm, setStorageForm] = React.useState<StorageFormState>(() => createEmptyStorageForm());
   const [storageModalOpen, setStorageModalOpen] = React.useState(false);
+  const [lineInInputs, setLineInInputs] = React.useState<LineInInputConfig[]>([]);
+  const [lineInModalOpen, setLineInModalOpen] = React.useState(false);
+  const [lineInSubmitting, setLineInSubmitting] = React.useState(false);
+  const [lineInEditingId, setLineInEditingId] = React.useState<string | null>(null);
+  const [lineInForm, setLineInForm] = React.useState<LineInFormState>(() => createEmptyLineInForm());
   const [customRadios, setCustomRadios] = React.useState<CustomRadioEntry[]>([]);
   const [customRadioLoading, setCustomRadioLoading] = React.useState(true);
   const [customRadioError, setCustomRadioError] = React.useState<string | null>(null);
@@ -592,9 +657,21 @@ export default function ContentView(): JSX.Element {
   const [recentsPurging, setRecentsPurging] = React.useState(false);
   const [favoritesPurgeFeedback, setFavoritesPurgeFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [recentsPurgeFeedback, setRecentsPurgeFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [contentFilter, setContentFilter] = React.useState<ContentFilterKey>(() => {
+    if (typeof window === 'undefined') return 'radio';
+    const stored = window.localStorage.getItem('admin-content-filter') as ContentFilterKey | null;
+    if (!stored) return 'radio';
+    const allowed: ContentFilterKey[] = ['radio', 'library', 'spotify', 'linein', 'custom', 'system', 'alerts'];
+    return allowed.includes(stored) ? stored : 'radio';
+  });
   const spotifyAccountBaselineRef = React.useRef(0);
   const { push: pushAlert } = useGlobalAlert();
-  const modalOpen = customRadioModalOpen || bridgeModalOpen || storageModalOpen;
+  const modalOpen = customRadioModalOpen || bridgeModalOpen || storageModalOpen || lineInModalOpen;
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('admin-content-filter', contentFilter);
+  }, [contentFilter]);
 
   const renderModal = React.useCallback(
     (node: React.ReactNode): React.ReactPortal | null => {
@@ -678,6 +755,7 @@ export default function ContentView(): JSX.Element {
         const cfg = (await getConfig()) as ContentConfigResponse;
         if (cancelled) return;
         const content = cfg.config?.content ?? {};
+        const lineIn = cfg.config?.inputs?.lineIn?.inputs ?? [];
         const currentRadio = content.radio?.tuneInUsername ?? '';
         const currentSpotify = content.spotify?.clientId ?? '';
         setRadioUsername(currentRadio);
@@ -690,6 +768,7 @@ export default function ContentView(): JSX.Element {
             ? content.spotify!.bridges!.map((bridge) => normalizeBridge(bridge))
             : [],
         );
+        setLineInInputs(Array.isArray(lineIn) ? normalizeLineInInputs(lineIn) : []);
         if (currentRadio.trim()) {
           void validateTuneIn(currentRadio);
         }
@@ -868,6 +947,28 @@ export default function ContentView(): JSX.Element {
     }
   }, []);
 
+  const handleDeleteLibraryStorage = React.useCallback(
+    async (storageId: string): Promise<void> => {
+      if (!storageId || deletingStorageId) return;
+      const confirmDelete = window.confirm('Remove this library share?');
+      if (!confirmDelete) return;
+      setDeletingStorageId(storageId);
+      try {
+        await deleteLibraryStorage(storageId);
+        await refreshLibraryStorages();
+      } catch (err) {
+        pushAlert({
+          tone: 'error',
+          title: 'Share removal failed',
+          message: err instanceof Error ? err.message : 'Unable to remove library share.',
+        });
+      } finally {
+        setDeletingStorageId(null);
+      }
+    },
+    [deletingStorageId, pushAlert, refreshLibraryStorages],
+  );
+
   React.useEffect(() => {
     void refreshLibraryStorages();
   }, [refreshLibraryStorages]);
@@ -880,7 +981,7 @@ export default function ContentView(): JSX.Element {
       setCustomRadios(Array.isArray(payload.stations) ? payload.stations : []);
     } catch (err) {
       setCustomRadios([]);
-      setCustomRadioError(err instanceof Error ? err.message : 'Failed to load custom stations');
+      setCustomRadioError(err instanceof Error ? err.message : 'Failed to load custom streams');
     } finally {
       setCustomRadioLoading(false);
     }
@@ -937,6 +1038,40 @@ export default function ContentView(): JSX.Element {
   const openBridgeModal = (): void => {
     setBridgeModalOpen(true);
     setBridgeFeedback(null);
+    setBridgeEditingId(null);
+    setBridgeEditingLabel(null);
+  };
+
+  const openLineInModal = (input?: LineInInputConfig): void => {
+    if (input) {
+      setLineInEditingId(input.id ?? null);
+      setLineInForm({
+        name: input.name ?? '',
+        iconType: typeof input.iconType === 'number' ? input.iconType : LineInIconType.CdPlayer,
+        sourceType: input.source?.type ?? 'ingest',
+      });
+    } else {
+      setLineInEditingId(null);
+      setLineInForm(createEmptyLineInForm());
+    }
+    setLineInModalOpen(true);
+  };
+
+  const openBridgeEditModal = (bridge: SpotifyBridgeConfig): void => {
+    setBridgeEditingId(bridge.id);
+    setBridgeEditingLabel(bridge.label ?? bridge.id);
+    setBridgeForm({
+      provider: (bridge.provider?.toLowerCase() as BridgeFormState['provider']) || 'musicassistant',
+      host: bridge.host ?? '127.0.0.1',
+      port: bridge.port ?? 8095,
+      apiKey: bridge.apiKey ?? '',
+      userToken: bridge.userToken ?? '',
+      deezerArl: bridge.deezerArl ?? '',
+      tidalAccessToken: bridge.tidalAccessToken ?? '',
+      tidalCountryCode: bridge.tidalCountryCode ?? 'US',
+    });
+    setBridgeFeedback(null);
+    setBridgeModalOpen(true);
   };
 
   const closeBridgeModal = (resetFeedback = true): void => {
@@ -945,6 +1080,14 @@ export default function ContentView(): JSX.Element {
       setBridgeFeedback(null);
     }
     setBridgeForm(createEmptyBridgeForm());
+    setBridgeEditingId(null);
+    setBridgeEditingLabel(null);
+  };
+
+  const closeLineInModal = (): void => {
+    setLineInModalOpen(false);
+    setLineInEditingId(null);
+    setLineInForm(createEmptyLineInForm());
   };
 
   React.useEffect(() => {
@@ -1246,7 +1389,7 @@ export default function ContentView(): JSX.Element {
     } catch (err) {
       setCustomRadioFeedback({
         type: 'error',
-        message: err instanceof Error ? err.message : 'Failed to add station',
+        message: err instanceof Error ? err.message : 'Failed to add stream',
       });
     } finally {
       setCustomRadioSubmitting(false);
@@ -1263,7 +1406,7 @@ export default function ContentView(): JSX.Element {
     } catch (err) {
       setCustomRadioFeedback({
         type: 'error',
-        message: err instanceof Error ? err.message : 'Failed to remove station',
+        message: err instanceof Error ? err.message : 'Failed to remove stream',
       });
     }
   };
@@ -1276,6 +1419,10 @@ export default function ContentView(): JSX.Element {
     const payload: CreateSpotifyBridgePayload = {
       provider,
     };
+    if (bridgeEditingId) {
+      payload.id = bridgeEditingId;
+      if (bridgeEditingLabel) payload.label = bridgeEditingLabel;
+    }
     if (provider === 'musicassistant') {
       payload.host = bridgeForm.host.trim() || '127.0.0.1';
       payload.port =
@@ -1305,12 +1452,12 @@ export default function ContentView(): JSX.Element {
         const filtered = prev.filter((b) => (b.id || '').toLowerCase() !== normalized.id.toLowerCase());
         return [...filtered, normalized];
       });
-      setBridgeFeedback({ type: 'success', message: 'Bridge added' });
+      setBridgeFeedback({ type: 'success', message: bridgeEditingId ? 'Bridge updated' : 'Bridge added' });
       closeBridgeModal(false);
     } catch (err) {
       setBridgeFeedback({
         type: 'error',
-        message: err instanceof Error ? err.message : 'Failed to add bridge',
+        message: err instanceof Error ? err.message : bridgeEditingId ? 'Failed to update bridge' : 'Failed to add bridge',
       });
     } finally {
       setBridgeSubmitting(false);
@@ -1334,6 +1481,88 @@ export default function ContentView(): JSX.Element {
       setBridgeDeletingId(null);
     }
   };
+
+  const persistLineInInputs = React.useCallback(
+    async (inputs: LineInInputConfig[]): Promise<void> => {
+      await updateInputsConfig({
+        lineIn: {
+          inputs: inputs.map((entry) => ({
+            id: entry.id,
+            name: entry.name,
+            iconType: entry.iconType,
+            source: entry.source ?? {},
+          })),
+        },
+      });
+    },
+    [],
+  );
+
+  const handleLineInSave = React.useCallback(async (): Promise<void> => {
+    if (lineInSubmitting) return;
+    const name = lineInForm.name.trim();
+    if (!name) return;
+    setLineInSubmitting(true);
+    try {
+      const nextInputs = [...lineInInputs];
+      if (lineInEditingId) {
+        const idx = nextInputs.findIndex((entry) => entry.id === lineInEditingId);
+        const nextEntry: LineInInputConfig = {
+          id: lineInEditingId,
+          name,
+          iconType: lineInForm.iconType ?? LineInIconType.CdPlayer,
+          source: {
+            ...(nextInputs[idx]?.source ?? {}),
+            type: lineInForm.sourceType,
+          },
+        };
+        if (idx >= 0) {
+          nextInputs[idx] = nextEntry;
+        } else {
+          nextInputs.push(nextEntry);
+        }
+      } else {
+        nextInputs.push({
+          id: `linein-${Date.now().toString(36)}`,
+          name,
+          iconType: lineInForm.iconType ?? LineInIconType.CdPlayer,
+          source: { type: lineInForm.sourceType },
+        });
+      }
+      await persistLineInInputs(nextInputs);
+      setLineInInputs(nextInputs);
+      closeLineInModal();
+    } catch (err) {
+      pushAlert({
+        tone: 'error',
+        title: 'Line-in update failed',
+        message: err instanceof Error ? err.message : 'Unable to update line-in inputs.',
+      });
+    } finally {
+      setLineInSubmitting(false);
+    }
+  }, [closeLineInModal, lineInEditingId, lineInForm, lineInInputs, lineInSubmitting, persistLineInInputs, pushAlert]);
+
+  const handleLineInRemove = React.useCallback(
+    async (inputId: string, inputName?: string): Promise<void> => {
+      if (!inputId && !inputName) return;
+      const nextInputs = lineInInputs.filter((entry) => {
+        if (inputId) return entry.id !== inputId;
+        return entry.name !== inputName;
+      });
+      try {
+        await persistLineInInputs(nextInputs);
+        setLineInInputs(nextInputs);
+      } catch (err) {
+        pushAlert({
+          tone: 'error',
+          title: 'Line-in update failed',
+          message: err instanceof Error ? err.message : 'Unable to remove line-in input.',
+        });
+      }
+    },
+    [lineInInputs, persistLineInInputs, pushAlert],
+  );
 
   if (loading) {
     return (
@@ -1361,7 +1590,7 @@ export default function ContentView(): JSX.Element {
     return value.toString();
   };
   const heroStats = [
-    { label: 'Custom stations', value: customRadios.length, loading: customRadioLoading },
+    { label: 'Custom streams', value: customRadios.length, loading: customRadioLoading },
     {
       label: 'Library tracks',
       value: libraryTrackCount ?? 0,
@@ -1398,6 +1627,18 @@ export default function ContentView(): JSX.Element {
         : radioValidationStatus === 'error'
           ? 'error'
           : 'idle';
+  const visibleSpotifyAccounts = spotifyAccounts.filter(
+    (account) =>
+      resolveAccountKey(account) ||
+      account.displayName ||
+      account.name ||
+      account.user ||
+      account.email,
+  );
+  const libraryCoverSlots = 6;
+  const shareCoverSlots = 4;
+  const visibleLibraryCovers = libraryCovers.slice(0, libraryCoverSlots);
+  const libraryCoverPlaceholderCount = Math.max(libraryCoverSlots - visibleLibraryCovers.length, 0);
 
   return (
     <div className="content-layout">
@@ -1419,62 +1660,120 @@ export default function ContentView(): JSX.Element {
             ))}
           </ul>
         </div>
-      <section className="content-section">
-        <header className="content-section__header">
-          <div>
-            <p className="content-section__eyebrow">Music sources</p>
-            <h2>Music sources</h2>
-            <p>Radio, Spotify, and custom bridges available to every zone.</p>
+        <div className="content-filter-bar">
+          <div className="content-filter-actions" role="tablist" aria-label="Content sections">
+            <button
+              type="button"
+              className={`content-filter-chip${contentFilter === 'radio' ? ' is-active' : ''}`}
+              onClick={() => setContentFilter('radio')}
+              role="tab"
+              aria-selected={contentFilter === 'radio'}
+            >
+              Radio
+            </button>
+            <button
+              type="button"
+              className={`content-filter-chip${contentFilter === 'library' ? ' is-active' : ''}`}
+              onClick={() => setContentFilter('library')}
+              role="tab"
+              aria-selected={contentFilter === 'library'}
+            >
+              Library
+            </button>
+            <button
+              type="button"
+              className={`content-filter-chip${contentFilter === 'spotify' ? ' is-active' : ''}`}
+              onClick={() => setContentFilter('spotify')}
+              role="tab"
+              aria-selected={contentFilter === 'spotify'}
+            >
+              Spotify
+            </button>
+            <button
+              type="button"
+              className={`content-filter-chip${contentFilter === 'linein' ? ' is-active' : ''}`}
+              onClick={() => setContentFilter('linein')}
+              role="tab"
+              aria-selected={contentFilter === 'linein'}
+            >
+              Line-in
+            </button>
+            <button
+              type="button"
+              className={`content-filter-chip${contentFilter === 'custom' ? ' is-active' : ''}`}
+              onClick={() => setContentFilter('custom')}
+              role="tab"
+              aria-selected={contentFilter === 'custom'}
+            >
+              Custom services
+            </button>
+            <button
+              type="button"
+              className={`content-filter-chip${contentFilter === 'system' ? ' is-active' : ''}`}
+              onClick={() => setContentFilter('system')}
+              role="tab"
+              aria-selected={contentFilter === 'system'}
+            >
+              System services
+            </button>
+            <button
+              type="button"
+              className={`content-filter-chip${contentFilter === 'alerts' ? ' is-active' : ''}`}
+              onClick={() => setContentFilter('alerts')}
+              role="tab"
+              aria-selected={contentFilter === 'alerts'}
+            >
+              Alerts
+            </button>
           </div>
-        </header>
-        <div className="content-section__body">
-        <div className="content-subsection">
-          <div className="content-subsection__header">
-            <p className="content-section__eyebrow">Built-in services</p>
-            <p className="content-body-copy">
-              Radio, Spotify, and the on-device library mirror what the native Loxone experience offers.
-            </p>
-          </div>
-          <div className="content-grid content-grid--stacked">
-            <article className="content-card">
-              <header>
-                <div>
-                  <h3>Radio content</h3>
-                  <p>
-                    TuneIn powers the radio catalog—adding a TuneIn username exposes your personal presets, while search scans the
-                    full TuneIn service. Custom stations are also supported. You can create them here or using the Loxone app.
-                  </p>
-                </div>
-              </header>
-              <div className="content-pane content-pane--split">
-                <div className="content-subtile">
-                  <div className="content-pane__section">
-                    <div className="content-section__subheader">
-                      <p className="content-section__eyebrow">TuneIn</p>
-                      <p className="content-body-copy content-body-copy--muted">
-                        Add your TuneIn username to expose your personal presets.
-                      </p>
+        </div>
+      {contentFilter === 'radio' && (
+        <section className="content-section">
+          <header className="content-section__header">
+            <div>
+              <p className="content-section__eyebrow">Music sources</p>
+              <h2>Radio content</h2>
+              <p>
+                TuneIn powers the radio catalog—adding a TuneIn username exposes your personal presets, while search scans the
+                full TuneIn service. Custom streams are also supported.
+              </p>
+            </div>
+          </header>
+          <div className="content-section__body">
+            <div className="content-grid content-grid--radio">
+              <article className="content-card content-card--radio">
+                <header>
+                  <div>
+                    <h3>TuneIn</h3>
+                    <p>Add your TuneIn username to expose your personal presets. If left empty, demo presets will be shown.</p>
+                  </div>
+                </header>
+                <div className="content-pane__section">
+                  <div className="content-radio-body">
+                    <div className="content-radio-main">
+                      <div className="content-form">
+                        <label htmlFor="tunein-username">TuneIn username</label>
+                        <input
+                          id="tunein-username"
+                          type="text"
+                          autoComplete="off"
+                          value={radioUsername}
+                          onChange={(e) => {
+                            setRadioUsername(e.target.value);
+                            setRadioPresetCount(null);
+                            setRadioValidationMessage(null);
+                            setRadioValidationStatus('idle');
+                            setRadioFeedback(null);
+                          }}
+                          onBlur={() => {
+                            void validateTuneIn(radioUsername);
+                          }}
+                          placeholder="e.g. mytuneinaccount"
+                        />
+                      </div>
                     </div>
-                    <div className="content-form">
-                      <label htmlFor="tunein-username">TuneIn username</label>
-                      <input
-                        id="tunein-username"
-                        type="text"
-                        autoComplete="off"
-                        value={radioUsername}
-                        onChange={(e) => {
-                          setRadioUsername(e.target.value);
-                          setRadioPresetCount(null);
-                          setRadioValidationMessage(null);
-                          setRadioValidationStatus('idle');
-                          setRadioFeedback(null);
-                        }}
-                        onBlur={() => {
-                          void validateTuneIn(radioUsername);
-                        }}
-                        placeholder="e.g. mytuneinaccount"
-                      />
-                      {(radioValidationStatus !== 'idle' || radioValidationMessage) && (
+                    {(radioValidationStatus !== 'idle' || radioValidationMessage) && (
+                      <div className="content-radio-meta">
                         <div className="content-tunein-status">
                           {radioValidationStatus !== 'idle' && (
                             <span className={`content-status-pill tone-${tuneInStatusTone}`}>
@@ -1503,115 +1802,144 @@ export default function ContentView(): JSX.Element {
                             </span>
                           )}
                         </div>
-                      )}
-                    </div>
-                    <div className="content-actions">
-                      <button
-                        type="button"
-                        onPointerDown={() => {
-                          void handleSaveRadio();
-                        }}
-                        onClick={() => {
-                          void handleSaveRadio();
-                        }}
-                        disabled={radioSaving}
-                      >
-                        {radioSaving ? 'Saving…' : 'Save radio content'}
-                      </button>
-                      {/* feedback routed to global alert */}
-                    </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="content-actions">
+                    <button
+                      type="button"
+                      className="secondary"
+                      onPointerDown={() => {
+                        void handleSaveRadio();
+                      }}
+                      onClick={() => {
+                        void handleSaveRadio();
+                      }}
+                      disabled={radioSaving}
+                    >
+                        {radioSaving ? 'Saving…' : 'Save'}
+                    </button>
+                    {/* feedback routed to global alert */}
                   </div>
                 </div>
-                <div className="content-subtile">
-                  <div className="content-pane__section">
-                    <div className="content-section__subheader">
-                      <p className="content-section__eyebrow">Custom radio</p>
-                      <p className="content-body-copy content-body-copy--muted">
-                        Configure custom radio streams here or using the Loxone app.
-                      </p>
-                    </div>
-                    <div className="content-custom-radio-header">
-                      <aside className="content-custom-radio-count">
-                        {customRadioLoading
-                          ? 'Loading…'
-                          : `${customRadios.length} station${customRadios.length === 1 ? '' : 's'} configured`}
-                      </aside>
-                      <button type="button" className="secondary" onClick={openCustomRadioModal}>
-                        Add custom station
-                      </button>
-                    </div>
-                    {!customRadioModalOpen && customRadioFeedback && (
-                      <></>
-                    )}
-                    {customRadioLoading ? (
-                      <p className="content-body-copy content-body-copy--muted">Loading custom stations…</p>
-                    ) : customRadioError ? (
-                      <></>
-                    ) : customRadios.length > 0 ? (
-                      <ul className="content-custom-radio-list">
-                        {customRadios.map((station) => (
-                          <li key={station.id}>
-                            <div className="content-custom-radio-item">
-                              {station.coverurl && (
-                                <div className="content-custom-radio-coverart">
-                                  <img src={station.coverurl} alt={`${station.name} cover`} />
-                                </div>
-                              )}
-                              <div className="content-custom-radio-info">
-                                <span className="content-custom-radio-name">{station.name}</span>
-                                <a
-                                  className="content-custom-radio-stream"
-                                  href={station.stream}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  title={station.stream}
-                                >
-                                  {station.stream}
-                                </a>
+              </article>
+              <article className="content-card content-card--radio">
+                <header>
+                  <div>
+                    <h3>Custom streams</h3>
+                    <p>Configure custom streams here or using the Loxone app.</p>
+                  </div>
+                </header>
+                <div className="content-pane__section">
+                  <div className="content-radio-body">
+                    <div className="content-radio-main">
+                      {!customRadioModalOpen && customRadioFeedback && (
+                        <></>
+                      )}
+                      {customRadioLoading ? (
+                        <p className="content-body-copy content-body-copy--muted">Loading custom streams…</p>
+                      ) : customRadioError ? (
+                        <></>
+                      ) : customRadios.length > 0 ? (
+                        <ul className="content-custom-radio-list">
+                          {customRadios.map((station) => (
+                            <li key={station.id}>
+                              <div className="content-custom-radio-item">
                                 {station.coverurl && (
+                                  <div className="content-custom-radio-coverart">
+                                    <img src={station.coverurl} alt={`${station.name} cover`} />
+                                  </div>
+                                )}
+                                <div className="content-custom-radio-info">
+                                  <span className="content-custom-radio-name">{station.name}</span>
                                   <a
-                                    className="content-custom-radio-cover"
-                                    href={station.coverurl}
+                                    className="content-custom-radio-stream"
+                                    href={station.stream}
                                     target="_blank"
                                     rel="noreferrer"
-                                    title={station.coverurl}
+                                    title={station.stream}
                                   >
-                                    {station.coverurl}
+                                    {station.stream}
                                   </a>
-                                )}
+                                  {station.coverurl && (
+                                    <a
+                                      className="content-custom-radio-cover"
+                                      href={station.coverurl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      title={station.coverurl}
+                                    >
+                                      {station.coverurl}
+                                    </a>
+                                  )}
+                                </div>
+                                <button type="button" className="danger-link" onClick={() => handleCustomRadioDelete(station.id)}>
+                                  Remove
+                                </button>
                               </div>
-                              <button type="button" className="danger-link" onClick={() => handleCustomRadioDelete(station.id)}>
-                                Remove
-                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <ul className="content-custom-radio-list">
+                          <li>
+                            <div className="content-custom-radio-item content-custom-radio-item--empty">
+                              <div className="content-custom-radio-info">
+                                <span className="content-custom-radio-name">No custom streams yet</span>
+                                <span className="content-custom-radio-stream">Add one to make it available in Loxone.</span>
+                              </div>
                             </div>
                           </li>
-                        ))}
-                      </ul>
-                    ) : null}
+                        </ul>
+                      )}
+                    </div>
+                    <div className="content-radio-meta">
+                      <div className="content-tunein-status content-custom-radio-status content-custom-radio-status--bottom">
+                        <span className="content-tunein-count">
+                          {customRadioLoading
+                          ? 'Loading…'
+                          : `${customRadios.length} stream${customRadios.length === 1 ? '' : 's'} configured`}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="content-actions">
+                    <button type="button" className="secondary" onClick={openCustomRadioModal}>
+                      Add custom stream
+                    </button>
                   </div>
                 </div>
-              </div>
-            </article>
+              </article>
+            </div>
+          </div>
+        </section>
+      )}
 
-            <article className="content-card">
-              <header>
-                <div>
-                  <h3>Spotify content</h3>
-                  <p>
-                    Multi-account Spotify is supported out of the box. Create a Spotify app, copy the Client ID, and paste it below.
-                    No client secret is needed. You can link accounts here or in the Loxone app after the Client ID is set.
-                  </p>
-                </div>
-              </header>
-              <div className="content-pane content-pane--split">
-                <div className="content-subtile">
-                  <div className="content-pane__section">
-                    <div className="content-section__subheader">
-                      <p className="content-section__eyebrow">Client ID</p>
-                      <p className="content-body-copy content-body-copy--muted">
-                        Configure the Spotify app details and paste the Client ID below.
-                      </p>
-                    </div>
+      {contentFilter === 'spotify' && (
+        <section className="content-section">
+          <header className="content-section__header">
+            <div>
+              <p className="content-section__eyebrow">Music sources</p>
+              <h2>Spotify</h2>
+              <p>
+                Multi-account Spotify is supported out of the box. Create a Spotify app, copy the Client ID, and paste it below.
+                No client secret is needed. You can link accounts here or in the Loxone app after the Client ID is set.
+              </p>
+            </div>
+          </header>
+          <div className="content-section__body">
+            <div className="content-grid">
+              <article className="content-card">
+                <header>
+                  <div>
+                    <h3>Client ID</h3>
+                    <p className="content-body-copy content-body-copy--muted">
+                      Configure the Spotify app details and paste the Client ID below.
+                    </p>
+                  </div>
+                </header>
+                <div className="content-pane__section content-spotify-card">
+                  <div className="content-spotify-body">
                     <div className="content-form">
                       <div className="content-input-hint">
                         Create a new app at{' '}
@@ -1653,19 +1981,23 @@ export default function ContentView(): JSX.Element {
                     </button>
                   </div>
                 </div>
-                <div className="content-subtile">
-                  <div className="content-pane__section">
-                    <div className="content-section__subheader">
-                      <p className="content-section__eyebrow">Accounts</p>
-                      <p className="content-body-copy content-body-copy--muted">
-                        Link Spotify accounts here or in the Loxone app after setting the Client ID.
-                      </p>
-                    </div>
-                    {spotifyAccounts.length > 0 ? (
+              </article>
+              <article className="content-card">
+                <header>
+                  <div>
+                    <h3>Accounts</h3>
+                    <p className="content-body-copy content-body-copy--muted">
+                      Link Spotify accounts here or in the Loxone app after setting the Client ID.
+                    </p>
+                  </div>
+                </header>
+                <div className="content-pane__section content-spotify-card">
+                  <div className="content-spotify-body">
+                    {visibleSpotifyAccounts.length > 0 ? (
                       <div className="content-account-list">
                         <span className="content-account-list__label">Configured accounts</span>
                         <ul>
-                          {spotifyAccounts.map((account, index) => {
+                          {visibleSpotifyAccounts.map((account, index) => {
                             const accountKey = resolveAccountKey(account) ?? `account-${index}`;
                             const removableKey = resolveAccountKey(account);
                             return (
@@ -1690,44 +2022,61 @@ export default function ContentView(): JSX.Element {
                         </ul>
                       </div>
                     ) : (
-                      <p className="content-body-copy content-body-copy--muted">No Spotify accounts linked yet.</p>
+                      <div className="content-empty-panel">
+                        <span className="content-empty-title">No Spotify accounts linked yet.</span>
+                        <span className="content-empty-note">Add one to enable Spotify sources in Loxone.</span>
+                      </div>
                     )}
-                    <div className="content-divider-row" />
-                    <div className="content-actions content-actions--spotify">
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={handleAddSpotifyAccount}
-                        disabled={addingSpotifyAccount || !hasSpotifyClientId}
-                      >
-                        {addingSpotifyAccount ? 'Opening…' : 'Add Spotify account'}
-                      </button>
-                      <span className="content-note">Spotify login may be blocked by popup blockers; allow popups to complete linking.</span>
-                    </div>
                   </div>
-                  {/* feedback routed to global alert */}
+                  <div className="content-actions content-actions--spotify">
+                    <span className="content-note content-note--spotify">
+                      Spotify login may be blocked by popup blockers; allow popups to complete linking.
+                    </span>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={handleAddSpotifyAccount}
+                      disabled={addingSpotifyAccount || !hasSpotifyClientId}
+                    >
+                      {addingSpotifyAccount ? 'Opening…' : 'Add Spotify account'}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            </article>
+                {/* feedback routed to global alert */}
+              </article>
+            </div>
+          </div>
+        </section>
+      )}
 
-            <article className="content-card">
-              <header className="content-card__header content-card__header--stacked">
-                <div>
-                  <h3>Library</h3>
-                  <p>
-                    Loxone supports local and network libraries—we emulate the same experience. Drop files under
-                    <code>data/music/local</code>, upload audio here, or add SMB shares here or in the Loxone app.
-                  </p>
-                </div>
-                <div className="content-library-header-meta">
-                  <div className="content-library-coverstrip" aria-label="Library cover art">
-                    {libraryCoversLoading ? (
-                      <span className="content-note">Loading cover art…</span>
-                    ) : libraryCoversError ? (
-                      <></>
-                    ) : libraryCovers.length > 0 ? (
+      {contentFilter === 'library' && (
+        <section className="content-section">
+          <header className="content-section__header">
+            <div>
+              <p className="content-section__eyebrow">Music sources</p>
+              <h2>Library</h2>
+              <p>
+                Loxone supports local and network libraries—we emulate the same experience. Drop files under
+                <code>data/music/local</code>, upload audio here, or add SMB shares here or in the Loxone app.
+              </p>
+              <div className="content-section__actions">
+                <button type="button" className="secondary" onClick={openStorageModal}>
+                  Add share
+                </button>
+              </div>
+            </div>
+          </header>
+          <div className="content-section__body">
+            <div className="content-grid">
+              <article className="content-card content-card--library">
+                <header className="content-card__header content-card__header--stacked">
+                  <div>
+                    <h3>Local library</h3>
+                  </div>
+                  <div className="content-library-header-meta">
+                    <div className="content-library-coverstrip" aria-label="Library cover art">
                       <div className="content-library-covers content-library-covers--compact">
-                        {libraryCovers.map((cover, index) => (
+                        {visibleLibraryCovers.map((cover, index) => (
                           <div
                             key={`${cover.album}-${cover.artist}-${index}`}
                             className="content-library-cover content-library-cover--compact"
@@ -1736,230 +2085,249 @@ export default function ContentView(): JSX.Element {
                             <img src={cover.coverurl} alt={`${cover.album} cover`} loading="lazy" />
                           </div>
                         ))}
-                        <button
-                          type="button"
-                          className="content-library-cover content-library-cover--compact content-library-rescan"
-                          onClick={handleLibraryRescan}
-                          disabled={libraryActionPending}
-                          aria-label="Rescan library"
-                        >
-                          <svg
-                            className={`content-library-rescan__icon ${libraryActionPending ? 'is-spinning' : ''}`}
-                            width="20"
-                            height="20"
-                            viewBox="0 0 24 24"
-                            fill="none"
+                        {Array.from({ length: libraryCoverPlaceholderCount }).map((_, index) => (
+                          <div
+                            key={`library-cover-placeholder-${index}`}
+                            className="content-library-cover content-library-cover--compact content-library-cover--dummy"
                             aria-hidden="true"
-                          >
-                            <path
-                              d="M20 6v4h-4"
-                              stroke="currentColor"
-                              strokeWidth="1.8"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                            <path
-                              d="M20 10a8 8 0 1 0 2.3 5.6"
-                              stroke="currentColor"
-                              strokeWidth="1.8"
-                              strokeLinecap="round"
-                            />
-                          </svg>
-                        </button>
+                          />
+                        ))}
                       </div>
-                    ) : (
-                      <span className="content-note">No cover art available yet.</span>
-                    )}
+                    </div>
+                    <div className="content-library-stats">
+                      <div className="content-library-stats__item">
+                        <span className="content-library-stats__label">Tracks</span>
+                        <span className="content-library-stats__value">
+                          {libraryLoading ? '—' : libraryTrackCount ?? 0}
+                        </span>
+                      </div>
+                      <div className="content-library-stats__item">
+                        <span className="content-library-stats__label">Albums</span>
+                        <span className="content-library-stats__value">
+                          {libraryLoading ? '—' : libraryAlbumCount ?? 0}
+                        </span>
+                      </div>
+                      <div className="content-library-stats__item">
+                        <span className="content-library-stats__label">Artists</span>
+                        <span className="content-library-stats__value">
+                          {libraryLoading ? '—' : libraryArtistCount ?? 0}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="content-library-rescan content-library-rescan--inline"
+                        onClick={handleLibraryRescan}
+                        disabled={libraryActionPending}
+                      >
+                        <span className="content-library-rescan__label">
+                          {libraryActionPending ? 'Rescanning…' : 'Rescan'}
+                        </span>
+                      </button>
+                    </div>
                   </div>
-                  <div className="content-library-overlay">
-                    <span className="content-library-overlay__item">
-                      {libraryLoading ? 'Scanning…' : `${libraryTrackCount ?? 0} tracks`}
-                    </span>
-                    <span className="content-library-overlay__item">
-                      {libraryLoading ? '…' : `${libraryAlbumCount ?? 0} albums`}
-                    </span>
-                    <span className="content-library-overlay__item">
-                      {libraryLoading ? '…' : `${libraryArtistCount ?? 0} artists`}
-                    </span>
+                </header>
+                <div className="content-pane__section">
+                  <div
+                    className={`content-dropzone ${libraryDragActive ? 'is-active' : ''} ${
+                      libraryUploading ? 'is-disabled' : ''
+                    }`}
+                    role="button"
+                    tabIndex={libraryUploading ? -1 : 0}
+                    onClick={() => {
+                      if (libraryUploading) return;
+                      libraryFileInputRef.current?.click();
+                    }}
+                    onKeyDown={(event) => {
+                      if (libraryUploading) return;
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        libraryFileInputRef.current?.click();
+                      }
+                    }}
+                    onDragEnter={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (!libraryUploading) setLibraryDragActive(true);
+                    }}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      event.dataTransfer.dropEffect = 'copy';
+                    }}
+                    onDragLeave={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setLibraryDragActive(false);
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setLibraryDragActive(false);
+                      if (libraryUploading) return;
+                      void handleDropFiles(event.dataTransfer);
+                    }}
+                  >
+                    <div className="content-dropzone__title">
+                      <span className="content-dropzone__icon" aria-hidden="true">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                          <path d="M12 3v10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                          <path d="M8 7l4-4 4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                          <path d="M4 14v3.2A2.8 2.8 0 0 0 6.8 20h10.4A2.8 2.8 0 0 0 20 17.2V14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                        </svg>
+                      </span>
+                      {libraryUploading ? 'Uploading…' : 'Drop audio here'}
+                    </div>
+                    <div className="content-dropzone__meta">or click to select a file</div>
+                    <div className="content-dropzone__hint">MP3, FLAC, M4A, AAC, OGG, WAV</div>
+                    <input
+                      type="file"
+                      accept="audio/mp3,audio/flac,audio/x-flac,audio/m4a,audio/aac,audio/ogg,audio/wav"
+                      multiple
+                      ref={libraryFileInputRef}
+                      disabled={libraryUploading}
+                      onChange={(e) => {
+                        const files = Array.from(e.target.files ?? []).map((file) => ({
+                          file,
+                          relativePath: normalizeRelativePath(file.webkitRelativePath),
+                        }));
+                        void handleLibraryUploadFiles(files);
+                        e.target.value = '';
+                      }}
+                    />
                   </div>
                 </div>
-              </header>
-              <div className="content-pane content-pane--split">
-                <section className="content-subtile">
-                  <h4>Configured shares</h4>
-                  <p className="content-body-copy">
-                    These shares map NAS folders and SMB/CIFS exports into the local library. We broadcast updates to the Loxone
-                    apps immediately after a change.
-                  </p>
-                  {storageLoading ? (
-                    <p className="content-body-copy content-body-copy--muted">Loading shares…</p>
-                  ) : storageError ? (
-                    <></>
-                  ) : libraryStorages.length > 0 ? (
-                    <ul className="library-storage-list">
-                      {libraryStorages.map((storage) => (
-                        <li key={storage.id}>
-                          <div>
-                            <span className="library-storage-name">{storage.name}</span>
-                            <span className="library-storage-meta">
-                              {storage.server}
-                              {storage.folder ? ` / ${storage.folder}` : ''}
-                            </span>
-                            <span className="library-storage-auth">
-                              {storage.guest
-                                ? 'Guest access'
-                                : storage.username
-                                  ? `User: ${storage.username}`
-                                  : 'Credentials required'}
-                            </span>
-                          </div>
+              </article>
+              {storageLoading ? (
+                <article className="content-card">
+                  <p className="content-body-copy content-body-copy--muted">Loading shares…</p>
+                </article>
+              ) : storageError ? (
+                <article className="content-card">
+                  <p className="content-body-copy content-body-copy--muted">Unable to load shares.</p>
+                </article>
+              ) : libraryStorages.length > 0 ? (
+                <>
+                  {libraryStorages.map((storage) => (
+                    <article key={storage.id} className="content-card content-card--library content-card--share">
+                      <header className="content-card__header content-card__header--split">
+                        <div className="content-share-title">
+                          <h3>
+                            {storage.name}
+                            {storage.server && !storage.name.includes(storage.server) ? ` (${storage.server})` : ''}
+                          </h3>
+                          <span className="content-share-subtitle">
+                            {storage.folder ? `/${storage.folder}` : 'Share root'}
+                          </span>
+                        </div>
+                        <div className="content-share-meta">
                           <span className="library-storage-type">{storage.type.toUpperCase()}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="content-body-copy content-body-copy--muted">
-                      No network shares configured. Add a share to expose remote music folders.
-                    </p>
-                  )}
-                  <div className="content-actions content-actions--library">
-                    <button type="button" onClick={openStorageModal}>
-                      Add share
-                    </button>
-                  </div>
-                </section>
-                <section className="content-subtile">
-                  <div className="content-pane__section">
-                    <div className="content-section__subheader">
-                      <p className="content-section__eyebrow">Library actions</p>
+                          <button
+                            type="button"
+                            className="content-share-remove"
+                            onClick={() => handleDeleteLibraryStorage(storage.id)}
+                            disabled={deletingStorageId === storage.id}
+                          >
+                            {deletingStorageId === storage.id ? 'Removing…' : 'Remove'}
+                          </button>
+                        </div>
+                      </header>
+                      <div className="content-library-header-meta content-library-header-meta--share">
+                        <div
+                          className="content-library-coverstrip content-library-coverstrip--share"
+                          aria-label={`${storage.name} library`}
+                        >
+                          <div className="content-library-covers content-library-covers--compact">
+                            {Array.from({ length: shareCoverSlots }).map((_, index) => (
+                              <div
+                                key={`${storage.id}-dummy-${index}`}
+                                className="content-library-cover content-library-cover--compact content-library-cover--dummy"
+                                aria-hidden="true"
+                              />
+                            ))}
+                          </div>
+                        </div>
+                        <div className="content-library-overlay content-library-overlay--share">
+                          <span className="content-library-overlay__item">0 tracks</span>
+                          <span className="content-library-overlay__item">0 albums</span>
+                          <span className="content-library-overlay__item">0 artists</span>
+                        </div>
+                      </div>
+                      <div className="content-pane__section">
+                        <div className="content-share-info">
+                          <span className="library-storage-auth">
+                            {storage.guest
+                              ? 'Guest access'
+                              : storage.username
+                                ? `User: ${storage.username}`
+                                : 'Credentials required'}
+                          </span>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </>
+              ) : (
+                <article className="content-card">
+                  <header>
+                    <div>
+                      <h3>No shares yet</h3>
                       <p className="content-body-copy content-body-copy--muted">
-                        Manage shares and trigger a rescan when new music is added.
+                        Add a share to expose remote music folders to the library.
                       </p>
                     </div>
-                    <div
-                      className={`content-dropzone ${libraryDragActive ? 'is-active' : ''} ${
-                        libraryUploading ? 'is-disabled' : ''
-                      }`}
-                      role="button"
-                      tabIndex={libraryUploading ? -1 : 0}
-                      onClick={() => {
-                        if (libraryUploading) return;
-                        libraryFileInputRef.current?.click();
-                      }}
-                      onKeyDown={(event) => {
-                        if (libraryUploading) return;
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          libraryFileInputRef.current?.click();
-                        }
-                      }}
-                      onDragEnter={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        if (!libraryUploading) setLibraryDragActive(true);
-                      }}
-                      onDragOver={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        event.dataTransfer.dropEffect = 'copy';
-                      }}
-                      onDragLeave={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        setLibraryDragActive(false);
-                      }}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        setLibraryDragActive(false);
-                        if (libraryUploading) return;
-                        void handleDropFiles(event.dataTransfer);
-                      }}
-                    >
-                    <div className="content-dropzone__title">
-                        <span className="content-dropzone__icon" aria-hidden="true">
-                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-                            <path d="M12 3v10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                            <path d="M8 7l4-4 4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                            <path d="M4 14v3.2A2.8 2.8 0 0 0 6.8 20h10.4A2.8 2.8 0 0 0 20 17.2V14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                          </svg>
-                        </span>
-                        {libraryUploading ? 'Uploading…' : 'Drop audio here'}
-                      </div>
-                      <div className="content-dropzone__meta">or click to select a file</div>
-                      <div className="content-dropzone__hint">MP3, FLAC, M4A, AAC, OGG, WAV</div>
-                      <input
-                        type="file"
-                        accept="audio/mp3,audio/flac,audio/x-flac,audio/m4a,audio/aac,audio/ogg,audio/wav"
-                        multiple
-                        ref={libraryFileInputRef}
-                        disabled={libraryUploading}
-                        onChange={(e) => {
-                          const files = Array.from(e.target.files ?? []).map((file) => ({
-                            file,
-                            relativePath: normalizeRelativePath(file.webkitRelativePath),
-                          }));
-                          void handleLibraryUploadFiles(files);
-                          e.target.value = '';
-                        }}
-                      />
-                    </div>
-                    {/* feedback routed to global alert */}
-                  </div>
-                </section>
-              </div>
-            </article>
+                  </header>
+                </article>
+              )}
+            </div>
           </div>
-        </div>
+        </section>
+      )}
 
-        <div className="content-subsection">
-            <div className="content-subsection__header">
-              <p className="content-section__eyebrow">Bridges</p>
-              <h3 className="content-bridges-title">External providers</h3>
-              <p className="content-body-copy">
-              Loxone only supports Spotify. To expose other services inside the app we introduce the concept of bridge providers.
-              A bridge provider is a proxy layer inside lox-audioserver that exposes a non-Spotify service as a Spotify account.
-              Each bridge maps one external service to one virtual Spotify account, so Loxone can list and use multiple unsupported
-              sources side by side without conflicts.
+      {contentFilter === 'custom' && (
+        <section className="content-section">
+          <header className="content-section__header">
+            <div>
+              <p className="content-section__eyebrow">Music sources</p>
+              <h2>Custom services</h2>
+              <p>
+                Loxone only supports Spotify. To expose other services inside the app we introduce bridge providers. Each bridge
+                maps one external service to one virtual Spotify account so Loxone can list multiple unsupported sources.
               </p>
+              <div className="content-section__actions">
+                <button type="button" className="secondary" onClick={openBridgeModal}>
+                  Add bridge
+                </button>
+              </div>
             </div>
-          <article className="content-bridges-panel">
-            <div className="content-bridges-panel__copy">
-              <p className="content-section__eyebrow">Spotify bridges</p>
-              <h4>Route other providers through Spotify</h4>
-              <p className="content-body-copy">
-                Configure your bridge providers here. Each bridge presents an external service as its own Spotify account,
-                so multiple sources can live side by side in the Loxone app without conflicts.
-              </p>
-                <div className="content-bridges-actions">
-                  <button type="button" className="secondary" onClick={openBridgeModal}>
-                    Add bridge
-                  </button>
-                </div>
-              {/* feedback routed to global alert */}
-            </div>
-            <div className="content-bridges-panel__list">
+          </header>
+          <div className="content-section__body">
+            <article className="content-card">
               {spotifyBridges.length > 0 ? (
                 <ul className="content-bridges-list">
                   {spotifyBridges.map((bridge) => (
                     <li key={bridge.id}>
                       <div className="content-bridges-header">
                         <span className="content-bridges-name">{bridge.label}</span>
-                        <span className={`content-bridges-status ${bridge.enabled === false ? 'is-disabled' : 'is-enabled'}`}>
-                          {bridge.enabled === false ? 'Disabled' : 'Enabled'}
-                        </span>
                       </div>
                       <dl className="content-bridges-details">
                         <dt>Provider id</dt>
                         <dd>{bridge.id}</dd>
                       </dl>
-                      <div className="content-bridges-actions-row">
-                        <button
-                          type="button"
-                          className="danger-link"
-                          onClick={() => handleBridgeDelete(bridge.id)}
-                          disabled={bridgeDeletingId === bridge.id}
-                        >
+                        <div className="content-bridges-actions-row">
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={() => openBridgeEditModal(bridge)}
+                            disabled={bridgeDeletingId === bridge.id}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="danger-link"
+                            onClick={() => handleBridgeDelete(bridge.id)}
+                            disabled={bridgeDeletingId === bridge.id}
+                          >
                           {bridgeDeletingId === bridge.id ? 'Removing…' : 'Remove'}
                         </button>
                       </div>
@@ -1972,13 +2340,69 @@ export default function ContentView(): JSX.Element {
                   <span className="content-note">Add a bridge to expose Music Assistant or Apple Music instantly.</span>
                 </div>
               )}
+            </article>
+          </div>
+        </section>
+      )}
+
+      {contentFilter === 'linein' && (
+        <section className="content-section">
+          <header className="content-section__header">
+            <div>
+              <p className="content-section__eyebrow">Music sources</p>
+              <h2>Line-in</h2>
+              <p>Manage virtual line-in sources exposed to the Loxone app.</p>
+              <div className="content-section__actions">
+                <button type="button" className="secondary" onClick={() => openLineInModal()}>
+                  Add line-in
+                </button>
+              </div>
             </div>
-          </article>
-        </div>
+          </header>
+          <div className="content-section__body">
+            <div className="content-grid">
+              {lineInInputs.length > 0 ? (
+                lineInInputs.map((input) => (
+                  <article key={input.id ?? input.name} className="content-card">
+                    <header className="content-card__header content-card__header--split">
+                      <div>
+                        <h3>{input.name || 'Line-in'}</h3>
+                        {input.id && (
+                          <p className="content-linein-id" title={input.id}>
+                            ID: {input.id}
+                          </p>
+                        )}
+                        <span className="content-linein-source">
+                          {input.source?.type ?? 'ingest'}
+                        </span>
+                      </div>
+                      <div className="content-linein-actions">
+                        <button type="button" className="secondary" onClick={() => openLineInModal(input)}>
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="danger-link"
+                          onClick={() => handleLineInRemove(input.id ?? '', input.name)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </header>
+                  </article>
+                ))
+              ) : (
+                <article className="content-card">
+                  <p className="content-body-copy">No line-in sources configured yet.</p>
+                  <span className="content-note">Add a line-in input to expose it as a selectable source.</span>
+                </article>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
 
-        </div>
-      </section>
-
+      {contentFilter === 'system' && (
       <section className="content-section">
         <header className="content-section__header">
           <div>
@@ -2034,7 +2458,9 @@ export default function ContentView(): JSX.Element {
         </div>
         </div>
       </section>
+      )}
 
+      {contentFilter === 'alerts' && (
       <section className="content-section">
         <header className="content-section__header">
           <div>
@@ -2079,6 +2505,7 @@ export default function ContentView(): JSX.Element {
         </article>
         </div>
       </section>
+      )}
       {customRadioModalOpen &&
         renderModal(
           <div
@@ -2091,7 +2518,7 @@ export default function ContentView(): JSX.Element {
             <div className="content-modal" onClick={(e) => e.stopPropagation()}>
               <div className="content-modal-header">
                 <div>
-                  <h4 id="custom-radio-modal-title">Add custom station</h4>
+                  <h4 id="custom-radio-modal-title">Add custom stream</h4>
                   <p className="content-body-copy">
                     Provide a label and stream URL. Stations sync to the same store Loxone reads from.
                   </p>
@@ -2142,7 +2569,7 @@ export default function ContentView(): JSX.Element {
                 </div>
                 <div className="content-actions">
                   <button type="button" onClick={handleCustomRadioAdd} disabled={!customRadioFormValid || customRadioSubmitting}>
-                    {customRadioSubmitting ? 'Adding…' : 'Add station'}
+                    {customRadioSubmitting ? 'Adding…' : 'Add stream'}
                   </button>
                   <button
                     type="button"
@@ -2153,6 +2580,85 @@ export default function ContentView(): JSX.Element {
                     Cancel
                   </button>
                   {/* feedback routed to global alert */}
+                </div>
+              </div>
+            </div>
+          </div>,
+        )}
+      {lineInModalOpen &&
+        renderModal(
+          <div
+            className="content-modal-backdrop"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="linein-modal-title"
+            onClick={() => closeLineInModal()}
+          >
+            <div className="content-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="content-modal-header">
+                <div>
+                  <h4 id="linein-modal-title">{lineInEditingId ? 'Edit line-in' : 'Add line-in'}</h4>
+                  <p className="content-body-copy">Define a line-in source for Loxone zones.</p>
+                </div>
+                <button
+                  type="button"
+                  className="content-modal-close"
+                  aria-label="Close"
+                  onClick={() => closeLineInModal()}
+                  disabled={lineInSubmitting}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="content-custom-radio-form">
+                <div className="content-custom-radio-field">
+                  <label htmlFor="linein-name">Name</label>
+                  <input
+                    id="linein-name"
+                    type="text"
+                    value={lineInForm.name}
+                    onChange={(e) => setLineInForm((prev) => ({ ...prev, name: e.target.value }))}
+                    placeholder="Turntable"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="content-custom-radio-field">
+                  <label htmlFor="linein-icon">Icon</label>
+                  <select
+                    id="linein-icon"
+                    className="content-input-select"
+                    value={lineInForm.iconType}
+                    onChange={(e) => setLineInForm((prev) => ({ ...prev, iconType: Number(e.target.value) as LineInIconType }))}
+                  >
+                    <option value={LineInIconType.LineIn}>Line in</option>
+                    <option value={LineInIconType.CdPlayer}>CD player</option>
+                    <option value={LineInIconType.Computer}>Computer</option>
+                    <option value={LineInIconType.IMac}>iMac</option>
+                    <option value={LineInIconType.IPod}>iPod</option>
+                    <option value={LineInIconType.Mobile}>Mobile</option>
+                    <option value={LineInIconType.Radio}>Radio</option>
+                    <option value={LineInIconType.Screen}>Screen</option>
+                    <option value={LineInIconType.TurnTable}>Turntable</option>
+                  </select>
+                </div>
+                <div className="content-custom-radio-field">
+                  <label htmlFor="linein-source">Source type</label>
+                  <select
+                    id="linein-source"
+                    className="content-input-select"
+                    value={lineInForm.sourceType}
+                    onChange={(e) => setLineInForm((prev) => ({ ...prev, sourceType: e.target.value as LineInSourceType }))}
+                  >
+                    <option value="ingest">Ingest</option>
+                  </select>
+                </div>
+                <div className="content-actions">
+                  <button type="button" onClick={handleLineInSave} disabled={!lineInForm.name.trim() || lineInSubmitting}>
+                    {lineInSubmitting ? 'Saving…' : lineInEditingId ? 'Save line-in' : 'Add line-in'}
+                  </button>
+                  <button type="button" className="secondary" onClick={() => closeLineInModal()} disabled={lineInSubmitting}>
+                    Cancel
+                  </button>
                 </div>
               </div>
             </div>
@@ -2170,7 +2676,7 @@ export default function ContentView(): JSX.Element {
             <div className="content-modal" onClick={(e) => e.stopPropagation()}>
               <div className="content-modal-header">
                 <div>
-                  <h4 id="bridge-modal-title">Add bridge</h4>
+                  <h4 id="bridge-modal-title">{bridgeEditingId ? 'Edit bridge' : 'Add bridge'}</h4>
                   <p className="content-body-copy">
                     Expose bridged service as a Spotify-compatible source.
                   </p>
@@ -2349,7 +2855,7 @@ export default function ContentView(): JSX.Element {
               </div>
               <div className="content-actions">
                 <button type="button" onClick={handleBridgeAdd} disabled={!bridgeFormValid || bridgeSubmitting}>
-                  {bridgeSubmitting ? 'Adding…' : 'Add bridge'}
+                  {bridgeSubmitting ? 'Saving…' : bridgeEditingId ? 'Save bridge' : 'Add bridge'}
                 </button>
                 <button
                   type="button"

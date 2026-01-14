@@ -2,10 +2,10 @@
   margin: 1.9rem auto 2.2rem;
   padding: var(--page-padding);
   width: var(--page-width);
-  background: var(--shell-bg);
-  border: 1px solid var(--shell-border);
+  background: #ffffff;
+  border: 1px solid var(--color-border-soft);
   border-radius: var(--shell-radius);
-  box-shadow: var(--shell-shadow);
+  box-shadow: var(--shadow-soft);
   color: var(--color-text);
   animation: card-enter 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
@@ -30,9 +30,9 @@
 
 .section-card h2 {
   margin: 0;
-  font-size: 1.45rem;
+  font-size: 1.35rem;
   color: var(--color-text);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .section-card__description {

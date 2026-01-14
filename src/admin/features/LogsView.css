@@ -83,7 +83,7 @@
 }
 
 .logs-filter-control {
-  border-radius: 12px;
+  border-radius: 8px;
   border: 1px solid var(--color-border-soft);
   padding: 0.45rem 0.7rem;
   background: linear-gradient(180deg, var(--surface-0) 0%, var(--surface-2) 100%);
@@ -212,9 +212,9 @@
 
 .logs-output {
   border: 1px solid var(--color-border-strong);
-  border-radius: 18px;
+  border-radius: 8px;
   padding: 0.8rem;
-  background: #0f172a;
+  background: #ffffff;
   min-height: 320px;
   max-height: 520px;
   overflow: auto;
@@ -223,11 +223,35 @@
   line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-word;
-  color: #f7f7f7;
+  color: var(--color-text);
 }
 
 .logs-output__content {
   margin: 0;
+}
+
+.log-line {
+  color: inherit;
+}
+
+.log-line--error {
+  color: #c14b4b;
+}
+
+.log-line--warn {
+  color: #b27a21;
+}
+
+.log-line--info {
+  color: #2c6aa3;
+}
+
+.log-line--debug {
+  color: #6b7076;
+}
+
+.log-line--trace {
+  color: #8a9097;
 }
 
 .content-divider-row {
@@ -241,7 +265,7 @@
   .logs-control-group {
     width: 100%;
     justify-content: space-between;
-    border-radius: 18px;
+    border-radius: 8px;
   }
 
   .logs-action-group {

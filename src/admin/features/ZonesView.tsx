@@ -459,29 +459,6 @@ export default function ZonesView(): JSX.Element {
             </p>
           </div>
           <div className="zones-hero__actions">
-            <div className="zones-filter-actions zones-filter-actions--hero">
-              <button
-                type="button"
-                className={`chip-button${outputFilter === 'all' ? ' is-active' : ''}`}
-                onClick={() => setOutputFilter('all')}
-              >
-                All
-              </button>
-              <button
-                type="button"
-                className={`chip-button${outputFilter === 'assigned' ? ' is-active' : ''}`}
-                onClick={() => setOutputFilter('assigned')}
-              >
-                With output
-              </button>
-              <button
-                type="button"
-                className={`chip-button${outputFilter === 'unassigned' ? ' is-active' : ''}`}
-                onClick={() => setOutputFilter('unassigned')}
-              >
-                Needs output
-              </button>
-            </div>
             <button
               type="button"
               className="secondary"
@@ -512,6 +489,31 @@ export default function ZonesView(): JSX.Element {
                   <div>
                     <p className="zone-source">{group.label || 'AudioServer'}</p>
                     <p className="zone-serial">{formatSerial(group.sourceSerial ?? baseSerial)}</p>
+                  </div>
+                  <div className="zone-card__header-right">
+                    <div className="zones-filter-actions zone-card__filters">
+                      <button
+                        type="button"
+                        className={`chip-button${outputFilter === 'all' ? ' is-active' : ''}`}
+                        onClick={() => setOutputFilter('all')}
+                      >
+                        All
+                      </button>
+                      <button
+                        type="button"
+                        className={`chip-button${outputFilter === 'assigned' ? ' is-active' : ''}`}
+                        onClick={() => setOutputFilter('assigned')}
+                      >
+                        With output
+                      </button>
+                      <button
+                        type="button"
+                        className={`chip-button${outputFilter === 'unassigned' ? ' is-active' : ''}`}
+                        onClick={() => setOutputFilter('unassigned')}
+                      >
+                        Needs output
+                      </button>
+                    </div>
                   </div>
                   <div className="zone-count">
                     <span className="zone-count__value">{group.zones.length}</span>
@@ -635,7 +637,6 @@ export default function ZonesView(): JSX.Element {
                             ))}
                           </div>
                         </div>
-                        <div className="zone-divider" />
                         <div className="zone-section">
                           <div className="zone-section-head">
                             <p className="zone-section-label">Output</p>
@@ -643,26 +644,33 @@ export default function ZonesView(): JSX.Element {
                           <div className="zone-output-row">
                             <button
                               type="button"
-                            className={`zone-output-chip${primaryTransport ? ' is-active' : ''}`}
-                            onClick={() => setActiveZoneModal({ zoneId: zone.id, groupLabel: group.label, type: 'output' })}
-                          >
-                            <span className="zone-output-name">{outputsLabel}</span>
-                            <span className="zone-output-type">{outputType}</span>
-                          </button>
-                            {hasWebPlayer && (
-                              <a
-                                className="zone-link-button"
-                                href={`/zoneplayer/?zone=${zone.id}&autoconnect=1`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                style={{ marginLeft: '8px' }}
-                              >
-                                Open web player
-                              </a>
-                            )}
+                              className={`zone-output-chip${primaryTransport ? ' is-active' : ' is-empty'}`}
+                              onClick={() =>
+                                setActiveZoneModal({ zoneId: zone.id, groupLabel: group.label, type: 'output' })
+                              }
+                            >
+                              <span className="zone-output-name">{outputsLabel}</span>
+                              <span className="zone-output-type">{outputType}</span>
+                              {hasWebPlayer && (
+                                <button
+                                  type="button"
+                                  className="zone-output-audio-button"
+                                  aria-label="Open web player"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    window.open(`/zoneplayer/?zone=${zone.id}&autoconnect=1`, '_blank', 'noopener,noreferrer');
+                                  }}
+                                >
+                                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <path d="M4 9h4l5-4v14l-5-4H4z" />
+                                    <path d="M16 8a4 4 0 0 1 0 8" />
+                                    <path d="M18.5 5.5a7.5 7.5 0 0 1 0 13" />
+                                  </svg>
+                                </button>
+                              )}
+                            </button>
+                          </div>
                         </div>
-                        </div>
-                        <div className="zone-divider" />
                         <div className="zone-maintenance zone-maintenance--inline">
                           <div className="zone-maintenance-row">
                             <div>

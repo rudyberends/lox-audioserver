@@ -5,8 +5,8 @@ import SectionCard from './components/SectionCard';
 import SetupView from './features/SetupView';
 import ContentView from './features/ContentView';
 import ZonesView from './features/ZonesView';
-import LogsView from './features/LogsView';
 import AudioView from './features/AudioView';
+import LogsView from './features/LogsView';
 import { GlobalAlertProvider } from './components/GlobalAlert';
 
 const TAB_ORDER = ['setup', 'content', 'zones', 'audio', 'logs'] as const;

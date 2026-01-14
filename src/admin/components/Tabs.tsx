@@ -20,7 +20,7 @@ export default function Tabs({ active, tabs, onChange }: TabsProps): JSX.Element
               className={active === tab ? 'active' : ''}
               onClick={() => onChange(tab)}
             >
-              {formatLabel(tab)}
+              <span className="tabs__label">{formatLabel(tab)}</span>
             </button>
           </li>
         ))}
@@ -31,5 +31,6 @@ export default function Tabs({ active, tabs, onChange }: TabsProps): JSX.Element
 
 function formatLabel(value: string): string {
   if (!value) return '';
+  if (value === 'insight') return 'Insight';
   return value.charAt(0).toUpperCase() + value.slice(1);
 }

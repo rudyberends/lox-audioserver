@@ -135,6 +135,8 @@ export type SpotifyBridgeConfig = {
 };
 
 export type CreateSpotifyBridgePayload = {
+  id?: string;
+  label?: string;
   provider: string;
   host?: string;
   port?: number;
@@ -288,4 +290,14 @@ export async function createLibraryStorage(
     throw new Error(text || 'Failed to add library share');
   }
   return (await res.json()) as CreateLibraryStorageResponse;
+}
+
+export async function deleteLibraryStorage(storageId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/content/library/storages/${encodeURIComponent(storageId)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || 'Failed to remove library share');
+  }
 }

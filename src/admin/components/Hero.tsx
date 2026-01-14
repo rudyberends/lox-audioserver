@@ -77,10 +77,10 @@ export default function Hero(): JSX.Element {
               <dd>{item.value}</dd>
             </div>
           ))}
-        </div>
-
-        <div className="hero-meta hero-meta--primary hero-meta--below">
-          <span className={`hero-pill hero-pill--${status.tone}`}>{status.label}</span>
+          <div className={`hero-meta-block hero-meta-block--status hero-meta-block--${status.tone}`}>
+            <dt>Status</dt>
+            <dd>{status.label}</dd>
+          </div>
         </div>
 
         {error && <div className="hero-error">Status error: {error}</div>}
