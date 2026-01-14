@@ -123,25 +123,25 @@ export async function audioCfgRoomFavs(command: string) {
     case 'add': {
       const title = decodeSegment(rest[0] ?? '');
       const source = decodeSegment(rest.slice(1).join('/'));
-      await favoritesManager.add(zoneId, title, source);
-      return buildResponse(command, 'roomfavs_add', { title, source });
+      const fav = await favoritesManager.add(zoneId, title, source);
+      return buildResponse(command, 'roomfavs_add', { id: fav.id, name: title });
     }
     case 'setid': {
       const oldId = parseNumberPart(rest[0], 0);
       const newId = parseNumberPart(rest[1], 0);
       await favoritesManager.setId(zoneId, oldId, newId);
-      return buildResponse(command, 'roomfavs_set', 'ok');
+      return buildResponse(command, 'roomfavs_set', { changed_from: oldId, changed_to: newId });
     }
     case 'delete': {
       const id = parseNumberPart(rest[0], 0);
       await favoritesManager.remove(zoneId, id);
-      return buildResponse(command, 'roomfavs_delete', { id });
+      return buildResponse(command, 'roomfavs_delete', { delete_id: id });
     }
     case 'reorder': {
       const order =
         rest[0]?.split(',').map((value) => Number(value)).filter(Boolean) ?? [];
       await favoritesManager.reorder(zoneId, order);
-      return buildResponse(command, 'roomfavs_reorder', order);
+      return buildResponse(command, 'roomfavs_reorder', 'ok');
     }
     case 'copy': {
       const destinations =
