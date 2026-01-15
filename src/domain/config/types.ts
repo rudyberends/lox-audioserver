@@ -216,6 +216,7 @@ export interface LineInInputConfig {
   name?: string;
   iconType?: number;
   source?: Record<string, unknown> | null;
+  metadataEnabled?: boolean;
 }
 
 export interface RawAudioConfig {

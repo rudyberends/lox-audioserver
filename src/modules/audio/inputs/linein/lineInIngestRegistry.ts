@@ -17,6 +17,7 @@ class LineInIngestRegistry {
   private readonly sessions = new Map<string, LineInIngestSession>();
   private readonly listeners = new Map<string, Set<LineInIngestListener>>();
   private readonly stopListeners = new Map<string, Set<LineInIngestStopListener>>();
+  private readonly anyStartListeners = new Set<LineInIngestListener>();
 
   public start(id: string, source: NodeJS.ReadableStream): LineInIngestSession {
     const trimmed = id.trim();
@@ -104,6 +105,17 @@ class LineInIngestRegistry {
     };
   }
 
+  public onAnyStart(listener: LineInIngestListener): () => void {
+    this.anyStartListeners.add(listener);
+    return () => {
+      this.anyStartListeners.delete(listener);
+    };
+  }
+
+  public getActiveSessions(): LineInIngestSession[] {
+    return Array.from(this.sessions.values());
+  }
+
   public onStop(id: string, listener: LineInIngestStopListener): () => void {
     const inputId = id.trim();
     if (!inputId) {
@@ -126,6 +138,16 @@ class LineInIngestRegistry {
     const bucket = this.listeners.get(session.id);
     if (bucket?.size) {
       for (const listener of bucket) {
+        try {
+          listener(session);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.log.warn('line-in ingest listener failed', { inputId: session.id, message });
+        }
+      }
+    }
+    if (this.anyStartListeners.size) {
+      for (const listener of this.anyStartListeners) {
         try {
           listener(session);
         } catch (error) {

@@ -1445,6 +1445,12 @@ class ZoneManager {
     assignPatch('album', metadata.album);
     assignPatch('coverurl', metadata.coverurl as string | undefined);
     assignPatch('audiopath', metadata.audiopath);
+    if (metadata.coverurl && typeof ctx.state.icontype === 'number') {
+      patch.icontype = undefined;
+    }
+    if (metadata.coverurl) {
+      patch.audiotype = 1;
+    }
     if (typeof metadata.duration === 'number' && metadata.duration > 0) {
       patch.duration = Math.round(metadata.duration);
     } else if (
@@ -2285,9 +2291,10 @@ class ZoneManager {
     }
 
     if (durationMs && durationMs > 0) {
+      const clampedMs = Math.min(durationMs + 150, 2147483647);
       ctx.alert.stopTimer = setTimeout(() => {
         void this.stopAlert(zoneId);
-      }, durationMs + 150);
+      }, clampedMs);
     }
 
     this.patchState(zoneId, {

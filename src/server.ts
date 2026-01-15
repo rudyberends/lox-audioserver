@@ -5,6 +5,7 @@ import { contentManager } from '@/modules/content/contentManager';
 import { LoxoneHttpService } from '@/modules/loxone/http';
 import { zoneManager } from '@/modules/zones/zoneManager';
 import { loadConfig as loadStoredConfig } from '@/domain/config/configStore';
+import { lineInMetadataService } from '@/modules/audio/inputs/linein/lineInMetadataService';
 
 /**
  * Descriptor for services that need graceful shutdown coordination.
@@ -55,6 +56,7 @@ async function startServices(): Promise<void> {
 
   await zoneManager.initialize();
   await contentManager.reinitialize();
+  lineInMetadataService.start();
 
   httpService = new HttpService(config.http, { onReinitialize: handleReinitialize });
   loxoneService = new LoxoneHttpService(config.loxone, {
@@ -78,6 +80,7 @@ async function stopServices(): Promise<void> {
   const services: LifecycleService[] = [
     { name: 'zones', stop: () => zoneManager.shutdown() },
   ];
+  services.push({ name: 'linein-metadata', stop: async () => lineInMetadataService.stop() });
 
   if (loxoneService) {
     services.push({ name: 'loxone', stop: () => loxoneService!.stop() });

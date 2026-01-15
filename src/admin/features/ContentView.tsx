@@ -74,6 +74,7 @@ type LineInInputConfig = {
   id?: string;
   name?: string;
   iconType?: LineInIconType;
+  metadataEnabled?: boolean;
   source?: {
     type?: LineInSourceType;
     [key: string]: unknown;
@@ -113,6 +114,7 @@ type LineInFormState = {
   name: string;
   iconType: LineInIconType;
   sourceType: LineInSourceType;
+  metadataEnabled: boolean;
 };
 
 enum LineInIconType {
@@ -538,6 +540,7 @@ const createEmptyLineInForm = (): LineInFormState => ({
   name: '',
   iconType: LineInIconType.CdPlayer,
   sourceType: 'ingest',
+  metadataEnabled: true,
 });
 
 const normalizeLineInInputs = (inputs: LineInInputConfig[]): LineInInputConfig[] => {
@@ -545,6 +548,7 @@ const normalizeLineInInputs = (inputs: LineInInputConfig[]): LineInInputConfig[]
     id: entry.id ?? `linein-${index}-${entry.name ?? 'input'}`,
     name: entry.name,
     iconType: typeof entry.iconType === 'number' ? entry.iconType : LineInIconType.CdPlayer,
+    metadataEnabled: typeof entry.metadataEnabled === 'boolean' ? entry.metadataEnabled : true,
     source: {
       type: entry.source?.type ?? 'ingest',
       ...(entry.source ?? {}),
@@ -1049,6 +1053,7 @@ export default function ContentView(): JSX.Element {
         name: input.name ?? '',
         iconType: typeof input.iconType === 'number' ? input.iconType : LineInIconType.CdPlayer,
         sourceType: input.source?.type ?? 'ingest',
+        metadataEnabled: typeof input.metadataEnabled === 'boolean' ? input.metadataEnabled : true,
       });
     } else {
       setLineInEditingId(null);
@@ -1490,6 +1495,7 @@ export default function ContentView(): JSX.Element {
             id: entry.id,
             name: entry.name,
             iconType: entry.iconType,
+            metadataEnabled: entry.metadataEnabled,
             source: entry.source ?? {},
           })),
         },
@@ -1511,6 +1517,7 @@ export default function ContentView(): JSX.Element {
           id: lineInEditingId,
           name,
           iconType: lineInForm.iconType ?? LineInIconType.CdPlayer,
+          metadataEnabled: lineInForm.metadataEnabled,
           source: {
             ...(nextInputs[idx]?.source ?? {}),
             type: lineInForm.sourceType,
@@ -1526,6 +1533,7 @@ export default function ContentView(): JSX.Element {
           id: `linein-${Date.now().toString(36)}`,
           name,
           iconType: lineInForm.iconType ?? LineInIconType.CdPlayer,
+          metadataEnabled: lineInForm.metadataEnabled,
           source: { type: lineInForm.sourceType },
         });
       }
@@ -2651,6 +2659,21 @@ export default function ContentView(): JSX.Element {
                   >
                     <option value="ingest">Ingest</option>
                   </select>
+                </div>
+                <div className="content-custom-radio-field">
+                  <label htmlFor="linein-metadata">Enable acoustic fingerprinting</label>
+                  <label className="content-switch" htmlFor="linein-metadata">
+                    <input
+                      id="linein-metadata"
+                      type="checkbox"
+                      checked={lineInForm.metadataEnabled}
+                      onChange={(e) =>
+                        setLineInForm((prev) => ({ ...prev, metadataEnabled: e.target.checked }))
+                      }
+                    />
+                    <span className="content-switch-slider" />
+                  </label>
+                  <p className="content-input-hint">Try to determine metadata for input.</p>
                 </div>
                 <div className="content-actions">
                   <button type="button" onClick={handleLineInSave} disabled={!lineInForm.name.trim() || lineInSubmitting}>
