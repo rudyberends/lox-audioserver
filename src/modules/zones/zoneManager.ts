@@ -42,6 +42,7 @@ import {
   setTransportStateHandler,
 } from '@/modules/audio/outputs/queueUpdater';
 import type { AlertMediaResource } from '@/modules/alerts/types';
+import { AudioEventType, AudioType, FileType } from '@/modules/loxone/types/audioStateEnums';
 import {
   createQueueItem,
   mapFolderItemsToQueue,
@@ -117,9 +118,6 @@ interface ActiveAlertState {
   snapshot: AlertSnapshot;
 }
 
-const ALERT_AUDIO_TYPE = 9;
-const ALERT_PRE_DELAY_MS = 10000;
-const ALERT_PAD_TAIL_MS = 10000;
 const MIN_ALERT_DURATION_MS = 20000;
 const ALERT_STOP_MARGIN_MS = 750;
 const MUSIC_ASSISTANT_PROVIDER_DEFAULT = 'spotify@musicassistant';
@@ -507,7 +505,8 @@ class ZoneManager {
         station: '',
         qindex: ctx.alert.snapshot.queue.currentIndex,
         qid: `alert-${ctx.id}`,
-        audiotype: ALERT_AUDIO_TYPE,
+        audiotype: AudioType.File,
+        type: resolveAlertEventType(ctx.alert.type),
         sourceName: ctx.name,
       };
     }
@@ -2251,11 +2250,10 @@ class ZoneManager {
       !media.loop && typeof media.duration === 'number' && media.duration > 0
         ? Math.round(media.duration * 1000)
         : undefined;
-    const estimatedStreamMs =
-      rawDurationMs !== undefined ? rawDurationMs + ALERT_PRE_DELAY_MS + ALERT_PAD_TAIL_MS : undefined;
-    const durationMs =
-      estimatedStreamMs !== undefined
-        ? Math.max(estimatedStreamMs + ALERT_STOP_MARGIN_MS, MIN_ALERT_DURATION_MS)
+    const durationMs = media.loop
+      ? undefined
+      : rawDurationMs !== undefined
+        ? Math.max(rawDurationMs + ALERT_STOP_MARGIN_MS, 0)
         : MIN_ALERT_DURATION_MS;
     const playUrl = media.url;
     const title = media.title ?? type;
@@ -2307,7 +2305,8 @@ class ZoneManager {
       mode: 'play',
       clientState: 'on',
       power: 'on',
-      audiotype: ALERT_AUDIO_TYPE,
+      audiotype: AudioType.File,
+      type: resolveAlertEventType(type),
       sourceName: ctx.name,
     });
   }
@@ -3632,29 +3631,29 @@ function getInputAudioType(ctx: ZoneContext, audiopathOverride?: string): number
   if (ctx.inputMode === 'linein' || audiopath.startsWith('linein://')) {
     return 3;
   }
-  if (isBridgeApple || isBridgeDeezer || isBridgeTidal) {
-    return 2;
+  if (isBridgeProvider) {
+    return AudioType.Spotify;
   }
   if (
     ctx.inputMode === 'applemusic' ||
     lowerAudiopath.includes('applemusic') ||
     isBridgeApple
   ) {
-    return 2;
+    return AudioType.Playlist;
   }
   if (
     ctx.inputMode === 'deezer' ||
     lowerAudiopath.includes('deezer') ||
     isBridgeDeezer
   ) {
-    return 2;
+    return AudioType.Playlist;
   }
   if (
     ctx.inputMode === 'tidal' ||
     lowerAudiopath.includes('tidal') ||
     isBridgeTidal
   ) {
-    return 2;
+    return AudioType.Playlist;
   }
   if (
     ctx.inputMode === 'musicassistant' ||
@@ -3665,13 +3664,13 @@ function getInputAudioType(ctx: ZoneContext, audiopathOverride?: string): number
     (maUser && lowerAudiopath.startsWith(`musicassistant@${maUser}`)) ||
     lowerAudiopath.includes('musicassistant')
   ) {
-    return 2;
+    return AudioType.Playlist;
   }
   if (ctx.inputMode === 'spotify' || audiopath.startsWith('spotify://') || audiopath.startsWith('spotify:')) {
-    return 5;
+    return AudioType.Spotify;
   }
   if (detectServiceFromAudiopath(audiopath) === 'radio') {
-    return 1;
+    return AudioType.Radio;
   }
   return null;
 }
@@ -3679,7 +3678,7 @@ function getInputAudioType(ctx: ZoneContext, audiopathOverride?: string): number
 function getStateAudiotype(ctx: ZoneContext, item?: QueueItem | null): number | null {
   const audiopath = item?.audiopath ?? ctx.queueController.current()?.audiopath ?? ctx.state.audiopath ?? '';
   if (/^spotify@bridge-[^:]+:track:/i.test(audiopath)) {
-    return 0;
+    return AudioType.Spotify;
   }
   const resolved = getInputAudioType(ctx, audiopath);
   if (resolved != null) {
@@ -3689,7 +3688,7 @@ function getStateAudiotype(ctx: ZoneContext, item?: QueueItem | null): number | 
 }
 
 function getStateFileType(): number {
-  return 2;
+  return FileType.File;
 }
 
 function isRadioAudiopath(audiopath: string | undefined, audiotype?: number | null): boolean {
@@ -3733,9 +3732,34 @@ function toRadioAudiopath(audiopath: string | undefined): string {
 
 function resolveLoxoneType(_audiopath: string | undefined, audiotype?: number | null): number {
   if (audiotype === 3) {
-    return 6;
+    return FileType.LineIn;
   }
-  return 2;
+  return FileType.File;
+}
+
+function resolveAlertEventType(type: string): AudioEventType {
+  switch (type.toLowerCase()) {
+    case 'bell':
+      return AudioEventType.Bell;
+    case 'buzzer':
+      return AudioEventType.Buzzer;
+    case 'tts':
+      return AudioEventType.TTS;
+    case 'error_tts':
+    case 'error-tts':
+      return AudioEventType.ErrorTTS;
+    case 'uploaded':
+      return AudioEventType.UploadedFile;
+    case 'alarm':
+      return AudioEventType.Alarm;
+    case 'fire':
+    case 'firealarm':
+      return AudioEventType.Fire;
+    case 'identify':
+      return AudioEventType.Identify;
+    default:
+      return AudioEventType.Unknown;
+  }
 }
 
 function deriveRadioStationLabel(audiopath: string | undefined): string | undefined {

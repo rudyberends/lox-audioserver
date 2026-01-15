@@ -75,6 +75,8 @@ export class AudioSession {
   private lastSubscriberDropAt: number | null = null;
   private readonly sourcePadTailSec?: number;
   private readonly sourcePreDelayMs?: number;
+  private readonly keepInitialBuffer: boolean;
+  private readonly isAlertSource: boolean;
   private debugTapStream?: fs.WriteStream;
   private readonly debugTapEnabled: boolean;
   private pipeSourceStream?: NodeJS.ReadableStream;
@@ -92,6 +94,8 @@ export class AudioSession {
     private readonly outputSettings: AudioOutputSettings,
   ) {
     const candidate = outputSettings.prebufferBytes;
+    const hardMax = 1024 * 1024 * 4;
+    const hardMin = 1024 * 8; // keep a small guard when enabled
     this.sourcePadTailSec =
       this.source.kind === 'file' && !this.source.loop ? this.source.padTailSec : undefined;
     this.sourcePreDelayMs =
@@ -103,16 +107,31 @@ export class AudioSession {
       this.source.path.includes('/alerts/');
     // Fixed lead to reduce startup latency across outputs.
     this.targetLeadMs = 1000;
+    const alertPrebufferMs = 6000;
+    const isAlertSource =
+      this.source.kind === 'file' &&
+      typeof this.source.path === 'string' &&
+      this.source.path.includes('/alerts/');
+    this.isAlertSource = isAlertSource;
+    this.keepInitialBuffer = isAlertSource;
+    const alertBufferBytes = isAlertSource
+      ? Math.round(
+          (alertPrebufferMs / 1000) *
+            (outputSettings.sampleRate * outputSettings.channels * (outputSettings.pcmBitDepth / 8)),
+        )
+      : 0;
     if (!Number.isFinite(candidate) || candidate <= 0) {
       // Allow disabling the rolling buffer; we still stream live without caching chunks.
       this.maxBufferBytes = 0;
     } else {
       // Allow larger prebuffer when upstream requests it (e.g., Sendspin wants ~5s).
       // Keep a safety cap to avoid unbounded memory; 4MB is still modest.
-      const hardMax = 1024 * 1024 * 4;
-      const hardMin = 1024 * 8; // keep a small guard when enabled
       const requested = Math.min(candidate, hardMax);
       this.maxBufferBytes = Math.max(requested, hardMin);
+    }
+    if (alertBufferBytes > 0) {
+      const clampedAlert = Math.min(hardMax, Math.max(alertBufferBytes, hardMin));
+      this.maxBufferBytes = Math.max(this.maxBufferBytes, clampedAlert);
     }
     this.killTimeoutMs = this.loadKillTimeoutMs();
   }
@@ -315,10 +334,12 @@ export class AudioSession {
       if (this.maxBufferBytes > 0 && this.bufferBytes < this.maxBufferBytes) {
         this.bufferQueue.push(chunk);
         this.bufferBytes += chunk.length;
-        while (this.bufferBytes > this.maxBufferBytes && this.bufferQueue.length > 0) {
-          const removed = this.bufferQueue.shift();
-          if (removed) {
-            this.bufferBytes -= removed.length;
+        if (!this.keepInitialBuffer) {
+          while (this.bufferBytes > this.maxBufferBytes && this.bufferQueue.length > 0) {
+            const removed = this.bufferQueue.shift();
+            if (removed) {
+              this.bufferBytes -= removed.length;
+            }
           }
         }
       }
@@ -452,23 +473,11 @@ export class AudioSession {
     }
 
     const inputs: string[] = [];
-    const hasPreDelay = Boolean(this.source.preDelayMs && this.source.preDelayMs > 0);
-    if (hasPreDelay) {
-      const durationSec = Math.max(0, (this.source.preDelayMs ?? 0) / 1000);
-      inputs.push(
-        '-f',
-        'lavfi',
-        '-t',
-        durationSec.toFixed(3),
-        '-i',
-        `anullsrc=cl=${this.outputSettings.channels}:r=${this.outputSettings.sampleRate}`,
-      );
-    }
-
     const loopArgs = this.source.loop ? ['-stream_loop', '-1'] : [];
+    const inputLatencyArgs = this.isAlertSource ? this.buildBufferedArgs() : this.buildLowLatencyArgs();
     // Pace file sources in real-time so downstream transports (e.g., Snapcast) don’t get flooded.
     const realTimeArg = ['-re'];
-    inputs.push(...this.buildLowLatencyArgs(), ...loopArgs, ...realTimeArg, '-i', this.source.path);
+    inputs.push(...inputLatencyArgs, ...loopArgs, ...realTimeArg, '-i', this.source.path);
     return inputs;
   }
 
@@ -484,11 +493,15 @@ export class AudioSession {
 
   private buildOutputArgs(): string[] {
     const { sampleRate, channels, pcmBitDepth, mp3Bitrate, fixedGainDb } = this.outputSettings;
-    const useConcatWithSilence =
-      this.source.kind === 'file' && !this.source.loop && this.sourcePreDelayMs && this.sourcePreDelayMs > 0;
-
     const buildFilterArgs = (): { filterArgs: string[] } => {
       const filters: string[] = [];
+      if (this.sourcePreDelayMs && this.sourcePreDelayMs > 0) {
+        const delayMs = Math.max(0, Math.round(this.sourcePreDelayMs));
+        filters.push(`adelay=delays=${delayMs}:all=1`);
+      }
+      if (this.sourcePadTailSec && this.sourcePadTailSec > 0) {
+        filters.push(`apad=pad_dur=${this.sourcePadTailSec}`);
+      }
       if (Number.isFinite(fixedGainDb) && fixedGainDb !== 0) {
         filters.push(`volume=${fixedGainDb}dB`);
       }
@@ -498,19 +511,6 @@ export class AudioSession {
         );
       }
 
-      if (useConcatWithSilence) {
-        const chain: string[] = ['[0:a][1:a]concat=n=2:v=0:a=1'];
-        if (this.sourcePadTailSec && this.sourcePadTailSec > 0) {
-          chain.push(`apad=pad_dur=${this.sourcePadTailSec}`);
-        }
-        chain.push(...filters);
-        const filterComplex = `${chain.join(',')}[outa]`;
-        return { filterArgs: ['-filter_complex', filterComplex, '-map', '[outa]'] };
-      }
-
-      if (this.sourcePadTailSec && this.sourcePadTailSec > 0) {
-        filters.unshift(`apad=pad_dur=${this.sourcePadTailSec}`);
-      }
       return { filterArgs: filters.length ? ['-af', filters.join(',')] : [] };
     };
 
