@@ -10,11 +10,13 @@ type LineInIngestSession = {
 };
 
 type LineInIngestListener = (session: LineInIngestSession) => void;
+type LineInIngestStopListener = (session: LineInIngestSession, reason?: string) => void;
 
 class LineInIngestRegistry {
   private readonly log = createLogger('Audio', 'LineInIngest');
   private readonly sessions = new Map<string, LineInIngestSession>();
   private readonly listeners = new Map<string, Set<LineInIngestListener>>();
+  private readonly stopListeners = new Map<string, Set<LineInIngestStopListener>>();
 
   public start(id: string, source: NodeJS.ReadableStream): LineInIngestSession {
     const trimmed = id.trim();
@@ -41,6 +43,7 @@ class LineInIngestRegistry {
           /* ignore */
         }
         stream.end();
+        this.notifyStopped(session, reason);
         if (reason) {
           this.log.info('line-in ingest stopped', { inputId, reason });
         }
@@ -101,15 +104,47 @@ class LineInIngestRegistry {
     };
   }
 
+  public onStop(id: string, listener: LineInIngestStopListener): () => void {
+    const inputId = id.trim();
+    if (!inputId) {
+      return () => {};
+    }
+    const bucket = this.stopListeners.get(inputId) ?? new Set<LineInIngestStopListener>();
+    bucket.add(listener);
+    this.stopListeners.set(inputId, bucket);
+    return () => {
+      const set = this.stopListeners.get(inputId);
+      if (!set) return;
+      set.delete(listener);
+      if (!set.size) {
+        this.stopListeners.delete(inputId);
+      }
+    };
+  }
+
   private notifyStarted(session: LineInIngestSession): void {
     const bucket = this.listeners.get(session.id);
+    if (bucket?.size) {
+      for (const listener of bucket) {
+        try {
+          listener(session);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.log.warn('line-in ingest listener failed', { inputId: session.id, message });
+        }
+      }
+    }
+  }
+
+  private notifyStopped(session: LineInIngestSession, reason?: string): void {
+    const bucket = this.stopListeners.get(session.id);
     if (!bucket?.size) return;
     for (const listener of bucket) {
       try {
-        listener(session);
+        listener(session, reason);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        this.log.warn('line-in ingest listener failed', { inputId: session.id, message });
+        this.log.warn('line-in ingest stop listener failed', { inputId: session.id, message });
       }
     }
   }

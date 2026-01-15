@@ -1324,8 +1324,20 @@ class ZoneManager {
     const mode = normalized as ZoneContext['inputMode'];
     // Avoid re-dispatching transports when the same input/track is already playing.
     if (metadata?.audiopath && this.isActiveInput(ctx, mode) && this.isSameAudiopath(ctx, metadata.audiopath)) {
-      this.updateInputMetadata(zoneId, metadata);
-      return;
+      const nextPipe = playbackSource?.kind === 'pipe'
+        ? (playbackSource as { stream?: NodeJS.ReadableStream }).stream
+        : null;
+      const currentState = ctx.player.getState();
+      const currentPipe =
+        currentState.playbackSource?.kind === 'pipe'
+          ? (currentState.playbackSource as { stream?: NodeJS.ReadableStream }).stream
+          : null;
+      if (nextPipe && nextPipe !== currentPipe) {
+        // New pipe stream for the same audiopath (e.g., line-in reconnect): restart input.
+      } else {
+        this.updateInputMetadata(zoneId, metadata);
+        return;
+      }
     }
     const prevInput = ctx.inputMode;
     this.setInputMode(ctx, mode);
@@ -2451,6 +2463,7 @@ class ZoneManager {
 
     const mergedForType = { ...ctx.state, ...patch } as LoxoneZoneState;
     const isRadioState = isRadioAudiopath(mergedForType.audiopath, mergedForType.audiotype);
+    const isLineInState = isLineInAudiopath(mergedForType.audiopath);
     const desiredType = resolveLoxoneType(mergedForType.audiopath, mergedForType.audiotype);
     if (desiredType !== mergedForType.type) {
       patch.type = desiredType;
@@ -2492,10 +2505,14 @@ class ZoneManager {
     if ('duration' in patch) {
       const nextDuration = patch.duration;
       const currentDuration = ctx.state.duration;
-      if (typeof nextDuration !== 'number' || (!isRadioState && !isStopping && nextDuration <= 0)) {
+      if (
+        typeof nextDuration !== 'number' ||
+        (!isRadioState && !isLineInState && !isStopping && nextDuration <= 0)
+      ) {
         delete (patch as any).duration;
       } else if (
         !isRadioState &&
+        !isLineInState &&
         !trackChanged &&
         typeof currentDuration === 'number' &&
         currentDuration > 0
@@ -3688,6 +3705,11 @@ function isRadioAudiopath(audiopath: string | undefined, audiotype?: number | nu
     return false;
   }
   return detectServiceFromAudiopath(decoded) === 'radio';
+}
+
+function isLineInAudiopath(audiopath: string | undefined): boolean {
+  const raw = (audiopath ?? '').trim().toLowerCase();
+  return raw.startsWith('linein:') || raw.startsWith('linein://');
 }
 
 function toRadioAudiopath(audiopath: string | undefined): string {

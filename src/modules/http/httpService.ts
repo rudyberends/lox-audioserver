@@ -11,7 +11,8 @@ import { sendspinClientConnector } from '@/modules/http/sendspin/sendspinClientC
 import { SnapcastGateway } from '@/modules/http/snapcast/snapcastGateway';
 import { AudioStreamHandler } from '@/modules/http/streams/audioStreamHandler';
 import { AudioProxyHandler } from '@/modules/http/streams/audioProxyHandler';
-import { LineInIngestHandler } from '@/modules/http/streams/lineInIngestHandler';
+import { LineInIngestWebSocket } from '@/modules/http/streams/lineInIngestWs';
+import { LineInIngestTcp } from '@/modules/http/streams/lineInIngestTcp';
 import { getSystemConfig } from '@/domain/config/configStore';
 import { networkInterfaces } from 'node:os';
 
@@ -25,7 +26,8 @@ export class HttpService {
   private readonly staticFiles: StaticFileHandler;
   private readonly audioStream: AudioStreamHandler;
   private readonly audioProxy: AudioProxyHandler;
-  private readonly lineInIngest: LineInIngestHandler;
+  private readonly lineInIngestWs: LineInIngestWebSocket;
+  private readonly lineInIngestTcp: LineInIngestTcp;
   private readonly sendspin = new SendspinGateway();
   private readonly snapcast = new SnapcastGateway();
   private server?: http.Server;
@@ -40,7 +42,8 @@ export class HttpService {
     this.staticFiles = new StaticFileHandler(config.publicDir);
     this.audioStream = new AudioStreamHandler();
     this.audioProxy = new AudioProxyHandler();
-    this.lineInIngest = new LineInIngestHandler();
+    this.lineInIngestWs = new LineInIngestWebSocket();
+    this.lineInIngestTcp = new LineInIngestTcp();
   }
 
   public async start(): Promise<void> {
@@ -77,6 +80,7 @@ export class HttpService {
         })
         .on('error', reject);
     });
+    await this.lineInIngestTcp.start();
   }
 
   public async stop(): Promise<void> {
@@ -92,6 +96,7 @@ export class HttpService {
       this.server.close(() => resolve());
       this.server = undefined;
     });
+    await this.lineInIngestTcp.stop();
     this.sendspin.close();
     this.snapcast.close();
   }
@@ -132,11 +137,6 @@ export class HttpService {
       return;
     }
 
-    if (this.lineInIngest.matches(pathname)) {
-      await this.lineInIngest.handle(req, res, pathname);
-      return;
-    }
-
     if (this.audioStream.matches(pathname)) {
       await this.audioStream.handle(req, res, pathname);
       return;
@@ -159,6 +159,9 @@ export class HttpService {
       return;
     }
     if (this.snapcast.handleUpgrade(req, socket, head)) {
+      return;
+    }
+    if (this.lineInIngestWs.handleUpgrade(req, socket, head)) {
       return;
     }
     socket.destroy();

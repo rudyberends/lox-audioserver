@@ -21,7 +21,9 @@ const LINEIN_ID_START = 1000001;
 const DEFAULT_ICON_TYPE = 0;
 const PCM_SAMPLE_RATE = 48000;
 const PCM_CHANNELS = 2;
-const pendingLineInByZone = new Map<number, { inputId: string; stop: () => void }>();
+const NO_SIGNAL_TITLE = 'No Signal detected';
+const activeLineInByZone = new Map<number, { inputId: string; stop: () => void }>();
+const lineInWatchByZone = new Map<number, { inputId: string; stop: () => void }>();
 
 function resolveMacId(): string {
   const macId = getConfig()?.system?.audioserver?.macId?.trim().toUpperCase();
@@ -138,10 +140,7 @@ export function audioLineIn(command: string) {
   const parts = splitCommand(command);
   const zoneId = parseNumberPart(parts[1], 0);
   const rawId = parts[3] ?? parts[2] ?? '';
-  const rawValue =
-    typeof rawId === 'string' && rawId.toLowerCase().startsWith('linein')
-      ? rawId.slice('linein'.length)
-      : rawId;
+  const rawValue = extractLineInValue(rawId);
   const inputId = decodeInputId(rawValue);
 
   if (!zoneId) {
@@ -160,31 +159,44 @@ export function audioLineIn(command: string) {
 
   const title = selected?.name ?? (resolvedInputs[0]?.name ?? 'LineIn1');
   const audiopath = selected?.id ?? resolvedId;
+  const iconType = selected?.iconType ?? DEFAULT_ICON_TYPE;
 
   log.info('line-in selected', { zoneId, inputId: audiopath });
-  startLineInPlayback(zoneId, audiopath, title);
+  ensureLineInWatch(zoneId, audiopath);
+  startLineInPlayback(zoneId, audiopath, title, iconType);
   return buildEmptyResponse(command);
 }
 
-function startLineInPlayback(zoneId: number, inputId: string, title: string): void {
-  clearPendingLineIn(zoneId);
+function extractLineInValue(rawId: string): string {
+  if (typeof rawId !== 'string') {
+    return rawId as unknown as string;
+  }
+  const lowered = rawId.toLowerCase();
+  if (!lowered.startsWith('linein')) {
+    return rawId;
+  }
+  const candidate = rawId.slice('linein'.length);
+  return /^\d+$/.test(candidate) ? candidate : rawId;
+}
+
+function startLineInPlayback(zoneId: number, inputId: string, title: string, iconType: number): void {
+  clearActiveLineIn(zoneId);
   const stream = lineInIngestRegistry.getStream(inputId);
   if (!stream) {
     log.info('line-in ingest pending; waiting for stream', { zoneId, inputId });
-    overwriteLineInState(zoneId, inputId, title, 'stop');
-    const stop = lineInIngestRegistry.onStart(inputId, (session) => {
-      const pending = pendingLineInByZone.get(zoneId);
-      if (!pending || pending.inputId !== inputId) {
-        return;
-      }
-      clearPendingLineIn(zoneId);
-      startLineInPlayback(zoneId, inputId, title);
-    });
-    pendingLineInByZone.set(zoneId, { inputId, stop });
+    overwriteLineInState(zoneId, inputId, NO_SIGNAL_TITLE, iconType, 'pause');
     return;
   }
 
-  overwriteLineInState(zoneId, inputId, title, 'play');
+  overwriteLineInState(zoneId, inputId, title, iconType, 'play');
+  const stop = lineInIngestRegistry.onStop(inputId, () => {
+    const active = activeLineInByZone.get(zoneId);
+    if (!active || active.inputId !== inputId) {
+      return;
+    }
+    handleLineInStopped(zoneId, inputId);
+  });
+  activeLineInByZone.set(zoneId, { inputId, stop });
   zoneManager.playInputSource(
     zoneId,
     'linein',
@@ -207,18 +219,83 @@ function startLineInPlayback(zoneId: number, inputId: string, title: string): vo
   );
 }
 
-function clearPendingLineIn(zoneId: number): void {
-  const pending = pendingLineInByZone.get(zoneId);
-  if (pending) {
-    pending.stop();
-    pendingLineInByZone.delete(zoneId);
+function clearActiveLineIn(zoneId: number): void {
+  const active = activeLineInByZone.get(zoneId);
+  if (active) {
+    active.stop();
+    activeLineInByZone.delete(zoneId);
   }
+}
+
+function handleLineInStopped(zoneId: number, inputId: string): void {
+  const state = zoneManager.getZoneState(zoneId);
+  if (!state) {
+    return;
+  }
+  const currentPath = state.audiopath ?? '';
+  const matches =
+    currentPath === `linein:${inputId}` || currentPath === `linein://${inputId}`;
+  if (!matches) {
+    return;
+  }
+  zoneManager.patchState(
+    zoneId,
+    {
+      mode: 'pause',
+      time: 0,
+      duration: 0,
+      title: NO_SIGNAL_TITLE,
+      artist: '',
+      album: '',
+      station: '',
+      audiopath: `linein:${inputId}`,
+      audiotype: 3,
+    },
+    true,
+  );
+  clearActiveLineIn(zoneId);
+}
+
+function resolveLineInMeta(inputId: string): { title: string; iconType: number } {
+  const resolvedInputs = resolveLineInInputs();
+  const match = resolvedInputs.find((entry) => entry.id === inputId);
+  return {
+    title: match?.name ?? NO_SIGNAL_TITLE,
+    iconType: match?.iconType ?? DEFAULT_ICON_TYPE,
+  };
+}
+
+function ensureLineInWatch(zoneId: number, inputId: string): void {
+  const existing = lineInWatchByZone.get(zoneId);
+  if (existing) {
+    if (existing.inputId === inputId) {
+      return;
+    }
+    existing.stop();
+    lineInWatchByZone.delete(zoneId);
+  }
+  const stop = lineInIngestRegistry.onStart(inputId, () => {
+    const state = zoneManager.getZoneState(zoneId);
+    if (!state) {
+      return;
+    }
+    const currentPath = state.audiopath ?? '';
+    const matches =
+      currentPath === `linein:${inputId}` || currentPath === `linein://${inputId}`;
+    if (!matches) {
+      return;
+    }
+    const { title, iconType } = resolveLineInMeta(inputId);
+    startLineInPlayback(zoneId, inputId, title, iconType);
+  });
+  lineInWatchByZone.set(zoneId, { inputId, stop });
 }
 
 function overwriteLineInState(
   zoneId: number,
   inputId: string,
   title: string,
+  iconType: number,
   mode: LoxoneZoneState['mode'],
 ): void {
   const current = zoneManager.getZoneState(zoneId);
@@ -238,6 +315,7 @@ function overwriteLineInState(
     duration: 0,
     audiopath: `linein:${inputId}`,
     audiotype: 3,
+    icontype: iconType,
     type: 6,
     title,
     artist: '',

@@ -103,10 +103,11 @@ export function createQueueItem(
       ? userFromUri || contentManager.getDefaultSpotifyAccountId()
       : null;
   const user = metaUser && metaUser !== 'nouser' ? metaUser : defaultSpotifyUser ?? 'nouser';
+  const isLineIn = normalizedUri.toLowerCase().startsWith('linein:');
   const duration =
     typeof metadata?.duration === 'number' && metadata.duration > 0
       ? Math.round(metadata.duration)
-      : inferredType === 1
+      : inferredType === 1 || inferredType === 3 || isLineIn
         ? 0
         : 120;
   const station = sanitizeStation(metadata?.station, normalizedUri);

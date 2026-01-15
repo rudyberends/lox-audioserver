@@ -9,6 +9,7 @@ export interface LoxoneZoneState {
   clientState: 'on' | 'off';
   coverurl: string;
   duration: number;
+  icontype?: number;
   mode: 'play' | 'pause' | 'stop';
   name: string;
   parent: LoxoneParentMeta | null;
