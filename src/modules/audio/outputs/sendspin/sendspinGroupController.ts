@@ -82,11 +82,7 @@ class SendspinGroupController {
     leaderZoneId: number,
     frame: { data: Buffer; timestampUs: number },
   ): void {
-    const fmt = this.lastStreamFormat.get(leaderZoneId);
     this.forEachMemberTransport(leaderZoneId, (transport) => {
-      if (fmt) {
-        sendspinCore.sendStreamStart(transport.getClientId(), fmt);
-      }
       sendspinCore.sendPcmFrameToClient(transport.getClientId(), frame);
     });
   }

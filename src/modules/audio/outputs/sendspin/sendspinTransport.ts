@@ -11,7 +11,6 @@ import {
 } from '@/modules/audio/utils/audioFormat';
 import { serverNowUs } from '@/modules/http/sendspin/sendspinClock';
 import { sendspinCore } from '@/modules/http/sendspin/sendspinCore';
-import { sendspinClientConnector } from '@/modules/http/sendspin/sendspinClientConnector';
 import type { PreferredOutput, TransportConfigDefinition, ZoneTransport } from '@/modules/audio/outputs/types';
 import { zoneManager } from '@/modules/zones/zoneManager';
 import type { SendspinSession } from '@/modules/http/sendspin/sendspinSession';
@@ -86,7 +85,6 @@ export class SendspinTransport implements ZoneTransport {
   private progressTimer: NodeJS.Timeout | null = null;
   private currentCoverUrl: string | null = null;
   private lastProgressPayload: SendspinMetadataProgress | null = null;
-  private readonly unregisterWatch: () => void;
   private playbackState: 'playing' | 'paused' | 'stopped' = 'stopped';
   private lastSentPlaybackState: 'playing' | 'paused' | 'stopped' | null = null;
   private lastKnownVolume = 50;
@@ -130,6 +128,10 @@ export class SendspinTransport implements ZoneTransport {
   private lastMetadataSignature: string | null = null;
   private lastStreamSignature: string | null = null;
   private pcmRemainder: Buffer | null = null;
+  private lastPlayRequestAtMs: number | null = null;
+  private firstFrameLogged = false;
+  private lastStreamStartSentAtMs: number | null = null;
+  private streamToken = 0;
 
   constructor(
     private readonly zoneId: number,
@@ -139,7 +141,6 @@ export class SendspinTransport implements ZoneTransport {
   ) {
     this.clientId = config.clientId;
     this.options = options;
-    this.unregisterWatch = sendspinClientConnector.watchClient(this.clientId);
     sendspinGroupController.register(this.zoneId, this);
     sendspinCore.registerHooks(this.clientId, {
       onIdentified: (sendspinSession) => {
@@ -226,7 +227,9 @@ export class SendspinTransport implements ZoneTransport {
 
   /** Start playback for this zone on the Sendspin client. */
   public async play(session: PlaybackSession): Promise<void> {
-    sendspinClientConnector.requestPlaybackPriority(this.clientId);
+    this.lastPlayRequestAtMs = Date.now();
+    this.firstFrameLogged = false;
+    this.lastStreamStartSentAtMs = null;
     if (!session.playbackSource) {
       this.log.warn('Sendspin transport skipped; no playback source', { zoneId: this.zoneId });
       return;
@@ -264,9 +267,6 @@ export class SendspinTransport implements ZoneTransport {
       zoneName: this.zoneName,
       clientId: this.clientId,
     });
-    if (session) {
-      sendspinClientConnector.requestPlaybackPriority(this.clientId);
-    }
     if (session) {
       await this.play(session);
     } else {
@@ -455,7 +455,6 @@ export class SendspinTransport implements ZoneTransport {
     this.teardown();
     sendspinCore.unregisterHooks(this.clientId);
     sendspinCore.clearLeadStats(this.clientId);
-    this.unregisterWatch();
     sendspinGroupController.unregister(this.zoneId);
   }
 
@@ -476,6 +475,7 @@ export class SendspinTransport implements ZoneTransport {
       this.log.debug('Sendspin stream start skipped; already starting', { zoneId: this.zoneId });
       return;
     }
+    let token = this.streamToken;
     const preserveAnchor = options.preserveAnchor === true;
     this.streamStarting = true;
     try {
@@ -550,8 +550,10 @@ export class SendspinTransport implements ZoneTransport {
 
       // If a previous stream object exists but is ended/destroyed, clean it up first.
       if (this.currentStream) {
-        this.teardown({ preserveAnchor });
+        this.teardown({ preserveAnchor, invalidateToken: false });
       }
+      this.streamToken += 1;
+      token = this.streamToken;
 
       const sessionStats = audioStreamEngine.getSessionStats(this.zoneId);
       const hasTargetProfile = sessionStats.some((s) => s.profile === profile);
@@ -623,9 +625,7 @@ export class SendspinTransport implements ZoneTransport {
             ? Math.floor((4096 * 1_000_000) / sampleRate)
             : 0;
       const overbufferMarginUs = 100_000; // keep lead tight around target
-      const pendingFrames: Array<{ data: Buffer; durationUs: number }> = [];
-      let pendingDurationUs = 0;
-      let streamingStarted = false;
+      let streamingStarted = true;
       const prepareBufferMarginUs = Math.max(500_000, Math.min(2_500_000, this.targetLeadUs));
       const sendTransmissionMarginUs = 100_000; // align with MA send margin (network + client processing)
       const targetBufferUs = this.targetLeadUs;
@@ -734,6 +734,19 @@ export class SendspinTransport implements ZoneTransport {
       };
 
       const emitFrame = (frameTsUs: number, frameData: Buffer, durationUs: number): void => {
+        if (token !== this.streamToken) {
+          return;
+        }
+        if (!this.firstFrameLogged) {
+          this.firstFrameLogged = true;
+          const now = Date.now();
+          this.log.info('Sendspin first audio frame sent', {
+            zoneId: this.zoneId,
+            clientId: this.clientId,
+            sincePlayMs: this.lastPlayRequestAtMs ? now - this.lastPlayRequestAtMs : null,
+            sinceStreamStartMs: this.lastStreamStartSentAtMs ? now - this.lastStreamStartSentAtMs : null,
+          });
+        }
         if (lastSendWallUs !== null) {
           const nowUs = serverNowUs();
           const intervalUs = nowUs - lastSendWallUs;
@@ -818,6 +831,7 @@ export class SendspinTransport implements ZoneTransport {
           ...(codecHeader ? { codecHeader } : {}),
         });
         streamStartSent = true;
+        this.lastStreamStartSentAtMs = Date.now();
       };
 
       const sendScheduledFrame = async (
@@ -825,6 +839,9 @@ export class SendspinTransport implements ZoneTransport {
         durationUs: number,
         options: { skipLeadGate?: boolean } = {},
       ): Promise<void> => {
+        if (token !== this.streamToken) {
+          return;
+        }
         if (this.nextFrameTimestampUs === null) {
           this.playStartUs = serverNowUs() + this.anchorLeadUs;
           this.nextFrameTimestampUs = this.playStartUs;
@@ -863,18 +880,7 @@ export class SendspinTransport implements ZoneTransport {
       };
 
       const processFrame = async (frameData: Buffer<ArrayBufferLike>, durationUs: number): Promise<void> => {
-        if (!streamingStarted) {
-          pendingFrames.push({ data: frameData, durationUs });
-          pendingDurationUs += durationUs;
-          if (pendingDurationUs < this.targetLeadUs) {
-            return;
-          }
-          streamingStarted = true;
-          for (const frame of pendingFrames) {
-            await sendScheduledFrame(frame.data, frame.durationUs);
-          }
-          pendingFrames.length = 0;
-          pendingDurationUs = 0;
+        if (token !== this.streamToken) {
           return;
         }
         await sendScheduledFrame(frameData, durationUs);
@@ -889,6 +895,9 @@ export class SendspinTransport implements ZoneTransport {
       };
 
       const sendLiveChunk = async (chunk: Buffer) => {
+        if (token !== this.streamToken) {
+          return;
+        }
         let payload = chunk;
         const nowUs = serverNowUs();
         if (this.wallClockAnchorUs === null) {
@@ -991,6 +1000,7 @@ export class SendspinTransport implements ZoneTransport {
         sampleRate,
         channels,
         bitDepth: pcmBitDepth,
+        sincePlayMs: this.lastPlayRequestAtMs ? Date.now() - this.lastPlayRequestAtMs : null,
       });
 
       this.lastStreamSignature = streamSignature;
@@ -1011,8 +1021,11 @@ export class SendspinTransport implements ZoneTransport {
     }
   }
 
-  private teardown(options: { preserveAnchor?: boolean } = {}): void {
+  private teardown(options: { preserveAnchor?: boolean; invalidateToken?: boolean } = {}): void {
     const preserveAnchor = options.preserveAnchor === true;
+    if (options.invalidateToken !== false) {
+      this.streamToken += 1;
+    }
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
@@ -1470,7 +1483,7 @@ export class SendspinTransport implements ZoneTransport {
     // Default to 1.0s lead (aiosendspin reference); override via SENDSPIN_LEAD_MS.
     const raw = process.env.SENDSPIN_LEAD_MS;
     const parsed = raw ? Number(raw) : NaN;
-    const defaultMs = 1500;
+    const defaultMs = 300;
     const leadMs = Number.isFinite(parsed) ? parsed : defaultMs;
     const clampedMs = Math.max(300, Math.min(8000, Math.round(leadMs)));
     return clampedMs * 1000;

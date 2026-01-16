@@ -86,6 +86,8 @@ export class SendspinSession {
   private readonly connectionMeta: SendspinConnectionMeta;
   private initialStateReceived = false;
   private initialStateTimer: NodeJS.Timeout | null = null;
+  private initialStateRequired = false;
+  private identified = false;
 
   private activeStream = false;
   private streamFormat: PlayerFormat = {
@@ -119,14 +121,7 @@ export class SendspinSession {
     this.connectionMeta = { ...connectionMeta };
     this.applyConnectionContext({ ...connectionMeta });
 
-    // If the client already sent hello before hooks were attached, fire onIdentified now.
-    if (this.ready && this.hooks.onIdentified) {
-      try {
-        this.hooks.onIdentified(this, this.req);
-      } catch (err) {
-        log.warn('onIdentified hook failed', { message: (err as Error).message });
-      }
-    }
+    this.maybeNotifyIdentified();
   }
 
   public setHooks(
@@ -138,15 +133,7 @@ export class SendspinSession {
     if (context) {
       this.applyConnectionContext(context);
     }
-    // If the client already sent hello, fire onIdentified immediately.
-    if (this.ready && this.hooks.onIdentified) {
-      try {
-        this.hooks.onIdentified(this, this.req);
-        log.debug('hooks applied after hello; onIdentified fired', { clientId: this.clientId });
-      } catch (err) {
-        log.warn('onIdentified hook failed', { message: (err as Error).message });
-      }
-    }
+    this.maybeNotifyIdentified();
   }
 
   public getClientId(): string | null {
@@ -348,6 +335,7 @@ export class SendspinSession {
 
   public sendServerCommand(command: 'volume' | 'mute', extra?: { volume?: number; mute?: boolean }): void {
     if (!this.ready) return;
+    if (!this.roles.includes('player@v1')) return;
     this.send({
       type: 'server/command',
       payload: { player: { command, ...(extra ?? {}) } },
@@ -361,7 +349,9 @@ export class SendspinSession {
   }): void {
     if (!this.ready) return;
     if (update.playback_state) {
-      this.playbackState = update.playback_state;
+      const mapped = update.playback_state === 'paused' ? 'stopped' : update.playback_state;
+      this.playbackState = mapped;
+      update = { ...update, playback_state: mapped };
     }
     this.send({
       type: 'group/update',
@@ -386,6 +376,7 @@ export class SendspinSession {
     } | null;
   }): void {
     if (!this.ready) return;
+    if (!this.roles.includes('metadata@v1')) return;
     this.send({
       type: 'server/state',
       payload: {
@@ -403,6 +394,7 @@ export class SendspinSession {
     muted: boolean;
   }): void {
     if (!this.ready) return;
+    if (!this.roles.includes('controller@v1')) return;
     this.send({
       type: 'server/state',
       payload: { controller },
@@ -506,8 +498,27 @@ export class SendspinSession {
   }
 
   private handleHello(payload: any): void {
+    const version = typeof payload?.version === 'number' ? payload.version : null;
+    if (version !== 1) {
+      log.warn('client/hello invalid version', { version, clientId: payload?.client_id ?? 'unknown' });
+      try {
+        this.ws.close(1008, 'invalid protocol version');
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
     this.clientId = payload?.client_id || 'unknown';
     const supportedRoles = Array.isArray(payload?.supported_roles) ? payload.supported_roles : [];
+    if (!supportedRoles.length) {
+      log.warn('client/hello missing supported_roles', { clientId: this.clientId });
+      try {
+        this.ws.close(1008, 'missing supported_roles');
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
     const serverSupported = new Set(['player@v1', 'controller@v1', 'metadata@v1', 'artwork@v1', 'visualizer@v1']);
 
     // Activate the first supported version per role family, respecting client priority.
@@ -524,7 +535,37 @@ export class SendspinSession {
     }
     this.roles = activeRoles;
 
-    this.playerSupport = payload?.['player@v1_support'] || payload?.player_support || {};
+    const playerSupport = payload?.['player@v1_support'] || payload?.player_support || null;
+    const artworkSupport = payload?.['artwork@v1_support'] || payload?.artwork_support || null;
+    const visualizerSupport = payload?.['visualizer@v1_support'] || payload?.visualizer_support || null;
+    if (this.roles.includes('player@v1') && !playerSupport) {
+      log.warn('client/hello missing player@v1_support', { clientId: this.clientId });
+      try {
+        this.ws.close(1008, 'missing player support');
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    if (this.roles.includes('artwork@v1') && !artworkSupport) {
+      log.warn('client/hello missing artwork@v1_support', { clientId: this.clientId });
+      try {
+        this.ws.close(1008, 'missing artwork support');
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    if (this.roles.includes('visualizer@v1') && !visualizerSupport) {
+      log.warn('client/hello missing visualizer@v1_support', { clientId: this.clientId });
+      try {
+        this.ws.close(1008, 'missing visualizer support');
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    this.playerSupport = playerSupport || {};
     const supportedCommands: string[] = Array.isArray(this.playerSupport?.supported_commands)
       ? this.playerSupport.supported_commands
       : [];
@@ -537,8 +578,8 @@ export class SendspinSession {
       expectVolume: this.expectVolume,
       expectMute: this.expectMute,
     });
-    this.artworkSupport = Array.isArray(payload?.['artwork@v1_support']?.channels)
-      ? payload['artwork@v1_support'].channels
+    this.artworkSupport = Array.isArray(artworkSupport?.channels)
+      ? artworkSupport.channels
       : [];
     if (this.artworkSupport.length) {
       this.artworkChannels = this.artworkSupport.map((c: any) => ({
@@ -548,6 +589,7 @@ export class SendspinSession {
         height: typeof c?.media_height === 'number' ? c.media_height : 800,
       }));
     }
+    this.initialStateRequired = this.roles.includes('player@v1');
     this.applyPreferredStreamFormat();
     this.ready = true;
 
@@ -563,25 +605,24 @@ export class SendspinSession {
         server_id: 'lox-audioserver',
         name: 'Lox Audio Server',
         version: 1,
-        active_roles: this.roles.length
-          ? Array.from(new Set(this.roles))
-          : ['player@v1', 'controller@v1', 'metadata@v1'],
+        active_roles: Array.from(new Set(this.roles)),
         connection_reason: this.connectionReason,
       },
     });
 
     this.startInitialStateTimeout();
+    const defaultGroup = this.getDefaultGroupInfo();
+    this.sendGroupUpdate({
+      playback_state: 'stopped',
+      group_id: defaultGroup.groupId,
+      group_name: defaultGroup.groupName,
+    });
 
     // After the handshake, notify the transport that the client is ready.
-    if (this.hooks.onIdentified) {
-      try {
-        this.hooks.onIdentified(this, this.req);
-      } catch (err) {
-        log.warn('onIdentified hook failed', { message: (err as Error).message });
-      }
-    } else {
+    if (!this.hooks.onIdentified) {
       log.debug('client/hello received; waiting for hooks to attach', { clientId: this.clientId });
     }
+    this.maybeNotifyIdentified();
 
   }
 
@@ -640,6 +681,7 @@ export class SendspinSession {
         clearTimeout(this.initialStateTimer);
         this.initialStateTimer = null;
       }
+      this.maybeNotifyIdentified();
     }
     const player = payload?.player ?? payload;
     const state =
@@ -713,7 +755,7 @@ export class SendspinSession {
     const reason = typeof payload?.reason === 'string' ? payload.reason : 'unknown';
     this.logClientMessage('client/goodbye', { reason }, 'info');
     try {
-      this.ws.close(1000, 'client goodbye');
+      this.ws.close(1000, `client goodbye:${reason}`);
     } catch {
       /* ignore */
     }
@@ -722,49 +764,57 @@ export class SendspinSession {
   private handleFormatRequest(payload: any): void {
     const playerReq = payload?.player;
     if (playerReq) {
-      const codecRaw = typeof playerReq.codec === 'string' ? playerReq.codec : this.streamFormat.codec;
-      const codec: PlayerFormat['codec'] =
-        codecRaw === 'opus' ? 'opus' : codecRaw === 'flac' ? 'flac' : 'pcm';
-      const requestedRate =
-        typeof playerReq.sample_rate === 'number' ? playerReq.sample_rate : undefined;
-      const requestedChannels =
-        typeof playerReq.channels === 'number' ? playerReq.channels : undefined;
-      const requestedBitDepth =
-        typeof playerReq.bit_depth === 'number' ? playerReq.bit_depth : undefined;
-      this.streamFormat = {
-        codec,
-        sampleRate: requestedRate ?? this.streamFormat.sampleRate,
-        channels: requestedChannels ?? this.streamFormat.channels,
-        bitDepth: requestedBitDepth ?? this.streamFormat.bitDepth,
-      };
+      if (!this.roles.includes('player@v1')) {
+        log.warn('stream/request-format ignored; client lacks player role', { clientId: this.clientId });
+      } else {
+        const codecRaw = typeof playerReq.codec === 'string' ? playerReq.codec : this.streamFormat.codec;
+        const codec: PlayerFormat['codec'] =
+          codecRaw === 'opus' ? 'opus' : codecRaw === 'flac' ? 'flac' : 'pcm';
+        const requestedRate =
+          typeof playerReq.sample_rate === 'number' ? playerReq.sample_rate : undefined;
+        const requestedChannels =
+          typeof playerReq.channels === 'number' ? playerReq.channels : undefined;
+        const requestedBitDepth =
+          typeof playerReq.bit_depth === 'number' ? playerReq.bit_depth : undefined;
+        this.streamFormat = {
+          codec,
+          sampleRate: requestedRate ?? this.streamFormat.sampleRate,
+          channels: requestedChannels ?? this.streamFormat.channels,
+          bitDepth: requestedBitDepth ?? this.streamFormat.bitDepth,
+        };
+      }
     }
 
     const artworkReq = payload?.artwork;
     if (artworkReq && typeof artworkReq.channel === 'number') {
-      const idx = Math.floor(artworkReq.channel);
-      if (idx < 0 || idx >= this.artworkChannels.length) {
-        log.warn('client/stream request invalid artwork channel', {
-          clientId: this.clientId,
-          channel: artworkReq.channel,
-          available: this.artworkChannels.length,
-        });
-        return;
+      if (!this.roles.includes('artwork@v1')) {
+        log.warn('stream/request-format ignored; client lacks artwork role', { clientId: this.clientId });
+      } else {
+        const idx = Math.floor(artworkReq.channel);
+        if (idx < 0 || idx >= this.artworkChannels.length) {
+          log.warn('client/stream request invalid artwork channel', {
+            clientId: this.clientId,
+            channel: artworkReq.channel,
+            available: this.artworkChannels.length,
+          });
+          return;
+        }
+        const source: 'album' | 'artist' | 'none' =
+          artworkReq.source === 'artist' ? 'artist' : artworkReq.source === 'none' ? 'none' : 'album';
+        const format: 'jpeg' | 'png' | 'bmp' =
+          artworkReq.format === 'png' ? 'png' : artworkReq.format === 'bmp' ? 'bmp' : 'jpeg';
+        const width =
+          typeof artworkReq.media_width === 'number'
+            ? artworkReq.media_width
+            : this.artworkChannels[idx]?.width ?? 800;
+        const height =
+          typeof artworkReq.media_height === 'number'
+            ? artworkReq.media_height
+            : this.artworkChannels[idx]?.height ?? 800;
+        const next = { source, format, width, height };
+        this.artworkChannels[idx] = next;
+        this.sendArtworkStreamStart(this.artworkChannels);
       }
-      const source: 'album' | 'artist' | 'none' =
-        artworkReq.source === 'artist' ? 'artist' : artworkReq.source === 'none' ? 'none' : 'album';
-      const format: 'jpeg' | 'png' | 'bmp' =
-        artworkReq.format === 'png' ? 'png' : artworkReq.format === 'bmp' ? 'bmp' : 'jpeg';
-      const width =
-        typeof artworkReq.media_width === 'number'
-          ? artworkReq.media_width
-          : this.artworkChannels[idx]?.width ?? 800;
-      const height =
-        typeof artworkReq.media_height === 'number'
-          ? artworkReq.media_height
-          : this.artworkChannels[idx]?.height ?? 800;
-      const next = { source, format, width, height };
-      this.artworkChannels[idx] = next;
-      this.sendArtworkStreamStart(this.artworkChannels);
     }
 
     if (this.hooks.onFormatChanged) {
@@ -927,5 +977,39 @@ export class SendspinSession {
         /* ignore */
       }
     }, 5000);
+  }
+
+  private getDefaultGroupInfo(): { groupId: string; groupName: string } {
+    if (this.connectionMeta.playerId) {
+      return {
+        groupId: this.connectionMeta.playerId,
+        groupName: this.connectionMeta.playerId,
+      };
+    }
+    if (typeof this.connectionMeta.zoneId === 'number') {
+      const id = `zone-${this.connectionMeta.zoneId}`;
+      return { groupId: id, groupName: id };
+    }
+    const fallback = this.clientId ?? 'sendspin';
+    return { groupId: fallback, groupName: fallback };
+  }
+
+  private maybeNotifyIdentified(): void {
+    if (this.identified) {
+      return;
+    }
+    if (!this.ready || !this.hooks.onIdentified) {
+      return;
+    }
+    if (this.initialStateRequired && !this.initialStateReceived) {
+      return;
+    }
+    try {
+      this.hooks.onIdentified(this, this.req);
+      this.identified = true;
+      log.debug('onIdentified fired', { clientId: this.clientId });
+    } catch (err) {
+      log.warn('onIdentified hook failed', { message: (err as Error).message });
+    }
   }
 }

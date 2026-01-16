@@ -18,6 +18,7 @@ interface Endpoint {
   serviceName?: string;
   candidateMatch: boolean;
   reason: 'discovery' | 'playback';
+  clientId?: string;
 }
 
 /**
@@ -36,6 +37,7 @@ class SendspinClientConnector {
   private readonly lastAttempts = new Map<string, number>();
   private readonly retryTimers = new Map<string, NodeJS.Timeout>();
   private readonly knownServices = new Map<string, MdnsService>();
+  private readonly inboundClients = new Set<string>();
   private bonjour: Bonjour | null = null;
   private browser: ReturnType<Bonjour['find']> | null = null;
   private serverService: ReturnType<Bonjour['publish']> | null = null;
@@ -155,12 +157,12 @@ class SendspinClientConnector {
       return;
     }
 
-    const candidateMatch = [...this.desiredClientIds].some((id) => this.serviceMatches(service, id));
-    if (!candidateMatch) {
+    const matchedClientId = [...this.desiredClientIds].find((id) => this.serviceMatches(service, id));
+    if (!matchedClientId) {
       return;
     }
 
-    const endpoint = this.toEndpoint(service, candidateMatch);
+    const endpoint = this.toEndpoint(service, matchedClientId);
     if (endpoint) {
       this.connect(endpoint);
     }
@@ -168,6 +170,9 @@ class SendspinClientConnector {
 
   private connect(endpoint: Endpoint): void {
     if (this.activeSockets.has(endpoint.url)) {
+      return;
+    }
+    if (endpoint.clientId && this.inboundClients.has(endpoint.clientId)) {
       return;
     }
     if (!this.desiredClientIds.size) {
@@ -233,10 +238,15 @@ class SendspinClientConnector {
       }
     });
 
-    ws.on('close', () => {
+    ws.on('close', (_code, reasonBuf) => {
       this.activeSockets.delete(endpoint.url);
       this.socketReason.delete(endpoint.url);
-      this.scheduleRetry(endpoint, matchedDesired || endpoint.candidateMatch);
+      const reason = reasonBuf ? reasonBuf.toString() : '';
+      const goodbyeReason = this.parseGoodbyeReason(reason);
+      const shouldRetry =
+        (matchedDesired || endpoint.candidateMatch) &&
+        !this.shouldSuppressRetry(goodbyeReason);
+      this.scheduleRetry(endpoint, shouldRetry);
     });
 
     ws.on('error', (err) => {
@@ -250,6 +260,9 @@ class SendspinClientConnector {
 
   private scheduleRetry(endpoint: Endpoint, shouldRetry: boolean): void {
     if (!shouldRetry || !this.desiredClientIds.size) {
+      return;
+    }
+    if (endpoint.clientId && this.inboundClients.has(endpoint.clientId)) {
       return;
     }
     if (this.retryTimers.has(endpoint.url)) {
@@ -298,7 +311,7 @@ class SendspinClientConnector {
     }
   }
 
-  private toEndpoint(service: MdnsService, candidateMatch: boolean): Endpoint | null {
+  private toEndpoint(service: MdnsService, clientId: string): Endpoint | null {
     const address = this.pickAddress(service);
     if (!address || !service.port) {
       this.log.debug('Sendspin mDNS entry missing address/port', { service: service.name });
@@ -309,8 +322,9 @@ class SendspinClientConnector {
     return {
       url,
       serviceName: service.name,
-      candidateMatch,
-      reason: this.resolveReasonForService(service),
+      candidateMatch: true,
+      reason: this.desiredReasons.get(clientId) ?? 'discovery',
+      clientId,
     };
   }
 
@@ -352,6 +366,7 @@ class SendspinClientConnector {
       serviceName: 'direct',
       candidateMatch: true,
       reason,
+      clientId: trimmed,
     };
   }
 
@@ -402,6 +417,37 @@ class SendspinClientConnector {
 
   private serviceKey(service: MdnsService): string {
     return `${service.name || service.host || 'unknown'}:${service.port}`;
+  }
+
+  public markInboundConnected(clientId: string): void {
+    const normalized = clientId.trim();
+    if (!normalized) {
+      return;
+    }
+    this.inboundClients.add(normalized);
+  }
+
+  public markInboundDisconnected(clientId: string): void {
+    const normalized = clientId.trim();
+    if (!normalized) {
+      return;
+    }
+    this.inboundClients.delete(normalized);
+  }
+
+  private parseGoodbyeReason(reason: string): string | null {
+    const prefix = 'client goodbye:';
+    if (!reason || !reason.startsWith(prefix)) {
+      return null;
+    }
+    return reason.slice(prefix.length).trim() || null;
+  }
+
+  private shouldSuppressRetry(reason: string | null): boolean {
+    if (!reason) {
+      return false;
+    }
+    return reason === 'another_server' || reason === 'shutdown' || reason === 'user_request';
   }
 }
 
