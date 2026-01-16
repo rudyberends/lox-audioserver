@@ -94,7 +94,7 @@ class AudioManager {
     if (this.isProxyUrl(source.url)) {
       headers['X-Loxone-Zone'] = String(zoneId);
     }
-    const realTime = this.shouldUseRealTime(rawSource);
+    const realTime = this.shouldUseRealTime(rawSource ?? source.url);
     return { ...source, headers, ...(realTime ? { realTime: true } : {}) };
   }
 
@@ -148,7 +148,8 @@ class AudioManager {
     if (typeof requiresPcm === 'boolean') {
       this.zonePcmPreference.set(zoneId, requiresPcm);
     }
-    const decorated = this.decorateRadioSource(zoneId, playbackSource, metadata);
+    const rawSource = playbackSource?.kind === 'url' ? playbackSource.url : undefined;
+    const decorated = this.decorateRadioSource(zoneId, playbackSource, metadata, rawSource);
     return this.startWithResolvedSource(zoneId, label, decorated, metadata, requiresPcm);
   }
 

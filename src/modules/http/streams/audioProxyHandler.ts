@@ -14,7 +14,6 @@ const MAX_PLAYLIST_BYTES = 1024 * 1024;
 
 export class AudioProxyHandler {
   private readonly log = createLogger('Http', 'AudioProxy');
-  private readonly lastIcyTitleByZone = new Map<number, string>();
 
   public matches(pathname: string): boolean {
     return pathname === '/streams/proxy';
@@ -246,17 +245,18 @@ export class AudioProxyHandler {
     let bytesUntilMeta = metaInt;
     let metaRemaining = 0;
     let metaChunks: Buffer[] = [];
+    let lastSignature = '';
 
     const handleMetadata = (payload: Buffer) => {
       const update = this.parseIcyMetadata(payload);
       if (!update) {
         return;
       }
-      const last = this.lastIcyTitleByZone.get(zoneId);
-      if (last === update.title) {
+      const signature = `${update.title}|||${update.artist}`;
+      if (lastSignature === signature) {
         return;
       }
-      this.lastIcyTitleByZone.set(zoneId, update.title);
+      lastSignature = signature;
       zoneManager.updateRadioMetadata(zoneId, update);
     };
 

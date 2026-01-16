@@ -1490,8 +1490,8 @@ class ZoneManager {
     if (artist.trim()) {
       if (ctx.state.station) {
         ctx.metadata.radioStationFallback = ctx.state.station;
+        patch.station = ctx.state.station;
       }
-      patch.station = '';
     } else if (!ctx.state.station) {
       const fallback = typeof ctx.metadata.radioStationFallback === 'string'
         ? ctx.metadata.radioStationFallback
@@ -2487,10 +2487,19 @@ class ZoneManager {
         patch.duration = 0;
       }
       if (artistValue) {
-        if (ctx.state.station) {
-          ctx.metadata.radioStationFallback = ctx.state.station;
+        if (!mergedForType.station?.trim()) {
+          if (ctx.state.station?.trim()) {
+            patch.station = ctx.state.station;
+          } else {
+            const fallback =
+              typeof ctx.metadata.radioStationFallback === 'string'
+                ? ctx.metadata.radioStationFallback
+                : '';
+            if (fallback) {
+              patch.station = fallback;
+            }
+          }
         }
-        patch.station = '';
       } else if (!mergedForType.station?.trim()) {
         const fallback =
           typeof ctx.metadata.radioStationFallback === 'string'
