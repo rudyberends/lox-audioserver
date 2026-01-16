@@ -564,6 +564,22 @@ function normalizeBridge(bridge: SpotifyBridgeConfig): SpotifyBridgeConfig {
   return bridge;
 }
 
+function resolveBridgeLogoUrl(provider?: string | null): string | null {
+  const normalized = provider?.toLowerCase();
+  switch (normalized) {
+    case 'musicassistant':
+      return '/providers/music-assistant.png';
+    case 'applemusic':
+      return '/providers/apple-music.svg';
+    case 'deezer':
+      return '/providers/deezer.svg';
+    case 'tidal':
+      return '/providers/tidal.svg';
+    default:
+      return null;
+  }
+}
+
 function sortStorages(entries: LibraryStorage[]): LibraryStorage[] {
   return [...entries].sort((a, b) => {
     const left = (a.name || `${a.server}/${a.folder}` || '').toLowerCase();
@@ -711,6 +727,10 @@ export default function ContentView(): JSX.Element {
     }
     return true;
   }, [bridgeForm]);
+  const bridgeProviderLogoUrl = React.useMemo(
+    () => resolveBridgeLogoUrl(bridgeForm.provider),
+    [bridgeForm.provider],
+  );
 
   const validateTuneIn = React.useCallback(
     async (value: string): Promise<{ ok: boolean; message?: string }> => {
@@ -2309,19 +2329,31 @@ export default function ContentView(): JSX.Element {
             </div>
           </header>
           <div className="content-section__body">
-            <article className="content-card">
+            <div className="content-grid">
               {spotifyBridges.length > 0 ? (
-                <ul className="content-bridges-list">
-                  {spotifyBridges.map((bridge) => (
-                    <li key={bridge.id}>
-                      <div className="content-bridges-header">
-                        <span className="content-bridges-name">{bridge.label}</span>
-                      </div>
-                      <dl className="content-bridges-details">
-                        <dt>Provider id</dt>
-                        <dd>{bridge.id}</dd>
-                      </dl>
-                        <div className="content-bridges-actions-row">
+                spotifyBridges.map((bridge) => {
+                  const logoUrl = resolveBridgeLogoUrl(bridge.provider);
+                  return (
+                    <article key={bridge.id} className="content-card">
+                      <header className="content-card__header content-card__header--split">
+                        <div>
+                          <div className="content-bridge-title">
+                            {logoUrl && (
+                              <img
+                                className="content-bridge-logo"
+                                src={logoUrl}
+                                alt=""
+                                loading="lazy"
+                                aria-hidden="true"
+                              />
+                            )}
+                            <h3>{bridge.label ?? bridge.id}</h3>
+                          </div>
+                          <p className="content-linein-id" title={bridge.id}>
+                            ID: {bridge.id}
+                          </p>
+                        </div>
+                        <div className="content-linein-actions">
                           <button
                             type="button"
                             className="secondary"
@@ -2336,19 +2368,20 @@ export default function ContentView(): JSX.Element {
                             onClick={() => handleBridgeDelete(bridge.id)}
                             disabled={bridgeDeletingId === bridge.id}
                           >
-                          {bridgeDeletingId === bridge.id ? 'Removing…' : 'Remove'}
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                            {bridgeDeletingId === bridge.id ? 'Removing…' : 'Remove'}
+                          </button>
+                        </div>
+                      </header>
+                    </article>
+                  );
+                })
               ) : (
-                <div className="content-bridges-empty">
-                  <p className="content-body-copy">No bridges configured.</p>
+                <article className="content-card">
+                  <p className="content-body-copy">No custom services configured yet.</p>
                   <span className="content-note">Add a bridge to expose Music Assistant or Apple Music instantly.</span>
-                </div>
+                </article>
               )}
-            </article>
+            </div>
           </div>
         </section>
       )}
@@ -2714,167 +2747,191 @@ export default function ContentView(): JSX.Element {
                   ×
                 </button>
               </div>
-              <div className="content-custom-radio-form">
-                <div className="content-custom-radio-field">
-                  <label htmlFor="bridge-provider">Provider</label>
-                  <select
-                    id="bridge-provider"
-                    className="content-input-select"
-                    value={bridgeForm.provider}
-                    onChange={(e) => updateBridgeForm({ provider: e.target.value as BridgeFormState['provider'] })}
-                    disabled={bridgeSubmitting}
-                  >
-                    <option value="musicassistant">Music Assistant</option>
-                    <option value="applemusic">Apple Music</option>
-                    <option value="deezer">Deezer</option>
-                    <option value="tidal">Tidal</option>
-                  </select>
+              <div className="content-bridge-modal-body">
+                <div className="content-bridge-steps">
+                  <div className="content-bridge-step">
+                    <span className="content-bridge-step-label">Step 1</span>
+                    <h5>Choose provider</h5>
+                    <p className="content-body-copy content-body-copy--muted">
+                      Pick which service you want to expose through the Spotify-compatible bridge.
+                    </p>
+                    <div className="content-bridge-picker">
+                      <div className="content-bridge-logo-swatch" aria-hidden="true">
+                        {bridgeProviderLogoUrl ? (
+                          <img className="content-bridge-logo" src={bridgeProviderLogoUrl} alt="" loading="lazy" />
+                        ) : (
+                          <span className="content-bridge-logo-fallback">?</span>
+                        )}
+                      </div>
+                      <div className="content-bridge-picker-field">
+                        <label htmlFor="bridge-provider">Provider</label>
+                        <select
+                          id="bridge-provider"
+                          className="content-input-select"
+                          value={bridgeForm.provider}
+                          onChange={(e) => updateBridgeForm({ provider: e.target.value as BridgeFormState['provider'] })}
+                          disabled={bridgeSubmitting}
+                        >
+                          <option value="musicassistant">Music Assistant</option>
+                          <option value="applemusic">Apple Music</option>
+                          <option value="deezer">Deezer</option>
+                          <option value="tidal">Tidal</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="content-bridge-step content-bridge-step--info">
+                    <div className="content-bridge-provider-info">
+                      <div className="content-bridge-provider-header">
+                        {bridgeProviderLogoUrl && (
+                          <img className="content-bridge-provider-logo" src={bridgeProviderLogoUrl} alt="" loading="lazy" />
+                        )}
+                        <div>
+                          {bridgeForm.provider === 'musicassistant' && <h5>Music Assistant</h5>}
+                          {bridgeForm.provider === 'applemusic' && <h5>Apple Music</h5>}
+                          {bridgeForm.provider === 'deezer' && <h5>Deezer</h5>}
+                          {bridgeForm.provider === 'tidal' && <h5>Tidal</h5>}
+                          <p className="content-bridge-provider-subtitle">Bridge setup details</p>
+                        </div>
+                      </div>
+                      {bridgeForm.provider === 'musicassistant' && (
+                        <>
+                          <p>
+                            Music Assistant exposes one Spotify account per configured MA account. Create dedicated MA accounts with
+                            provider filters to surface specific services in Loxone.
+                          </p>
+                          <span className="content-bridge-badge">Requires Music Assistant 2.7+</span>
+                        </>
+                      )}
+                      {bridgeForm.provider === 'applemusic' && (
+                        <p>
+                          Use a Media User Token from music.apple.com to enable Apple Music browsing and playback. Tokens can be refreshed
+                          anytime from your browser session.
+                        </p>
+                      )}
+                      {bridgeForm.provider === 'deezer' && (
+                        <p>
+                          Deezer works without credentials for public catalog data. Add an ARL cookie only if you need private playlists or
+                          recommendations.
+                        </p>
+                      )}
+                      {bridgeForm.provider === 'tidal' && (
+                        <p>
+                          Provide a valid access token plus a two-letter country code to enable Tidal catalog and playback.
+                        </p>
+                      )}
+                    </div>
+                  </div>
                 </div>
-                <div className="content-bridge-provider-info">
+                <div className="content-bridge-step content-bridge-step--form">
+                  <span className="content-bridge-step-label">Step 2</span>
+                  <h5>Credentials</h5>
+                  <p className="content-body-copy content-body-copy--muted">
+                    Only fields required for the selected provider are shown.
+                  </p>
                   {bridgeForm.provider === 'musicassistant' && (
-                    <>
-                      <h5>Music Assistant</h5>
-                      <p>
-                        Music Assistant aggregates many services into one library. That full library is exposed in Loxone under a
-                        single "Music Assistant" Spotify account. If you want to expose a specific service, create a dedicated account in
-                        Music Assistant, apply a provider filter, and use that account’s API key here. Multiple instances of the
-                        bridge are allowed, so you can expose every service under its own Spotify account.
-                      </p>
-                      <span className="content-bridge-badge">Requires Music Assistant 2.7+</span>
-                    </>
+                    <div className="content-bridge-form-grid">
+                      <div className="content-custom-radio-field">
+                        <label htmlFor="bridge-host">Host</label>
+                        <input
+                          id="bridge-host"
+                          type="text"
+                          value={bridgeForm.host}
+                          onChange={(e) => updateBridgeForm({ host: e.target.value })}
+                          placeholder="127.0.0.1"
+                          autoComplete="off"
+                        />
+                      </div>
+                      <div className="content-custom-radio-field">
+                        <label htmlFor="bridge-port">Port</label>
+                        <input
+                          id="bridge-port"
+                          type="number"
+                          value={bridgeForm.port}
+                          onChange={(e) => updateBridgeForm({ port: Number(e.target.value) || 0 })}
+                          placeholder="8095"
+                          min={1}
+                        />
+                      </div>
+                      <div className="content-custom-radio-field">
+                        <label htmlFor="bridge-apikey">API key</label>
+                        <p className="content-input-hint">
+                          Generate a long-lived token under your Music Assistant account settings.
+                        </p>
+                        <input
+                          id="bridge-apikey"
+                          type="text"
+                          value={bridgeForm.apiKey}
+                          onChange={(e) => updateBridgeForm({ apiKey: e.target.value })}
+                          placeholder="token"
+                          autoComplete="off"
+                        />
+                      </div>
+                    </div>
                   )}
                   {bridgeForm.provider === 'applemusic' && (
-                    <>
-                      <h5>Apple Music</h5>
-                      <p>
-                        Apple Music bridge uses a Media User Token from music.apple.com to read catalog content.
-                        Grab a fresh token from your browser session and paste it below.
-                      </p>
-                    </>
+                    <div className="content-bridge-form-grid">
+                      <div className="content-custom-radio-field">
+                        <label htmlFor="bridge-usertoken">Media user token</label>
+                        <p className="content-input-hint">Paste a token from your music.apple.com session.</p>
+                        <input
+                          id="bridge-usertoken"
+                          type="text"
+                          value={bridgeForm.userToken}
+                          onChange={(e) => updateBridgeForm({ userToken: e.target.value })}
+                          placeholder="Media user token"
+                          autoComplete="off"
+                        />
+                      </div>
+                    </div>
                   )}
                   {bridgeForm.provider === 'deezer' && (
-                    <>
-                      <h5>Deezer</h5>
-                      <p>
-                        Deezer bridge reads public catalog data. Add your ARL cookie to access private playlists or account-specific data.
-                      </p>
-                    </>
+                    <div className="content-bridge-form-grid">
+                      <div className="content-custom-radio-field">
+                        <label htmlFor="bridge-deezer-arl">ARL cookie (optional)</label>
+                        <p className="content-input-hint">
+                          Add your Deezer ARL cookie to access private playlists or recommendations.
+                        </p>
+                        <input
+                          id="bridge-deezer-arl"
+                          type="text"
+                          value={bridgeForm.deezerArl}
+                          onChange={(e) => updateBridgeForm({ deezerArl: e.target.value })}
+                          placeholder="ARL"
+                          autoComplete="off"
+                        />
+                      </div>
+                    </div>
                   )}
                   {bridgeForm.provider === 'tidal' && (
-                    <>
-                      <h5>Tidal</h5>
-                      <p>
-                        Tidal bridge uses an access token from your Tidal account. Provide a valid token and country code to enable catalog and playback.
-                      </p>
-                    </>
+                    <div className="content-bridge-form-grid">
+                      <div className="content-custom-radio-field">
+                        <label htmlFor="bridge-tidal-token">Access token</label>
+                        <p className="content-input-hint">Paste a token from your device authorization flow.</p>
+                        <input
+                          id="bridge-tidal-token"
+                          type="text"
+                          value={bridgeForm.tidalAccessToken}
+                          onChange={(e) => updateBridgeForm({ tidalAccessToken: e.target.value })}
+                          placeholder="Access token"
+                          autoComplete="off"
+                        />
+                      </div>
+                      <div className="content-custom-radio-field">
+                        <label htmlFor="bridge-tidal-country">Country code</label>
+                        <input
+                          id="bridge-tidal-country"
+                          type="text"
+                          value={bridgeForm.tidalCountryCode}
+                          onChange={(e) => updateBridgeForm({ tidalCountryCode: e.target.value })}
+                          placeholder="US"
+                          autoComplete="off"
+                          maxLength={2}
+                        />
+                      </div>
+                    </div>
                   )}
                 </div>
-                {bridgeForm.provider === 'musicassistant' && (
-                  <div className="content-bridge-form-grid">
-                    <div className="content-custom-radio-field">
-                      <label htmlFor="bridge-host">Host</label>
-                      <input
-                        id="bridge-host"
-                        type="text"
-                        value={bridgeForm.host}
-                        onChange={(e) => updateBridgeForm({ host: e.target.value })}
-                        placeholder="127.0.0.1"
-                        autoComplete="off"
-                      />
-                    </div>
-                    <div className="content-custom-radio-field">
-                      <label htmlFor="bridge-port">Port</label>
-                      <input
-                        id="bridge-port"
-                        type="number"
-                        value={bridgeForm.port}
-                        onChange={(e) => updateBridgeForm({ port: Number(e.target.value) || 0 })}
-                        placeholder="8095"
-                        min={1}
-                      />
-                    </div>
-                    <div className="content-custom-radio-field">
-                      <label htmlFor="bridge-apikey">API key</label>
-                      <p className="content-body-copy content-body-copy--muted">
-                        Music Assistant requires authentication. Generate a long-lived token under your Music Assistant account settings.
-                      </p>
-                      <input
-                        id="bridge-apikey"
-                        type="text"
-                        value={bridgeForm.apiKey}
-                        onChange={(e) => updateBridgeForm({ apiKey: e.target.value })}
-                        placeholder="token"
-                        autoComplete="off"
-                      />
-                    </div>
-                  </div>
-                )}
-                {bridgeForm.provider === 'applemusic' && (
-                  <div className="content-bridge-form-grid">
-                    <div className="content-custom-radio-field">
-                      <label htmlFor="bridge-usertoken">Media user token</label>
-                      <p className="content-body-copy content-body-copy--muted">
-                        Paste a Media User Token from your music.apple.com session.
-                      </p>
-                      <input
-                        id="bridge-usertoken"
-                        type="text"
-                        value={bridgeForm.userToken}
-                        onChange={(e) => updateBridgeForm({ userToken: e.target.value })}
-                        placeholder="Media user token"
-                        autoComplete="off"
-                      />
-                    </div>
-                  </div>
-                )}
-                {bridgeForm.provider === 'deezer' && (
-                  <div className="content-bridge-form-grid">
-                    <div className="content-custom-radio-field">
-                      <label htmlFor="bridge-deezer-arl">ARL cookie (optional)</label>
-                      <p className="content-body-copy content-body-copy--muted">
-                        Paste your Deezer ARL cookie if you want to access private playlists or recommendations.
-                      </p>
-                      <input
-                        id="bridge-deezer-arl"
-                        type="text"
-                        value={bridgeForm.deezerArl}
-                        onChange={(e) => updateBridgeForm({ deezerArl: e.target.value })}
-                        placeholder="ARL"
-                        autoComplete="off"
-                      />
-                    </div>
-                  </div>
-                )}
-                {bridgeForm.provider === 'tidal' && (
-                  <div className="content-bridge-form-grid">
-                    <div className="content-custom-radio-field">
-                      <label htmlFor="bridge-tidal-token">Access token</label>
-                      <p className="content-body-copy content-body-copy--muted">
-                        Paste a Tidal access token from your device authorization flow.
-                      </p>
-                      <input
-                        id="bridge-tidal-token"
-                        type="text"
-                        value={bridgeForm.tidalAccessToken}
-                        onChange={(e) => updateBridgeForm({ tidalAccessToken: e.target.value })}
-                        placeholder="Access token"
-                        autoComplete="off"
-                      />
-                    </div>
-                    <div className="content-custom-radio-field">
-                      <label htmlFor="bridge-tidal-country">Country code</label>
-                      <input
-                        id="bridge-tidal-country"
-                        type="text"
-                        value={bridgeForm.tidalCountryCode}
-                        onChange={(e) => updateBridgeForm({ tidalCountryCode: e.target.value })}
-                        placeholder="US"
-                        autoComplete="off"
-                        maxLength={2}
-                      />
-                    </div>
-                  </div>
-                )}
               </div>
               <div className="content-actions">
                 <button type="button" onClick={handleBridgeAdd} disabled={!bridgeFormValid || bridgeSubmitting}>

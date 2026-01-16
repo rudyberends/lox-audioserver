@@ -29,7 +29,7 @@ const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
 const PROVIDER_ICONS: Record<string, string> = {
   spotify: 'https://extended-app-content.s3.eu-central-1.amazonaws.com/audioZone/services/Icon-Spotify.svg',
   applemusic: '/providers/apple-music.svg',
-  musicassistant: '/providers/music-assistant.svg',
+  musicassistant: '/providers/music-assistant.png',
   deezer: 'https://extended-app-content.s3.eu-central-1.amazonaws.com/audioZone/services/Icon-Deezer.svg',
   tidal: 'https://extended-app-content.s3.eu-central-1.amazonaws.com/audioZone/services/Icon-Tidal.svg',
 };
