@@ -1,7 +1,6 @@
 import net from 'node:net';
 import { PassThrough } from 'node:stream';
 import { createLogger } from '@/core/logging/logger';
-import { getConfig } from '@/domain/config/configStore';
 import { lineInIngestRegistry } from '@/modules/audio/inputs/linein/lineInIngestRegistry';
 
 const DEFAULT_TCP_PORT = 7080;
@@ -137,20 +136,5 @@ function normalizeLineInInputId(raw: string): string | null {
   if (!trimmed) {
     return null;
   }
-  if (trimmed.includes('#')) {
-    return trimmed;
-  }
-  const match = trimmed.match(/^linein(\d+)$/i) ?? trimmed.match(/^(\d+)$/);
-  if (!match) {
-    return trimmed;
-  }
-  const index = Number(match[1] ?? '0');
-  if (!Number.isFinite(index) || index <= 0) {
-    return null;
-  }
-  const mac = getConfig()?.system?.audioserver?.macId?.trim();
-  if (!mac) {
-    return null;
-  }
-  return `${mac}#${1000000 + index}`;
+  return trimmed;
 }

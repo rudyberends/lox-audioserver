@@ -2,10 +2,9 @@ import type { IncomingMessage } from 'node:http';
 import { PassThrough } from 'node:stream';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createLogger } from '@/core/logging/logger';
-import { getConfig } from '@/domain/config/configStore';
 import { lineInIngestRegistry } from '@/modules/audio/inputs/linein/lineInIngestRegistry';
 
-const PATH_PREFIX = '/ingest/ws/linein/';
+const PATH_PREFIX = '/ingest/';
 
 export class LineInIngestWebSocket {
   private readonly log = createLogger('Http', 'LineInIngestWs');
@@ -76,20 +75,5 @@ function normalizeLineInInputId(raw: string): string | null {
   if (!trimmed) {
     return null;
   }
-  if (trimmed.includes('#')) {
-    return trimmed;
-  }
-  const match = trimmed.match(/^linein(\d+)$/i) ?? trimmed.match(/^(\d+)$/);
-  if (!match) {
-    return trimmed;
-  }
-  const index = Number(match[1] ?? '0');
-  if (!Number.isFinite(index) || index <= 0) {
-    return null;
-  }
-  const mac = getConfig()?.system?.audioserver?.macId?.trim();
-  if (!mac) {
-    return null;
-  }
-  return `${mac}#${1000000 + index}`;
+  return trimmed;
 }

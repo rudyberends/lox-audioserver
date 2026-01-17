@@ -221,6 +221,11 @@ function getLineInIngestWsUrl(baseUrl: string): string {
   return baseUrl;
 }
 
+function getLineInIngestTcpHost(): string {
+  if (typeof window === 'undefined') return '<audioserver-host>';
+  return window.location.hostname || '<audioserver-host>';
+}
+
 type FileSystemEntry = {
   isFile: boolean;
   isDirectory: boolean;
@@ -2804,6 +2809,7 @@ export default function ContentView(): JSX.Element {
               {(() => {
                 const ingestBaseUrl = getLineInIngestBaseUrl();
                 const ingestWsUrl = getLineInIngestWsUrl(ingestBaseUrl);
+                const ingestTcpHost = getLineInIngestTcpHost();
                 const ingestId = lineInEditingId ?? lineInForm.draftId ?? '<line-in-id>';
                 return (
                   <div className="content-linein-modal">
@@ -2917,7 +2923,7 @@ export default function ContentView(): JSX.Element {
                     <p className="content-linein-info__title">Source type</p>
                     <p className="content-linein-info__copy">
                       {lineInForm.sourceType === 'ingest' ? (
-                        'Ingest exposes two input paths per line-in (HTTP and WebSocket). The AudioServer never pulls audio; you must push a stream into one of the endpoints below.'
+                        'Ingest supports WebSocket and TCP per line-in. The AudioServer never pulls audio; push a stream into one of the endpoints below.'
                       ) : lineInForm.sourceType === 'sendspin' ? (
                         <>
                           Not functional yet: awaiting confirmation of spec update. See{' '}
@@ -2963,16 +2969,14 @@ export default function ContentView(): JSX.Element {
                     )}
                     {lineInForm.sourceType === 'ingest' && (
                       <div className="content-linein-info__urls">
-                        <p className="content-linein-info__label">HTTP ingest</p>
-                        <code>{`${ingestBaseUrl}/ingest/linein/${ingestId}`}</code>
                         <p className="content-linein-info__label">WebSocket ingest</p>
-                        <code>{`${ingestWsUrl}/ingest/ws/linein/${ingestId}`}</code>
+                        <code>{`${ingestWsUrl}/ingest/${ingestId}`}</code>
+                        <p className="content-linein-info__label">TCP ingest</p>
+                        <code>{`tcp://${ingestTcpHost}:7080`}</code>
+                        <p className="content-linein-info__hint">
+                          Send the line-in ID as the first line (ending with newline), then stream raw audio.
+                        </p>
                       </div>
-                    )}
-                    {lineInForm.sourceType !== 'sendspin' && (
-                      <p className="content-linein-info__hint">
-                        Use the line-in ID shown here after saving. This choice affects routing and metadata capture.
-                      </p>
                     )}
                   </div>
                 </aside>
