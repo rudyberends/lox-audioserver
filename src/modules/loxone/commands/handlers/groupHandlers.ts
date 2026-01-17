@@ -7,6 +7,7 @@ import {
   removeGroupByLeader,
 } from '@/modules/groups/groupTracker';
 import { zoneManager } from '@/modules/zones/zoneManager';
+import { createLogger } from '@/core/logging/logger';
 
 function clampVolume(value: unknown): number {
   const n = Number(value);
@@ -20,6 +21,20 @@ const GROUP_UPDATE_RE = /^audio\/cfg\/dgroup\/update\/([^/]+)(?:\/([^/]+))?$/;
 const MASTER_VOLUME_RE = /^audio\/(\d+)\/mastervolume\/(-?\d+)(?:\/.*)?$/;
 const GROUP_VOLUME_RE = /^audio\/grouped\/volume\/([^/]+)\/([^/]+)(?:\/.*)?$/;
 const GROUP_PLAYBACK_RE = /^audio\/grouped\/(pause|play|resume|stop)\/([^/]+)(?:\/.*)?$/;
+
+function resolveOutputProtocol(zoneId: number): string {
+  const snapshot = zoneManager.getTechnicalSnapshot(zoneId);
+  if (!snapshot) {
+    return 'unknown';
+  }
+  const fallback = snapshot.transports.find((type) => type !== 'spotify-input') ?? null;
+  return snapshot.activeOutput ?? fallback ?? 'unknown';
+}
+
+function filterMembersByProtocol(leader: number, members: number[]): number[] {
+  const leaderProtocol = resolveOutputProtocol(leader);
+  return members.filter((memberId) => resolveOutputProtocol(memberId) === leaderProtocol);
+}
 
 export async function audioCfgDynamicGroup(command: string) {
   const match = command.match(GROUP_UPDATE_RE);
@@ -52,16 +67,27 @@ export async function audioCfgDynamicGroup(command: string) {
   if (!leaderState) {
     return buildResponse(command, 'dgroup_update', { success: false, error: 'leader-missing' });
   }
+  const filteredMembers = filterMembersByProtocol(leader, members);
+  const droppedMembers = members.filter((memberId) => !filteredMembers.includes(memberId));
+  if (droppedMembers.length) {
+    createLogger('Groups', 'Handlers').debug('dropped group members (protocol mismatch)', {
+      leader,
+      droppedMembers,
+    });
+  }
 
   const existing = getGroupByExternalId(groupIdRaw) ?? getGroupByLeader(leader);
   if (existing) {
     removeGroupByLeader(existing.leader);
   }
 
-  const externalId = groupIdRaw === 'new' ? `grp-${leader}-${Date.now()}` : groupIdRaw;
+  const externalId =
+    groupIdRaw === 'new'
+      ? `grp-${leader}-${resolveOutputProtocol(leader)}-${Date.now().toString(36)}`
+      : groupIdRaw;
   groupManager.upsert({
     leader,
-    members,
+    members: filteredMembers,
     backend: 'Unknown',
     externalId,
     source: 'manual',
