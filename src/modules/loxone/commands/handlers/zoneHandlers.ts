@@ -164,7 +164,7 @@ export async function audioFavoritePlay(command: string) {
     const duration = fadeOpts.fadeDurationMs ?? 120_000;
     void fadeController.fadeIn(zoneId, duration);
   }
-  return buildResponse(command, 'favoriteplay', [{ zoneId, favoriteId }]);
+  return buildResponse(command, 'roomfav', [{ playerid: zoneId, playing_slot: favoriteId }]);
 }
 
 export async function audioRoomFavPlus(command: string) {
