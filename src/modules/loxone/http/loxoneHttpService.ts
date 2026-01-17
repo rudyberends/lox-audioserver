@@ -15,6 +15,7 @@ import {
   registerConnection,
   unregisterConnection,
 } from '@/modules/loxone/ws/connectionRegistry';
+import { emitServerHeartbeat } from '@/modules/loxone/ws/serverHeartbeat';
 
 interface ServerRuntime {
   definition: LoxoneServerOptions;
@@ -143,6 +144,9 @@ export class LoxoneHttpService {
   ): void {
     connection.sendUTF(definition.identification);
     registerConnection(connection);
+    if (definition.name === 'msHttp') {
+      emitServerHeartbeat();
+    }
 
     connection.on('message', (message) =>
       this.handleWebSocketMessage(message, connection, definition),

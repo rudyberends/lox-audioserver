@@ -5,6 +5,7 @@ import { contentManager } from '@/modules/content/contentManager';
 import { LoxoneHttpService } from '@/modules/loxone/http';
 import { zoneManager } from '@/modules/zones/zoneManager';
 import { loadConfig as loadStoredConfig } from '@/domain/config/configStore';
+import type { AudioServerConfig } from '@/domain/config/types';
 import { lineInMetadataService } from '@/modules/audio/inputs/linein/lineInMetadataService';
 
 /**
@@ -66,6 +67,7 @@ async function startServices(): Promise<void> {
 
   await httpService.start();
   await loxoneService.start();
+  await notifyMiniserverStartup(storedConfig);
 
   if (!shutdownHandlersRegistered) {
     registerShutdownHandlers(log);
@@ -73,6 +75,91 @@ async function startServices(): Promise<void> {
   }
 
   log.info('startup complete');
+}
+
+async function notifyMiniserverStartup(config: AudioServerConfig): Promise<void> {
+  const log = createLogger('Server');
+  const miniserverIp = config.system?.miniserver?.ip?.trim();
+  const macId = config.system?.audioserver?.macId?.trim().toUpperCase();
+
+  if (!miniserverIp || !macId) {
+    log.debug('miniserver startup ping skipped (missing ip/mac)');
+    return;
+  }
+
+  const section = findServerSection(config.rawAudioConfig?.raw, macId)
+    ?? findServerSection(config.rawAudioConfig?.rawString, macId);
+  const uuid = normalizeString(section?.uuid);
+
+  if (!uuid) {
+    log.debug('miniserver startup ping skipped (missing uuid)', { macId });
+    return;
+  }
+
+  const url = `http://${miniserverIp}/dev/sps/devicestartup/${encodeURIComponent(uuid)}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4000);
+
+  try {
+    const response = await fetch(url, { method: 'GET', signal: controller.signal });
+    if (!response.ok) {
+      log.warn('miniserver startup ping failed', { status: response.status, url });
+    } else {
+      log.info('miniserver startup ping sent', { url });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn('miniserver startup ping failed', { message, url });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function findServerSection(raw: unknown, macId: string): Record<string, any> | undefined {
+  if (!raw || !macId) {
+    return undefined;
+  }
+
+  const normalizedMacId = macId.trim().toUpperCase();
+  let parsed = raw;
+
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return undefined;
+    }
+  }
+
+  if (!Array.isArray(parsed)) {
+    return undefined;
+  }
+
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    const matchKey = Object.keys(entry).find(
+      (key) => key.trim().toUpperCase() === normalizedMacId,
+    );
+    if (matchKey) {
+      return (entry as Record<string, any>)[matchKey] as Record<string, any>;
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeString(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 async function stopServices(): Promise<void> {
