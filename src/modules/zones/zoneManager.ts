@@ -65,6 +65,7 @@ import {
   dispatchVolume,
   selectPlayOutputs,
 } from '@/modules/zones/services/transportOrchestrator';
+import { getGroupByLeader } from '@/modules/groups/groupTracker';
 
 export interface QueueItem {
   album: string;
@@ -2552,6 +2553,7 @@ class ZoneManager {
       ctx.lastZoneBroadcastAt = now;
       notifyZoneStateChanged(ctx.state);
     }
+    this.syncGroupMembersPatch(zoneId, patch, force);
     const session = audioManager.getSession(zoneId);
     if (session) {
       if ('time' in patch || 'duration' in patch) {
@@ -2599,6 +2601,15 @@ class ZoneManager {
     this.notifyTransportMetadata(zoneId, ctx, patch);
   }
 
+  public syncGroupMembersToLeader(leaderId: number): void {
+    const leaderState = this.getState(leaderId);
+    if (!leaderState) {
+      return;
+    }
+    const patch = this.stripGroupStateFields(leaderState);
+    this.applyGroupPatchToMembers(leaderId, patch, true);
+  }
+
   public getMetadata(zoneId: number): Record<string, unknown> | undefined {
     return this.zones.get(zoneId)?.metadata;
   }
@@ -2626,6 +2637,42 @@ class ZoneManager {
       transports,
       outputs,
     };
+  }
+
+  private syncGroupMembersPatch(
+    leaderId: number,
+    patch: Partial<LoxoneZoneState>,
+    force: boolean,
+  ): void {
+    const filtered = this.stripGroupStateFields(patch);
+    if (!Object.keys(filtered).length) {
+      return;
+    }
+    this.applyGroupPatchToMembers(leaderId, filtered, force);
+  }
+
+  private applyGroupPatchToMembers(
+    leaderId: number,
+    patch: Partial<LoxoneZoneState>,
+    force: boolean,
+  ): void {
+    const group = getGroupByLeader(leaderId);
+    if (!group) {
+      return;
+    }
+    for (const memberId of group.members) {
+      if (memberId === leaderId) {
+        continue;
+      }
+      this.patchState(memberId, patch, force);
+    }
+  }
+
+  private stripGroupStateFields(
+    patch: Partial<LoxoneZoneState>,
+  ): Partial<LoxoneZoneState> {
+    const { playerid: _playerid, name: _name, volume: _volume, ...rest } = patch;
+    return rest;
   }
 
   private updateTransportState(

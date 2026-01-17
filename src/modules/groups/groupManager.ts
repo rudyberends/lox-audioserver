@@ -46,10 +46,12 @@ export class GroupManager {
         case 'new':
           this.log.info('group created', context);
           this.syncAirplayGroup(leader);
+          zoneManager.syncGroupMembersToLeader(leader);
           break;
         case 'update':
           this.log.info('group updated', context);
           this.syncAirplayGroup(leader);
+          zoneManager.syncGroupMembersToLeader(leader);
           break;
         case 'remove': {
           this.log.info('group removed', context);

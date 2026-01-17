@@ -146,20 +146,22 @@ export async function audioGroupedVolume(command: string) {
     }
 
     const current = clampVolume(state.volume);
+    const isPlus = plus.has(valueToken);
+    const isMinus = minus.has(valueToken);
     let next = current;
-    if (plus.has(valueToken)) {
-      next = current + 1;
-    } else if (minus.has(valueToken)) {
-      next = current - 1;
+    let payload: string;
+    if (isPlus || isMinus) {
+      payload = isPlus ? '+1' : '-1';
+      next = clampVolume(current + (isPlus ? 1 : -1));
     } else {
       next = clampVolume(Number(valueToken));
+      payload = String(next);
     }
 
-    next = clampVolume(next);
-
     try {
-      zoneManager.handleCommand(zoneId, 'volume_set', String(next));
-      results.push({ zoneId, newVolume: next });
+      zoneManager.handleCommand(zoneId, 'volume_set', payload);
+      const updated = zoneManager.getState(zoneId);
+      results.push({ zoneId, newVolume: clampVolume(updated?.volume ?? next) });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       skipped.push({ zoneId, reason });
