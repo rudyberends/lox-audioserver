@@ -81,6 +81,7 @@ export default function LogsView(): JSX.Element {
     consoleLevel: 'info',
   });
   const [filterText, setFilterText] = React.useState('');
+  const [wrapLines, setWrapLines] = React.useState(true);
 
   const viewerRef = React.useRef<HTMLDivElement | null>(null);
   const streamRef = React.useRef<EventSource | null>(null);
@@ -276,23 +277,6 @@ export default function LogsView(): JSX.Element {
     return displayContent.split('\n');
   }, [displayContent]);
 
-  const metaBadges: string[] = [];
-  const updatedLabel = formatTimestamp(state.updatedAt);
-  if (updatedLabel) metaBadges.push(`Updated ${updatedLabel}`);
-  if (!state.missing && state.size) {
-    if (state.truncated) {
-      metaBadges.push(`Showing last ${formatBytes(state.limit)} of ${formatBytes(state.size)}`);
-    } else {
-      metaBadges.push(`Buffer ${formatBytes(state.size)}`);
-    }
-  }
-  if (streamRef.current) {
-    metaBadges.push(state.streaming ? 'Live stream active' : 'Live stream reconnecting…');
-  }
-  if (filterText.trim()) {
-    metaBadges.push(`Filter: “${filterText.trim()}”`);
-  }
-
   return (
     <div className="logs-layout">
       <div className="logs-shell">
@@ -302,32 +286,10 @@ export default function LogsView(): JSX.Element {
             <h1>Live output</h1>
             <p className="logs-subtitle">Inspect runtime output, adjust verbosity, and follow the live stream.</p>
           </div>
-          <div className="logs-header-controls">
-            <div className="logs-action-group">
-              <button
-                type="button"
-                className="secondary"
-                onClick={handleDownload}
-                disabled={!state.content}
-              >
-                Download
-              </button>
-              <button type="button" className="secondary" onClick={handleClear} disabled={!state.content}>
-                Clear view
-              </button>
-            </div>
-          </div>
         </div>
 
         <div className="logs-header">
-          <div className="logs-header-meta">
-            {metaBadges.map((badge) => (
-              <span key={badge} className="logs-meta-badge">
-                {badge}
-              </span>
-            ))}
-          </div>
-          <div className="logs-header-controls-secondary">
+          <div className="logs-toolbar">
             <div className="logs-filter">
               <label htmlFor="logs-filter">Filter</label>
               <input
@@ -353,6 +315,31 @@ export default function LogsView(): JSX.Element {
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="logs-toolbar__actions">
+              <button
+                type="button"
+                className={`logs-pill ${state.autoScroll ? 'is-active' : ''}`}
+                onClick={() => setState((prev) => ({ ...prev, autoScroll: !prev.autoScroll }))}
+              >
+                Auto-scroll
+              </button>
+              <button
+                type="button"
+                className={`logs-pill ${wrapLines ? 'is-active' : ''}`}
+                onClick={() => setWrapLines((prev) => !prev)}
+              >
+                Wrap lines
+              </button>
+              <button type="button" className="logs-pill" onClick={handleCopy} disabled={!displayContent}>
+                Copy
+              </button>
+              <button type="button" className="logs-pill" onClick={handleDownload} disabled={!state.content}>
+                Download
+              </button>
+              <button type="button" className="logs-pill logs-pill--ghost" onClick={handleClear} disabled={!state.content}>
+                Clear
+              </button>
             </div>
           </div>
         </div>
@@ -381,7 +368,7 @@ export default function LogsView(): JSX.Element {
 
         {!state.missing && (
           <div
-            className="logs-output"
+            className={`logs-output ${wrapLines ? 'is-wrapped' : 'is-unwrapped'}`}
             tabIndex={0}
             ref={viewerRef}
             onScroll={handleViewerScroll}

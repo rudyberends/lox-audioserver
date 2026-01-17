@@ -33,6 +33,7 @@ import type { AlertFile } from '../services/alertsApi';
 import { purgeFavorites, purgeRecents } from '../services/zonesApi';
 import { API_BASE } from '../config/apiConfig';
 import { useGlobalAlert } from '../components/GlobalAlert';
+import { discoverSendspinClients, type SendspinClient } from '../services/transportsApi';
 
 type ContentConfigResponse = {
   config?: {
@@ -115,6 +116,8 @@ type LineInFormState = {
   iconType: LineInIconType;
   sourceType: LineInSourceType;
   metadataEnabled: boolean;
+  draftId: string;
+  sendspinClientId: string;
 };
 
 enum LineInIconType {
@@ -129,7 +132,94 @@ enum LineInIconType {
   TurnTable = 8,
 }
 
-type LineInSourceType = 'ingest';
+const LINEIN_ICON_OPTIONS: Array<{ value: LineInIconType; label: string }> = [
+  { value: LineInIconType.LineIn, label: 'Line in' },
+  { value: LineInIconType.CdPlayer, label: 'CD player' },
+  { value: LineInIconType.Computer, label: 'Computer' },
+  { value: LineInIconType.IMac, label: 'iMac' },
+  { value: LineInIconType.IPod, label: 'iPod' },
+  { value: LineInIconType.Mobile, label: 'Mobile' },
+  { value: LineInIconType.Radio, label: 'Radio' },
+  { value: LineInIconType.Screen, label: 'Screen' },
+  { value: LineInIconType.TurnTable, label: 'Turntable' },
+];
+
+type LineInSourceType = 'ingest' | 'sendspin' | 'lox-beolink';
+
+function describeLineInIcon(iconType: LineInIconType): string {
+  switch (iconType) {
+    case LineInIconType.LineIn:
+      return 'Line in';
+    case LineInIconType.CdPlayer:
+      return 'CD player';
+    case LineInIconType.Computer:
+      return 'Computer';
+    case LineInIconType.IMac:
+      return 'iMac';
+    case LineInIconType.IPod:
+      return 'iPod';
+    case LineInIconType.Mobile:
+      return 'Mobile';
+    case LineInIconType.Radio:
+      return 'Radio';
+    case LineInIconType.Screen:
+      return 'Screen';
+    case LineInIconType.TurnTable:
+      return 'Turntable';
+    default:
+      return 'Line in';
+  }
+}
+
+function describeLineInSource(sourceType: LineInSourceType): string {
+  if (sourceType === 'ingest') return 'Ingest (streamed input)';
+  if (sourceType === 'sendspin') return 'Sendspin';
+  if (sourceType === 'lox-beolink') return 'Lox BeoLink';
+  return sourceType;
+}
+
+function resolveLineInIconUrl(iconType: LineInIconType): string {
+  const base = (import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/';
+  const prefix = base.endsWith('/') ? base : `${base}/`;
+  const toUrl = (file: string) => `${prefix}linein/${file}`;
+  switch (iconType) {
+    case LineInIconType.LineIn:
+      return toUrl('line-in.svg');
+    case LineInIconType.CdPlayer:
+      return toUrl('cd-player.svg');
+    case LineInIconType.Computer:
+      return toUrl('computer.svg');
+    case LineInIconType.IMac:
+      return toUrl('imac.svg');
+    case LineInIconType.IPod:
+      return toUrl('ipod.svg');
+    case LineInIconType.Mobile:
+      return toUrl('mobile.svg');
+    case LineInIconType.Radio:
+      return toUrl('radio-1.svg');
+    case LineInIconType.Screen:
+      return toUrl('screen.svg');
+    case LineInIconType.TurnTable:
+      return toUrl('turntable.svg');
+    default:
+      return toUrl('line-in.svg');
+  }
+}
+
+function createLineInId(): string {
+  return `linein-${Date.now().toString(36)}`;
+}
+
+function getLineInIngestBaseUrl(): string {
+  if (typeof window === 'undefined') return 'http://<audioserver-host>';
+  return window.location.origin || 'http://<audioserver-host>';
+}
+
+function getLineInIngestWsUrl(baseUrl: string): string {
+  if (baseUrl.startsWith('https://')) return baseUrl.replace('https://', 'wss://');
+  if (baseUrl.startsWith('http://')) return baseUrl.replace('http://', 'ws://');
+  return baseUrl;
+}
 
 type FileSystemEntry = {
   isFile: boolean;
@@ -541,6 +631,8 @@ const createEmptyLineInForm = (): LineInFormState => ({
   iconType: LineInIconType.CdPlayer,
   sourceType: 'ingest',
   metadataEnabled: true,
+  draftId: createLineInId(),
+  sendspinClientId: '',
 });
 
 const normalizeLineInInputs = (inputs: LineInInputConfig[]): LineInInputConfig[] => {
@@ -658,6 +750,9 @@ export default function ContentView(): JSX.Element {
   const [lineInSubmitting, setLineInSubmitting] = React.useState(false);
   const [lineInEditingId, setLineInEditingId] = React.useState<string | null>(null);
   const [lineInForm, setLineInForm] = React.useState<LineInFormState>(() => createEmptyLineInForm());
+  const [sendspinClients, setSendspinClients] = React.useState<SendspinClient[]>([]);
+  const [sendspinLoading, setSendspinLoading] = React.useState(false);
+  const [sendspinError, setSendspinError] = React.useState<string | null>(null);
   const [customRadios, setCustomRadios] = React.useState<CustomRadioEntry[]>([]);
   const [customRadioLoading, setCustomRadioLoading] = React.useState(true);
   const [customRadioError, setCustomRadioError] = React.useState<string | null>(null);
@@ -1068,12 +1163,17 @@ export default function ContentView(): JSX.Element {
 
   const openLineInModal = (input?: LineInInputConfig): void => {
     if (input) {
+      const rawSource = input.source ?? {};
+      const sourceRecord = rawSource as Record<string, unknown>;
+      const sendspinClientId = typeof sourceRecord.clientId === 'string' ? sourceRecord.clientId : '';
       setLineInEditingId(input.id ?? null);
       setLineInForm({
         name: input.name ?? '',
         iconType: typeof input.iconType === 'number' ? input.iconType : LineInIconType.CdPlayer,
         sourceType: input.source?.type ?? 'ingest',
         metadataEnabled: typeof input.metadataEnabled === 'boolean' ? input.metadataEnabled : true,
+        draftId: input.id ?? createLineInId(),
+        sendspinClientId,
       });
     } else {
       setLineInEditingId(null);
@@ -1528,20 +1628,27 @@ export default function ContentView(): JSX.Element {
     if (lineInSubmitting) return;
     const name = lineInForm.name.trim();
     if (!name) return;
+    if (lineInForm.sourceType === 'sendspin' && !lineInForm.sendspinClientId.trim()) return;
     setLineInSubmitting(true);
     try {
       const nextInputs = [...lineInInputs];
       if (lineInEditingId) {
         const idx = nextInputs.findIndex((entry) => entry.id === lineInEditingId);
+        const nextSource: Record<string, unknown> = {
+          ...(nextInputs[idx]?.source ?? {}),
+          type: lineInForm.sourceType,
+        };
+        if (lineInForm.sourceType === 'sendspin' && lineInForm.sendspinClientId.trim()) {
+          nextSource.clientId = lineInForm.sendspinClientId.trim();
+        } else if ('clientId' in nextSource) {
+          delete nextSource.clientId;
+        }
         const nextEntry: LineInInputConfig = {
           id: lineInEditingId,
           name,
           iconType: lineInForm.iconType ?? LineInIconType.CdPlayer,
           metadataEnabled: lineInForm.metadataEnabled,
-          source: {
-            ...(nextInputs[idx]?.source ?? {}),
-            type: lineInForm.sourceType,
-          },
+          source: nextSource,
         };
         if (idx >= 0) {
           nextInputs[idx] = nextEntry;
@@ -1549,12 +1656,17 @@ export default function ContentView(): JSX.Element {
           nextInputs.push(nextEntry);
         }
       } else {
+        const nextId = lineInForm.draftId || createLineInId();
+        const nextSource: Record<string, unknown> = { type: lineInForm.sourceType };
+        if (lineInForm.sourceType === 'sendspin' && lineInForm.sendspinClientId.trim()) {
+          nextSource.clientId = lineInForm.sendspinClientId.trim();
+        }
         nextInputs.push({
-          id: `linein-${Date.now().toString(36)}`,
+          id: nextId,
           name,
           iconType: lineInForm.iconType ?? LineInIconType.CdPlayer,
           metadataEnabled: lineInForm.metadataEnabled,
-          source: { type: lineInForm.sourceType },
+          source: nextSource,
         });
       }
       await persistLineInInputs(nextInputs);
@@ -1570,6 +1682,31 @@ export default function ContentView(): JSX.Element {
       setLineInSubmitting(false);
     }
   }, [closeLineInModal, lineInEditingId, lineInForm, lineInInputs, lineInSubmitting, persistLineInInputs, pushAlert]);
+
+  const handleSendspinDiscovery = React.useCallback(async (): Promise<void> => {
+    if (sendspinLoading) return;
+    setSendspinLoading(true);
+    setSendspinError(null);
+    try {
+      const clients = await discoverSendspinClients();
+      setSendspinClients(clients);
+      if (!clients.length) {
+        setSendspinError('No Sendspin clients found.');
+      }
+    } catch (err) {
+      setSendspinClients([]);
+      setSendspinError(err instanceof Error ? err.message : 'Discovery failed');
+    } finally {
+      setSendspinLoading(false);
+    }
+  }, [sendspinLoading]);
+
+  React.useEffect(() => {
+    if (!lineInModalOpen || lineInForm.sourceType !== 'sendspin') return;
+    if (!sendspinClients.length && !sendspinLoading && !sendspinError) {
+      void handleSendspinDiscovery();
+    }
+  }, [lineInModalOpen, lineInForm.sourceType, sendspinClients.length, sendspinLoading, sendspinError, handleSendspinDiscovery]);
 
   const handleLineInRemove = React.useCallback(
     async (inputId: string, inputName?: string): Promise<void> => {
@@ -1710,21 +1847,21 @@ export default function ContentView(): JSX.Element {
             </button>
             <button
               type="button"
-              className={`content-filter-chip${contentFilter === 'spotify' ? ' is-active' : ''}`}
-              onClick={() => setContentFilter('spotify')}
-              role="tab"
-              aria-selected={contentFilter === 'spotify'}
-            >
-              Spotify
-            </button>
-            <button
-              type="button"
               className={`content-filter-chip${contentFilter === 'linein' ? ' is-active' : ''}`}
               onClick={() => setContentFilter('linein')}
               role="tab"
               aria-selected={contentFilter === 'linein'}
             >
               Line-in
+            </button>
+            <button
+              type="button"
+              className={`content-filter-chip${contentFilter === 'spotify' ? ' is-active' : ''}`}
+              onClick={() => setContentFilter('spotify')}
+              role="tab"
+              aria-selected={contentFilter === 'spotify'}
+            >
+              Spotify
             </button>
             <button
               type="button"
@@ -1950,13 +2087,13 @@ export default function ContentView(): JSX.Element {
               <p className="content-section__eyebrow">Music sources</p>
               <h2>Spotify</h2>
               <p>
-                Multi-account Spotify is supported out of the box. Create a Spotify app, copy the Client ID, and paste it below.
+                Multi-account Spotify is supported out of the box. Create a Spotify app, copy the Client ID, and paste it here.
                 No client secret is needed. You can link accounts here or in the Loxone app after the Client ID is set.
               </p>
             </div>
           </header>
           <div className="content-section__body">
-            <div className="content-grid">
+            <div className="content-grid content-grid--spotify">
               <article className="content-card">
                 <header>
                   <div>
@@ -2015,7 +2152,7 @@ export default function ContentView(): JSX.Element {
                   <div>
                     <h3>Accounts</h3>
                     <p className="content-body-copy content-body-copy--muted">
-                      Link Spotify accounts here or in the Loxone app after setting the Client ID.
+                      Link Spotify accounts here or in the Loxone app.
                     </p>
                   </div>
                 </header>
@@ -2407,12 +2544,22 @@ export default function ContentView(): JSX.Element {
                   <article key={input.id ?? input.name} className="content-card">
                     <header className="content-card__header content-card__header--split">
                       <div>
-                        <h3>{input.name || 'Line-in'}</h3>
-                        {input.id && (
-                          <p className="content-linein-id" title={input.id}>
-                            ID: {input.id}
-                          </p>
-                        )}
+                        <div className="content-linein-title">
+                          <img
+                            className="content-bridge-logo"
+                            src={resolveLineInIconUrl(input.iconType)}
+                            alt=""
+                            aria-hidden="true"
+                          />
+                          <div className="content-linein-title-text">
+                            <h3>{input.name || 'Line-in'}</h3>
+                            {input.id && (
+                              <p className="content-linein-id" title={input.id}>
+                                {input.id}
+                              </p>
+                            )}
+                          </div>
+                        </div>
                         <span className="content-linein-source">
                           {input.source?.type ?? 'ingest'}
                         </span>
@@ -2458,14 +2605,17 @@ export default function ContentView(): JSX.Element {
           <header>
             <div>
               <h3>Text-to-speech</h3>
-              <p>
-                The built-in TTS manager handles announcements and spoken alerts through Google TTS on the AudioServer. Additional
-                configuration hooks will surface here in a future release.
-              </p>
+              <p>Select the provider used for spoken alerts and announcements.</p>
             </div>
           </header>
+          <div className="content-form">
+            <label htmlFor="tts-provider">TTS provider</label>
+            <select id="tts-provider" className="content-input-select">
+              <option value="google">Google TTS</option>
+            </select>
+          </div>
           <p className="content-body-copy content-body-copy--muted">
-            TTS is automatically available for all zones; no extra setup is required right now.
+            TTS is automatically available for all zones; no extra setup is required.
           </p>
           </article>
 
@@ -2651,72 +2801,184 @@ export default function ContentView(): JSX.Element {
                   ×
                 </button>
               </div>
-              <div className="content-custom-radio-form">
-                <div className="content-custom-radio-field">
-                  <label htmlFor="linein-name">Name</label>
-                  <input
-                    id="linein-name"
-                    type="text"
-                    value={lineInForm.name}
-                    onChange={(e) => setLineInForm((prev) => ({ ...prev, name: e.target.value }))}
-                    placeholder="Turntable"
-                    autoComplete="off"
-                  />
-                </div>
-                <div className="content-custom-radio-field">
-                  <label htmlFor="linein-icon">Icon</label>
-                  <select
-                    id="linein-icon"
-                    className="content-input-select"
-                    value={lineInForm.iconType}
-                    onChange={(e) => setLineInForm((prev) => ({ ...prev, iconType: Number(e.target.value) as LineInIconType }))}
-                  >
-                    <option value={LineInIconType.LineIn}>Line in</option>
-                    <option value={LineInIconType.CdPlayer}>CD player</option>
-                    <option value={LineInIconType.Computer}>Computer</option>
-                    <option value={LineInIconType.IMac}>iMac</option>
-                    <option value={LineInIconType.IPod}>iPod</option>
-                    <option value={LineInIconType.Mobile}>Mobile</option>
-                    <option value={LineInIconType.Radio}>Radio</option>
-                    <option value={LineInIconType.Screen}>Screen</option>
-                    <option value={LineInIconType.TurnTable}>Turntable</option>
-                  </select>
-                </div>
-                <div className="content-custom-radio-field">
-                  <label htmlFor="linein-source">Source type</label>
-                  <select
-                    id="linein-source"
-                    className="content-input-select"
-                    value={lineInForm.sourceType}
-                    onChange={(e) => setLineInForm((prev) => ({ ...prev, sourceType: e.target.value as LineInSourceType }))}
-                  >
-                    <option value="ingest">Ingest</option>
-                  </select>
-                </div>
-                <div className="content-custom-radio-field">
-                  <label htmlFor="linein-metadata">Enable acoustic fingerprinting</label>
-                  <label className="content-switch" htmlFor="linein-metadata">
+              {(() => {
+                const ingestBaseUrl = getLineInIngestBaseUrl();
+                const ingestWsUrl = getLineInIngestWsUrl(ingestBaseUrl);
+                const ingestId = lineInEditingId ?? lineInForm.draftId ?? '<line-in-id>';
+                return (
+                  <div className="content-linein-modal">
+                <div className="content-linein-form">
+                  <div className="content-custom-radio-field">
+                    <label htmlFor="linein-name">
+                      Name <span className="content-field-required">Required</span>
+                    </label>
                     <input
-                      id="linein-metadata"
-                      type="checkbox"
-                      checked={lineInForm.metadataEnabled}
-                      onChange={(e) =>
-                        setLineInForm((prev) => ({ ...prev, metadataEnabled: e.target.checked }))
-                      }
+                      id="linein-name"
+                      type="text"
+                      value={lineInForm.name}
+                      onChange={(e) => setLineInForm((prev) => ({ ...prev, name: e.target.value }))}
+                      placeholder="Turntable"
+                      autoComplete="off"
                     />
-                    <span className="content-switch-slider" />
-                  </label>
-                  <p className="content-input-hint">Try to determine metadata for input.</p>
-                </div>
-                <div className="content-actions">
-                  <button type="button" onClick={handleLineInSave} disabled={!lineInForm.name.trim() || lineInSubmitting}>
+                    <p className="content-input-hint">This is the label shown in the Loxone app.</p>
+                  </div>
+                  <div className="content-custom-radio-field">
+                    <label htmlFor="linein-icon">Icon</label>
+                    <div className="content-linein-icon-grid" role="listbox" aria-label="Line-in icon">
+                      {LINEIN_ICON_OPTIONS.map((option) => {
+                        const isSelected = lineInForm.iconType === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={`content-linein-icon-option${isSelected ? ' is-selected' : ''}`}
+                            onClick={() =>
+                              setLineInForm((prev) => ({ ...prev, iconType: option.value }))
+                            }
+                            aria-pressed={isSelected}
+                          >
+                            <img src={resolveLineInIconUrl(option.value)} alt="" aria-hidden="true" />
+                            <span className="content-linein-icon-label">{option.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="content-input-hint">Pick the icon to show next to the source.</p>
+                  </div>
+                  <div className="content-custom-radio-field">
+                    <label htmlFor="linein-source">Source type</label>
+                    <select
+                      id="linein-source"
+                      className="content-input-select"
+                      value={lineInForm.sourceType}
+                      onChange={(e) => setLineInForm((prev) => ({ ...prev, sourceType: e.target.value as LineInSourceType }))}
+                    >
+                      <option value="ingest">Ingest</option>
+                      <option value="sendspin">Sendspin</option>
+                      <option value="lox-beolink">Lox BeoLink</option>
+                    </select>
+                    <p className="content-input-hint">Select the input method used to feed audio.</p>
+                  </div>
+                  <div className="content-custom-radio-field">
+                    <label htmlFor="linein-metadata">Enable acoustic fingerprinting</label>
+                    <label className="content-switch" htmlFor="linein-metadata">
+                      <input
+                        id="linein-metadata"
+                        type="checkbox"
+                        checked={lineInForm.metadataEnabled}
+                        onChange={(e) =>
+                          setLineInForm((prev) => ({ ...prev, metadataEnabled: e.target.checked }))
+                        }
+                      />
+                      <span className="content-switch-slider" />
+                    </label>
+                    <p className="content-input-hint">
+                      Tries to identify track metadata for this input.
+                    </p>
+                  </div>
+                  <div className="content-actions">
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={handleLineInSave}
+                    disabled={
+                      !lineInForm.name.trim() ||
+                      lineInSubmitting ||
+                      (lineInForm.sourceType === 'sendspin' && !lineInForm.sendspinClientId.trim())
+                    }
+                  >
                     {lineInSubmitting ? 'Saving…' : lineInEditingId ? 'Save line-in' : 'Add line-in'}
                   </button>
-                  <button type="button" className="secondary" onClick={() => closeLineInModal()} disabled={lineInSubmitting}>
-                    Cancel
-                  </button>
+                    <button type="button" className="secondary" onClick={() => closeLineInModal()} disabled={lineInSubmitting}>
+                      Cancel
+                    </button>
+                  </div>
                 </div>
-              </div>
+                <aside className="content-linein-preview">
+                  <div className="content-linein-preview-card">
+                    <p className="content-linein-preview-eyebrow">Preview</p>
+                    <div className="content-linein-preview-name">
+                      {lineInForm.name.trim() || 'Line-in name'}
+                    </div>
+                    <p className="content-linein-preview-meta">
+                      {describeLineInIcon(lineInForm.iconType)} · {describeLineInSource(lineInForm.sourceType)}
+                    </p>
+                    <p className="content-linein-preview-meta">
+                      {lineInForm.metadataEnabled ? 'Fingerprinting on' : 'Fingerprinting off'}
+                    </p>
+                    {lineInForm.draftId && (
+                      <p className="content-linein-preview-id">
+                        ID: {lineInForm.draftId}
+                        {!lineInEditingId && ' (assigned on save)'}
+                      </p>
+                    )}
+                  </div>
+                  <div className="content-linein-info">
+                    <p className="content-linein-info__title">Source type</p>
+                    <p className="content-linein-info__copy">
+                      {lineInForm.sourceType === 'ingest' ? (
+                        'Ingest exposes two input paths per line-in (HTTP and WebSocket). The AudioServer never pulls audio; you must push a stream into one of the endpoints below.'
+                      ) : lineInForm.sourceType === 'sendspin' ? (
+                        <>
+                          Not functional yet: awaiting confirmation of spec update. See{' '}
+                          <a href="https://github.com/Sendspin/spec/pull/52" target="_blank" rel="noreferrer">
+                            PR #52
+                          </a>
+                          .
+                        </>
+                      ) : lineInForm.sourceType === 'lox-beolink' ? (
+                        'Lox BeoLink line-in ingests audio from a BeoLink gateway integration.'
+                      ) : (
+                        'Choose the source type that matches how the audio enters AudioServer.'
+                      )}
+                    </p>
+                    {lineInForm.sourceType === 'sendspin' && (
+                      <div className="content-linein-info__select">
+                        <label htmlFor="linein-sendspin-client">Sendspin client</label>
+                        <div className="content-linein-select-row">
+                          <select
+                            id="linein-sendspin-client"
+                            className="content-input-select"
+                            value={lineInForm.sendspinClientId}
+                            onChange={(e) => setLineInForm((prev) => ({ ...prev, sendspinClientId: e.target.value }))}
+                          >
+                            <option value="">Select a client</option>
+                            {sendspinClients.map((client) => (
+                              <option key={client.id} value={client.clientId}>
+                                {client.name || client.clientId}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            className="secondary content-linein-refresh"
+                            onClick={() => void handleSendspinDiscovery()}
+                            disabled={sendspinLoading}
+                          >
+                            {sendspinLoading ? 'Refreshing…' : 'Refresh'}
+                          </button>
+                        </div>
+                        {sendspinError && <p className="content-linein-error">{sendspinError}</p>}
+                      </div>
+                    )}
+                    {lineInForm.sourceType === 'ingest' && (
+                      <div className="content-linein-info__urls">
+                        <p className="content-linein-info__label">HTTP ingest</p>
+                        <code>{`${ingestBaseUrl}/ingest/linein/${ingestId}`}</code>
+                        <p className="content-linein-info__label">WebSocket ingest</p>
+                        <code>{`${ingestWsUrl}/ingest/ws/linein/${ingestId}`}</code>
+                      </div>
+                    )}
+                    {lineInForm.sourceType !== 'sendspin' && (
+                      <p className="content-linein-info__hint">
+                        Use the line-in ID shown here after saving. This choice affects routing and metadata capture.
+                      </p>
+                    )}
+                  </div>
+                </aside>
+                  </div>
+                );
+              })()}
             </div>
           </div>,
         )}

@@ -51,9 +51,17 @@ export default function Hero(): JSX.Element {
   const name = info?.name ?? 'Unconfigured';
   const zoneCount = typeof info?.zones === 'number' ? info.zones : null;
   const firmwareVersion = info?.firmwareVersion ?? '—';
+  const firmwareDisplay = firmwareVersion.includes('LWSS V ')
+    ? firmwareVersion.split('LWSS V ')[1].trim()
+    : firmwareVersion;
+  const apiVersionRaw = info?.apiVersion ?? '—';
+  const apiDisplay = apiVersionRaw.includes('API:')
+    ? apiVersionRaw.split('API:')[1].replace(/[^0-9.]/g, '')
+    : apiVersionRaw.replace(/[^0-9.]/g, '');
   const heroMetaLines: Array<{ label: string; value: string }> = [
     { label: 'Name', value: name },
-    { label: 'Emulated firmware', value: firmwareVersion },
+    { label: 'Emulated firmware', value: firmwareDisplay },
+    { label: 'API', value: apiDisplay || '—' },
   ];
   if (uptime) heroMetaLines.push({ label: 'Uptime', value: uptime });
   if (zoneCount !== null) {

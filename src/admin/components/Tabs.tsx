@@ -32,5 +32,6 @@ export default function Tabs({ active, tabs, onChange }: TabsProps): JSX.Element
 function formatLabel(value: string): string {
   if (!value) return '';
   if (value === 'insight') return 'Insight';
+  if (value === 'audio') return 'Sessions';
   return value.charAt(0).toUpperCase() + value.slice(1);
 }

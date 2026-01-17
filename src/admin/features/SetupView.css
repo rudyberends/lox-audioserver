@@ -81,6 +81,12 @@
   display: none;
 }
 
+.setup-hero-meta {
+  margin: 0.4rem 0 0;
+  font-size: 0.9rem;
+  color: var(--color-subtle);
+}
+
 .setup-pill {
   display: inline-flex;
   align-items: center;

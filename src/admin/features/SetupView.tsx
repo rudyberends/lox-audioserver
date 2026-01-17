@@ -14,7 +14,14 @@ interface SetupConfig {
       macId?: string;
     };
     zones?: unknown[];
-    adapters?: unknown[];
+    content?: {
+      radio?: { tuneInUsername?: string | null };
+      spotify?: { accounts?: unknown[]; bridges?: unknown[]; clientId?: string | null };
+      library?: { enabled?: boolean };
+    };
+    inputs?: {
+      lineIn?: { inputs?: unknown[] | null };
+    };
   };
 }
 
@@ -176,6 +183,21 @@ export default function SetupView(): JSX.Element {
     null;
 
   const isPaired = Boolean(status?.paired);
+  const zonesCount = typeof status?.zones === 'number'
+    ? status.zones
+    : Array.isArray(cfg.zones)
+      ? cfg.zones.length
+      : 0;
+  const contentConfig = (cfg as any).content ?? {};
+  const inputsConfig = (cfg as any).inputs ?? {};
+  const lineInCount = Array.isArray(inputsConfig.lineIn?.inputs) ? inputsConfig.lineIn.inputs.length : 0;
+  const spotifyAccountsCount = Array.isArray(contentConfig.spotify?.accounts) ? contentConfig.spotify.accounts.length : 0;
+  const spotifyBridgesCount = Array.isArray(contentConfig.spotify?.bridges) ? contentConfig.spotify.bridges.length : 0;
+  const radioConfigured = contentConfig.radio?.tuneInUsername ? 1 : 0;
+  const libraryEnabled = contentConfig.library?.enabled ? 1 : 0;
+  const contentCount = lineInCount + spotifyAccountsCount + spotifyBridgesCount + radioConfigured + libraryEnabled;
+  const versionLabel = status?.version ?? status?.apiVersion ?? '—';
+  const uptimeLabel = formatDuration(status?.uptime);
   const macIdTrimmed = macIdInput.trim();
   const macIdChanged = macIdTrimmed !== configuredMacId.trim();
   const macIdValid = macIdTrimmed.length > 0;
@@ -190,6 +212,17 @@ export default function SetupView(): JSX.Element {
     return date.toLocaleString();
   }
 
+  function formatDuration(value: number | undefined): string | null {
+    if (!Number.isFinite(value)) return null;
+    const totalSeconds = Math.max(0, Math.floor(value ?? 0));
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    if (days > 0) return `${days}d ${hours}h`;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
+  }
+
   return (
     <div className="setup-layout">
       <section className="setup-shell">
@@ -199,7 +232,7 @@ export default function SetupView(): JSX.Element {
                 <h1 className="page-hero__title">Setup</h1>
                 <p className="page-hero__subtitle">
                   {isPaired
-                    ? 'Paired and ready — review the checklist to confirm zones and adapters are mapped.'
+                    ? 'Paired and ready — review the checklist to confirm zones and content are mapped.'
                     : 'Follow these steps to get paired and start using the AudioServer.'}
                 </p>
               </div>
@@ -274,6 +307,7 @@ export default function SetupView(): JSX.Element {
                 <span className="setup-detail__label">Config CRC</span>
                 <span className="setup-detail__value">{configCrc ?? 'Not available'}</span>
               </div>
+              {/* Additional status is already summarized in the hero */}
             </article>
 
             <article className="setup-card">
@@ -380,7 +414,7 @@ export default function SetupView(): JSX.Element {
               <div className="paired-tiles">
                 <div className="paired-tile">
                   <h3>Paired and ready</h3>
-                  <p>Your AudioServer is paired. Use the tabs above to configure adapters, zones, and content.</p>
+                  <p>Your AudioServer is paired. Use the tabs above to configure zones and content.</p>
                 </div>
               </div>
             ) : (

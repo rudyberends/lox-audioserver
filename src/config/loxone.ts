@@ -32,8 +32,7 @@ export interface LoxoneHttpConfig {
 
 const DEFAULT_FIRMWARE_VERSION = 'LWSS V 16.1.10.01';
 const DEFAULT_API_VERSION = '~API:1.6~';
-const DEFAULT_SESSION =
-  '8WahwAfULwEQce9Yu0qIE9L7QMkXFHbi0M9ch9vKcgYArPPojXHpSiNcq0fT3lqL';
+const DEFAULT_SESSION = '8WahwAfULwEQce9Yu0qIE9L7QMkXFHbi0M9ch9vKcgYArPPojXHpSiNcq0fT3lqL';
 const DEFAULT_MDNS_NAME = 'audioserver';
 const DEFAULT_MDNS_HOSTNAME = 'audioserver';
 const DEFAULT_MDNS_TYPE = 'http';

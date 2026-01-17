@@ -62,6 +62,8 @@ interface ZoneGroup {
   label: string;
   sourceSerial?: string;
   zones: Zone[];
+  totalZones?: number;
+  filteredEmpty?: boolean;
 }
 
 interface ExtensionPlaceholder {
@@ -87,6 +89,7 @@ export default function ZonesView(): JSX.Element {
   const [spotifyDiscovery, setSpotifyDiscovery] = React.useState<Record<number, SpotifyDiscoveryState>>({});
   const [maintenanceState, setMaintenanceState] = React.useState<Record<number, ZoneMaintenanceIndicator>>({});
   const [outputFilter, setOutputFilter] = React.useState<'all' | 'assigned' | 'unassigned'>('all');
+  const [zoneQuery, setZoneQuery] = React.useState('');
   const modalOpen = Boolean(activeZoneModal);
 
   React.useEffect(() => {
@@ -159,19 +162,34 @@ export default function ZonesView(): JSX.Element {
 
   const filteredGroups = React.useMemo(() => {
     const groups: ZoneGroup[] = [];
+    const query = zoneQuery.trim().toLowerCase();
     displayGroups.forEach((group) => {
       const zones = group.zones.filter((zone) => {
         const hasOutput = Boolean(getPrimaryTransport(zone));
         if (outputFilter === 'assigned') return hasOutput;
         if (outputFilter === 'unassigned') return !hasOutput;
         return true;
+      }).filter((zone) => {
+        if (!query) return true;
+        const name = (zone.name ?? '').toLowerCase();
+        const idLabel = String(zone.id ?? '');
+        const source = (zone.source ?? '').toLowerCase();
+        return name.includes(query) || idLabel.includes(query) || source.includes(query);
       });
-      if (zones.length > 0 || group.zones.length === 0) {
-        groups.push({ ...group, zones });
+      if (zones.length > 0) {
+        groups.push({ ...group, zones, totalZones: group.zones.length, filteredEmpty: false });
+        return;
+      }
+      if (group.zones.length === 0) {
+        groups.push({ ...group, zones, totalZones: 0, filteredEmpty: false });
+        return;
+      }
+      if (outputFilter !== 'all' || query) {
+        groups.push({ ...group, zones, totalZones: group.zones.length, filteredEmpty: true });
       }
     });
     return groups;
-  }, [displayGroups, outputFilter]);
+  }, [displayGroups, outputFilter, zoneQuery]);
 
   const renderModal = React.useCallback(
     (node: React.ReactNode): React.ReactPortal | null => {
@@ -459,6 +477,20 @@ export default function ZonesView(): JSX.Element {
             </p>
           </div>
           <div className="zones-hero__actions">
+            <div className="zones-search">
+              <input
+                type="search"
+                placeholder="Search zones"
+                value={zoneQuery}
+                onChange={(event) => setZoneQuery(event.target.value)}
+                aria-label="Search zones"
+              />
+              {zoneQuery && (
+                <button type="button" onClick={() => setZoneQuery('')} aria-label="Clear search">
+                  ×
+                </button>
+              )}
+            </div>
             <button
               type="button"
               className="secondary"
@@ -516,12 +548,15 @@ export default function ZonesView(): JSX.Element {
                     </div>
                   </div>
                   <div className="zone-count">
-                    <span className="zone-count__value">{group.zones.length}</span>
+                    <span className="zone-count__value">{group.totalZones ?? group.zones.length}</span>
                     <span className="zone-count__label">zones</span>
                   </div>
                 </header>
                 <ul>
-                  {group.zones.length === 0 && (
+                  {group.filteredEmpty && (
+                    <li className="zone-empty">No zones match this filter</li>
+                  )}
+                  {!group.filteredEmpty && group.zones.length === 0 && (
                     <li className="zone-empty">No zones assigned yet</li>
                   )}
                   {group.zones.map((zone) => {
@@ -559,21 +594,7 @@ export default function ZonesView(): JSX.Element {
                   }
                   const zoneOrigin = zone.source || group.label || 'AudioServer';
                   const maintenance = maintenanceState[zone.id] ?? {};
-                  const hasWebPlayer =
-                    Array.isArray(zone.transports) &&
-                    zone.transports.some((transport) => {
-                      const id = (transport?.id || '').toLowerCase();
-                      const castSendspin = id === 'googlecast' && (transport as any)?.useSendspin;
-                      const castSnapcast = id === 'googlecast' && (transport as any)?.useSnapcast;
-                      return (
-                        id === 'snapcast' ||
-                        id === 'snapcast-cast' ||
-                        id === 'sendspin' ||
-                        id === 'sendspin-cast' ||
-                        castSendspin ||
-                        castSnapcast
-                      );
-                    });
+                  const hasWebPlayer = zoneHasWebPlayer(zone);
                   return (
                     <li key={zone.id} className="zone-row">
                       <div className="zone-row__header">
@@ -656,6 +677,7 @@ export default function ZonesView(): JSX.Element {
                                   type="button"
                                   className="zone-output-audio-button"
                                   aria-label="Open web player"
+                                  title="Listen"
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     window.open(`/zoneplayer/?zone=${zone.id}&autoconnect=1`, '_blank', 'noopener,noreferrer');
@@ -666,6 +688,7 @@ export default function ZonesView(): JSX.Element {
                                     <path d="M16 8a4 4 0 0 1 0 8" />
                                     <path d="M18.5 5.5a7.5 7.5 0 0 1 0 13" />
                                   </svg>
+                                  <span className="zone-output-audio-label">Listen</span>
                                 </button>
                               )}
                             </button>
@@ -728,11 +751,22 @@ export default function ZonesView(): JSX.Element {
                           ? 'Sendspin over Cast'
                           : definitionMap.get(activeTransport.id)?.label ?? activeTransport.id
                         : 'Offload only';
+                    const hasWebPlayer = zoneHasWebPlayer(activeZoneInfo.zone);
                     return (
                       <section className="zone-detail-block">
-                        <div className="zone-detail-row">
-                          <p className="zone-section-title">Output routing</p>
-                          <button type="button" className="zones-modal-close" onClick={closeZoneModal} aria-label="Close zone configuration">
+                        <div className="zone-detail-row zone-output-modal__title-row">
+                          <div className="zone-output-modal__title-stack">
+                            <p className="zone-section-title">Output routing</p>
+                            <p className="zone-output-modal__meta">
+                              Zone {activeZoneInfo.zone.name} · #{activeZoneInfo.zone.id} · {activeZoneInfo.groupLabel ?? 'AudioServer'}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            className="zones-modal-close"
+                            onClick={closeZoneModal}
+                            aria-label="Close zone configuration"
+                          >
                             ×
                           </button>
                         </div>
@@ -753,6 +787,36 @@ export default function ZonesView(): JSX.Element {
                             <div className="zone-output-modal__summary-card__badge">Active</div>
                             <p className="zone-output-modal__summary-card__title">{activeLabel}</p>
                             <p className="zone-output-modal__summary-card__meta">{activeType}</p>
+                            <div className="zone-output-modal__summary-actions">
+                              {hasWebPlayer && (
+                                <button
+                                  type="button"
+                                  className="zone-output-modal__action"
+                                  onClick={() =>
+                                    window.open(
+                                      `/zoneplayer/?zone=${activeZoneInfo.zone.id}&autoconnect=1`,
+                                      '_blank',
+                                      'noopener,noreferrer',
+                                    )
+                                  }
+                                >
+                                  Listen
+                                </button>
+                              )}
+                              {activeTransport && (
+                                <button
+                                  type="button"
+                                  className="zone-output-modal__action zone-output-modal__action--danger"
+                                  onClick={() => {
+                                    if (window.confirm(`Remove output for ${activeZoneInfo.zone.name}?`)) {
+                                      void handleTransportChange(activeZoneInfo.zone.id, null);
+                                    }
+                                  }}
+                                >
+                                  Clear output
+                                </button>
+                              )}
+                            </div>
                           </aside>
                           <ZoneOutputEditor
                             zone={activeZoneInfo.zone}
@@ -975,6 +1039,12 @@ function ZoneOutputEditor({
       : primary?.id === 'googleCast' && (primary as any)?.useSendspin
         ? (primary as any)?.host ?? ''
         : '';
+  const activeSnapcastCastHost =
+    selectedId === 'snapcast'
+      ? fieldValues.host || (primary as any)?.host || ''
+      : primary?.id === 'snapcast-cast'
+        ? (primary as any)?.host ?? ''
+        : '';
 
   const parseFriendlyName = (
     value: string | undefined,
@@ -998,6 +1068,10 @@ function ZoneOutputEditor({
     (selectedId === 'sendspin' ? fieldValues.name : undefined) ||
     ((primary as any)?.name as string | undefined) ||
     tailLabel(activeSendspinCastHost);
+  const activeSnapcastCastLabel =
+    (selectedId === 'snapcast' ? fieldValues.name : undefined) ||
+    ((primary as any)?.name as string | undefined) ||
+    tailLabel(activeSnapcastCastHost);
   const definitionMap = React.useMemo(() => {
     const map = new Map<string, TransportConfigDefinition>();
     definitions.forEach((def) => map.set(def.id, def));
@@ -1005,7 +1079,8 @@ function ZoneOutputEditor({
   }, [definitions]);
 
   React.useEffect(() => {
-    setSelectedId(primary?.id ?? '');
+    const nextId = primary?.id === 'snapcast-cast' ? 'snapcast' : primary?.id ?? '';
+    setSelectedId(nextId);
     setFieldValues(extractTransportFields(primary));
   }, [primary]);
 
@@ -1023,7 +1098,7 @@ function ZoneOutputEditor({
       setAirplayError(null);
       setDiscoveringAirplay(false);
     }
-    if (!isGoogleCast && !isSendspin) {
+    if (!isGoogleCast && !isSendspin && !isSnapcast) {
       setCastDevices(null);
       setCastError(null);
       setDiscoveringCast(false);
@@ -1058,10 +1133,10 @@ function ZoneOutputEditor({
   }, [isGoogleCast, castDevices, discoveringCast]);
 
   React.useEffect(() => {
-    if (isSendspin && !castDevices && !discoveringCast) {
+    if ((isSendspin || isSnapcast) && !castDevices && !discoveringCast) {
       void handleGoogleCastDiscovery();
     }
-  }, [isSendspin, castDevices, discoveringCast]);
+  }, [isSendspin, isSnapcast, castDevices, discoveringCast]);
 
   React.useEffect(() => {
     if (isSendspin && !sendspinClients && !discoveringSendspin) {
@@ -1396,12 +1471,29 @@ function ZoneOutputEditor({
     onChange(payload);
   }
 
-  const moduleOptions = definitions.map((definition) => ({
-    id: definition.id,
-    label: definition.label,
-    description: definition.description ?? '',
-    active: definition.id === selectedId,
-  }));
+  function applySnapcastCastDevice(device: GoogleCastDevice): void {
+    setSelectedId('snapcast');
+    const host = device.address || device.host || '';
+    const payload: ZoneTransportConfig = {
+      id: 'snapcast-cast',
+      host,
+      name: device.name,
+    };
+    setFieldValues({
+      host,
+      name: device.name || '',
+    });
+    onChange(payload);
+  }
+
+  const moduleOptions = definitions
+    .filter((definition) => definition.id !== 'snapcast-cast')
+    .map((definition) => ({
+      id: definition.id,
+      label: definition.label,
+      description: definition.description ?? '',
+      active: definition.id === selectedId,
+    }));
   const moduleIcons: Record<string, string> = {
     airplay: '/providers/airplay.svg',
     googleCast: '/providers/cast.svg',
@@ -1511,6 +1603,7 @@ function ZoneOutputEditor({
     <div className="zone-output-config">
       <div className="zone-output-config__editor">
         <div className="zone-output-editor">
+          <p className="zone-output-step">Step 1 · Choose output type</p>
           <div className="zone-output-selector">
             {moduleOptions.map((option) => (
               <button
@@ -1575,11 +1668,24 @@ function ZoneOutputEditor({
       <div className="zone-output-config__devices">
         {isAirplay && (
           <div className="zone-output-discovery">
-            {airplayError && <p className="zone-output-error">{airplayError}</p>}
             <div className="zone-output-discovery-panel zone-output-discovery-panel--visible">
               <div className="zone-output-discovery-panel__header">
-                <p className="zone-output-discovery-panel__title">Devices</p>
-                <p className="zone-output-discovery-panel__copy">Tap a device to route audio instantly.</p>
+                <div className="zone-output-discovery-panel__title-stack">
+                  <p className="zone-output-step zone-output-step--inline">Step 2 · Select a device</p>
+                  <p className="zone-output-discovery-panel__title">Devices</p>
+                  <p className="zone-output-discovery-panel__copy">Tap a device to route audio instantly.</p>
+                  <p className="zone-output-discovery-panel__error" aria-live="polite">
+                    {airplayError || ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="zone-output-modal__action"
+                  onClick={() => void handleAirplayDiscovery()}
+                  disabled={saving || discoveringAirplay}
+                >
+                  {discoveringAirplay ? 'Refreshing…' : 'Refresh list'}
+                </button>
               </div>
               <div className="zone-output-device-grid">
                 {airplayTiles.map((item, index) => {
@@ -1613,9 +1719,12 @@ function ZoneOutputEditor({
                     </button>
                   );
                 })}
-                {(!airplayLoaded || airplayDeviceItems.length === 0) &&
+                {(discoveringAirplay || (!airplayLoaded && airplayDeviceItems.length === 0)) &&
                   Array.from({ length: 3 }).map((_, idx) => (
-                    <div key={`airplay-placeholder-${idx}`} className="zone-output-device zone-output-device--placeholder">
+                    <div
+                      key={`airplay-placeholder-${idx}`}
+                      className={`zone-output-device zone-output-device--placeholder${discoveringAirplay ? ' zone-output-device--discovering' : ''}`}
+                    >
                       <span className="zone-output-device__name">AirPlay device</span>
                       <span className="zone-output-device__type">Discovering…</span>
                     </div>
@@ -1626,11 +1735,24 @@ function ZoneOutputEditor({
         )}
         {isGoogleCast && (
           <div className="zone-output-discovery">
-            {castError && <p className="zone-output-error">{castError}</p>}
             <div className="zone-output-discovery-panel zone-output-discovery-panel--visible">
               <div className="zone-output-discovery-panel__header">
-                <p className="zone-output-discovery-panel__title">Devices</p>
-                <p className="zone-output-discovery-panel__copy">Tap a device to route audio instantly.</p>
+                <div className="zone-output-discovery-panel__title-stack">
+                  <p className="zone-output-step zone-output-step--inline">Step 2 · Select a device</p>
+                  <p className="zone-output-discovery-panel__title">Devices</p>
+                  <p className="zone-output-discovery-panel__copy">Tap a device to route audio instantly.</p>
+                  <p className="zone-output-discovery-panel__error" aria-live="polite">
+                    {castError || ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="zone-output-modal__action"
+                  onClick={() => void handleGoogleCastDiscovery()}
+                  disabled={saving || discoveringCast}
+                >
+                  {discoveringCast ? 'Refreshing…' : 'Refresh list'}
+                </button>
               </div>
               <div className="zone-output-device-grid">
                 {castTiles.map((item, index) => {
@@ -1664,9 +1786,12 @@ function ZoneOutputEditor({
                     </button>
                   );
                 })}
-                {(!castLoaded || castDeviceItems.length === 0) &&
+                {(discoveringCast || (!castLoaded && castDeviceItems.length === 0)) &&
                   Array.from({ length: 3 }).map((_, idx) => (
-                    <div key={`cast-placeholder-${idx}`} className="zone-output-device zone-output-device--placeholder">
+                    <div
+                      key={`cast-placeholder-${idx}`}
+                      className={`zone-output-device zone-output-device--placeholder${discoveringCast ? ' zone-output-device--discovering' : ''}`}
+                    >
                       <span className="zone-output-device__name">Cast device</span>
                       <span className="zone-output-device__type">Discovering…</span>
                     </div>
@@ -1717,11 +1842,24 @@ function ZoneOutputEditor({
       )}
         {isSonos && (
           <div className="zone-output-discovery">
-            {sonosError && <p className="zone-output-error">{sonosError}</p>}
             <div className="zone-output-discovery-panel zone-output-discovery-panel--visible">
               <div className="zone-output-discovery-panel__header">
-                <p className="zone-output-discovery-panel__title">Devices</p>
-                <p className="zone-output-discovery-panel__copy">Tap a device to route audio instantly.</p>
+                <div className="zone-output-discovery-panel__title-stack">
+                  <p className="zone-output-step zone-output-step--inline">Step 2 · Select a device</p>
+                  <p className="zone-output-discovery-panel__title">Devices</p>
+                  <p className="zone-output-discovery-panel__copy">Tap a device to route audio instantly.</p>
+                  <p className="zone-output-discovery-panel__error" aria-live="polite">
+                    {sonosError || ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="zone-output-modal__action"
+                  onClick={() => void handleSonosDiscovery()}
+                  disabled={saving || discoveringSonos}
+                >
+                  {discoveringSonos ? 'Refreshing…' : 'Refresh list'}
+                </button>
               </div>
               <div className="zone-output-device-grid">
                 {sonosTiles.map((item, index) => {
@@ -1755,34 +1893,40 @@ function ZoneOutputEditor({
                     </button>
                   );
                 })}
-                {(!sonosLoaded || sonosDeviceItems.length === 0) &&
+                {(discoveringSonos || (!sonosLoaded && sonosDeviceItems.length === 0)) &&
                   Array.from({ length: 3 }).map((_, idx) => (
-                    <div key={`sonos-placeholder-${idx}`} className="zone-output-device zone-output-device--placeholder">
+                    <div
+                      key={`sonos-placeholder-${idx}`}
+                      className={`zone-output-device zone-output-device--placeholder${discoveringSonos ? ' zone-output-device--discovering' : ''}`}
+                    >
                       <span className="zone-output-device__name">Sonos device</span>
                       <span className="zone-output-device__type">Discovering…</span>
                     </div>
                   ))}
               </div>
             </div>
-            <div className="zone-output-discovery-actions">
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => void handleSonosDiscovery()}
-                disabled={saving || discoveringSonos}
-              >
-                {discoveringSonos ? 'Refreshing…' : 'Refresh list'}
-              </button>
-            </div>
           </div>
         )}
-          {isSendspin && (
-            <div className="zone-output-discovery">
-              {sendspinError && <p className="zone-output-error">{sendspinError}</p>}
-              <div className="zone-output-discovery-panel zone-output-discovery-panel--visible">
+        {isSendspin && (
+          <div className="zone-output-discovery">
+            <div className="zone-output-discovery-panel zone-output-discovery-panel--visible">
               <div className="zone-output-discovery-panel__header">
-                <p className="zone-output-discovery-panel__title">Devices</p>
-                <p className="zone-output-discovery-panel__copy">Tap a client to route audio.</p>
+                <div className="zone-output-discovery-panel__title-stack">
+                  <p className="zone-output-step zone-output-step--inline">Step 2 · Select a device</p>
+                  <p className="zone-output-discovery-panel__title">Devices</p>
+                  <p className="zone-output-discovery-panel__copy">Tap a client to route audio.</p>
+                  <p className="zone-output-discovery-panel__error" aria-live="polite">
+                    {sendspinError || ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="zone-output-modal__action"
+                  onClick={() => void handleSendspinDiscovery()}
+                  disabled={saving || discoveringSendspin}
+                >
+                  {discoveringSendspin ? 'Refreshing…' : 'Refresh list'}
+                </button>
               </div>
               <div className="zone-output-device-grid">
                 {sendspinTiles.map((item, index) => {
@@ -1843,11 +1987,20 @@ function ZoneOutputEditor({
                     </button>
                   );
                 })}
-                {(!sendspinLoaded || sendspinDeviceItems.length === 0) &&
+                {(discoveringSendspin ||
+                  (!sendspinLoaded &&
+                    sendspinDeviceItems.length === 0 &&
+                    castDeviceItems.length === 0 &&
+                    !activeSendspinCastHost)) &&
                   Array.from({ length: 3 }).map((_, idx) => (
-                    <div key={`sendspin-placeholder-${idx}`} className="zone-output-device zone-output-device--placeholder">
+                    <div
+                      key={`sendspin-placeholder-${idx}`}
+                      className={`zone-output-device zone-output-device--placeholder${discoveringSendspin ? ' zone-output-device--discovering' : ''}`}
+                    >
                       <span className="zone-output-device__name">Sendspin client</span>
-                      <span className="zone-output-device__type">Discovering…</span>
+                      <span className="zone-output-device__type">
+                        {discoveringSendspin ? 'Discovering…' : 'No clients found'}
+                      </span>
                     </div>
                   ))}
               </div>
@@ -1856,11 +2009,24 @@ function ZoneOutputEditor({
         )}
         {isSnapcast && (
           <div className="zone-output-discovery">
-            {snapcastError && <p className="zone-output-error">{snapcastError}</p>}
             <div className="zone-output-discovery-panel zone-output-discovery-panel--visible">
               <div className="zone-output-discovery-panel__header">
-                <p className="zone-output-discovery-panel__title">Connected Snapclients</p>
-                <p className="zone-output-discovery-panel__copy">Tap a client to map it to this zone.</p>
+                <div className="zone-output-discovery-panel__title-stack">
+                  <p className="zone-output-step zone-output-step--inline">Step 2 · Select a device</p>
+                  <p className="zone-output-discovery-panel__title">Connected Snapclients</p>
+                  <p className="zone-output-discovery-panel__copy">Tap a client to map it to this zone.</p>
+                  <p className="zone-output-discovery-panel__error" aria-live="polite">
+                    {snapcastError || ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="zone-output-modal__action"
+                  onClick={() => void handleSnapcastDiscovery()}
+                  disabled={saving || discoveringSnapcast}
+                >
+                  {discoveringSnapcast ? 'Refreshing…' : 'Refresh list'}
+                </button>
               </div>
               <div className="zone-output-device-grid">
                 {snapcastDeviceItems.map((client, index) => {
@@ -1882,28 +2048,51 @@ function ZoneOutputEditor({
                     </button>
                   );
                 })}
-                {(!snapcastLoaded || snapcastDeviceItems.length === 0) &&
+                {activeSnapcastCastHost &&
+                  !castDeviceItems.some(
+                    (device) => (device.address || device.host) === activeSnapcastCastHost,
+                  ) && (
+                    <div className="zone-output-device is-active">
+                      <span className="zone-output-device__badge">Active</span>
+                      <span className="zone-output-device__name">{activeSnapcastCastLabel}</span>
+                      <span className="zone-output-device__type">Cast (Snapcast)</span>
+                    </div>
+                  )}
+                {castDeviceItems.map((device) => {
+                  const friendly = parseFriendlyName(device.name);
+                  const isActive =
+                    activeSnapcastCastHost &&
+                    (device.address || device.host) === activeSnapcastCastHost;
+                  return (
+                    <button
+                      key={`snapcast-cast-${device.id}`}
+                      type="button"
+                      className={`zone-output-device${isActive ? ' is-active' : ''}`}
+                      onClick={() => applySnapcastCastDevice(device)}
+                      disabled={saving}
+                    >
+                      {isActive && <span className="zone-output-device__badge">Active</span>}
+                      <span className="zone-output-device__name">{friendly.primary}</span>
+                      <span className="zone-output-device__type">Cast (Snapcast)</span>
+                    </button>
+                  );
+                })}
+                {(discoveringSnapcast ||
+                  (!snapcastLoaded &&
+                    snapcastDeviceItems.length === 0 &&
+                    castDeviceItems.length === 0 &&
+                    !activeSnapcastCastHost)) &&
                   Array.from({ length: 2 }).map((_, idx) => (
-                    <div key={`snapcast-placeholder-${idx}`} className="zone-output-device zone-output-device--placeholder">
+                    <div
+                      key={`snapcast-placeholder-${idx}`}
+                      className={`zone-output-device zone-output-device--placeholder${discoveringSnapcast ? ' zone-output-device--discovering' : ''}`}
+                    >
                       <span className="zone-output-device__name">Snapclient</span>
                       <span className="zone-output-device__type">
                         {discoveringSnapcast ? 'Discovering…' : 'No clients connected'}
                       </span>
                     </div>
                   ))}
-              </div>
-              <div className="zone-output-discovery-actions">
-                <button
-                  type="button"
-                  className="button-compact"
-                  onClick={() => void handleSnapcastDiscovery()}
-                  disabled={saving || discoveringSnapcast}
-                >
-                  {discoveringSnapcast ? 'Refreshing…' : 'Refresh list'}
-                </button>
-                <p className="zone-output-help">
-                  Current mapping: {fieldValues.clientIds?.trim() || 'None set'}
-                </p>
               </div>
             </div>
           </div>
@@ -2034,6 +2223,23 @@ function getPrimaryTransport(zone: Zone): ZoneTransportConfig | null {
     return zone.transports[0] ?? null;
   }
   return null;
+}
+
+function zoneHasWebPlayer(zone: Zone): boolean {
+  if (!Array.isArray(zone.transports)) return false;
+  return zone.transports.some((transport) => {
+    const id = (transport?.id || '').toLowerCase();
+    const castSendspin = id === 'googlecast' && (transport as any)?.useSendspin;
+    const castSnapcast = id === 'googlecast' && (transport as any)?.useSnapcast;
+    return (
+      id === 'snapcast' ||
+      id === 'snapcast-cast' ||
+      id === 'sendspin' ||
+      id === 'sendspin-cast' ||
+      castSendspin ||
+      castSnapcast
+    );
+  });
 }
 
 function describeTransport(config: ZoneTransportConfig | null): string {

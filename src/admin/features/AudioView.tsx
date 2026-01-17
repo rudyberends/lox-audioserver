@@ -11,6 +11,9 @@ type ViewState = {
 };
 
 export default function AudioView(): JSX.Element {
+  const [audioQuery, setAudioQuery] = React.useState('');
+  const [audioFilter, setAudioFilter] = React.useState<'all' | 'active' | 'issues'>('all');
+  const [audioDensity, setAudioDensity] = React.useState<'overview' | 'detailed'>('overview');
   const formatBackend = (backend: string | null | undefined): string => {
     const normalized = (backend ?? '').toLowerCase();
     if (normalized === 'unknown' || normalized === 'uknown' || normalized === '') {
@@ -397,7 +400,6 @@ export default function AudioView(): JSX.Element {
     };
   }, []);
 
-  const filtered = view.states;
   const activeCount = view.states.filter((s) => {
     const state = (s.state ?? '').toString().trim().toLowerCase();
     return state === 'playing' || state === 'play' || state === 'paused' || state === 'pause';
@@ -586,6 +588,44 @@ export default function AudioView(): JSX.Element {
     return state === 'playing' || state === 'play' || state === 'paused' || state === 'pause';
   };
 
+  const isStaleState = (s?: ZonePlaybackState | null): boolean => {
+    const updated = s?.tech?.session?.updatedAt;
+    if (!Number.isFinite(updated ?? NaN)) return false;
+    const ts = (updated ?? 0) < 1_000_000_000_000 ? (updated ?? 0) * 1000 : (updated ?? 0);
+    return Date.now() - ts > 30_000;
+  };
+
+  const hasIssues = (s?: ZonePlaybackState | null): boolean => {
+    if (!s?.tech) return false;
+    const backpressure = s.tech.backpressure;
+    const backpressureIssue = (backpressure?.drops ?? 0) > 0 || (backpressure?.recentDrops ?? 0) > 0;
+    const streamIssue =
+      s.tech.streamStats?.some(
+        (stat) => (stat.subscriberDrops ?? 0) > 0 || (stat.restarts ?? 0) > 0 || stat.lastError || stat.lastStderr,
+      ) ?? false;
+    return backpressureIssue || streamIssue || isStaleState(s);
+  };
+
+  const issueCount = view.states.filter((s) => hasIssues(s)).length;
+
+  const matchesQuery = (s: ZonePlaybackState): boolean => {
+    const query = audioQuery.trim().toLowerCase();
+    if (!query) return true;
+    const fields = [
+      s.name,
+      s.title,
+      s.artist,
+      s.album,
+      s.station,
+      s.sourceName,
+      s.id != null ? String(s.id) : '',
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return fields.includes(query);
+  };
+
   const groupedZoneIds = React.useMemo(() => {
     const set = new Set<number>();
     groups.forEach((g) => g.members.forEach((m) => set.add(m)));
@@ -626,10 +666,77 @@ export default function AudioView(): JSX.Element {
         leaderState?: ZonePlaybackState;
         protocol?: string | null;
       }>;
-  }, [groups, stateMap, view.filter]);
+  }, [groups, stateMap]);
 
-  const soloStates = filtered.filter((s) => !groupedZoneIds.has(s.id ?? -1));
-  const activeGroups = groupCards.filter((g) => g.anyActive).length;
+  const filteredStates = React.useMemo(() => {
+    return view.states.filter((s) => {
+      if (!matchesQuery(s)) return false;
+      if (audioFilter === 'active') return isActiveState(s);
+      if (audioFilter === 'issues') return hasIssues(s);
+      return true;
+    });
+  }, [view.states, audioQuery, audioFilter]);
+
+  const filteredGroupCards = React.useMemo(() => {
+    return groupCards.filter((card) => {
+      const matchesAnyMember = card.members.some((member) => matchesQuery(member));
+      if (!matchesAnyMember && audioQuery.trim().length) return false;
+      if (audioFilter === 'active') return card.anyActive;
+      if (audioFilter === 'issues') return card.members.some((member) => hasIssues(member));
+      return true;
+    });
+  }, [groupCards, audioFilter, audioQuery]);
+
+  const activeGroups = filteredGroupCards.filter((g) => g.anyActive).length;
+  const groupAccentPalette = ['#2563eb', '#0ea5e9', '#14b8a6', '#22c55e', '#f97316', '#f59e0b', '#ef4444'];
+  const groupAccentByLeader = React.useMemo(() => {
+    const map = new Map<number, string>();
+    filteredGroupCards.forEach((card, index) => {
+      const accent = groupAccentPalette[index % groupAccentPalette.length];
+      map.set(card.group.leader, accent);
+    });
+    return map;
+  }, [filteredGroupCards]);
+  const memberToLeader = React.useMemo(() => {
+    const map = new Map<number, number>();
+    filteredGroupCards.forEach((card) => {
+      card.members.forEach((member) => {
+        if (member.id != null) map.set(member.id, card.group.leader);
+      });
+    });
+    return map;
+  }, [filteredGroupCards]);
+  const groupCardByLeader = React.useMemo(() => {
+    const map = new Map<number, (typeof filteredGroupCards)[number]>();
+    filteredGroupCards.forEach((card) => {
+      map.set(card.group.leader, card);
+    });
+    return map;
+  }, [filteredGroupCards]);
+  const renderEntries = React.useMemo(() => {
+    const entries: Array<
+      | { type: 'group'; leaderId: number; card: (typeof filteredGroupCards)[number] }
+      | { type: 'zone'; state: ZonePlaybackState }
+    > = [];
+    const seenGroups = new Set<number>();
+    filteredStates.forEach((state) => {
+      const id = state.id ?? -1;
+      const leaderId = memberToLeader.get(id);
+      if (leaderId && !seenGroups.has(leaderId)) {
+        const card = groupCardByLeader.get(leaderId);
+        if (card) {
+          entries.push({ type: 'group', leaderId, card });
+          seenGroups.add(leaderId);
+          return;
+        }
+      }
+      if (leaderId) {
+        return;
+      }
+      entries.push({ type: 'zone', state });
+    });
+    return entries;
+  }, [filteredStates, memberToLeader, groupCardByLeader]);
 
   const TechSummary = ({
     techParts,
@@ -796,6 +903,11 @@ export default function AudioView(): JSX.Element {
     );
   };
 
+  const compactIoLabel = (value?: string): string | null => {
+    if (!value) return null;
+    return value.split(' • ')[0] ?? value;
+  };
+
   return (
     <div className="audio-layout">
       <div className="audio-shell">
@@ -840,101 +952,67 @@ export default function AudioView(): JSX.Element {
             ))}
           </div>
         </header>
+        <div className="audio-toolbar">
+          <div className="audio-toolbar__search">
+            <input
+              type="search"
+              value={audioQuery}
+              onChange={(event) => setAudioQuery(event.target.value)}
+              placeholder="Search zones, sources, or track info"
+              aria-label="Search audio sessions"
+            />
+          </div>
+          <div className="audio-toolbar__filters" role="group" aria-label="Session filters">
+            <button
+              type="button"
+              className={`audio-filter ${audioFilter === 'all' ? 'is-active' : ''}`}
+              onClick={() => setAudioFilter('all')}
+            >
+              All
+              <span className="audio-filter__count">{view.states.length}</span>
+            </button>
+            <button
+              type="button"
+              className={`audio-filter ${audioFilter === 'active' ? 'is-active' : ''}`}
+              onClick={() => setAudioFilter('active')}
+            >
+              Active
+              <span className="audio-filter__count">{activeCount}</span>
+            </button>
+            <button
+              type="button"
+              className={`audio-filter ${audioFilter === 'issues' ? 'is-active' : ''}`}
+              onClick={() => setAudioFilter('issues')}
+            >
+              Issues
+              <span className="audio-filter__count">{issueCount}</span>
+            </button>
+          </div>
+          <div className="audio-toolbar__filters" role="group" aria-label="Detail level">
+            <button
+              type="button"
+              className={`audio-filter ${audioDensity === 'overview' ? 'is-active' : ''}`}
+              onClick={() => setAudioDensity('overview')}
+            >
+              Overview
+            </button>
+            <button
+              type="button"
+              className={`audio-filter ${audioDensity === 'detailed' ? 'is-active' : ''}`}
+              onClick={() => setAudioDensity('detailed')}
+            >
+              Detailed
+            </button>
+          </div>
+          <div className="audio-toolbar__meta">
+            Showing {filteredStates.length} of {view.states.length} sessions
+          </div>
+        </div>
 
         {view.loading && <p className="audio-status subtle">Loading audio state…</p>}
         {view.error && <p className="audio-status error">{view.error}</p>}
-        {!view.loading && !view.error && filtered.length === 0 && (
+        {!view.loading && !view.error && filteredStates.length === 0 && (
           <p className="audio-status subtle">No sessions match this filter.</p>
-        )}
-
-        {groupCards.length > 0 && (
-          <section className="audio-section">
-            <div className="zones-host-card zones-host-card--full">
-              <div className="zones-host-card__top">
-                <div>
-                  <p className="audio-section__eyebrow">Sync</p>
-                  <p className="audio-section__title">Synchronized zones</p>
-                  <p className="audio-section__hint">Keep rooms in phase with grouped, synchronized playback.</p>
-                </div>
-                <span className="zone-count zone-count--compact">
-                  <span className="zone-count__value">{groupCards.length}</span>
-                  <span className="zone-count__label">groups</span>
-                </span>
-              </div>
-              <div className="audio-groups audio-groups--inline">
-                {groupCards.map(({ group, members, anyActive, leaderState, protocol }) => {
-                  const updatedLabel = new Date(group.updatedAt).toLocaleTimeString();
-                const memberCount = members.length;
-                const leader =
-                  leaderState ?? {
-                    id: group.leader,
-                    name: group.leaderName,
-                    state: '',
-                    title: '',
-                    artist: '',
-                    album: '',
-                    station: '',
-                    coverUrl: '',
-                    coverurl: '',
-                  };
-                const playbackState = (leader.state ?? '').toLowerCase() || 'idle';
-                const title = leader.title?.trim() || leader.station?.trim() || 'Idle';
-                const subtitle =
-                  leader.artist?.trim() || leader.album?.trim() || leader.sourceName?.trim() || 'Group leader';
-                const cover =
-                  leader.coverUrl || leader.coverurl || 'https://dummyimage.com/160x160/0f0f0f/ffffff&text=Audio';
-                const techParts = formatTech(leader.tech);
-                return (
-                  <article
-                    key={`${group.backend}-${group.leader}`}
-                    className={`audio-group-card audio-group-card--compact ${anyActive ? 'is-active' : ''}`}
-                  >
-                    <div className="audio-group__head">
-                      <div>
-                        <p className="audio-group__backend">{formatBackend(group.backend)}</p>
-                        <p className="audio-group__name">{group.leaderName}</p>
-                        <div className="audio-group__tags">
-                          <span className="audio-chip audio-chip--ghost">Leader #{group.leader}</span>
-                          <span className="audio-chip">{memberCount} members</span>
-                          {protocol && <span className="audio-protocol-pill">{protocol}</span>}
-                        </div>
-                      </div>
-                      <div className="audio-group__meta">
-                        <span className="audio-group__updated">{updatedLabel}</span>
-                      </div>
-                    </div>
-                    <div className="audio-group__media">
-                      <div className="audio-group__cover">
-                        <img src={cover} alt="" />
-                        <span className={`audio-state audio-state--${playbackState}`}>{playbackState}</span>
-                      </div>
-                      <div className="audio-group__now audio-media">
-                        <div className="audio-group__meta-block">
-                          <p className="audio-group__label">Now playing</p>
-                          <p className="audio-group__title">{title}</p>
-                          <p className="audio-group__subtitle">{subtitle}</p>
-                        </div>
-                        <TechSummary techParts={techParts} protocol={protocol} />
-                      </div>
-                    </div>
-                    <div className="audio-group__body audio-group__body--inline">
-                      <div className="audio-group__members">
-                        <p className="audio-group__label">Members</p>
-                        <div className="audio-group__chips">
-                          {members.map((member) => (
-                            <span key={member.id} className="audio-group__chip">
-                              {member.name ?? `Zone ${member.id}`}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-            </div>
-          </section>
         )}
 
         <section className="audio-section">
@@ -942,211 +1020,348 @@ export default function AudioView(): JSX.Element {
             <div className="zones-host-card__top">
               <div>
                 <p className="audio-section__eyebrow">Zones</p>
-                <p className="audio-section__title">Single zones</p>
-                <p className="audio-section__hint">Monitor standalone rooms and the streams they are running.</p>
-                <div className="audio-pipeline">
-                  <span className="audio-pipeline__item">Source</span>
-                  <span className="audio-pipeline__arrow">→</span>
-                  <span className="audio-pipeline__item">Resolver</span>
-                  <span className="audio-pipeline__arrow">→</span>
-                  <span className="audio-pipeline__item">Manager</span>
-                  <span className="audio-pipeline__arrow">→</span>
-                  <span className="audio-pipeline__item">Engine</span>
-                  <span className="audio-pipeline__arrow">→</span>
-                  <span className="audio-pipeline__item">Profiles</span>
-                  <span className="audio-pipeline__arrow">→</span>
-                  <span className="audio-pipeline__item">Subscribers</span>
-                  <span className="audio-pipeline__arrow">→</span>
-                  <span className="audio-pipeline__item">Outputs</span>
+                <p className="audio-section__title">Sessions</p>
+                {audioDensity === 'detailed' && (
+                  <>
+                      <p className="audio-section__hint">Monitor grouped and standalone rooms, plus their streams.</p>
+                      <div className="audio-pipeline">
+                        <span className="audio-pipeline__item">Source</span>
+                        <span className="audio-pipeline__arrow">→</span>
+                        <span className="audio-pipeline__item">Resolver</span>
+                        <span className="audio-pipeline__arrow">→</span>
+                        <span className="audio-pipeline__item">Manager</span>
+                        <span className="audio-pipeline__arrow">→</span>
+                        <span className="audio-pipeline__item">Engine</span>
+                        <span className="audio-pipeline__arrow">→</span>
+                        <span className="audio-pipeline__item">Profiles</span>
+                        <span className="audio-pipeline__arrow">→</span>
+                        <span className="audio-pipeline__item">Subscribers</span>
+                        <span className="audio-pipeline__arrow">→</span>
+                        <span className="audio-pipeline__item">Outputs</span>
+                      </div>
+                      <p className="audio-pipeline__detail">
+                        Resolve source → create session → spawn ffmpeg → buffer → publish streams · prefer lossless paths whenever possible.
+                      </p>
+                    </>
+                  )}
                 </div>
-                <p className="audio-pipeline__detail">
-                  Resolve source → create session → spawn ffmpeg → buffer → publish streams · prefer lossless paths whenever possible.
-                </p>
-              </div>
-              <div className="zone-count zone-count--compact">
-                <span className="zone-count__value">{soloStates.length}</span>
-                <span className="zone-count__label">zones</span>
-              </div>
+                <div className="zone-count zone-count--compact">
+                  <span className="zone-count__value">{renderEntries.length}</span>
+                  <span className="zone-count__label">sessions</span>
+                </div>
             </div>
-            <div className="audio-snapshot">
-              <div className="audio-snapshot__section">
-                <div className="audio-snapshot__section-head">Routing</div>
-                <div className="audio-snapshot__grid">
-                  <div className="audio-snapshot__item">
-                    <span className="audio-snapshot__label">Active sessions</span>
-                    <span className="audio-snapshot__value">{activeCount}</span>
+            {audioDensity === 'detailed' && (
+                <div className="audio-snapshot">
+                  <div className="audio-snapshot__section">
+                    <div className="audio-snapshot__section-head">Routing</div>
+                    <div className="audio-snapshot__grid">
+                      <div className="audio-snapshot__item">
+                        <span className="audio-snapshot__label">Active sessions</span>
+                        <span className="audio-snapshot__value">{activeCount}</span>
+                      </div>
+                      <div className="audio-snapshot__item">
+                        <span className="audio-snapshot__label">Streams</span>
+                        <span className="audio-snapshot__value">{streamTotals.streams}</span>
+                      </div>
+                      <div className="audio-snapshot__item">
+                        <span className="audio-snapshot__label">Inputs</span>
+                        {renderSnapshotChips(Array.from(streamTotals.inputProviders.values()))}
+                      </div>
+                      <div className="audio-snapshot__item">
+                        <span className="audio-snapshot__label">Outputs</span>
+                        {renderSnapshotChips(Array.from(streamTotals.outputTargets.values()))}
+                      </div>
+                      <div className="audio-snapshot__item">
+                        <span className="audio-snapshot__label">Protocols</span>
+                        {renderSnapshotChips(Array.from(streamTotals.protocols.values()))}
+                      </div>
+                      <div className="audio-snapshot__item">
+                        <span className="audio-snapshot__label">Profiles</span>
+                        {renderSnapshotChips(
+                          Array.from(streamTotals.activeProfileCounts.entries()).map(
+                            ([profile, count]) => `${profile} ${count}`,
+                          ),
+                        )}
+                      </div>
+                      <div className="audio-snapshot__item">
+                        <span className="audio-snapshot__label">HTTP outputs</span>
+                        <span className="audio-snapshot__value">
+                          {streamTotals.httpOutputs ? `${streamTotals.httpOutputs}` : '—'}
+                        </span>
+                      </div>
+                      <div className="audio-snapshot__item">
+                        <span className="audio-snapshot__label">Lossless paths</span>
+                        <span className="audio-snapshot__value">
+                          {streamTotals.losslessPaths ? `${streamTotals.losslessPaths}` : '0'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="audio-snapshot__item">
-                    <span className="audio-snapshot__label">Streams</span>
-                    <span className="audio-snapshot__value">{streamTotals.streams}</span>
-                  </div>
-                  <div className="audio-snapshot__item">
-                    <span className="audio-snapshot__label">Inputs</span>
-                    {renderSnapshotChips(Array.from(streamTotals.inputProviders.values()))}
-                  </div>
-                  <div className="audio-snapshot__item">
-                    <span className="audio-snapshot__label">Outputs</span>
-                    {renderSnapshotChips(Array.from(streamTotals.outputTargets.values()))}
-                  </div>
-                  <div className="audio-snapshot__item">
-                    <span className="audio-snapshot__label">Protocols</span>
-                    {renderSnapshotChips(Array.from(streamTotals.protocols.values()))}
-                  </div>
-                  <div className="audio-snapshot__item">
-                    <span className="audio-snapshot__label">Profiles</span>
-                    {renderSnapshotChips(
-                      Array.from(streamTotals.activeProfileCounts.entries()).map(
-                        ([profile, count]) => `${profile} ${count}`,
-                      ),
-                    )}
-                  </div>
-                  <div className="audio-snapshot__item">
-                    <span className="audio-snapshot__label">HTTP outputs</span>
-                    <span className="audio-snapshot__value">
-                      {streamTotals.httpOutputs ? `${streamTotals.httpOutputs}` : '—'}
-                    </span>
-                  </div>
-                  <div className="audio-snapshot__item">
-                    <span className="audio-snapshot__label">Lossless paths</span>
-                    <span className="audio-snapshot__value">
-                      {streamTotals.losslessPaths ? `${streamTotals.losslessPaths}` : '0'}
-                    </span>
+                  <div className="audio-snapshot__section">
+                    <div className="audio-snapshot__section-head">Performance</div>
+                    <div className="audio-snapshot__grid">
+                      <div className="audio-snapshot__item">
+                        <span className="audio-snapshot__label">Buffered</span>
+                        <span className="audio-snapshot__value">
+                          {formatBytes(streamTotals.bufferedBytes) ?? '—'}
+                          {streamTotals.maxBufferedBytes > 0 ? (
+                            <span className="audio-snapshot__value-muted">
+                              {' '}
+                              · peak {formatBytes(streamTotals.maxBufferedBytes)}
+                            </span>
+                          ) : null}
+                        </span>
+                      </div>
+                      <div className="audio-snapshot__item">
+                        <span className="audio-snapshot__label">Subscribers</span>
+                        <span className="audio-snapshot__value">{streamTotals.subscribers}</span>
+                      </div>
+                      <div className="audio-snapshot__item">
+                        <span className="audio-snapshot__label">Throughput</span>
+                        <span className="audio-snapshot__value">
+                          {formatBitrate(streamTotals.throughputBps) ?? '—'}
+                        </span>
+                      </div>
+                      <div
+                        className={`audio-snapshot__item${streamTotals.resampledZones ? ' audio-snapshot__item--warn' : ''}`}
+                      >
+                        <span className="audio-snapshot__label">Resampling</span>
+                        <span className="audio-snapshot__value">
+                          {streamTotals.resampledZones ? `${streamTotals.resampledZones} zones` : 'None'}
+                        </span>
+                      </div>
+                      <div
+                        className={`audio-snapshot__item${streamTotals.downmixZones || streamTotals.upmixZones ? ' audio-snapshot__item--warn' : ''}`}
+                      >
+                        <span className="audio-snapshot__label">Channel mix</span>
+                        <span className="audio-snapshot__value">
+                          {streamTotals.downmixZones || streamTotals.upmixZones
+                            ? `${streamTotals.downmixZones} downmix · ${streamTotals.upmixZones} upmix`
+                            : 'None'}
+                        </span>
+                      </div>
+                      <div className={`audio-snapshot__item${streamTotals.lossyInputs ? ' audio-snapshot__item--warn' : ''}`}>
+                        <span className="audio-snapshot__label">Input quality</span>
+                        <span className="audio-snapshot__value">
+                          {streamTotals.losslessInputs || streamTotals.lossyInputs
+                            ? `${streamTotals.losslessInputs} lossless · ${streamTotals.lossyInputs} lossy`
+                            : '—'}
+                        </span>
+                      </div>
+                      <div
+                        className={`audio-snapshot__item${streamTotals.lossyOutputs ? ' audio-snapshot__item--warn' : ''}`}
+                      >
+                        <span className="audio-snapshot__label">Lossy outputs</span>
+                        <span className="audio-snapshot__value">
+                          {streamTotals.lossyOutputs ? `${streamTotals.lossyOutputs}` : '0'}
+                        </span>
+                      </div>
+                      <div className="audio-snapshot__item">
+                        <span className="audio-snapshot__label">Prebuffer</span>
+                        <span className="audio-snapshot__value">
+                          {formatBytes(streamTotals.prebufferBytes) ?? '—'}
+                        </span>
+                      </div>
+                      <div className="audio-snapshot__item">
+                        <span className="audio-snapshot__label">Sendspin buffer</span>
+                        <span className="audio-snapshot__value">
+                          {formatBytes(streamTotals.sendspinBufferedBytes) ?? '—'}
+                          {streamTotals.sendspinBufferCapacity > 0 ? (
+                            <span className="audio-snapshot__value-muted">
+                              {' '}
+                              · {Math.min(
+                                100,
+                                Math.round(
+                                  (streamTotals.sendspinBufferedBytes / streamTotals.sendspinBufferCapacity) * 100,
+                                ),
+                              )}
+                              %
+                            </span>
+                          ) : null}
+                        </span>
+                      </div>
+                      <div
+                        className={`audio-snapshot__item${
+                          streamTotals.sendspinLeadCount &&
+                          Math.abs(streamTotals.sendspinLeadDriftSum / streamTotals.sendspinLeadCount) > 5
+                            ? ' audio-snapshot__item--warn'
+                            : ''
+                        }`}
+                      >
+                        <span className="audio-snapshot__label">Sendspin lead</span>
+                        <span className="audio-snapshot__value">
+                          {streamTotals.sendspinLeadCount
+                            ? `${(streamTotals.sendspinLeadDriftSum / streamTotals.sendspinLeadCount).toFixed(1)} ms drift`
+                            : '—'}
+                        </span>
+                      </div>
+                      <div
+                        className={`audio-snapshot__item${streamTotals.engineRestarts ? ' audio-snapshot__item--warn' : ''}`}
+                      >
+                        <span className="audio-snapshot__label">Engine restarts</span>
+                        <span className="audio-snapshot__value">
+                          {streamTotals.engineRestarts ? `${streamTotals.engineRestarts}` : '0'}
+                        </span>
+                      </div>
+                      <div
+                        className={`audio-snapshot__item${streamTotals.subscriberDrops ? ' audio-snapshot__item--warn' : ''}`}
+                      >
+                        <span className="audio-snapshot__label">Subscriber drops</span>
+                        <span className="audio-snapshot__value">
+                          {streamTotals.subscriberDrops ? `${streamTotals.subscriberDrops}` : '0'}
+                        </span>
+                      </div>
+                      <div
+                        className={`audio-snapshot__item${
+                          streamTotals.backpressureDrops || streamTotals.backpressureRecent
+                            ? ' audio-snapshot__item--warn'
+                            : ''
+                        }`}
+                      >
+                        <span className="audio-snapshot__label">Backpressure</span>
+                        <span className="audio-snapshot__value">
+                          {streamTotals.backpressureDrops ? `${streamTotals.backpressureDrops} drops` : '0 drops'}
+                          {streamTotals.backpressureRecent > 0 ? (
+                            <span className="audio-snapshot__value-muted">
+                              {' '}
+                              · {streamTotals.backpressureRecent} last 5m
+                            </span>
+                          ) : null}
+                        </span>
+                      </div>
+                      <div className="audio-snapshot__item">
+                        <span className="audio-snapshot__label">Oldest session</span>
+                        <span className="audio-snapshot__value">
+                          {streamTotals.oldestSessionMs ? formatSeconds(streamTotals.oldestSessionMs / 1000) ?? '—' : '—'}
+                        </span>
+                      </div>
+                      <div
+                        className={`audio-snapshot__item${streamTotals.staleSessions ? ' audio-snapshot__item--warn' : ''}`}
+                      >
+                        <span className="audio-snapshot__label">Stale sessions</span>
+                        <span className="audio-snapshot__value">
+                          {streamTotals.staleSessions ? `${streamTotals.staleSessions}` : '0'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div className="audio-snapshot__section">
-                <div className="audio-snapshot__section-head">Performance</div>
-                <div className="audio-snapshot__grid">
-                  <div className="audio-snapshot__item">
-                    <span className="audio-snapshot__label">Buffered</span>
-                    <span className="audio-snapshot__value">
-                      {formatBytes(streamTotals.bufferedBytes) ?? '—'}
-                      {streamTotals.maxBufferedBytes > 0 ? (
-                        <span className="audio-snapshot__value-muted">
-                          {' '}
-                          · peak {formatBytes(streamTotals.maxBufferedBytes)}
-                        </span>
-                      ) : null}
-                    </span>
-                  </div>
-                  <div className="audio-snapshot__item">
-                    <span className="audio-snapshot__label">Subscribers</span>
-                    <span className="audio-snapshot__value">{streamTotals.subscribers}</span>
-                  </div>
-                  <div className="audio-snapshot__item">
-                    <span className="audio-snapshot__label">Throughput</span>
-                    <span className="audio-snapshot__value">
-                      {formatBitrate(streamTotals.throughputBps) ?? '—'}
-                    </span>
-                  </div>
-                  <div className={`audio-snapshot__item${streamTotals.resampledZones ? ' audio-snapshot__item--warn' : ''}`}>
-                    <span className="audio-snapshot__label">Resampling</span>
-                    <span className="audio-snapshot__value">
-                      {streamTotals.resampledZones ? `${streamTotals.resampledZones} zones` : 'None'}
-                    </span>
-                  </div>
-                  <div className={`audio-snapshot__item${streamTotals.downmixZones || streamTotals.upmixZones ? ' audio-snapshot__item--warn' : ''}`}>
-                    <span className="audio-snapshot__label">Channel mix</span>
-                    <span className="audio-snapshot__value">
-                      {streamTotals.downmixZones || streamTotals.upmixZones
-                        ? `${streamTotals.downmixZones} downmix · ${streamTotals.upmixZones} upmix`
-                        : 'None'}
-                    </span>
-                  </div>
-                  <div className={`audio-snapshot__item${streamTotals.lossyInputs ? ' audio-snapshot__item--warn' : ''}`}>
-                    <span className="audio-snapshot__label">Input quality</span>
-                    <span className="audio-snapshot__value">
-                      {streamTotals.losslessInputs || streamTotals.lossyInputs
-                        ? `${streamTotals.losslessInputs} lossless · ${streamTotals.lossyInputs} lossy`
-                        : '—'}
-                    </span>
-                  </div>
-                  <div className={`audio-snapshot__item${streamTotals.lossyOutputs ? ' audio-snapshot__item--warn' : ''}`}>
-                    <span className="audio-snapshot__label">Lossy outputs</span>
-                    <span className="audio-snapshot__value">
-                      {streamTotals.lossyOutputs ? `${streamTotals.lossyOutputs}` : '0'}
-                    </span>
-                  </div>
-                  <div className="audio-snapshot__item">
-                    <span className="audio-snapshot__label">Prebuffer</span>
-                    <span className="audio-snapshot__value">
-                      {formatBytes(streamTotals.prebufferBytes) ?? '—'}
-                    </span>
-                  </div>
-                  <div className="audio-snapshot__item">
-                    <span className="audio-snapshot__label">Sendspin buffer</span>
-                    <span className="audio-snapshot__value">
-                      {formatBytes(streamTotals.sendspinBufferedBytes) ?? '—'}
-                      {streamTotals.sendspinBufferCapacity > 0 ? (
-                        <span className="audio-snapshot__value-muted">
-                          {' '}
-                          · {Math.min(100, Math.round((streamTotals.sendspinBufferedBytes / streamTotals.sendspinBufferCapacity) * 100))}%
-                        </span>
-                      ) : null}
-                    </span>
-                  </div>
-                  <div
-                    className={`audio-snapshot__item${
-                      streamTotals.sendspinLeadCount &&
-                      Math.abs(streamTotals.sendspinLeadDriftSum / streamTotals.sendspinLeadCount) > 5
-                        ? ' audio-snapshot__item--warn'
-                        : ''
-                    }`}
-                  >
-                    <span className="audio-snapshot__label">Sendspin lead</span>
-                    <span className="audio-snapshot__value">
-                      {streamTotals.sendspinLeadCount
-                        ? `${(streamTotals.sendspinLeadDriftSum / streamTotals.sendspinLeadCount).toFixed(1)} ms drift`
-                        : '—'}
-                    </span>
-                  </div>
-                  <div className={`audio-snapshot__item${streamTotals.engineRestarts ? ' audio-snapshot__item--warn' : ''}`}>
-                    <span className="audio-snapshot__label">Engine restarts</span>
-                    <span className="audio-snapshot__value">
-                      {streamTotals.engineRestarts ? `${streamTotals.engineRestarts}` : '0'}
-                    </span>
-                  </div>
-                  <div className={`audio-snapshot__item${streamTotals.subscriberDrops ? ' audio-snapshot__item--warn' : ''}`}>
-                    <span className="audio-snapshot__label">Subscriber drops</span>
-                    <span className="audio-snapshot__value">
-                      {streamTotals.subscriberDrops ? `${streamTotals.subscriberDrops}` : '0'}
-                    </span>
-                  </div>
-                  <div
-                    className={`audio-snapshot__item${
-                      streamTotals.backpressureDrops || streamTotals.backpressureRecent
-                        ? ' audio-snapshot__item--warn'
-                        : ''
-                    }`}
-                  >
-                    <span className="audio-snapshot__label">Backpressure</span>
-                    <span className="audio-snapshot__value">
-                      {streamTotals.backpressureDrops ? `${streamTotals.backpressureDrops} drops` : '0 drops'}
-                      {streamTotals.backpressureRecent > 0 ? (
-                        <span className="audio-snapshot__value-muted">
-                          {' '}
-                          · {streamTotals.backpressureRecent} last 5m
-                        </span>
-                      ) : null}
-                    </span>
-                  </div>
-                  <div className="audio-snapshot__item">
-                    <span className="audio-snapshot__label">Oldest session</span>
-                    <span className="audio-snapshot__value">
-                      {streamTotals.oldestSessionMs ? formatSeconds(streamTotals.oldestSessionMs / 1000) ?? '—' : '—'}
-                    </span>
-                  </div>
-                  <div className={`audio-snapshot__item${streamTotals.staleSessions ? ' audio-snapshot__item--warn' : ''}`}>
-                    <span className="audio-snapshot__label">Stale sessions</span>
-                    <span className="audio-snapshot__value">
-                      {streamTotals.staleSessions ? `${streamTotals.staleSessions}` : '0'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
+              )}
             <div className="audio-grid audio-grid--inset">
-              {soloStates.map((state) => {
+              {renderEntries.map((entry) => {
+                if (entry.type === 'group') {
+                  const { card, leaderId } = entry;
+                  const leader =
+                    card.leaderState ?? {
+                      id: card.group.leader,
+                      name: card.group.leaderName,
+                      state: '',
+                      title: '',
+                      artist: '',
+                      album: '',
+                      station: '',
+                      coverUrl: '',
+                      coverurl: '',
+                      tech: undefined,
+                    };
+                  const playbackStateRaw = (leader.state ?? '').toString().trim().toLowerCase();
+                  const playbackState = playbackStateRaw || 'idle';
+                  const title = leader.title?.trim() || leader.station?.trim() || 'Idle';
+                  const subtitle = leader.artist?.trim() || leader.album?.trim() || leader.sourceName?.trim() || '';
+                  const cover =
+                    leader.coverUrl || leader.coverurl || 'https://dummyimage.com/160x160/0f0f0f/ffffff&text=Audio';
+                  const techParts = formatTech(leader.tech);
+                  const protocol = leader.tech?.sendspin?.protocol ?? null;
+                  const sessionAge =
+                    leader.tech?.session?.startedAt != null
+                      ? formatSeconds((Date.now() - leader.tech.session.startedAt) / 1000)
+                      : null;
+                  const lastUpdate =
+                    leader.tech?.session?.updatedAt != null ? formatAgeMs(leader.tech.session.updatedAt) : null;
+                  const isStale =
+                    leader.tech?.session?.updatedAt != null
+                      ? Date.now() - (leader.tech.session.updatedAt < 1_000_000_000_000
+                          ? leader.tech.session.updatedAt * 1000
+                          : leader.tech.session.updatedAt) > 30_000
+                      : false;
+                  const inputKind = leader.tech?.input?.kind ?? null;
+                  const outputProfiles = leader.tech?.output?.profiles?.length
+                    ? leader.tech.output.profiles.map((p) => p.toUpperCase()).join(', ')
+                    : null;
+                  const leadMs =
+                    leader.tech?.sendspin?.leadUs != null
+                      ? Math.round((leader.tech.sendspin.leadUs / 1000) * 10) / 10
+                      : null;
+                  const targetMs =
+                    leader.tech?.sendspin?.targetLeadUs != null
+                      ? Math.round((leader.tech.sendspin.targetLeadUs / 1000) * 10) / 10
+                      : null;
+                  const leadDrift =
+                    leadMs != null && targetMs != null ? Math.round((leadMs - targetMs) * 10) / 10 : null;
+                  const isActive =
+                    playbackState === 'playing' ||
+                    playbackState === 'play' ||
+                    playbackState === 'paused' ||
+                    playbackState === 'pause';
+                  const accent = groupAccentByLeader.get(leaderId) ?? groupAccentPalette[0];
+                  const groupSpan = Math.max(1, Math.min(card.members.length || 1, 4));
+                  const groupIdLabel = card.group.externalId ? `#${card.group.externalId}` : 'Group';
+                  return (
+                    <article
+                      key={`group-${leaderId}`}
+                      className={`audio-card audio-card--group ${audioDensity === 'overview' ? 'is-compact' : ''}`}
+                      style={{ '--group-accent': accent, gridColumn: `span ${groupSpan}` } as React.CSSProperties}
+                    >
+                      <div className="audio-card__main audio-media">
+                        <div className="audio-card__cover">
+                          <img src={cover} alt="" />
+                          <span className={`audio-state audio-state--${playbackState}`}>{playbackState}</span>
+                        </div>
+                        <div className="audio-card__body">
+                          <div className="audio-card__head">
+                            <div className="audio-card__zone">
+                              {card.members.length > 1 ? 'Group session' : leader.name || `Zone ${leader.id}`}
+                            </div>
+                            <div className="audio-card__id">
+                              <span className="audio-card__id-plain">{groupIdLabel}</span>
+                            </div>
+                          </div>
+                          <p className="audio-card__title">{title}</p>
+                          <p className="audio-card__subtitle">{subtitle || 'No metadata yet'}</p>
+                          {audioDensity === 'detailed' &&
+                            (sessionAge ||
+                              lastUpdate ||
+                              inputKind ||
+                              outputProfiles ||
+                              leadMs != null ||
+                              leadDrift != null) && (
+                              <div className={`audio-card__meta${isStale ? ' is-stale' : ''}`}>
+                                {sessionAge && <span>Session {sessionAge}</span>}
+                                {lastUpdate && <span>Updated {lastUpdate} ago</span>}
+                                {inputKind && <span>Input {inputKind}</span>}
+                                {outputProfiles && <span>Profiles {outputProfiles}</span>}
+                                {leadMs != null && (
+                                  <span>
+                                    Lead {leadMs} ms
+                                    {leadDrift != null ? ` (${leadDrift >= 0 ? '+' : ''}${leadDrift} ms)` : ''}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          {audioDensity === 'detailed' && <TechSummary techParts={techParts} protocol={protocol} />}
+                          <div className="audio-group-tile__members">
+                            {card.members.map((member) => (
+                              <span key={member.id} className="audio-group-tile__member">
+                                {member.name ?? `Zone ${member.id}`}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                }
+                const state = entry.state;
                 const playbackStateRaw = (state.state ?? '').toString().trim().toLowerCase();
                 const playbackState = playbackStateRaw || 'idle';
                 const title = state.title?.trim() || state.station?.trim() || 'Idle';
@@ -1187,10 +1402,13 @@ export default function AudioView(): JSX.Element {
                   playbackState === 'paused' ||
                   playbackState === 'pause';
                 return (
-                <article key={state.id} className={`audio-card ${isActive ? 'is-active' : ''}`}>
-                  <div className="audio-card__main audio-media">
-                    <div className="audio-card__cover">
-                      <img src={cover} alt="" />
+                  <article
+                    key={state.id}
+                    className={`audio-card ${isActive ? 'is-active' : ''} ${audioDensity === 'overview' ? 'is-compact' : ''}`}
+                  >
+                    <div className="audio-card__main audio-media">
+                      <div className="audio-card__cover">
+                        <img src={cover} alt="" />
                         <span className={`audio-state audio-state--${playbackState}`}>{playbackState}</span>
                       </div>
                       <div className="audio-card__body">
@@ -1202,21 +1420,22 @@ export default function AudioView(): JSX.Element {
                         </div>
                         <p className="audio-card__title">{title}</p>
                         <p className="audio-card__subtitle">{subtitle || 'No metadata yet'}</p>
-                        {(sessionAge || lastUpdate || inputKind || outputProfiles || leadMs != null || leadDrift != null) && (
-                          <div className={`audio-card__meta${isStale ? ' is-stale' : ''}`}>
-                            {sessionAge && <span>Session {sessionAge}</span>}
-                            {lastUpdate && <span>Updated {lastUpdate} ago</span>}
-                            {inputKind && <span>Input {inputKind}</span>}
-                            {outputProfiles && <span>Profiles {outputProfiles}</span>}
-                            {leadMs != null && (
-                              <span>
-                                Lead {leadMs} ms
-                                {leadDrift != null ? ` (${leadDrift >= 0 ? '+' : ''}${leadDrift} ms)` : ''}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                        <TechSummary techParts={techParts} protocol={protocol} />
+                        {audioDensity === 'detailed' &&
+                          (sessionAge || lastUpdate || inputKind || outputProfiles || leadMs != null || leadDrift != null) && (
+                            <div className={`audio-card__meta${isStale ? ' is-stale' : ''}`}>
+                              {sessionAge && <span>Session {sessionAge}</span>}
+                              {lastUpdate && <span>Updated {lastUpdate} ago</span>}
+                              {inputKind && <span>Input {inputKind}</span>}
+                              {outputProfiles && <span>Profiles {outputProfiles}</span>}
+                              {leadMs != null && (
+                                <span>
+                                  Lead {leadMs} ms
+                                  {leadDrift != null ? ` (${leadDrift >= 0 ? '+' : ''}${leadDrift} ms)` : ''}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        {audioDensity === 'detailed' && <TechSummary techParts={techParts} protocol={protocol} />}
                       </div>
                     </div>
                   </article>
