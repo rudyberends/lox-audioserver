@@ -14,8 +14,8 @@ const log = createLogger('Alerts', 'Upload');
 export async function audioGroupedAlert(command: string) {
   const parts = splitCommand(command);
   const type = (parts[2] ?? '').toLowerCase();
-  const hasOff = parts.includes('off');
-  const offIndex = parts.indexOf('off');
+  const offIndex = parts.findIndex((part) => part === 'off' || part === 'stop');
+  const hasOff = offIndex !== -1;
   const zonesIndex = hasOff ? offIndex + 1 : 3;
   const zonesPart = parts[zonesIndex] ?? '';
   const zones = zonesPart
