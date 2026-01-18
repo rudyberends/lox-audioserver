@@ -25,7 +25,12 @@ import { discoverSonosDevices } from '@/modules/audio/outputs/sonos/sonosDiscove
 import { sendspinCore } from '@/modules/http/sendspin/sendspinCore';
 import { discoverSpotifyConnectDevices } from '@/modules/audio/outputs/spotify/spotifyConnectDiscovery';
 import { zoneManager } from '@/modules/zones/zoneManager';
-import { notifyStorageAdded, notifyStorageListUpdated, notifyStorageRemoved } from '@/modules/loxone/ws/notifier';
+import {
+  notifyLineInChanged,
+  notifyStorageAdded,
+  notifyStorageListUpdated,
+  notifyStorageRemoved,
+} from '@/modules/loxone/ws/notifier';
 import { contentManager } from '@/modules/content/contentManager';
 import { musicAssistantStreamService } from '@/modules/content/providers/musicassistant/musicAssistantStreamService';
 import type { StorageConfig } from '@/modules/content/storage/storageManager';
@@ -1746,7 +1751,7 @@ export class AdminApiHandler {
     }
 
     if (req.method === 'POST' && isInputsUpdate) {
-          const body = (await this.readJsonBody(req)) as
+      const body = (await this.readJsonBody(req)) as
         | {
             airplay?: { enabled?: boolean };
             spotify?: { enabled?: boolean };
@@ -1758,6 +1763,16 @@ export class AdminApiHandler {
         this.sendJson(res, 400, { error: 'invalid-inputs-payload' });
         return;
       }
+
+      const lineInUpdated =
+        typeof body.lineIn === 'object' &&
+        body.lineIn !== null &&
+        Object.prototype.hasOwnProperty.call(body.lineIn, 'inputs');
+      const lineInInputs = lineInUpdated
+        ? Array.isArray(body.lineIn?.inputs)
+          ? body.lineIn?.inputs
+          : []
+        : null;
 
       await updateConfig((cfg) => {
         if (!cfg.inputs) cfg.inputs = this.defaultConfig().inputs;
@@ -1773,11 +1788,13 @@ export class AdminApiHandler {
             enabled: Boolean(body.bluetooth.enabled),
           };
         }
-        if (body.lineIn && typeof body.lineIn === 'object' && 'inputs' in body.lineIn) {
-          const inputs = Array.isArray(body.lineIn.inputs) ? body.lineIn.inputs : [];
-          cfg.inputs!.lineIn = { ...(cfg.inputs!.lineIn ?? {}), inputs };
+        if (lineInUpdated) {
+          cfg.inputs!.lineIn = { ...(cfg.inputs!.lineIn ?? {}), inputs: lineInInputs ?? [] };
         }
       });
+      if (lineInUpdated) {
+        notifyLineInChanged();
+      }
       await this.reloadZones();
       this.sendJson(res, 204, {});
       return;
