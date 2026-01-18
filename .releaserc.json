@@ -3,6 +3,7 @@
     "main",
     {
       "name": "beta",
+      "range": "4.x",
       "prerelease": true,
       "channel": "beta"
     }
