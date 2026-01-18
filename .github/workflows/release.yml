@@ -67,9 +67,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.version_after.outputs.version }}"
-          BUILD_TS=$(date -u +%Y%m%d%H%M%S)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "build_ts=$BUILD_TS" >> "$GITHUB_OUTPUT"
 
       - name: Define Docker tags
         id: tags
@@ -107,7 +105,6 @@ jobs:
           tags: ${{ steps.tags.outputs.tags }}
           build-args: |
             BUILD_VERSION=${{ steps.release_meta.outputs.version }}
-            BUILD_TIMESTAMP=${{ steps.release_meta.outputs.build_ts }}
 
   testing:
     if: ${{ github.ref_name == 'testing' }}
