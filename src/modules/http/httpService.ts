@@ -13,6 +13,7 @@ import { AudioStreamHandler } from '@/modules/http/streams/audioStreamHandler';
 import { AudioProxyHandler } from '@/modules/http/streams/audioProxyHandler';
 import { LineInIngestWebSocket } from '@/modules/http/streams/lineInIngestWs';
 import { LineInIngestTcp } from '@/modules/http/streams/lineInIngestTcp';
+import { LineInApiHandler } from '@/modules/http/lineInApi/lineInApiHandler';
 import { getSystemConfig } from '@/domain/config/configStore';
 import { networkInterfaces } from 'node:os';
 
@@ -28,6 +29,7 @@ export class HttpService {
   private readonly audioProxy: AudioProxyHandler;
   private readonly lineInIngestWs: LineInIngestWebSocket;
   private readonly lineInIngestTcp: LineInIngestTcp;
+  private readonly lineInApi: LineInApiHandler;
   private readonly sendspin = new SendspinGateway();
   private readonly snapcast = new SnapcastGateway();
   private server?: http.Server;
@@ -44,6 +46,7 @@ export class HttpService {
     this.audioProxy = new AudioProxyHandler();
     this.lineInIngestWs = new LineInIngestWebSocket();
     this.lineInIngestTcp = new LineInIngestTcp();
+    this.lineInApi = new LineInApiHandler();
   }
 
   public async start(): Promise<void> {
@@ -139,6 +142,11 @@ export class HttpService {
 
     if (this.audioStream.matches(pathname)) {
       await this.audioStream.handle(req, res, pathname);
+      return;
+    }
+
+    if (this.lineInApi.matches(pathname)) {
+      await this.lineInApi.handle(req, res, pathname);
       return;
     }
 

@@ -56,6 +56,11 @@ type ContentConfigResponse = {
         inputs?: LineInInputConfig[] | null;
       };
     };
+    system?: {
+      audioserver?: {
+        ip?: string | null;
+      };
+    };
   };
 };
 
@@ -125,6 +130,9 @@ type LineInFormState = {
   metadataEnabled: boolean;
   draftId: string;
   sendspinClientId: string;
+  useLoxAudioBridge: boolean;
+  vadThresholdDb: string;
+  vadHoldMs: string;
 };
 
 enum LineInIconType {
@@ -185,6 +193,47 @@ function describeLineInSource(sourceType: LineInSourceType): string {
   return sourceType;
 }
 
+type LineInBridgeStatus = {
+  linein_id: string;
+  connected: boolean;
+  state: string | null;
+  received_at: string | null;
+};
+
+const LINEIN_STATUS_POLL_MS = 5000;
+
+function parseOptionalNumber(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseNumberOrDefault(value: string, fallback: number): number {
+  const parsed = parseOptionalNumber(value);
+  return typeof parsed === 'number' ? parsed : fallback;
+}
+
+function formatLineInState(state?: string | null): string | null {
+  if (!state) return null;
+  return state
+    .toLowerCase()
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+async function fetchLineInBridgeStatus(inputId: string): Promise<LineInBridgeStatus | null> {
+  try {
+    const res = await fetch(`/api/linein/${encodeURIComponent(inputId)}/bridge-status`);
+    if (!res.ok) {
+      return null;
+    }
+    return (await res.json()) as LineInBridgeStatus;
+  } catch {
+    return null;
+  }
+}
+
 function resolveLineInIconUrl(iconType: LineInIconType): string {
   const base = (import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/';
   const prefix = base.endsWith('/') ? base : `${base}/`;
@@ -231,6 +280,15 @@ function getLineInIngestWsUrl(baseUrl: string): string {
 function getLineInIngestTcpHost(): string {
   if (typeof window === 'undefined') return '<audioserver-host>';
   return window.location.hostname || '<audioserver-host>';
+}
+
+function getLineInBridgeServerUrl(configuredIp?: string | null): string {
+  const host = configuredIp?.trim();
+  if (host) {
+    return `http://${host}:7090`;
+  }
+  if (typeof window === 'undefined') return 'http://<lox-host>:7090';
+  return `http://${window.location.hostname || '<lox-host>'}:7090`;
 }
 
 type FileSystemEntry = {
@@ -645,6 +703,9 @@ const createEmptyLineInForm = (): LineInFormState => ({
   metadataEnabled: true,
   draftId: createLineInId(),
   sendspinClientId: '',
+  useLoxAudioBridge: true,
+  vadThresholdDb: '-45',
+  vadHoldMs: '2000',
 });
 
 const normalizeLineInInputs = (inputs: LineInInputConfig[]): LineInInputConfig[] => {
@@ -764,6 +825,8 @@ export default function ContentView(): JSX.Element {
   const [lineInSubmitting, setLineInSubmitting] = React.useState(false);
   const [lineInEditingId, setLineInEditingId] = React.useState<string | null>(null);
   const [lineInForm, setLineInForm] = React.useState<LineInFormState>(() => createEmptyLineInForm());
+  const [lineInStatuses, setLineInStatuses] = React.useState<Record<string, LineInBridgeStatus>>({});
+  const [audioServerIp, setAudioServerIp] = React.useState<string>('');
   const [sendspinClients, setSendspinClients] = React.useState<SendspinClient[]>([]);
   const [sendspinLoading, setSendspinLoading] = React.useState(false);
   const [sendspinError, setSendspinError] = React.useState<string | null>(null);
@@ -892,6 +955,7 @@ export default function ContentView(): JSX.Element {
         const lineIn = cfg.config?.inputs?.lineIn?.inputs ?? [];
         const currentRadio = content.radio?.tuneInUsername ?? '';
         const currentSpotify = content.spotify?.clientId ?? '';
+        const currentAudioServerIp = cfg.config?.system?.audioserver?.ip ?? '';
         setRadioUsername(currentRadio);
         setInitialRadioUsername(currentRadio);
         setSpotifyClientId(currentSpotify);
@@ -902,6 +966,7 @@ export default function ContentView(): JSX.Element {
             ? content.spotify!.bridges!.map((bridge) => normalizeBridge(bridge))
             : [],
         );
+        setAudioServerIp(typeof currentAudioServerIp === 'string' ? currentAudioServerIp : '');
         setLineInInputs(Array.isArray(lineIn) ? normalizeLineInInputs(lineIn) : []);
         if (currentRadio.trim()) {
           void validateTuneIn(currentRadio);
@@ -1227,6 +1292,12 @@ export default function ContentView(): JSX.Element {
       const rawSource = input.source ?? {};
       const sourceRecord = rawSource as Record<string, unknown>;
       const sendspinClientId = typeof sourceRecord.clientId === 'string' ? sourceRecord.clientId : '';
+      const useLoxAudioBridge =
+        typeof sourceRecord.use_lox_linein_bridge === 'boolean' ? sourceRecord.use_lox_linein_bridge : false;
+      const vadThresholdDb =
+        typeof sourceRecord.vad_threshold_db === 'number' ? String(sourceRecord.vad_threshold_db) : '';
+      const vadHoldMs =
+        typeof sourceRecord.vad_hold_ms === 'number' ? String(sourceRecord.vad_hold_ms) : '';
       setLineInEditingId(input.id ?? null);
       setLineInForm({
         name: input.name ?? '',
@@ -1235,6 +1306,9 @@ export default function ContentView(): JSX.Element {
         metadataEnabled: typeof input.metadataEnabled === 'boolean' ? input.metadataEnabled : true,
         draftId: input.id ?? createLineInId(),
         sendspinClientId,
+        useLoxAudioBridge,
+        vadThresholdDb,
+        vadHoldMs,
       });
     } else {
       setLineInEditingId(null);
@@ -1704,6 +1778,17 @@ export default function ContentView(): JSX.Element {
         } else if ('clientId' in nextSource) {
           delete nextSource.clientId;
         }
+        if (lineInForm.sourceType === 'ingest') {
+          const threshold = parseNumberOrDefault(lineInForm.vadThresholdDb, -45);
+          const holdMs = parseNumberOrDefault(lineInForm.vadHoldMs, 2000);
+          nextSource.use_lox_linein_bridge = lineInForm.useLoxAudioBridge;
+          nextSource.vad_threshold_db = threshold;
+          nextSource.vad_hold_ms = holdMs;
+        } else {
+          delete nextSource.vad_threshold_db;
+          delete nextSource.vad_hold_ms;
+          delete nextSource.use_lox_linein_bridge;
+        }
         const nextEntry: LineInInputConfig = {
           id: lineInEditingId,
           name,
@@ -1721,6 +1806,13 @@ export default function ContentView(): JSX.Element {
         const nextSource: Record<string, unknown> = { type: lineInForm.sourceType };
         if (lineInForm.sourceType === 'sendspin' && lineInForm.sendspinClientId.trim()) {
           nextSource.clientId = lineInForm.sendspinClientId.trim();
+        }
+        if (lineInForm.sourceType === 'ingest') {
+          const threshold = parseNumberOrDefault(lineInForm.vadThresholdDb, -45);
+          const holdMs = parseNumberOrDefault(lineInForm.vadHoldMs, 2000);
+          nextSource.use_lox_linein_bridge = lineInForm.useLoxAudioBridge;
+          nextSource.vad_threshold_db = threshold;
+          nextSource.vad_hold_ms = holdMs;
         }
         nextInputs.push({
           id: nextId,
@@ -1768,6 +1860,38 @@ export default function ContentView(): JSX.Element {
       void handleSendspinDiscovery();
     }
   }, [lineInModalOpen, lineInForm.sourceType, sendspinClients.length, sendspinLoading, sendspinError, handleSendspinDiscovery]);
+
+  React.useEffect(() => {
+    if (contentFilter !== 'linein' || !lineInInputs.length) {
+      return;
+    }
+    let isActive = true;
+    const pollStatus = async () => {
+      const results = await Promise.all(
+        lineInInputs.map(async (input) => {
+          const inputId = input.id ?? '';
+          if (!inputId) return null;
+          return await fetchLineInBridgeStatus(inputId);
+        }),
+      );
+      if (!isActive) return;
+      setLineInStatuses((prev) => {
+        const next = { ...prev };
+        for (const item of results) {
+          if (item?.linein_id) {
+            next[item.linein_id] = item;
+          }
+        }
+        return next;
+      });
+    };
+    void pollStatus();
+    const timer = window.setInterval(pollStatus, LINEIN_STATUS_POLL_MS);
+    return () => {
+      isActive = false;
+      window.clearInterval(timer);
+    };
+  }, [contentFilter, lineInInputs]);
 
   const handleLineInRemove = React.useCallback(
     async (inputId: string, inputName?: string): Promise<void> => {
@@ -2676,9 +2800,6 @@ export default function ContentView(): JSX.Element {
                             )}
                           </div>
                         </div>
-                        <span className="content-linein-source">
-                          {input.source?.type ?? 'ingest'}
-                        </span>
                       </div>
                       <div className="content-linein-actions">
                         <button type="button" className="secondary" onClick={() => openLineInModal(input)}>
@@ -2693,6 +2814,37 @@ export default function ContentView(): JSX.Element {
                         </button>
                       </div>
                     </header>
+                    <div className="content-linein-meta-row">
+                      <span className="content-linein-source">
+                        {input.source?.type === 'ingest' && (input.source as Record<string, unknown>)?.use_lox_linein_bridge
+                          ? 'lox-linein-bridge'
+                          : input.source?.type ?? 'ingest'}
+                      </span>
+                      {input.id && (
+                        <div className="content-linein-status-row">
+                          {(() => {
+                            const status = lineInStatuses[input.id ?? ''];
+                            const connected = status?.connected ?? false;
+                            const stateLabel = formatLineInState(status?.state);
+                            return (
+                              <>
+                                <span
+                                  className={`content-linein-status__pill ${
+                                    connected ? 'is-connected' : 'is-offline'
+                                  }`}
+                                >
+                                  <span className="content-linein-status__dot" aria-hidden="true" />
+                                  {connected ? 'Connected' : 'Offline'}
+                                </span>
+                                {stateLabel && (
+                                  <span className="content-linein-status__state-badge">{stateLabel}</span>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </div>
+                      )}
+                    </div>
                   </article>
                 ))
               ) : (
@@ -2921,6 +3073,7 @@ export default function ContentView(): JSX.Element {
                 const ingestBaseUrl = getLineInIngestBaseUrl();
                 const ingestWsUrl = getLineInIngestWsUrl(ingestBaseUrl);
                 const ingestTcpHost = getLineInIngestTcpHost();
+                const bridgeServerUrl = getLineInBridgeServerUrl(audioServerIp);
                 const ingestId = lineInEditingId ?? lineInForm.draftId ?? '<line-in-id>';
                 return (
                   <div className="content-linein-modal">
@@ -3032,9 +3185,96 @@ export default function ContentView(): JSX.Element {
                   </div>
                   <div className="content-linein-info">
                     <p className="content-linein-info__title">Source type</p>
+                    {lineInForm.sourceType === 'ingest' && (
+                      <div className="content-linein-bridge-choice">
+                        <p className="content-linein-bridge-choice__eyebrow">Feed method</p>
+                        <div className="content-linein-bridge-choice__row">
+                          <div className="content-linein-bridge-choice__text">
+                            <label htmlFor="linein-bridge" className="content-linein-bridge-choice__title">
+                              Use lox-input-bridge
+                            </label>
+                            <p className="content-linein-bridge-choice__hint">
+                              Use Lox-input-bridge for automatic feeding.
+                            </p>
+                          </div>
+                          <label className="content-switch" htmlFor="linein-bridge">
+                            <input
+                              id="linein-bridge"
+                              type="checkbox"
+                              checked={lineInForm.useLoxAudioBridge}
+                              onChange={(e) =>
+                                setLineInForm((prev) => ({ ...prev, useLoxAudioBridge: e.target.checked }))
+                              }
+                            />
+                            <span className="content-switch-slider" />
+                          </label>
+                        </div>
+                      </div>
+                    )}
+                    {lineInForm.sourceType === 'ingest' && (
+                      <div className="content-linein-info__vad">
+                        <p className="content-linein-info__label">VAD settings</p>
+                        <div className="content-linein-info__vad-grid">
+                          <label className="content-linein-info__vad-field">
+                            <span>Threshold (dB)</span>
+                            <input
+                              id="linein-vad-threshold"
+                              type="number"
+                              inputMode="decimal"
+                              value={lineInForm.vadThresholdDb}
+                              onChange={(e) =>
+                                setLineInForm((prev) => ({ ...prev, vadThresholdDb: e.target.value }))
+                              }
+                              placeholder="-45"
+                            />
+                          </label>
+                          <label className="content-linein-info__vad-field">
+                            <span>Hold (ms)</span>
+                            <input
+                              id="linein-vad-hold"
+                              type="number"
+                              inputMode="numeric"
+                              value={lineInForm.vadHoldMs}
+                              onChange={(e) =>
+                                setLineInForm((prev) => ({ ...prev, vadHoldMs: e.target.value }))
+                              }
+                              placeholder="2000"
+                            />
+                          </label>
+                        </div>
+                        <p className="content-linein-info__hint">Control when streaming starts and stops on silence.</p>
+                      </div>
+                    )}
                     <p className="content-linein-info__copy">
                       {lineInForm.sourceType === 'ingest' ? (
-                        'Ingest supports WebSocket and TCP per line-in. The AudioServer never pulls audio; push a stream into one of the endpoints below.'
+                        lineInForm.useLoxAudioBridge ? (
+                          <>
+                            Lox-input-bridge streams audio from a small device into this line-in.
+                            <ol className="content-linein-info__steps">
+                              <li>
+                                Download the binary from{' '}
+                                <a
+                                  href="https://github.com/lox-audioserver/lox-linein-bridge/releases"
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  here
+                                </a>
+                                , and place it in <code>/usr/local/bin</code>.
+                              </li>
+                              <li>
+                                Run:
+                                <code>lox-input-bridge install --server {bridgeServerUrl}</code>
+                              </li>
+                              <li>
+                                Then:
+                                <code>sudo systemctl enable --now lox-input-bridge</code>
+                              </li>
+                            </ol>
+                          </>
+                        ) : (
+                          'Ingest supports WebSocket and TCP per line-in. The AudioServer never pulls audio; push a stream into one of the endpoints below.'
+                        )
                       ) : lineInForm.sourceType === 'sendspin' ? (
                         <>
                           Not functional yet: awaiting confirmation of spec update. See{' '}
@@ -3078,15 +3318,18 @@ export default function ContentView(): JSX.Element {
                         {sendspinError && <p className="content-linein-error">{sendspinError}</p>}
                       </div>
                     )}
-                    {lineInForm.sourceType === 'ingest' && (
-                      <div className="content-linein-info__urls">
-                        <p className="content-linein-info__label">WebSocket ingest</p>
-                        <code>{`${ingestWsUrl}/ingest/${ingestId}`}</code>
-                        <p className="content-linein-info__label">TCP ingest</p>
-                        <code>{`tcp://${ingestTcpHost}:7080`}</code>
-                        <p className="content-linein-info__hint">
-                          Send the line-in ID as the first line (ending with newline), then stream raw audio.
-                        </p>
+                    {lineInForm.sourceType === 'ingest' && !lineInForm.useLoxAudioBridge && (
+                      <div className="content-linein-info__manual">
+                        <p className="content-linein-info__label">Manual ingest</p>
+                        <div className="content-linein-info__urls">
+                          <p className="content-linein-info__label">WebSocket ingest</p>
+                          <code>{`${ingestWsUrl}/ingest/${ingestId}`}</code>
+                          <p className="content-linein-info__label">TCP ingest</p>
+                          <code>{`tcp://${ingestTcpHost}:7080`}</code>
+                          <p className="content-linein-info__hint">
+                            Send the line-in ID as the first line (ending with newline), then stream raw audio.
+                          </p>
+                        </div>
                       </div>
                     )}
                   </div>
