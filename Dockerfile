@@ -14,7 +14,9 @@ RUN apt-get update \
         python3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm ci
+RUN npm config delete proxy \
+    && npm config delete https-proxy \
+    && npm ci
 COPY . .
 RUN npm run build
 RUN npm prune --omit=dev
