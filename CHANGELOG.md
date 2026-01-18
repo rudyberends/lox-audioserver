@@ -1,3 +1,7 @@
+## 4.0.0-beta.2 (2026-01-18)
+
+* fix(docker): clear npm proxy before install ([fb23f64](https://github.com/rudyberends/lox-audioserver/commit/fb23f64))
+
 ## 4.0.0-beta.1 (2026-01-18)
 
 * fix: trigger beta release ([cd99e24](https://github.com/rudyberends/lox-audioserver/commit/cd99e24))
