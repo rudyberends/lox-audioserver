@@ -101,8 +101,8 @@
   bottom: -6px;
   height: 3px;
   border-radius: 18px;
-  background: #1f4d7a;
-  box-shadow: 0 6px 14px -10px rgba(31, 77, 122, 0.45);
+  background: #1d232a;
+  box-shadow: 0 6px 14px -10px rgba(29, 35, 42, 0.45);
 }
 
 .tabs__label {

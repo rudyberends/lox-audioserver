@@ -29,15 +29,15 @@
 }
 
 .global-alert--error {
-  border-color: rgba(213, 26, 41, 0.3);
-  background: rgba(249, 77, 95, 0.12);
-  color: #b02330;
+  border-color: rgba(29, 35, 42, 0.2);
+  background: rgba(29, 35, 42, 0.08);
+  color: #1d232a;
 }
 
 .global-alert--success {
-  border-color: rgba(31, 77, 122, 0.35);
-  background: rgba(31, 77, 122, 0.16);
-  color: #268111;
+  border-color: rgba(29, 35, 42, 0.2);
+  background: rgba(29, 35, 42, 0.08);
+  color: #1d232a;
 }
 
 @keyframes alert-slide-in {

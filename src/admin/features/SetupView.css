@@ -202,7 +202,7 @@
 }
 
 .form-control input:focus {
-  outline: 2px solid rgba(31, 77, 122, 0.4);
+  outline: 2px solid rgba(29, 35, 42, 0.4);
   outline-offset: 2px;
 }
 
@@ -315,6 +315,18 @@
   color: var(--color-subtle);
 }
 
+.setup-modal-warning {
+  margin: 0.4rem 0 0;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  background: #ffffff;
+  color: #111827;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  box-shadow: 0 12px 26px -22px rgba(15, 23, 42, 0.35);
+}
+
 .paired-copy {
   display: flex;
   flex-direction: column;
@@ -377,8 +389,8 @@
   padding: 0.65rem 0.85rem;
   border-radius: 8px;
   border: 1px solid var(--color-border);
-  background: rgba(234, 179, 8, 0.1);
-  color: #92400e;
+  background: rgba(29, 35, 42, 0.08);
+  color: #1d232a;
   font-weight: 600;
 }
 
@@ -470,9 +482,9 @@
 .setup-error {
   padding: 0.65rem 0.9rem;
   border-radius: 8px;
-  border: 1px solid rgba(220, 38, 38, 0.35);
-  color: var(--color-danger);
-  background: rgba(220, 38, 38, 0.08);
+  border: 1px solid rgba(29, 35, 42, 0.35);
+  color: #1d232a;
+  background: rgba(29, 35, 42, 0.08);
 }
 
 @media (max-width: 960px) {

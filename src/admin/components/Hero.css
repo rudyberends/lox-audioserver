@@ -33,9 +33,9 @@
   --color-border-strong: rgba(29, 35, 42, 0.2);
   --color-border-soft: rgba(29, 35, 42, 0.08);
   --color-accent: #1d232a;
-  --color-brand: #1f4d7a;
-  --color-highlight: rgba(31, 77, 122, 0.16);
-  --color-danger: #d51a29;
+  --color-brand: #1d232a;
+  --color-highlight: rgba(29, 35, 42, 0.16);
+  --color-danger: #1d232a;
   --shadow-soft: 0 10px 22px -18px rgba(29, 35, 42, 0.22);
   --shadow-md: 0 16px 32px -26px rgba(29, 35, 42, 0.24);
   --shadow-lg: 0 24px 44px -34px rgba(29, 35, 42, 0.28);
@@ -117,6 +117,11 @@ body::before {
   background-size: 120px 120px;
   opacity: 0.22;
   z-index: 0;
+}
+
+body::after {
+  content: none;
+  display: none;
 }
 
 main#app {
@@ -205,9 +210,9 @@ button.danger {
 }
 
 button.primary {
-  background: #2c6aa3;
+  background: #1d232a;
   color: #ffffff;
-  border-color: #2c6aa3;
+  border-color: #1d232a;
   box-shadow: none;
 }
 
@@ -219,8 +224,8 @@ button.secondary {
 }
 
 button.danger {
-  border-color: rgba(213, 26, 41, 0.35);
-  color: var(--color-danger);
+  border-color: rgba(29, 35, 42, 0.35);
+  color: var(--color-text);
   background: #ffffff;
 }
 
@@ -241,14 +246,14 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid rgba(31, 77, 122, 0.6);
+  outline: 2px solid rgba(29, 35, 42, 0.6);
   outline-offset: 2px;
-  box-shadow: 0 0 0 4px rgba(31, 77, 122, 0.2);
+  box-shadow: 0 0 0 4px rgba(29, 35, 42, 0.2);
 }
 
 button.primary:not(:disabled):hover {
-  background: #265f97;
-  border-color: #265f97;
+  background: #12161b;
+  border-color: #12161b;
   box-shadow: none;
 }
 
@@ -257,7 +262,7 @@ button.secondary:not(:disabled):hover {
 }
 
 button.danger:not(:disabled):hover {
-  background: rgba(213, 26, 41, 0.08);
+  background: rgba(29, 35, 42, 0.08);
 }
 
 select {
@@ -283,8 +288,8 @@ select {
 
 select:focus {
   outline: none;
-  border-color: rgba(31, 77, 122, 0.6);
-  box-shadow: 0 0 0 3px rgba(31, 77, 122, 0.18);
+  border-color: rgba(29, 35, 42, 0.6);
+  box-shadow: 0 0 0 3px rgba(29, 35, 42, 0.18);
 }
 
 select:disabled {
@@ -317,8 +322,8 @@ input[type='password']:focus,
 input[type='search']:focus,
 textarea:focus {
   outline: none;
-  border-color: rgba(31, 77, 122, 0.7);
-  box-shadow: 0 0 0 3px rgba(31, 77, 122, 0.18);
+  border-color: rgba(29, 35, 42, 0.7);
+  box-shadow: 0 0 0 3px rgba(29, 35, 42, 0.18);
 }
 
 input[type='text']:disabled,
@@ -356,7 +361,7 @@ header.hero::before {
   background-repeat: no-repeat;
   background-size: cover;
   background-position: center;
-  filter: grayscale(100%) contrast(1.1) brightness(0.72);
+  filter: grayscale(100%) saturate(0.08) contrast(1.08) brightness(0.66);
   opacity: 0.48;
   z-index: 0;
 }
@@ -365,7 +370,10 @@ header.hero::after {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.62));
+  background:
+    linear-gradient(180deg, rgba(29, 35, 42, 0.38), rgba(29, 35, 42, 0) 56%),
+    radial-gradient(circle at 85% 85%, rgba(29, 35, 42, 0.14), transparent 58%),
+    linear-gradient(180deg, rgba(240, 240, 240, 0.16), rgba(224, 224, 224, 0.5));
   z-index: 1;
 }
 
@@ -403,7 +411,7 @@ header.hero::after {
   line-height: 1.1;
   color: #1f2327;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.4rem;
   flex-wrap: wrap;
   text-shadow: none;
@@ -423,6 +431,8 @@ header.hero::after {
   background: #f1f1f1;
   border: 1px solid rgba(29, 35, 42, 0.1);
   text-transform: uppercase;
+  line-height: 1;
+  transform: translateY(1px);
 }
 
 .hero-meta {
@@ -466,7 +476,7 @@ header.hero::after {
 }
 
 .hero-pill--success::before {
-  background: #2c6aa3;
+  background: #3a4045;
 }
 
 .hero-pill--warn::before {
@@ -493,6 +503,8 @@ header.hero::after {
 .hero-toolbar {
   margin-left: auto;
   display: none;
+  align-items: flex-start;
+  padding-top: 0.2rem;
 }
 
 @media (max-width: 900px) {
@@ -505,6 +517,7 @@ header.hero::after {
 
   .hero-toolbar {
     margin-left: 0;
+    padding-top: 0;
   }
 
   .hero-button {
@@ -522,6 +535,46 @@ header.hero::after {
     width: 100%;
   }
 
+}
+
+.hero-github-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid rgba(29, 35, 42, 0.2);
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--color-text);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-decoration: none;
+  line-height: 1;
+  transform: translateY(1px);
+  box-shadow: 0 8px 18px -18px rgba(29, 35, 42, 0.4);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.hero-github-badge__icon {
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+.hero-github-badge:hover {
+  border-color: rgba(29, 35, 42, 0.6);
+  box-shadow: 0 12px 22px -18px rgba(29, 35, 42, 0.5);
+  transform: translateY(-1px);
+}
+
+.hero-github-badge:focus-visible {
+  outline: 2px solid rgba(29, 35, 42, 0.6);
+  outline-offset: 3px;
+}
+
+.hero-github-badge__label {
+  line-height: 1;
 }
 
 .hero-meta-block {
@@ -556,11 +609,11 @@ header.hero::after {
 }
 
 .hero-meta-block--warn dd::before {
-  background: #f7b55c;
+  background: rgba(29, 35, 42, 0.6);
 }
 
 .hero-meta-block--error dd::before {
-  background: #f94d5f;
+  background: rgba(29, 35, 42, 0.6);
 }
 
 .hero-meta-block:nth-child(1) { animation-delay: 80ms; }
@@ -596,9 +649,9 @@ header.hero::after {
   margin-top: 0.6rem;
   padding: 0.65rem 0.8rem;
   border-radius: 10px;
-  background: rgba(249, 77, 95, 0.12);
-  border: 1px solid rgba(213, 26, 41, 0.4);
-  color: #b02330;
+  background: rgba(29, 35, 42, 0.08);
+  border: 1px solid rgba(29, 35, 42, 0.2);
+  color: #1d232a;
   font-size: 0.95rem;
   max-width: 520px;
 }

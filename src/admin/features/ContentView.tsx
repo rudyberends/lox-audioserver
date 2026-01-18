@@ -1646,6 +1646,7 @@ export default function ContentView(): JSX.Element {
       setCustomRadios((prev) => [...prev, station]);
       setCustomRadioFeedback({ type: 'success', message: 'Station added' });
       setCustomRadioForm(createEmptyCustomRadioForm());
+      closeCustomRadioModal(false);
     } catch (err) {
       setCustomRadioFeedback({
         type: 'error',
@@ -2714,7 +2715,7 @@ export default function ContentView(): JSX.Element {
                     <article key={bridge.id} className="content-card">
                       <header className="content-card__header content-card__header--split">
                         <div>
-                          <div className="content-bridge-title">
+                          <div className="content-linein-title">
                             {logoUrl && (
                               <img
                                 className="content-bridge-logo"
@@ -2724,11 +2725,13 @@ export default function ContentView(): JSX.Element {
                                 aria-hidden="true"
                               />
                             )}
-                            <h3>{bridge.label ?? bridge.id}</h3>
+                            <div className="content-linein-title-text">
+                              <h3>{bridge.label ?? bridge.id}</h3>
+                              <p className="content-linein-id" title={bridge.id}>
+                                {bridge.id}
+                              </p>
+                            </div>
                           </div>
-                          <p className="content-linein-id" title={bridge.id}>
-                            ID: {bridge.id}
-                          </p>
                         </div>
                         <div className="content-linein-actions">
                           <button
@@ -2749,6 +2752,7 @@ export default function ContentView(): JSX.Element {
                           </button>
                         </div>
                       </header>
+                      <div className="content-linein-meta-row" />
                     </article>
                   );
                 })
@@ -3554,7 +3558,12 @@ export default function ContentView(): JSX.Element {
                 </div>
               </div>
               <div className="content-actions">
-                <button type="button" onClick={handleBridgeAdd} disabled={!bridgeFormValid || bridgeSubmitting}>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={handleBridgeAdd}
+                  disabled={!bridgeFormValid || bridgeSubmitting}
+                >
                   {bridgeSubmitting ? 'Saving…' : bridgeEditingId ? 'Save bridge' : 'Add bridge'}
                 </button>
                 <button

@@ -1361,7 +1361,7 @@
 
 .content-linein-error {
   margin: 0.35rem 0 0;
-  color: #b91c1c;
+  color: #1d232a;
   font-size: 0.82rem;
   font-weight: 600;
 }
@@ -2176,8 +2176,8 @@
   align-items: center;
   justify-content: center;
   background: var(--color-brand);
-  color: #1d232a;
-  box-shadow: 0 10px 24px -16px rgba(31, 77, 122, 0.45);
+  color: #ffffff;
+  box-shadow: 0 10px 24px -16px rgba(29, 35, 42, 0.45);
 }
 
 .content-dropzone__meta {
@@ -2193,8 +2193,8 @@
 }
 
 .content-dropzone.is-active {
-  border-color: rgba(31, 77, 122, 0.5);
-  box-shadow: 0 24px 50px -30px rgba(31, 77, 122, 0.45);
+  border-color: rgba(29, 35, 42, 0.5);
+  box-shadow: 0 24px 50px -30px rgba(29, 35, 42, 0.45);
   background:
     radial-gradient(circle at 20% 20%, rgba(15, 23, 42, 0.06), transparent 45%),
     linear-gradient(180deg, #ffffff 0%, #eef1f5 100%);
@@ -2517,14 +2517,14 @@
 }
 
 .content-modal .primary {
-  background: #2c6aa3;
-  border-color: #2c6aa3;
+  background: #1d232a;
+  border-color: #1d232a;
   color: #ffffff;
 }
 
 .content-modal .primary:not(:disabled):hover {
-  background: #265f97;
-  border-color: #265f97;
+  background: #12161b;
+  border-color: #12161b;
 }
 
 .content-modal-header {

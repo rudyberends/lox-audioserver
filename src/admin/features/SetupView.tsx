@@ -467,6 +467,10 @@ export default function SetupView(): JSX.Element {
                 <p className="page-hero__eyebrow">AudioServer</p>
                 <h3 id="macid-modal-title">Override macId</h3>
                 <p className="setup-card__hint">Provide a 12-character MAC (hex, no separators).</p>
+                <p className="setup-modal-warning">
+                  Only change this if you know what you are doing. Under normal circumstances these values
+                  do not need to be adjusted.
+                </p>
               </div>
               <button
                 type="button"
@@ -555,6 +559,10 @@ export default function SetupView(): JSX.Element {
                 <p className="page-hero__eyebrow">AudioServer</p>
                 <h3 id="ip-modal-title">Override IP</h3>
                 <p className="setup-card__hint">Provide the IP used for pairing and status.</p>
+                <p className="setup-modal-warning">
+                  Only change this if you know what you are doing. Under normal circumstances these values
+                  do not need to be adjusted.
+                </p>
               </div>
               <button
                 type="button"
