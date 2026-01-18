@@ -111,6 +111,7 @@ class LineInMetadataService {
     const cooldown = this.getCooldownMs();
     const last = this.lastLookup.get(inputId) ?? 0;
     if (Date.now() - last < cooldown) {
+      this.scheduleNextCheck(inputId);
       return;
     }
     this.log.info('line-in metadata capture starting', { inputId });
@@ -118,8 +119,12 @@ class LineInMetadataService {
     this.activeCaptures.set(inputId, capture);
   }
 
-  private captureSnippet(inputId: string, stream: NodeJS.ReadableStream): CaptureState {
-    const targetSeconds = this.getCaptureSeconds();
+  private captureSnippet(
+    inputId: string,
+    stream: NodeJS.ReadableStream,
+    targetSeconds = this.getCaptureSeconds(),
+    allowRetry = true,
+  ): CaptureState {
     const targetBytes = SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * targetSeconds;
     const buffers: Buffer[] = [];
     let bytes = 0;
@@ -137,6 +142,7 @@ class LineInMetadataService {
       this.activeCaptures.delete(inputId);
       if (bytes <= 0) {
         this.log.info('line-in metadata capture empty', { inputId, reason: reason ?? 'empty' });
+        this.scheduleNextCheck(inputId);
         return;
       }
       if (bytes < targetBytes) {
@@ -146,6 +152,7 @@ class LineInMetadataService {
           targetBytes,
           reason: reason ?? 'short',
         });
+        this.scheduleNextCheck(inputId);
         return;
       }
       const pcm = Buffer.concat(buffers, bytes);
@@ -165,6 +172,15 @@ class LineInMetadataService {
           this.applyMetadata(inputId, meta);
         } else {
           this.log.info('line-in metadata lookup returned no match', { inputId });
+          if (allowRetry && targetSeconds <= 5) {
+            this.log.info('line-in metadata retrying with longer capture', {
+              inputId,
+              seconds: 10,
+            });
+            const retry = this.captureSnippet(inputId, stream, 10, false);
+            this.activeCaptures.set(inputId, retry);
+            return;
+          }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -216,6 +232,9 @@ class LineInMetadataService {
         if (shazam) {
           return shazam;
         }
+      }
+      if (!this.isAcoustidEnabled()) {
+        return null;
       }
       this.log.info('line-in acoustid lookup started', { seconds: durationSeconds });
       const results = await this.queryAcoustid(key, fingerprint);
@@ -548,19 +567,19 @@ class LineInMetadataService {
   }
 
   private getCaptureSeconds(): number {
-    const raw = Number(process.env.LINEIN_ACOUSTID_SECONDS ?? '15');
+    const raw = Number(process.env.LINEIN_ACOUSTID_SECONDS ?? '5');
     if (!Number.isFinite(raw) || raw <= 0) {
-      return 15;
+      return 5;
     }
-    return Math.min(60, Math.max(10, Math.round(raw)));
+    return Math.min(60, Math.max(5, Math.round(raw)));
   }
 
   private getCooldownMs(): number {
     const raw =
       Number(process.env.LINEIN_METADATA_INTERVAL_MS) ||
-      Number(process.env.LINEIN_ACOUSTID_COOLDOWN_MS ?? '45000');
+      Number(process.env.LINEIN_ACOUSTID_COOLDOWN_MS ?? '25000');
     if (!Number.isFinite(raw) || raw <= 0) {
-      return 45000;
+      return 25000;
     }
     return Math.max(10_000, Math.round(raw));
   }
@@ -594,9 +613,9 @@ class LineInMetadataService {
   private getPollIntervalMs(): number {
     const raw =
       Number(process.env.LINEIN_METADATA_INTERVAL_MS) ||
-      Number(process.env.LINEIN_ACOUSTID_RETRY_MS ?? '45000');
+      Number(process.env.LINEIN_ACOUSTID_RETRY_MS ?? '25000');
     if (!Number.isFinite(raw) || raw <= 0) {
-      return 45000;
+      return 25000;
     }
     return Math.min(300_000, Math.max(10_000, Math.round(raw)));
   }
@@ -644,6 +663,11 @@ class LineInMetadataService {
 
   private isShazamEnabled(): boolean {
     const raw = (process.env.LINEIN_SHAZAM_ENABLED ?? 'true').trim().toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes';
+  }
+
+  private isAcoustidEnabled(): boolean {
+    const raw = (process.env.LINEIN_ACOUSTID_ENABLED ?? 'false').trim().toLowerCase();
     return raw === '1' || raw === 'true' || raw === 'yes';
   }
 
