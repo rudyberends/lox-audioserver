@@ -1,3 +1,8 @@
+## 4.0.0-beta.1 (2026-01-18)
+
+* fix: trigger beta release ([cd99e24](https://github.com/rudyberends/lox-audioserver/commit/cd99e24))
+* chore: trigger release ([dc0f65b](https://github.com/rudyberends/lox-audioserver/commit/dc0f65b))
+
 ## 1.0.0-beta.1 (2026-01-18)
 
 * chore: add build timestamp/version metadata to docker builds and admin hero ([1393784](https://github.com/rudyberends/lox-audioserver/commit/1393784))
