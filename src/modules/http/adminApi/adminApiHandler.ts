@@ -241,6 +241,22 @@ export class AdminApiHandler {
         handler: async (_req, res) => this.handleLibraryRescan(res),
       },
       {
+        method: 'GET',
+        pattern: /^\/content\/library\/storages\/([^/]+)\/status$/,
+        handler: async (_req, res, match) => {
+          const storageId = decodeURIComponent(match[1] ?? '');
+          this.handleLibraryStorageStatus(storageId, res);
+        },
+      },
+      {
+        method: 'GET',
+        pattern: /^\/content\/library\/storages\/([^/]+)\/covers$/,
+        handler: async (req, res, match) => {
+          const storageId = decodeURIComponent(match[1] ?? '');
+          await this.handleLibraryStorageCovers(storageId, req, res);
+        },
+      },
+      {
         method: 'DELETE',
         pattern: /^\/content\/library\/storages\/([^/]+)$/,
         handler: async (_req, res, match) => {
@@ -963,6 +979,24 @@ export class AdminApiHandler {
     }
   }
 
+  private handleLibraryStorageStatus(storageId: string, res: ServerResponse): void {
+    if (!storageId) {
+      this.sendJson(res, 400, { error: 'missing-storage-id' });
+      return;
+    }
+    try {
+      const stats = contentManager.getLibraryStorageStats(storageId);
+      this.sendJson(res, 200, {
+        trackCount: stats?.tracks ?? null,
+        albumCount: stats?.albums ?? null,
+        artistCount: stats?.artists ?? null,
+      });
+    } catch (err) {
+      this.log.warn('library storage status fetch failed', { err, storageId });
+      this.sendJson(res, 500, { error: 'library-storage-status-failed' });
+    }
+  }
+
   private async handleLibraryCovers(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const url = new URL(req.url ?? '', 'http://localhost');
@@ -976,6 +1010,30 @@ export class AdminApiHandler {
     } catch (err) {
       this.log.warn('library covers fetch failed', { err });
       this.sendJson(res, 500, { error: 'library-covers-failed' });
+    }
+  }
+
+  private async handleLibraryStorageCovers(
+    storageId: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (!storageId) {
+      this.sendJson(res, 400, { error: 'missing-storage-id' });
+      return;
+    }
+    try {
+      const url = new URL(req.url ?? '', 'http://localhost');
+      const rawLimit = Number(url.searchParams.get('limit'));
+      const limit =
+        Number.isFinite(rawLimit) && rawLimit > 0
+          ? Math.min(Math.round(rawLimit), 24)
+          : 8;
+      const covers = contentManager.getLibraryStorageCoverSamples(storageId, limit);
+      this.sendJson(res, 200, { covers });
+    } catch (err) {
+      this.log.warn('library storage covers fetch failed', { err, storageId });
+      this.sendJson(res, 500, { error: 'library-storage-covers-failed' });
     }
   }
 

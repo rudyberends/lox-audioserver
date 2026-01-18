@@ -57,6 +57,12 @@ export type LibraryCoverSample = {
   coverurl: string;
 };
 
+export type LibraryStorageStatusResponse = {
+  trackCount?: number | null;
+  albumCount?: number | null;
+  artistCount?: number | null;
+};
+
 export async function fetchLibraryStatus(): Promise<LibraryStatusResponse> {
   const res = await fetch(`${API_BASE}/content/library/status`);
   if (!res.ok) {
@@ -71,6 +77,31 @@ export async function fetchLibraryCovers(limit = 8): Promise<{ covers?: LibraryC
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(text || 'Failed to fetch library covers');
+  }
+  return (await res.json()) as { covers?: LibraryCoverSample[] };
+}
+
+export async function fetchLibraryStorageStatus(storageId: string): Promise<LibraryStorageStatusResponse> {
+  const res = await fetch(`${API_BASE}/content/library/storages/${encodeURIComponent(storageId)}/status`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || 'Failed to fetch library share status');
+  }
+  return (await res.json()) as LibraryStorageStatusResponse;
+}
+
+export async function fetchLibraryStorageCovers(
+  storageId: string,
+  limit = 8,
+): Promise<{ covers?: LibraryCoverSample[] }> {
+  const res = await fetch(
+    `${API_BASE}/content/library/storages/${encodeURIComponent(storageId)}/covers?limit=${encodeURIComponent(
+      String(limit),
+    )}`,
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || 'Failed to fetch library share covers');
   }
   return (await res.json()) as { covers?: LibraryCoverSample[] };
 }

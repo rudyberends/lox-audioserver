@@ -112,10 +112,36 @@ export class LocalLibraryProvider {
     }
   }
 
+  public getStorageStats(storageId: string): LibraryStats | null {
+    if (!storageId) {
+      return null;
+    }
+    try {
+      return this.store.getStatsForStorage(storageId);
+    } catch {
+      return null;
+    }
+  }
+
   public getCoverSamples(limit = 8): LibraryCoverSample[] {
     const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 24)) : 8;
     try {
       const rows = this.store.getAlbumCoverSamples(safeLimit);
+      return rows
+        .map((row) => this.mapCoverSample(row))
+        .filter((entry): entry is LibraryCoverSample => Boolean(entry));
+    } catch {
+      return [];
+    }
+  }
+
+  public getStorageCoverSamples(storageId: string, limit = 8): LibraryCoverSample[] {
+    if (!storageId) {
+      return [];
+    }
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 24)) : 8;
+    try {
+      const rows = this.store.getAlbumCoverSamplesForStorage(storageId, safeLimit);
       return rows
         .map((row) => this.mapCoverSample(row))
         .filter((entry): entry is LibraryCoverSample => Boolean(entry));

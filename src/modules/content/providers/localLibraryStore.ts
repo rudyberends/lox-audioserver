@@ -113,6 +113,24 @@ export class LocalLibraryStore {
     return { tracks: trackCount.count, albums: albumCount.count, artists: artistCount.count };
   }
 
+  public getStatsForStorage(storageId: string): { tracks: number; albums: number; artists: number } {
+    const db = this.requireDb();
+    const trackCount = db
+      .prepare('SELECT COUNT(*) AS count FROM tracks WHERE storage_id = ?')
+      .get(storageId) as { count: number };
+    const albumCount = db
+      .prepare(
+        'SELECT COUNT(*) AS count FROM (SELECT storage_id, artist, album FROM tracks WHERE storage_id = ? GROUP BY storage_id, artist, album)',
+      )
+      .get(storageId) as { count: number };
+    const artistCount = db
+      .prepare(
+        'SELECT COUNT(*) AS count FROM (SELECT storage_id, artist FROM tracks WHERE storage_id = ? GROUP BY storage_id, artist)',
+      )
+      .get(storageId) as { count: number };
+    return { tracks: trackCount.count, albums: albumCount.count, artists: artistCount.count };
+  }
+
   public getAlbums(
     storageId: string | null,
     offset: number,
@@ -167,6 +185,25 @@ export class LocalLibraryStore {
       `,
       )
       .all(limit) as AlbumCoverRow[];
+  }
+
+  public getAlbumCoverSamplesForStorage(storageId: string, limit: number): AlbumCoverRow[] {
+    const db = this.requireDb();
+    return db
+      .prepare(
+        `
+        SELECT storage_id, album, artist,
+          MAX(NULLIF(cover, '')) AS cover,
+          MIN(rel_path) AS rel_path,
+          MAX(mtime) AS last_mtime
+        FROM tracks
+        WHERE storage_id = ? AND cover IS NOT NULL AND cover <> ''
+        GROUP BY storage_id, artist, album
+        ORDER BY last_mtime DESC, LOWER(album)
+        LIMIT ?
+      `,
+      )
+      .all(storageId, limit) as AlbumCoverRow[];
   }
 
   public getArtists(

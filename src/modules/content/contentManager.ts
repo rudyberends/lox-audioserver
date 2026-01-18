@@ -189,8 +189,16 @@ export class ContentManager {
     return this.library.getLibraryStats();
   }
 
+  public getLibraryStorageStats(storageId: string): LibraryStats | null {
+    return this.library.getStorageStats(storageId);
+  }
+
   public getLibraryCoverSamples(limit: number): LibraryCoverSample[] {
     return this.library.getCoverSamples(limit);
+  }
+
+  public getLibraryStorageCoverSamples(storageId: string, limit: number): LibraryCoverSample[] {
+    return this.library.getStorageCoverSamples(storageId, limit);
   }
 
   public uploadLibraryAudio(relativePath: string, base64Data: string): Promise<{ relPath: string; filename: string }> {

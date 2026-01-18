@@ -5,7 +5,8 @@ import { getConfig } from '../services/setupApi';
 import {
   updateContentConfig,
   fetchLibraryStatus,
-  fetchLibraryCovers,
+  fetchLibraryStorageCovers,
+  fetchLibraryStorageStatus,
   uploadLibraryAudio,
   triggerLibraryRescan,
   deleteSpotifyAccount,
@@ -70,6 +71,12 @@ type SpotifyAccountConfig = {
 type SpotifyBridgeConfig = {
 };
 type ScanStatus = 0 | 1 | 2;
+
+type StorageLibraryStats = {
+  tracks: number;
+  albums: number;
+  artists: number;
+};
 
 type LineInInputConfig = {
   id?: string;
@@ -608,7 +615,7 @@ const createEmptyStorageForm = (): StorageFormState => ({
   name: '',
   server: '',
   folder: '',
-  type: 'smb',
+  type: 'cifs',
   username: '',
   password: '',
   guest: false,
@@ -741,6 +748,8 @@ export default function ContentView(): JSX.Element {
   const [libraryDragActive, setLibraryDragActive] = React.useState(false);
   const libraryFileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [libraryStorages, setLibraryStorages] = React.useState<LibraryStorage[]>([]);
+  const [libraryStorageStats, setLibraryStorageStats] = React.useState<Record<string, StorageLibraryStats>>({});
+  const [libraryStorageCovers, setLibraryStorageCovers] = React.useState<Record<string, LibraryCoverSample[]>>({});
   const [storageLoading, setStorageLoading] = React.useState(true);
   const [storageError, setStorageError] = React.useState<string | null>(null);
   const [deletingStorageId, setDeletingStorageId] = React.useState<string | null>(null);
@@ -787,6 +796,8 @@ export default function ContentView(): JSX.Element {
   const spotifyAccountBaselineRef = React.useRef(0);
   const { push: pushAlert } = useGlobalAlert();
   const modalOpen = customRadioModalOpen || bridgeModalOpen || storageModalOpen || lineInModalOpen;
+  const libraryCoverSlots = 6;
+  const shareCoverSlots = 6;
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -807,8 +818,7 @@ export default function ContentView(): JSX.Element {
     return (
       storageForm.name.trim().length > 0 &&
       storageForm.server.trim().length > 0 &&
-      storageForm.folder.trim().length > 0 &&
-      storageForm.type.trim().length > 0
+      storageForm.folder.trim().length > 0
     );
   }, [storageForm]);
   const customRadioFormValid = React.useMemo(() => {
@@ -961,11 +971,14 @@ export default function ContentView(): JSX.Element {
         setLibraryError(null);
       }
       try {
-        const payload = await fetchLibraryStatus();
-        setLibraryStatus(payload.status ?? 0);
-        setLibraryTrackCount(payload.trackCount ?? null);
-        setLibraryAlbumCount(payload.albumCount ?? null);
-        setLibraryArtistCount(payload.artistCount ?? null);
+        const [statusPayload, localPayload] = await Promise.all([
+          fetchLibraryStatus(),
+          fetchLibraryStorageStatus('local'),
+        ]);
+        setLibraryStatus(statusPayload.status ?? 0);
+        setLibraryTrackCount(localPayload.trackCount ?? null);
+        setLibraryAlbumCount(localPayload.albumCount ?? null);
+        setLibraryArtistCount(localPayload.artistCount ?? null);
       } catch (err) {
         setLibraryError(err instanceof Error ? err.message : 'Failed to load library status');
       } finally {
@@ -1043,7 +1056,7 @@ export default function ContentView(): JSX.Element {
       setLibraryCoversError(null);
     }
     try {
-      const payload = await fetchLibraryCovers(8);
+      const payload = await fetchLibraryStorageCovers('local', libraryCoverSlots);
       setLibraryCovers(Array.isArray(payload.covers) ? payload.covers : []);
     } catch (err) {
       setLibraryCovers([]);
@@ -1051,7 +1064,7 @@ export default function ContentView(): JSX.Element {
     } finally {
       setLibraryCoversLoading(false);
     }
-  }, []);
+  }, [libraryCoverSlots]);
 
   React.useEffect(() => {
     void refreshLibraryCovers(true);
@@ -1096,6 +1109,49 @@ export default function ContentView(): JSX.Element {
   React.useEffect(() => {
     void refreshLibraryStorages();
   }, [refreshLibraryStorages]);
+
+  const refreshLibraryStorageDetails = React.useCallback(
+    async (storages: LibraryStorage[]): Promise<void> => {
+      if (storages.length === 0) {
+        setLibraryStorageStats({});
+        setLibraryStorageCovers({});
+        return;
+      }
+      const statsMap: Record<string, StorageLibraryStats> = {};
+      const coversMap: Record<string, LibraryCoverSample[]> = {};
+      await Promise.all(
+        storages.map(async (storage) => {
+          try {
+            const [status, covers] = await Promise.all([
+              fetchLibraryStorageStatus(storage.id),
+              fetchLibraryStorageCovers(storage.id, shareCoverSlots),
+            ]);
+            statsMap[storage.id] = {
+              tracks: Number.isFinite(status.trackCount) ? Number(status.trackCount) : 0,
+              albums: Number.isFinite(status.albumCount) ? Number(status.albumCount) : 0,
+              artists: Number.isFinite(status.artistCount) ? Number(status.artistCount) : 0,
+            };
+            coversMap[storage.id] = Array.isArray(covers.covers) ? covers.covers : [];
+          } catch {
+            statsMap[storage.id] = { tracks: 0, albums: 0, artists: 0 };
+            coversMap[storage.id] = [];
+          }
+        }),
+      );
+      setLibraryStorageStats(statsMap);
+      setLibraryStorageCovers(coversMap);
+    },
+    [shareCoverSlots],
+  );
+
+  React.useEffect(() => {
+    if (libraryStorages.length === 0) {
+      setLibraryStorageStats({});
+      setLibraryStorageCovers({});
+      return;
+    }
+    void refreshLibraryStorageDetails(libraryStorages);
+  }, [libraryStorages, refreshLibraryStorageDetails]);
 
   const refreshCustomRadios = React.useCallback(async (): Promise<void> => {
     setCustomRadioLoading(true);
@@ -1386,7 +1442,7 @@ export default function ContentView(): JSX.Element {
         name: storageForm.name.trim(),
         server: storageForm.server.trim(),
         folder: storageForm.folder.trim(),
-        type: storageForm.type.trim(),
+        type: 'cifs',
         guest: storageForm.guest,
         username: storageForm.guest ? undefined : storageForm.username.trim() || undefined,
         password: storageForm.guest ? undefined : storageForm.password.trim() || undefined,
@@ -1805,8 +1861,6 @@ export default function ContentView(): JSX.Element {
       account.user ||
       account.email,
   );
-  const libraryCoverSlots = 6;
-  const shareCoverSlots = 4;
   const visibleLibraryCovers = libraryCovers.slice(0, libraryCoverSlots);
   const libraryCoverPlaceholderCount = Math.max(libraryCoverSlots - visibleLibraryCovers.length, 0);
 
@@ -2227,7 +2281,7 @@ export default function ContentView(): JSX.Element {
               <h2>Library</h2>
               <p>
                 Loxone supports local and network libraries—we emulate the same experience. Drop files under
-                <code>data/music/local</code>, upload audio here, or add SMB shares here or in the Loxone app.
+                <code>data/music/local</code>, upload audio here, or add network shares here or in the Loxone app.
               </p>
               <div className="content-section__actions">
                 <button type="button" className="secondary" onClick={openStorageModal}>
@@ -2240,8 +2294,18 @@ export default function ContentView(): JSX.Element {
             <div className="content-grid">
               <article className="content-card content-card--library">
                 <header className="content-card__header content-card__header--stacked">
-                  <div>
+                  <div className="content-card__header-row">
                     <h3>Local library</h3>
+                    <button
+                      type="button"
+                      className="content-library-rescan content-library-rescan--header"
+                      onClick={handleLibraryRescan}
+                      disabled={libraryActionPending}
+                    >
+                      <span className="content-library-rescan__label">
+                        {libraryActionPending ? 'Rescanning…' : 'Rescan'}
+                      </span>
+                    </button>
                   </div>
                   <div className="content-library-header-meta">
                     <div className="content-library-coverstrip" aria-label="Library cover art">
@@ -2283,16 +2347,6 @@ export default function ContentView(): JSX.Element {
                           {libraryLoading ? '—' : libraryArtistCount ?? 0}
                         </span>
                       </div>
-                      <button
-                        type="button"
-                        className="content-library-rescan content-library-rescan--inline"
-                        onClick={handleLibraryRescan}
-                        disabled={libraryActionPending}
-                      >
-                        <span className="content-library-rescan__label">
-                          {libraryActionPending ? 'Rescanning…' : 'Rescan'}
-                        </span>
-                      </button>
                     </div>
                   </div>
                 </header>
@@ -2377,64 +2431,121 @@ export default function ContentView(): JSX.Element {
                 </article>
               ) : libraryStorages.length > 0 ? (
                 <>
-                  {libraryStorages.map((storage) => (
-                    <article key={storage.id} className="content-card content-card--library content-card--share">
-                      <header className="content-card__header content-card__header--split">
-                        <div className="content-share-title">
-                          <h3>
-                            {storage.name}
-                            {storage.server && !storage.name.includes(storage.server) ? ` (${storage.server})` : ''}
-                          </h3>
-                          <span className="content-share-subtitle">
-                            {storage.folder ? `/${storage.folder}` : 'Share root'}
-                          </span>
-                        </div>
-                        <div className="content-share-meta">
-                          <span className="library-storage-type">{storage.type.toUpperCase()}</span>
-                          <button
-                            type="button"
-                            className="content-share-remove"
-                            onClick={() => handleDeleteLibraryStorage(storage.id)}
-                            disabled={deletingStorageId === storage.id}
+                  {libraryStorages.map((storage) => {
+                    const shareStats = libraryStorageStats[storage.id];
+                    const shareCovers = libraryStorageCovers[storage.id] ?? [];
+                    const visibleShareCovers = shareCovers.slice(0, shareCoverSlots);
+                    const shareCoverPlaceholderCount = Math.max(
+                      shareCoverSlots - visibleShareCovers.length,
+                      0,
+                    );
+
+                    return (
+                      <article key={storage.id} className="content-card content-card--library content-card--share">
+                        <header className="content-card__header">
+                          <div className="content-card__header-row">
+                            <div className="content-share-title">
+                              <h3>
+                                {storage.name}
+                                {storage.server && !storage.name.includes(storage.server) ? ` (${storage.server})` : ''}
+                              </h3>
+                            </div>
+                            <button
+                              type="button"
+                              className="content-library-rescan content-library-rescan--header"
+                              onClick={handleLibraryRescan}
+                              disabled={libraryActionPending}
+                            >
+                              <span className="content-library-rescan__label">
+                                {libraryActionPending ? 'Rescanning…' : 'Rescan'}
+                              </span>
+                            </button>
+                          </div>
+                        </header>
+                        <div className="content-library-header-meta content-library-header-meta--share">
+                          <div
+                            className="content-library-coverstrip content-library-coverstrip--share"
+                            aria-label={`${storage.name} library`}
                           >
-                            {deletingStorageId === storage.id ? 'Removing…' : 'Remove'}
-                          </button>
-                        </div>
-                      </header>
-                      <div className="content-library-header-meta content-library-header-meta--share">
-                        <div
-                          className="content-library-coverstrip content-library-coverstrip--share"
-                          aria-label={`${storage.name} library`}
-                        >
-                          <div className="content-library-covers content-library-covers--compact">
-                            {Array.from({ length: shareCoverSlots }).map((_, index) => (
-                              <div
-                                key={`${storage.id}-dummy-${index}`}
-                                className="content-library-cover content-library-cover--compact content-library-cover--dummy"
-                                aria-hidden="true"
-                              />
-                            ))}
+                            <div className="content-library-covers content-library-covers--compact">
+                              {visibleShareCovers.map((cover, index) => (
+                                <div
+                                  key={`${storage.id}-${cover.album}-${cover.artist}-${index}`}
+                                  className="content-library-cover content-library-cover--compact"
+                                  title={`${cover.album} · ${cover.artist}`}
+                                >
+                                  <img src={cover.coverurl} alt={`${cover.album} cover`} loading="lazy" />
+                                </div>
+                              ))}
+                              {Array.from({ length: shareCoverPlaceholderCount }).map((_, index) => (
+                                <div
+                                  key={`${storage.id}-dummy-${index}`}
+                                  className="content-library-cover content-library-cover--compact content-library-cover--dummy"
+                                  aria-hidden="true"
+                                />
+                              ))}
+                            </div>
+                          </div>
+                          <div className="content-library-stats content-library-stats--share">
+                            <div className="content-library-stats__item">
+                              <span className="content-library-stats__label">Tracks</span>
+                              <span className="content-library-stats__value">
+                                {shareStats ? shareStats.tracks : '—'}
+                              </span>
+                            </div>
+                            <div className="content-library-stats__item">
+                              <span className="content-library-stats__label">Albums</span>
+                              <span className="content-library-stats__value">
+                                {shareStats ? shareStats.albums : '—'}
+                              </span>
+                            </div>
+                            <div className="content-library-stats__item">
+                              <span className="content-library-stats__label">Artists</span>
+                              <span className="content-library-stats__value">
+                                {shareStats ? shareStats.artists : '—'}
+                              </span>
+                            </div>
                           </div>
                         </div>
-                        <div className="content-library-overlay content-library-overlay--share">
-                          <span className="content-library-overlay__item">0 tracks</span>
-                          <span className="content-library-overlay__item">0 albums</span>
-                          <span className="content-library-overlay__item">0 artists</span>
+                        <div className="content-pane__section">
+                          <div className="content-share-info">
+                            <div className="content-share-meta-list">
+                              <div className="content-share-meta-item">
+                                <span className="content-share-meta-label">Server</span>
+                                <span className="content-share-meta-value">{storage.server || '—'}</span>
+                              </div>
+                              <div className="content-share-meta-item">
+                                <span className="content-share-meta-label">Share</span>
+                                <span className="content-share-meta-value">
+                                  {storage.folder ? `/${storage.folder}` : 'Share root'}
+                                </span>
+                              </div>
+                              <div className="content-share-meta-item">
+                                <span className="content-share-meta-label">Access</span>
+                                <span className="content-share-meta-value">
+                                  {storage.guest
+                                    ? 'Guest'
+                                    : storage.username
+                                      ? `User: ${storage.username}`
+                                      : 'Credentials required'}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="content-share-actions">
+                              <button
+                                type="button"
+                                className="danger-link"
+                                onClick={() => handleDeleteLibraryStorage(storage.id)}
+                                disabled={deletingStorageId === storage.id}
+                              >
+                                {deletingStorageId === storage.id ? 'Removing…' : 'Remove'}
+                              </button>
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                      <div className="content-pane__section">
-                        <div className="content-share-info">
-                          <span className="library-storage-auth">
-                            {storage.guest
-                              ? 'Guest access'
-                              : storage.username
-                                ? `User: ${storage.username}`
-                                : 'Credentials required'}
-                          </span>
-                        </div>
-                      </div>
-                    </article>
-                  ))}
+                      </article>
+                    );
+                  })}
                 </>
               ) : (
                 <article className="content-card">
@@ -2737,7 +2848,7 @@ export default function ContentView(): JSX.Element {
                     type="text"
                     value={customRadioForm.name}
                     onChange={(e) => updateCustomRadioForm({ name: e.target.value })}
-                    placeholder="Studio Stream"
+                    placeholder="Custom Stream"
                     autoComplete="off"
                   />
                 </div>
@@ -3230,7 +3341,7 @@ export default function ContentView(): JSX.Element {
                 <div>
                   <h4 id="storage-modal-title">Add network share</h4>
                   <p className="content-body-copy">
-                    Provide the network details of your NAS or SMB share. Credentials are optional when guest access is enabled.
+                    Provide the network details of your NAS or network share. Credentials are optional when guest access is enabled.
                   </p>
                 </div>
                 <button
@@ -3244,95 +3355,95 @@ export default function ContentView(): JSX.Element {
                 </button>
               </div>
               <div className="library-storage-form">
-                <div className="library-storage-form-field">
-                  <label htmlFor="storage-name">Display name</label>
-                  <input
-                    id="storage-name"
-                    type="text"
-                    value={storageForm.name}
-                    onChange={(e) => updateStorageForm({ name: e.target.value })}
-                    placeholder="Studio NAS"
-                    autoComplete="off"
-                  />
-                </div>
-                <div className="library-storage-form__row">
+                <div className="library-storage-form-section">
+                  <div className="library-storage-form-section__title">Connection</div>
                   <div className="library-storage-form-field">
-                    <label htmlFor="storage-server">Server hostname / IP</label>
+                    <label htmlFor="storage-name">Display name</label>
                     <input
-                      id="storage-server"
+                      id="storage-name"
                       type="text"
-                      value={storageForm.server}
-                      onChange={(e) => updateStorageForm({ server: e.target.value })}
-                      placeholder="192.168.1.20"
+                      value={storageForm.name}
+                      onChange={(e) => updateStorageForm({ name: e.target.value })}
+                      placeholder="NASdrive"
                       autoComplete="off"
                     />
                   </div>
-                  <div className="library-storage-form-field">
-                    <label htmlFor="storage-folder">Share / folder</label>
-                    <input
-                      id="storage-folder"
-                      type="text"
-                      value={storageForm.folder}
-                      onChange={(e) => updateStorageForm({ folder: e.target.value })}
-                      placeholder="Music"
-                      autoComplete="off"
-                    />
-                  </div>
-                </div>
-                <div className="library-storage-form__row">
-                  <div className="library-storage-form-field">
-                    <label htmlFor="storage-type">Type</label>
-                    <input
-                      id="storage-type"
-                      type="text"
-                      value={storageForm.type}
-                      onChange={(e) => updateStorageForm({ type: e.target.value })}
-                      placeholder="smb"
-                      autoComplete="off"
-                    />
-                  </div>
-                  <div className="library-storage-form-field">
-                    <label htmlFor="storage-username">Username</label>
-                    <input
-                      id="storage-username"
-                      type="text"
-                      value={storageForm.username}
-                      onChange={(e) => updateStorageForm({ username: e.target.value })}
-                      placeholder="user"
-                      autoComplete="off"
-                      disabled={storageForm.guest}
-                    />
-                  </div>
-                  <div className="library-storage-form-field">
-                    <label htmlFor="storage-password">Password</label>
-                    <input
-                      id="storage-password"
-                      type="password"
-                      value={storageForm.password}
-                      onChange={(e) => updateStorageForm({ password: e.target.value })}
-                      placeholder="••••••••"
-                      autoComplete="new-password"
-                      disabled={storageForm.guest}
-                    />
+                  <div className="library-storage-form__row">
+                    <div className="library-storage-form-field">
+                      <label htmlFor="storage-server">Server hostname / IP</label>
+                      <input
+                        id="storage-server"
+                        type="text"
+                        value={storageForm.server}
+                        onChange={(e) => updateStorageForm({ server: e.target.value })}
+                        placeholder="192.168.1.20"
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className="library-storage-form-field">
+                      <label htmlFor="storage-folder">Share / folder</label>
+                      <input
+                        id="storage-folder"
+                        type="text"
+                        value={storageForm.folder}
+                        onChange={(e) => updateStorageForm({ folder: e.target.value })}
+                        placeholder="Music"
+                        autoComplete="off"
+                      />
+                    </div>
                   </div>
                 </div>
-                <label className="library-storage-checkbox" htmlFor="storage-guest">
-                  <input
-                    id="storage-guest"
-                    type="checkbox"
-                    checked={storageForm.guest}
-                    onChange={(e) =>
-                      updateStorageForm({
-                        guest: e.target.checked,
-                        ...(e.target.checked ? { username: '', password: '' } : {}),
-                      })
-                    }
-                  />
-                  Allow guest access (no credentials)
-                </label>
+                <div className="library-storage-form-section">
+                  <div className="library-storage-form-section__title">Access</div>
+                  <div className="library-storage-form__row">
+                    <div className="library-storage-form-field">
+                      <label htmlFor="storage-username">Username</label>
+                      <input
+                        id="storage-username"
+                        type="text"
+                        value={storageForm.username}
+                        onChange={(e) => updateStorageForm({ username: e.target.value })}
+                        placeholder="user"
+                        autoComplete="off"
+                        disabled={storageForm.guest}
+                      />
+                    </div>
+                    <div className="library-storage-form-field">
+                      <label htmlFor="storage-password">Password</label>
+                      <input
+                        id="storage-password"
+                        type="password"
+                        value={storageForm.password}
+                        onChange={(e) => updateStorageForm({ password: e.target.value })}
+                        placeholder="••••••••"
+                        autoComplete="new-password"
+                        disabled={storageForm.guest}
+                      />
+                    </div>
+                  </div>
+                  <label className="library-storage-checkbox" htmlFor="storage-guest">
+                    <input
+                      id="storage-guest"
+                      type="checkbox"
+                      checked={storageForm.guest}
+                      onChange={(e) =>
+                        updateStorageForm({
+                          guest: e.target.checked,
+                          ...(e.target.checked ? { username: '', password: '' } : {}),
+                        })
+                      }
+                    />
+                    Allow guest access (no credentials)
+                  </label>
+                </div>
               </div>
               <div className="content-actions library-storage-actions">
-                <button type="button" onClick={handleAddLibraryStorage} disabled={!storageFormValid || storageSubmitting}>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={handleAddLibraryStorage}
+                  disabled={!storageFormValid || storageSubmitting}
+                >
                   {storageSubmitting ? 'Adding…' : 'Add share'}
                 </button>
                 <button type="button" className="secondary" onClick={() => closeStorageModal(true)} disabled={storageSubmitting}>
