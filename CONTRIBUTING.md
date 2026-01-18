@@ -21,6 +21,6 @@ We use Conventional Commits. Some examples:
 - `main` produces normal semver releases like `2.2.0`.
 
 ## Pull Request flow
-1. Create a feature branch from `beta` or `main` (preferably `beta` for new features).
+1. Create a feature branch from `main`.
 2. Open a PR and ask for reviews.
 3. Ensure all CI checks are green (lint, tests, commitlint).
