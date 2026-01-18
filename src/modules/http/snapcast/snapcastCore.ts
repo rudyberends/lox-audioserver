@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 import os from 'node:os';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -12,6 +13,7 @@ type SnapcastClient = {
   socket: WebSocket;
   buffer: Buffer;
   clientId: string | null;
+  requestedStreamId: string;
   streamId: string;
   lastHelloId: number | null;
   connectedAt: number;
@@ -66,13 +68,10 @@ type ActiveStream = {
 };
 
 const BASE_HEADER_SIZE = 26; // 3x uint16 + 2x tv(int32,int32) + size(uint32), little endian
-const CHUNK_MS = 10;
+const CHUNK_MS = 20;
 const MAX_BUFFER_MS = 500;
-const INITIAL_LEAD_US = 250_000; // ~250ms lead to avoid initial “old chunk” drops
-// Snapclient uses a steady clock (steadytimeofday). Approximate that by anchoring
-// our high-res monotonic clock to the host uptime so both sides share the same epoch.
-const HR_TO_UPTIME_OFFSET_NS =
-  BigInt(Math.round(os.uptime() * 1_000_000_000)) - process.hrtime.bigint();
+const INITIAL_LEAD_US = 0;
+// Snapclient uses a steady clock (steadytimeofday). Use the monotonic clock directly.
 
 /**
  * Central Snapcast-compatible server (WebSocket only).
@@ -91,6 +90,7 @@ class SnapcastCore {
   private readonly streamSignatures = new Map<string, string>();
   private readonly clientConfigs = new Map<string, SnapcastClientConfig>();
   private readonly groupConfigs = new Map<string, SnapcastGroupState>();
+  private readonly clientToGroup = new Map<string, string>();
   private readonly streamMuteSnapshots = new Map<string, number>();
   private readonly rpcStreams = new Map<string, RpcStream>();
 
@@ -195,15 +195,54 @@ class SnapcastCore {
     stream: NodeJS.ReadableStream,
     clientIds: string[] = [],
   ): void {
-    const hadExisting =
-      this.streams.has(streamId) ||
-      Array.from(this.clients).some((client) => client.streamId === streamId);
-    this.clearStream(streamId);
     const bytesPerFrame = (output.pcmBitDepth / 8) * output.channels;
     const targetBytes = Math.max(
       bytesPerFrame,
       Math.floor((output.sampleRate * CHUNK_MS) / 1000) * bytesPerFrame,
     );
+    const existing = this.streams.get(streamId);
+    if (existing && existing.source === stream) {
+      // Reuse the active stream when only the client mapping or output metadata changes.
+      const formatChanged =
+        existing.output.sampleRate !== output.sampleRate ||
+        existing.output.channels !== output.channels ||
+        existing.output.pcmBitDepth !== output.pcmBitDepth;
+      existing.zoneId = zoneId;
+      existing.output = output;
+      existing.bytesPerFrame = bytesPerFrame;
+      if (formatChanged) {
+        existing.nextTimestampUs = 0;
+        existing.chunkBuffer = Buffer.alloc(0);
+      } else if (existing.nextTimestampUs < this.nowUs()) {
+        existing.nextTimestampUs = 0;
+      }
+
+      clientIds.forEach((id) => {
+        this.clientToStream.set(id, streamId);
+      });
+      for (const client of this.clients) {
+        if (clientIds.includes(client.clientId ?? '')) {
+          this.updateClientStream(client, streamId);
+          this.log.info('snapcast client reassigned to stream', { clientId: client.clientId, streamId });
+        }
+      }
+      this.log.info('snapcast stream updated', {
+        streamId,
+        zoneId,
+        sampleRate: output.sampleRate,
+        channels: output.channels,
+        bitDepth: output.pcmBitDepth,
+        clientIds,
+      });
+      this.pushSettingsToClients(streamId, output);
+      this.updateFlowControl(streamId);
+      this.streamSignatures.delete(streamId);
+      return;
+    }
+    const hadExisting =
+      this.streams.has(streamId) ||
+      Array.from(this.clients).some((client) => client.streamId === streamId);
+    this.clearStream(streamId);
     const onData = (chunk: Buffer) => {
       const active = this.streams.get(streamId);
       if (!active) return;
@@ -231,7 +270,7 @@ class SnapcastCore {
       zoneId,
       output,
       bytesPerFrame,
-      nextTimestampUs: this.nowUs() + INITIAL_LEAD_US,
+      nextTimestampUs: 0,
       chunkBuffer: Buffer.alloc(0),
       source: stream,
       cleanup: () => {
@@ -299,10 +338,6 @@ class SnapcastCore {
               this.clientToStream.delete(clientId);
             }
           }
-          const group = this.findGroupByStreamId(id);
-          if (group && group.id === id && group.clientIds.size === 0) {
-            this.groupConfigs.delete(group.id);
-          }
         }
       }
       return;
@@ -319,6 +354,7 @@ class SnapcastCore {
       socket,
       buffer: Buffer.alloc(0),
       clientId: null,
+      requestedStreamId: requested,
       streamId,
       lastHelloId: null,
       connectedAt: Date.now(),
@@ -334,7 +370,6 @@ class SnapcastCore {
           client: this.buildClientStatus(client, false),
           id: client.clientId,
         });
-        this.removeClientFromGroup(client.clientId, client.streamId);
       }
       this.clients.delete(client);
       this.updateFlowControl(client.streamId);
@@ -347,7 +382,6 @@ class SnapcastCore {
           client: this.buildClientStatus(client, false),
           id: client.clientId,
         });
-        this.removeClientFromGroup(client.clientId, client.streamId);
       }
       this.clients.delete(client);
       this.updateFlowControl(client.streamId);
@@ -479,7 +513,7 @@ class SnapcastCore {
         this.applyZoneVolumeToClient(client.clientId, client.streamId);
       }
       if (client.clientId) {
-        this.addClientToGroup(client.clientId, client.streamId);
+        this.ensureGroupForClient(client.clientId, client.streamId);
         this.sendClientNotification('Client.OnConnect', {
           client: this.buildClientStatus(client, true),
           id: client.clientId,
@@ -634,10 +668,10 @@ class SnapcastCore {
     const durationUs = Math.floor((frames * 1_000_000) / Math.max(1, active.output.sampleRate));
     const nowUs = this.nowUs();
     let tsUs =
-      active.nextTimestampUs && Number.isFinite(active.nextTimestampUs) ? active.nextTimestampUs : nowUs + INITIAL_LEAD_US;
+      active.nextTimestampUs && Number.isFinite(active.nextTimestampUs) ? active.nextTimestampUs : nowUs;
     // If we fell behind (e.g., after a pause or reconnect), jump forward to avoid sending stale chunks.
     if (tsUs < nowUs) {
-      tsUs = nowUs + INITIAL_LEAD_US;
+      tsUs = nowUs;
     }
     active.nextTimestampUs = tsUs + durationUs;
     const timestamp = {
@@ -725,9 +759,8 @@ class SnapcastCore {
   }
 
   private nowUs(): number {
-    // Monotonic microseconds anchored to host uptime to approximate steadytimeofday.
-    const ns = process.hrtime.bigint() + HR_TO_UPTIME_OFFSET_NS;
-    return Math.trunc(Number(ns / 1_000n));
+    // Use host uptime to align with snapclient steady clock (CLOCK_BOOTTIME).
+    return Math.trunc(os.uptime() * 1_000_000);
   }
 
   private extractStreamId(url: string): string | null {
@@ -779,7 +812,7 @@ class SnapcastCore {
     includeHeader: boolean,
   ): void {
     const config = this.getClientConfig(client.clientId ?? '');
-    const group = this.findGroupByStreamId(client.streamId);
+    const group = this.findGroupByClientId(client.clientId ?? '');
     const muted = config.volume.muted || (group?.muted ?? false);
     const settings = this.encodeJsonMessage(3, refersTo, {
       bufferMs: (() => {
@@ -814,7 +847,7 @@ class SnapcastCore {
     if (!hasClient && active.chunkBuffer.length > 0) {
       // Drop any queued audio when nobody is listening to avoid unbounded buffers.
       active.chunkBuffer = Buffer.alloc(0);
-      active.nextTimestampUs = this.nowUs() + INITIAL_LEAD_US;
+      active.nextTimestampUs = 0;
       this.log.debug('snapcast stream drained (no clients)', { streamId });
     }
   }
@@ -950,12 +983,16 @@ class SnapcastCore {
         if (!groupId || typeof mute !== 'boolean') {
           return error(-32602, 'Invalid params');
         }
-        const group = this.getOrCreateGroup(groupId, groupId);
+        const group = this.groupConfigs.get(groupId);
+        if (!group) {
+          return error(-32602, 'Group not found');
+        }
         group.muted = mute;
         const active = this.streams.get(group.streamId);
         if (active) {
-          for (const client of this.clients) {
-            if (client.streamId === group.streamId && client.socket.readyState === WebSocket.OPEN) {
+          for (const clientId of group.clientIds) {
+            const client = this.findClientById(clientId);
+            if (client && client.socket.readyState === WebSocket.OPEN) {
               this.sendSettings(client, active.output, 0, false);
             }
           }
@@ -970,7 +1007,10 @@ class SnapcastCore {
         if (!groupId || !streamId) {
           return error(-32602, 'Invalid params');
         }
-        const group = this.getOrCreateGroup(groupId, streamId);
+        const group = this.groupConfigs.get(groupId);
+        if (!group) {
+          return error(-32602, 'Group not found');
+        }
         group.streamId = streamId;
         for (const clientId of group.clientIds) {
           this.setClientStream(clientId, streamId);
@@ -987,10 +1027,41 @@ class SnapcastCore {
         if (!groupId || !clients) {
           return error(-32602, 'Invalid params');
         }
-        const group = this.getOrCreateGroup(groupId, groupId);
-        group.clientIds = new Set(clients);
-        for (const clientId of group.clientIds) {
+        const group = this.groupConfigs.get(groupId);
+        if (!group) {
+          return error(-32602, 'Group not found');
+        }
+        const previousClients = new Set<string>(group.clientIds);
+        const requestedClients = new Set<string>(clients);
+
+        // Move removed clients into new standalone groups that keep the same stream.
+        for (const clientId of previousClients) {
+          if (requestedClients.has(clientId)) {
+            continue;
+          }
+          group.clientIds.delete(clientId);
+          const newGroupId = randomUUID();
+          const newGroup = this.getOrCreateGroup(newGroupId, group.streamId);
+          newGroup.clientIds.add(clientId);
+          this.clientToGroup.set(clientId, newGroupId);
+        }
+
+        // Move requested clients into the target group.
+        for (const clientId of requestedClients) {
+          const currentGroup = this.findGroupByClientId(clientId);
+          if (currentGroup && currentGroup.id !== group.id) {
+            currentGroup.clientIds.delete(clientId);
+            if (currentGroup.clientIds.size === 0) {
+              this.groupConfigs.delete(currentGroup.id);
+            }
+          }
+          group.clientIds.add(clientId);
+          this.clientToGroup.set(clientId, group.id);
           this.setClientStream(clientId, group.streamId);
+        }
+
+        if (group.clientIds.size === 0) {
+          this.groupConfigs.delete(group.id);
         }
         const status = this.buildStatus();
         this.sendServerUpdate();
@@ -1002,7 +1073,10 @@ class SnapcastCore {
         if (!groupId) {
           return error(-32602, 'Invalid params');
         }
-        const group = this.getOrCreateGroup(groupId, groupId);
+        const group = this.groupConfigs.get(groupId);
+        if (!group) {
+          return error(-32602, 'Group not found');
+        }
         group.name = name;
         this.sendClientNotification('Group.OnNameChanged', { id: groupId, name });
         this.sendServerUpdate();
@@ -1024,7 +1098,7 @@ class SnapcastCore {
             /* ignore */
           }
           this.clients.delete(client);
-          this.removeClientFromGroup(clientId, client.streamId);
+          this.removeClientFromGroup(clientId);
         }
         this.clientConfigs.delete(clientId);
         try {
@@ -1306,7 +1380,7 @@ class SnapcastCore {
         metadata,
       },
       uri: {
-        raw: `ws://${this.pickLocalAddress()}:${process.env.HTTP_PORT ?? ''}/snapcast/${active.streamId}`,
+        raw: `ws://${this.pickLocalAddress()}:7090/snapcast/${active.streamId}`,
         scheme: 'ws',
         host: this.pickLocalAddress(),
         path: `/snapcast/${active.streamId}`,
@@ -1366,17 +1440,17 @@ class SnapcastCore {
   }
 
   private buildGroupStatus(active: ActiveStream): any {
-    const group = this.getOrCreateGroup(active.streamId, active.streamId);
-    return this.buildGroupStatusFromGroup(group);
+    const group = this.findGroupByStreamId(active.streamId);
+    if (group) {
+      return this.buildGroupStatusFromGroup(group);
+    }
+    return null;
   }
 
   private buildGroupStatusList(): any[] {
-    const streams = new Set(Array.from(this.streams.values()).map((stream) => stream.streamId));
-    this.rpcStreams.forEach((stream) => streams.add(stream.id));
-    for (const streamId of streams) {
-      this.getOrCreateGroup(streamId, streamId);
-    }
-    return Array.from(this.groupConfigs.values()).map((group) => this.buildGroupStatusFromGroup(group));
+    return Array.from(this.groupConfigs.values())
+      .map((group) => this.buildGroupStatusFromGroup(group))
+      .filter(Boolean);
   }
 
   private buildGroupStatusFromGroup(group: SnapcastGroupState): any {
@@ -1536,32 +1610,58 @@ class SnapcastCore {
       return;
     }
     const previous = client.streamId;
-    if (client.clientId) {
-      this.removeClientFromGroup(client.clientId, previous);
-    }
     client.streamId = streamId;
-    if (client.clientId) {
-      this.addClientToGroup(client.clientId, streamId);
-    }
     this.updateFlowControl(previous);
     this.updateFlowControl(streamId);
   }
 
-  private addClientToGroup(clientId: string, streamId: string): void {
-    const group = this.findGroupByStreamId(streamId) ?? this.getOrCreateGroup(streamId, streamId);
+  private ensureGroupForClient(clientId: string, streamId: string): void {
+    const existing = this.findGroupByClientId(clientId);
+    if (existing) {
+      existing.clientIds.add(clientId);
+      return;
+    }
+    const groupId = randomUUID();
+    const group = this.getOrCreateGroup(groupId, streamId);
     group.clientIds.add(clientId);
+    this.clientToGroup.set(clientId, groupId);
   }
 
-  private removeClientFromGroup(clientId: string, streamId: string): void {
-    const group = this.findGroupByStreamId(streamId);
-    if (group) {
-      group.clientIds.delete(clientId);
+  private removeClientFromGroup(clientId: string): void {
+    const group = this.findGroupByClientId(clientId);
+    if (!group) {
+      return;
+    }
+    group.clientIds.delete(clientId);
+    this.clientToGroup.delete(clientId);
+    if (group.clientIds.size === 0) {
+      this.groupConfigs.delete(group.id);
     }
   }
 
   private findGroupByStreamId(streamId: string): SnapcastGroupState | null {
     for (const group of this.groupConfigs.values()) {
       if (group.streamId === streamId) {
+        return group;
+      }
+    }
+    return null;
+  }
+
+  private findGroupByClientId(clientId: string): SnapcastGroupState | null {
+    if (!clientId) {
+      return null;
+    }
+    const groupId = this.clientToGroup.get(clientId);
+    if (groupId) {
+      const group = this.groupConfigs.get(groupId);
+      if (group) {
+        return group;
+      }
+    }
+    for (const group of this.groupConfigs.values()) {
+      if (group.clientIds.has(clientId)) {
+        this.clientToGroup.set(clientId, group.id);
         return group;
       }
     }

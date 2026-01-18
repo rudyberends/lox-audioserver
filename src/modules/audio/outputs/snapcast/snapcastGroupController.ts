@@ -1,5 +1,6 @@
 import { createLogger } from '@/core/logging/logger';
 import { getGroupByZone, onGroupChanged } from '@/modules/groups/groupTracker';
+import { audioManager } from '@/modules/audio/audioManager';
 
 type TransportInfo = {
   zoneId: number;
@@ -26,10 +27,11 @@ class SnapcastGroupController {
   private readonly transports = new Map<number, TransportInfo>();
 
   constructor() {
-    onGroupChanged((_event, leader) => {
-      const transport = this.transports.get(leader);
-      transport?.refresh();
-      // Non-leaders will re-evaluate on next play; nothing else needed here.
+    onGroupChanged(() => {
+      // Group changes can affect any snapcast transport; refresh all to avoid stale mappings.
+      for (const transport of this.transports.values()) {
+        transport.refresh();
+      }
     });
   }
 
@@ -53,13 +55,45 @@ class SnapcastGroupController {
       };
     }
 
-    const leaderZoneId = group.leader;
-    const leaderTransport = this.transports.get(leaderZoneId);
-    const leaderStreamId = leaderTransport?.baseStreamId ?? String(leaderZoneId);
+    const memberIds = new Set([group.leader, ...group.members]);
+    let leaderZoneId = group.leader;
+    let leaderTransport = this.transports.get(leaderZoneId);
+    const leaderSession = audioManager.getSession(leaderZoneId);
+    if (!leaderSession) {
+      for (const memberId of memberIds) {
+        const candidateSession = audioManager.getSession(memberId);
+        const candidate = this.transports.get(memberId);
+        if (candidate && candidateSession) {
+          leaderZoneId = memberId;
+          leaderTransport = candidate;
+          break;
+        }
+      }
+    }
+    if (!leaderTransport) {
+      for (const memberId of memberIds) {
+        const candidate = this.transports.get(memberId);
+        if (candidate) {
+          leaderZoneId = memberId;
+          leaderTransport = candidate;
+          break;
+        }
+      }
+    }
+    if (!leaderTransport) {
+      return {
+        shouldPlay: true,
+        streamId: baseStreamId,
+        clientIds: baseClientIds,
+        leaderZoneId: zoneId,
+        isLeader: true,
+      };
+    }
+    const leaderStreamId = leaderTransport.baseStreamId;
 
     // Combine clientIds from leader + members that have transports.
     const combinedClientIds = new Set<string>();
-    for (const memberId of new Set([group.leader, ...group.members])) {
+    for (const memberId of memberIds) {
       const t = this.transports.get(memberId);
       if (!t) continue;
       t.baseClientIds.forEach((id) => combinedClientIds.add(id));

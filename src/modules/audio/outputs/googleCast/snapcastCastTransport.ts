@@ -159,6 +159,10 @@ export class SnapcastCastTransport implements ZoneTransport {
   }
 
   private refreshGrouping(): void {
+    const plan = this.recomputePlan();
+    if (this.baseClientId) {
+      snapcastCore.setClientStream(this.baseClientId, this.effectiveStreamId);
+    }
     if (!this.lastSession) return;
     void this.play(this.lastSession);
   }

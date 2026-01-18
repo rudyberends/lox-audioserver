@@ -166,10 +166,6 @@ export class SnapcastTransport implements ZoneTransport {
   }
 
   private refreshGrouping(): void {
-    // Restart stream to pick up new group membership when this zone is leader.
-    if (!this.currentStream) {
-      return;
-    }
     const plan = snapcastGroupController.buildPlan(
       this.zoneId,
       this.baseStreamId,
@@ -177,6 +173,13 @@ export class SnapcastTransport implements ZoneTransport {
     );
     this.effectiveStreamId = plan.streamId;
     this.effectiveClientIds = plan.clientIds;
+    // Keep client mappings in sync even when this transport is not actively streaming.
+    for (const clientId of this.baseClientIds) {
+      snapcastCore.setClientStream(clientId, this.effectiveStreamId);
+    }
+    if (!this.currentStream) {
+      return;
+    }
     if (!plan.shouldPlay) {
       this.stopStream();
       return;
