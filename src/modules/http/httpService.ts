@@ -9,6 +9,8 @@ import { StaticFileHandler } from '@/modules/http/static/staticFileHandler';
 import { SendspinGateway } from '@/modules/http/sendspin/sendspinGateway';
 import { sendspinClientConnector } from '@/modules/http/sendspin/sendspinClientConnector';
 import { SnapcastGateway } from '@/modules/http/snapcast/snapcastGateway';
+import { SnapcastTcpServer } from '@/modules/http/snapcast/snapcastTcpServer';
+import { SnapcastMdnsAdvertiser } from '@/modules/http/snapcast/snapcastMdnsAdvertiser';
 import { AudioStreamHandler } from '@/modules/http/streams/audioStreamHandler';
 import { AudioProxyHandler } from '@/modules/http/streams/audioProxyHandler';
 import { LineInIngestWebSocket } from '@/modules/http/streams/lineInIngestWs';
@@ -32,8 +34,10 @@ export class HttpService {
   private readonly lineInIngestTcp: LineInIngestTcp;
   private readonly lineInApi: LineInApiHandler;
   private readonly loxAudioMdns = new LoxAudioMdnsAdvertiser();
+  private readonly snapcastMdns = new SnapcastMdnsAdvertiser();
   private readonly sendspin = new SendspinGateway();
   private readonly snapcast = new SnapcastGateway();
+  private readonly snapcastTcp = new SnapcastTcpServer();
   private server?: http.Server;
   private stopMdnsAdvert?: () => void;
 
@@ -87,6 +91,8 @@ export class HttpService {
         .on('error', reject);
     });
     await this.lineInIngestTcp.start();
+    await this.snapcastTcp.start();
+    this.advertiseSnapcastMdns();
   }
 
   public async stop(): Promise<void> {
@@ -95,6 +101,7 @@ export class HttpService {
       this.stopMdnsAdvert = undefined;
     }
     this.loxAudioMdns.stop();
+    this.snapcastMdns.stop();
     await new Promise<void>((resolve) => {
       if (!this.server) {
         resolve();
@@ -104,6 +111,7 @@ export class HttpService {
       this.server = undefined;
     });
     await this.lineInIngestTcp.stop();
+    await this.snapcastTcp.stop();
     this.sendspin.close();
     this.snapcast.close();
   }
@@ -230,6 +238,24 @@ export class HttpService {
         linein_status: '/api/linein/bridges/{bridge_id}/status',
         mac: mac ? mac.toUpperCase() : undefined,
       },
+    });
+  }
+
+  private advertiseSnapcastMdns(): void {
+    const systemName = getSystemConfig()?.audioserver?.name || 'Lox Audio Server';
+    const host =
+      this.config.host && this.config.host !== '0.0.0.0' ? this.config.host : this.pickLocalAddress();
+    const mdnsHost = host === '0.0.0.0' ? undefined : host;
+    const streamPort = this.snapcastTcp.getAdvertisePort();
+    if (!streamPort) {
+      this.log.warn('snapcast mdns skipped (tcp server not listening)');
+      return;
+    }
+    this.snapcastMdns.advertise({
+      name: systemName,
+      host: mdnsHost,
+      streamPort,
+      jsonrpcPort: this.config.port,
     });
   }
 

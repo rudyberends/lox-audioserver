@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'node:http';
+import type net from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 import os from 'node:os';
@@ -10,7 +11,8 @@ import { audioManager } from '@/modules/audio/audioManager';
 import { zoneManager } from '@/modules/zones/zoneManager';
 
 type SnapcastClient = {
-  socket: WebSocket;
+  socket: WebSocket | net.Socket;
+  transport: 'ws' | 'tcp';
   buffer: Buffer;
   clientId: string | null;
   requestedStreamId: string;
@@ -70,12 +72,11 @@ type ActiveStream = {
 const BASE_HEADER_SIZE = 26; // 3x uint16 + 2x tv(int32,int32) + size(uint32), little endian
 const CHUNK_MS = 20;
 const MAX_BUFFER_MS = 500;
-const INITIAL_LEAD_US = 0;
 const MAX_MESSAGE_SIZE = 1_000_000;
 // Snapclient uses a steady clock (steadytimeofday). Use the monotonic clock directly.
 
 /**
- * Central Snapcast-compatible server (WebSocket only).
+ * Central Snapcast-compatible server (WebSocket + TCP).
  * Listens on /snapcast via the shared HTTP server upgrade path.
  */
 class SnapcastCore {
@@ -135,7 +136,7 @@ class SnapcastCore {
   }
 
   public close(): void {
-    this.clients.forEach((client) => client.socket.close());
+    this.clients.forEach((client) => this.closeClientSocket(client));
     this.clients.clear();
     this.wsServer.close();
     this.rpcServer.close();
@@ -153,14 +154,37 @@ class SnapcastCore {
     connected: boolean;
     connectedAt: number;
     lastHelloId: number | null;
+    latency: number;
   }> {
     return Array.from(this.clients).map((c) => ({
       clientId: c.clientId ?? '',
       streamId: c.streamId,
-      connected: c.socket.readyState === WebSocket.OPEN,
+      connected: this.isClientOpen(c),
       connectedAt: c.connectedAt,
       lastHelloId: c.lastHelloId,
+      latency: this.getClientConfig(c.clientId ?? '').latency,
     }));
+  }
+
+  public setClientLatency(clientId: string, latency: number): { updated: boolean; connected: boolean; latency: number } {
+    if (!clientId || !Number.isFinite(latency)) {
+      return { updated: false, connected: false, latency: 0 };
+    }
+    const clamped = Math.max(0, Math.round(latency));
+    this.ensureClientConfig(clientId).latency = clamped;
+    const client = this.findClientById(clientId);
+    let connected = false;
+    if (client && this.isClientOpen(client)) {
+      connected = true;
+      const output =
+        this.streams.get(client.streamId)?.output ??
+        this.streams.values().next().value?.output ??
+        audioOutputSettings;
+      this.sendSettings(client, output, 0, false);
+    }
+    this.sendClientNotification('Client.OnLatencyChanged', { id: clientId, latency: clamped });
+    this.sendServerUpdate();
+    return { updated: true, connected, latency: clamped };
   }
 
   public setClientStream(clientId: string, streamId: string): { updated: boolean; connected: boolean } {
@@ -172,7 +196,7 @@ class SnapcastCore {
     let pushed = false;
     for (const client of this.clients) {
       if (client.clientId === clientId) {
-        connected = true;
+        connected = this.isClientOpen(client);
         if (client.streamId !== streamId) {
           this.updateClientStream(client, streamId);
         }
@@ -353,6 +377,7 @@ class SnapcastCore {
     const streamId = this.resolveStreamId(requested);
     const client: SnapcastClient = {
       socket,
+      transport: 'ws',
       buffer: Buffer.alloc(0),
       clientId: null,
       requestedStreamId: requested,
@@ -363,6 +388,53 @@ class SnapcastCore {
     this.clients.add(client);
     this.log.debug('snapcast ws connection opened', { streamId });
     socket.on('message', (data: Buffer) => {
+      this.consumeData(client, Buffer.isBuffer(data) ? data : Buffer.from(data));
+    });
+    socket.on('close', () => {
+      if (client.clientId) {
+        this.sendClientNotification('Client.OnDisconnect', {
+          client: this.buildClientStatus(client, false),
+          id: client.clientId,
+        });
+      }
+      this.clients.delete(client);
+      this.updateFlowControl(client.streamId);
+      this.sendServerUpdate();
+    });
+    socket.on('error', (error) => {
+      this.log.debug('snapcast client error', { message: (error as Error).message });
+      if (client.clientId) {
+        this.sendClientNotification('Client.OnDisconnect', {
+          client: this.buildClientStatus(client, false),
+          id: client.clientId,
+        });
+      }
+      this.clients.delete(client);
+      this.updateFlowControl(client.streamId);
+      this.sendServerUpdate();
+    });
+    this.updateFlowControl(client.streamId);
+  }
+
+  public handleTcpConnection(socket: net.Socket): void {
+    const requested = 'default';
+    const streamId = this.resolveStreamId(requested);
+    const client: SnapcastClient = {
+      socket,
+      transport: 'tcp',
+      buffer: Buffer.alloc(0),
+      clientId: null,
+      requestedStreamId: requested,
+      streamId,
+      lastHelloId: null,
+      connectedAt: Date.now(),
+    };
+    this.clients.add(client);
+    this.log.debug('snapcast tcp connection opened', {
+      streamId,
+      remote: socket.remoteAddress,
+    });
+    socket.on('data', (data: Buffer) => {
       this.consumeData(client, Buffer.isBuffer(data) ? data : Buffer.from(data));
     });
     socket.on('close', () => {
@@ -456,11 +528,47 @@ class SnapcastCore {
       ...details,
     });
     client.buffer = Buffer.alloc(0);
+    this.closeClientSocket(client);
+  }
+
+  private isClientOpen(client: SnapcastClient): boolean {
+    if (client.transport === 'ws') {
+      return (client.socket as WebSocket).readyState === WebSocket.OPEN;
+    }
+    const socket = client.socket as net.Socket;
+    return socket.writable && !socket.destroyed;
+  }
+
+  private sendToClient(client: SnapcastClient, payload: Buffer): void {
+    if (!this.isClientOpen(client)) {
+      return;
+    }
+    if (client.transport === 'ws') {
+      (client.socket as WebSocket).send(payload);
+      return;
+    }
+    (client.socket as net.Socket).write(payload);
+  }
+
+  private closeClientSocket(client: SnapcastClient): void {
     try {
-      client.socket.close();
+      if (client.transport === 'ws') {
+        (client.socket as WebSocket).close();
+      } else {
+        (client.socket as net.Socket).destroy();
+      }
     } catch {
       /* ignore */
     }
+  }
+
+  private getClientRemoteIp(client: SnapcastClient): string | null {
+    if (client.transport === 'ws') {
+      const remoteIp = (client.socket as any)?._socket?.remoteAddress;
+      return typeof remoteIp === 'string' ? remoteIp : null;
+    }
+    const remoteIp = (client.socket as net.Socket).remoteAddress;
+    return typeof remoteIp === 'string' ? remoteIp : null;
   }
 
   private handleMessage(
@@ -515,8 +623,8 @@ class SnapcastCore {
       if (typeof parsed.MAC === 'string') {
         config.host.mac = parsed.MAC;
       }
-      const remoteIp = (client.socket as any)?._socket?.remoteAddress;
-      if (typeof remoteIp === 'string') {
+      const remoteIp = this.getClientRemoteIp(client);
+      if (remoteIp) {
         config.host.ip = remoteIp;
       }
       if (typeof parsed.ClientName === 'string') {
@@ -590,7 +698,7 @@ class SnapcastCore {
       config.volume.muted = muted;
     }
     const client = this.findClientById(clientId);
-    if (client && client.socket.readyState === WebSocket.OPEN) {
+    if (client && this.isClientOpen(client)) {
       const output =
         this.streams.get(client.streamId)?.output ??
         this.streams.values().next().value?.output ??
@@ -680,7 +788,7 @@ class SnapcastCore {
     payload.writeInt32LE(latencySec, 0);
     payload.writeInt32LE(latencyUsec, 4);
     const message = this.encodeMessage(4, this.nextId(), header.id, payload);
-    client.socket.send(message);
+    this.sendToClient(client, message);
   }
 
   private broadcastWireChunk(streamId: string, payload: Buffer): void {
@@ -694,6 +802,9 @@ class SnapcastCore {
     const nowUs = this.nowUs();
     let tsUs =
       active.nextTimestampUs && Number.isFinite(active.nextTimestampUs) ? active.nextTimestampUs : nowUs;
+    if (!active.nextTimestampUs) {
+      tsUs = nowUs;
+    }
     // If we fell behind (e.g., after a pause or reconnect), jump forward to avoid sending stale chunks.
     if (tsUs < nowUs) {
       tsUs = nowUs;
@@ -710,8 +821,8 @@ class SnapcastCore {
     payload.copy(chunkPayload, 12);
     const message = this.encodeMessage(2, this.nextId(), 0, chunkPayload);
     for (const client of this.clients) {
-      if (client.socket.readyState === WebSocket.OPEN && client.streamId === streamId) {
-        client.socket.send(message);
+      if (this.isClientOpen(client) && client.streamId === streamId) {
+        this.sendToClient(client, message);
       }
     }
   }
@@ -822,7 +933,7 @@ class SnapcastCore {
   private pushSettingsToClients(streamId: string, output: AudioOutputSettings): void {
     let pushed = 0;
     for (const client of this.clients) {
-      if (client.streamId === streamId && client.socket.readyState === WebSocket.OPEN) {
+      if (client.streamId === streamId && this.isClientOpen(client)) {
         this.sendSettings(client, output, 0, true);
         pushed += 1;
       }
@@ -840,26 +951,16 @@ class SnapcastCore {
     const group = this.findGroupByClientId(client.clientId ?? '');
     const muted = config.volume.muted || (group?.muted ?? false);
     const settings = this.encodeJsonMessage(3, refersTo, {
-      bufferMs: (() => {
-        const computed = output.prebufferBytes
-          ? Math.round(
-              (output.prebufferBytes / (output.sampleRate * output.channels * (output.pcmBitDepth / 8))) * 1000,
-            )
-          : 0;
-        if (!Number.isFinite(computed) || computed <= 0) {
-          return MAX_BUFFER_MS;
-        }
-        return Math.min(computed, MAX_BUFFER_MS);
-      })(),
+      bufferMs: this.computeBufferMs(output),
       latency: Number.isFinite(config.latency) ? config.latency : 0,
       volume: config.volume.percent,
       muted,
     });
-    client.socket.send(settings);
+    this.sendToClient(client, settings);
 
     if (includeHeader) {
       const wavHeader = this.buildPcmCodecHeader(output.sampleRate, output.channels, output.pcmBitDepth);
-      client.socket.send(wavHeader);
+      this.sendToClient(client, wavHeader);
     }
   }
 
@@ -867,7 +968,7 @@ class SnapcastCore {
     const active = this.streams.get(streamId);
     if (!active) return;
     const hasClient = Array.from(this.clients).some(
-      (client) => client.streamId === streamId && client.socket.readyState === WebSocket.OPEN,
+      (client) => client.streamId === streamId && this.isClientOpen(client),
     );
     if (!hasClient && active.chunkBuffer.length > 0) {
       // Drop any queued audio when nobody is listening to avoid unbounded buffers.
@@ -875,6 +976,18 @@ class SnapcastCore {
       active.nextTimestampUs = 0;
       this.log.debug('snapcast stream drained (no clients)', { streamId });
     }
+  }
+
+  private computeBufferMs(output: AudioOutputSettings): number {
+    const computed = output.prebufferBytes
+      ? Math.round(
+          (output.prebufferBytes / (output.sampleRate * output.channels * (output.pcmBitDepth / 8))) * 1000,
+        )
+      : 0;
+    if (!Number.isFinite(computed) || computed <= 0) {
+      return MAX_BUFFER_MS;
+    }
+    return Math.min(computed, MAX_BUFFER_MS);
   }
 
   private handleRpcMessage(socket: WebSocket, raw: RawData): void {
@@ -931,7 +1044,7 @@ class SnapcastCore {
         const clientId = typeof params.id === 'string' ? params.id : '';
         const client = this.findClientById(clientId);
         if (client) {
-          return reply({ client: this.buildClientStatus(client, client.socket.readyState === WebSocket.OPEN) });
+          return reply({ client: this.buildClientStatus(client, this.isClientOpen(client)) });
         }
         if (!clientId || !this.clientConfigs.has(clientId)) {
           return error(-32602, 'Invalid params');
@@ -952,7 +1065,7 @@ class SnapcastCore {
         const clamped = Math.min(100, Math.max(0, Math.round(percent)));
         this.setClientVolume(clientId, { muted, percent: clamped });
         const client = this.findClientById(clientId);
-        if (client && client.socket.readyState === WebSocket.OPEN) {
+        if (client && this.isClientOpen(client)) {
           const output =
             this.streams.get(client.streamId)?.output ??
             this.streams.values().next().value?.output ??
@@ -972,7 +1085,7 @@ class SnapcastCore {
         const clamped = Math.max(0, Math.round(latency));
         this.ensureClientConfig(clientId).latency = clamped;
         const client = this.findClientById(clientId);
-        if (client && client.socket.readyState === WebSocket.OPEN) {
+        if (client && this.isClientOpen(client)) {
           const output =
             this.streams.get(client.streamId)?.output ??
             this.streams.values().next().value?.output ??
@@ -1017,7 +1130,7 @@ class SnapcastCore {
         if (active) {
           for (const clientId of group.clientIds) {
             const client = this.findClientById(clientId);
-            if (client && client.socket.readyState === WebSocket.OPEN) {
+            if (client && this.isClientOpen(client)) {
               this.sendSettings(client, active.output, 0, false);
             }
           }
@@ -1117,11 +1230,7 @@ class SnapcastCore {
           return error(-32602, 'Invalid params');
         }
         if (client) {
-          try {
-            client.socket.close();
-          } catch {
-            /* ignore */
-          }
+          this.closeClientSocket(client);
           this.clients.delete(client);
           this.removeClientFromGroup(clientId);
         }
@@ -1482,7 +1591,7 @@ class SnapcastCore {
     const clients = Array.from(group.clientIds).map((id) => {
       const live = this.findClientById(id);
       if (live) {
-        return this.buildClientStatus(live, live.socket.readyState === WebSocket.OPEN);
+        return this.buildClientStatus(live, this.isClientOpen(live));
       }
       return this.buildClientStatusFromConfig(id, false);
     });
