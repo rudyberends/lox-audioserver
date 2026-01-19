@@ -42,8 +42,43 @@ class LoxoneConfigService {
   }
 
   public async applyVolumePreset(players: unknown[]): Promise<number> {
-    this.log.info('volume preset applied', { players: players.length });
-    return players.length;
+    const entries = Array.isArray(players) ? players : [];
+    let updated = 0;
+
+    await updateConfig((cfg) => {
+      entries.forEach((entry) => {
+        if (!entry || typeof entry !== 'object') {
+          return;
+        }
+        const payload = entry as Record<string, unknown>;
+        const zoneId = Number(payload.playerid);
+        if (!Number.isFinite(zoneId)) {
+          return;
+        }
+        const zone = cfg.zones.find((z) => z.id === zoneId);
+        if (!zone) {
+          this.log.debug('volume preset ignored; unknown zone', { zoneId });
+          return;
+        }
+        const volumes = zone.volumes as unknown as Record<string, number>;
+        let changed = false;
+        for (const [key, value] of Object.entries(payload)) {
+          if (key in volumes && typeof value === 'number') {
+            volumes[key] = value;
+            changed = true;
+          }
+        }
+        if (changed) {
+          updated += 1;
+        }
+      });
+    });
+
+    this.log.info('volume preset applied', {
+      players: entries.length,
+      updated,
+    });
+    return updated;
   }
 
   public async applyDefaultVolume(zoneId: number, value: number): Promise<void> {
