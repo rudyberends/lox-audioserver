@@ -71,6 +71,7 @@ const BASE_HEADER_SIZE = 26; // 3x uint16 + 2x tv(int32,int32) + size(uint32), l
 const CHUNK_MS = 20;
 const MAX_BUFFER_MS = 500;
 const INITIAL_LEAD_US = 0;
+const MAX_MESSAGE_SIZE = 1_000_000;
 // Snapclient uses a steady clock (steadytimeofday). Use the monotonic clock directly.
 
 /**
@@ -395,6 +396,15 @@ class SnapcastCore {
     while (client.buffer.length >= BASE_HEADER_SIZE) {
       const header = this.parseHeader(client.buffer);
       if (!header) {
+        this.terminateClient(client, 'invalid-header');
+        return;
+      }
+      if (header.type > 8) {
+        this.terminateClient(client, 'unknown-message-type', { type: header.type });
+        return;
+      }
+      if (header.size > MAX_MESSAGE_SIZE) {
+        this.terminateClient(client, 'message-too-large', { size: header.size });
         return;
       }
       const totalLength = BASE_HEADER_SIZE + header.size;
@@ -435,6 +445,21 @@ class SnapcastCore {
     } catch (error) {
       this.log.warn('failed to parse snapcast header', { message: (error as Error).message });
       return null;
+    }
+  }
+
+  private terminateClient(client: SnapcastClient, reason: string, details?: Record<string, unknown>): void {
+    this.log.warn('snapcast client disconnected', {
+      reason,
+      clientId: client.clientId,
+      streamId: client.streamId,
+      ...details,
+    });
+    client.buffer = Buffer.alloc(0);
+    try {
+      client.socket.close();
+    } catch {
+      /* ignore */
     }
   }
 
