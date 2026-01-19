@@ -68,6 +68,7 @@ export interface SnapcastClient {
   streamId?: string;
   connected?: boolean;
   connectedAt?: number;
+  latency?: number;
 }
 
 export type SpotifyDeviceResponse = {
@@ -201,6 +202,23 @@ export async function discoverSnapcastClients(): Promise<SnapcastClient[]> {
   }
   const payload = (await res.json()) as { clients?: SnapcastClient[] };
   return payload.clients ?? [];
+}
+
+export async function setSnapcastClientLatency(
+  clientId: string,
+  latency: number,
+): Promise<{ latency: number }> {
+  const res = await fetch(`${API_BASE}/snapcast/clients/${encodeURIComponent(clientId)}/latency`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ latency }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || 'Failed to update Snapcast latency');
+  }
+  const payload = (await res.json()) as { latency?: number };
+  return { latency: payload.latency ?? latency };
 }
 
 export async function discoverSpotifyDevices(): Promise<SpotifyDevice[]> {

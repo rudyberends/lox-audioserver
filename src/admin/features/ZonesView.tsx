@@ -10,11 +10,13 @@ import {
   discoverSonosDevices,
   discoverSendspinClients,
   discoverSnapcastClients,
+  setSnapcastClientLatency,
   discoverSpotifyDevices,
   type AirplayDevice,
   type GoogleCastDevice,
   type SonosDevice,
   type SendspinClient,
+  type SnapcastClient,
   type SpotifyDevice,
 } from '../services/transportsApi';
 import type { ZoneInputConfig, ZoneTransportConfig } from '@/domain/config/types';
@@ -1006,9 +1008,12 @@ function ZoneOutputEditor({
   const [sonosDevices, setSonosDevices] = React.useState<SonosDevice[] | null>(null);
   const [discoveringSonos, setDiscoveringSonos] = React.useState(false);
   const [sonosError, setSonosError] = React.useState<string | null>(null);
-  const [snapcastClients, setSnapcastClients] = React.useState<{ clientId: string; streamId?: string; connected?: boolean; connectedAt?: number }[] | null>(null);
+  const [snapcastClients, setSnapcastClients] = React.useState<SnapcastClient[] | null>(null);
   const [discoveringSnapcast, setDiscoveringSnapcast] = React.useState(false);
   const [snapcastError, setSnapcastError] = React.useState<string | null>(null);
+  const [snapcastLatencyDrafts, setSnapcastLatencyDrafts] = React.useState<Record<string, string>>(
+    {},
+  );
   const activeAirplayHost =
     selectedId === 'airplay'
       ? fieldValues.host || (primary as any)?.host || ''
@@ -1155,6 +1160,19 @@ function ZoneOutputEditor({
       void handleSnapcastDiscovery();
     }
   }, [isSnapcast, snapcastClients, discoveringSnapcast]);
+
+  React.useEffect(() => {
+    if (!snapcastClients) return;
+    setSnapcastLatencyDrafts((prev) => {
+      const next = { ...prev };
+      snapcastClients.forEach((client) => {
+        const id = client.clientId;
+        if (!id || next[id] !== undefined) return;
+        next[id] = typeof client.latency === 'number' ? String(client.latency) : '';
+      });
+      return next;
+    });
+  }, [snapcastClients]);
 
   function persist(transportId: string, values: Record<string, string>): void {
     if (!transportId) {
@@ -1469,6 +1487,47 @@ function ZoneOutputEditor({
     } as any;
     setFieldValues({ clientIds: clientId });
     onChange(payload);
+  }
+
+  function handleSnapcastLatencyChange(clientId: string, value: string): void {
+    setSnapcastLatencyDrafts((prev) => ({ ...prev, [clientId]: value }));
+  }
+
+  async function handleSnapcastLatencyCommit(clientId: string, nextValue?: number): Promise<void> {
+    const raw = snapcastLatencyDrafts[clientId];
+    const parsed = typeof nextValue === 'number' ? nextValue : Number(raw);
+    if (!Number.isFinite(parsed)) {
+      setSnapcastError('Latency must be a number.');
+      return;
+    }
+    try {
+      const clamped = Math.max(0, Math.round(parsed));
+      const result = await setSnapcastClientLatency(clientId, clamped);
+      setSnapcastClients((prev) =>
+        prev
+          ? prev.map((client) =>
+              client.clientId === clientId ? { ...client, latency: result.latency } : client,
+            )
+          : prev,
+      );
+      setSnapcastLatencyDrafts((prev) => ({ ...prev, [clientId]: String(result.latency) }));
+      setSnapcastError(null);
+    } catch (err) {
+      setSnapcastError(
+        err instanceof Error ? err.message : typeof err === 'string' ? err : 'Failed to update latency',
+      );
+    }
+  }
+
+  function handleSnapcastLatencyNudge(clientId: string, delta: number): void {
+    const raw = snapcastLatencyDrafts[clientId];
+    const base = Number(raw);
+    const current = Number.isFinite(base)
+      ? base
+      : snapcastClients?.find((client) => client.clientId === clientId)?.latency ?? 0;
+    const next = Math.max(0, Math.round(current + delta));
+    setSnapcastLatencyDrafts((prev) => ({ ...prev, [clientId]: String(next) }));
+    void handleSnapcastLatencyCommit(clientId, next);
   }
 
   function applySnapcastCastDevice(device: GoogleCastDevice): void {
@@ -2028,15 +2087,16 @@ function ZoneOutputEditor({
                   {discoveringSnapcast ? 'Refreshing…' : 'Refresh list'}
                 </button>
               </div>
-              <div className="zone-output-device-grid">
+              <div className="zone-output-device-grid zone-output-device-grid--snapcast">
                 {snapcastDeviceItems.map((client, index) => {
                   const label = client.clientId || client.id || `client-${index}`;
                   const active = activeSnapcastIds.includes(label);
+                  const latencyValue = snapcastLatencyDrafts[label] ?? '';
                   return (
                     <button
                       key={`snapcast-${label}-${index}`}
                       type="button"
-                      className={`zone-output-device${active ? ' is-active' : ''}`}
+                      className={`zone-output-device zone-output-device--snapcast${active ? ' is-active' : ''}`}
                       onClick={() => applySnapcastClient(label)}
                       disabled={saving}
                     >
@@ -2045,6 +2105,47 @@ function ZoneOutputEditor({
                       <span className="zone-output-device__type">
                         {client.streamId ? `Stream: ${client.streamId}` : 'Snapcast'}
                       </span>
+                      <div className="zone-output-device__latency">
+                        <span className="zone-output-device__latency-label">Latency</span>
+                        <div className="zone-output-device__latency-controls">
+                          <button
+                            type="button"
+                            className="zone-output-device__latency-step"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleSnapcastLatencyNudge(label, -25);
+                            }}
+                            disabled={saving}
+                          >
+                            −25
+                          </button>
+                          <input
+                            type="number"
+                            inputMode="numeric"
+                            value={latencyValue}
+                            onChange={(event) => handleSnapcastLatencyChange(label, event.target.value)}
+                            onClick={(event) => event.stopPropagation()}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.currentTarget.blur();
+                              }
+                            }}
+                            onBlur={() => void handleSnapcastLatencyCommit(label)}
+                          />
+                          <span className="zone-output-device__latency-unit">ms</span>
+                          <button
+                            type="button"
+                            className="zone-output-device__latency-step"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleSnapcastLatencyNudge(label, 25);
+                            }}
+                            disabled={saving}
+                          >
+                            +25
+                          </button>
+                        </div>
+                      </div>
                     </button>
                   );
                 })}

@@ -1237,12 +1237,21 @@
   height: 64px;
 }
 
+.zone-output-device--snapcast {
+  height: 124px;
+  justify-content: space-between;
+}
+
 .zone-output-device-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 0.5rem;
   min-height: calc(140px + 0.5rem);
   grid-auto-rows: 70px;
+}
+
+.zone-output-device-grid--snapcast {
+  grid-auto-rows: 124px;
 }
 
 .zone-output-discovery-panel {
@@ -1358,6 +1367,76 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.zone-output-device__latency {
+  margin-top: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  color: #4b5563;
+}
+
+.zone-output-device--snapcast .zone-output-device__name {
+  margin-top: 0.1rem;
+}
+
+.zone-output-device--snapcast .zone-output-device__type {
+  margin-bottom: 0.2rem;
+}
+
+.zone-output-device__latency-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.55rem;
+  font-weight: 700;
+  color: #6b7280;
+}
+
+.zone-output-device__latency-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.zone-output-device__latency input {
+  width: 56px;
+  padding: 0.15rem 0.35rem;
+  font-size: 0.7rem;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  background: #ffffff;
+  text-align: center;
+  appearance: textfield;
+}
+
+.zone-output-device__latency input::-webkit-outer-spin-button,
+.zone-output-device__latency input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.zone-output-device__latency-unit {
+  font-size: 0.68rem;
+  color: #6b7280;
+}
+
+.zone-output-device__latency-step {
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: #111827;
+  cursor: pointer;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.zone-output-device__latency-step:hover {
+  border-color: rgba(15, 23, 42, 0.35);
+  box-shadow: 0 4px 10px -8px rgba(15, 23, 42, 0.35);
 }
 
 .zone-output-device__badge {

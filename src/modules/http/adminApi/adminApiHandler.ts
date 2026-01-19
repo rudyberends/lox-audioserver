@@ -137,6 +137,21 @@ export class AdminApiHandler {
         },
       },
       {
+        method: 'POST',
+        pattern: /^\/snapcast\/clients\/([^/]+)\/latency$/,
+        handler: async (req, res, match) => {
+          const clientId = decodeURIComponent(match[1] ?? '').trim();
+          const body = (await this.readJsonBody(req)) as { latency?: number } | null;
+          const latency = body?.latency;
+          if (!clientId || typeof latency !== 'number') {
+            this.sendJson(res, 400, { error: 'invalid-snapcast-latency' });
+            return;
+          }
+          const result = snapcastCore.setClientLatency(clientId, latency);
+          this.sendJson(res, 200, { clientId, ...result });
+        },
+      },
+      {
         method: 'DELETE',
         pattern: /^\/spotify\/accounts\/([^/]+)$/,
         handler: async (_req, res, match) => {
@@ -836,6 +851,7 @@ export class AdminApiHandler {
         streamId: client.streamId,
         connected: client.connected,
         connectedAt: client.connectedAt,
+        latency: client.latency,
       }));
       this.sendJson(res, 200, { clients });
     } catch (err) {
