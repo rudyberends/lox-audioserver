@@ -8,6 +8,7 @@ import { recognizeBytes, type DecodedSignature } from 'shazamio-core';
 import ffmpegPath from 'ffmpeg-static';
 import { createLogger } from '@/core/logging/logger';
 import { lineInIngestRegistry } from '@/modules/audio/inputs/linein/lineInIngestRegistry';
+import { resolveLineInSampleRate } from '@/modules/audio/inputs/linein/lineInConstants';
 import { zoneManager } from '@/modules/zones/zoneManager';
 import { buildWavHeader } from '@/modules/audio/utils/audioFormat';
 import { getConfig } from '@/domain/config/configStore';
@@ -24,7 +25,6 @@ type CaptureState = {
   stop: () => void;
 };
 
-const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
 const BYTES_PER_SAMPLE = 2;
 const ACOUSTID_ENDPOINT = 'https://api.acoustid.org/v2/lookup';
@@ -119,13 +119,32 @@ class LineInMetadataService {
     this.activeCaptures.set(inputId, capture);
   }
 
+  public handleTrackChange(inputId: string): void {
+    if (!this.isMetadataEnabledForInput(inputId)) {
+      return;
+    }
+    if (this.activeCaptures.has(inputId)) {
+      return;
+    }
+    const stream = lineInIngestRegistry.getStream(inputId);
+    if (!stream) {
+      this.log.info('line-in metadata track change ignored; no stream', { inputId });
+      return;
+    }
+    this.clearPoll(inputId);
+    this.log.info('line-in metadata track change capture', { inputId });
+    const capture = this.captureSnippet(inputId, stream);
+    this.activeCaptures.set(inputId, capture);
+  }
+
   private captureSnippet(
     inputId: string,
     stream: NodeJS.ReadableStream,
     targetSeconds = this.getCaptureSeconds(),
     allowRetry = true,
   ): CaptureState {
-    const targetBytes = SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * targetSeconds;
+    const sampleRate = this.resolveSampleRate(inputId);
+    const targetBytes = sampleRate * CHANNELS * BYTES_PER_SAMPLE * targetSeconds;
     const buffers: Buffer[] = [];
     let bytes = 0;
     let finished = false;
@@ -167,7 +186,7 @@ class LineInMetadataService {
           seconds: targetSeconds,
           bytes,
         });
-        const meta = await this.lookupMetadata(pcm, targetSeconds);
+        const meta = await this.lookupMetadata(inputId, pcm, targetSeconds);
         if (meta) {
           this.applyMetadata(inputId, meta);
         } else {
@@ -209,6 +228,7 @@ class LineInMetadataService {
   }
 
   private async lookupMetadata(
+    inputId: string,
     pcm: Buffer,
     durationSeconds: number,
   ): Promise<LineInMetadata | null> {
@@ -219,7 +239,7 @@ class LineInMetadataService {
     if (!key) {
       return null;
     }
-    const filePath = await this.writeWav(pcm);
+    const filePath = await this.writeWav(inputId, pcm);
     const keepWav = this.shouldKeepWav();
     try {
       const fingerprint = await this.runFpcalc(filePath, durationSeconds);
@@ -258,10 +278,10 @@ class LineInMetadataService {
     }
   }
 
-  private async writeWav(pcm: Buffer): Promise<string> {
+  private async writeWav(inputId: string, pcm: Buffer): Promise<string> {
     const filePath = path.join(os.tmpdir(), `linein-${randomUUID()}.wav`);
     const header = buildWavHeader({
-      sampleRate: SAMPLE_RATE,
+      sampleRate: this.resolveSampleRate(inputId),
       channels: CHANNELS,
       bitDepth: BYTES_PER_SAMPLE * 8,
     });
@@ -564,6 +584,15 @@ class LineInMetadataService {
       return match.metadataEnabled;
     }
     return true;
+  }
+
+  private resolveSampleRate(inputId: string): number {
+    const config = getConfig();
+    const inputs = Array.isArray(config.inputs?.lineIn?.inputs)
+      ? config.inputs!.lineIn!.inputs!
+      : [];
+    const entry = resolveLineInInputConfig(inputId, inputs);
+    return resolveLineInSampleRate(entry);
   }
 
   private getCaptureSeconds(): number {

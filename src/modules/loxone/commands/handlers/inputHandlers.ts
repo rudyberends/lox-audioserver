@@ -7,6 +7,7 @@ import { getConfig, updateConfig } from '@/domain/config/configStore';
 import type { AudioServerConfig, LineInInputConfig } from '@/domain/config/types';
 import type { LoxoneZoneState } from '@/modules/zones/types/loxoneZoneState';
 import { lineInIngestRegistry } from '@/modules/audio/inputs/linein/lineInIngestRegistry';
+import { resolveLineInSampleRate } from '@/modules/audio/inputs/linein/lineInConstants';
 
 type ResolvedLineInInput = {
   id: string;
@@ -19,7 +20,6 @@ const log = createLogger('Loxone', 'InputHandlers');
 
 const LINEIN_ID_START = 1000001;
 const DEFAULT_ICON_TYPE = 0;
-const PCM_SAMPLE_RATE = 48000;
 const PCM_CHANNELS = 2;
 const NO_SIGNAL_TITLE = 'No Signal detected';
 const activeLineInByZone = new Map<number, { inputId: string; stop: () => void }>();
@@ -52,6 +52,18 @@ function findLineInIndexById(inputId: string): number | null {
   if (!inputId) return null;
   const match = resolveLineInInputs().find((entry) => entry.id === inputId);
   return match ? match.index : null;
+}
+
+function resolveLineInInputConfig(inputId: string): LineInInputConfig | null {
+  const index = findLineInIndexById(inputId);
+  if (index == null || index < 0) {
+    return null;
+  }
+  const config = getConfig();
+  const entries = Array.isArray(config.inputs?.lineIn?.inputs)
+    ? config.inputs!.lineIn!.inputs!
+    : [];
+  return (entries[index] ?? null) as LineInInputConfig | null;
 }
 
 function getMutableLineInInputs(config: AudioServerConfig): LineInInputConfig[] {
@@ -204,8 +216,9 @@ function startLineInPlayback(zoneId: number, inputId: string, title: string, ico
       kind: 'pipe',
       path: `linein:${inputId}`,
       format: 's16le',
-      sampleRate: PCM_SAMPLE_RATE,
+      sampleRate: resolveLineInSampleRate(resolveLineInInputConfig(inputId)),
       channels: PCM_CHANNELS,
+      realTime: true,
       stream,
     },
     {

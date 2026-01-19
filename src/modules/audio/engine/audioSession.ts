@@ -31,6 +31,8 @@ export type PlaybackSource =
       format?: 's16le' | 's32le' | 's16be';
       sampleRate?: number;
       channels?: number;
+      /** Whether ffmpeg should pace input with -re (default: true). */
+      realTime?: boolean;
       /** Optional shared readable stream to feed directly (bypasses URL). */
       stream?: NodeJS.ReadableStream;
     };
@@ -162,12 +164,13 @@ export class AudioSession {
       const fmt = this.source.format ?? 's16le';
       const sr = this.source.sampleRate ?? this.outputSettings.sampleRate;
       const ch = this.source.channels ?? 2;
-      // Always apply -re so ffmpeg throttles to real-time. Without it, ffmpeg may read
-      // from the upstream pipe as fast as possible which makes the Sendspin timestamps
-      // run ahead of wall clock and causes the client to speed up to ~104%.
+      const paceInput = this.source.realTime !== false;
+      // When pacing is enabled, apply -re so ffmpeg throttles to real-time. Without it,
+      // ffmpeg may read from the upstream pipe as fast as possible which makes the
+      // Sendspin timestamps run ahead of wall clock and causes the client to speed up.
       const inputArgs = [
         ...this.buildLowLatencyArgs({ includeProbe: false }),
-        '-re',
+        ...(paceInput ? ['-re'] : []),
         '-f',
         fmt,
         '-ar',
@@ -458,9 +461,10 @@ export class AudioSession {
       const sampleRate = this.source.sampleRate ?? this.outputSettings.sampleRate;
       const channels = this.source.channels ?? this.outputSettings.channels;
       const format = this.source.format ?? 's16le';
+      const paceInput = this.source.realTime !== false;
       return [
         ...this.buildLowLatencyArgs({ includeProbe: false }),
-        '-re',
+        ...(paceInput ? ['-re'] : []),
         '-f',
         format,
         '-ar',

@@ -162,6 +162,7 @@ export interface GlobalBluetoothConfig {
 
 export interface GlobalLineInConfig {
   inputs?: LineInInputConfig[] | null;
+  bridges?: LineInBridgeConfig[] | null;
 }
 
 export interface ZoneAirplayConfig {
@@ -217,6 +218,21 @@ export interface LineInInputConfig {
   iconType?: number;
   source?: Record<string, unknown> | null;
   metadataEnabled?: boolean;
+}
+
+export interface LineInBridgeConfig {
+  bridge_id: string;
+  hostname?: string;
+  version?: string;
+  ip?: string;
+  mac?: string;
+  capture_devices?: Array<{
+    id: string;
+    name?: string;
+    channels?: number;
+    sample_rates?: number[];
+  }>;
+  last_seen?: string;
 }
 
 export interface RawAudioConfig {

@@ -14,6 +14,7 @@ import { AudioProxyHandler } from '@/modules/http/streams/audioProxyHandler';
 import { LineInIngestWebSocket } from '@/modules/http/streams/lineInIngestWs';
 import { LineInIngestTcp } from '@/modules/http/streams/lineInIngestTcp';
 import { LineInApiHandler } from '@/modules/http/lineInApi/lineInApiHandler';
+import { LoxAudioMdnsAdvertiser } from '@/modules/http/loxAudioMdnsAdvertiser';
 import { getSystemConfig } from '@/domain/config/configStore';
 import { networkInterfaces } from 'node:os';
 
@@ -30,6 +31,7 @@ export class HttpService {
   private readonly lineInIngestWs: LineInIngestWebSocket;
   private readonly lineInIngestTcp: LineInIngestTcp;
   private readonly lineInApi: LineInApiHandler;
+  private readonly loxAudioMdns = new LoxAudioMdnsAdvertiser();
   private readonly sendspin = new SendspinGateway();
   private readonly snapcast = new SnapcastGateway();
   private server?: http.Server;
@@ -79,6 +81,7 @@ export class HttpService {
             host: this.config.host,
           });
           this.advertiseSendspinMdns();
+          this.advertiseLoxAudioMdns();
           resolve();
         })
         .on('error', reject);
@@ -91,6 +94,7 @@ export class HttpService {
       this.stopMdnsAdvert();
       this.stopMdnsAdvert = undefined;
     }
+    this.loxAudioMdns.stop();
     await new Promise<void>((resolve) => {
       if (!this.server) {
         resolve();
@@ -206,6 +210,27 @@ export class HttpService {
       name: systemName,
     });
     this.stopMdnsAdvert = () => sendspinClientConnector.stopAdvertising();
+  }
+
+  private advertiseLoxAudioMdns(): void {
+    const systemConfig = getSystemConfig();
+    const systemName = systemConfig?.audioserver?.name || 'Lox Audio Server';
+    const host =
+      this.config.host && this.config.host !== '0.0.0.0' ? this.config.host : this.pickLocalAddress();
+    const mdnsHost = host === '0.0.0.0' ? undefined : host;
+    const mac = systemConfig?.audioserver?.macId?.trim();
+    this.loxAudioMdns.advertise({
+      name: systemName,
+      host: mdnsHost,
+      port: this.config.port,
+      txt: {
+        api: '/api',
+        linein: '/api/linein',
+        linein_register: '/api/linein/bridges/register',
+        linein_status: '/api/linein/bridges/{bridge_id}/status',
+        mac: mac ? mac.toUpperCase() : undefined,
+      },
+    });
   }
 
   private pickLocalAddress(): string {

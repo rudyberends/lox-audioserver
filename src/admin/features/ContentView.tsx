@@ -130,7 +130,10 @@ type LineInFormState = {
   metadataEnabled: boolean;
   draftId: string;
   sendspinClientId: string;
-  useLoxAudioBridge: boolean;
+  bridgeId: string;
+  captureDeviceId: string;
+  ingestSampleRate: string;
+  ingestResampler: string;
   vadThresholdDb: string;
   vadHoldMs: string;
 };
@@ -150,7 +153,6 @@ enum LineInIconType {
 const LINEIN_ICON_OPTIONS: Array<{ value: LineInIconType; label: string }> = [
   { value: LineInIconType.LineIn, label: 'Line in' },
   { value: LineInIconType.CdPlayer, label: 'CD player' },
-  { value: LineInIconType.Computer, label: 'Computer' },
   { value: LineInIconType.IMac, label: 'iMac' },
   { value: LineInIconType.IPod, label: 'iPod' },
   { value: LineInIconType.Mobile, label: 'Mobile' },
@@ -159,7 +161,7 @@ const LINEIN_ICON_OPTIONS: Array<{ value: LineInIconType; label: string }> = [
   { value: LineInIconType.TurnTable, label: 'Turntable' },
 ];
 
-type LineInSourceType = 'ingest' | 'sendspin' | 'lox-beolink';
+type LineInSourceType = 'bridge' | 'ingest' | 'sendspin' | 'lox-beolink';
 
 function describeLineInIcon(iconType: LineInIconType): string {
   switch (iconType) {
@@ -187,6 +189,7 @@ function describeLineInIcon(iconType: LineInIconType): string {
 }
 
 function describeLineInSource(sourceType: LineInSourceType): string {
+  if (sourceType === 'bridge') return 'Lox-linein-bridge';
   if (sourceType === 'ingest') return 'Ingest (streamed input)';
   if (sourceType === 'sendspin') return 'Sendspin';
   if (sourceType === 'lox-beolink') return 'Lox BeoLink';
@@ -195,9 +198,22 @@ function describeLineInSource(sourceType: LineInSourceType): string {
 
 type LineInBridgeStatus = {
   linein_id: string;
+  bridge_id?: string | null;
   connected: boolean;
   state: string | null;
   received_at: string | null;
+  device?: string | null;
+};
+
+type LineInBridgeSummary = {
+  bridge_id: string;
+  hostname?: string;
+  version?: string;
+  ip?: string;
+  mac?: string;
+  assigned_input_id?: string | null;
+  last_seen?: string | null;
+  capture_devices?: Array<{ id: string; name?: string }>;
 };
 
 const LINEIN_STATUS_POLL_MS = 5000;
@@ -231,6 +247,28 @@ async function fetchLineInBridgeStatus(inputId: string): Promise<LineInBridgeSta
     return (await res.json()) as LineInBridgeStatus;
   } catch {
     return null;
+  }
+}
+
+async function fetchLineInBridges(signal?: AbortSignal): Promise<LineInBridgeSummary[]> {
+  const res = await fetch('/api/linein/bridges', { signal });
+  if (!res.ok) {
+    throw new Error('Failed to load line-in bridges.');
+  }
+  const payload = (await res.json()) as LineInBridgeSummary[];
+  return Array.isArray(payload) ? payload : [];
+}
+
+async function deleteLineInBridge(bridgeId: string): Promise<void> {
+  const res = await fetch(`/api/linein/bridges/${encodeURIComponent(bridgeId)}`, {
+    method: 'DELETE',
+  });
+  if (res.status === 409) {
+    throw new Error('Bridge is still assigned.');
+  }
+  if (!res.ok && res.status !== 204) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || 'Failed to delete bridge.');
   }
 }
 
@@ -699,11 +737,14 @@ const createEmptyBridgeForm = (): BridgeFormState => ({
 const createEmptyLineInForm = (): LineInFormState => ({
   name: '',
   iconType: LineInIconType.CdPlayer,
-  sourceType: 'ingest',
+  sourceType: 'bridge',
   metadataEnabled: true,
   draftId: createLineInId(),
   sendspinClientId: '',
-  useLoxAudioBridge: true,
+  bridgeId: '',
+  captureDeviceId: '',
+  ingestSampleRate: '',
+  ingestResampler: 'sinc-fast',
   vadThresholdDb: '-45',
   vadHoldMs: '2000',
 });
@@ -715,7 +756,7 @@ const normalizeLineInInputs = (inputs: LineInInputConfig[]): LineInInputConfig[]
     iconType: typeof entry.iconType === 'number' ? entry.iconType : LineInIconType.CdPlayer,
     metadataEnabled: typeof entry.metadataEnabled === 'boolean' ? entry.metadataEnabled : true,
     source: {
-      type: entry.source?.type ?? 'ingest',
+      type: entry.source?.type ?? 'bridge',
       ...(entry.source ?? {}),
     },
   }));
@@ -826,6 +867,10 @@ export default function ContentView(): JSX.Element {
   const [lineInEditingId, setLineInEditingId] = React.useState<string | null>(null);
   const [lineInForm, setLineInForm] = React.useState<LineInFormState>(() => createEmptyLineInForm());
   const [lineInStatuses, setLineInStatuses] = React.useState<Record<string, LineInBridgeStatus>>({});
+  const [lineInBridges, setLineInBridges] = React.useState<LineInBridgeSummary[]>([]);
+  const [lineInBridgesLoading, setLineInBridgesLoading] = React.useState(false);
+  const [lineInBridgesError, setLineInBridgesError] = React.useState<string | null>(null);
+  const [lineInBridgeDeletingId, setLineInBridgeDeletingId] = React.useState<string | null>(null);
   const [audioServerIp, setAudioServerIp] = React.useState<string>('');
   const [sendspinClients, setSendspinClients] = React.useState<SendspinClient[]>([]);
   const [sendspinLoading, setSendspinLoading] = React.useState(false);
@@ -904,6 +949,18 @@ export default function ContentView(): JSX.Element {
     () => resolveBridgeLogoUrl(bridgeForm.provider),
     [bridgeForm.provider],
   );
+  const availableLineInBridges = React.useMemo(() => {
+    return lineInBridges.filter((bridge) => {
+      const assigned = bridge.assigned_input_id ?? null;
+      if (!assigned) return true;
+      return assigned === lineInEditingId;
+    });
+  }, [lineInBridges, lineInEditingId]);
+  const activeLineInBridge = React.useMemo(() => {
+    if (!lineInForm.bridgeId) return null;
+    return lineInBridges.find((bridge) => bridge.bridge_id === lineInForm.bridgeId) ?? null;
+  }, [lineInBridges, lineInForm.bridgeId]);
+  const activeLineInBridgeDevices = activeLineInBridge?.capture_devices ?? [];
 
   const validateTuneIn = React.useCallback(
     async (value: string): Promise<{ ok: boolean; message?: string }> => {
@@ -1292,8 +1349,16 @@ export default function ContentView(): JSX.Element {
       const rawSource = input.source ?? {};
       const sourceRecord = rawSource as Record<string, unknown>;
       const sendspinClientId = typeof sourceRecord.clientId === 'string' ? sourceRecord.clientId : '';
-      const useLoxAudioBridge =
-        typeof sourceRecord.use_lox_linein_bridge === 'boolean' ? sourceRecord.use_lox_linein_bridge : false;
+      const bridgeId = typeof sourceRecord.bridge_id === 'string' ? sourceRecord.bridge_id : '';
+      const captureDeviceId = typeof sourceRecord.capture_device === 'string' ? sourceRecord.capture_device : '';
+      const ingestSampleRate =
+        typeof sourceRecord.ingest_sample_rate === 'number'
+          ? String(sourceRecord.ingest_sample_rate)
+          : typeof sourceRecord.ingest_sample_rate === 'string'
+            ? sourceRecord.ingest_sample_rate
+            : '';
+      const ingestResampler =
+        typeof sourceRecord.ingest_resampler === 'string' ? sourceRecord.ingest_resampler : 'sinc-fast';
       const vadThresholdDb =
         typeof sourceRecord.vad_threshold_db === 'number' ? String(sourceRecord.vad_threshold_db) : '';
       const vadHoldMs =
@@ -1302,11 +1367,14 @@ export default function ContentView(): JSX.Element {
       setLineInForm({
         name: input.name ?? '',
         iconType: typeof input.iconType === 'number' ? input.iconType : LineInIconType.CdPlayer,
-        sourceType: input.source?.type ?? 'ingest',
+        sourceType: input.source?.type ?? 'bridge',
         metadataEnabled: typeof input.metadataEnabled === 'boolean' ? input.metadataEnabled : true,
         draftId: input.id ?? createLineInId(),
         sendspinClientId,
-        useLoxAudioBridge,
+        bridgeId,
+        captureDeviceId,
+        ingestSampleRate,
+        ingestResampler,
         vadThresholdDb,
         vadHoldMs,
       });
@@ -1760,11 +1828,74 @@ export default function ContentView(): JSX.Element {
     [],
   );
 
+  const lineInBridgeRefreshInFlight = React.useRef(false);
+
+  const refreshLineInBridges = React.useCallback(async (): Promise<void> => {
+    if (lineInBridgeRefreshInFlight.current) return;
+    lineInBridgeRefreshInFlight.current = true;
+    setLineInBridgesLoading(true);
+    setLineInBridgesError(null);
+    const controller = new AbortController();
+    let timedOut = false;
+    const watchdog = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      lineInBridgeRefreshInFlight.current = false;
+      setLineInBridgesLoading(false);
+      setLineInBridgesError('Bridge refresh timed out.');
+    }, 5000);
+    try {
+      const bridges = await fetchLineInBridges(controller.signal);
+      if (!timedOut) {
+        setLineInBridges(bridges);
+      }
+    } catch (err) {
+      if (!timedOut) {
+        setLineInBridges([]);
+        if (err instanceof Error && err.name === 'AbortError') {
+          setLineInBridgesError('Bridge refresh timed out.');
+        } else {
+          setLineInBridgesError(err instanceof Error ? err.message : 'Unable to load bridges.');
+        }
+      }
+    } finally {
+      if (!timedOut) {
+        window.clearTimeout(watchdog);
+        lineInBridgeRefreshInFlight.current = false;
+        setLineInBridgesLoading(false);
+      }
+    }
+  }, []);
+
+  const handleLineInBridgeDelete = React.useCallback(
+    async (bridgeId: string): Promise<void> => {
+      if (!bridgeId || lineInBridgeDeletingId === bridgeId) return;
+      setLineInBridgeDeletingId(bridgeId);
+      try {
+        await deleteLineInBridge(bridgeId);
+        setLineInBridges((prev) => prev.filter((bridge) => bridge.bridge_id !== bridgeId));
+      } catch (err) {
+        setLineInBridgesError(err instanceof Error ? err.message : 'Unable to delete bridge.');
+      } finally {
+        setLineInBridgeDeletingId(null);
+      }
+    },
+    [lineInBridgeDeletingId],
+  );
+
   const handleLineInSave = React.useCallback(async (): Promise<void> => {
     if (lineInSubmitting) return;
     const name = lineInForm.name.trim();
     if (!name) return;
     if (lineInForm.sourceType === 'sendspin' && !lineInForm.sendspinClientId.trim()) return;
+    if (lineInForm.sourceType === 'bridge' && !lineInForm.bridgeId.trim()) {
+      pushAlert({
+        tone: 'error',
+        title: 'Line-in update failed',
+        message: 'Select a bridge before saving this line-in input.',
+      });
+      return;
+    }
     setLineInSubmitting(true);
     try {
       const nextInputs = [...lineInInputs];
@@ -1779,16 +1910,35 @@ export default function ContentView(): JSX.Element {
         } else if ('clientId' in nextSource) {
           delete nextSource.clientId;
         }
-        if (lineInForm.sourceType === 'ingest') {
+        if (lineInForm.sourceType === 'bridge') {
           const threshold = parseNumberOrDefault(lineInForm.vadThresholdDb, -45);
           const holdMs = parseNumberOrDefault(lineInForm.vadHoldMs, 2000);
-          nextSource.use_lox_linein_bridge = lineInForm.useLoxAudioBridge;
+          const ingestSampleRate = parseNumberOrDefault(lineInForm.ingestSampleRate, 0);
+          nextSource.bridge_id = lineInForm.bridgeId.trim();
+          if (lineInForm.captureDeviceId.trim()) {
+            nextSource.capture_device = lineInForm.captureDeviceId.trim();
+          } else {
+            delete nextSource.capture_device;
+          }
+          if (ingestSampleRate > 0) {
+            nextSource.ingest_sample_rate = ingestSampleRate;
+          } else {
+            delete nextSource.ingest_sample_rate;
+          }
+          if (lineInForm.ingestResampler.trim()) {
+            nextSource.ingest_resampler = lineInForm.ingestResampler.trim();
+          } else {
+            delete nextSource.ingest_resampler;
+          }
           nextSource.vad_threshold_db = threshold;
           nextSource.vad_hold_ms = holdMs;
         } else {
           delete nextSource.vad_threshold_db;
           delete nextSource.vad_hold_ms;
-          delete nextSource.use_lox_linein_bridge;
+          delete nextSource.bridge_id;
+          delete nextSource.capture_device;
+          delete nextSource.ingest_sample_rate;
+          delete nextSource.ingest_resampler;
         }
         const nextEntry: LineInInputConfig = {
           id: lineInEditingId,
@@ -1808,10 +1958,20 @@ export default function ContentView(): JSX.Element {
         if (lineInForm.sourceType === 'sendspin' && lineInForm.sendspinClientId.trim()) {
           nextSource.clientId = lineInForm.sendspinClientId.trim();
         }
-        if (lineInForm.sourceType === 'ingest') {
+        if (lineInForm.sourceType === 'bridge') {
           const threshold = parseNumberOrDefault(lineInForm.vadThresholdDb, -45);
           const holdMs = parseNumberOrDefault(lineInForm.vadHoldMs, 2000);
-          nextSource.use_lox_linein_bridge = lineInForm.useLoxAudioBridge;
+          const ingestSampleRate = parseNumberOrDefault(lineInForm.ingestSampleRate, 0);
+          nextSource.bridge_id = lineInForm.bridgeId.trim();
+          if (lineInForm.captureDeviceId.trim()) {
+            nextSource.capture_device = lineInForm.captureDeviceId.trim();
+          }
+          if (ingestSampleRate > 0) {
+            nextSource.ingest_sample_rate = ingestSampleRate;
+          }
+          if (lineInForm.ingestResampler.trim()) {
+            nextSource.ingest_resampler = lineInForm.ingestResampler.trim();
+          }
           nextSource.vad_threshold_db = threshold;
           nextSource.vad_hold_ms = holdMs;
         }
@@ -1861,6 +2021,15 @@ export default function ContentView(): JSX.Element {
       void handleSendspinDiscovery();
     }
   }, [lineInModalOpen, lineInForm.sourceType, sendspinClients.length, sendspinLoading, sendspinError, handleSendspinDiscovery]);
+
+  React.useEffect(() => {
+    if (contentFilter !== 'linein' && !lineInModalOpen) return;
+    void refreshLineInBridges();
+    const timer = window.setInterval(() => {
+      void refreshLineInBridges();
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [contentFilter, lineInModalOpen, refreshLineInBridges]);
 
   React.useEffect(() => {
     if (contentFilter !== 'linein' || !lineInInputs.length) {
@@ -2782,82 +2951,161 @@ export default function ContentView(): JSX.Element {
             </div>
           </header>
           <div className="content-section__body">
-            <div className="content-grid">
-              {lineInInputs.length > 0 ? (
-                lineInInputs.map((input) => (
-                  <article key={input.id ?? input.name} className="content-card">
-                    <header className="content-card__header content-card__header--split">
-                      <div>
-                        <div className="content-linein-title">
-                          <img
-                            className="content-bridge-logo"
-                            src={resolveLineInIconUrl(input.iconType)}
-                            alt=""
-                            aria-hidden="true"
-                          />
-                          <div className="content-linein-title-text">
-                            <h3>{input.name || 'Line-in'}</h3>
-                            {input.id && (
-                              <p className="content-linein-id" title={input.id}>
-                                {input.id}
-                              </p>
-                            )}
+            <div className="content-linein-subsection">
+              <div className="content-linein-subsection__header">
+                <h3>Line-in inputs</h3>
+                <span>Sources selectable in the Loxone app.</span>
+              </div>
+              <div className="content-grid">
+                {lineInInputs.length > 0 ? (
+                  lineInInputs.map((input) => (
+                    <article key={input.id ?? input.name} className="content-card">
+                      <header className="content-card__header content-card__header--split">
+                        <div>
+                          <div className="content-linein-title">
+                            <img
+                              className="content-bridge-logo"
+                              src={resolveLineInIconUrl(input.iconType)}
+                              alt=""
+                              aria-hidden="true"
+                            />
+                            <div className="content-linein-title-text">
+                              <h3>{input.name || 'Line-in'}</h3>
+                              {input.id && (
+                                <p className="content-linein-id" title={input.id}>
+                                  {input.id}
+                                </p>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                      <div className="content-linein-actions">
-                        <button type="button" className="secondary" onClick={() => openLineInModal(input)}>
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="danger-link"
-                          onClick={() => handleLineInRemove(input.id ?? '', input.name)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </header>
-                    <div className="content-linein-meta-row">
-                      <span className="content-linein-source">
-                        {input.source?.type === 'ingest' && (input.source as Record<string, unknown>)?.use_lox_linein_bridge
-                          ? 'lox-linein-bridge'
-                          : input.source?.type ?? 'ingest'}
-                      </span>
-                      {input.id && (
-                        <div className="content-linein-status-row">
-                          {(() => {
-                            const status = lineInStatuses[input.id ?? ''];
-                            const connected = status?.connected ?? false;
-                            const stateLabel = formatLineInState(status?.state);
-                            return (
-                              <>
-                                <span
-                                  className={`content-linein-status__pill ${
-                                    connected ? 'is-connected' : 'is-offline'
-                                  }`}
-                                >
-                                  <span className="content-linein-status__dot" aria-hidden="true" />
-                                  {connected ? 'Connected' : 'Offline'}
-                                </span>
-                                {stateLabel && (
-                                  <span className="content-linein-status__state-badge">{stateLabel}</span>
-                                )}
-                              </>
-                            );
-                          })()}
+                        <div className="content-linein-actions">
+                          <button type="button" className="secondary" onClick={() => openLineInModal(input)}>
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="danger-link"
+                            onClick={() => handleLineInRemove(input.id ?? '', input.name)}
+                          >
+                            Remove
+                          </button>
                         </div>
-                      )}
-                    </div>
+                      </header>
+                      <div className="content-linein-meta-row">
+                        <span className="content-linein-source">
+                          {(() => {
+                            const sourceType = input.source?.type ?? 'ingest';
+                            if (sourceType === 'bridge') {
+                              return 'lox-linein-bridge';
+                            }
+                            return sourceType;
+                          })()}
+                        </span>
+                        {input.id && input.source?.type === 'bridge' && (
+                          <div className="content-linein-status-row">
+                            {(() => {
+                              const status = lineInStatuses[input.id ?? ''];
+                              const connected = status?.connected ?? false;
+                              const stateLabel = formatLineInState(status?.state);
+                              return (
+                                <>
+                                  <span
+                                    className={`content-linein-status__pill ${
+                                      connected ? 'is-connected' : 'is-offline'
+                                    }`}
+                                  >
+                                    <span className="content-linein-status__dot" aria-hidden="true" />
+                                    {connected ? 'Connected' : 'Offline'}
+                                  </span>
+                                  {stateLabel && (
+                                    <span className="content-linein-status__state-badge">{stateLabel}</span>
+                                  )}
+                                </>
+                              );
+                            })()}
+                          </div>
+                        )}
+                      </div>
+                    </article>
+                  ))
+                ) : (
+                  <article className="content-card">
+                    <p className="content-body-copy">No line-in sources configured yet.</p>
+                    <span className="content-note">Add a line-in input to expose it as a selectable source.</span>
                   </article>
-                ))
-              ) : (
-                <article className="content-card">
-                  <p className="content-body-copy">No line-in sources configured yet.</p>
-                  <span className="content-note">Add a line-in input to expose it as a selectable source.</span>
-                </article>
-              )}
+                )}
+              </div>
             </div>
+            <article className="content-card content-card--wide content-linein-bridge-card">
+              <div className="content-linein-bridge-list">
+                <div className="content-linein-bridge-list__header">
+                  <div className="content-linein-subsection__header">
+                    <h3>Registered bridges</h3>
+                    <span>Devices that can feed line-in inputs.</span>
+                  </div>
+                </div>
+                {lineInBridgesError && <p className="content-linein-error">{lineInBridgesError}</p>}
+                {lineInBridges.length > 0 ? (
+                  <div className="content-linein-bridge-table">
+                    <div className="content-linein-bridge-row content-linein-bridge-row--header">
+                      <span>Bridge</span>
+                      <span>Version</span>
+                      <span>Last seen</span>
+                      <span>Assigned</span>
+                      <span />
+                    </div>
+                    {lineInBridges.map((bridge) => (
+                      <div key={bridge.bridge_id} className="content-linein-bridge-row">
+                        <div>
+                          <div className="content-linein-bridge-name">
+                            {bridge.hostname ?? 'Bridge'}
+                          </div>
+                          <div className="content-linein-bridge-id" title={bridge.ip ?? bridge.bridge_id}>
+                            {bridge.ip ?? bridge.bridge_id}
+                          </div>
+                        </div>
+                        <div>{bridge.version ?? '—'}</div>
+                        <div>{bridge.last_seen ?? '—'}</div>
+                        <div>{bridge.assigned_input_id ?? '—'}</div>
+                        <div className="content-linein-bridge-actions">
+                          <button
+                            type="button"
+                            className="danger-link"
+                            onClick={() => handleLineInBridgeDelete(bridge.bridge_id)}
+                            disabled={Boolean(bridge.assigned_input_id) || lineInBridgeDeletingId === bridge.bridge_id}
+                          >
+                            {lineInBridgeDeletingId === bridge.bridge_id ? 'Removing…' : 'Remove'}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="content-body-copy content-body-copy--muted">
+                    <p>No bridges registered yet.</p>
+                    <p>Install the bridge to make line-in devices available:</p>
+                    <ol className="content-linein-info__steps">
+                      <li>
+                        Download the binary from{' '}
+                        <a
+                          href="https://github.com/lox-audioserver/lox-linein-bridge/releases"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          here
+                        </a>
+                        , and place it in <code>/usr/local/bin</code>.
+                      </li>
+                      <li>
+                        Run:
+                        <code>sudo lox-input-bridge install</code>
+                      </li>
+                    </ol>
+                  </div>
+                )}
+              </div>
+            </article>
           </div>
         </section>
       )}
@@ -3077,80 +3325,324 @@ export default function ContentView(): JSX.Element {
                 const ingestBaseUrl = getLineInIngestBaseUrl();
                 const ingestWsUrl = getLineInIngestWsUrl(ingestBaseUrl);
                 const ingestTcpHost = getLineInIngestTcpHost();
-                const bridgeServerUrl = getLineInBridgeServerUrl(audioServerIp);
                 const ingestId = lineInEditingId ?? lineInForm.draftId ?? '<line-in-id>';
                 return (
                   <div className="content-linein-modal">
-                <div className="content-linein-form">
-                  <div className="content-custom-radio-field">
-                    <label htmlFor="linein-name">
-                      Name <span className="content-field-required">Required</span>
-                    </label>
-                    <input
-                      id="linein-name"
-                      type="text"
-                      value={lineInForm.name}
-                      onChange={(e) => setLineInForm((prev) => ({ ...prev, name: e.target.value }))}
-                      placeholder="Turntable"
-                      autoComplete="off"
-                    />
-                    <p className="content-input-hint">This is the label shown in the Loxone app.</p>
-                  </div>
-                  <div className="content-custom-radio-field">
-                    <label htmlFor="linein-icon">Icon</label>
-                    <div className="content-linein-icon-grid" role="listbox" aria-label="Line-in icon">
-                      {LINEIN_ICON_OPTIONS.map((option) => {
-                        const isSelected = lineInForm.iconType === option.value;
-                        return (
-                          <button
-                            key={option.value}
-                            type="button"
-                            className={`content-linein-icon-option${isSelected ? ' is-selected' : ''}`}
-                            onClick={() =>
-                              setLineInForm((prev) => ({ ...prev, iconType: option.value }))
+                  <div className="content-linein-form">
+                    <section className="content-linein-section">
+                      <div className="content-linein-section__header">
+                        <h5 className="content-linein-section__title">Basics</h5>
+                      </div>
+                      <div className="content-custom-radio-field">
+                        <label htmlFor="linein-name">
+                          Name <span className="content-field-required">Required</span>
+                        </label>
+                        <input
+                          id="linein-name"
+                          type="text"
+                          value={lineInForm.name}
+                          onChange={(e) => setLineInForm((prev) => ({ ...prev, name: e.target.value }))}
+                          placeholder="Turntable"
+                          autoComplete="off"
+                        />
+                        <p className="content-input-hint">This is the label shown in the Loxone app.</p>
+                      </div>
+                      <div className="content-custom-radio-field">
+                        <label htmlFor="linein-icon">Icon</label>
+                        <div className="content-linein-icon-grid" role="listbox" aria-label="Line-in icon">
+                          {LINEIN_ICON_OPTIONS.map((option) => {
+                            const isSelected = lineInForm.iconType === option.value;
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                className={`content-linein-icon-option${isSelected ? ' is-selected' : ''}`}
+                                onClick={() =>
+                                  setLineInForm((prev) => ({ ...prev, iconType: option.value }))
+                                }
+                                aria-pressed={isSelected}
+                              >
+                                <img src={resolveLineInIconUrl(option.value)} alt="" aria-hidden="true" />
+                                <span className="content-linein-icon-label">{option.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <p className="content-input-hint">Pick the icon to show next to the source.</p>
+                      </div>
+                    </section>
+                    <section className="content-linein-section">
+                      <div className="content-linein-section__header">
+                        <h5 className="content-linein-section__title">Source</h5>
+                      </div>
+                      <div className="content-custom-radio-field">
+                        <label htmlFor="linein-source">Input method</label>
+                        <select
+                          id="linein-source"
+                          className="content-input-select"
+                          value={lineInForm.sourceType}
+                          onChange={(e) =>
+                            setLineInForm((prev) => ({ ...prev, sourceType: e.target.value as LineInSourceType }))
+                          }
+                        >
+                          <option value="bridge">Lox-linein-bridge</option>
+                          <option value="ingest">Manual ingest</option>
+                          <option value="sendspin">Sendspin</option>
+                          <option value="lox-beolink">Lox BeoLink</option>
+                        </select>
+                        <p className="content-input-hint">Select how audio reaches this input.</p>
+                      </div>
+                    </section>
+                    <section className="content-linein-section">
+                      <div className="content-linein-section__header">
+                        <h5 className="content-linein-section__title">Preferences</h5>
+                      </div>
+                      <div className="content-custom-radio-field">
+                        <label htmlFor="linein-metadata">Enable acoustic fingerprinting</label>
+                        <label className="content-switch" htmlFor="linein-metadata">
+                          <input
+                            id="linein-metadata"
+                            type="checkbox"
+                            checked={lineInForm.metadataEnabled}
+                            onChange={(e) =>
+                              setLineInForm((prev) => ({ ...prev, metadataEnabled: e.target.checked }))
                             }
-                            aria-pressed={isSelected}
+                          />
+                          <span className="content-switch-slider" />
+                        </label>
+                        <p className="content-input-hint">
+                          Tries to identify track metadata for this input.
+                        </p>
+                      </div>
+                    </section>
+                  </div>
+                <aside className="content-linein-preview">
+                  <div className="content-linein-info">
+                    {lineInForm.sourceType === 'bridge' && (
+                      <div className="content-linein-info__section">
+                        <div className="content-linein-info__section-header">
+                          <p className="content-linein-info__title">Bridge setup</p>
+                        </div>
+                        <p className="content-linein-info__copy">
+                          Bind a registered bridge and choose its capture device.
+                        </p>
+                        <div className="content-linein-select-row">
+                          <select
+                            id="linein-bridge-select"
+                            className="content-input-select"
+                            value={lineInForm.bridgeId}
+                            onChange={(e) =>
+                              setLineInForm((prev) => ({
+                                ...prev,
+                                bridgeId: e.target.value,
+                                captureDeviceId: '',
+                              }))
+                            }
                           >
-                            <img src={resolveLineInIconUrl(option.value)} alt="" aria-hidden="true" />
-                            <span className="content-linein-icon-label">{option.label}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <p className="content-input-hint">Pick the icon to show next to the source.</p>
+                            <option value="">Select a bridge</option>
+                            {lineInForm.bridgeId &&
+                              !availableLineInBridges.some((bridge) => bridge.bridge_id === lineInForm.bridgeId) && (
+                                <option value={lineInForm.bridgeId}>
+                                  {lineInForm.bridgeId} (unregistered)
+                                </option>
+                              )}
+                            {availableLineInBridges.map((bridge) => (
+                              <option key={bridge.bridge_id} value={bridge.bridge_id}>
+                                {bridge.hostname ? `${bridge.hostname} · ${bridge.bridge_id}` : bridge.bridge_id}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        {lineInBridgesError && <p className="content-linein-error">{lineInBridgesError}</p>}
+                        {activeLineInBridge && (
+                          <div className="content-linein-meta-grid">
+                            <div>
+                              <p className="content-linein-info__label">Hostname</p>
+                              <p className="content-linein-meta-value">
+                                {activeLineInBridge.hostname ?? activeLineInBridge.bridge_id}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="content-linein-info__label">Last seen</p>
+                              <p className="content-linein-meta-value">
+                                {activeLineInBridge.last_seen ?? '—'}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="content-linein-info__label">Devices</p>
+                              <p className="content-linein-meta-value">
+                                {activeLineInBridgeDevices.length || '—'}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                        <div className="content-linein-info__select">
+                          <label htmlFor="linein-capture-device">Capture device</label>
+                          <div className="content-linein-select-row">
+                            <select
+                              id="linein-capture-device"
+                              className="content-input-select"
+                              value={lineInForm.captureDeviceId}
+                              onChange={(e) =>
+                                setLineInForm((prev) => ({ ...prev, captureDeviceId: e.target.value }))
+                              }
+                              disabled={!activeLineInBridge}
+                            >
+                              <option value="">Default device</option>
+                              {activeLineInBridgeDevices.map((device) => (
+                                <option key={device.id} value={device.id}>
+                                  {device.name ? `${device.name} · ${device.id}` : device.id}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <p className="content-input-hint">
+                            {activeLineInBridge
+                              ? 'Choose which capture device the bridge should use.'
+                              : 'Select a bridge to view capture devices.'}
+                          </p>
+                        </div>
+                        <div className="content-linein-info__vad">
+                          <p className="content-linein-info__label">Ingest settings</p>
+                          <div className="content-linein-info__vad-grid">
+                            <label className="content-linein-info__vad-field">
+                              <span>Sample rate (Hz)</span>
+                              <input
+                                id="linein-sample-rate"
+                                type="number"
+                                inputMode="numeric"
+                                value={lineInForm.ingestSampleRate}
+                                onChange={(e) =>
+                                  setLineInForm((prev) => ({ ...prev, ingestSampleRate: e.target.value }))
+                                }
+                                placeholder="44100"
+                              />
+                            </label>
+                            <label className="content-linein-info__vad-field">
+                              <span>Resampler</span>
+                              <select
+                                id="linein-resampler"
+                                className="content-input-select"
+                                value={lineInForm.ingestResampler}
+                                onChange={(e) =>
+                                  setLineInForm((prev) => ({ ...prev, ingestResampler: e.target.value }))
+                                }
+                              >
+                                <option value="linear">Linear (low quality)</option>
+                                <option value="sinc-fast">Sinc-fast (balanced)</option>
+                                <option value="sinc/rubato">Sinc (highest quality)</option>
+                              </select>
+                            </label>
+                          </div>
+                          <p className="content-linein-info__hint">
+                            Sample rate must match the bridge capture rate. Resampler sets quality (linear → sinc-fast → sinc).
+                          </p>
+                        </div>
+                        <div className="content-linein-info__vad">
+                          <p className="content-linein-info__label">VAD settings</p>
+                          <div className="content-linein-info__vad-grid">
+                            <label className="content-linein-info__vad-field">
+                              <span>Threshold (dB)</span>
+                              <input
+                                id="linein-vad-threshold"
+                                type="number"
+                                inputMode="decimal"
+                                value={lineInForm.vadThresholdDb}
+                                onChange={(e) =>
+                                  setLineInForm((prev) => ({ ...prev, vadThresholdDb: e.target.value }))
+                                }
+                                placeholder="-45"
+                              />
+                            </label>
+                            <label className="content-linein-info__vad-field">
+                              <span>Hold (ms)</span>
+                              <input
+                                id="linein-vad-hold"
+                                type="number"
+                                inputMode="numeric"
+                                value={lineInForm.vadHoldMs}
+                                onChange={(e) =>
+                                  setLineInForm((prev) => ({ ...prev, vadHoldMs: e.target.value }))
+                                }
+                                placeholder="2000"
+                              />
+                            </label>
+                          </div>
+                          <p className="content-linein-info__hint">Control when streaming starts and stops on silence.</p>
+                        </div>
+                      </div>
+                    )}
+                    {lineInForm.sourceType === 'sendspin' && (
+                      <div className="content-linein-info__section">
+                        <p className="content-linein-info__title">Sendspin</p>
+                        <p className="content-linein-info__copy">
+                          Not functional yet: awaiting confirmation of spec update. See{' '}
+                          <a href="https://github.com/Sendspin/spec/pull/52" target="_blank" rel="noreferrer">
+                            PR #52
+                          </a>
+                          .
+                        </p>
+                        <div className="content-linein-info__select">
+                          <label htmlFor="linein-sendspin-client">Sendspin client</label>
+                          <div className="content-linein-select-row">
+                            <select
+                              id="linein-sendspin-client"
+                              className="content-input-select"
+                              value={lineInForm.sendspinClientId}
+                              onChange={(e) => setLineInForm((prev) => ({ ...prev, sendspinClientId: e.target.value }))}
+                            >
+                              <option value="">Select a client</option>
+                              {sendspinClients.map((client) => (
+                                <option key={client.id} value={client.clientId}>
+                                  {client.name || client.clientId}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              className="secondary content-linein-refresh"
+                              onClick={() => void handleSendspinDiscovery()}
+                              disabled={sendspinLoading}
+                            >
+                              {sendspinLoading ? 'Refreshing…' : 'Refresh'}
+                            </button>
+                          </div>
+                          {sendspinError && <p className="content-linein-error">{sendspinError}</p>}
+                        </div>
+                      </div>
+                    )}
+                    {lineInForm.sourceType === 'ingest' && (
+                      <div className="content-linein-info__section">
+                        <p className="content-linein-info__title">Manual ingest</p>
+                        <p className="content-linein-info__copy">
+                          Manual ingest supports WebSocket and TCP per line-in.
+                        </p>
+                        <div className="content-linein-info__manual">
+                          <p className="content-linein-info__label">Ingest endpoints</p>
+                          <div className="content-linein-info__urls">
+                            <p className="content-linein-info__label">WebSocket ingest</p>
+                            <code>{`${ingestWsUrl}/ingest/${ingestId}`}</code>
+                            <p className="content-linein-info__label">TCP ingest</p>
+                            <code>{`tcp://${ingestTcpHost}:7080`}</code>
+                            <p className="content-linein-info__hint">
+                              For manual testing only. Send the line-in ID as the first line (ending with newline),
+                              then stream raw audio.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {lineInForm.sourceType === 'lox-beolink' && (
+                      <div className="content-linein-info__section">
+                        <p className="content-linein-info__title">Lox BeoLink</p>
+                        <p className="content-linein-info__copy">
+                          Lox BeoLink line-in ingests audio from a BeoLink gateway integration.
+                        </p>
+                      </div>
+                    )}
                   </div>
-                  <div className="content-custom-radio-field">
-                    <label htmlFor="linein-source">Source type</label>
-                    <select
-                      id="linein-source"
-                      className="content-input-select"
-                      value={lineInForm.sourceType}
-                      onChange={(e) => setLineInForm((prev) => ({ ...prev, sourceType: e.target.value as LineInSourceType }))}
-                    >
-                      <option value="ingest">Ingest</option>
-                      <option value="sendspin">Sendspin</option>
-                      <option value="lox-beolink">Lox BeoLink</option>
-                    </select>
-                    <p className="content-input-hint">Select the input method used to feed audio.</p>
-                  </div>
-                  <div className="content-custom-radio-field">
-                    <label htmlFor="linein-metadata">Enable acoustic fingerprinting</label>
-                    <label className="content-switch" htmlFor="linein-metadata">
-                      <input
-                        id="linein-metadata"
-                        type="checkbox"
-                        checked={lineInForm.metadataEnabled}
-                        onChange={(e) =>
-                          setLineInForm((prev) => ({ ...prev, metadataEnabled: e.target.checked }))
-                        }
-                      />
-                      <span className="content-switch-slider" />
-                    </label>
-                    <p className="content-input-hint">
-                      Tries to identify track metadata for this input.
-                    </p>
-                  </div>
-                  <div className="content-actions">
+                </aside>
+                <div className="content-actions content-actions--linein">
                   <button
                     type="button"
                     className="primary"
@@ -3158,186 +3650,21 @@ export default function ContentView(): JSX.Element {
                     disabled={
                       !lineInForm.name.trim() ||
                       lineInSubmitting ||
-                      (lineInForm.sourceType === 'sendspin' && !lineInForm.sendspinClientId.trim())
+                      (lineInForm.sourceType === 'sendspin' && !lineInForm.sendspinClientId.trim()) ||
+                      (lineInForm.sourceType === 'bridge' && !lineInForm.bridgeId.trim())
                     }
                   >
                     {lineInSubmitting ? 'Saving…' : lineInEditingId ? 'Save line-in' : 'Add line-in'}
                   </button>
-                    <button type="button" className="secondary" onClick={() => closeLineInModal()} disabled={lineInSubmitting}>
-                      Cancel
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => closeLineInModal()}
+                    disabled={lineInSubmitting}
+                  >
+                    Cancel
+                  </button>
                 </div>
-                <aside className="content-linein-preview">
-                  <div className="content-linein-preview-card">
-                    <p className="content-linein-preview-eyebrow">Preview</p>
-                    <div className="content-linein-preview-name">
-                      {lineInForm.name.trim() || 'Line-in name'}
-                    </div>
-                    <p className="content-linein-preview-meta">
-                      {describeLineInIcon(lineInForm.iconType)} · {describeLineInSource(lineInForm.sourceType)}
-                    </p>
-                    <p className="content-linein-preview-meta">
-                      {lineInForm.metadataEnabled ? 'Fingerprinting on' : 'Fingerprinting off'}
-                    </p>
-                    {lineInForm.draftId && (
-                      <p className="content-linein-preview-id">
-                        ID: {lineInForm.draftId}
-                        {!lineInEditingId && ' (assigned on save)'}
-                      </p>
-                    )}
-                  </div>
-                  <div className="content-linein-info">
-                    <p className="content-linein-info__title">Source type</p>
-                    {lineInForm.sourceType === 'ingest' && (
-                      <div className="content-linein-bridge-choice">
-                        <p className="content-linein-bridge-choice__eyebrow">Feed method</p>
-                        <div className="content-linein-bridge-choice__row">
-                          <div className="content-linein-bridge-choice__text">
-                            <label htmlFor="linein-bridge" className="content-linein-bridge-choice__title">
-                              Use lox-input-bridge
-                            </label>
-                            <p className="content-linein-bridge-choice__hint">
-                              Use Lox-input-bridge for automatic feeding.
-                            </p>
-                          </div>
-                          <label className="content-switch" htmlFor="linein-bridge">
-                            <input
-                              id="linein-bridge"
-                              type="checkbox"
-                              checked={lineInForm.useLoxAudioBridge}
-                              onChange={(e) =>
-                                setLineInForm((prev) => ({ ...prev, useLoxAudioBridge: e.target.checked }))
-                              }
-                            />
-                            <span className="content-switch-slider" />
-                          </label>
-                        </div>
-                      </div>
-                    )}
-                    {lineInForm.sourceType === 'ingest' && (
-                      <div className="content-linein-info__vad">
-                        <p className="content-linein-info__label">VAD settings</p>
-                        <div className="content-linein-info__vad-grid">
-                          <label className="content-linein-info__vad-field">
-                            <span>Threshold (dB)</span>
-                            <input
-                              id="linein-vad-threshold"
-                              type="number"
-                              inputMode="decimal"
-                              value={lineInForm.vadThresholdDb}
-                              onChange={(e) =>
-                                setLineInForm((prev) => ({ ...prev, vadThresholdDb: e.target.value }))
-                              }
-                              placeholder="-45"
-                            />
-                          </label>
-                          <label className="content-linein-info__vad-field">
-                            <span>Hold (ms)</span>
-                            <input
-                              id="linein-vad-hold"
-                              type="number"
-                              inputMode="numeric"
-                              value={lineInForm.vadHoldMs}
-                              onChange={(e) =>
-                                setLineInForm((prev) => ({ ...prev, vadHoldMs: e.target.value }))
-                              }
-                              placeholder="2000"
-                            />
-                          </label>
-                        </div>
-                        <p className="content-linein-info__hint">Control when streaming starts and stops on silence.</p>
-                      </div>
-                    )}
-                    <p className="content-linein-info__copy">
-                      {lineInForm.sourceType === 'ingest' ? (
-                        lineInForm.useLoxAudioBridge ? (
-                          <>
-                            Lox-input-bridge streams audio from a small device into this line-in.
-                            <ol className="content-linein-info__steps">
-                              <li>
-                                Download the binary from{' '}
-                                <a
-                                  href="https://github.com/lox-audioserver/lox-linein-bridge/releases"
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  here
-                                </a>
-                                , and place it in <code>/usr/local/bin</code>.
-                              </li>
-                              <li>
-                                Run:
-                                <code>lox-input-bridge install --server {bridgeServerUrl}</code>
-                              </li>
-                              <li>
-                                Then:
-                                <code>sudo systemctl enable --now lox-input-bridge</code>
-                              </li>
-                            </ol>
-                          </>
-                        ) : (
-                          'Ingest supports WebSocket and TCP per line-in. The AudioServer never pulls audio; push a stream into one of the endpoints below.'
-                        )
-                      ) : lineInForm.sourceType === 'sendspin' ? (
-                        <>
-                          Not functional yet: awaiting confirmation of spec update. See{' '}
-                          <a href="https://github.com/Sendspin/spec/pull/52" target="_blank" rel="noreferrer">
-                            PR #52
-                          </a>
-                          .
-                        </>
-                      ) : lineInForm.sourceType === 'lox-beolink' ? (
-                        'Lox BeoLink line-in ingests audio from a BeoLink gateway integration.'
-                      ) : (
-                        'Choose the source type that matches how the audio enters AudioServer.'
-                      )}
-                    </p>
-                    {lineInForm.sourceType === 'sendspin' && (
-                      <div className="content-linein-info__select">
-                        <label htmlFor="linein-sendspin-client">Sendspin client</label>
-                        <div className="content-linein-select-row">
-                          <select
-                            id="linein-sendspin-client"
-                            className="content-input-select"
-                            value={lineInForm.sendspinClientId}
-                            onChange={(e) => setLineInForm((prev) => ({ ...prev, sendspinClientId: e.target.value }))}
-                          >
-                            <option value="">Select a client</option>
-                            {sendspinClients.map((client) => (
-                              <option key={client.id} value={client.clientId}>
-                                {client.name || client.clientId}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            type="button"
-                            className="secondary content-linein-refresh"
-                            onClick={() => void handleSendspinDiscovery()}
-                            disabled={sendspinLoading}
-                          >
-                            {sendspinLoading ? 'Refreshing…' : 'Refresh'}
-                          </button>
-                        </div>
-                        {sendspinError && <p className="content-linein-error">{sendspinError}</p>}
-                      </div>
-                    )}
-                    {lineInForm.sourceType === 'ingest' && !lineInForm.useLoxAudioBridge && (
-                      <div className="content-linein-info__manual">
-                        <p className="content-linein-info__label">Manual ingest</p>
-                        <div className="content-linein-info__urls">
-                          <p className="content-linein-info__label">WebSocket ingest</p>
-                          <code>{`${ingestWsUrl}/ingest/${ingestId}`}</code>
-                          <p className="content-linein-info__label">TCP ingest</p>
-                          <code>{`tcp://${ingestTcpHost}:7080`}</code>
-                          <p className="content-linein-info__hint">
-                            Send the line-in ID as the first line (ending with newline), then stream raw audio.
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </aside>
                   </div>
                 );
               })()}

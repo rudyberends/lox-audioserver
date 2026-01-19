@@ -27,6 +27,9 @@ class LineInIngestRegistry {
       existing.stop('replaced');
     }
 
+    const channels = 2;
+    const bytesPerSample = 2; // s16le
+    const logIntervalMs = 5000;
     const stream = new PassThrough({ highWaterMark: 1024 * 64 });
     const session: LineInIngestSession = {
       id: inputId,
@@ -51,9 +54,30 @@ class LineInIngestRegistry {
       },
     };
 
+    let bytesSinceLog = 0;
+    let lastLogTs = 0;
     const onData = (chunk: Buffer) => {
       if (!chunk?.length) return;
       session.bytesIn += chunk.length;
+      bytesSinceLog += chunk.length;
+      const now = Date.now();
+      if (!lastLogTs) {
+        lastLogTs = now;
+        return;
+      }
+      const elapsed = now - lastLogTs;
+      if (elapsed >= logIntervalMs) {
+        const bytesPerSec = Math.round((bytesSinceLog / elapsed) * 1000);
+        const estimatedSampleRate = Math.round(bytesPerSec / (channels * bytesPerSample));
+        this.log.info('line-in ingest throughput', {
+          inputId,
+          bytesPerSec,
+          estimatedSampleRate,
+          elapsedMs: elapsed,
+        });
+        lastLogTs = now;
+        bytesSinceLog = 0;
+      }
     };
     const onEnd = () => session.stop('ended');
     const onClose = () => session.stop('closed');
