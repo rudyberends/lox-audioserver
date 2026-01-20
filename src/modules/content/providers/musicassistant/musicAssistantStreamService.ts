@@ -494,15 +494,12 @@ class SendspinClient {
 
   private handleBinaryMessage(buf: Buffer): void {
     if (!this.streamFormat) {
-      // Ignore stray audio if we don't know the format (e.g., after stream/end).
-      this.log.debug('sendspin audio dropped; no active format', { playerId: this.playerId, bytes: buf.length });
-      return;
-    }
-    if (!this.stream) {
       // Fallback: if we receive audio before a stream/start, assume PCM 44.1k/16-bit stereo.
       const fmt: StreamFormat = { codec: 'pcm', sampleRate: 44100, channels: 2, bitDepth: 16 };
       this.streamFormat = fmt;
-      this.stream = new PassThrough();
+      if (!this.stream || this.stream.destroyed || this.stream.writableEnded) {
+        this.stream = new PassThrough();
+      }
       this.streamGen += 1;
       this.firstChunkLogged = false;
       this.bytesSinceLog = 0;

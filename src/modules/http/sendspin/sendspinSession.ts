@@ -349,9 +349,7 @@ export class SendspinSession {
   }): void {
     if (!this.ready) return;
     if (update.playback_state) {
-      const mapped = update.playback_state === 'paused' ? 'stopped' : update.playback_state;
-      this.playbackState = mapped;
-      update = { ...update, playback_state: mapped };
+      this.playbackState = update.playback_state;
     }
     this.send({
       type: 'group/update',
@@ -508,7 +506,17 @@ export class SendspinSession {
       }
       return;
     }
-    this.clientId = payload?.client_id || 'unknown';
+    const rawClientId = typeof payload?.client_id === 'string' ? payload.client_id.trim() : '';
+    if (!rawClientId) {
+      log.warn('client/hello missing client_id', { clientId: 'unknown' });
+      try {
+        this.ws.close(1008, 'missing client_id');
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    this.clientId = rawClientId;
     const supportedRoles = Array.isArray(payload?.supported_roles) ? payload.supported_roles : [];
     if (!supportedRoles.length) {
       log.warn('client/hello missing supported_roles', { clientId: this.clientId });
