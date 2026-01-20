@@ -2139,7 +2139,7 @@ class ZoneManager {
               target = clamp(Math.round(target / step) * step, 0, maxVol);
             }
           }
-          this.log.debug('zone volume command', {
+          this.log.spam('zone volume command', {
             zoneId,
             command,
             payload,
