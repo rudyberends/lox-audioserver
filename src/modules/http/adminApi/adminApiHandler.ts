@@ -22,7 +22,7 @@ import { discoverAirplayDevices } from '@/modules/audio/outputs/airplay/airplayD
 import { discoverGoogleCastDevices } from '@/modules/audio/outputs/googleCast/googleCastDiscovery';
 import { discoverDlnaDevices } from '@/modules/audio/outputs/dlna/dlnaDiscovery';
 import { discoverSonosDevices } from '@/modules/audio/outputs/sonos/sonosDiscovery';
-import { sendspinCore } from '@/modules/http/sendspin/sendspinCore';
+import { sendspinCore } from '@lox-audioserver/node-sendspin';
 import { discoverSpotifyConnectDevices } from '@/modules/audio/outputs/spotify/spotifyConnectDiscovery';
 import { zoneManager } from '@/modules/zones/zoneManager';
 import {

@@ -2,7 +2,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { createLogger } from '@/core/logging/logger';
-import { sendspinCore } from '@/modules/http/sendspin/sendspinCore';
+import { ConnectionReason, sendspinCore } from '@lox-audioserver/node-sendspin';
 
 /**
  * WebSocket gateway for the Sendspin protocol.
@@ -14,7 +14,7 @@ export class SendspinGateway {
   constructor() {
     this.wsServer.on('connection', (socket, req) => {
       if (!req) return;
-      sendspinCore.handleConnection(socket, req, 'discovery');
+      sendspinCore.handleConnection(socket, req, ConnectionReason.DISCOVERY);
     });
   }
 

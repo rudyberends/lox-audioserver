@@ -3,7 +3,7 @@ import Bonjour from 'bonjour-service';
 import WebSocket from 'ws';
 import type { RawData } from 'ws';
 import { createLogger } from '@/core/logging/logger';
-import { sendspinCore } from '@/modules/http/sendspin/sendspinCore';
+import { ConnectionReason, sendspinCore } from '@lox-audioserver/node-sendspin';
 
 type MdnsService = {
   name?: string;
@@ -30,7 +30,7 @@ class SendspinClientConnector {
   private readonly desiredClientIds = new Set<string>();
   private readonly desiredReasons = new Map<string, 'discovery' | 'playback'>();
   private readonly activeSockets = new Map<string, WebSocket>();
-  private readonly socketReason = new Map<string, 'discovery' | 'playback'>();
+  private readonly socketReason = new Map<string, ConnectionReason>();
   private readonly clientSocketUrl = new Map<string, string>();
   private readonly directEndpoints = new Map<string, string>();
   private readonly failures = new Map<string, { count: number; lastError: string | null; suppressedUntil: number | null }>();
@@ -205,7 +205,8 @@ class SendspinClientConnector {
 
     ws.once('open', () => {
       this.activeSockets.set(endpoint.url, ws);
-      const reason = endpoint.reason ?? 'discovery';
+      const reason =
+        endpoint.reason === 'playback' ? ConnectionReason.PLAYBACK : ConnectionReason.DISCOVERY;
       this.socketReason.set(endpoint.url, reason);
       // Pass the intended connection reason to the session.
       sendspinCore.handleConnection(ws, upgradeReq, reason);
@@ -233,7 +234,7 @@ class SendspinClientConnector {
       // Upgrade reason if this was a playback-priority client but the endpoint used discovery.
       const desiredReason = this.desiredReasons.get(clientId);
       const socketReason = this.socketReason.get(endpoint.url);
-      if (desiredReason === 'playback' && socketReason !== 'playback') {
+      if (desiredReason === 'playback' && socketReason !== ConnectionReason.PLAYBACK) {
         ws.close();
       }
     });

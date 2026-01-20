@@ -1,7 +1,6 @@
 import { createLogger } from '@/core/logging/logger';
-import { sendspinCore } from '@/modules/http/sendspin/sendspinCore';
-import type { SendspinSession } from '@/modules/http/sendspin/sendspinSession';
-import { serverNowUs } from '@/modules/http/sendspin/sendspinClock';
+import { PlaybackStateType, sendspinCore, serverNowUs, type PlayerFormat } from '@lox-audioserver/node-sendspin';
+import type { SendspinSession } from '@lox-audioserver/node-sendspin';
 import { getGroupByZone, onGroupChanged } from '@/modules/groups/groupTracker';
 import type { GroupRecord } from '@/modules/groups/types/groupRecord';
 import { zoneManager } from '@/modules/zones/zoneManager';
@@ -14,13 +13,7 @@ export interface SendspinGroupParticipant {
   ensureClientReady?(): Promise<void> | void;
 }
 
-type PlayerStreamFormat = {
-  codec: 'pcm' | 'opus' | 'flac';
-  sampleRate: number;
-  channels: number;
-  bitDepth: number;
-  codecHeader?: string;
-};
+type PlayerStreamFormat = PlayerFormat;
 
 type MetadataPayload = Parameters<SendspinSession['sendMetadata']>[0];
 type ControllerPayload = Parameters<SendspinSession['sendControllerState']>[0];
@@ -36,7 +29,7 @@ class SendspinGroupController {
   private readonly lastStreamFormat = new Map<number, PlayerStreamFormat>();
   private readonly lastMetadata = new Map<number, MetadataPayload>();
   private readonly lastController = new Map<number, ControllerPayload>();
-  private readonly lastPlaybackState = new Map<number, 'playing' | 'paused' | 'stopped'>();
+  private readonly lastPlaybackState = new Map<number, PlaybackStateType>();
 
   constructor() {
     onGroupChanged((event, leader, record) => {
@@ -103,7 +96,7 @@ class SendspinGroupController {
 
   public broadcastPlaybackState(
     leaderZoneId: number,
-    state: 'playing' | 'paused' | 'stopped',
+    state: PlaybackStateType,
     groupId: string,
     groupName: string,
   ): void {
@@ -158,7 +151,7 @@ class SendspinGroupController {
       sendspinCore.sendStreamClear(clientId, ['player@v1']);
       const name = zoneManager.getZoneState(memberId)?.name ?? `Zone ${memberId}`;
       const groupId = record.externalId ?? `group-${leader}`;
-      sendspinCore.setClientPlaybackState(clientId, 'stopped', groupId, name);
+      sendspinCore.setClientPlaybackState(clientId, PlaybackStateType.STOPPED, groupId, name);
     }
   }
 

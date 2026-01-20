@@ -9,45 +9,37 @@ import {
   type AudioOutputSettings,
   type PcmBitDepth,
 } from '@/modules/audio/utils/audioFormat';
-import { serverNowUs } from '@/modules/http/sendspin/sendspinClock';
-import { sendspinCore } from '@/modules/http/sendspin/sendspinCore';
+import {
+  AudioCodec,
+  MediaCommand,
+  PlaybackStateType,
+  PlayerCommand,
+  RepeatMode,
+  sendspinCore,
+  serverNowUs,
+  type PlayerFormat,
+  type PlayerFormatWithBitDepth,
+  type SendspinGroupCommand,
+  type SendspinPlayerStateUpdate,
+} from '@lox-audioserver/node-sendspin';
 import type { PreferredOutput, TransportConfigDefinition, ZoneTransport } from '@/modules/audio/outputs/types';
 import { zoneManager } from '@/modules/zones/zoneManager';
-import type { SendspinSession } from '@/modules/http/sendspin/sendspinSession';
+import type { SendspinSession } from '@lox-audioserver/node-sendspin';
 import { sendspinGroupController } from '@/modules/audio/outputs/sendspin/sendspinGroupController';
 import { getGroupByZone, upsertGroup } from '@/modules/groups/groupTracker';
 import { groupManager } from '@/modules/groups/groupManager';
 
-type SendspinFormat = {
-  codec: 'pcm' | 'opus' | 'flac';
-  sampleRate: number;
-  channels: number;
-  bitDepth: PcmBitDepth;
-};
+type SendspinFormat = PlayerFormatWithBitDepth<PcmBitDepth>;
+
+type ArtworkChannel = Parameters<SendspinSession['sendArtworkStreamStart']>[0][number];
 
 /** Minimal Sendspin transport configuration. */
 export interface SendspinTransportConfig {
   clientId: string;
 }
 
-export type SendspinMetadataProgress = {
-  track_progress: number;
-  track_duration: number;
-  playback_speed: number;
-};
-
-export type SendspinMetadataPayload = {
-  title?: string | null;
-  artist?: string | null;
-  album_artist?: string | null;
-  album?: string | null;
-  artwork_url?: string | null;
-  track?: number | null;
-  year?: number | null;
-  shuffle?: boolean | null;
-  repeat?: 'off' | 'one' | 'all' | null;
-  progress?: SendspinMetadataProgress | null;
-};
+export type SendspinMetadataPayload = Parameters<SendspinSession['sendMetadata']>[0];
+export type SendspinMetadataProgress = NonNullable<SendspinMetadataPayload['progress']>;
 
 export interface SendspinTransportOptions {
   onMetadata?: (payload: SendspinMetadataPayload) => void;
@@ -74,7 +66,6 @@ export const SENDSPIN_TRANSPORT_DEFINITION: TransportConfigDefinition = {
   ],
 };
 
-/** Sendspin ZoneTransport implementation: streams audio/state to a Sendspin client. */
 /** Sendspin ZoneTransport implementation: streams audio/state to a Sendspin client. */
 export class SendspinTransport implements ZoneTransport {
   public readonly type = 'sendspin';
@@ -114,7 +105,7 @@ export class SendspinTransport implements ZoneTransport {
   private streamStarting = false;
   private activeSession: SendspinSession | null = null;
   private negotiatedFormat: SendspinFormat = {
-    codec: 'pcm',
+    codec: AudioCodec.PCM,
     sampleRate: audioOutputSettings.sampleRate,
     channels: audioOutputSettings.channels,
     bitDepth: audioOutputSettings.pcmBitDepth,
@@ -143,7 +134,7 @@ export class SendspinTransport implements ZoneTransport {
     this.options = options;
     sendspinGroupController.register(this.zoneId, this);
     sendspinCore.registerHooks(this.clientId, {
-      onIdentified: (sendspinSession) => {
+      onIdentified: (sendspinSession: SendspinSession) => {
         // Avoid re-running onIdentified for the same session instance.
         if (this.activeSession === sendspinSession) {
           return;
@@ -173,8 +164,8 @@ export class SendspinTransport implements ZoneTransport {
         // Push current playback state to the client right away.
         this.pushPlaybackState(this.playbackState);
       },
-      onPlayerState: (_session, update) => this.handleClientState(update),
-      onGroupCommand: (_session, command) => this.handleGroupCommand(command),
+      onPlayerState: (_session: SendspinSession, update: SendspinPlayerStateUpdate) => this.handleClientState(update),
+      onGroupCommand: (_session: SendspinSession, command: SendspinGroupCommand) => this.handleGroupCommand(command),
       onDisconnected: () => {
         this.clientConnected = false;
         this.activeSession = null;
@@ -184,7 +175,7 @@ export class SendspinTransport implements ZoneTransport {
         this.externalSourceActive = false;
         this.log.info('Sendspin client disconnected', { zoneId: this.zoneId, clientId: this.clientId });
       },
-      onFormatChanged: (_session, format) => {
+      onFormatChanged: (_session: SendspinSession, format: PlayerFormat) => {
         this.negotiatedFormat = this.normalizeFormat(format);
         // Restart stream with the newly requested format.
         void this.startStream({ preserveAnchor: false, formatOverride: this.negotiatedFormat });
@@ -200,7 +191,12 @@ export class SendspinTransport implements ZoneTransport {
   public getPreferredOutput(): PreferredOutput {
     const preferredPrebuffer = this.computePrebufferBytes(this.negotiatedFormat);
     return {
-      profile: this.negotiatedFormat.codec === 'opus' ? 'opus' : this.negotiatedFormat.codec === 'flac' ? 'flac' : 'pcm',
+      profile:
+        this.negotiatedFormat.codec === AudioCodec.OPUS
+          ? 'opus'
+          : this.negotiatedFormat.codec === AudioCodec.FLAC
+            ? 'flac'
+            : 'pcm',
       sampleRate: this.negotiatedFormat.sampleRate,
       channels: this.negotiatedFormat.channels,
       bitDepth: this.negotiatedFormat.bitDepth,
@@ -219,7 +215,7 @@ export class SendspinTransport implements ZoneTransport {
       this.lastKnownVolume = vol;
       this.lastOutboundVolume = vol;
       this.lastOutboundVolumeAt = Date.now();
-      this.activeSession.sendServerCommand('volume', { volume: vol });
+      this.activeSession.sendServerCommand(PlayerCommand.VOLUME, { volume: vol });
     } else {
       this.lastKnownVolume = vol;
     }
@@ -501,7 +497,11 @@ export class SendspinTransport implements ZoneTransport {
       };
       this.maxBufferedBytes = prebufferBytes;
       const profile: 'pcm' | 'opus' | 'flac' =
-        chosenFormat.codec === 'opus' ? 'opus' : chosenFormat.codec === 'flac' ? 'flac' : 'pcm';
+        chosenFormat.codec === AudioCodec.OPUS
+          ? 'opus'
+          : chosenFormat.codec === AudioCodec.FLAC
+            ? 'flac'
+            : 'pcm';
       const streamSignature = this.buildStreamSignature(current, profile);
       const formatMatchesActive =
         this.activeOutputFormat &&
@@ -594,9 +594,9 @@ export class SendspinTransport implements ZoneTransport {
       let modeledTimelineUs = 0; // Sum of durations we think we sent (for drift visibility).
       let codecHeaderSent = false;
       let streamStartSent = false;
-      const isFlac = chosenFormat.codec === 'flac';
+      const isFlac = chosenFormat.codec === AudioCodec.FLAC;
       const bytesPerSample = (pcmBitDepth / 8) * channels;
-      const isPcm = chosenFormat.codec === 'pcm';
+      const isPcm = chosenFormat.codec === AudioCodec.PCM;
       const frameSamples = Math.max(1, Math.floor(sampleRate * 0.025));
       const frameBytes = frameSamples * bytesPerSample;
       let pcmFrameBuffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
@@ -619,9 +619,9 @@ export class SendspinTransport implements ZoneTransport {
         }
       };
       let encodedFrameDurationUs =
-        chosenFormat.codec === 'opus'
+        chosenFormat.codec === AudioCodec.OPUS
           ? Math.floor(1_000_000 / 50) // 20 ms frames
-          : chosenFormat.codec === 'flac'
+          : chosenFormat.codec === AudioCodec.FLAC
             ? Math.floor((4096 * 1_000_000) / sampleRate)
             : 0;
       const overbufferMarginUs = 100_000; // keep lead tight around target
@@ -806,7 +806,7 @@ export class SendspinTransport implements ZoneTransport {
             logPayload.durationUs = Math.floor((logPayload.frames as number * 1_000_000) / sampleRate);
             logPayload.sampleRate = sampleRate;
           }
-          this.log.debug('Sendspin frame ts', logPayload);
+          this.log.spam('Sendspin frame ts', logPayload);
         }
       };
 
@@ -1122,16 +1122,22 @@ export class SendspinTransport implements ZoneTransport {
     const zoneState = zoneManager.getZoneState(this.zoneId);
     const vol = typeof zoneState?.volume === 'number' ? zoneState.volume : this.lastKnownVolume;
     this.lastKnownVolume = vol;
-    const supportedCommands: Array<
-      // eslint-disable-next-line max-len
-      'play' | 'pause' | 'stop' | 'next' | 'previous' | 'volume' | 'mute' | 'repeat_off' | 'repeat_one' | 'repeat_all' | 'shuffle' | 'unshuffle' | 'switch'
-    > = ['play', 'pause', 'stop', 'next', 'previous', 'volume', 'mute', 'switch'];
+    const supportedCommands: MediaCommand[] = [
+      MediaCommand.PLAY,
+      MediaCommand.PAUSE,
+      MediaCommand.STOP,
+      MediaCommand.NEXT,
+      MediaCommand.PREVIOUS,
+      MediaCommand.VOLUME,
+      MediaCommand.MUTE,
+      MediaCommand.SWITCH,
+    ];
     // Repeat/shuffle only if zoneManager exposes those controls.
     if (typeof zoneState?.plrepeat === 'number') {
-      supportedCommands.push('repeat_off', 'repeat_one', 'repeat_all');
+      supportedCommands.push(MediaCommand.REPEAT_OFF, MediaCommand.REPEAT_ONE, MediaCommand.REPEAT_ALL);
     }
     if (typeof zoneState?.plshuffle === 'number') {
-      supportedCommands.push('shuffle', 'unshuffle');
+      supportedCommands.push(MediaCommand.SHUFFLE, MediaCommand.UNSHUFFLE);
     }
     sendspinCore.setClientControllerState(this.clientId, {
       supported_commands: supportedCommands,
@@ -1242,8 +1248,12 @@ export class SendspinTransport implements ZoneTransport {
       return;
     }
     const { groupId, groupName } = this.getGroupInfo();
-    const mappedState: 'playing' | 'paused' | 'stopped' =
-      state === 'playing' ? 'playing' : state === 'paused' ? 'paused' : 'stopped';
+    const mappedState =
+      state === 'playing'
+        ? PlaybackStateType.PLAYING
+        : state === 'paused'
+          ? PlaybackStateType.PAUSED
+          : PlaybackStateType.STOPPED;
     sendspinCore.setClientPlaybackState(this.clientId, mappedState, groupId, groupName);
     sendspinGroupController.broadcastPlaybackState(this.zoneId, mappedState, groupId, groupName);
     this.lastSentPlaybackState = state;
@@ -1293,12 +1303,12 @@ export class SendspinTransport implements ZoneTransport {
         : Number.isFinite(Number(meta?.trackId))
           ? Number(meta?.trackId)
           : null;
-    const repeatMode: 'off' | 'one' | 'all' | null =
+    const repeatMode: RepeatMode | null =
       zoneState?.plrepeat === 3
-        ? 'one'
+        ? RepeatMode.ONE
         : zoneState?.plrepeat === 1
-          ? 'all'
-          : 'off';
+          ? RepeatMode.ALL
+          : RepeatMode.OFF;
     const shuffleMode: boolean | null =
       typeof zoneState?.plshuffle === 'number' ? zoneState.plshuffle === 1 : null;
 
@@ -1352,7 +1362,7 @@ export class SendspinTransport implements ZoneTransport {
 
   // eslint-disable-next-line max-len
   private async fetchAndSendArtwork(session?: { metadata?: PlaybackSession['metadata']; stream?: PlaybackSession['stream'] }): Promise<void> {
-    const preferredChannels =
+    const preferredChannels: ArtworkChannel[] =
       sendspinCore.getArtworkChannels(this.clientId) ??
       [
         { source: 'album', format: 'jpeg', width: 800, height: 800 },
@@ -1364,7 +1374,9 @@ export class SendspinTransport implements ZoneTransport {
         null;
       if (!coverUrl) {
         sendspinCore.sendArtworkStreamStart(this.clientId, preferredChannels);
-        preferredChannels.forEach((_, idx) => sendspinCore.sendArtwork(this.clientId, idx as 0 | 1 | 2 | 3, null));
+        preferredChannels.forEach((_channel, idx) => {
+          sendspinCore.sendArtwork(this.clientId, idx as 0 | 1 | 2 | 3, null);
+        });
         return;
       }
       // Skip invalid/non-http URLs to avoid noisy errors.
@@ -1372,12 +1384,16 @@ export class SendspinTransport implements ZoneTransport {
         const parsed = new URL(coverUrl);
         if (!/^https?:$/.test(parsed.protocol)) {
           sendspinCore.sendArtworkStreamStart(this.clientId, preferredChannels);
-          preferredChannels.forEach((_, idx) => sendspinCore.sendArtwork(this.clientId, idx as 0 | 1 | 2 | 3, null));
+          preferredChannels.forEach((_channel, idx) => {
+            sendspinCore.sendArtwork(this.clientId, idx as 0 | 1 | 2 | 3, null);
+          });
           return;
         }
       } catch {
         sendspinCore.sendArtworkStreamStart(this.clientId, preferredChannels);
-        preferredChannels.forEach((_, idx) => sendspinCore.sendArtwork(this.clientId, idx as 0 | 1 | 2 | 3, null));
+        preferredChannels.forEach((_channel, idx) => {
+          sendspinCore.sendArtwork(this.clientId, idx as 0 | 1 | 2 | 3, null);
+        });
         return;
       }
       const buf = await this.fetchBuffer(coverUrl);
@@ -1385,7 +1401,7 @@ export class SendspinTransport implements ZoneTransport {
         return;
       }
       sendspinCore.sendArtworkStreamStart(this.clientId, preferredChannels);
-      preferredChannels.forEach((_, idx) => {
+      preferredChannels.forEach((_channel, idx) => {
         sendspinCore.sendArtwork(this.clientId, idx as 0 | 1 | 2 | 3, buf);
       });
     } catch (error) {
@@ -1463,19 +1479,18 @@ export class SendspinTransport implements ZoneTransport {
     return 16;
   }
 
-  private normalizeFormat(format: {
-    codec?: 'pcm' | 'opus' | 'flac';
-    sampleRate?: number;
-    channels?: number;
-    bitDepth?: number;
-  }): SendspinFormat {
+  private normalizeFormat(format: Partial<PlayerFormat>): SendspinFormat {
     const sampleRate = Number.isFinite(format.sampleRate) ? format.sampleRate! : audioOutputSettings.sampleRate;
     const channels = Number.isFinite(format.channels) ? format.channels! : audioOutputSettings.channels;
     const bitDepth = this.normalizeBitDepth(
       Number.isFinite(format.bitDepth) ? (format.bitDepth as number) : audioOutputSettings.pcmBitDepth,
     );
-    const codec: 'pcm' | 'opus' | 'flac' =
-      format.codec === 'opus' ? 'opus' : format.codec === 'flac' ? 'flac' : 'pcm';
+    const codec: AudioCodec =
+      format.codec === AudioCodec.OPUS
+        ? AudioCodec.OPUS
+        : format.codec === AudioCodec.FLAC
+          ? AudioCodec.FLAC
+          : AudioCodec.PCM;
     return { codec, sampleRate, channels, bitDepth };
   }
 
