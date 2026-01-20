@@ -196,6 +196,16 @@ export async function discoverSendspinClients(): Promise<SendspinClient[]> {
   return payload.clients ?? [];
 }
 
+export async function discoverSendspinSources(): Promise<SendspinClient[]> {
+  const res = await fetch(`${API_BASE}/transports/sendspin/sources`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || 'Failed to discover Sendspin sources');
+  }
+  const payload = (await res.json()) as SendspinClientResponse;
+  return payload.clients ?? [];
+}
+
 export async function discoverSnapcastClients(): Promise<SnapcastClient[]> {
   const res = await fetch(`${API_BASE}/transports/snapcast/clients`);
   if (!res.ok) {

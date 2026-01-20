@@ -34,7 +34,7 @@ import type { AlertFile } from '../services/alertsApi';
 import { purgeFavorites, purgeRecents } from '../services/zonesApi';
 import { API_BASE } from '../config/apiConfig';
 import { useGlobalAlert } from '../components/GlobalAlert';
-import { discoverSendspinClients, type SendspinClient } from '../services/transportsApi';
+import { discoverSendspinSources, type SendspinClient } from '../services/transportsApi';
 
 type ContentConfigResponse = {
   config?: {
@@ -2025,7 +2025,7 @@ export default function ContentView(): JSX.Element {
     setSendspinLoading(true);
     setSendspinError(null);
     try {
-      const clients = await discoverSendspinClients();
+      const clients = await discoverSendspinSources();
       setSendspinClients(clients);
       if (!clients.length) {
         setSendspinError('No Sendspin clients found.');

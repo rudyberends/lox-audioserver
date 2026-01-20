@@ -22,7 +22,7 @@ import { discoverAirplayDevices } from '@/modules/audio/outputs/airplay/airplayD
 import { discoverGoogleCastDevices } from '@/modules/audio/outputs/googleCast/googleCastDiscovery';
 import { discoverDlnaDevices } from '@/modules/audio/outputs/dlna/dlnaDiscovery';
 import { discoverSonosDevices } from '@/modules/audio/outputs/sonos/sonosDiscovery';
-import { Roles, sendspinCore } from '@lox-audioserver/node-sendspin';
+import { sendspinCore } from '@lox-audioserver/node-sendspin';
 import { discoverSpotifyConnectDevices } from '@/modules/audio/outputs/spotify/spotifyConnectDiscovery';
 import { zoneManager } from '@/modules/zones/zoneManager';
 import {
@@ -229,7 +229,12 @@ export class AdminApiHandler {
       {
         method: 'GET',
         pattern: /^\/transports\/sendspin\/clients$/,
-        handler: async (_req, res) => this.handleSendspinDiscovery(res),
+        handler: async (req, res) => this.handleSendspinDiscovery(req, res),
+      },
+      {
+        method: 'GET',
+        pattern: /^\/transports\/sendspin\/sources$/,
+        handler: async (_req, res) => this.handleSendspinSourceDiscovery(res),
       },
       {
         method: 'GET',
@@ -828,11 +833,39 @@ export class AdminApiHandler {
     }
   }
 
-  private async handleSendspinDiscovery(res: ServerResponse): Promise<void> {
+  private async handleSendspinDiscovery(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const url = new URL(req.url ?? '', 'http://localhost');
+      const roles = url.searchParams
+        .getAll('role')
+        .flatMap((value) => value.split(','))
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0);
+      const clients = sendspinCore
+        .listClients()
+        .filter((client) => (roles.length ? roles.some((role) => client.roles.includes(role)) : true))
+        .map((client) => ({
+          id: client.clientId,
+          clientId: client.clientId,
+          name: client.name,
+          remote: client.remote,
+          roles: client.roles,
+          playbackState: client.playbackState,
+          sourceState: client.sourceState,
+          sourceSignal: client.sourceSignal,
+        }));
+        this.sendJson(res, 200, { clients });
+    } catch (err) {
+      this.log.warn('sendspin discovery failed', { err });
+      this.sendJson(res, 500, { error: 'sendspin-discovery-failed' });
+    }
+  }
+
+  private async handleSendspinSourceDiscovery(res: ServerResponse): Promise<void> {
     try {
       const clients = sendspinCore
         .listClients()
-        .filter((client) => client.roles.includes(Roles.SOURCE))
+        .filter((client) => client.roles.includes('source@v1'))
         .map((client) => ({
           id: client.clientId,
           clientId: client.clientId,
@@ -845,8 +878,8 @@ export class AdminApiHandler {
         }));
       this.sendJson(res, 200, { clients });
     } catch (err) {
-      this.log.warn('sendspin discovery failed', { err });
-      this.sendJson(res, 500, { error: 'sendspin-discovery-failed' });
+      this.log.warn('sendspin source discovery failed', { err });
+      this.sendJson(res, 500, { error: 'sendspin-source-discovery-failed' });
     }
   }
 
