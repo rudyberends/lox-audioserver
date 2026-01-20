@@ -6,7 +6,15 @@ type LineInIngestSession = {
   stream: PassThrough;
   startedAt: number;
   bytesIn: number;
+  format?: LineInIngestFormat;
   stop: (reason?: string) => void;
+};
+
+export type LineInIngestFormat = {
+  sampleRate: number;
+  channels: number;
+  bitDepth: number;
+  pcmFormat: 's16le' | 's24le' | 's32le';
 };
 
 type LineInIngestListener = (session: LineInIngestSession) => void;
@@ -19,7 +27,11 @@ class LineInIngestRegistry {
   private readonly stopListeners = new Map<string, Set<LineInIngestStopListener>>();
   private readonly anyStartListeners = new Set<LineInIngestListener>();
 
-  public start(id: string, source: NodeJS.ReadableStream): LineInIngestSession {
+  public start(
+    id: string,
+    source: NodeJS.ReadableStream,
+    options: { format?: LineInIngestFormat } = {},
+  ): LineInIngestSession {
     const trimmed = id.trim();
     const inputId = trimmed || 'unknown';
     const existing = this.sessions.get(inputId);
@@ -27,8 +39,8 @@ class LineInIngestRegistry {
       existing.stop('replaced');
     }
 
-    const channels = 2;
-    const bytesPerSample = 2; // s16le
+    const channels = options.format?.channels ?? 2;
+    const bytesPerSample = options.format ? Math.max(1, Math.floor(options.format.bitDepth / 8)) : 2;
     const logIntervalMs = 5000;
     const stream = new PassThrough({ highWaterMark: 1024 * 64 });
     const session: LineInIngestSession = {
@@ -36,6 +48,7 @@ class LineInIngestRegistry {
       stream,
       startedAt: Date.now(),
       bytesIn: 0,
+      format: options.format,
       stop: (reason?: string) => {
         if (!this.sessions.has(inputId)) {
           return;
@@ -102,6 +115,10 @@ class LineInIngestRegistry {
   public getStream(id: string): PassThrough | null {
     const session = this.sessions.get(id.trim());
     return session?.stream ?? null;
+  }
+
+  public getSession(id: string): LineInIngestSession | null {
+    return this.sessions.get(id.trim()) ?? null;
   }
 
   public stop(id: string, reason?: string): void {

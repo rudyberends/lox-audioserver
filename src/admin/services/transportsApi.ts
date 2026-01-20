@@ -60,6 +60,8 @@ export interface SendspinClient {
   address?: string;
   port?: number;
   path?: string;
+  sourceState?: 'idle' | 'streaming' | 'error' | null;
+  sourceSignal?: 'present' | 'absent' | 'unknown' | null;
 }
 
 export interface SnapcastClient {

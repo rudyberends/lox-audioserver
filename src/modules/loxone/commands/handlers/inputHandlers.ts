@@ -8,6 +8,7 @@ import type { AudioServerConfig, LineInInputConfig } from '@/domain/config/types
 import type { LoxoneZoneState } from '@/modules/zones/types/loxoneZoneState';
 import { lineInIngestRegistry } from '@/modules/audio/inputs/linein/lineInIngestRegistry';
 import { resolveLineInSampleRate } from '@/modules/audio/inputs/linein/lineInConstants';
+import { sendspinLineInService } from '@/modules/audio/inputs/linein/sendspinLineInService';
 
 type ResolvedLineInInput = {
   id: string;
@@ -193,12 +194,20 @@ function extractLineInValue(rawId: string): string {
 
 function startLineInPlayback(zoneId: number, inputId: string, title: string, iconType: number): void {
   clearActiveLineIn(zoneId);
-  const stream = lineInIngestRegistry.getStream(inputId);
+  sendspinLineInService.requestStart(inputId);
+  const session = lineInIngestRegistry.getSession(inputId);
+  const stream = session?.stream ?? null;
   if (!stream) {
     log.info('line-in ingest pending; waiting for stream', { zoneId, inputId });
     overwriteLineInState(zoneId, inputId, NO_SIGNAL_TITLE, iconType, 'pause');
     return;
   }
+
+  const inputConfig = resolveLineInInputConfig(inputId);
+  const sessionFormat = session?.format ?? null;
+  const sampleRate = sessionFormat?.sampleRate ?? resolveLineInSampleRate(inputConfig);
+  const channels = sessionFormat?.channels ?? PCM_CHANNELS;
+  const pcmFormat = sessionFormat?.pcmFormat ?? 's16le';
 
   overwriteLineInState(zoneId, inputId, title, iconType, 'play');
   const stop = lineInIngestRegistry.onStop(inputId, () => {
@@ -215,9 +224,9 @@ function startLineInPlayback(zoneId: number, inputId: string, title: string, ico
     {
       kind: 'pipe',
       path: `linein:${inputId}`,
-      format: 's16le',
-      sampleRate: resolveLineInSampleRate(resolveLineInInputConfig(inputId)),
-      channels: PCM_CHANNELS,
+      format: pcmFormat,
+      sampleRate,
+      channels,
       realTime: true,
       stream,
     },
@@ -235,6 +244,7 @@ function startLineInPlayback(zoneId: number, inputId: string, title: string, ico
 function clearActiveLineIn(zoneId: number): void {
   const active = activeLineInByZone.get(zoneId);
   if (active) {
+    sendspinLineInService.requestStop(active.inputId);
     active.stop();
     activeLineInByZone.delete(zoneId);
   }

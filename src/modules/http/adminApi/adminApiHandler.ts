@@ -22,7 +22,7 @@ import { discoverAirplayDevices } from '@/modules/audio/outputs/airplay/airplayD
 import { discoverGoogleCastDevices } from '@/modules/audio/outputs/googleCast/googleCastDiscovery';
 import { discoverDlnaDevices } from '@/modules/audio/outputs/dlna/dlnaDiscovery';
 import { discoverSonosDevices } from '@/modules/audio/outputs/sonos/sonosDiscovery';
-import { sendspinCore } from '@lox-audioserver/node-sendspin';
+import { Roles, sendspinCore } from '@lox-audioserver/node-sendspin';
 import { discoverSpotifyConnectDevices } from '@/modules/audio/outputs/spotify/spotifyConnectDiscovery';
 import { zoneManager } from '@/modules/zones/zoneManager';
 import {
@@ -31,6 +31,7 @@ import {
   notifyStorageListUpdated,
   notifyStorageRemoved,
 } from '@/modules/loxone/ws/notifier';
+import { sendspinLineInService } from '@/modules/audio/inputs/linein/sendspinLineInService';
 import { contentManager } from '@/modules/content/contentManager';
 import { musicAssistantStreamService } from '@/modules/content/providers/musicassistant/musicAssistantStreamService';
 import type { StorageConfig } from '@/modules/content/storage/storageManager';
@@ -829,13 +830,19 @@ export class AdminApiHandler {
 
   private async handleSendspinDiscovery(res: ServerResponse): Promise<void> {
     try {
-      const clients = sendspinCore.listClients().map((client) => ({
-        id: client.clientId,
-        clientId: client.clientId,
-        remote: client.remote,
-        roles: client.roles,
-        playbackState: client.playbackState,
-      }));
+      const clients = sendspinCore
+        .listClients()
+        .filter((client) => client.roles.includes(Roles.SOURCE))
+        .map((client) => ({
+          id: client.clientId,
+          clientId: client.clientId,
+          name: client.name,
+          remote: client.remote,
+          roles: client.roles,
+          playbackState: client.playbackState,
+          sourceState: client.sourceState,
+          sourceSignal: client.sourceSignal,
+        }));
       this.sendJson(res, 200, { clients });
     } catch (err) {
       this.log.warn('sendspin discovery failed', { err });
@@ -1810,6 +1817,7 @@ export class AdminApiHandler {
       });
       if (lineInUpdated) {
         notifyLineInChanged();
+        sendspinLineInService.refresh();
       }
       await this.reloadZones();
       this.sendJson(res, 204, {});

@@ -10,12 +10,15 @@ import { ConnectionReason, sendspinCore } from '@lox-audioserver/node-sendspin';
 export class SendspinGateway {
   private readonly log = createLogger('Http', 'Sendspin');
   private readonly wsServer = new WebSocketServer({ noServer: true });
+  private readonly knownClients = new Set<string>();
+  private pollTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     this.wsServer.on('connection', (socket, req) => {
       if (!req) return;
       sendspinCore.handleConnection(socket, req, ConnectionReason.DISCOVERY);
     });
+    this.pollTimer = setInterval(() => this.pollConnections(), 2000);
   }
 
   public handleUpgrade(
@@ -35,7 +38,36 @@ export class SendspinGateway {
   }
 
   public close(): void {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
     this.wsServer.close();
   }
 
+  private pollConnections(): void {
+    const activeClients = new Set<string>();
+    for (const session of sendspinCore.getSessions()) {
+      const clientId = session.getClientId();
+      if (!clientId) {
+        continue;
+      }
+      activeClients.add(clientId);
+      if (!this.knownClients.has(clientId)) {
+        this.knownClients.add(clientId);
+        this.log.info('sendspin client connected', {
+          clientId,
+          name: session.getClientName(),
+          roles: session.getRoles(),
+          remote: session.getRemoteAddress(),
+          reason: session.getConnectionReason(),
+        });
+      }
+    }
+    for (const clientId of this.knownClients) {
+      if (!activeClients.has(clientId)) {
+        this.knownClients.delete(clientId);
+      }
+    }
+  }
 }

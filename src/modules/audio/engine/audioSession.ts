@@ -28,7 +28,7 @@ export type PlaybackSource =
   | {
       kind: 'pipe';
       path: string;
-      format?: 's16le' | 's32le' | 's16be';
+      format?: 's16le' | 's24le' | 's32le' | 's16be';
       sampleRate?: number;
       channels?: number;
       /** Whether ffmpeg should pace input with -re (default: true). */

@@ -7,6 +7,7 @@ import { zoneManager } from '@/modules/zones/zoneManager';
 import { loadConfig as loadStoredConfig } from '@/domain/config/configStore';
 import type { AudioServerConfig } from '@/domain/config/types';
 import { lineInMetadataService } from '@/modules/audio/inputs/linein/lineInMetadataService';
+import { sendspinLineInService } from '@/modules/audio/inputs/linein/sendspinLineInService';
 
 /**
  * Descriptor for services that need graceful shutdown coordination.
@@ -58,6 +59,7 @@ async function startServices(): Promise<void> {
   await zoneManager.initialize();
   await contentManager.reinitialize();
   lineInMetadataService.start();
+  sendspinLineInService.start();
 
   httpService = new HttpService(config.http, { onReinitialize: handleReinitialize });
   loxoneService = new LoxoneHttpService(config.loxone, {
@@ -168,6 +170,7 @@ async function stopServices(): Promise<void> {
     { name: 'zones', stop: () => zoneManager.shutdown() },
   ];
   services.push({ name: 'linein-metadata', stop: async () => lineInMetadataService.stop() });
+  services.push({ name: 'sendspin-linein', stop: async () => sendspinLineInService.stop() });
 
   if (loxoneService) {
     services.push({ name: 'loxone', stop: () => loxoneService!.stop() });

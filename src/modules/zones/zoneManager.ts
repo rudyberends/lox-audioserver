@@ -36,6 +36,7 @@ import { musicAssistantInputService } from '@/modules/audio/inputs/musicassistan
 import { appleMusicInputService } from '@/modules/audio/inputs/applemusic/appleMusicInputService';
 import { deezerInputService } from '@/modules/audio/inputs/deezer/deezerInputService';
 import { tidalInputService } from '@/modules/audio/inputs/tidal/tidalInputService';
+import { sendspinLineInService } from '@/modules/audio/inputs/linein/sendspinLineInService';
 import {
   setQueueUpdateHandler,
   setTransportErrorHandler,
@@ -1340,7 +1341,20 @@ class ZoneManager {
       }
     }
     const prevInput = ctx.inputMode;
+    const prevAudiopath = ctx.state.audiopath;
     this.setInputMode(ctx, mode);
+    if (prevInput === 'linein' && mode !== 'linein') {
+      const inputId = parseLineInInputId(prevAudiopath);
+      if (inputId) {
+        this.log.info('line-in input cleared on input switch', {
+          zoneId: ctx.id,
+          from: prevInput,
+          to: mode,
+          inputId,
+        });
+        sendspinLineInService.requestStop(inputId);
+      }
+    }
     this.stopExternalInputSessions(zoneId, prevInput, mode);
     if (mode !== 'spotify') {
       this.stopSpotifyTransports(ctx.transports);
@@ -3772,6 +3786,19 @@ function isRadioAudiopath(audiopath: string | undefined, audiotype?: number | nu
 function isLineInAudiopath(audiopath: string | undefined): boolean {
   const raw = (audiopath ?? '').trim().toLowerCase();
   return raw.startsWith('linein:') || raw.startsWith('linein://');
+}
+
+function parseLineInInputId(audiopath: string | undefined): string | null {
+  if (!audiopath) {
+    return null;
+  }
+  const decoded = decodeAudiopath(audiopath) || audiopath;
+  const match = decoded.trim().match(/^linein:(?:\/\/)?(.+)$/i);
+  if (!match || !match[1]) {
+    return null;
+  }
+  const inputId = match[1].trim();
+  return inputId.length ? inputId : null;
 }
 
 function toRadioAudiopath(audiopath: string | undefined): string {

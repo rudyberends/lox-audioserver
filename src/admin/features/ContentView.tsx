@@ -217,6 +217,7 @@ type LineInBridgeSummary = {
 };
 
 const LINEIN_STATUS_POLL_MS = 5000;
+const SENDSPIN_STATUS_POLL_MS = 5000;
 
 function parseOptionalNumber(value: string): number | undefined {
   const trimmed = value.trim();
@@ -961,6 +962,28 @@ export default function ContentView(): JSX.Element {
     return lineInBridges.find((bridge) => bridge.bridge_id === lineInForm.bridgeId) ?? null;
   }, [lineInBridges, lineInForm.bridgeId]);
   const activeLineInBridgeDevices = activeLineInBridge?.capture_devices ?? [];
+  const sendspinClientMap = React.useMemo(() => {
+    const map = new Map<string, SendspinClient>();
+    for (const client of sendspinClients) {
+      if (client.clientId) {
+        map.set(client.clientId, client);
+      }
+    }
+    return map;
+  }, [sendspinClients]);
+  const sendspinAssignedMap = React.useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const input of lineInInputs) {
+      if (input.source?.type !== 'sendspin') continue;
+      const clientId = typeof input.source?.clientId === 'string' ? input.source.clientId : '';
+      if (!clientId) continue;
+      const label = input.name || input.id || clientId;
+      const list = map.get(clientId) ?? [];
+      list.push(label);
+      map.set(clientId, list);
+    }
+    return map;
+  }, [lineInInputs]);
 
   const validateTuneIn = React.useCallback(
     async (value: string): Promise<{ ok: boolean; message?: string }> => {
@@ -2016,11 +2039,14 @@ export default function ContentView(): JSX.Element {
   }, [sendspinLoading]);
 
   React.useEffect(() => {
-    if (!lineInModalOpen || lineInForm.sourceType !== 'sendspin') return;
-    if (!sendspinClients.length && !sendspinLoading && !sendspinError) {
+    const needsSendspin = contentFilter === 'linein' || (lineInModalOpen && lineInForm.sourceType === 'sendspin');
+    if (!needsSendspin) return;
+    void handleSendspinDiscovery();
+    const timer = window.setInterval(() => {
       void handleSendspinDiscovery();
-    }
-  }, [lineInModalOpen, lineInForm.sourceType, sendspinClients.length, sendspinLoading, sendspinError, handleSendspinDiscovery]);
+    }, SENDSPIN_STATUS_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [contentFilter, lineInModalOpen, lineInForm.sourceType, lineInInputs, handleSendspinDiscovery]);
 
   React.useEffect(() => {
     if (contentFilter !== 'linein' && !lineInModalOpen) return;
@@ -3026,6 +3052,54 @@ export default function ContentView(): JSX.Element {
                             })()}
                           </div>
                         )}
+                        {input.source?.type === 'sendspin' && (
+                          <div className="content-linein-status-row">
+                            {(() => {
+                              const clientId =
+                                typeof input.source?.clientId === 'string' ? input.source.clientId : '';
+                              const client = clientId ? sendspinClientMap.get(clientId) : undefined;
+                              if (!client) {
+                                return (
+                                  <span className="content-linein-status__pill is-offline">
+                                    <span className="content-linein-status__dot" aria-hidden="true" />
+                                    Offline
+                                  </span>
+                                );
+                              }
+                              const stateLabel = formatLineInState(client.sourceState);
+                              const signalLabel = formatLineInState(client.sourceSignal);
+                              const signalTone =
+                                client.sourceSignal === 'present'
+                                  ? 'is-connected'
+                                  : client.sourceSignal === 'absent'
+                                    ? 'is-offline'
+                                    : '';
+                              if (!stateLabel && !signalLabel) {
+                                return (
+                                  <span className="content-linein-status__pill is-connected">
+                                    <span className="content-linein-status__dot" aria-hidden="true" />
+                                    Connected
+                                  </span>
+                                );
+                              }
+                              return (
+                                <>
+                                  {stateLabel && (
+                                    <span className="content-linein-status__state-badge">{stateLabel}</span>
+                                  )}
+                                  {signalLabel && (
+                                    <span
+                                      className={`content-linein-status__pill${signalTone ? ` ${signalTone}` : ''}`}
+                                    >
+                                      <span className="content-linein-status__dot" aria-hidden="true" />
+                                      {signalLabel}
+                                    </span>
+                                  )}
+                                </>
+                              );
+                            })()}
+                          </div>
+                        )}
                       </div>
                     </article>
                   ))
@@ -3046,12 +3120,12 @@ export default function ContentView(): JSX.Element {
                   </div>
                 </div>
                 {lineInBridgesError && <p className="content-linein-error">{lineInBridgesError}</p>}
-                {lineInBridges.length > 0 ? (
+                {lineInBridges.length > 0 || sendspinClients.length > 0 ? (
                   <div className="content-linein-bridge-table">
                     <div className="content-linein-bridge-row content-linein-bridge-row--header">
                       <span>Bridge</span>
-                      <span>Version</span>
-                      <span>Last seen</span>
+                      <span>Type</span>
+                      <span>Status</span>
                       <span>Assigned</span>
                       <span />
                     </div>
@@ -3080,10 +3154,39 @@ export default function ContentView(): JSX.Element {
                         </div>
                       </div>
                     ))}
+                    {sendspinClients.map((client) => {
+                      const stateLabel = formatLineInState(client.sourceState);
+                      const signalLabel = formatLineInState(client.sourceSignal);
+                      const statusLabel = [stateLabel, signalLabel].filter(Boolean).join(' / ') || '—';
+                      const assignedList =
+                        client.clientId && sendspinAssignedMap.has(client.clientId)
+                          ? sendspinAssignedMap.get(client.clientId)!
+                          : [];
+                      const assignedLabel = assignedList.length ? assignedList.join(', ') : '—';
+                      return (
+                        <div key={`sendspin-${client.clientId ?? client.id}`} className="content-linein-bridge-row">
+                          <div>
+                            <div className="content-linein-bridge-name">
+                              {client.name || 'Sendspin source'}
+                            </div>
+                            <div
+                              className="content-linein-bridge-id"
+                              title={client.clientId || client.id}
+                            >
+                              {client.clientId || client.id}
+                            </div>
+                          </div>
+                          <div>Sendspin</div>
+                          <div>{statusLabel}</div>
+                          <div>{assignedLabel}</div>
+                          <div />
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="content-body-copy content-body-copy--muted">
-                    <p>No bridges registered yet.</p>
+                    <p>No bridges or Sendspin sources registered yet.</p>
                     <p>Install the bridge to make line-in devices available:</p>
                     <ol className="content-linein-info__steps">
                       <li>
@@ -3576,11 +3679,8 @@ export default function ContentView(): JSX.Element {
                       <div className="content-linein-info__section">
                         <p className="content-linein-info__title">Sendspin</p>
                         <p className="content-linein-info__copy">
-                          Not functional yet: awaiting confirmation of spec update. See{' '}
-                          <a href="https://github.com/Sendspin/spec/pull/52" target="_blank" rel="noreferrer">
-                            PR #52
-                          </a>
-                          .
+                          Stream audio from a Sendspin source client. Select the client ID below and capture will start
+                          when the line-in input is selected.
                         </p>
                         <div className="content-linein-info__select">
                           <label htmlFor="linein-sendspin-client">Sendspin client</label>
