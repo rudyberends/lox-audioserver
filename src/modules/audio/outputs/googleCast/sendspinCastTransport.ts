@@ -329,7 +329,6 @@ export class SendspinCastTransport implements ZoneTransport {
   private buildSendspinWsUrl(): string {
     const host = this.resolvePublicHost() || '127.0.0.1';
     const url = new URL(`ws://${host}:7090/sendspin`);
-    url.searchParams.set('tunnel', 'cast');
     url.searchParams.set('zone', String(this.zoneId));
     url.searchParams.set('player', this.clientId);
     return url.toString();

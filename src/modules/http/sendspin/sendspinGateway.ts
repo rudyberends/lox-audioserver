@@ -1,7 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
-import { URL } from 'node:url';
 import { createLogger } from '@/core/logging/logger';
 import { sendspinCore } from '@/modules/http/sendspin/sendspinCore';
 
@@ -15,8 +14,7 @@ export class SendspinGateway {
   constructor() {
     this.wsServer.on('connection', (socket, req) => {
       if (!req) return;
-      const reason = this.getConnectionReason(req);
-      sendspinCore.handleConnection(socket, req, reason);
+      sendspinCore.handleConnection(socket, req, 'discovery');
     });
   }
 
@@ -40,15 +38,4 @@ export class SendspinGateway {
     this.wsServer.close();
   }
 
-  private getConnectionReason(req: IncomingMessage): 'discovery' | 'playback' | 'cast-tunnel' {
-    try {
-      const url = new URL(req.url ?? '', 'http://localhost');
-      if ((url.searchParams.get('tunnel') ?? '').toLowerCase() === 'cast') {
-        return 'cast-tunnel';
-      }
-    } catch {
-      /* ignore */
-    }
-    return 'discovery';
-  }
 }

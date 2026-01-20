@@ -62,7 +62,6 @@ const serializeForLog = (value: unknown): string => {
 export type SendspinConnectionMeta = {
   zoneId?: number;
   playerId?: string;
-  tunnel?: string | null;
   remote?: string | null;
 };
 
@@ -82,7 +81,7 @@ export class SendspinSession {
   private expectMute = false;
   private warnedMissingVolume = false;
   private warnedMissingMute = false;
-  private connectionReason: 'discovery' | 'playback' | 'cast-tunnel';
+  private connectionReason: 'discovery' | 'playback';
   private readonly connectionMeta: SendspinConnectionMeta;
   private initialStateReceived = false;
   private initialStateTimer: NodeJS.Timeout | null = null;
@@ -112,7 +111,7 @@ export class SendspinSession {
   constructor(
     private readonly ws: WebSocket,
     private readonly req: IncomingMessage | null,
-    connectionReason: 'discovery' | 'playback' | 'cast-tunnel' = 'discovery',
+    connectionReason: 'discovery' | 'playback' = 'discovery',
     connectionMeta: SendspinConnectionMeta = {},
     hooks: SendspinSessionHooks = {},
   ) {
@@ -126,7 +125,7 @@ export class SendspinSession {
 
   public setHooks(
     hooks: SendspinSessionHooks,
-    context?: SendspinConnectionMeta & { reason?: 'cast-tunnel' },
+    context?: SendspinConnectionMeta,
   ): void {
     this.hooks = hooks;
     this.hooksAttached = true;
@@ -186,7 +185,7 @@ export class SendspinSession {
     };
   }
 
-  public getConnectionReason(): 'discovery' | 'playback' | 'cast-tunnel' {
+  public getConnectionReason(): 'discovery' | 'playback' {
     return this.connectionReason;
   }
 
@@ -614,7 +613,7 @@ export class SendspinSession {
         name: 'Lox Audio Server',
         version: 1,
         active_roles: Array.from(new Set(this.roles)),
-        connection_reason: this.connectionReason,
+        connection_reason: this.connectionReason === 'playback' ? 'playback' : 'discovery',
       },
     });
 
@@ -952,16 +951,12 @@ export class SendspinSession {
   }
 
   private applyConnectionContext(
-    context: SendspinConnectionMeta & { reason?: 'cast-tunnel' },
+    context: SendspinConnectionMeta,
   ): void {
     if (!context) return;
-    if (context.reason) {
-      this.connectionReason = context.reason;
-    }
     this.connectionMeta.zoneId =
       typeof context.zoneId === 'number' ? context.zoneId : this.connectionMeta.zoneId;
     this.connectionMeta.playerId = context.playerId ?? this.connectionMeta.playerId;
-    this.connectionMeta.tunnel = context.tunnel ?? this.connectionMeta.tunnel;
     this.connectionMeta.remote = context.remote ?? this.connectionMeta.remote;
   }
 

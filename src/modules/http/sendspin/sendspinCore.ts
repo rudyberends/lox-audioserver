@@ -20,7 +20,7 @@ export class SendspinCore {
   private readonly sessionsBySocket = new Map<WebSocket, SendspinSession>();
   private readonly hooksByClientId = new Map<
     string,
-    { hooks: SendspinSessionHooks; context?: SendspinConnectionMeta & { reason?: 'cast-tunnel' } }
+    { hooks: SendspinSessionHooks; context?: SendspinConnectionMeta }
   >();
 
   private readonly leadStatsByClientId = new Map<
@@ -31,24 +31,21 @@ export class SendspinCore {
   public handleConnection(
     ws: WebSocket,
     req?: IncomingMessage | null,
-    connectionReason: 'discovery' | 'playback' | 'cast-tunnel' = 'discovery',
+    connectionReason: 'discovery' | 'playback' = 'discovery',
   ): void {
     const meta = this.extractConnectionMetadata(req);
-    const effectiveReason = meta.reason ?? connectionReason;
-    const session = new SendspinSession(ws, req ?? null, effectiveReason, {
+    const session = new SendspinSession(ws, req ?? null, connectionReason, {
       zoneId: meta.zoneId,
       playerId: meta.playerId,
-      tunnel: meta.tunnel,
       remote: req?.socket?.remoteAddress ?? null,
     });
     this.sessionsBySocket.set(ws, session);
 
     log.info('WebSocket connected', {
       remote: req?.socket?.remoteAddress ?? 'unknown',
-      reason: effectiveReason,
+      reason: connectionReason,
       zone: meta.zoneId,
       playerId: meta.playerId,
-      tunnel: meta.tunnel,
     });
 
     ws.on('message', (data, isBinary) => {
@@ -80,7 +77,7 @@ export class SendspinCore {
   public registerHooks(
     clientId: string,
     hooks: SendspinSessionHooks,
-    context?: SendspinConnectionMeta & { reason?: 'cast-tunnel' },
+    context?: SendspinConnectionMeta,
   ): void {
     this.hooksByClientId.set(clientId, { hooks, context });
     const session = this.getSession(clientId);
@@ -240,9 +237,6 @@ export class SendspinCore {
       remote: string | null;
     }> = [];
     for (const session of this.sessionsBySocket.values()) {
-      if (session.getConnectionReason() === 'cast-tunnel') {
-        continue;
-      }
       const descriptor = session.getDescriptor();
       if (!descriptor.clientId) {
         continue;
@@ -335,9 +329,6 @@ export class SendspinCore {
       const info = session.getInfo();
       if (info.id && info.id === clientId) {
         const reason = session.getConnectionReason();
-        if (reason === 'cast-tunnel') {
-          return session;
-        }
         if (reason === 'playback' && !preferred) {
           preferred = session;
         } else if (!fallback) {
@@ -351,29 +342,18 @@ export class SendspinCore {
   private extractConnectionMetadata(
     req?: IncomingMessage | null,
   ): {
-    reason?: 'cast-tunnel';
     zoneId?: number;
     playerId?: string;
-    tunnel?: string | null;
   } {
     if (!req?.url) {
       return {};
     }
     try {
       const url = new URL(req.url, 'http://localhost');
-      const tunnelParam = url.searchParams.get('tunnel');
       const zoneStr = url.searchParams.get('zone');
       const zoneId = zoneStr && Number.isFinite(Number(zoneStr)) ? Number(zoneStr) : undefined;
       const playerId = url.searchParams.get('player') ?? undefined;
-      if ((tunnelParam ?? '').toLowerCase() === 'cast') {
-        return {
-          reason: 'cast-tunnel',
-          zoneId,
-          playerId,
-          tunnel: 'cast',
-        };
-      }
-      return { zoneId, playerId, tunnel: tunnelParam };
+      return { zoneId, playerId };
     } catch {
       return {};
     }

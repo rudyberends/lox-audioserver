@@ -59,7 +59,7 @@
   </main>
 
   <script type="module">
-    import { SendspinPlayer } from 'https://unpkg.com/@music-assistant/sendspin-js@0.5.0/dist/index.js';
+    import { SendspinPlayer } from 'https://unpkg.com/@music-assistant/sendspin-js@1.0.0/dist/index.js';
 
     const CAST_NS = 'urn:x-cast:sendspin';
     const statusEl = document.getElementById('status');
@@ -340,7 +340,7 @@
       const patchSendspinPlayer = (p) => {
         if (!p || p._loxPatchedConnect) return;
         p._loxPatchedConnect = true;
-        // Preserve query params (tunnel=cast/zone/player) when opening WS.
+        // Preserve query params (zone/player) when opening WS.
         const originalConnect = p.connect.bind(p);
       p.connect = async () => {
         const url = normalized;
