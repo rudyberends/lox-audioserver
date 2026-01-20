@@ -825,11 +825,28 @@
   width: 100%;
   flex: 2 1 0;
   background: #ffffff;
-  cursor: pointer;
   text-align: left;
   box-shadow: none;
   transition: border-color 0.15s ease, background 0.15s ease;
   position: relative;
+}
+
+.zone-output-chip__action {
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  width: 100%;
+  cursor: pointer;
+  color: inherit;
+}
+
+.zone-output-chip__action:focus-visible {
+  outline: 2px solid rgba(29, 35, 42, 0.45);
+  outline-offset: 2px;
 }
 
 .zone-output-chip.is-active {
@@ -1386,6 +1403,63 @@
   margin-bottom: 0.2rem;
 }
 
+.zone-output-latency {
+  margin-top: 0.8rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.zone-output-latency--tile {
+  margin-top: 0.7rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid #ececec;
+}
+
+.zone-output-latency__label {
+  margin: 0;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-weight: 700;
+  color: #7b8087;
+}
+
+.zone-output-latency__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  min-height: 0;
+}
+
+.zone-output-latency__empty {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #6b7280;
+}
+
+.zone-output-latency__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+  padding: 0;
+}
+
+.zone-output-latency__row.is-disabled {
+  opacity: 0.55;
+  justify-content: center;
+}
+
+.zone-output-latency__name {
+  display: none;
+}
+
 .zone-output-device__latency-label {
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -1394,49 +1468,67 @@
   color: #6b7280;
 }
 
-.zone-output-device__latency-controls {
-  display: flex;
+.zone-amount-control {
+  display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  justify-content: center;
+  gap: 0.2rem;
+  width: 118px;
+  height: 34px;
+  padding: 3px 4px;
+  border-radius: 9px;
+  background: #f2f2f2;
+  font-family: Averta, Lexend, Helvetica, sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  letter-spacing: 0.48px;
+  color: rgb(58, 64, 69);
 }
 
-.zone-output-device__latency input {
-  width: 56px;
-  padding: 0.15rem 0.35rem;
-  font-size: 0.7rem;
-  border-radius: 8px;
-  border: 1px solid rgba(15, 23, 42, 0.18);
+.zone-amount-control__action {
+  border: none;
+  background: transparent;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  font-size: 16px;
+  font-weight: 500;
+  color: rgba(58, 64, 69, 0.55);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zone-amount-control__action:hover {
+  background: rgba(87, 92, 97, 0.12);
+  color: rgba(58, 64, 69, 0.75);
+}
+
+.zone-amount-control__input {
+  width: 36px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #dcdcdc;
   background: #ffffff;
+  border-radius: 7px;
   text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(58, 64, 69, 0.75);
   appearance: textfield;
 }
 
-.zone-output-device__latency input::-webkit-outer-spin-button,
-.zone-output-device__latency input::-webkit-inner-spin-button {
+.zone-amount-control__input::-webkit-outer-spin-button,
+.zone-amount-control__input::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
 
-.zone-output-device__latency-unit {
-  font-size: 0.68rem;
-  color: #6b7280;
-}
-
-.zone-output-device__latency-step {
-  border: 1px solid rgba(15, 23, 42, 0.14);
-  background: rgba(255, 255, 255, 0.8);
-  border-radius: 999px;
-  padding: 0.1rem 0.45rem;
-  font-size: 0.66rem;
-  font-weight: 700;
-  color: #111827;
-  cursor: pointer;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease;
-}
-
-.zone-output-device__latency-step:hover {
-  border-color: rgba(15, 23, 42, 0.35);
-  box-shadow: 0 4px 10px -8px rgba(15, 23, 42, 0.35);
+.zone-amount-control__action:disabled,
+.zone-amount-control__input:disabled {
+  color: rgba(58, 64, 69, 0.3);
+  cursor: not-allowed;
 }
 
 .zone-output-device__badge {

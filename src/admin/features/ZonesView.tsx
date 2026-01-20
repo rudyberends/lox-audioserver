@@ -90,6 +90,10 @@ export default function ZonesView(): JSX.Element {
   const [hasSpotifyAccounts, setHasSpotifyAccounts] = React.useState(false);
   const [spotifyDiscovery, setSpotifyDiscovery] = React.useState<Record<number, SpotifyDiscoveryState>>({});
   const [maintenanceState, setMaintenanceState] = React.useState<Record<number, ZoneMaintenanceIndicator>>({});
+  const [snapcastTileClients, setSnapcastTileClients] = React.useState<SnapcastClient[] | null>(null);
+  const [snapcastTileLatencyDrafts, setSnapcastTileLatencyDrafts] = React.useState<Record<string, string>>(
+    {},
+  );
   const [outputFilter, setOutputFilter] = React.useState<'all' | 'assigned' | 'unassigned'>('all');
   const [zoneQuery, setZoneQuery] = React.useState('');
   const modalOpen = Boolean(activeZoneModal);
@@ -143,6 +147,100 @@ export default function ZonesView(): JSX.Element {
       cancelled = true;
     };
   }, []);
+
+  const snapcastTileIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    zoneGroups.forEach((group) => {
+      group.zones.forEach((zone) => {
+        const transport = getPrimaryTransport(zone);
+        if (transport?.id !== 'snapcast') return;
+        const clientIds = extractClientIds(transport);
+        clientIds.forEach((id) => ids.add(id));
+      });
+    });
+    return Array.from(ids);
+  }, [zoneGroups]);
+
+  React.useEffect(() => {
+    if (snapcastTileIds.length === 0 || snapcastTileClients !== null) return;
+    let cancelled = false;
+
+    async function loadSnapcastClients(): Promise<void> {
+      try {
+        const clients = await discoverSnapcastClients();
+        if (cancelled) return;
+        setSnapcastTileClients(clients);
+      } catch (err) {
+        if (!cancelled) setSnapcastTileClients([]);
+      }
+    }
+
+    void loadSnapcastClients();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [snapcastTileIds, snapcastTileClients]);
+
+  React.useEffect(() => {
+    if (!snapcastTileClients) return;
+    setSnapcastTileLatencyDrafts((prev) => {
+      const next = { ...prev };
+      snapcastTileClients.forEach((client) => {
+        const id = client.clientId;
+        if (!id || next[id] !== undefined) return;
+        next[id] = typeof client.latency === 'number' ? String(client.latency) : '';
+      });
+      return next;
+    });
+  }, [snapcastTileClients]);
+
+  const snapcastLatencyByClient = React.useMemo(() => {
+    if (!snapcastTileClients) return new Map<string, number>();
+    return new Map(
+      snapcastTileClients
+        .filter((client) => Boolean(client.clientId))
+        .map((client) => [client.clientId, client.latency ?? 0]),
+    );
+  }, [snapcastTileClients]);
+
+  function handleSnapcastTileLatencyChange(clientId: string, value: string): void {
+    setSnapcastTileLatencyDrafts((prev) => ({ ...prev, [clientId]: value }));
+  }
+
+  async function handleSnapcastTileLatencyCommit(clientId: string, nextValue?: number): Promise<void> {
+    const raw = snapcastTileLatencyDrafts[clientId];
+    const parsed = typeof nextValue === 'number' ? nextValue : Number(raw);
+    if (!Number.isFinite(parsed)) {
+      window.alert?.('Latency must be a number.');
+      return;
+    }
+    try {
+      const clamped = Math.max(0, Math.round(parsed));
+      const result = await setSnapcastClientLatency(clientId, clamped);
+      setSnapcastTileClients((prev) =>
+        prev
+          ? prev.map((client) =>
+              client.clientId === clientId ? { ...client, latency: result.latency } : client,
+            )
+          : prev,
+      );
+      setSnapcastTileLatencyDrafts((prev) => ({ ...prev, [clientId]: String(result.latency) }));
+    } catch (err) {
+      window.alert?.(
+        err instanceof Error ? err.message : typeof err === 'string' ? err : 'Failed to update latency',
+      );
+    }
+  }
+
+  function handleSnapcastTileLatencyNudge(clientId: string, delta: number): void {
+    const raw = snapcastTileLatencyDrafts[clientId];
+    const base = Number(raw);
+    const current = Number.isFinite(base) ? base : snapcastLatencyByClient.get(clientId) ?? 0;
+    const next = Math.max(0, Math.round(current + delta));
+    setSnapcastTileLatencyDrafts((prev) => ({ ...prev, [clientId]: String(next) }));
+    void handleSnapcastTileLatencyCommit(clientId, next);
+  }
 
   React.useEffect(() => {
     let cancelled = false;
@@ -597,6 +695,8 @@ export default function ZonesView(): JSX.Element {
                   const zoneOrigin = zone.source || group.label || 'AudioServer';
                   const maintenance = maintenanceState[zone.id] ?? {};
                   const hasWebPlayer = zoneHasWebPlayer(zone);
+                  const snapcastClientIds =
+                    primaryTransport?.id === 'snapcast' ? extractClientIds(primaryTransport) : [];
                   return (
                     <li key={zone.id} className="zone-row">
                       <div className="zone-row__header">
@@ -665,15 +765,17 @@ export default function ZonesView(): JSX.Element {
                             <p className="zone-section-label">Output</p>
                           </div>
                           <div className="zone-output-row">
-                            <button
-                              type="button"
-                              className={`zone-output-chip${primaryTransport ? ' is-active' : ' is-empty'}`}
-                              onClick={() =>
-                                setActiveZoneModal({ zoneId: zone.id, groupLabel: group.label, type: 'output' })
-                              }
-                            >
-                              <span className="zone-output-name">{outputsLabel}</span>
-                              <span className="zone-output-type">{outputType}</span>
+                            <div className={`zone-output-chip${primaryTransport ? ' is-active' : ' is-empty'}`}>
+                              <button
+                                type="button"
+                                className="zone-output-chip__action"
+                                onClick={() =>
+                                  setActiveZoneModal({ zoneId: zone.id, groupLabel: group.label, type: 'output' })
+                                }
+                              >
+                                <span className="zone-output-name">{outputsLabel}</span>
+                                <span className="zone-output-type">{outputType}</span>
+                              </button>
                               {hasWebPlayer && (
                                 <button
                                   type="button"
@@ -693,7 +795,69 @@ export default function ZonesView(): JSX.Element {
                                   <span className="zone-output-audio-label">Listen</span>
                                 </button>
                               )}
-                            </button>
+                            </div>
+                            <div className="zone-output-latency zone-output-latency--tile">
+                              <p className="zone-output-latency__label">Output latency (ms)</p>
+                              <div className="zone-output-latency__list">
+                                {(snapcastClientIds.length > 0
+                                  ? snapcastClientIds
+                                  : ['']
+                                ).map((clientId) => {
+                                  const isDisabled = snapcastClientIds.length === 0;
+                                  const fallbackLatency = snapcastLatencyByClient.get(clientId);
+                                  const latencyValue =
+                                    snapcastTileLatencyDrafts[clientId] ??
+                                    (fallbackLatency === undefined ? '' : String(fallbackLatency));
+                                  return (
+                                    <div
+                                      key={`tile-latency-${clientId}`}
+                                      className={`zone-output-latency__row${isDisabled ? ' is-disabled' : ''}`}
+                                    >
+                                      <span className="zone-output-latency__name">
+                                        {clientId || '\u00A0'}
+                                      </span>
+                                      <div className="zone-amount-control">
+                                        <button
+                                          type="button"
+                                          className="zone-amount-control__action"
+                                          onClick={() => handleSnapcastTileLatencyNudge(clientId, -10)}
+                                          disabled={saving || isDisabled}
+                                          aria-label="Decrease latency"
+                                        >
+                                          <span aria-hidden="true">−</span>
+                                        </button>
+                                        <input
+                                          aria-label="Latency"
+                                          className="zone-amount-control__input"
+                                          type="number"
+                                          inputMode="numeric"
+                                          value={latencyValue}
+                                          onChange={(event) =>
+                                            handleSnapcastTileLatencyChange(clientId, event.target.value)
+                                          }
+                                          onKeyDown={(event) => {
+                                            if (event.key === 'Enter') {
+                                              event.currentTarget.blur();
+                                            }
+                                          }}
+                                          onBlur={() => void handleSnapcastTileLatencyCommit(clientId)}
+                                          disabled={isDisabled}
+                                        />
+                                        <button
+                                          type="button"
+                                          className="zone-amount-control__action"
+                                          onClick={() => handleSnapcastTileLatencyNudge(clientId, 10)}
+                                          disabled={saving || isDisabled}
+                                          aria-label="Increase latency"
+                                        >
+                                          <span aria-hidden="true">+</span>
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
                           </div>
                         </div>
                         <div className="zone-maintenance zone-maintenance--inline">
@@ -1011,9 +1175,6 @@ function ZoneOutputEditor({
   const [snapcastClients, setSnapcastClients] = React.useState<SnapcastClient[] | null>(null);
   const [discoveringSnapcast, setDiscoveringSnapcast] = React.useState(false);
   const [snapcastError, setSnapcastError] = React.useState<string | null>(null);
-  const [snapcastLatencyDrafts, setSnapcastLatencyDrafts] = React.useState<Record<string, string>>(
-    {},
-  );
   const activeAirplayHost =
     selectedId === 'airplay'
       ? fieldValues.host || (primary as any)?.host || ''
@@ -1161,18 +1322,6 @@ function ZoneOutputEditor({
     }
   }, [isSnapcast, snapcastClients, discoveringSnapcast]);
 
-  React.useEffect(() => {
-    if (!snapcastClients) return;
-    setSnapcastLatencyDrafts((prev) => {
-      const next = { ...prev };
-      snapcastClients.forEach((client) => {
-        const id = client.clientId;
-        if (!id || next[id] !== undefined) return;
-        next[id] = typeof client.latency === 'number' ? String(client.latency) : '';
-      });
-      return next;
-    });
-  }, [snapcastClients]);
 
   function persist(transportId: string, values: Record<string, string>): void {
     if (!transportId) {
@@ -1489,46 +1638,6 @@ function ZoneOutputEditor({
     onChange(payload);
   }
 
-  function handleSnapcastLatencyChange(clientId: string, value: string): void {
-    setSnapcastLatencyDrafts((prev) => ({ ...prev, [clientId]: value }));
-  }
-
-  async function handleSnapcastLatencyCommit(clientId: string, nextValue?: number): Promise<void> {
-    const raw = snapcastLatencyDrafts[clientId];
-    const parsed = typeof nextValue === 'number' ? nextValue : Number(raw);
-    if (!Number.isFinite(parsed)) {
-      setSnapcastError('Latency must be a number.');
-      return;
-    }
-    try {
-      const clamped = Math.max(0, Math.round(parsed));
-      const result = await setSnapcastClientLatency(clientId, clamped);
-      setSnapcastClients((prev) =>
-        prev
-          ? prev.map((client) =>
-              client.clientId === clientId ? { ...client, latency: result.latency } : client,
-            )
-          : prev,
-      );
-      setSnapcastLatencyDrafts((prev) => ({ ...prev, [clientId]: String(result.latency) }));
-      setSnapcastError(null);
-    } catch (err) {
-      setSnapcastError(
-        err instanceof Error ? err.message : typeof err === 'string' ? err : 'Failed to update latency',
-      );
-    }
-  }
-
-  function handleSnapcastLatencyNudge(clientId: string, delta: number): void {
-    const raw = snapcastLatencyDrafts[clientId];
-    const base = Number(raw);
-    const current = Number.isFinite(base)
-      ? base
-      : snapcastClients?.find((client) => client.clientId === clientId)?.latency ?? 0;
-    const next = Math.max(0, Math.round(current + delta));
-    setSnapcastLatencyDrafts((prev) => ({ ...prev, [clientId]: String(next) }));
-    void handleSnapcastLatencyCommit(clientId, next);
-  }
 
   function applySnapcastCastDevice(device: GoogleCastDevice): void {
     setSelectedId('snapcast');
@@ -2091,7 +2200,6 @@ function ZoneOutputEditor({
                 {snapcastDeviceItems.map((client, index) => {
                   const label = client.clientId || client.id || `client-${index}`;
                   const active = activeSnapcastIds.includes(label);
-                  const latencyValue = snapcastLatencyDrafts[label] ?? '';
                   return (
                     <button
                       key={`snapcast-${label}-${index}`}
@@ -2105,47 +2213,6 @@ function ZoneOutputEditor({
                       <span className="zone-output-device__type">
                         {client.streamId ? `Stream: ${client.streamId}` : 'Snapcast'}
                       </span>
-                      <div className="zone-output-device__latency">
-                        <span className="zone-output-device__latency-label">Latency</span>
-                        <div className="zone-output-device__latency-controls">
-                          <button
-                            type="button"
-                            className="zone-output-device__latency-step"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handleSnapcastLatencyNudge(label, -25);
-                            }}
-                            disabled={saving}
-                          >
-                            −25
-                          </button>
-                          <input
-                            type="number"
-                            inputMode="numeric"
-                            value={latencyValue}
-                            onChange={(event) => handleSnapcastLatencyChange(label, event.target.value)}
-                            onClick={(event) => event.stopPropagation()}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.currentTarget.blur();
-                              }
-                            }}
-                            onBlur={() => void handleSnapcastLatencyCommit(label)}
-                          />
-                          <span className="zone-output-device__latency-unit">ms</span>
-                          <button
-                            type="button"
-                            className="zone-output-device__latency-step"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handleSnapcastLatencyNudge(label, 25);
-                            }}
-                            disabled={saving}
-                          >
-                            +25
-                          </button>
-                        </div>
-                      </div>
                     </button>
                   );
                 })}
@@ -2343,37 +2410,45 @@ function zoneHasWebPlayer(zone: Zone): boolean {
   });
 }
 
+function extractClientIds(config: ZoneTransportConfig | null): string[] {
+  if (!config) return [];
+  const record = config as Record<string, unknown>;
+  const raw = record.clientIds;
+  if (typeof raw !== 'string') return [];
+  return raw.split(',').map((value) => value.trim()).filter(Boolean);
+}
+
 function describeTransport(config: ZoneTransportConfig | null): string {
   if (!config) return '';
   const record = config as Record<string, unknown>;
   const id = (config.id ?? '').toLowerCase();
   if (id === 'sendspin') {
     const clientId = readStringField(record, 'clientId');
-    if (clientId) return clientId;
+    if (clientId) return normalizeOutputName(clientId);
   }
   if (id === 'snapcast') {
     const clientIds = readStringField(record, 'clientIds');
     if (clientIds) {
       const first = clientIds.split(',')[0]?.trim();
-      if (first) return first;
+      if (first) return normalizeOutputName(first);
     }
   }
   if (id === 'dlna') {
     const host = readStringField(record, 'host');
-    if (host) return host;
+    if (host) return normalizeOutputName(host);
     const controlUrl = readStringField(record, 'controlUrl');
-    if (controlUrl) return controlUrl;
+    if (controlUrl) return normalizeOutputName(controlUrl);
   }
   if (id === 'sonos') {
     const host = readStringField(record, 'host');
-    if (host) return host;
+    if (host) return normalizeOutputName(host);
     const controlUrl = readStringField(record, 'controlUrl');
-    if (controlUrl) return controlUrl;
+    if (controlUrl) return normalizeOutputName(controlUrl);
   }
   const name = readStringField(record, 'name');
-  if (name) return name;
+  if (name) return normalizeOutputName(name);
   const label = readStringField(record, 'label');
-  if (label) return label;
+  if (label) return normalizeOutputName(label);
   return config.id ?? 'Output';
 }
 
@@ -2382,6 +2457,19 @@ function readStringField(record: Record<string, unknown>, key: string): string |
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeOutputName(value: string): string {
+  const trimmed = value.trim();
+  let normalized = trimmed;
+  const prefix = 'sendspin-cli-';
+  if (normalized.toLowerCase().startsWith(prefix)) {
+    normalized = normalized.slice(prefix.length);
+  }
+  if (normalized.toLowerCase().endsWith('.localdomain')) {
+    normalized = normalized.slice(0, -12);
+  }
+  return normalized || trimmed;
 }
 
 function extractTransportFields(config: ZoneTransportConfig | null): Record<string, string> {
