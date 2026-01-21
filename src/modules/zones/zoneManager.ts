@@ -229,7 +229,7 @@ class ZoneManager {
   private readonly zones = new Map<number, ZoneContext>();
   private initialized = false;
   private heartbeatTimer: NodeJS.Timeout | null = null;
-  private readonly musicAssistantFlowMode = process.env.MUSICASSISTANT_FLOW_MODE !== 'false';
+  private readonly musicAssistantFlowMode = true;
   private readonly musicAssistantInputHandlers = {
     startPlayback: (zoneId: number, label: string, source: PlaybackSource, metadata?: PlaybackMetadata) => {
       const ctx = this.zones.get(zoneId);
@@ -3542,12 +3542,8 @@ class ZoneManager {
       return pathname;
     }
     const sys = getSystemConfig();
-    const host =
-      sys.audioserver.ip?.trim() ||
-      process.env.PUBLIC_HOST ||
-      process.env.HTTP_HOST ||
-      '127.0.0.1';
-    const port = Number(process.env.HTTP_PORT ?? '7090');
+    const host = sys.audioserver.ip?.trim() || '127.0.0.1';
+    const port = 7090;
     const normalized = pathname.startsWith('/') ? pathname : `/${pathname}`;
     return `http://${host}:${port}${normalized}`;
   }

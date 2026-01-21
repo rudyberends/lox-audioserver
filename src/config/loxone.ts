@@ -87,24 +87,15 @@ export function buildLoxoneHttpConfig(
 }
 
 function buildLoxoneMdnsConfig(env: EnvironmentConfig): LoxoneMdnsConfig {
-  const envOrDefault = (raw: string | undefined, fallback: string): string => {
-    const value = raw?.trim();
-    return value ? value : fallback;
-  };
-  const envOrOptional = (raw: string | undefined): string | undefined => {
-    const value = raw?.trim();
-    return value || undefined;
-  };
-
   return {
-    name: envOrDefault(process.env.LOXONE_MDNS_NAME, DEFAULT_MDNS_NAME),
-    type: envOrDefault(process.env.LOXONE_MDNS_TYPE, DEFAULT_MDNS_TYPE),
-    host: envOrOptional(process.env.LOXONE_MDNS_HOST) ?? env.hostname,
-    hostname: envOrDefault(process.env.LOXONE_MDNS_HOSTNAME, DEFAULT_MDNS_HOSTNAME),
-    deviceType: envOrDefault(process.env.LOXONE_MDNS_DEVICE_TYPE, DEFAULT_MDNS_DEVICE_TYPE),
-    version: envOrDefault(process.env.LOXONE_MDNS_VERSION, DEFAULT_MDNS_VERSION),
-    txtVersion: envOrDefault(process.env.LOXONE_MDNS_TXT_VERSION, DEFAULT_MDNS_TXT_VERSION),
-    deviceInstance: envOrDefault(process.env.LOXONE_MDNS_DEVICE_INSTANCE, DEFAULT_MDNS_DEVICE_INSTANCE),
+    name: DEFAULT_MDNS_NAME,
+    type: DEFAULT_MDNS_TYPE,
+    host: env.hostname,
+    hostname: DEFAULT_MDNS_HOSTNAME,
+    deviceType: DEFAULT_MDNS_DEVICE_TYPE,
+    version: DEFAULT_MDNS_VERSION,
+    txtVersion: DEFAULT_MDNS_TXT_VERSION,
+    deviceInstance: DEFAULT_MDNS_DEVICE_INSTANCE,
     port: env.loxoneAppPort,
   };
 }

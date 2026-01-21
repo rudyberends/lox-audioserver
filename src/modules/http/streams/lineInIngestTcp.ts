@@ -110,24 +110,15 @@ export class LineInIngestTcp {
   }
 
   private resolvePort(): number {
-    const raw = process.env.LINEIN_TCP_PORT;
-    const parsed = raw ? Number(raw) : NaN;
-    if (Number.isFinite(parsed) && parsed > 0 && parsed < 65535) {
-      return parsed;
-    }
     return DEFAULT_TCP_PORT;
   }
 
   private resolveHost(): string {
-    return process.env.LINEIN_TCP_HOST ?? '0.0.0.0';
+    return '0.0.0.0';
   }
 
   private resolveDefaultId(): string | null {
-    const raw = process.env.LINEIN_TCP_DEFAULT_ID?.trim();
-    if (!raw) {
-      return null;
-    }
-    return normalizeLineInInputId(raw);
+    return null;
   }
 }
 

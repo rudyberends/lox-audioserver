@@ -547,11 +547,7 @@ export class AdminApiHandler {
   }
 
   private readBuildVersion(pkgVersion: string): string {
-    const envVersion = process.env.APP_VERSION || process.env.BUILD_VERSION;
-    const envTimestamp = process.env.BUILD_TIMESTAMP || process.env.BUILD_DATE;
-    const baseVersion = envVersion || pkgVersion;
-    if (envTimestamp) return `${baseVersion}-${envTimestamp}`;
-    return baseVersion;
+    return pkgVersion;
   }
 
   private readonly hiddenTransportIds = new Set(['spotify', 'sendspin-cast', 'dlna']);

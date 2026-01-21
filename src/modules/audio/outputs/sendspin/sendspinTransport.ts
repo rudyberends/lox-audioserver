@@ -1513,12 +1513,8 @@ export class SendspinTransport implements ZoneTransport {
   }
 
   private static resolveAnchorLeadUs(): number {
-    // Default to 1.0s lead (aiosendspin reference); override via SENDSPIN_LEAD_MS.
-    const raw = process.env.SENDSPIN_LEAD_MS;
-    const parsed = raw ? Number(raw) : NaN;
     const defaultMs = 300;
-    const leadMs = Number.isFinite(parsed) ? parsed : defaultMs;
-    const clampedMs = Math.max(300, Math.min(8000, Math.round(leadMs)));
+    const clampedMs = Math.max(300, Math.min(8000, Math.round(defaultMs)));
     return clampedMs * 1000;
   }
 }

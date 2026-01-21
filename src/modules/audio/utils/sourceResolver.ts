@@ -7,8 +7,6 @@ import { buildProxyUrl } from '@/modules/audio/utils/urlProxy';
 
 const musicRoot = path.resolve(resolveDataDir('music'));
 const alertsRoot = path.resolve(process.cwd(), 'public', 'alerts');
-const DEFAULT_ALERT_PRE_DELAY_MS = 4000;
-const ALERT_PRE_DELAY_MS = clampAlertDelay(process.env.ALERT_PRE_DELAY_MS, DEFAULT_ALERT_PRE_DELAY_MS);
 const log = createLogger('Audio', 'SourceResolver');
 
 export function resolvePlaybackSource(audiopath: string): PlaybackSource | null {
@@ -107,15 +105,4 @@ function safeDecode(value: string): string {
   } catch {
     return value;
   }
-}
-
-function clampAlertDelay(raw: string | undefined, fallback: number): number {
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-  return Math.min(20000, Math.max(0, parsed));
 }

@@ -14,11 +14,6 @@ type ClientIdSource =
  * Resolve the Spotify client id while falling back to the default public id.
  */
 export function resolveSpotifyClientId(source?: ClientIdSource): string {
-  const envId = process.env.SPOTIFY_CLIENT_ID;
-  if (envId?.trim()) {
-    return envId.trim();
-  }
-
   if (source) {
     const raw =
       typeof (source as any).clientId === 'string'

@@ -6,8 +6,8 @@ import os from 'node:os';
 import http from 'node:http';
 import { PassThrough } from 'stream';
 import * as libraop from '@lox-audioserver/node-libraop';
-import { startReceiver, stopReceiver, setLogHandler } from '@lox-audioserver/node-libraop';
-import type { LogEntry, RaopEvent, ReceiverOptions } from '@lox-audioserver/node-libraop/dist/types';
+import { startReceiver, stopReceiver } from '@lox-audioserver/node-libraop';
+import type { RaopEvent, ReceiverOptions } from '@lox-audioserver/node-libraop/dist/types';
 
 export interface AirplayInstanceController {
   startPlayback(
@@ -27,8 +27,6 @@ export interface AirplayInstanceController {
 
 const DEFAULT_SAMPLE_RATE = 44100;
 const DEFAULT_CHANNELS = 2;
-const libraopLog = createLogger('Input', 'AirPlayLibraop');
-let libraopLogHandlerConfigured = false;
 type LibraopRemoteCommand = 'play' | 'pause' | 'stop' | 'next' | 'prev' | 'previous';
 
 export class AirplayInstance {
@@ -132,29 +130,6 @@ export class AirplayInstance {
       host,
     };
     this.httpHost = host;
-    const libraopLogLevel = process.env.AIRPLAY_LIBRAOP_LOG as LogEntry['level'] | undefined;
-    if (!libraopLogHandlerConfigured && libraopLogLevel) {
-      libraopLogHandlerConfigured = true;
-      setLogHandler((entry: LogEntry) => {
-        const payload = { source: entry.source, timestamp: entry.timestamp, line: entry.line };
-        switch (entry.level) {
-          case 'error':
-            libraopLog.error('libraop', payload);
-            break;
-          case 'warn':
-            libraopLog.warn('libraop', payload);
-            break;
-          case 'debug':
-          case 'sdebug':
-            libraopLog.debug('libraop', payload);
-            break;
-          default:
-            libraopLog.info('libraop', payload);
-            break;
-        }
-      }, libraopLogLevel);
-      this.log.info('libraop log handler enabled', { zoneId: this.zoneId });
-    }
     this.log.info('starting AirPlay receiver', {
       zoneId: this.zoneId,
       portBase,
@@ -202,10 +177,6 @@ export class AirplayInstance {
   }
 
   private resolveHostAddress(): string | undefined {
-    const envHost = process.env.AIRPLAY_BIND_HOST;
-    if (envHost && envHost.trim()) {
-      return envHost.trim();
-    }
     const interfaces = os.networkInterfaces();
     const normalizedMac = this.sourceMac.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
     let fallbackHost: string | undefined;

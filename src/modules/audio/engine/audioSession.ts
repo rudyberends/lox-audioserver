@@ -39,6 +39,8 @@ export type PlaybackSource =
 
 export type OutputProfile = 'mp3' | 'aac' | 'pcm' | 'opus' | 'flac';
 
+const DEFAULT_KILL_TIMEOUT_MS = 2000;
+
 export class AudioSession {
   private readonly log = createLogger('Audio', 'Session');
   private readonly subscribers = new Set<PassThrough>();
@@ -47,9 +49,7 @@ export class AudioSession {
   private process?: ChildProcessWithoutNullStreams;
   private ending = false;
   private readonly ffmpegPath =
-    process.env.AUDIO_FFMPEG_PATH ||
-    process.env.FFMPEG_PATH ||
-    (typeof ffmpegStatic === 'string' && ffmpegStatic ? ffmpegStatic : 'ffmpeg');
+    typeof ffmpegStatic === 'string' && ffmpegStatic ? ffmpegStatic : 'ffmpeg';
 
   private readonly bufferQueue: Buffer[] = [];
   private bufferBytes = 0;
@@ -85,7 +85,7 @@ export class AudioSession {
   private pipeSourceDataListener?: (chunk: Buffer) => void;
   private pipeSourceErrorListener?: (err: any) => void;
   private killTimer?: NodeJS.Timeout;
-  private readonly killTimeoutMs: number;
+  private readonly killTimeoutMs = DEFAULT_KILL_TIMEOUT_MS;
   private discardSubscribersOnStop = false;
 
   constructor(
@@ -135,7 +135,6 @@ export class AudioSession {
       const clampedAlert = Math.min(hardMax, Math.max(alertBufferBytes, hardMin));
       this.maxBufferBytes = Math.max(this.maxBufferBytes, clampedAlert);
     }
-    this.killTimeoutMs = this.loadKillTimeoutMs();
   }
 
   public start(): void {
@@ -289,7 +288,6 @@ export class AudioSession {
   ): ChildProcessWithoutNullStreams {
     const proc = spawn(this.ffmpegPath, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
     }) as ChildProcessWithoutNullStreams;
 
     if (options.stdinStream) {
@@ -820,18 +818,6 @@ export class AudioSession {
       clearTimeout(this.killTimer);
       this.killTimer = undefined;
     }
-  }
-
-  private loadKillTimeoutMs(): number {
-    const raw = process.env.AUDIO_FFMPEG_KILL_MS;
-    if (!raw) {
-      return 2000;
-    }
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      return 2000;
-    }
-    return parsed;
   }
 
   private detachPipeSourceListeners(): void {

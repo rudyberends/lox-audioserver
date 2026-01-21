@@ -18,8 +18,8 @@ export function buildHttpServerConfig(env: EnvironmentConfig): HttpServerConfig 
   return {
     port: env.httpPort,
     host: env.httpHost,
-    publicDir: resolveDir(process.env.HTTP_PUBLIC_DIR ?? path.resolve(process.cwd(), 'public')),
-    musicDir: resolveDir(process.env.HTTP_MUSIC_DIR ?? path.resolve(process.cwd(), 'data', 'music')),
+    publicDir: resolveDir(path.resolve(process.cwd(), 'public')),
+    musicDir: resolveDir(path.resolve(process.cwd(), 'data', 'music')),
   };
 }
 

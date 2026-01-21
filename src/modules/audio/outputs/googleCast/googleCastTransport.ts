@@ -515,14 +515,8 @@ export class GoogleCastTransport implements ZoneTransport {
 
   private resolveBaseUrl(): string {
     const sys = getSystemConfig() as any;
-    const host =
-      sys?.audioserver?.ip?.trim() ||
-      process.env.HTTP_PUBLIC_HOST ||
-      process.env.PUBLIC_HOST ||
-      process.env.HTTP_HOST ||
-      process.env.HOST ||
-      this.pickLocalAddress();
-    const port = Number(process.env.HTTP_PORT ?? process.env.PORT ?? 7090);
+    const host = sys?.audioserver?.ip?.trim() || this.pickLocalAddress();
+    const port = 7090;
     return `http://${host}:${port}`;
   }
 

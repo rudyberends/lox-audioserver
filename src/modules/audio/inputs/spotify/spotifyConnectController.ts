@@ -123,12 +123,8 @@ export class SpotifyConnectInputController implements ZoneTransport {
   ) {
     this.deviceName = (config.deviceName || zoneName).trim();
     this.preferredDeviceId = config.deviceId?.trim() || undefined;
-    this.publishName =
-      process.env.SPOTIFY_PUBLISH_NAME?.trim() ||
-      this.deviceName ||
-      this.zoneName ||
-      'lox-spotify';
-    this.preferredAccountId = process.env.SPOTIFY_ACCOUNT_ID?.trim();
+    this.publishName = this.deviceName || this.zoneName || 'lox-spotify';
+    this.preferredAccountId = undefined;
     // Pre-seed with a static device id when provided so Connect calls do not wait for librespot to emit it.
     if (this.preferredDeviceId) {
       setSpotifyDeviceId(this.zoneId, this.preferredDeviceId);

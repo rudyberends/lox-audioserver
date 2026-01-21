@@ -2,15 +2,13 @@ import { createLogger } from '@/core/logging/logger';
 
 const log = createLogger('Audio', 'UrlProxy');
 const DEFAULT_HTTP_PORT = 7090;
+const DEFAULT_PROXY_HOST = '127.0.0.1';
 
 export function buildProxyUrl(
   targetUrl: string,
   headers?: Record<string, string>,
 ): string | null {
   if (!targetUrl) {
-    return null;
-  }
-  if (process.env.AUDIO_DISABLE_URL_PROXY === '1') {
     return null;
   }
   if (!/^https?:/i.test(targetUrl)) {
@@ -31,16 +29,11 @@ export function buildProxyUrl(
 }
 
 export function resolveProxyHost(): string {
-  const host = process.env.HTTP_HOST ?? '0.0.0.0';
-  if (!host || host === '0.0.0.0') {
-    return '127.0.0.1';
-  }
-  return host;
+  return DEFAULT_PROXY_HOST;
 }
 
 export function resolveProxyPort(): number {
-  const parsed = Number(process.env.HTTP_PORT ?? DEFAULT_HTTP_PORT);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_HTTP_PORT;
+  return DEFAULT_HTTP_PORT;
 }
 
 export function encodeHeaders(headers?: Record<string, string>): string | null {

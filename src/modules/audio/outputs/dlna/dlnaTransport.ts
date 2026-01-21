@@ -522,12 +522,8 @@ export class DlnaTransport implements ZoneTransport {
       return null;
     }
     const sys = getSystemConfig();
-    const host =
-      sys.audioserver.ip?.trim() ||
-      process.env.PUBLIC_HOST ||
-      process.env.HTTP_HOST ||
-      '127.0.0.1';
-    const port = Number(process.env.HTTP_PORT ?? '7090');
+    const host = sys.audioserver.ip?.trim() || '127.0.0.1';
+    const port = 7090;
     return `http://${host}:${port}${pathname}`;
   }
 

@@ -81,7 +81,6 @@ test('pipe source listeners are detached after stop', () => {
 test('ffmpeg stop issues SIGKILL after timeout', async () => {
   const source = new PassThrough();
   let proc: FakeProcess | null = null;
-  process.env.AUDIO_FFMPEG_KILL_MS = '50';
   spawnImpl = () => {
     proc = new FakeProcess(false);
     return proc;
@@ -95,7 +94,7 @@ test('ffmpeg stop issues SIGKILL after timeout', async () => {
   );
   session.start();
   session.stop();
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  await new Promise((resolve) => setTimeout(resolve, 2200));
   if (!proc) {
     throw new Error('ffmpeg process not captured');
   }

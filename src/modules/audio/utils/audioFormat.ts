@@ -47,37 +47,18 @@ const DEFAULT_HTTP_ICY_INTERVAL = 16384;
 const DEFAULT_HTTP_ICY_NAME = 'lox-audioserver';
 
 export function loadAudioOutputSettings(): AudioOutputSettings {
-  const sampleRate = parseEnvInt('AUDIO_OUTPUT_SAMPLE_RATE', DEFAULT_SAMPLE_RATE);
-  const channels = clamp(parseEnvInt('AUDIO_OUTPUT_CHANNELS', DEFAULT_CHANNELS), 1, 8);
-  const pcmBitDepth = parsePcmBitDepth(
-    process.env.AUDIO_OUTPUT_PCM_BIT_DEPTH,
-    DEFAULT_PCM_BIT_DEPTH,
-  );
-  const mp3Bitrate = parseMp3Bitrate(process.env.AUDIO_OUTPUT_MP3_BITRATE, DEFAULT_MP3_BITRATE);
-  // Prebuffer is derived from system memory; no environment toggle.
-  const prebufferBytes = DEFAULT_PREBUFFER_BYTES;
-  const httpProfile = parseHttpProfile(process.env.AUDIO_HTTP_PROFILE, DEFAULT_HTTP_PROFILE);
-  const httpFallbackSeconds = parseEnvInt(
-    'AUDIO_HTTP_FALLBACK_SECONDS',
-    DEFAULT_HTTP_FALLBACK_SECONDS,
-  );
-  const fixedGainDb = parseEnvFloat('AUDIO_OUTPUT_FIXED_GAIN_DB', DEFAULT_FIXED_GAIN_DB);
-  const httpIcyEnabled = parseEnvBool('AUDIO_HTTP_ICY_ENABLED', DEFAULT_HTTP_ICY_ENABLED);
-  const httpIcyInterval = parseEnvInt('AUDIO_HTTP_ICY_INTERVAL', DEFAULT_HTTP_ICY_INTERVAL);
-  const httpIcyName = process.env.AUDIO_HTTP_ICY_NAME?.trim() || DEFAULT_HTTP_ICY_NAME;
-
   return {
-    sampleRate,
-    channels,
-    pcmBitDepth,
-    mp3Bitrate,
-    prebufferBytes,
-    httpProfile,
-    httpFallbackSeconds,
-    fixedGainDb,
-    httpIcyEnabled,
-    httpIcyInterval,
-    httpIcyName,
+    sampleRate: DEFAULT_SAMPLE_RATE,
+    channels: DEFAULT_CHANNELS,
+    pcmBitDepth: DEFAULT_PCM_BIT_DEPTH,
+    mp3Bitrate: DEFAULT_MP3_BITRATE,
+    prebufferBytes: DEFAULT_PREBUFFER_BYTES,
+    httpProfile: DEFAULT_HTTP_PROFILE,
+    httpFallbackSeconds: DEFAULT_HTTP_FALLBACK_SECONDS,
+    fixedGainDb: DEFAULT_FIXED_GAIN_DB,
+    httpIcyEnabled: DEFAULT_HTTP_ICY_ENABLED,
+    httpIcyInterval: DEFAULT_HTTP_ICY_INTERVAL,
+    httpIcyName: DEFAULT_HTTP_ICY_NAME,
   };
 }
 
@@ -143,73 +124,4 @@ export function buildWavHeader(options: {
   buffer.write('data', 36);
   buffer.writeUInt32LE(dataSize, 40);
   return buffer;
-}
-
-function parseEnvInt(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function parseEnvFloat(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = Number.parseFloat(raw);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function parseEnvBool(name: string, fallback: boolean): boolean {
-  const raw = process.env[name];
-  if (!raw) return fallback;
-  const normalized = raw.trim().toLowerCase();
-  return normalized === '1' || normalized === 'true' || normalized === 'yes';
-}
-
-function parsePcmBitDepth(raw: string | undefined, fallback: PcmBitDepth): PcmBitDepth {
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (parsed === 16 || parsed === 24 || parsed === 32) {
-    return parsed;
-  }
-  return fallback;
-}
-
-function parseMp3Bitrate(raw: string | undefined, fallback: string): string {
-  if (!raw) {
-    return fallback;
-  }
-  const normalized = raw.trim();
-  if (/^\d+k$/i.test(normalized)) {
-    return normalized.toLowerCase();
-  }
-  return fallback;
-}
-
-function parseHttpProfile(raw: string | undefined, fallback: HttpProfile): HttpProfile {
-  if (!raw) {
-    return fallback;
-  }
-  const normalized = raw.trim().toLowerCase();
-  if (
-    normalized === 'chunked' ||
-    normalized === 'forced_content_length' ||
-    normalized === 'default'
-  ) {
-    return normalized;
-  }
-  return fallback;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return min;
-  }
-  return Math.max(min, Math.min(max, value));
 }

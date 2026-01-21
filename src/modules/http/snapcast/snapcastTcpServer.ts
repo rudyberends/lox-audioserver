@@ -45,15 +45,10 @@ export class SnapcastTcpServer {
   }
 
   private resolvePort(): number {
-    const raw = process.env.SNAPCAST_TCP_PORT;
-    const parsed = raw ? Number(raw) : NaN;
-    if (Number.isFinite(parsed) && parsed > 0 && parsed < 65535) {
-      return parsed;
-    }
     return DEFAULT_TCP_PORT;
   }
 
   private resolveHost(): string {
-    return process.env.SNAPCAST_TCP_HOST ?? '0.0.0.0';
+    return '0.0.0.0';
   }
 }

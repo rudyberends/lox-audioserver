@@ -30,6 +30,11 @@ const BYTES_PER_SAMPLE = 2;
 const ACOUSTID_ENDPOINT = 'https://api.acoustid.org/v2/lookup';
 const SHAZAM_BASE_URL = 'https://amp.shazam.com/discovery/v5';
 const LINEIN_ID_START = 1000001;
+const DEFAULT_CAPTURE_SECONDS = 5;
+const DEFAULT_COOLDOWN_MS = 25000;
+const DEFAULT_POLL_INTERVAL_MS = 25000;
+const DEFAULT_SHAZAM_LOCALE = 'en-US';
+const DEFAULT_LOOKUP_TIMEOUT_MS = 15000;
 const execFileAsync = promisify(execFile);
 
 class LineInMetadataService {
@@ -81,14 +86,6 @@ class LineInMetadataService {
   }
 
   private isEnabled(): boolean {
-    const override = (process.env.LINEIN_METADATA_ENABLED ?? '').trim().toLowerCase();
-    if (override === '1' || override === 'true' || override === 'yes') {
-      return true;
-    }
-    const disable = (process.env.LINEIN_METADATA_DISABLED ?? '').trim().toLowerCase();
-    if (disable === '1' || disable === 'true' || disable === 'yes') {
-      return false;
-    }
     const config = getConfig();
     const inputs = Array.isArray(config.inputs?.lineIn?.inputs)
       ? config.inputs!.lineIn!.inputs!
@@ -235,7 +232,7 @@ class LineInMetadataService {
     if (!this.ensureFpcalcAvailable()) {
       return null;
     }
-    const key = (process.env.LINEIN_ACOUSTID_API_KEY ?? this.apiKey).trim();
+    const key = this.apiKey.trim();
     if (!key) {
       return null;
     }
@@ -596,21 +593,11 @@ class LineInMetadataService {
   }
 
   private getCaptureSeconds(): number {
-    const raw = Number(process.env.LINEIN_ACOUSTID_SECONDS ?? '5');
-    if (!Number.isFinite(raw) || raw <= 0) {
-      return 5;
-    }
-    return Math.min(60, Math.max(5, Math.round(raw)));
+    return DEFAULT_CAPTURE_SECONDS;
   }
 
   private getCooldownMs(): number {
-    const raw =
-      Number(process.env.LINEIN_METADATA_INTERVAL_MS) ||
-      Number(process.env.LINEIN_ACOUSTID_COOLDOWN_MS ?? '25000');
-    if (!Number.isFinite(raw) || raw <= 0) {
-      return 25000;
-    }
-    return Math.max(10_000, Math.round(raw));
+    return DEFAULT_COOLDOWN_MS;
   }
 
   private scheduleNextCheck(inputId: string): void {
@@ -640,18 +627,11 @@ class LineInMetadataService {
   }
 
   private getPollIntervalMs(): number {
-    const raw =
-      Number(process.env.LINEIN_METADATA_INTERVAL_MS) ||
-      Number(process.env.LINEIN_ACOUSTID_RETRY_MS ?? '25000');
-    if (!Number.isFinite(raw) || raw <= 0) {
-      return 25000;
-    }
-    return Math.min(300_000, Math.max(10_000, Math.round(raw)));
+    return DEFAULT_POLL_INTERVAL_MS;
   }
 
   private getShazamLocale(): string {
-    const raw = (process.env.LINEIN_SHAZAM_LANGUAGE ?? 'en-US').trim();
-    return raw || 'en-US';
+    return DEFAULT_SHAZAM_LOCALE;
   }
 
   private getShazamUrlLanguage(locale: string): string {
@@ -660,20 +640,12 @@ class LineInMetadataService {
   }
 
   private getShazamCountry(locale: string): string {
-    const raw = (process.env.LINEIN_SHAZAM_COUNTRY ?? '').trim().toUpperCase();
-    if (raw) {
-      return raw;
-    }
     const region = locale.split('-')[1]?.trim().toUpperCase();
     return region || 'US';
   }
 
   private getLookupTimeoutMs(): number {
-    const raw = Number(process.env.LINEIN_METADATA_TIMEOUT_MS ?? '15000');
-    if (!Number.isFinite(raw) || raw <= 0) {
-      return 15000;
-    }
-    return Math.min(60000, Math.max(5000, Math.round(raw)));
+    return DEFAULT_LOOKUP_TIMEOUT_MS;
   }
 
   private async fetchWithTimeout(
@@ -691,18 +663,15 @@ class LineInMetadataService {
   }
 
   private isShazamEnabled(): boolean {
-    const raw = (process.env.LINEIN_SHAZAM_ENABLED ?? 'true').trim().toLowerCase();
-    return raw === '1' || raw === 'true' || raw === 'yes';
+    return true;
   }
 
   private isAcoustidEnabled(): boolean {
-    const raw = (process.env.LINEIN_ACOUSTID_ENABLED ?? 'false').trim().toLowerCase();
-    return raw === '1' || raw === 'true' || raw === 'yes';
+    return false;
   }
 
   private shouldKeepWav(): boolean {
-    const raw = (process.env.LINEIN_ACOUSTID_KEEP_WAV ?? '').trim().toLowerCase();
-    return raw === '1' || raw === 'true' || raw === 'yes';
+    return false;
   }
 
   private ensureFpcalcAvailable(): boolean {

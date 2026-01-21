@@ -142,7 +142,7 @@ export class AirplaySender {
       airplay2,
       txt: resolved.txt ?? fallbackTxt,
       startTimeMs,
-      debug: this.config.debug ?? process.env.AIRPLAY_DEBUG === '1',
+      debug: this.config.debug ?? false,
       metrics: true,
     config: this.config.config,
       log: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: unknown) => {
@@ -347,12 +347,8 @@ export class AirplaySender {
   }
 
   private resolveUrl(url: string): string {
-    const fallbackHost =
-      process.env.HTTP_PUBLIC_HOST ||
-      process.env.HTTP_HOST ||
-      process.env.HOST ||
-      this.pickLocalAddress();
-    const fallbackPort = Number(process.env.HTTP_PORT || process.env.PORT || 7090);
+    const fallbackHost = this.pickLocalAddress();
+    const fallbackPort = 7090;
     const isLoopback = (h?: string) =>
       !h || h === 'localhost' || h === '::1' || h.startsWith('127.');
 
