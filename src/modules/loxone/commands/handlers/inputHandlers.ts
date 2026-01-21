@@ -294,6 +294,7 @@ function ensureLineInWatch(zoneId: number, inputId: string): void {
     if (existing.inputId === inputId) {
       return;
     }
+    sendspinLineInService.requestStop(existing.inputId);
     existing.stop();
     lineInWatchByZone.delete(zoneId);
   }

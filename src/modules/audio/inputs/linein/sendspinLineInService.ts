@@ -5,6 +5,7 @@ import type { LineInInputConfig } from '@/domain/config/types';
 import { lineInIngestRegistry, type LineInIngestFormat } from '@/modules/audio/inputs/linein/lineInIngestRegistry';
 import { pcmFormatFromBitDepth } from '@/modules/audio/utils/audioFormat';
 import { sendspinCore, SourceCommand } from '@lox-audioserver/node-sendspin';
+import { registerSendspinHooks } from '@/modules/sendspin/sendspinHookRegistry';
 
 type SendspinLineInMapping = {
   inputId: string;
@@ -25,6 +26,7 @@ class SendspinLineInService {
   private readonly mappings = new Map<string, SendspinLineInMapping>();
   private readonly activeSources = new Map<string, ActiveSource>();
   private readonly lastAudioLog = new Map<string, number>();
+  private readonly hookStops = new Map<string, () => void>();
   private started = false;
 
   public start(): void {
@@ -35,9 +37,10 @@ class SendspinLineInService {
 
   public stop(): void {
     this.started = false;
-    for (const clientId of this.mappings.keys()) {
-      sendspinCore.unregisterHooks(clientId);
+    for (const stop of this.hookStops.values()) {
+      stop();
     }
+    this.hookStops.clear();
     this.mappings.clear();
     for (const [clientId, active] of this.activeSources.entries()) {
       lineInIngestRegistry.stop(active.inputId, 'sendspin-disconnected');
@@ -65,12 +68,15 @@ class SendspinLineInService {
         this.mappings.set(mapping.clientId, mapping);
         this.registerHooks(mapping.clientId);
       }
+      if (this.activeSources.has(mapping.clientId)) {
+        this.sendSourceSettings(mapping.clientId, mapping.inputId, SourceCommand.START);
+      }
     }
 
     for (const clientId of this.mappings.keys()) {
       if (!seen.has(clientId)) {
         this.mappings.delete(clientId);
-        sendspinCore.unregisterHooks(clientId);
+        this.unregisterHooks(clientId);
         this.stopActiveSource(clientId, 'sendspin-unmapped');
       }
     }
@@ -78,22 +84,39 @@ class SendspinLineInService {
 
   public requestStart(inputId: string): void {
     const mapping = this.findMappingByInput(inputId);
-    if (!mapping) return;
-    this.sendSourceCommand(mapping.clientId, SourceCommand.START);
+    if (!mapping) {
+      this.log.debug('sendspin line-in start skipped; no mapping', { inputId });
+      return;
+    }
+    this.log.debug('sendspin line-in start requested', { inputId, clientId: mapping.clientId });
+    const sent = this.sendSourceSettings(mapping.clientId, inputId, SourceCommand.START);
+    if (!sent) {
+      this.sendSourceCommand(mapping.clientId, SourceCommand.START);
+    }
   }
 
   public requestStop(inputId: string): void {
     const mapping = this.findMappingByInput(inputId);
-    if (!mapping) return;
+    if (!mapping) {
+      this.log.debug('sendspin line-in stop skipped; no mapping', { inputId });
+      return;
+    }
+    this.log.debug('sendspin line-in stop requested', { inputId, clientId: mapping.clientId });
     this.sendSourceCommand(mapping.clientId, SourceCommand.STOP);
   }
 
   private registerHooks(clientId: string): void {
-    sendspinCore.registerHooks(clientId, {
+    this.unregisterHooks(clientId);
+    const stop = registerSendspinHooks(clientId, {
       onSourceAudio: (_session, chunk) => {
         this.handleSourceAudio(clientId, chunk.data);
       },
       onSourceState: (_session, state) => {
+        this.log.debug('sendspin line-in source state', {
+          clientId,
+          state: state.state,
+          signal: state.signal,
+        });
         if (state.state && state.state !== 'streaming') {
           this.stopActiveSource(clientId, `sendspin-${state.state}`);
         }
@@ -102,6 +125,14 @@ class SendspinLineInService {
         this.stopActiveSource(clientId, 'sendspin-disconnected');
       },
     });
+    this.hookStops.set(clientId, stop);
+  }
+
+  private unregisterHooks(clientId: string): void {
+    const stop = this.hookStops.get(clientId);
+    if (!stop) return;
+    stop();
+    this.hookStops.delete(clientId);
   }
 
   private handleSourceAudio(clientId: string, payload: Buffer): void {
@@ -160,7 +191,23 @@ class SendspinLineInService {
   }
 
   private sendSourceCommand(clientId: string, command: SourceCommand): void {
+    this.log.debug('sendspin line-in source command', { clientId, command });
     sendspinCore.sendServerCommand(clientId, { source: { command } });
+  }
+
+  private sendSourceSettings(clientId: string, inputId: string, command?: SourceCommand): boolean {
+    const settings = this.resolveSourceSettings(inputId);
+    if (!settings) {
+      this.log.debug('sendspin line-in source settings skipped', { clientId, inputId });
+      return false;
+    }
+    if (!command) {
+      this.log.debug('sendspin line-in source settings skipped; command missing', { clientId, inputId });
+      return false;
+    }
+    this.log.debug('sendspin line-in source settings', { clientId, inputId, command, ...settings });
+    sendspinCore.sendServerCommand(clientId, { source: { command, ...settings } } as any);
+    return true;
   }
 
   private resolveMappings(): SendspinLineInMapping[] {
@@ -204,6 +251,60 @@ class SendspinLineInService {
         : `${DEFAULT_LINEIN_NAME}${index + 1}`;
       return { id, name, record };
     });
+  }
+
+  private resolveLineInInputConfig(inputId: string): LineInInputConfig | null {
+    const match = this.resolveLineInInputs().find((entry) => entry.id === inputId);
+    return match?.record ?? null;
+  }
+
+  private resolveSourceSettings(
+    inputId: string,
+  ): {
+    vad?: { threshold_db?: number; hold_ms?: number };
+    format?: { codec?: string; channels?: number; sample_rate?: number; bit_depth?: number };
+  } | null {
+    const entry = this.resolveLineInInputConfig(inputId);
+    if (!entry) return null;
+    const source = entry.source && typeof entry.source === 'object' ? (entry.source as Record<string, unknown>) : {};
+
+    const parseNumeric = (value: unknown): number | null => {
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+      if (typeof value === 'string' && value.trim()) {
+        const parsed = Number(value.trim());
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+      return null;
+    };
+
+    const threshold = parseNumeric(source.vad_threshold_db);
+    const hold = parseNumeric(source.vad_hold_ms);
+    const vad =
+      threshold != null || hold != null
+        ? { ...(threshold != null ? { threshold_db: threshold } : {}), ...(hold != null ? { hold_ms: hold } : {}) }
+        : null;
+
+    const sampleRate = parseNumeric(source.sample_rate ?? source.ingest_sample_rate ?? source.rate ?? source.sampleRate);
+    const channels = parseNumeric(source.channels ?? source.ingest_channels);
+    const bitDepth = parseNumeric(source.bit_depth ?? source.ingest_bit_depth);
+    const codec =
+      typeof source.codec === 'string' && source.codec.trim()
+        ? source.codec.trim()
+        : typeof source.ingest_codec === 'string' && source.ingest_codec.trim()
+          ? source.ingest_codec.trim()
+          : null;
+    const format =
+      sampleRate != null || channels != null || bitDepth != null || codec
+        ? {
+          ...(codec ? { codec } : {}),
+          ...(channels != null && channels > 0 ? { channels: Math.round(channels) } : {}),
+          ...(sampleRate != null && sampleRate > 0 ? { sample_rate: Math.round(sampleRate) } : {}),
+          ...(bitDepth != null && bitDepth > 0 ? { bit_depth: Math.round(bitDepth) } : {}),
+        }
+        : null;
+
+    if (!vad && !format) return null;
+    return { ...(vad ? { vad } : {}), ...(format ? { format } : {}) };
   }
 
   private resolveClientId(source: Record<string, unknown>): string | null {

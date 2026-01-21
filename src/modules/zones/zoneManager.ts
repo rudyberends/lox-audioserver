@@ -347,6 +347,13 @@ class ZoneManager {
     if (prevInput === 'musicassistant') {
       void musicAssistantInputService.switchAway(zoneId);
     }
+    if (prevInput === 'linein') {
+      const ctx = this.zones.get(zoneId);
+      const inputId = parseLineInInputId(ctx?.state.audiopath);
+      if (inputId) {
+        sendspinLineInService.requestStop(inputId);
+      }
+    }
   }
 
   private isLocalQueueAuthority(authority: QueueAuthority | undefined | null): boolean {

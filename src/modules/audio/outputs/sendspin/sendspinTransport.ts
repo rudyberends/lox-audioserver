@@ -28,6 +28,7 @@ import type { SendspinSession } from '@lox-audioserver/node-sendspin';
 import { sendspinGroupController } from '@/modules/audio/outputs/sendspin/sendspinGroupController';
 import { getGroupByZone, upsertGroup } from '@/modules/groups/groupTracker';
 import { groupManager } from '@/modules/groups/groupManager';
+import { registerSendspinHooks } from '@/modules/sendspin/sendspinHookRegistry';
 
 type SendspinFormat = PlayerFormatWithBitDepth<PcmBitDepth>;
 
@@ -123,6 +124,7 @@ export class SendspinTransport implements ZoneTransport {
   private firstFrameLogged = false;
   private lastStreamStartSentAtMs: number | null = null;
   private streamToken = 0;
+  private hooksStop: (() => void) | null = null;
 
   constructor(
     private readonly zoneId: number,
@@ -133,7 +135,7 @@ export class SendspinTransport implements ZoneTransport {
     this.clientId = config.clientId;
     this.options = options;
     sendspinGroupController.register(this.zoneId, this);
-    sendspinCore.registerHooks(this.clientId, {
+    this.hooksStop = registerSendspinHooks(this.clientId, {
       onIdentified: (sendspinSession: SendspinSession) => {
         // Avoid re-running onIdentified for the same session instance.
         if (this.activeSession === sendspinSession) {
@@ -328,8 +330,21 @@ export class SendspinTransport implements ZoneTransport {
     }
     if (typeof update.volume === 'number') {
       const vol = Math.min(100, Math.max(0, Math.round(update.volume)));
-      this.lastKnownVolume = vol;
-      zoneManager.handleCommand(this.zoneId, 'volume_set', String(vol));
+      const now = Date.now();
+      const recentlySent =
+        this.lastOutboundVolumeAt != null && now - this.lastOutboundVolumeAt < 1000;
+      const outboundMatches =
+        this.lastOutboundVolume != null && Math.abs(vol - this.lastOutboundVolume) <= 1;
+      if (recentlySent && outboundMatches) {
+        this.log.debug('Sendspin client volume echo ignored', {
+          zoneId: this.zoneId,
+          clientId: this.clientId,
+          volume: vol,
+        });
+      } else if (vol !== this.lastKnownVolume) {
+        this.lastKnownVolume = vol;
+        zoneManager.handleCommand(this.zoneId, 'volume_set', String(vol));
+      }
     }
     if (typeof update.muted === 'boolean') {
       // No explicit mute command path in zoneManager; treat mute as volume 0/unmute restore.
@@ -449,7 +464,10 @@ export class SendspinTransport implements ZoneTransport {
   /** Dispose transport resources and unregister hooks. */
   public async dispose(): Promise<void> {
     this.teardown();
-    sendspinCore.unregisterHooks(this.clientId);
+    if (this.hooksStop) {
+      this.hooksStop();
+      this.hooksStop = null;
+    }
     sendspinCore.clearLeadStats(this.clientId);
     sendspinGroupController.unregister(this.zoneId);
   }

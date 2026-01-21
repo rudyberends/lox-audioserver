@@ -133,6 +133,9 @@ type LineInFormState = {
   bridgeId: string;
   captureDeviceId: string;
   ingestSampleRate: string;
+  ingestChannels: string;
+  ingestBitDepth: string;
+  ingestCodec: string;
   ingestResampler: string;
   vadThresholdDb: string;
   vadHoldMs: string;
@@ -218,6 +221,12 @@ type LineInBridgeSummary = {
 
 const LINEIN_STATUS_POLL_MS = 5000;
 const SENDSPIN_STATUS_POLL_MS = 5000;
+const SENDSPIN_FORMAT_DEFAULTS = {
+  ingestCodec: 'pcm',
+  ingestSampleRate: '44100',
+  ingestChannels: '2',
+  ingestBitDepth: '16',
+};
 
 function parseOptionalNumber(value: string): number | undefined {
   const trimmed = value.trim();
@@ -229,6 +238,21 @@ function parseOptionalNumber(value: string): number | undefined {
 function parseNumberOrDefault(value: string, fallback: number): number {
   const parsed = parseOptionalNumber(value);
   return typeof parsed === 'number' ? parsed : fallback;
+}
+
+function parseNumberOrNull(value: string): number | null {
+  const parsed = parseOptionalNumber(value);
+  return typeof parsed === 'number' ? parsed : null;
+}
+
+function applySendspinDefaults(form: LineInFormState): LineInFormState {
+  return {
+    ...form,
+    ingestCodec: form.ingestCodec.trim() ? form.ingestCodec : SENDSPIN_FORMAT_DEFAULTS.ingestCodec,
+    ingestSampleRate: form.ingestSampleRate.trim() ? form.ingestSampleRate : SENDSPIN_FORMAT_DEFAULTS.ingestSampleRate,
+    ingestChannels: form.ingestChannels.trim() ? form.ingestChannels : SENDSPIN_FORMAT_DEFAULTS.ingestChannels,
+    ingestBitDepth: form.ingestBitDepth.trim() ? form.ingestBitDepth : SENDSPIN_FORMAT_DEFAULTS.ingestBitDepth,
+  };
 }
 
 function formatLineInState(state?: string | null): string | null {
@@ -745,6 +769,9 @@ const createEmptyLineInForm = (): LineInFormState => ({
   bridgeId: '',
   captureDeviceId: '',
   ingestSampleRate: '',
+  ingestChannels: '',
+  ingestBitDepth: '',
+  ingestCodec: '',
   ingestResampler: 'sinc-fast',
   vadThresholdDb: '-45',
   vadHoldMs: '2000',
@@ -1374,12 +1401,42 @@ export default function ContentView(): JSX.Element {
       const sendspinClientId = typeof sourceRecord.clientId === 'string' ? sourceRecord.clientId : '';
       const bridgeId = typeof sourceRecord.bridge_id === 'string' ? sourceRecord.bridge_id : '';
       const captureDeviceId = typeof sourceRecord.capture_device === 'string' ? sourceRecord.capture_device : '';
-      const ingestSampleRate =
-        typeof sourceRecord.ingest_sample_rate === 'number'
-          ? String(sourceRecord.ingest_sample_rate)
-          : typeof sourceRecord.ingest_sample_rate === 'string'
-            ? sourceRecord.ingest_sample_rate
+      const ingestCodec =
+        typeof sourceRecord.codec === 'string'
+          ? sourceRecord.codec
+          : typeof sourceRecord.ingest_codec === 'string'
+            ? sourceRecord.ingest_codec
             : '';
+      const ingestChannels =
+        typeof sourceRecord.channels === 'number'
+          ? String(sourceRecord.channels)
+          : typeof sourceRecord.channels === 'string'
+            ? sourceRecord.channels
+            : typeof sourceRecord.ingest_channels === 'number'
+              ? String(sourceRecord.ingest_channels)
+              : typeof sourceRecord.ingest_channels === 'string'
+                ? sourceRecord.ingest_channels
+                : '';
+      const ingestBitDepth =
+        typeof sourceRecord.bit_depth === 'number'
+          ? String(sourceRecord.bit_depth)
+          : typeof sourceRecord.bit_depth === 'string'
+            ? sourceRecord.bit_depth
+            : typeof sourceRecord.ingest_bit_depth === 'number'
+              ? String(sourceRecord.ingest_bit_depth)
+              : typeof sourceRecord.ingest_bit_depth === 'string'
+                ? sourceRecord.ingest_bit_depth
+                : '';
+      const ingestSampleRate =
+        typeof sourceRecord.sample_rate === 'number'
+          ? String(sourceRecord.sample_rate)
+          : typeof sourceRecord.sample_rate === 'string'
+            ? sourceRecord.sample_rate
+            : typeof sourceRecord.ingest_sample_rate === 'number'
+              ? String(sourceRecord.ingest_sample_rate)
+              : typeof sourceRecord.ingest_sample_rate === 'string'
+                ? sourceRecord.ingest_sample_rate
+                : '';
       const ingestResampler =
         typeof sourceRecord.ingest_resampler === 'string' ? sourceRecord.ingest_resampler : 'sinc-fast';
       const vadThresholdDb =
@@ -1387,7 +1444,7 @@ export default function ContentView(): JSX.Element {
       const vadHoldMs =
         typeof sourceRecord.vad_hold_ms === 'number' ? String(sourceRecord.vad_hold_ms) : '';
       setLineInEditingId(input.id ?? null);
-      setLineInForm({
+      const nextForm: LineInFormState = {
         name: input.name ?? '',
         iconType: typeof input.iconType === 'number' ? input.iconType : LineInIconType.CdPlayer,
         sourceType: input.source?.type ?? 'bridge',
@@ -1397,10 +1454,14 @@ export default function ContentView(): JSX.Element {
         bridgeId,
         captureDeviceId,
         ingestSampleRate,
+        ingestChannels,
+        ingestBitDepth,
+        ingestCodec,
         ingestResampler,
         vadThresholdDb,
         vadHoldMs,
-      });
+      };
+      setLineInForm(nextForm.sourceType === 'sendspin' ? applySendspinDefaults(nextForm) : nextForm);
     } else {
       setLineInEditingId(null);
       setLineInForm(createEmptyLineInForm());
@@ -1930,6 +1991,49 @@ export default function ContentView(): JSX.Element {
         };
         if (lineInForm.sourceType === 'sendspin' && lineInForm.sendspinClientId.trim()) {
           nextSource.clientId = lineInForm.sendspinClientId.trim();
+          const threshold = parseNumberOrNull(lineInForm.vadThresholdDb);
+          const holdMs = parseNumberOrNull(lineInForm.vadHoldMs);
+          const ingestSampleRate = parseNumberOrNull(lineInForm.ingestSampleRate);
+          const ingestChannels = parseNumberOrNull(lineInForm.ingestChannels);
+          const ingestBitDepth = parseNumberOrNull(lineInForm.ingestBitDepth);
+          const ingestCodec = lineInForm.ingestCodec.trim();
+          if (ingestSampleRate != null && ingestSampleRate > 0) {
+            nextSource.sample_rate = ingestSampleRate;
+          } else {
+            delete nextSource.sample_rate;
+          }
+          if (ingestChannels != null && ingestChannels > 0) {
+            nextSource.channels = ingestChannels;
+          } else {
+            delete nextSource.channels;
+          }
+          if (ingestBitDepth != null && ingestBitDepth > 0) {
+            nextSource.bit_depth = ingestBitDepth;
+          } else {
+            delete nextSource.bit_depth;
+          }
+          if (ingestCodec) {
+            nextSource.codec = ingestCodec;
+          } else {
+            delete nextSource.codec;
+          }
+          if (threshold != null) {
+            nextSource.vad_threshold_db = threshold;
+          } else {
+            delete nextSource.vad_threshold_db;
+          }
+          if (holdMs != null) {
+            nextSource.vad_hold_ms = holdMs;
+          } else {
+            delete nextSource.vad_hold_ms;
+          }
+          delete nextSource.bridge_id;
+          delete nextSource.capture_device;
+          delete nextSource.ingest_resampler;
+          delete nextSource.ingest_sample_rate;
+          delete nextSource.ingest_channels;
+          delete nextSource.ingest_bit_depth;
+          delete nextSource.ingest_codec;
         } else if ('clientId' in nextSource) {
           delete nextSource.clientId;
         }
@@ -1955,13 +2059,21 @@ export default function ContentView(): JSX.Element {
           }
           nextSource.vad_threshold_db = threshold;
           nextSource.vad_hold_ms = holdMs;
-        } else {
+          delete nextSource.sample_rate;
+          delete nextSource.channels;
+          delete nextSource.bit_depth;
+          delete nextSource.codec;
+        } else if (lineInForm.sourceType !== 'sendspin') {
           delete nextSource.vad_threshold_db;
           delete nextSource.vad_hold_ms;
           delete nextSource.bridge_id;
           delete nextSource.capture_device;
           delete nextSource.ingest_sample_rate;
           delete nextSource.ingest_resampler;
+          delete nextSource.sample_rate;
+          delete nextSource.channels;
+          delete nextSource.bit_depth;
+          delete nextSource.codec;
         }
         const nextEntry: LineInInputConfig = {
           id: lineInEditingId,
@@ -1980,6 +2092,30 @@ export default function ContentView(): JSX.Element {
         const nextSource: Record<string, unknown> = { type: lineInForm.sourceType };
         if (lineInForm.sourceType === 'sendspin' && lineInForm.sendspinClientId.trim()) {
           nextSource.clientId = lineInForm.sendspinClientId.trim();
+          const threshold = parseNumberOrNull(lineInForm.vadThresholdDb);
+          const holdMs = parseNumberOrNull(lineInForm.vadHoldMs);
+          const ingestSampleRate = parseNumberOrNull(lineInForm.ingestSampleRate);
+          const ingestChannels = parseNumberOrNull(lineInForm.ingestChannels);
+          const ingestBitDepth = parseNumberOrNull(lineInForm.ingestBitDepth);
+          const ingestCodec = lineInForm.ingestCodec.trim();
+          if (ingestSampleRate != null && ingestSampleRate > 0) {
+            nextSource.sample_rate = ingestSampleRate;
+          }
+          if (ingestChannels != null && ingestChannels > 0) {
+            nextSource.channels = ingestChannels;
+          }
+          if (ingestBitDepth != null && ingestBitDepth > 0) {
+            nextSource.bit_depth = ingestBitDepth;
+          }
+          if (ingestCodec) {
+            nextSource.codec = ingestCodec;
+          }
+          if (threshold != null) {
+            nextSource.vad_threshold_db = threshold;
+          }
+          if (holdMs != null) {
+            nextSource.vad_hold_ms = holdMs;
+          }
         }
         if (lineInForm.sourceType === 'bridge') {
           const threshold = parseNumberOrDefault(lineInForm.vadThresholdDb, -45);
@@ -3485,7 +3621,10 @@ export default function ContentView(): JSX.Element {
                           className="content-input-select"
                           value={lineInForm.sourceType}
                           onChange={(e) =>
-                            setLineInForm((prev) => ({ ...prev, sourceType: e.target.value as LineInSourceType }))
+                            setLineInForm((prev) => {
+                              const next = { ...prev, sourceType: e.target.value as LineInSourceType };
+                              return next.sourceType === 'sendspin' ? applySendspinDefaults(next) : next;
+                            })
                           }
                         >
                           <option value="bridge">Lox-linein-bridge</option>
@@ -3684,7 +3823,7 @@ export default function ContentView(): JSX.Element {
                         </p>
                         <div className="content-linein-info__select">
                           <label htmlFor="linein-sendspin-client">Sendspin client</label>
-                          <div className="content-linein-select-row">
+                          <div className="content-linein-select-row content-linein-select-row--compact">
                             <select
                               id="linein-sendspin-client"
                               className="content-input-select"
@@ -3698,16 +3837,93 @@ export default function ContentView(): JSX.Element {
                                 </option>
                               ))}
                             </select>
-                            <button
-                              type="button"
-                              className="secondary content-linein-refresh"
-                              onClick={() => void handleSendspinDiscovery()}
-                              disabled={sendspinLoading}
-                            >
-                              {sendspinLoading ? 'Refreshing…' : 'Refresh'}
-                            </button>
+                            <label className="content-linein-inline-field" htmlFor="linein-sendspin-sample-rate">
+                              <span>Sample rate (Hz)</span>
+                              <input
+                                id="linein-sendspin-sample-rate"
+                                type="number"
+                                inputMode="numeric"
+                                value={lineInForm.ingestSampleRate}
+                                onChange={(e) =>
+                                  setLineInForm((prev) => ({ ...prev, ingestSampleRate: e.target.value }))
+                                }
+                                placeholder="44100"
+                              />
+                            </label>
+                          </div>
+                          <div className="content-linein-format-row">
+                            <label className="content-linein-inline-field content-linein-inline-field--wide" htmlFor="linein-sendspin-codec">
+                              <span>Codec</span>
+                              <select
+                                id="linein-sendspin-codec"
+                                className="content-input-select"
+                                value={lineInForm.ingestCodec}
+                                onChange={(e) => setLineInForm((prev) => ({ ...prev, ingestCodec: e.target.value }))}
+                              >
+                                <option value="pcm">pcm</option>
+                                <option value="flac">flac</option>
+                                <option value="opus">opus</option>
+                                <option value="aac">aac</option>
+                              </select>
+                            </label>
+                            <label className="content-linein-inline-field content-linein-inline-field--narrow" htmlFor="linein-sendspin-channels">
+                              <span>Channels</span>
+                              <input
+                                id="linein-sendspin-channels"
+                                type="number"
+                                inputMode="numeric"
+                                value={lineInForm.ingestChannels}
+                                onChange={(e) => setLineInForm((prev) => ({ ...prev, ingestChannels: e.target.value }))}
+                                placeholder="2"
+                              />
+                            </label>
+                            <label className="content-linein-inline-field content-linein-inline-field--narrow" htmlFor="linein-sendspin-bit-depth">
+                              <span>Bit depth</span>
+                              <input
+                                id="linein-sendspin-bit-depth"
+                                type="number"
+                                inputMode="numeric"
+                                value={lineInForm.ingestBitDepth}
+                                onChange={(e) => setLineInForm((prev) => ({ ...prev, ingestBitDepth: e.target.value }))}
+                                placeholder="16"
+                              />
+                            </label>
                           </div>
                           {sendspinError && <p className="content-linein-error">{sendspinError}</p>}
+                        </div>
+                        <div className="content-linein-info__vad">
+                          <p className="content-linein-info__label">Capture settings</p>
+                          <div className="content-linein-info__vad-grid">
+                            <label className="content-linein-info__vad-field">
+                              <span>Threshold (dB)</span>
+                              <input
+                                id="linein-sendspin-vad-threshold"
+                                type="number"
+                                inputMode="decimal"
+                                value={lineInForm.vadThresholdDb}
+                                onChange={(e) =>
+                                  setLineInForm((prev) => ({ ...prev, vadThresholdDb: e.target.value }))
+                                }
+                                placeholder="-45"
+                              />
+                            </label>
+                            <label className="content-linein-info__vad-field">
+                              <span>Hold (ms)</span>
+                              <input
+                                id="linein-sendspin-vad-hold"
+                                type="number"
+                                inputMode="numeric"
+                                value={lineInForm.vadHoldMs}
+                                onChange={(e) =>
+                                  setLineInForm((prev) => ({ ...prev, vadHoldMs: e.target.value }))
+                                }
+                                placeholder="2000"
+                              />
+                            </label>
+                          </div>
+                          <p className="content-linein-info__hint">
+                            Optional controls for when Sendspin starts/stops streaming on silence.
+                          </p>
                         </div>
                       </div>
                     )}
