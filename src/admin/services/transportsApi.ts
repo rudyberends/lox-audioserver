@@ -1,5 +1,5 @@
 import { API_BASE } from '../config/apiConfig';
-import type { TransportConfigDefinition } from '@/modules/audio/outputs/types';
+import type { TransportConfigDefinition } from '@/ports/OutputsTypes';
 
 type TransportDefinitionsResponse = {
   transports?: TransportConfigDefinition[];

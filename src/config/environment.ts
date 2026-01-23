@@ -1,4 +1,4 @@
-import type { LogLevel } from '@/core/logging/logger';
+import type { LogLevel } from '@/shared/logging/logger';
 
 /**
  * Canonical view of the process environment consumed by the application.

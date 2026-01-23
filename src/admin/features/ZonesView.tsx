@@ -20,7 +20,7 @@ import {
   type SpotifyDevice,
 } from '../services/transportsApi';
 import type { ZoneInputConfig, ZoneTransportConfig } from '@/domain/config/types';
-import type { TransportConfigDefinition } from '@/modules/audio/outputs/types';
+import type { TransportConfigDefinition } from '@/outputs/types';
 import type { SpotifyAccountConfig } from '@/domain/config/types';
 
 interface Zone {

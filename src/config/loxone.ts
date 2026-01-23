@@ -1,5 +1,5 @@
 import type { EnvironmentConfig } from '@/config/environment';
-import { DEFAULT_MAC_ID } from '@/core/utils/mac';
+import { DEFAULT_MAC_ID } from '@/shared/utils/mac';
 
 export type LoxoneServerName = 'appHttp' | 'msHttp';
 

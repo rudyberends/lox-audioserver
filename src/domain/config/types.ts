@@ -104,10 +104,12 @@ export interface SpotifyBridgeConfig {
   registerAll?: boolean;
 }
 
-export interface ZoneTransportConfig {
+export interface ZoneOutputConfig {
   id: string;
   [key: string]: unknown;
 }
+
+export type ZoneTransportConfig = ZoneOutputConfig;
 
 export interface ZoneConfig {
   id: number;
@@ -115,7 +117,8 @@ export interface ZoneConfig {
   source?: string;
   sourceSerial?: string;
   sourceMac: string;
-  transports: ZoneTransportConfig[];
+  output?: ZoneOutputConfig | null;
+  transports?: ZoneTransportConfig[];
   volumes: ZoneVolumesConfig;
   inputs?: ZoneInputConfig;
 }
