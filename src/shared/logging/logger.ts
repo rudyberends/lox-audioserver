@@ -1,10 +1,11 @@
 import { logBuffer } from '@/shared/logging/logBuffer';
+import type { LogLevel } from '@/types/logLevel';
 
 /**
  * Minimal structured logger with hierarchical scopes and optional JSON output.
  * `spam` is below debug for very noisy traces.
  */
-export type LogLevel = 'spam' | 'debug' | 'info' | 'warn' | 'error' | 'none';
+export type { LogLevel } from '@/types/logLevel';
 
 const WEIGHTS: Record<LogLevel, number> = {
   spam: 5,
