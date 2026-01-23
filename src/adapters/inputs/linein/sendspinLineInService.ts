@@ -2,7 +2,7 @@ import { PassThrough } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import type { LineInInputConfig } from '@/domain/config/types';
 import type { LineInIngestFormat, LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
-import { pcmFormatFromBitDepth } from '@/shared/audioFormat';
+import { pcmFormatFromBitDepth } from '@/ports/types/audioFormat';
 import { sendspinCore, SourceCommand } from '@lox-audioserver/node-sendspin';
 import type { SendspinHookRegistryPort } from '@/adapters/outputs/sendspin/sendspinHookRegistry';
 import type { ConfigPort } from '@/ports/ConfigPort';

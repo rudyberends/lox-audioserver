@@ -11,7 +11,7 @@ import {
   mp3BitrateToBps,
   type HttpProfile,
   type AudioOutputSettings,
-} from '@/shared/audioFormat';
+} from '@/ports/types/audioFormat';
 import type { StreamEvents } from '@/adapters/http/streams/streamEvents';
 
 /**

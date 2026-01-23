@@ -1,5 +1,5 @@
 import type { PlaybackSession } from '@/application/playback/audioManager';
-import type { PcmBitDepth, HttpProfile } from '@/shared/audioFormat';
+import type { PcmBitDepth, HttpProfile } from '@/ports/types/audioFormat';
 
 export type PreferredOutput = {
   profile: 'pcm' | 'opus' | 'flac' | 'mp3' | 'aac';

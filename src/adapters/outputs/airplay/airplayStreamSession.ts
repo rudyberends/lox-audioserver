@@ -2,7 +2,7 @@ import { PassThrough } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import type { EngineLocalSession, EnginePort } from '@/ports/EnginePort';
 import type { PlaybackSource } from '@/ports/EngineTypes';
-import type { AudioOutputSettings } from '@/shared/audioFormat';
+import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 
 /**
  * Minimal shared PCM stream session for AirPlay.

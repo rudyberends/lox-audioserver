@@ -10,7 +10,7 @@ import type {
   ZoneSpotifyConfig,
 } from '@/domain/config/types';
 import type { SpotifyDeviceRegistry } from '@/adapters/outputs/spotify/deviceRegistry';
-import { audioOutputSettings } from '@/shared/audioFormat';
+import { audioOutputSettings } from '@/ports/types/audioFormat';
 import type { PlaybackMetadata, PlaybackSource } from '@/application/playback/audioManager';
 import type { SpotifyConnectController } from '@/ports/InputsPort';
 import { PassThrough } from 'node:stream';

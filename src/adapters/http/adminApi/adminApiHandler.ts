@@ -38,7 +38,7 @@ import type { CustomRadioStore } from '@/adapters/content/providers/customRadioS
 import { TuneInClient } from '@/adapters/content/providers/tunein/tuneinClient';
 import type { GroupManagerReadPort } from '@/application/groups/groupManager';
 import type { AudioManager } from '@/application/playback/audioManager';
-import { audioResampler } from '@/shared/audioFormat';
+import { audioResampler } from '@/ports/types/audioFormat';
 import https from 'node:https';
 import { loadConfig as loadRuntimeConfig } from '@/config';
 import type { SnapcastCore } from '@/adapters/http/snapcast/snapcastCore';

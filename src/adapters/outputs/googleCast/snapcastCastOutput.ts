@@ -3,7 +3,7 @@ import { URL } from 'node:url';
 import { createLogger } from '@/shared/logging/logger';
 import type { ZoneConfig, ZoneTransportConfig } from '@/domain/config/types';
 import type { PlaybackSession } from '@/application/playback/audioManager';
-import { audioOutputSettings } from '@/shared/audioFormat';
+import { audioOutputSettings } from '@/ports/types/audioFormat';
 import type { OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 

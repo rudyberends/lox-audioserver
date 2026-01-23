@@ -1,7 +1,7 @@
 import type { PlaybackMetadata } from '@/application/playback/audioManager';
 import { createQueueItem, normalizeSpotifyAudiopath, sanitizeStation } from '@/application/zones/helpers/queueHelpers';
 import { clamp } from '@/application/zones/helpers/stateHelpers';
-import type { QueueItem } from '@/shared/queueTypes';
+import type { QueueItem } from '@/ports/types/queueTypes';
 import type { ContentPort } from '@/ports/ContentPort';
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
 import type { ParentContext } from '@/application/zones/policies/ParentContextPolicy';

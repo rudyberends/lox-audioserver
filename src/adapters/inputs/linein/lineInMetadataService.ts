@@ -11,7 +11,7 @@ import { bestEffort, safeReadText } from '@/shared/bestEffort';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import { resolveLineInSampleRate } from '@/adapters/inputs/linein/lineInConstants';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
-import { buildWavHeader } from '@/shared/audioFormat';
+import { buildWavHeader } from '@/ports/types/audioFormat';
 import type { LineInInputConfig } from '@/domain/config/types';
 import type { ConfigPort } from '@/ports/ConfigPort';
 

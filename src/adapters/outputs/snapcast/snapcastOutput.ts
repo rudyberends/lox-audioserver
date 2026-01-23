@@ -1,6 +1,6 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { PlaybackSession } from '@/application/playback/audioManager';
-import { pcmCodecFromBitDepth, audioOutputSettings } from '@/shared/audioFormat';
+import { pcmCodecFromBitDepth, audioOutputSettings } from '@/ports/types/audioFormat';
 import type { PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 

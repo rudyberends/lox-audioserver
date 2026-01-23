@@ -5,9 +5,9 @@ import type { InputAdapter } from '@/application/playback/inputAdapter';
 import type { SpotifyInputAdapter } from '@/application/playback/adapters/SpotifyInputAdapter';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import type { ZonePlayer } from '@/application/playback/zonePlayer';
-import type { QueueItem } from '@/shared/queueTypes';
+import type { QueueItem } from '@/ports/types/queueTypes';
 
-export type { QueueItem } from '@/shared/queueTypes';
+export type { QueueItem } from '@/ports/types/queueTypes';
 
 export type QueueAuthority =
   | 'local'

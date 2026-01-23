@@ -14,7 +14,7 @@ import './runtimeShutdown.test';
 import type { ZoneConfig } from '../src/domain/config/types';
 import { applyZonePatch } from '../src/domain/loxone/reducer';
 import type { LoxoneZoneState } from '../src/domain/loxone/types';
-import type { QueueItem } from '../src/shared/queueTypes';
+import type { QueueItem } from '../src/ports/types/queueTypes';
 import type { PlaybackSession } from '../src/application/playback/audioManager';
 import { StorageAdapter } from '../src/adapters/storage/StorageAdapter';
 import type { AirplayGroupCoordinator } from '../src/application/outputs/airplayGroupController';

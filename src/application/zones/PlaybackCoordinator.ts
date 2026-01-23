@@ -18,7 +18,7 @@ import {
   sanitizeTitle,
   clamp,
 } from '@/application/zones/helpers/stateHelpers';
-import { audioOutputSettings } from '@/shared/audioFormat';
+import { audioOutputSettings } from '@/ports/types/audioFormat';
 import { computePreferredPlaybackSettings } from '@/application/playback/policies/OutputFormatPolicy';
 import { buildPlaybackPlan } from '@/application/playback/buildPlaybackPlan';
 import { executePlaybackPlan } from '@/application/playback/executePlaybackPlan';

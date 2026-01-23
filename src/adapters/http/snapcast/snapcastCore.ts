@@ -6,7 +6,7 @@ import os from 'node:os';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { RawData } from 'ws';
 import { createLogger } from '@/shared/logging/logger';
-import { audioOutputSettings, type AudioOutputSettings } from '@/shared/audioFormat';
+import { audioOutputSettings, type AudioOutputSettings } from '@/ports/types/audioFormat';
 import type { AudioManager } from '@/application/playback/audioManager';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 

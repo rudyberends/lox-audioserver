@@ -9,7 +9,7 @@ import type { EnginePort } from '@/ports/EnginePort';
 import type { SendspinHookRegistryPort } from '@/adapters/outputs/sendspin/sendspinHookRegistry';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { SpotifyDeviceRegistry } from '@/adapters/outputs/spotify/deviceRegistry';
-import type { QueueItem } from '@/shared/queueTypes';
+import type { QueueItem } from '@/ports/types/queueTypes';
 import type { AudioManager } from '@/application/playback/audioManager';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { GroupManager } from '@/application/groups/groupManager';

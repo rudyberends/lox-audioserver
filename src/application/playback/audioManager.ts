@@ -10,7 +10,7 @@ import type {
 export type { PlaybackSource, OutputProfile } from '@/ports/EngineTypes';
 import { resolvePlaybackSource } from '@/application/playback/sourceResolver';
 import { decodeAudiopath } from '@/shared/audiopath';
-import { audioOutputSettings, type AudioOutputSettings, type HttpProfile } from '@/shared/audioFormat';
+import { audioOutputSettings, type AudioOutputSettings, type HttpProfile } from '@/ports/types/audioFormat';
 import type { PlaybackService } from '@/application/playback/PlaybackService';
 
 export interface PlaybackMetadata {

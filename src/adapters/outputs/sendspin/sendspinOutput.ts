@@ -7,7 +7,7 @@ import {
   audioOutputSettings,
   type AudioOutputSettings,
   type PcmBitDepth,
-} from '@/shared/audioFormat';
+} from '@/ports/types/audioFormat';
 import {
   AudioCodec,
   MediaCommand,

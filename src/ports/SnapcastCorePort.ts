@@ -1,4 +1,4 @@
-import type { AudioOutputSettings } from '@/shared/audioFormat';
+import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 
 export interface SnapcastCorePort {
   setStream: (

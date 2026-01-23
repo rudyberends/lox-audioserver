@@ -1,4 +1,4 @@
-import type { AudioOutputSettings } from '@/shared/audioFormat';
+import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 import type { OutputProfile } from '@/ports/EngineTypes';
 import type { HttpPreferences, PreferredOutput, ZoneOutput } from '@/ports/OutputsTypes';
 import { decodeAudiopath } from '@/shared/audiopath';

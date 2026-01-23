@@ -9,7 +9,7 @@ import type {
   PlaybackSource,
   OutputProfile,
 } from '@/ports/EngineTypes';
-import { audioOutputSettings, type AudioOutputSettings } from '@/shared/audioFormat';
+import { audioOutputSettings, type AudioOutputSettings } from '@/ports/types/audioFormat';
 
 export class EngineAdapter implements EnginePort {
   constructor(private readonly engine: AudioStreamEngine) {}

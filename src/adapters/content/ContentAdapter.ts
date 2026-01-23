@@ -6,7 +6,7 @@ import type { ContentPort, BuildQueueOptions } from '@/ports/ContentPort';
 import type { ContentFolder, ContentFolderItem, ContentItemMetadata } from '@/ports/ContentTypes';
 import type { PlaybackSourceResolveArgs, StreamResolution } from '@/ports/types/StreamResolution';
 import { detectServiceFromAudiopath } from '@/shared/audiopath';
-import type { QueueItem } from '@/shared/queueTypes';
+import type { QueueItem } from '@/ports/types/queueTypes';
 
 type ContentStreamResolvers = {
   appleMusic: AppleMusicStreamResolver;

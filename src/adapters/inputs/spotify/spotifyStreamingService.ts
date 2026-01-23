@@ -1,6 +1,6 @@
 import { PassThrough } from 'stream';
 import { createLogger } from '@/shared/logging/logger';
-import { audioOutputSettings } from '@/shared/audioFormat';
+import { audioOutputSettings } from '@/ports/types/audioFormat';
 import type {
   CreateSessionOpts,
   LibrespotSession,

@@ -8,7 +8,7 @@ import type { PlaybackMetadata } from '../src/application/playback/audioManager'
 import type { ContentPort } from '../src/ports/ContentPort';
 import type { ZoneAudioHelpers } from '../src/application/zones/internal/zoneAudioHelpers';
 import type { QueueController as ZoneQueueController } from '../src/application/zones/QueueController';
-import type { QueueItem } from '../src/shared/queueTypes';
+import type { QueueItem } from '../src/ports/types/queueTypes';
 import type { ZoneContext } from '../src/application/zones/internal/zoneTypes';
 import type { PreferredPlaybackSettings } from '../src/application/playback/policies/OutputFormatPolicy';
 

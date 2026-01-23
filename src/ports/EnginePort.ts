@@ -1,6 +1,6 @@
 import type { PassThrough } from 'node:stream';
 import type { EngineHandoffSpec, EngineStartOptions, OutputProfile, PlaybackSource } from '@/ports/EngineTypes';
-import type { AudioOutputSettings } from '@/shared/audioFormat';
+import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 
 export type EngineSessionStats = {
   profile: OutputProfile;

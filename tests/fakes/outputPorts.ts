@@ -1,4 +1,4 @@
-import { audioOutputSettings } from '../../src/shared/audioFormat';
+import { audioOutputSettings } from '../../src/ports/types/audioFormat';
 import type { AirplayGroupCoordinator } from '../../src/application/outputs/airplayGroupController';
 import type { ConfigPort } from '../../src/ports/ConfigPort';
 import type { EnginePort } from '../../src/ports/EnginePort';

@@ -1,6 +1,6 @@
 import type { EngineHandoffOptions, EnginePort } from '@/ports/EnginePort';
 import type { EngineStartOptions, OutputProfile, PlaybackSource } from '@/ports/EngineTypes';
-import type { AudioOutputSettings } from '@/shared/audioFormat';
+import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 
 export class PlaybackService {
   private engine: EnginePort;
