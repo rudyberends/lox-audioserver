@@ -89,6 +89,10 @@ export class ComponentLogger {
     this.write('error', message, context);
   }
 
+  public isEnabled(level: LogLevel): boolean {
+    return WEIGHTS[level] >= WEIGHTS[this.config.level];
+  }
+
   private write(level: LogLevel, message: string, context?: LogContext): void {
     if (WEIGHTS[level] < WEIGHTS[this.config.level]) {
       return;

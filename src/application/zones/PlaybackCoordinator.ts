@@ -937,13 +937,11 @@ export class PlaybackCoordinator {
               target = clamp(Math.round(target / step) * step, 0, maxVol);
             }
           }
-          this.log.spam('zone volume command', {
-            zoneId,
-            command,
-            payload,
-            target,
-            origin: this.getVolumeOrigin(),
-          });
+          const logContext: Record<string, unknown> = { zoneId, command, payload, target };
+          if (this.log.isEnabled('spam')) {
+            logContext.origin = this.getVolumeOrigin();
+          }
+          this.log.spam('zone volume command', logContext);
           if (mode === 'airplay') {
             this.inputsPort.remoteVolume(zoneId, target);
           }
