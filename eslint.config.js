@@ -14,10 +14,7 @@ module.exports = tseslint.config(
       parserOptions: {
         ecmaVersion: 2022,
         sourceType: 'module',
-        project: [
-          './tsconfig.json',
-          './src/admin/tsconfig.json'
-        ],
+        project: ['./tsconfig.json'],
         tsconfigRootDir: __dirname,
       },
     },
