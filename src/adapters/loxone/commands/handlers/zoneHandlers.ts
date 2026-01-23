@@ -8,7 +8,7 @@ import {
 } from '@/adapters/loxone/commands/utils/commandUtils';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
-import { decodeAudiopath } from '@/shared/audiopath';
+import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import { fadeController } from '@/application/zones/fadeController';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 

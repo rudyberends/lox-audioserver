@@ -1,7 +1,7 @@
 import type { PlaybackMetadata } from '@/application/playback/audioManager';
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 import type { PreferredPlaybackSettings } from '@/application/playback/policies/OutputFormatPolicy';
-import { detectServiceFromAudiopath } from '@/shared/audiopath';
+import { detectServiceFromAudiopath } from '@/domain/loxone/audiopath';
 import type { PlaybackPlan, ProviderKind } from '@/application/playback/types/PlaybackPlan';
 
 type PlaybackClassification = {

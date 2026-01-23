@@ -1,7 +1,7 @@
 import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 import type { OutputProfile } from '@/ports/EngineTypes';
 import type { HttpPreferences, PreferredOutput, ZoneOutput } from '@/ports/OutputsTypes';
-import { decodeAudiopath } from '@/shared/audiopath';
+import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import { selectPlayOutputs } from '@/application/zones/services/outputOrchestrator';
 
 export type PreferredPlaybackSettings = {

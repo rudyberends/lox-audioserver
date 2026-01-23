@@ -7,7 +7,7 @@ import type { InputsPort, MusicAssistantInputHandlers } from '@/ports/InputsPort
 import type { ContentPort } from '@/ports/ContentPort';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { NotifierPort } from '@/ports/NotifierPort';
-import { decodeAudiopath, encodeAudiopath } from '@/shared/audiopath';
+import { decodeAudiopath, encodeAudiopath } from '@/domain/loxone/audiopath';
 import {
   normalizeSpotifyAudiopath,
   sanitizeStation,

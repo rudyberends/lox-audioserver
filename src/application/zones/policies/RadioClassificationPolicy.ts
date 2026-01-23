@@ -1,5 +1,5 @@
 import type { PlaybackMetadata } from '@/application/playback/audioManager';
-import { decodeAudiopath } from '@/shared/audiopath';
+import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import { isRadioAudiopath } from '@/application/zones/internal/zoneAudioHelpers';
 
 export function classifyIsRadio(args: {

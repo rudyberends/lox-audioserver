@@ -8,7 +8,7 @@ import type {
   RadioMenuEntry,
   ScanStatus,
 } from '@/ports/ContentTypes';
-import { decodeAudiopath, detectServiceFromAudiopath } from '@/shared/audiopath';
+import { decodeAudiopath, detectServiceFromAudiopath } from '@/domain/loxone/audiopath';
 import { LocalLibraryProvider, type LibraryCoverSample, type LibraryStats } from '@/adapters/content/providers/localLibraryProvider';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import { TuneInProvider, type TuneInProviderOptions } from '@/adapters/content/providers/tunein/tuneinProvider';

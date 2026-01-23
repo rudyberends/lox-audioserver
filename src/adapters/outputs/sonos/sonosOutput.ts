@@ -11,7 +11,7 @@ import type {
 import { SonosClient } from '@lox-audioserver/node-sonos';
 import { resolveDlnaEndpoints } from '@/adapters/outputs/dlna/dlnaDiscovery';
 import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
-import { decodeAudiopath } from '@/shared/audiopath';
+import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import { discoverSonosDevice } from '@/adapters/outputs/sonos/sonosDiscovery';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 

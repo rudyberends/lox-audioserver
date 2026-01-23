@@ -1,5 +1,5 @@
 import type { PlaybackMetadata, PlaybackSession } from '@/application/playback/audioManager';
-import { decodeAudiopath } from '@/shared/audiopath';
+import { decodeAudiopath } from '@/domain/loxone/audiopath';
 
 /**
  * Resolves a usable cover-art URI for a playback session.

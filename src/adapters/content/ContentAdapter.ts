@@ -5,7 +5,7 @@ import type { TidalStreamResolver } from '@/adapters/content/providers/tidal/tid
 import type { ContentPort, BuildQueueOptions } from '@/ports/ContentPort';
 import type { ContentFolder, ContentFolderItem, ContentItemMetadata } from '@/ports/ContentTypes';
 import type { PlaybackSourceResolveArgs, StreamResolution } from '@/ports/types/StreamResolution';
-import { detectServiceFromAudiopath } from '@/shared/audiopath';
+import { detectServiceFromAudiopath } from '@/domain/loxone/audiopath';
 import type { QueueItem } from '@/ports/types/queueTypes';
 
 type ContentStreamResolvers = {

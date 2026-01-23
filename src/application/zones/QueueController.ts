@@ -2,7 +2,7 @@ import type { ComponentLogger } from '@/shared/logging/logger';
 import type { ContentFolderItem } from '@/ports/ContentTypes';
 import type { ContentPort } from '@/ports/ContentPort';
 import type { NotifierPort } from '@/ports/NotifierPort';
-import { decodeAudiopath, detectServiceFromAudiopath } from '@/shared/audiopath';
+import { decodeAudiopath, detectServiceFromAudiopath } from '@/domain/loxone/audiopath';
 import {
   createQueueItem,
   mapFolderItemsToQueue,

@@ -1,4 +1,4 @@
-import { inferAudiotype } from '@/shared/audiopath';
+import { inferAudiotype } from '@/domain/loxone/audiopath';
 import type { PlaybackMetadata } from '@/application/playback/audioManager';
 import type { ContentFolderItem } from '@/ports/ContentTypes';
 

@@ -3,7 +3,7 @@ import { safeReadText } from '@/shared/bestEffort';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { SpotifyBridgeConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
-import { decodeAudiopath } from '@/shared/audiopath';
+import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import Widevine, { LicenseType as WvLicenseType } from 'widevine';
 import { loadWidevineArtifacts } from './widevine';
 import protobuf from 'protobufjs';

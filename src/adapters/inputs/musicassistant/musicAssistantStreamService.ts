@@ -6,7 +6,7 @@ import type { QueueItem } from '@/application/zones/zoneManager';
 import WebSocket from 'ws';
 import { performance } from 'node:perf_hooks';
 import { MusicAssistantApi } from '@/shared/musicassistant/musicAssistantApi';
-import { decodeAudiopath, encodeAudiopath } from '@/shared/audiopath';
+import { decodeAudiopath, encodeAudiopath } from '@/domain/loxone/audiopath';
 import { PassThrough } from 'node:stream';
 import { generateQueueId } from '@/application/zones/helpers/queueHelpers';
 

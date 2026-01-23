@@ -1,7 +1,7 @@
 import type { QueueItem, ZoneContext } from '@/application/zones/internal/zoneTypes';
 import { normalizeSpotifyAudiopath, parseSpotifyUser } from '@/application/zones/helpers/queueHelpers';
 import { AudioEventType, AudioType, FileType } from '@/domain/loxone/enums';
-import { decodeAudiopath, detectServiceFromAudiopath, encodeAudiopath } from '@/shared/audiopath';
+import { decodeAudiopath, detectServiceFromAudiopath, encodeAudiopath } from '@/domain/loxone/audiopath';
 import { getMusicAssistantProviderId, getMusicAssistantUserId } from '@/application/zones/internal/musicAssistantProvider';
 import type { ContentPort } from '@/ports/ContentPort';
 import type { ConfigPort } from '@/ports/ConfigPort';

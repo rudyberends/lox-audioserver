@@ -1,4 +1,4 @@
-import { decodeAudiopath } from '@/shared/audiopath';
+import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import { normalizeSpotifyAudiopath } from '@/application/zones/helpers/queueHelpers';
 
 export type ParentContext = {

@@ -3,7 +3,7 @@ import { createLogger } from '@/shared/logging/logger';
 import { safeReadText } from '@/shared/bestEffort';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { HttpPreferences, PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
-import { decodeAudiopath } from '@/shared/audiopath';
+import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
 import { resolveDlnaEndpoints } from '@/adapters/outputs/dlna/dlnaDiscovery';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';

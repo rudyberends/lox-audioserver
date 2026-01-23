@@ -7,7 +7,7 @@ import {
 import type { QueueItem } from '@/application/zones/zoneManager';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ContentPort } from '@/ports/ContentPort';
-import { detectLoxoneItemType, detectServiceFromAudiopath, decodeAudiopath } from '@/shared/audiopath';
+import { detectLoxoneItemType, detectServiceFromAudiopath, decodeAudiopath } from '@/domain/loxone/audiopath';
 import { bestEffort } from '@/shared/bestEffort';
 
 const MAX_RECENTS = 5;

@@ -1,6 +1,6 @@
 import { createLogger } from '@/shared/logging/logger';
 import { safeReadText } from '@/shared/bestEffort';
-import { decodeAudiopath } from '@/shared/audiopath';
+import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import type {
