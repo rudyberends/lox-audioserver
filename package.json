@@ -12,7 +12,8 @@
     "@": "dist"
   },
   "scripts": {
-    "lint": "eslint src/**.ts --max-warnings=0",
+    "lint": "eslint src/**.ts --max-warnings=0 && npm run depcheck",
+    "depcheck": "depcruise --config .dependency-cruiser.cjs src",
     "watch": "concurrently \"npm:watch:server\" \"npm:watch:admin\"",
     "watch:server": "nodemon",
     "watch:admin": "vite build --config vite.admin.config.mts --watch",
@@ -56,6 +57,7 @@
     "eslint": "^9.38.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",
+    "dependency-cruiser": "^16.7.0",
     "husky": "^9.1.7",
     "nodemon": "^3.1.10",
     "prettier": "^3.6.2",
