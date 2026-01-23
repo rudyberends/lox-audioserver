@@ -8,6 +8,7 @@ import path from 'node:path';
 import { test, tests } from './testHarness';
 import './architecture/importBoundaries.test';
 import './playbackRefactorSeams.test';
+import './playbackCoordinator.characterization.test';
 import './adminApiJsonBody.test';
 import './airplayPcmStream.test';
 import './runtimeShutdown.test';
