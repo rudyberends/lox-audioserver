@@ -235,6 +235,7 @@ class FakeRecentsManager {
 class FakeAudioManager {
   public readonly preferred: Array<{ zoneId: number; settings: unknown }> = [];
   public readonly httpPrefs: Array<{ zoneId: number; prefs: unknown }> = [];
+  public readonly inputPrefs: Array<{ zoneId: number; prefs: unknown }> = [];
 
   public setPreferredOutputSettings(zoneId: number, settings: unknown): void {
     this.preferred.push({ zoneId, settings });
@@ -242,6 +243,10 @@ class FakeAudioManager {
 
   public setHttpPreferences(zoneId: number, prefs: unknown): void {
     this.httpPrefs.push({ zoneId, prefs });
+  }
+
+  public setInputPreferences(zoneId: number, prefs: unknown): void {
+    this.inputPrefs.push({ zoneId, prefs });
   }
 }
 
