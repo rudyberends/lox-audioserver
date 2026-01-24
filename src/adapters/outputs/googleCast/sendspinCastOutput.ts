@@ -1,7 +1,5 @@
-import util from 'node:util';
-import { URL } from 'node:url';
 import { createLogger } from '@/shared/logging/logger';
-import { bestEffortSync } from '@/shared/bestEffort';
+import { bestEffort } from '@/shared/bestEffort';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import {
@@ -9,16 +7,14 @@ import {
   type SendspinMetadataPayload,
 } from '@/adapters/outputs/sendspin/sendspinOutput';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
+import type { CastDevice, DiscoveredDevice } from '@lox-audioserver/node-googlecast';
+import { loadGoogleCastModule } from '@/adapters/outputs/googleCast/googlecastLoader';
+import {
+  createJsonNamespaceControllerFactory,
+  type JsonNamespaceController,
+} from '@/adapters/outputs/googleCast/googlecastNamespace';
 
-// castv2-client has no bundled types; import via require to avoid TS resolution issues.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const castv2: any = require('castv2-client');
-const { Client: CastClient } = castv2;
-const JsonController =
-  castv2.controllers?.Json || castv2.JsonController || require('castv2-client/lib/controllers/json');
-const ApplicationBase = require('castv2-client/lib/senders/application');
-
-const DEFAULT_SENDSPIN_APP_ID = '7268B1DD';
+const DEFAULT_SENDSPIN_APP_ID = '938CBF87';
 const DEFAULT_SENDSPIN_NAMESPACE = 'urn:x-cast:sendspin';
 
 export interface SendspinCastOutputConfig {
@@ -42,16 +38,6 @@ export const SENDSPIN_CAST_OUTPUT_DEFINITION: OutputConfigDefinition = {
   ],
 };
 
-function createSendspinApp(appId: string, namespace: string) {
-  function SendspinApp(this: any, client: any, session: any) {
-    ApplicationBase.call(this, client, session);
-    this.channel = this.createController(JsonController, namespace);
-  }
-  util.inherits(SendspinApp, ApplicationBase);
-  (SendspinApp as any).APP_ID = appId;
-  return SendspinApp as any;
-}
-
 export class SendspinCastOutput implements ZoneOutput {
   public readonly type = 'sendspin-cast';
   private readonly log = createLogger('Output', 'SendspinCast');
@@ -59,10 +45,10 @@ export class SendspinCastOutput implements ZoneOutput {
   private readonly base: SendspinOutput;
   private latestMetadata: SendspinMetadataPayload | null = null;
 
-  private client: any | null = null;
-  private receiver: any | null = null;
+  private castDevice: CastDevice | null = null;
+  private namespaceController: JsonNamespaceController | null = null;
   private connected = false;
-  private castMessageHandler: ((message: any) => void) | null = null;
+  private castMessageHandler: ((message: Record<string, unknown>) => void) | null = null;
   private lastKnownVolume = 50;
   private lastCastVolumeLogged: number | null = null;
   private lastCastMuteLogged: boolean | null = null;
@@ -85,6 +71,7 @@ export class SendspinCastOutput implements ZoneOutput {
       { clientId: this.clientId },
       {
         onMetadata: (payload) => this.handleMetadataUpdate(payload),
+        ignoreVolumeUpdates: true,
       },
       this.ports,
     );
@@ -143,6 +130,9 @@ export class SendspinCastOutput implements ZoneOutput {
     this.sendspinLastEnsureMs = now;
     try {
       await this.ensureConnected();
+      if (this.base.isClientConnected() && this.namespaceController) {
+        return;
+      }
       await this.startSendspinApp();
     } catch (err) {
       this.log.debug('Sendspin Cast ensure ready failed', {
@@ -159,76 +149,71 @@ export class SendspinCastOutput implements ZoneOutput {
   }
 
   private async ensureConnected(): Promise<void> {
-    if (this.connected && this.client) return;
-    await new Promise<void>((resolve, reject) => {
-      const client = new CastClient();
-      // Best-effort; older cast client builds may not support setMaxListeners.
-      bestEffortSync(() => client.setMaxListeners?.(20), {
-        fallback: undefined,
-        onError: 'debug',
-        log: this.log,
-        label: 'Sendspin Cast setMaxListeners failed',
-        context: { host: this.config.host },
+    if (this.connected && this.castDevice) return;
+    const { connect } = await loadGoogleCastModule();
+    const device = this.buildDeviceDescriptor();
+    const castDevice = await connect(device);
+    this.castDevice = castDevice;
+    this.connected = true;
+    this.log.info('Sendspin Cast connected', { host: this.config.host });
+    castDevice.on('disconnected', (err?: Error) => {
+      this.log.warn('Sendspin Cast disconnected', {
+        host: this.config.host,
+        message: err?.message,
       });
-      client.connect(this.config.host, () => {
-        this.client = client;
-        this.connected = true;
-        this.log.info('Sendspin Cast connected', { host: this.config.host });
-        client.on('close', () => this.disconnect());
-        client.on('error', (err: Error) => {
-          this.log.warn('Sendspin Cast error', { host: this.config.host, message: err.message });
-          this.disconnect();
-        });
-        resolve();
-      });
-      client.on('error', (err: Error) => reject(err));
+      this.disconnect();
+    });
+    castDevice.on('error', (err: Error) => {
+      this.log.warn('Sendspin Cast error', { host: this.config.host, message: err.message });
+      this.disconnect();
     });
   }
 
   private async startSendspinApp(): Promise<void> {
-    if (!this.client) return;
-    const appId = this.config.namespace ? undefined : DEFAULT_SENDSPIN_APP_ID;
+    if (!this.castDevice) return;
     const namespace = this.config.namespace || DEFAULT_SENDSPIN_NAMESPACE;
     const playerId = this.getClientId();
     const syncDelay = Number.isFinite(Number(this.config.syncDelayMs)) ? Number(this.config.syncDelayMs) : 0;
-    const SendspinApp = createSendspinApp(appId || DEFAULT_SENDSPIN_APP_ID, namespace);
-
-    await new Promise<void>((resolve, reject) => {
-      if (!this.client) return reject(new Error('cast client missing'));
-      this.client.launch(SendspinApp, (err: Error, app: any) => {
-        if (err) return reject(err);
-        this.receiver = app;
-        this.attachCastChannel(app);
-        const payload = {
-          type: 'setup',
-          serverUrl: this.buildSendspinWsUrl(),
-          playerId,
-          playerName: this.zoneName,
-          syncDelay,
-          codecs: ['pcm', 'opus', 'flac'],
-          metadata: this.latestMetadata || undefined,
-        };
-        try {
-          app.channel.send(payload);
-          this.log.info('Sendspin Cast payload sent', { zoneId: this.zoneId, payload });
-          this.sendMetadataToReceiver();
-        } catch (sendErr: any) {
-          this.log.warn('Sendspin Cast payload failed', { zoneId: this.zoneId, message: sendErr?.message });
-        }
-        resolve();
-      });
-    });
+    const session = this.castDevice.getSession();
+    if (!session || session.appId !== DEFAULT_SENDSPIN_APP_ID) {
+      await this.castDevice.launchApp(DEFAULT_SENDSPIN_APP_ID);
+    }
+    if (!this.namespaceController) {
+      const factory = await createJsonNamespaceControllerFactory(namespace);
+      const controller = this.castDevice.addAppController(namespace, factory);
+      this.namespaceController = controller;
+      this.attachCastChannel(controller);
+    }
+    const controller = this.namespaceController;
+    if (!controller) {
+      throw new Error('sendspin namespace controller missing');
+    }
+    const payload = {
+      type: 'setup',
+      serverUrl: this.buildSendspinServerUrl(),
+      playerId,
+      playerName: this.zoneName,
+      syncDelay,
+      codecs: ['pcm', 'opus', 'flac'],
+      metadata: this.latestMetadata || undefined,
+    };
+    try {
+      await controller.sendMessage(payload);
+      this.log.info('Sendspin Cast payload sent', { zoneId: this.zoneId, payload });
+      void this.sendMetadataToReceiver();
+    } catch (sendErr: any) {
+      this.log.warn('Sendspin Cast payload failed', { zoneId: this.zoneId, message: sendErr?.message });
+    }
   }
 
-  private attachCastChannel(app: any): void {
-    if (!app?.channel) return;
+  private attachCastChannel(controller: JsonNamespaceController): void {
     this.detachCastChannel();
-    const handler = (message: any) => this.handleCastMessage(message);
+    const handler = (message: Record<string, unknown>) => this.handleCastMessage(message);
     try {
-      app.channel.on('message', handler);
+      controller.on('message', handler);
       this.castMessageHandler = handler;
       if (this.metadataSendPending && this.latestMetadata) {
-        this.sendMetadataToReceiver();
+        void this.sendMetadataToReceiver();
       }
     } catch (err) {
       this.log.debug('Sendspin Cast channel attach failed', {
@@ -239,15 +224,8 @@ export class SendspinCastOutput implements ZoneOutput {
   }
 
   private detachCastChannel(): void {
-    if (this.receiver?.channel && this.castMessageHandler) {
-      // Best-effort; channel may already be gone.
-      bestEffortSync(() => this.receiver.channel.removeListener('message', this.castMessageHandler), {
-        fallback: undefined,
-        onError: 'debug',
-        log: this.log,
-        label: 'Sendspin Cast channel detach failed',
-        context: { zoneId: this.zoneId },
-      });
+    if (this.namespaceController && this.castMessageHandler) {
+      this.namespaceController.off('message', this.castMessageHandler);
     }
     this.castMessageHandler = null;
     if (this.metadataRetryTimer) {
@@ -324,36 +302,37 @@ export class SendspinCastOutput implements ZoneOutput {
   private disconnect(): void {
     this.connected = false;
     this.detachCastChannel();
-    if (this.receiver) {
-      // Best-effort; receiver may already be closing.
-      bestEffortSync(() => this.receiver.close?.(), {
-        fallback: undefined,
-        onError: 'debug',
-        log: this.log,
-        label: 'Sendspin Cast receiver close failed',
-        context: { zoneId: this.zoneId },
-      });
-      this.receiver = null;
-    }
-    if (this.client) {
-      // Best-effort; client may already be closing.
-      bestEffortSync(() => this.client.close(), {
+    if (this.castDevice) {
+      // Best-effort; device may already be closing.
+      void bestEffort(() => this.castDevice!.disconnect(), {
         fallback: undefined,
         onError: 'debug',
         log: this.log,
         label: 'Sendspin Cast client close failed',
         context: { zoneId: this.zoneId },
       });
-      this.client = null;
+      this.castDevice = null;
     }
+    this.namespaceController = null;
   }
 
-  private buildSendspinWsUrl(): string {
-    const host = this.resolvePublicHost() || '127.0.0.1';
-    const url = new URL(`ws://${host}:7090/sendspin`);
-    url.searchParams.set('zone', String(this.zoneId));
-    url.searchParams.set('player', this.clientId);
-    return url.toString();
+  private buildSendspinServerUrl(): string {
+    const host = this.resolvePublicHost();
+    if (!host) {
+      throw new Error('audioserver ip missing');
+    }
+    return `http://${host}:7090`;
+  }
+
+  private buildDeviceDescriptor(): DiscoveredDevice {
+    const name = this.config.name?.trim() || this.zoneName;
+    return {
+      id: `sendspin-cast-${this.zoneId}-${this.config.host}`,
+      name,
+      host: this.config.host,
+      port: 8009,
+      lastSeen: Date.now(),
+    };
   }
 
   private resolvePublicHost(): string {
@@ -369,7 +348,7 @@ export class SendspinCastOutput implements ZoneOutput {
       artist: this.latestMetadata.artist,
       album: this.latestMetadata.album,
     });
-    this.sendMetadataToReceiver();
+    void this.sendMetadataToReceiver();
   }
 
   private mergeMetadataPayload(update: SendspinMetadataPayload): SendspinMetadataPayload {
@@ -392,8 +371,8 @@ export class SendspinCastOutput implements ZoneOutput {
     return base;
   }
 
-  private sendMetadataToReceiver(): void {
-    if (!this.receiver?.channel || !this.latestMetadata) {
+  private async sendMetadataToReceiver(): Promise<void> {
+    if (!this.namespaceController || !this.latestMetadata) {
       if (this.latestMetadata) {
         this.metadataSendPending = true;
       }
@@ -408,10 +387,10 @@ export class SendspinCastOutput implements ZoneOutput {
       });
       const message = {
         type: 'metadata',
-        payload: this.latestMetadata,
+        metadata: this.latestMetadata,
       };
       // Send as plain object to the JSON namespace; CAF will deliver parsed data to the receiver.
-      this.receiver.channel.send(message);
+      await this.namespaceController.sendMessage(message);
       this.metadataSendPending = false;
       if (this.metadataRetryTimer) {
         clearTimeout(this.metadataRetryTimer);
@@ -427,7 +406,7 @@ export class SendspinCastOutput implements ZoneOutput {
         this.metadataRetryTimer = setTimeout(() => {
           this.metadataRetryTimer = null;
           if (this.metadataSendPending) {
-            this.sendMetadataToReceiver();
+            void this.sendMetadataToReceiver();
           }
         }, 1000);
       }

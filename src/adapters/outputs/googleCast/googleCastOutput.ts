@@ -1,82 +1,14 @@
-import util from 'node:util';
 import { networkInterfaces } from 'node:os';
 import { createLogger } from '@/shared/logging/logger';
-import { bestEffort, bestEffortSync } from '@/shared/bestEffort';
+import { bestEffort } from '@/shared/bestEffort';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { HttpPreferences, PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import { isHttpUrl } from '@/shared/coverArt';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
+import type { CastDevice, DiscoveredDevice, MediaStatusModel } from '@lox-audioserver/node-googlecast';
+import { loadGoogleCastModule } from '@/adapters/outputs/googleCast/googlecastLoader';
 
-// castv2-client has no bundled types; import via require to avoid TS resolution issues.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const castv2: any = require('castv2-client');
-const { Client: CastClient, DefaultMediaReceiver } = castv2;
-
-let castMediaControllerPatched = false;
-const patchCastMediaController = (): void => {
-  if (castMediaControllerPatched) return;
-  castMediaControllerPatched = true;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const MediaController = require('castv2-client/lib/controllers/media') as any;
-    if (!MediaController?.prototype || MediaController.prototype.__safePatched) {
-      return;
-    }
-    MediaController.prototype.__safePatched = true;
-
-    MediaController.prototype.load = function load(media: any, options: any, callback: any): void {
-      let opts = options;
-      let cb = callback;
-      if (typeof opts === 'function') {
-        cb = opts;
-        opts = {};
-      }
-      cb = cb || (() => {});
-      const data: any = {
-        type: 'LOAD',
-        autoplay: opts?.autoplay,
-        currentTime: opts?.currentTime,
-        activeTrackIds: opts?.activeTrackIds,
-      };
-      data.media = media;
-      this.request(data, (err: any, response: any) => {
-        if (err) return cb(err);
-        if (response?.type === 'LOAD_FAILED') {
-          return cb(new Error('Load failed'));
-        }
-        if (response?.type === 'LOAD_CANCELLED') {
-          return cb(new Error('Load cancelled'));
-        }
-        const status = response?.status?.[0];
-        if (!status) {
-          return cb(new Error('Load missing status'));
-        }
-        return cb(null, status);
-      });
-    };
-
-    MediaController.prototype.sessionRequest = function sessionRequest(data: any, callback: any): void {
-      const cb = callback || (() => {});
-      if (!this.currentSession?.mediaSessionId) {
-        cb(new Error('Missing media session'));
-        return;
-      }
-      data.mediaSessionId = this.currentSession.mediaSessionId;
-      this.request(data, (err: any, response: any) => {
-        if (err) return cb(err);
-        const status = response?.status?.[0];
-        if (!status) {
-          return cb(new Error('Session request missing status'));
-        }
-        return cb(null, status);
-      });
-    };
-  } catch {
-    // Keep default behavior if patching fails.
-  }
-};
-
-patchCastMediaController();
+const DEFAULT_MEDIA_RECEIVER_APP_ID = 'CC1AD845';
 export interface GoogleCastOutputConfig {
   host: string;
   name?: string;
@@ -96,8 +28,7 @@ export const GOOGLE_CAST_OUTPUT_DEFINITION: OutputConfigDefinition = {
 export class GoogleCastOutput implements ZoneOutput {
   public readonly type = 'googleCast';
   private readonly log = createLogger('Output', 'GoogleCast');
-  private client: any | null = null;
-  private receiver: any | null = null;
+  private castDevice: CastDevice | null = null;
   private connected = false;
   private lastLoadAt = 0;
   private lastLoadSignature: string | null = null;
@@ -106,6 +37,13 @@ export class GoogleCastOutput implements ZoneOutput {
   private lastMetadataUpdateAt = 0;
   private lastMetadataLoadAttemptAt = 0;
   private metadataLoadCooldownUntil = 0;
+  private lastKnownVolume = 50;
+  private lastOutboundVolumeAt: number | null = null;
+  private lastOutboundVolume: number | null = null;
+  private lastOutboundStateAt: number | null = null;
+  private lastOutboundState: 'playing' | 'paused' | 'stopped' | null = null;
+  private lastForwardedState: 'playing' | 'paused' | 'stopped' | null = null;
+  private suppressRemoteStateUntil = 0;
 
   constructor(
     private readonly zoneId: number,
@@ -123,14 +61,16 @@ export class GoogleCastOutput implements ZoneOutput {
       this.log.warn('Google Cast output skipped; no playback source', { zoneId: this.zoneId });
       return;
     }
+    this.markOutboundState('playing');
     await this.connect();
     await this.loadStream(session);
   }
 
   public async pause(_session: PlaybackSession | null): Promise<void> {
-    if (this.receiver) {
+    if (this.castDevice) {
       // Best-effort pause; cast may reject during transitions.
-      await bestEffort(() => util.promisify((cb: any) => this.receiver.pause(cb))(), {
+      this.markOutboundState('paused');
+      await bestEffort(() => this.castDevice!.media.pauseCurrent(), {
         fallback: undefined,
         onError: 'debug',
         log: this.log,
@@ -144,9 +84,10 @@ export class GoogleCastOutput implements ZoneOutput {
 
   public async resume(session: PlaybackSession | null): Promise<void> {
     if (!session) return;
-    if (this.receiver) {
+    if (this.castDevice) {
       // Best-effort resume; cast may reject during transitions.
-      await bestEffort(() => util.promisify((cb: any) => this.receiver.play(cb))(), {
+      this.markOutboundState('playing');
+      await bestEffort(() => this.castDevice!.media.playCurrent(), {
         fallback: undefined,
         onError: 'debug',
         log: this.log,
@@ -159,21 +100,20 @@ export class GoogleCastOutput implements ZoneOutput {
   }
 
   public async stop(_session: PlaybackSession | null): Promise<void> {
+    this.markOutboundState('stopped');
     await this.stopStream();
   }
 
   public async setPosition(positionMs: number): Promise<void> {
-    if (!this.receiver || !this.lastMediaSessionId) {
+    if (!this.castDevice || !this.lastMediaSessionId) {
       this.log.debug('Google Cast seek skipped; no receiver or session', { zoneId: this.zoneId });
       return;
     }
     const seconds = Math.max(0, positionMs / 1000);
     this.log.debug('Google Cast seek', { zoneId: this.zoneId, seconds });
-    await util
-      .promisify((cb: any) => this.receiver.seek(seconds, cb))()
-      .catch((err: any) => {
-        this.log.debug('Google Cast seek failed', { zoneId: this.zoneId, message: err?.message });
-      });
+    await this.castDevice.media.seekCurrent(seconds).catch((err: any) => {
+      this.log.debug('Google Cast seek failed', { zoneId: this.zoneId, message: err?.message });
+    });
   }
 
   public async dispose(): Promise<void> {
@@ -182,16 +122,15 @@ export class GoogleCastOutput implements ZoneOutput {
   }
 
   public async setVolume(level: number): Promise<void> {
-    if (!this.client) return;
+    if (!this.castDevice) return;
     const volume = Math.max(0, Math.min(1, level / 100));
-    await util.promisify((cb: any) => this.client.setVolume({ level: volume }, cb))().catch(
-      (err: any) => {
-        this.log.debug('Google Cast setVolume failed', {
-          zoneId: this.zoneId,
-          message: err?.message,
-        });
-      },
-    );
+    this.markOutboundVolume(level);
+    await this.castDevice.volume.setVolume(volume).catch((err: any) => {
+      this.log.debug('Google Cast setVolume failed', {
+        zoneId: this.zoneId,
+        message: err?.message,
+      });
+    });
   }
 
   public async updateMetadata(session: PlaybackSession | null): Promise<void> {
@@ -201,57 +140,47 @@ export class GoogleCastOutput implements ZoneOutput {
     if (signature === this.lastMetadataSignature) {
       return;
     }
-    if (Date.now() - this.lastMetadataUpdateAt < 1500) {
-      return;
-    }
-    const receiver = this.receiver;
-    if (!receiver) {
-      this.log.debug('Google Cast metadata skipped; no receiver yet', { zoneId: this.zoneId });
+    const now = Date.now();
+    if (signature === this.lastLoadSignature && now - this.lastLoadAt < 3000) {
       this.lastMetadataSignature = signature;
-      this.lastMetadataUpdateAt = Date.now();
+      this.lastMetadataUpdateAt = now;
       return;
     }
-
-    this.log.info('Google Cast metadata update', {
-      zoneId: this.zoneId,
-      title: session.metadata?.title,
-      artist: session.metadata?.artist,
-      elapsedSec: session.elapsed,
-      durationSec: session.duration,
+    if (now < this.metadataLoadCooldownUntil) {
+      this.lastMetadataSignature = signature;
+      this.lastMetadataUpdateAt = now;
+      return;
+    }
+    if (now - this.lastMetadataUpdateAt < 1500) {
+      return;
+    }
+    const meta = (session.metadata ?? {}) as { duration?: number };
+    const durationSec = session.duration || meta.duration || 0;
+    const isLiveStream = !durationSec || durationSec <= 0;
+    if (isLiveStream) {
+      // Avoid reloads for live streams; metadata updates require a session update API.
+      this.lastMetadataSignature = signature;
+      this.lastMetadataUpdateAt = now;
+      return;
+    }
+    if (!this.castDevice) {
+      this.lastMetadataSignature = signature;
+      this.lastMetadataUpdateAt = now;
+      return;
+    }
+    if (now - this.lastMetadataLoadAttemptAt < 1000) {
+      return;
+    }
+    this.lastMetadataLoadAttemptAt = now;
+    await bestEffort(() => this.loadStream(session), {
+      fallback: undefined,
+      onError: 'debug',
+      log: this.log,
+      label: 'cast metadata reload failed',
+      context: { zoneId: this.zoneId },
     });
-
-    const media = this.buildMedia(session);
-    const status: any = await bestEffort(
-      () => util.promisify((cb: any) => receiver.getStatus(cb))(),
-      {
-        // Best-effort status query; skip metadata push if status is unavailable.
-        fallback: null,
-        onError: 'debug',
-        log: this.log,
-        label: 'cast status read failed',
-        context: { zoneId: this.zoneId },
-      },
-    );
-    const isLiveStream = !media.duration || media.streamType === 'LIVE';
-    const controller = (receiver as any)?.media;
-    if (controller && status) {
-      controller.currentSession = status;
-    }
-    const canPushMetadata =
-      isLiveStream && status?.playerState === 'PLAYING' && status?.mediaSessionId && !!controller?.sessionRequest;
-
-    let updated = false;
-    if (canPushMetadata) {
-      updated = await this.pushMetadataUpdate(media.metadata, media.customData ?? {});
-    }
-    if (!updated) {
-      // Avoid re-loading media on every metadata tick; it causes Cast to reset/buffer.
-      this.lastMetadataSignature = signature;
-      this.lastMetadataUpdateAt = Date.now();
-      return;
-    }
     this.lastMetadataSignature = signature;
-    this.lastMetadataUpdateAt = Date.now();
+    this.lastMetadataUpdateAt = now;
   }
 
   public getPreferredOutput(): PreferredOutput {
@@ -266,38 +195,41 @@ export class GoogleCastOutput implements ZoneOutput {
 
   private async connect(): Promise<void> {
     if (this.connected) return;
-    return new Promise((resolve, reject) => {
-      const client = new CastClient();
-      client.connect(this.config.host, () => {
-        this.connected = true;
-        this.client = client;
-        this.log.info('Google Cast connected', { zoneId: this.zoneId, host: this.config.host });
-        client.on('close', () => this.disconnect());
-        client.on('error', (err: any) => {
-          this.log.warn('Google Cast client error', { zoneId: this.zoneId, message: err?.message });
-          this.disconnect();
-        });
-        resolve();
+    const { connect } = await loadGoogleCastModule();
+    const device = this.buildDeviceDescriptor();
+    const castDevice = await connect(device);
+    this.castDevice = castDevice;
+    this.connected = true;
+    this.log.info('Google Cast connected', { zoneId: this.zoneId, host: this.config.host });
+    castDevice.on('disconnected', (err?: Error) => {
+      this.log.warn('Google Cast disconnected', {
+        zoneId: this.zoneId,
+        host: this.config.host,
+        message: err?.message,
       });
-      client.on('error', (err: any) => {
-        this.log.warn('Google Cast connect error', { zoneId: this.zoneId, message: err?.message });
-        reject(err);
-      });
+      this.disconnect();
     });
+    castDevice.on('error', (err: Error) => {
+      this.log.warn('Google Cast client error', { zoneId: this.zoneId, message: err?.message });
+      this.disconnect();
+    });
+    castDevice.on('mediaStatusModel', (status: MediaStatusModel) => this.handleStatus(status));
+    castDevice.on('volumeChanged', (volume) => this.handleVolume(volume));
   }
 
   private disconnect(): void {
     this.connected = false;
-    // Best-effort close; cast clients may already be gone.
-    bestEffortSync(() => this.client?.close(), {
-      fallback: undefined,
-      onError: 'debug',
-      log: this.log,
-      label: 'cast client close failed',
-      context: { zoneId: this.zoneId },
-    });
-    this.client = null;
-    this.receiver = null;
+    if (this.castDevice) {
+      // Best-effort close; cast clients may already be gone.
+      void bestEffort(() => this.castDevice!.disconnect(), {
+        fallback: undefined,
+        onError: 'debug',
+        log: this.log,
+        label: 'cast client close failed',
+        context: { zoneId: this.zoneId },
+      });
+    }
+    this.castDevice = null;
     this.lastLoadSignature = null;
     this.lastMetadataSignature = null;
     this.lastMediaSessionId = null;
@@ -305,22 +237,23 @@ export class GoogleCastOutput implements ZoneOutput {
   }
 
   private async loadStream(session: PlaybackSession): Promise<void> {
-    if (!this.client) return;
+    if (!this.castDevice) return;
     const media = this.buildMedia(session);
     const signature = this.buildMediaSignature(session);
     if (this.lastLoadSignature === signature && Date.now() - this.lastLoadAt < 1000) {
       return;
     }
 
-    let receiver = await this.ensureReceiver();
-    let loaded = await this.loadMedia(receiver, media, {
+    await this.ensureReceiver();
+    const now = Date.now();
+    this.suppressRemoteStateUntil = Math.max(this.suppressRemoteStateUntil, now + 3000);
+    let loaded = await this.loadMedia(media, {
       autoplay: true,
       currentTime: session.elapsed ? session.elapsed : 0,
     });
     if (!loaded) {
-      this.receiver = null;
-      receiver = await this.ensureReceiver();
-      loaded = await this.loadMedia(receiver, media, {
+      await this.ensureReceiver();
+      loaded = await this.loadMedia(media, {
         autoplay: true,
         currentTime: session.elapsed ? session.elapsed : 0,
       });
@@ -331,12 +264,13 @@ export class GoogleCastOutput implements ZoneOutput {
     this.lastLoadSignature = signature;
     this.lastMetadataSignature = signature;
     this.lastLoadAt = Date.now();
-    await this.ensurePlayback(receiver);
+    await this.ensurePlayback();
   }
 
   private async stopStream(): Promise<void> {
+    if (!this.castDevice) return;
     // Best-effort stop; receiver may already be idle.
-    await bestEffort(() => this.stopReceiver(), {
+    await bestEffort(() => this.castDevice!.media.stopCurrent(), {
       fallback: undefined,
       onError: 'debug',
       log: this.log,
@@ -345,70 +279,126 @@ export class GoogleCastOutput implements ZoneOutput {
     });
   }
 
-  private async stopReceiver(): Promise<void> {
-    if (!this.receiver) return;
-    await util.promisify((cb: any) => this.receiver.stop(cb))();
-  }
-
-  private async ensureReceiver(): Promise<any> {
-    if (this.receiver) {
-      return this.receiver;
+  private async ensureReceiver(): Promise<void> {
+    if (!this.castDevice) return;
+    try {
+      await this.castDevice.launchApp(DEFAULT_MEDIA_RECEIVER_APP_ID);
+    } catch (err: any) {
+      this.log.warn('Google Cast launch error', { zoneId: this.zoneId, message: err?.message });
+      throw err;
     }
-    return await new Promise<any>((resolve, reject) => {
-      this.client.launch(DefaultMediaReceiver, (err: any, receiver: any) => {
-        if (err) {
-          this.log.warn('Google Cast launch error', { zoneId: this.zoneId, message: err?.message });
-          reject(err);
-          return;
-        }
-        const previous = this.receiver;
-        if (previous) {
-          // Best-effort cleanup; receiver might be partially torn down.
-          bestEffortSync(() => previous.removeAllListeners?.('status'), {
-            fallback: undefined,
-            onError: 'debug',
-            log: this.log,
-            label: 'cast status listener cleanup failed',
-            context: { zoneId: this.zoneId },
-          });
-        }
-        this.receiver = receiver;
-        receiver.on('status', (status: any) => this.handleStatus(status));
-        resolve(receiver);
-      });
-    });
   }
 
-  private handleStatus(status: any): void {
+  private handleStatus(status: MediaStatusModel): void {
     if (!status) return;
-    const state = status.playerState;
-    if (status.mediaSessionId) {
+    if (typeof status.mediaSessionId === 'number') {
       this.lastMediaSessionId = status.mediaSessionId;
     }
-    this.log.debug('Google Cast status', { zoneId: this.zoneId, state });
+    this.log.debug('Google Cast status', { zoneId: this.zoneId, state: status.playerState });
     const mappedStatus =
-      state === 'PLAYING' ? 'playing' : state === 'PAUSED' ? 'paused' : state === 'IDLE' ? 'stopped' : undefined;
+      status.playerIsPlaying ? 'playing' : status.playerIsPaused ? 'paused' : status.playerIsIdle ? 'stopped' : undefined;
     if (!mappedStatus) {
       return;
     }
-    const duration =
-      typeof status.media?.duration === 'number'
-        ? status.media.duration
-        : typeof status.media?.metadata?.duration === 'number'
-          ? status.media.metadata.duration
-          : undefined;
+    const duration = typeof status.duration === 'number' ? status.duration : undefined;
     const position = typeof status.currentTime === 'number' ? status.currentTime : undefined;
-    const uri =
-      status.media?.customData?.uri ??
-      status.media?.customData?.queue_item_id ??
-      status.media?.contentId ??
+    const customData = status.mediaCustomData as Record<string, unknown>;
+    const uriCandidate =
+      customData?.uri ??
+      customData?.queue_item_id ??
+      status.contentId ??
       undefined;
+    const uri = typeof uriCandidate === 'string' ? uriCandidate : undefined;
     this.ports.outputHandlers.onOutputState(this.zoneId, {
       status: mappedStatus,
       position,
       duration,
       uri,
     });
+    const ignoreStop =
+      mappedStatus === 'stopped' && status.playerIsIdle && status.idleReason === 'FINISHED';
+    this.maybeForwardRemoteState(mappedStatus, { ignoreStop });
+  }
+
+  private handleVolume(volume?: {
+    level?: number;
+    muted?: boolean;
+    controlType?: 'fixed' | 'attenuation' | 'master';
+  }): void {
+    if (!volume) return;
+    if (typeof volume.level === 'number' && Number.isFinite(volume.level)) {
+      const vol = Math.min(100, Math.max(0, Math.round(volume.level * 100)));
+      const now = Date.now();
+      const recentlySent =
+        this.lastOutboundVolumeAt != null && now - this.lastOutboundVolumeAt < 1000;
+      const outboundMatches =
+        this.lastOutboundVolume != null && Math.abs(vol - this.lastOutboundVolume) <= 1;
+      if (recentlySent && outboundMatches) {
+        return;
+      }
+      if (vol !== this.lastKnownVolume) {
+        this.lastKnownVolume = vol;
+        this.ports.zoneManager.handleCommand(this.zoneId, 'volume_set', String(vol));
+      }
+    }
+    if (typeof volume.muted === 'boolean') {
+      if (volume.muted) {
+        this.ports.zoneManager.handleCommand(this.zoneId, 'volume_set', '0');
+      } else {
+        this.ports.zoneManager.handleCommand(
+          this.zoneId,
+          'volume_set',
+          String(this.lastKnownVolume),
+        );
+      }
+    }
+  }
+
+  private maybeForwardRemoteState(
+    state: 'playing' | 'paused' | 'stopped',
+    options?: { ignoreStop?: boolean },
+  ): void {
+    const now = Date.now();
+    if (now < this.suppressRemoteStateUntil) {
+      return;
+    }
+    if (this.lastForwardedState === state) {
+      return;
+    }
+    if (
+      this.lastOutboundState === state &&
+      this.lastOutboundStateAt != null &&
+      now - this.lastOutboundStateAt < 1500
+    ) {
+      return;
+    }
+    this.lastForwardedState = state;
+    switch (state) {
+      case 'playing':
+        this.ports.zoneManager.handleCommand(this.zoneId, 'play');
+        break;
+      case 'paused':
+        this.ports.zoneManager.handleCommand(this.zoneId, 'pause');
+        break;
+      case 'stopped':
+        if (options?.ignoreStop) {
+          break;
+        }
+        this.ports.zoneManager.handleCommand(this.zoneId, 'stop');
+        break;
+      default:
+        break;
+    }
+  }
+
+  private markOutboundVolume(level: number): void {
+    this.lastOutboundVolumeAt = Date.now();
+    this.lastOutboundVolume = Math.min(100, Math.max(0, Math.round(level)));
+  }
+
+  private markOutboundState(state: 'playing' | 'paused' | 'stopped'): void {
+    this.lastOutboundStateAt = Date.now();
+    this.lastOutboundState = state;
   }
 
   private buildMedia(session: PlaybackSession): any {
@@ -481,69 +471,45 @@ export class GoogleCastOutput implements ZoneOutput {
     return { baseUrl, streamUrl };
   }
 
-  private async pushMetadataUpdate(metadata: any, customData: Record<string, any>): Promise<boolean> {
-    const controller = (this.receiver as any)?.media;
-    if (!controller?.sessionRequest || !controller?.currentSession?.mediaSessionId) {
-      return false;
-    }
-    const payload = {
-      type: 'PLAY',
-      customData: {
-        metadata,
-        customData,
-      },
-    };
-    try {
-      await util.promisify((cb: any) => controller.sessionRequest(payload, cb))();
-      return true;
-    } catch (error: any) {
-      this.log.debug('Google Cast metadata session update failed', {
-        zoneId: this.zoneId,
-        message: error?.message,
-      });
-      return false;
-    }
-  }
-
   private async loadMedia(
-    receiver: any,
     media: any,
     options: { autoplay?: boolean; currentTime?: number } = {},
   ): Promise<boolean> {
-    return await new Promise((resolve) => {
-      receiver.load(
-        media,
-        {
-          autoplay: options.autoplay ?? true,
-          currentTime: options.currentTime ?? 0,
-        },
-        (loadErr: any) => {
-          if (loadErr) {
-            this.log.warn('Google Cast load error', { zoneId: this.zoneId, message: loadErr?.message });
-            const message = loadErr?.message ?? '';
-            if (typeof message === 'string' && message.toLowerCase().includes('load cancelled')) {
-              this.metadataLoadCooldownUntil = Date.now() + 3000;
-            }
-            resolve(false);
-            return;
-          }
-          this.log.info('Google Cast stream loaded', { zoneId: this.zoneId });
-          resolve(true);
-        },
-      );
-    });
+    if (!this.castDevice) return false;
+    try {
+      const response: any = await this.castDevice.media.load(media.contentId, media.contentType, {
+        metadata: media.metadata,
+        streamType: media.streamType,
+        customData: media.customData,
+        autoplay: options.autoplay ?? true,
+        startTime: options.currentTime ?? 0,
+      });
+      const sessionId = response?.status?.[0]?.mediaSessionId;
+      if (typeof sessionId === 'number') {
+        this.lastMediaSessionId = sessionId;
+      }
+      this.log.info('Google Cast stream loaded', { zoneId: this.zoneId });
+      return true;
+    } catch (loadErr: any) {
+      this.log.warn('Google Cast load error', { zoneId: this.zoneId, message: loadErr?.message });
+      const message = loadErr?.message ?? '';
+      if (typeof message === 'string' && message.toLowerCase().includes('load cancelled')) {
+        this.metadataLoadCooldownUntil = Date.now() + 3000;
+      }
+      return false;
+    }
   }
 
-  private async ensurePlayback(receiver: any): Promise<void> {
+  private async ensurePlayback(): Promise<void> {
     try {
-      const status: any = await util.promisify((cb: any) => receiver.getStatus(cb))();
-      if (status?.mediaSessionId) {
+      if (!this.castDevice) return;
+      const status = await this.castDevice.media.getStatusModel();
+      if (typeof status.mediaSessionId === 'number') {
         this.lastMediaSessionId = status.mediaSessionId;
       }
-      const shouldPlay =
-        status?.mediaSessionId && status?.playerState && status.playerState !== 'PLAYING';
+      const shouldPlay = status.mediaSessionId && status.playerState !== 'PLAYING';
       if (shouldPlay) {
-        await util.promisify((cb: any) => receiver.play(cb))();
+        await this.castDevice.media.playCurrent();
       }
     } catch (err: any) {
       this.log.debug('Google Cast play after load failed', {
@@ -558,6 +524,17 @@ export class GoogleCastOutput implements ZoneOutput {
     const host = sys?.audioserver?.ip?.trim() || this.pickLocalAddress();
     const port = 7090;
     return `http://${host}:${port}`;
+  }
+
+  private buildDeviceDescriptor(): DiscoveredDevice {
+    const name = this.config.name?.trim() || this.zoneName;
+    return {
+      id: `googlecast-${this.zoneId}-${this.config.host}`,
+      name,
+      host: this.config.host,
+      port: 8009,
+      lastSeen: Date.now(),
+    };
   }
 
   private appendQueryParam(url: string, key: string, value: string): string {

@@ -121,16 +121,21 @@ export class SnapcastCore {
     const meta = session?.metadata;
     const zoneState = this.zones.getZoneState(stream.zoneId);
     const hasSession = Boolean(session);
-    const duration = meta?.duration ?? session?.duration ?? undefined;
-    const metadata = meta
-      ? {
-          title: meta.title ?? undefined,
-          artist: meta.artist ? [meta.artist] : undefined,
-          album: meta.album ?? undefined,
-          artUrl: meta.coverurl ?? session?.stream?.coverUrl,
-          duration,
-        }
-      : undefined;
+    const title = meta?.title ?? zoneState?.title ?? undefined;
+    const artist = meta?.artist ?? zoneState?.artist ?? undefined;
+    const album = meta?.album ?? zoneState?.album ?? undefined;
+    const artUrl = meta?.coverurl ?? zoneState?.coverurl ?? session?.stream?.coverUrl;
+    const duration = meta?.duration ?? session?.duration ?? zoneState?.duration ?? undefined;
+    const metadata =
+      title || artist || album || artUrl || typeof duration === 'number'
+        ? {
+            title,
+            artist: artist ? [artist] : undefined,
+            album,
+            artUrl,
+            duration,
+          }
+        : undefined;
     const playbackStatus =
       session?.state === 'playing' ? 'playing' : session?.state === 'paused' ? 'paused' : 'stopped';
     const position = session?.elapsed ?? undefined;

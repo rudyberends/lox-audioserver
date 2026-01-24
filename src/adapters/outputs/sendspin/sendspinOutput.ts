@@ -39,6 +39,7 @@ export type SendspinMetadataProgress = NonNullable<SendspinMetadataPayload['prog
 
 export interface SendspinOutputOptions {
   onMetadata?: (payload: SendspinMetadataPayload) => void;
+  ignoreVolumeUpdates?: boolean;
 }
 
 const cloneMetadataPayload = (payload: SendspinMetadataPayload): SendspinMetadataPayload => ({
@@ -325,7 +326,7 @@ export class SendspinOutput implements ZoneOutput {
         muted: update.muted,
       });
     }
-    if (typeof update.volume === 'number') {
+    if (!this.options.ignoreVolumeUpdates && typeof update.volume === 'number') {
       const vol = Math.min(100, Math.max(0, Math.round(update.volume)));
       const now = Date.now();
       const recentlySent =
@@ -343,7 +344,7 @@ export class SendspinOutput implements ZoneOutput {
         this.ports.zoneManager.handleCommand(this.zoneId, 'volume_set', String(vol));
       }
     }
-    if (typeof update.muted === 'boolean') {
+    if (!this.options.ignoreVolumeUpdates && typeof update.muted === 'boolean') {
       // No explicit mute command path in zoneManager; treat mute as volume 0/unmute restore.
       if (update.muted) {
         this.ports.zoneManager.handleCommand(this.zoneId, 'volume_set', '0');
@@ -524,7 +525,27 @@ export class SendspinOutput implements ZoneOutput {
         this.activeOutputFormat.sampleRate === chosenFormat.sampleRate &&
         this.activeOutputFormat.channels === chosenFormat.channels &&
         this.activeOutputFormat.bitDepth === chosenFormat.bitDepth;
-      const shouldRestartForFormat = this.activeOutputFormat !== null && !formatMatchesActive;
+      const sessionOutput = this.ports.audioManager.getOutputSettings(this.zoneId);
+      const outputMismatch =
+        this.activeOutputFormat === null &&
+        sessionOutput != null &&
+        (sessionOutput.sampleRate !== chosenFormat.sampleRate ||
+          sessionOutput.channels !== chosenFormat.channels ||
+          sessionOutput.pcmBitDepth !== chosenFormat.bitDepth);
+      const shouldRestartForFormat =
+        outputMismatch || (this.activeOutputFormat !== null && !formatMatchesActive);
+      if (outputMismatch) {
+        this.log.info('Sendspin output format mismatch; restarting engine', {
+          zoneId: this.zoneId,
+          clientId: this.clientId,
+          current: sessionOutput,
+          requested: {
+            sampleRate: chosenFormat.sampleRate,
+            channels: chosenFormat.channels,
+            pcmBitDepth: chosenFormat.bitDepth,
+          },
+        });
+      }
 
       // If a stream already exists and is healthy, reuse it and just re-announce to the client.
       if (

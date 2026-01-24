@@ -76,6 +76,7 @@
     let providedPlayerName;
     let providedSyncDelay;
     let providedCodecs;
+    let lastServerUrl = null;
     let externalMetadata = null;
     let lastMetadataSignature = null;
     let lastProgressSignature = null;
@@ -99,6 +100,13 @@
     };
 
     const getActiveMetadata = () => externalMetadata || player?.metadata || null;
+    const buildImage = (url) => {
+      try {
+        return new cast.framework.messages.Image(url);
+      } catch {
+        return { url };
+      }
+    };
 
     const mergeExternalMetadata = (payload) => {
       if (!payload) return;
@@ -202,9 +210,23 @@
       md.releaseDate = currentMeta.year ? String(currentMeta.year) : undefined;
       md.metadataType = cast.framework.messages.MetadataType.MUSIC_TRACK;
       md.songName = md.title;
-      if (cover) md.images = [{ url: cover }];
+      if (cover) md.images = [buildImage(cover)];
       info.metadata = md;
       return info;
+    };
+
+    const sendStatusSafe = (state) => {
+      if (typeof playerManager.broadcastStatus === 'function') {
+        playerManager.broadcastStatus(true);
+        return;
+      }
+      const status = playerManager.getStatus ? playerManager.getStatus() : null;
+      if (status) {
+        if (state) {
+          status.playerState = state;
+        }
+        playerManager.sendStatus(status);
+      }
     };
 
     const pushMediaStatus = (state = PlayerState.PAUSED, meta) => {
@@ -213,7 +235,7 @@
         playerManager.setMediaInformation(info);
         if (typeof playerManager.setPlayerState === 'function') {
           playerManager.setPlayerState(state);
-          playerManager.sendStatus(playerManager.getStatus());
+          sendStatusSafe(state);
         } else {
           // Older CAF builds (notably the Chromecast Audio firmware) expose read-only
           // status helpers. Manually mutate the cached status so we can still push
@@ -222,6 +244,8 @@
           if (status) {
             status.playerState = state;
             playerManager.sendStatus(status);
+          } else {
+            sendStatusSafe(state);
           }
         }
       } catch (err) {
@@ -377,8 +401,7 @@
                 client_id: protocol.playerId,
                 name: protocol.clientName,
                 version: 1,
-                supported_roles: ['player@v1'],
-                //supported_roles: ['player@v1', 'metadata@v1', 'artwork@v1'],
+                supported_roles: ['player@v1', 'metadata@v1', 'artwork@v1'],
                 device_info: {
                   product_name: (typeof navigator !== 'undefined' && navigator.vendor) || 'Unknown',
                   manufacturer: (typeof navigator !== 'undefined' && navigator.vendor) || 'Unknown',
@@ -483,15 +506,24 @@
           : raw || {};
 
       const payload = data.payload || data;
-      if (payload.type === 'metadata') {
+      const messageType = payload.type || data.type;
+      if (messageType === 'metadata') {
         const metaPayload =
-          typeof payload.payload === 'string' ? JSON.parse(payload.payload || 'null') : payload.payload ?? payload.metadata;
+          typeof payload.payload === 'string'
+            ? (() => {
+                try {
+                  return JSON.parse(payload.payload || 'null');
+                } catch {
+                  return null;
+                }
+              })()
+            : payload.payload ?? payload.metadata ?? data.payload ?? data.metadata;
         applyExternalMetadata(metaPayload || null);
         return;
       }
 
-      const serverUrl = payload.serverUrl;
-      const initialMetadata = payload.metadata;
+      const serverUrl = payload.serverUrl || data.serverUrl;
+      const initialMetadata = payload.metadata || data.metadata;
       if (initialMetadata) {
         applyExternalMetadata(initialMetadata);
       }
@@ -504,9 +536,11 @@
       providedPlayerName = payload.playerName;
       providedSyncDelay = payload.syncDelay;
       providedCodecs = payload.codecs;
-      if (normalizeWsUrl(serverUrl) === normalizeWsUrl(provided?.serverUrl)) {
+      const normalizedServerUrl = normalizeWsUrl(serverUrl);
+      if (normalizedServerUrl && normalizedServerUrl === lastServerUrl) {
         return;
       }
+      lastServerUrl = normalizedServerUrl;
       connectToServer(serverUrl);
     };
 

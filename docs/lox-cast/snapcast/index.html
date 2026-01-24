@@ -145,6 +145,28 @@
       pushMediaStatus(meta);
     };
 
+    const buildImage = (url) => {
+      try {
+        return new cast.framework.messages.Image(url);
+      } catch {
+        return { url };
+      }
+    };
+
+    const sendStatusSafe = (state) => {
+      if (typeof playerManager.broadcastStatus === 'function') {
+        playerManager.broadcastStatus(true);
+        return;
+      }
+      const status = playerManager.getStatus ? playerManager.getStatus() : null;
+      if (status) {
+        if (state) {
+          status.playerState = state;
+        }
+        playerManager.sendStatus(status);
+      }
+    };
+
     const pushMediaStatus = (meta) => {
       try {
         const info = new cast.framework.messages.MediaInformation();
@@ -156,12 +178,14 @@
         md.title = meta?.title || 'Snapcast';
         md.artist = meta?.artist ? (Array.isArray(meta.artist) ? meta.artist.join(', ') : meta.artist) : '';
         md.albumName = meta?.album || '';
-        if (meta?.artUrl) md.images = [{ url: meta.artUrl }];
+        if (meta?.artUrl) md.images = [buildImage(meta.artUrl)];
         info.metadata = md;
         playerManager.setMediaInformation(info);
         if (typeof playerManager.setPlayerState === 'function') {
           playerManager.setPlayerState(PlayerState.PLAYING);
-          playerManager.sendStatus(playerManager.getStatus());
+          sendStatusSafe(PlayerState.PLAYING);
+        } else {
+          sendStatusSafe(PlayerState.PLAYING);
         }
       } catch (err) {
         console.warn('pushMediaStatus failed', err);
@@ -273,17 +297,17 @@
     const handleCastPayload = (raw) => {
       const data = typeof raw === 'string' ? (() => { try { return JSON.parse(raw); } catch { return {}; } })() : raw || {};
       const payload = data.payload || data;
-      const type = payload.type || 'setup';
-      const meta = payload.metadata || null;
+      const type = payload.type || data.type || 'setup';
+      const meta = payload.metadata || data.metadata || (data.type === 'metadata' ? data.payload : null);
       if (meta) {
         applyMetadata(meta);
       }
       if (type === 'metadata') {
         return;
       }
-      const serverUrl = payload.serverUrl;
-      const streamId = payload.streamId;
-      const clientId = payload.clientId;
+      const serverUrl = payload.serverUrl || data.serverUrl;
+      const streamId = payload.streamId || data.streamId;
+      const clientId = payload.clientId || data.clientId;
       if (!serverUrl) {
         setStatus('Missing serverUrl', false, true);
         return;

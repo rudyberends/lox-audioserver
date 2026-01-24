@@ -1,18 +1,17 @@
-import util from 'node:util';
 import { URL } from 'node:url';
 import { createLogger } from '@/shared/logging/logger';
+import { bestEffort } from '@/shared/bestEffort';
 import type { ZoneConfig, ZoneTransportConfig } from '@/domain/config/types';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import { audioOutputSettings } from '@/ports/types/audioFormat';
 import type { OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const castv2: any = require('castv2-client');
-const { Client: CastClient } = castv2;
-const JsonController =
-  castv2.controllers?.Json || castv2.JsonController || require('castv2-client/lib/controllers/json');
-const ApplicationBase = require('castv2-client/lib/senders/application');
+import type { CastDevice, DiscoveredDevice } from '@lox-audioserver/node-googlecast';
+import { loadGoogleCastModule } from '@/adapters/outputs/googleCast/googlecastLoader';
+import {
+  createJsonNamespaceControllerFactory,
+  type JsonNamespaceController,
+} from '@/adapters/outputs/googleCast/googlecastNamespace';
 
 const DEFAULT_SNAPCAST_APP_ID = '16BF7E39';
 const DEFAULT_SNAPCAST_NAMESPACE = 'urn:x-cast:snapcast';
@@ -35,16 +34,6 @@ export const SNAPCAST_CAST_OUTPUT_DEFINITION: OutputConfigDefinition = {
   ],
 };
 
-function createSnapcastApp(appId: string, namespace: string) {
-  function SnapcastApp(this: any, client: any, session: any) {
-    ApplicationBase.call(this, client, session);
-    this.channel = this.createController(JsonController, namespace);
-  }
-  util.inherits(SnapcastApp, ApplicationBase);
-  (SnapcastApp as any).APP_ID = appId;
-  return SnapcastApp as any;
-}
-
 export class SnapcastCastOutput implements ZoneOutput {
   public readonly type = 'snapcast-cast';
   private readonly log = createLogger('Output', 'SnapcastCast');
@@ -55,8 +44,8 @@ export class SnapcastCastOutput implements ZoneOutput {
   private effectiveClientIds: string[];
   private lastSession: PlaybackSession | null = null;
 
-  private client: any | null = null;
-  private receiver: any | null = null;
+  private castDevice: CastDevice | null = null;
+  private namespaceController: JsonNamespaceController | null = null;
   private connected = false;
   private sendPending = false;
   private lastPayload: Record<string, unknown> | null = null;
@@ -139,7 +128,7 @@ export class SnapcastCastOutput implements ZoneOutput {
   }
 
   private async ensureReady(): Promise<void> {
-    if (this.connected && this.receiver) return;
+    if (this.connected && this.namespaceController) return;
     await this.connectCast();
     await this.startApp();
   }
@@ -223,59 +212,61 @@ export class SnapcastCastOutput implements ZoneOutput {
   }
 
   private async connectCast(): Promise<void> {
-    if (this.connected && this.client) return;
-    await new Promise<void>((resolve, reject) => {
-      const client = new CastClient();
-      client.connect(this.config.host, () => {
-        this.client = client;
-        this.connected = true;
-        this.log.info('Snapcast Cast connected', { host: this.config.host });
-        client.on('close', () => this.disconnect());
-        client.on('error', (err: Error) => {
-          this.log.warn('Snapcast Cast error', { host: this.config.host, message: err.message });
-          this.disconnect();
-        });
-        resolve();
-      });
-      client.on('error', (err: Error) => reject(err));
+    if (this.connected && this.castDevice) return;
+    const { connect } = await loadGoogleCastModule();
+    const device = this.buildDeviceDescriptor();
+    const castDevice = await connect(device);
+    this.castDevice = castDevice;
+    this.connected = true;
+    this.log.info('Snapcast Cast connected', { host: this.config.host });
+    castDevice.on('disconnected', (err?: Error) => {
+      this.log.warn('Snapcast Cast disconnected', { host: this.config.host, message: err?.message });
+      this.disconnect();
+    });
+    castDevice.on('error', (err: Error) => {
+      this.log.warn('Snapcast Cast error', { host: this.config.host, message: err.message });
+      this.disconnect();
     });
   }
 
   private async startApp(): Promise<void> {
-    if (!this.client) return;
+    if (!this.castDevice) return;
     const namespace = DEFAULT_SNAPCAST_NAMESPACE;
-    const SnapcastApp = createSnapcastApp(DEFAULT_SNAPCAST_APP_ID, namespace);
-    await new Promise<void>((resolve, reject) => {
-      this.client!.launch(SnapcastApp, (err: Error, app: any) => {
-        if (err) {
-          this.log.warn('Snapcast Cast launch failed', {
-            host: this.config.host,
-            appId: DEFAULT_SNAPCAST_APP_ID,
-            namespace,
-            message: err.message,
-          });
-          return reject(err);
-        }
-        this.log.info('Snapcast Cast launched', {
-          host: this.config.host,
-          appId: DEFAULT_SNAPCAST_APP_ID,
-          namespace,
-        });
-        this.receiver = app;
-        resolve();
+    try {
+      await this.castDevice.launchApp(DEFAULT_SNAPCAST_APP_ID);
+      this.log.info('Snapcast Cast launched', {
+        host: this.config.host,
+        appId: DEFAULT_SNAPCAST_APP_ID,
+        namespace,
       });
-    });
+    } catch (err: any) {
+      this.log.warn('Snapcast Cast launch failed', {
+        host: this.config.host,
+        appId: DEFAULT_SNAPCAST_APP_ID,
+        namespace,
+        message: err?.message ?? String(err),
+      });
+      throw err;
+    }
+    if (!this.namespaceController) {
+      const factory = await createJsonNamespaceControllerFactory(namespace);
+      this.namespaceController = this.castDevice.addAppController(namespace, factory);
+    }
   }
 
   private disconnect(): void {
     this.connected = false;
-    try {
-      this.client?.close();
-    } catch {
-      /* ignore */
+    if (this.castDevice) {
+      void bestEffort(() => this.castDevice!.disconnect(), {
+        fallback: undefined,
+        onError: 'debug',
+        log: this.log,
+        label: 'Snapcast Cast client close failed',
+        context: { zoneId: this.zoneId },
+      });
     }
-    this.client = null;
-    this.receiver = null;
+    this.castDevice = null;
+    this.namespaceController = null;
   }
 
   private stopStream(): void {
@@ -291,7 +282,7 @@ export class SnapcastCastOutput implements ZoneOutput {
   }
 
   private async pushPayload(session: PlaybackSession, metadataOnly = false): Promise<void> {
-    if (!this.receiver) return;
+    if (!this.namespaceController) return;
     if (this.sendPending) return;
     this.sendPending = true;
     try {
@@ -300,7 +291,7 @@ export class SnapcastCastOutput implements ZoneOutput {
       if (this.lastPayload && JSON.stringify(this.lastPayload) === signature) {
         return;
       }
-      await util.promisify((cb: any) => this.receiver.channel.send(payload, cb))();
+      await this.namespaceController.sendMessage(payload);
       this.lastPayload = payload;
       this.log.info('Snapcast Cast payload sent', {
         zoneId: this.zoneId,
@@ -323,23 +314,40 @@ export class SnapcastCastOutput implements ZoneOutput {
     const streamId = this.effectiveStreamId;
     const clientId = this.baseClientId;
     const meta = session.metadata;
+    const zoneState = this.ports.zoneManager.getZoneState(this.zoneId);
+    const title = meta?.title ?? zoneState?.title ?? this.zoneName;
+    const artist = meta?.artist ?? zoneState?.artist ?? '';
+    const album = meta?.album ?? zoneState?.album ?? '';
+    const artUrl = meta?.coverurl ?? zoneState?.coverurl ?? session.stream.coverUrl;
+    const duration = meta?.duration ?? session.duration ?? zoneState?.duration ?? 0;
     const payload: Record<string, unknown> = {
       type: 'setup',
       serverUrl,
       streamId,
       clientId,
       metadata: {
-        title: meta?.title ?? this.zoneName,
-        artist: meta?.artist ?? '',
-        album: meta?.album ?? '',
-        artUrl: meta?.coverurl ?? session.stream.coverUrl,
-        duration: meta?.duration ?? session.duration ?? 0,
+        title,
+        artist,
+        album,
+        artUrl,
+        duration,
       },
     };
     if (metadataOnly) {
       payload.type = 'metadata';
     }
     return payload;
+  }
+
+  private buildDeviceDescriptor(): DiscoveredDevice {
+    const name = this.config.name?.trim() || this.zoneName;
+    return {
+      id: `snapcast-cast-${this.zoneId}-${this.config.host}`,
+      name,
+      host: this.config.host,
+      port: 8009,
+      lastSeen: Date.now(),
+    };
   }
 
   private buildStreamUrl(): string {
