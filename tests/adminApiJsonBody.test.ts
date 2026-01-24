@@ -18,7 +18,7 @@ import { SendspinLineInService } from '../src/adapters/inputs/linein/sendspinLin
 import { MusicAssistantStreamService } from '../src/adapters/inputs/musicassistant/musicAssistantStreamService';
 import { SpotifyInputService } from '../src/adapters/inputs/spotify/spotifyInputService';
 import { SendspinHookRegistry } from '../src/adapters/outputs/sendspin/sendspinHookRegistry';
-import { SnapcastCore } from '../src/adapters/http/snapcast/snapcastCore';
+import { SnapcastCore } from '../src/adapters/outputs/snapcast/snapcastCore';
 import { SqueezeliteCore } from '../src/adapters/outputs/squeezelite/squeezeliteCore';
 import { ConnectionRegistry } from '../src/adapters/loxone/ws/connectionRegistry';
 import { LoxoneWsNotifier } from '../src/adapters/loxone/ws/notifier';

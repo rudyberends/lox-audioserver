@@ -16,8 +16,7 @@
     [
       "@semantic-release/commit-analyzer",
       {
-        "preset": "conventionalcommits",
-        "releaseRules": "./config/release-rules.cjs"
+        "preset": "conventionalcommits"
       }
     ],
     [
