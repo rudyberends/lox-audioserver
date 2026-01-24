@@ -1,5 +1,6 @@
 import Bonjour from 'bonjour-service';
 import net from 'node:net';
+import os from 'node:os';
 import { createLogger } from '@/shared/logging/logger';
 
 type SnapcastAdvertiseOptions = {
@@ -65,12 +66,11 @@ export class SnapcastMdnsAdvertiser {
   }
 
   private normalizeHost(host?: string): string | undefined {
-    if (!host) {
+    const trimmed = host?.trim() ?? '';
+    const candidate = trimmed && !net.isIP(trimmed) ? trimmed : os.hostname();
+    if (!candidate) {
       return undefined;
     }
-    if (net.isIP(host)) {
-      return undefined;
-    }
-    return host;
+    return candidate.includes('.') ? candidate : `${candidate}.local`;
   }
 }
