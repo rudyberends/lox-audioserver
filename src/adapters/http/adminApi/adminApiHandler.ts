@@ -1,8 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { spawn } from 'node:child_process';
 import { createConnection } from 'node:net';
-import { readFileSync } from 'node:fs';
+import { createWriteStream, promises as fs, readFileSync } from 'node:fs';
 import os from 'node:os';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { createLogger, logManager } from '@/shared/logging/logger';
 import type { LogLevel } from '@/types/logLevel';
 import { bestEffort } from '@/shared/bestEffort';
@@ -80,6 +82,19 @@ type Route = {
   handler: RouteHandler;
 };
 
+type AdminUiUpdateRequest = {
+  release?: string;
+};
+
+type AdminUiUpdateResult = {
+  ok: boolean;
+  release: string;
+  distUrl: string;
+  targetDir: string;
+  updatedAt?: string;
+  error?: string;
+};
+
 const MAX_JSON_BODY_BYTES = 1 * 1024 * 1024;
 
 /**
@@ -105,6 +120,7 @@ export class AdminApiHandler {
   private readonly groupManager: GroupManagerReadPort;
   private readonly contentManager: ContentManager;
   private readonly audioManager: AudioManager;
+  private adminUiUpdateInFlight: Promise<AdminUiUpdateResult> | null = null;
   private clockOffsetCache: { offsetMs: number | null; sampledAt: number } = { offsetMs: null, sampledAt: 0 };
   private readonly routes: Route[];
 
@@ -257,6 +273,13 @@ export class AdminApiHandler {
         pattern: /^\/setup\/reinitialize$/,
         handler: async (_req, res) => {
           await this.handleReinitialize(res);
+        },
+      },
+      {
+        method: 'POST',
+        pattern: /^\/adminui\/update$/,
+        handler: async (req, res) => {
+          await this.handleAdminUiUpdate(req, res);
         },
       },
       { method: 'GET', pattern: /^\/info$/, handler: (_req, res) => this.handleInfo(res) },
@@ -611,6 +634,34 @@ export class AdminApiHandler {
     }
   }
 
+  private async handleAdminUiUpdate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (this.adminUiUpdateInFlight) {
+      this.sendJson(res, 409, { error: 'adminui-update-in-progress' });
+      return;
+    }
+
+    const body = (await this.readJsonBody(req, res)) as AdminUiUpdateRequest | null;
+    if (res.writableEnded) {
+      return;
+    }
+    const release = typeof body?.release === 'string' ? body.release.trim() : '';
+
+    const task = this.performAdminUiUpdate(release || undefined);
+    this.adminUiUpdateInFlight = task;
+    try {
+      const result = await task;
+      if (!result.ok) {
+        this.sendJson(res, 500, result);
+        return;
+      }
+      this.sendJson(res, 200, result);
+    } finally {
+      if (this.adminUiUpdateInFlight === task) {
+        this.adminUiUpdateInFlight = null;
+      }
+    }
+  }
+
   private readPackageVersion(): string {
     try {
       const json = readFileSync(resolve(process.cwd(), 'package.json'), 'utf8');
@@ -623,6 +674,158 @@ export class AdminApiHandler {
 
   private readBuildVersion(pkgVersion: string): string {
     return pkgVersion;
+  }
+
+  private async performAdminUiUpdate(releaseOverride?: string): Promise<AdminUiUpdateResult> {
+    const repo = 'lox-audioserver/adminui';
+    const assetName = 'admin-dist.tgz';
+    const release = releaseOverride || process.env.ADMINUI_RELEASE || 'latest';
+    const distUrl =
+      process.env.ADMINUI_DIST_URL ??
+      (release === 'latest'
+        ? `https://github.com/${repo}/releases/latest/download/${assetName}`
+        : `https://github.com/${repo}/releases/download/${encodeURIComponent(release)}/${assetName}`);
+    const targetDir = join(this.runtimeConfig.http.publicDir, 'admin');
+    const stagingDir = join(this.runtimeConfig.http.publicDir, `admin-staging-${Date.now()}`);
+    const backupDir = join(this.runtimeConfig.http.publicDir, `admin-backup-${Date.now()}`);
+    const archivePath = join(os.tmpdir(), `admin-dist-${Date.now()}.tgz`);
+
+    this.log.info('admin ui update started', { release, distUrl, targetDir });
+
+    const baseResult = { release, distUrl, targetDir };
+    let backupCreated = false;
+
+    try {
+      try {
+        await fs.rm(archivePath, { force: true });
+      } catch {
+        // Best-effort cleanup.
+      }
+      await fs.rm(stagingDir, { recursive: true, force: true });
+      await fs.mkdir(stagingDir, { recursive: true });
+
+      await this.downloadAdminUi(distUrl, archivePath);
+      await this.extractAdminUi(archivePath, stagingDir);
+      try {
+        await fs.rm(archivePath, { force: true });
+      } catch {
+        // Best-effort cleanup.
+      }
+
+      if (await this.pathExists(targetDir)) {
+        await fs.rm(backupDir, { recursive: true, force: true });
+        await fs.rename(targetDir, backupDir);
+        backupCreated = true;
+      }
+      await fs.rename(stagingDir, targetDir);
+      if (backupCreated) {
+        try {
+          await fs.rm(backupDir, { recursive: true, force: true });
+        } catch (cleanupErr) {
+          const cleanupMessage =
+            cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+          this.log.warn('admin ui cleanup failed', { cleanupMessage });
+        }
+      }
+
+      this.log.info('admin ui update finished', { release, distUrl });
+      return { ok: true, updatedAt: new Date().toISOString(), ...baseResult };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.warn('admin ui update failed', { release, distUrl, message });
+
+      try {
+        if (await this.pathExists(stagingDir)) {
+          await fs.rm(stagingDir, { recursive: true, force: true });
+        }
+      } catch {
+        // Best-effort cleanup.
+      }
+
+      try {
+        await fs.rm(archivePath, { force: true });
+      } catch {
+        // Best-effort cleanup.
+      }
+
+      if (backupCreated) {
+        try {
+          await fs.rm(targetDir, { recursive: true, force: true });
+          await fs.rename(backupDir, targetDir);
+        } catch (rollbackErr) {
+          const rollbackMessage =
+            rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+          this.log.warn('admin ui rollback failed', { rollbackMessage });
+        }
+      }
+
+      return { ok: false, error: message, ...baseResult };
+    }
+  }
+
+  private async downloadAdminUi(url: string, dest: string, redirects = 0): Promise<void> {
+    if (redirects > 5) {
+      throw new Error(`Too many redirects while downloading ${url}`);
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const request = https.get(
+        url,
+        { headers: { 'User-Agent': 'lox-audioserver-admin-fetch' } },
+        (response) => {
+          const status = response.statusCode ?? 0;
+          if ([301, 302, 303, 307, 308].includes(status) && response.headers.location) {
+            response.resume();
+            resolve(this.downloadAdminUi(response.headers.location, dest, redirects + 1));
+            return;
+          }
+
+          if (status !== 200) {
+            response.resume();
+            reject(new Error(`Failed to download admin dist (${status}) from ${url}`));
+            return;
+          }
+
+          pipeline(response, createWriteStream(dest)).then(resolve).catch(reject);
+        },
+      );
+
+      request.on('error', reject);
+    });
+  }
+
+  private async extractAdminUi(archive: string, dest: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn('tar', ['-xzf', archive, '-C', dest], {
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+
+      let stderr = '';
+      if (proc.stderr) {
+        proc.stderr.on('data', (chunk) => {
+          stderr += chunk.toString();
+        });
+      }
+
+      proc.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          const suffix = stderr.trim() ? `: ${stderr.trim()}` : '';
+          reject(new Error(`tar exited with code ${code}${suffix}`));
+        }
+      });
+      proc.on('error', reject);
+    });
+  }
+
+  private async pathExists(targetPath: string): Promise<boolean> {
+    try {
+      await fs.access(targetPath);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private readonly hiddenTransportIds = new Set(['spotify', 'sendspin-cast', 'dlna']);
