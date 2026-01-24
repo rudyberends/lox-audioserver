@@ -14,11 +14,23 @@ export type ExecutePlaybackPlanArgs = {
   inputs: InputsPort;
   log: ComponentLogger;
   audioManager: AudioManager;
+  startAtSec?: number;
 };
 
 export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promise<PlaybackSession | null> {
-  const { ctx, plan, content, inputs, log, audioManager } = args;
+  const { ctx, plan, content, inputs, log, audioManager, startAtSec } = args;
   applyPreferredPlaybackSettings(audioManager, ctx.id, plan.preferredSettings);
+  const normalizedStartAt =
+    typeof startAtSec === 'number' && Number.isFinite(startAtSec) && startAtSec > 0 ? startAtSec : undefined;
+  const resolveStartAt = (source?: PlaybackSource | null): number | undefined => {
+    if (!normalizedStartAt) {
+      return undefined;
+    }
+    if (!source || source.kind === 'pipe') {
+      return undefined;
+    }
+    return normalizedStartAt;
+  };
 
   if (plan.playExternalLabel === 'musicassistant') {
     const result = await inputs.startStreamForAudiopath(
@@ -36,7 +48,12 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
       },
     );
     if (result.playbackSource) {
-      return ctx.player.playExternal('musicassistant', result.playbackSource, plan.metadata);
+      return ctx.player.playExternal(
+        'musicassistant',
+        result.playbackSource,
+        plan.metadata,
+        resolveStartAt(result.playbackSource),
+      );
     }
     if (result.outputOnly) {
       return ctx.player.playExternal('musicassistant', null, plan.metadata);
@@ -51,7 +68,12 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
       audiopath: plan.audiopath,
     });
     if (result.playbackSource) {
-      return ctx.player.playExternal(plan.playExternalLabel, result.playbackSource, plan.metadata);
+      return ctx.player.playExternal(
+        plan.playExternalLabel,
+        result.playbackSource,
+        plan.metadata,
+        resolveStartAt(result.playbackSource),
+      );
     }
     if (result.outputOnly) {
       return ctx.player.playExternal(plan.playExternalLabel, null, plan.metadata);
@@ -99,5 +121,5 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
     return session;
   }
 
-  return ctx.player.playUri(plan.audiopath, plan.metadata);
+  return ctx.player.playUri(plan.audiopath, plan.metadata, normalizedStartAt);
 }

@@ -18,6 +18,8 @@ export type PlaybackSource =
       loop?: boolean;
       padTailSec?: number;
       preDelayMs?: number;
+      /** Optional start offset in seconds. */
+      startAtSec?: number;
       /** Whether ffmpeg should pace input with -re (default: true). */
       realTime?: boolean;
     }
@@ -29,6 +31,8 @@ export type PlaybackSource =
       tlsVerifyHost?: string;
       inputFormat?: string;
       logLevel?: string;
+      /** Optional start offset in seconds. */
+      startAtSec?: number;
       realTime?: boolean;
       lowLatency?: boolean;
       restartOnFailure?: boolean;
@@ -445,6 +449,7 @@ export class AudioSession {
       const tlsArgs = needsTlsVerifyHost ? ['-tls_verify', '0', '-verifyhost', this.source.tlsVerifyHost!] : [];
       const inputFormatArgs = this.source.inputFormat ? ['-f', this.source.inputFormat] : [];
       const realtimeArgs = this.source.realTime ? ['-re'] : [];
+      const seekArgs = this.buildSeekArgs(this.source.startAtSec);
       return [
         ...(lowLatency ? this.buildLowLatencyArgs() : this.buildBufferedArgs()),
         '-reconnect',
@@ -458,6 +463,7 @@ export class AudioSession {
         ...headerArgs,
         ...inputFormatArgs,
         ...realtimeArgs,
+        ...seekArgs,
         '-i',
         this.source.url,
       ];
@@ -488,8 +494,20 @@ export class AudioSession {
     // Pace file sources in real-time so downstream outputs (e.g., Snapcast) don’t get flooded.
     const paceInput = this.source.realTime !== false;
     const realTimeArgs = paceInput ? ['-re'] : [];
-    inputs.push(...inputLatencyArgs, ...loopArgs, ...realTimeArgs, '-i', this.source.path);
+    const seekArgs = this.buildSeekArgs(this.source.startAtSec);
+    inputs.push(...inputLatencyArgs, ...loopArgs, ...realTimeArgs, ...seekArgs, '-i', this.source.path);
     return inputs;
+  }
+
+  private buildSeekArgs(startAtSec?: number): string[] {
+    if (!Number.isFinite(startAtSec)) {
+      return [];
+    }
+    const safe = Math.max(0, startAtSec ?? 0);
+    if (safe <= 0) {
+      return [];
+    }
+    return ['-ss', String(safe)];
   }
 
   private formatHeaders(headers: Record<string, string>): string {

@@ -68,7 +68,11 @@ export function registerRoutes(
     dependencies.favoritesManager,
     dependencies.contentManager,
   );
-  const groupHandlers = createGroupHandlers(dependencies.zoneManager, dependencies.groupManager);
+  const groupHandlers = createGroupHandlers(
+    dependencies.zoneManager,
+    dependencies.groupManager,
+    dependencies.configPort,
+  );
   const inputHandlers = createInputHandlers(dependencies.zoneManager, dependencies.configPort, {
     registry: dependencies.lineInRegistry,
     sendspinLineIn: dependencies.sendspinLineInService,

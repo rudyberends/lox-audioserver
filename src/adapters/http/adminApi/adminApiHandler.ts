@@ -1888,6 +1888,7 @@ export class AdminApiHandler {
     const isContentUpdate = pathname.endsWith('/config/content');
     const isInputsUpdate = pathname.endsWith('/config/inputs');
     const isSystemUpdate = pathname.endsWith('/config/system');
+    const isGroupsUpdate = pathname.endsWith('/config/groups');
 
     if (req.method === 'GET' && (pathname.endsWith('/config') || pathname.endsWith('/config/'))) {
       const cfg = this.configPort.getConfig();
@@ -2078,6 +2079,31 @@ export class AdminApiHandler {
         if (normalizedIp) {
           cfg.system.audioserver.ip = normalizedIp;
         }
+      });
+      this.sendJson(res, 204, {});
+      return;
+    }
+
+    if (req.method === 'POST' && isGroupsUpdate) {
+      const body = (await this.readJsonBody(req, res)) as
+        | {
+            mixedGroupEnabled?: boolean;
+          }
+        | null;
+      if (res.writableEnded) {
+        return;
+      }
+      if (!body || typeof body !== 'object') {
+        this.sendJson(res, 400, { error: 'invalid-groups-payload' });
+        return;
+      }
+      if (!('mixedGroupEnabled' in body)) {
+        this.sendJson(res, 400, { error: 'invalid-groups-payload' });
+        return;
+      }
+      await this.configPort.updateConfig((cfg) => {
+        if (!cfg.groups) cfg.groups = {};
+        cfg.groups.mixedGroupEnabled = Boolean(body.mixedGroupEnabled);
       });
       this.sendJson(res, 204, {});
       return;

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PassThrough } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import type {
   EngineInputSpec,
@@ -120,6 +121,45 @@ export class AudioManager {
     return { ...source, headers, ...(realTime ? { realTime: true } : {}) };
   }
 
+  private normalizeStartAtSec(startAtSec?: number): number | null {
+    if (!Number.isFinite(startAtSec)) {
+      return null;
+    }
+    const safe = Math.max(0, startAtSec ?? 0);
+    return safe > 0 ? safe : null;
+  }
+
+  private applyStartAt(
+    source: PlaybackSource | null,
+    startAtSec?: number | null,
+    metadata?: PlaybackMetadata,
+  ): PlaybackSource | null {
+    if (!source || !startAtSec || startAtSec <= 0) {
+      return source;
+    }
+    if (metadata?.isRadio) {
+      return source;
+    }
+    if (source.kind === 'pipe') {
+      return source;
+    }
+    if (source.kind === 'url' && source.realTime) {
+      return source;
+    }
+    return { ...source, startAtSec };
+  }
+
+  private getStartAtSec(source: PlaybackSource | null): number {
+    if (!source || source.kind === 'pipe') {
+      return 0;
+    }
+    const startAtSec = (source as { startAtSec?: number }).startAtSec;
+    if (!Number.isFinite(startAtSec)) {
+      return 0;
+    }
+    return Math.max(0, startAtSec ?? 0);
+  }
+
   private isProxyUrl(url: string): boolean {
     try {
       const parsed = new URL(url);
@@ -147,17 +187,20 @@ export class AudioManager {
     source: string,
     metadata?: PlaybackMetadata,
     requiresPcm?: boolean,
+    options?: { startAtSec?: number },
   ): PlaybackSession | null {
     if (typeof requiresPcm === 'boolean') {
       this.zonePcmPreference.set(zoneId, requiresPcm);
     }
+    const startAtSec = this.normalizeStartAtSec(options?.startAtSec);
     const playbackSource = this.decorateRadioSource(
       zoneId,
       resolvePlaybackSource(source),
       metadata,
       source,
     );
-    return this.startWithResolvedSource(zoneId, source, playbackSource, metadata, requiresPcm);
+    const effectiveSource = this.applyStartAt(playbackSource, startAtSec, metadata);
+    return this.startWithResolvedSource(zoneId, source, effectiveSource, metadata, requiresPcm);
   }
 
   public startExternalPlayback(
@@ -166,13 +209,16 @@ export class AudioManager {
     playbackSource: PlaybackSource | null,
     metadata?: PlaybackMetadata,
     requiresPcm?: boolean,
+    options?: { startAtSec?: number },
   ): PlaybackSession | null {
     if (typeof requiresPcm === 'boolean') {
       this.zonePcmPreference.set(zoneId, requiresPcm);
     }
+    const startAtSec = this.normalizeStartAtSec(options?.startAtSec);
     const rawSource = playbackSource?.kind === 'url' ? playbackSource.url : undefined;
     const decorated = this.decorateRadioSource(zoneId, playbackSource, metadata, rawSource);
-    return this.startWithResolvedSource(zoneId, label, decorated, metadata, requiresPcm);
+    const effectiveSource = this.applyStartAt(decorated, startAtSec, metadata);
+    return this.startWithResolvedSource(zoneId, label, effectiveSource, metadata, requiresPcm);
   }
 
   public pausePlayback(zoneId: number): PlaybackSession | null {
@@ -311,6 +357,59 @@ export class AudioManager {
     return this.playbackService.waitForFirstChunk(zoneId, profile, timeoutMs);
   }
 
+  public createStream(
+    zoneId: number,
+    profile: OutputProfile = 'mp3',
+    options?: { primeWithBuffer?: boolean; label?: string },
+  ): PassThrough | null {
+    return this.playbackService.createStream(zoneId, profile, options);
+  }
+
+  public createLocalPcmTap(
+    zoneId: number,
+    source: PlaybackSource,
+    options?: {
+      outputSettings?: Pick<AudioOutputSettings, 'sampleRate' | 'channels' | 'pcmBitDepth'>;
+      startAtSec?: number;
+      label?: string;
+    },
+  ): { stream: PassThrough; stop: () => void } | null {
+    const base = this.getEffectiveOutputSettings(zoneId);
+    const outputSettings: AudioOutputSettings = {
+      ...base,
+      sampleRate: options?.outputSettings?.sampleRate ?? base.sampleRate,
+      channels: options?.outputSettings?.channels ?? base.channels,
+      pcmBitDepth: options?.outputSettings?.pcmBitDepth ?? base.pcmBitDepth,
+    };
+    const playbackSource =
+      Number.isFinite(options?.startAtSec) && (options?.startAtSec ?? 0) > 0
+        ? { ...source, startAtSec: options?.startAtSec }
+        : source;
+    const local = this.playbackService.createLocalSession(
+      zoneId,
+      playbackSource,
+      'pcm',
+      outputSettings,
+      () => {
+        /* no-op */
+      },
+    );
+    local.start();
+    const stream = local.createSubscriber({
+      primeWithBuffer: false,
+      label: options?.label ?? `local-${zoneId}`,
+    });
+    if (!stream) {
+      local.stop();
+      return null;
+    }
+    const stop = (): void => {
+      local.stop();
+      stream.destroy();
+    };
+    return { stream, stop };
+  }
+
   private createStreamHandles(
     zoneId: number,
     streamProfile: OutputProfile = 'mp3',
@@ -354,6 +453,7 @@ export class AudioManager {
           tlsVerifyHost: source.tlsVerifyHost,
           inputFormat: source.inputFormat,
           logLevel: source.logLevel,
+          startAtSec: source.startAtSec,
           realTime: source.realTime,
           lowLatency: source.lowLatency,
           restartOnFailure: source.restartOnFailure,
@@ -375,6 +475,7 @@ export class AudioManager {
           loop: source.loop,
           padTailSec: source.padTailSec,
           preDelayMs: source.preDelayMs,
+          startAtSec: source.startAtSec,
           realTime: source.realTime,
         };
       default:
@@ -435,6 +536,7 @@ export class AudioManager {
       hasStream: effectiveSource ? 'stream' in effectiveSource && !!(effectiveSource as any).stream : false,
     });
     const existing = this.sessions.get(zoneId);
+    const startAtSec = this.getStartAtSec(effectiveSource);
     const effectivePcmPreference =
       typeof requiresPcm === 'boolean'
         ? requiresPcm
@@ -466,9 +568,9 @@ export class AudioManager {
           existing.duration = metadata.duration;
         }
       }
-      existing.elapsed = 0;
+      existing.elapsed = startAtSec;
       existing.state = 'playing';
-      existing.startedAt = Date.now();
+      existing.startedAt = Date.now() - startAtSec * 1000;
       existing.updatedAt = Date.now();
       const profilesChanged = !this.sameProfiles(existing.profiles, profiles);
       existing.profiles = profiles;
@@ -534,9 +636,9 @@ export class AudioManager {
       stream,
       pcmStream,
       state: 'playing',
-      elapsed: 0,
+      elapsed: startAtSec,
       duration: metadata?.duration ?? 0,
-      startedAt: Date.now(),
+      startedAt: Date.now() - startAtSec * 1000,
       updatedAt: Date.now(),
       playbackSource: effectiveSource,
       cover: undefined,
@@ -585,6 +687,7 @@ export class AudioManager {
             decryptionKey?: string;
             inputFormat?: string;
             tlsVerifyHost?: string;
+            startAtSec?: number;
           };
           const prevUrl = prev as typeof nextUrl;
           return (
@@ -592,15 +695,20 @@ export class AudioManager {
             this.headersEqual(prevUrl.headers, nextUrl.headers) &&
             prevUrl.decryptionKey === nextUrl.decryptionKey &&
             prevUrl.inputFormat === nextUrl.inputFormat &&
-            prevUrl.tlsVerifyHost === nextUrl.tlsVerifyHost
+            prevUrl.tlsVerifyHost === nextUrl.tlsVerifyHost &&
+            this.getStartAtSec(prev) === this.getStartAtSec(next)
           );
         }
       case 'file':
         {
-          const nextFile = next as { kind: 'file'; path: string; realTime?: boolean };
+          const nextFile = next as { kind: 'file'; path: string; realTime?: boolean; startAtSec?: number };
           const prevPace = (prev as { realTime?: boolean }).realTime !== false;
           const nextPace = nextFile.realTime !== false;
-          return prev.path === nextFile.path && prevPace === nextPace;
+          return (
+            prev.path === nextFile.path &&
+            prevPace === nextPace &&
+            this.getStartAtSec(prev) === this.getStartAtSec(next)
+          );
         }
       default:
         return false;

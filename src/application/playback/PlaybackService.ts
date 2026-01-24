@@ -46,6 +46,12 @@ export class PlaybackService {
     return this.engine.createStream(...args);
   }
 
+  public createLocalSession(
+    ...args: Parameters<EnginePort['createLocalSession']>
+  ): ReturnType<EnginePort['createLocalSession']> {
+    return this.engine.createLocalSession(...args);
+  }
+
   public waitForFirstChunk(
     ...args: Parameters<EnginePort['waitForFirstChunk']>
   ): ReturnType<EnginePort['waitForFirstChunk']> {

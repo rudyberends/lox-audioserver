@@ -119,6 +119,7 @@ export class EngineAdapter implements EnginePort {
           tlsVerifyHost: input.tlsVerifyHost,
           inputFormat: input.inputFormat,
           logLevel: input.logLevel,
+          startAtSec: input.startAtSec,
           realTime: input.realTime,
           lowLatency: input.lowLatency,
           restartOnFailure: input.restartOnFailure,
@@ -140,6 +141,7 @@ export class EngineAdapter implements EnginePort {
           loop: input.loop,
           padTailSec: input.padTailSec,
           preDelayMs: input.preDelayMs,
+          startAtSec: input.startAtSec,
         };
       case 'silence':
         throw new Error('EngineInputSpec kind "silence" is not supported by the audio engine.');

@@ -6,6 +6,7 @@ import type { ConfigPort } from '@/ports/ConfigPort';
 import { ZoneManager } from '@/application/zones/zoneManager';
 import type { AudioManager } from '@/application/playback/audioManager';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
+import type { MixedGroupCoordinator } from '@/application/groups/mixedGroupController';
 
 export type ZoneManagerFacade = Pick<
   ZoneManager,
@@ -45,6 +46,7 @@ export type ZoneManagerDeps = {
   config: ConfigPort;
   recents: RecentsManager;
   audioManager: AudioManager;
+  mixedGroup?: MixedGroupCoordinator;
 };
 
 export function createZoneManager(deps: ZoneManagerDeps): ZoneManagerFacade {
@@ -56,5 +58,6 @@ export function createZoneManager(deps: ZoneManagerDeps): ZoneManagerFacade {
     deps.config,
     deps.recents,
     deps.audioManager,
+    deps.mixedGroup ?? null,
   );
 }

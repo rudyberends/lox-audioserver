@@ -4,6 +4,7 @@ export interface AudioServerConfig {
   zones: ZoneConfig[];
   rawAudioConfig: RawAudioConfig;
   inputs?: InputConfig;
+  groups?: GroupConfig;
   updatedAt?: string;
 }
 
@@ -147,6 +148,11 @@ export interface InputConfig {
   spotify?: GlobalSpotifyConfig | null;
   bluetooth?: GlobalBluetoothConfig | null;
   lineIn?: GlobalLineInConfig | null;
+}
+
+export interface GroupConfig {
+  /** Allow grouping zones across different output protocols (best effort). */
+  mixedGroupEnabled?: boolean;
 }
 
 export interface GlobalAirplayConfig {

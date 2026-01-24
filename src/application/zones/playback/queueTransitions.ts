@@ -13,6 +13,7 @@ type QueueTransitionCoordinator = {
     ctx: ZoneContext,
     audiopath: string,
     metadata?: PlaybackMetadata,
+    options?: { startAtSec?: number },
   ) => Promise<PlaybackSession | null>;
   applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
   dispatchOutputs: (

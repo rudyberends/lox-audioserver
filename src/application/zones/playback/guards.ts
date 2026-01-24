@@ -1,7 +1,7 @@
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 
-const METADATA_INPUTS = new Set(['spotify', 'airplay', 'musicassistant', 'linein']);
-const COVER_INPUTS = new Set(['spotify', 'airplay', 'musicassistant']);
+const METADATA_INPUTS = new Set(['spotify', 'airplay', 'musicassistant', 'linein', 'mixedgroup']);
+const COVER_INPUTS = new Set(['spotify', 'airplay', 'musicassistant', 'mixedgroup']);
 const VOLUME_INPUTS = new Set(['spotify', 'airplay', 'musicassistant']);
 
 export function allowsInputMetadata(activeInput: string | null | undefined): boolean {

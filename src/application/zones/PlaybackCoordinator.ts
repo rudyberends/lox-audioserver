@@ -262,6 +262,7 @@ export class PlaybackCoordinator {
     uri: string,
     type: string,
     metadata?: PlaybackMetadata,
+    options?: { startAtSec?: number },
   ): Promise<void> {
     const ctx = this.zoneRepo.get(zoneId);
     if (!ctx) {
@@ -313,18 +314,19 @@ export class PlaybackCoordinator {
       hasParentContext: req.hasParentContext,
     });
 
-    if (await this.trySeekExistingQueue(ctx, req, metadata)) {
+    if (await this.trySeekExistingQueue(ctx, req, metadata, options?.startAtSec)) {
       return;
     }
 
     const queueBuild = await this.rebuildQueue(ctx, req, metadata);
-    await this.startFromCurrentQueueItem(ctx, req, queueBuild);
+    await this.startFromCurrentQueueItem(ctx, req, queueBuild, options?.startAtSec);
   }
 
   private async trySeekExistingQueue(
     ctx: ZoneContext,
     req: ResolvedPlayRequest,
     _metadata?: PlaybackMetadata,
+    startAtSec?: number,
   ): Promise<boolean> {
     if (req.hasParentContext || ctx.state.mode === 'stop') {
       return false;
@@ -351,7 +353,7 @@ export class PlaybackCoordinator {
         stationIndex: ctx.queueController.currentIndex(),
         isRadio: this.audioHelpers.isRadioAudiopath(current.audiopath, current.audiotype),
       },
-      { skipExternalStop: true },
+      { skipExternalStop: true, startAtSec },
     );
     if (session) {
       void this.recentsManager.record(ctx.id, current);
@@ -475,6 +477,7 @@ export class PlaybackCoordinator {
     ctx: ZoneContext,
     req: ResolvedPlayRequest,
     buildResult: QueueBuildResult,
+    startAtSec?: number,
   ): Promise<void> {
     const current = ctx.queueController.current();
     if (!current) {
@@ -500,7 +503,7 @@ export class PlaybackCoordinator {
         stationIndex: ctx.queueController.currentIndex(),
         isRadio: req.isRadio,
       },
-      { skipExternalStop: true },
+      { skipExternalStop: true, startAtSec },
     );
     if (session) {
       void this.recentsManager.record(ctx.id, current);
@@ -534,7 +537,7 @@ export class PlaybackCoordinator {
     ctx: ZoneContext,
     audiopath: string,
     metadata?: PlaybackMetadata,
-    options?: { skipExternalStop?: boolean },
+    options?: { skipExternalStop?: boolean; startAtSec?: number },
   ): Promise<PlaybackSession | null> {
     // Apply preferred output from the primary target output so we can resample/format accordingly.
     const outputTargets =
@@ -579,6 +582,7 @@ export class PlaybackCoordinator {
       inputs: this.inputsPort,
       log: this.log,
       audioManager: this.audioManager,
+      startAtSec: options?.startAtSec,
     });
     if (!session) {
       if (plan.playExternalLabel === 'musicassistant') {

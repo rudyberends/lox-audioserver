@@ -26,6 +26,7 @@ export class ConfigRepository {
       await this.storage.writeJson(CONFIG_PATH, fallback);
     }
     normalizeInputs(this.config);
+    normalizeGroups(this.config);
     const outputMigrated = normalizeZones(this.config);
     if (outputMigrated) {
       await this.storage.writeJson(CONFIG_PATH, this.config);
@@ -45,6 +46,7 @@ export class ConfigRepository {
       throw new Error('configuration not loaded');
     }
     normalizeInputs(this.config);
+    normalizeGroups(this.config);
     normalizeZones(this.config);
   }
 
@@ -69,6 +71,7 @@ export class ConfigRepository {
 
     await mutator(this.config!);
     normalizeInputs(this.config!);
+    normalizeGroups(this.config!);
     normalizeZones(this.config!);
     await this.save();
     return this.config!;
@@ -81,6 +84,7 @@ export class ConfigRepository {
       const before = serializeConfig(cfg);
       await mutator(cfg);
       normalizeInputs(cfg);
+      normalizeGroups(cfg);
       normalizeZones(cfg);
       const after = serializeConfig(cfg);
       if (before !== after) {
@@ -142,6 +146,9 @@ function defaultConfig(): AudioServerConfig {
         inputs: [],
         bridges: [],
       },
+    },
+    groups: {
+      mixedGroupEnabled: false,
     },
     zones: [],
     rawAudioConfig: {
@@ -235,5 +242,15 @@ function normalizeInputs(config: AudioServerConfig): void {
     if (!Array.isArray(config.inputs.lineIn.inputs)) {
       config.inputs.lineIn.inputs = [];
     }
+  }
+}
+
+function normalizeGroups(config: AudioServerConfig): void {
+  if (!config.groups) {
+    config.groups = { mixedGroupEnabled: false };
+    return;
+  }
+  if (config.groups.mixedGroupEnabled !== true) {
+    config.groups.mixedGroupEnabled = false;
   }
 }

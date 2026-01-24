@@ -11,6 +11,11 @@ type ZoneStateStoreDeps = {
   isRadioAudiopath: (audiopath: string | undefined, audiotype?: number | null) => boolean;
   isLineInAudiopath: (audiopath: string | undefined) => boolean;
   syncGroupMembersPatch: (leaderId: number, patch: Partial<LoxoneZoneState>, force: boolean) => void;
+  onStatePatch?: (
+    zoneId: number,
+    patch: Partial<LoxoneZoneState>,
+    nextState: LoxoneZoneState,
+  ) => void;
   notifyOutputMetadata: (
     zoneId: number,
     ctx: ZoneContext,
@@ -169,6 +174,7 @@ export class ZoneStateStore {
       ctx.lastZoneBroadcastAt = now;
       this.deps.notifier.notifyZoneStateChanged(ctx.state);
     }
+    this.deps.onStatePatch?.(zoneId, patch, nextState);
     this.deps.syncGroupMembersPatch(zoneId, patch, force);
     const session = this.deps.audioManager.getSession(zoneId);
     if (session) {

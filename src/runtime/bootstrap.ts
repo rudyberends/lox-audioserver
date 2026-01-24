@@ -46,6 +46,7 @@ import { sonosGroupController } from '@/application/outputs/sonosGroupController
 import { sendspinGroupController } from '@/application/outputs/sendspinGroupController';
 import { createSqueezeliteGroupController } from '@/application/outputs/squeezeliteGroupController';
 import { createGroupManager } from '@/application/groups/groupManager';
+import { createMixedGroupController } from '@/application/groups/mixedGroupController';
 import { createFavoritesManager } from '@/application/zones/favorites/favoritesManager';
 import { createRecentsManager } from '@/application/zones/recents/recentsManager';
 import { createRuntimePorts, createZoneManagerProxy } from '@/runtime/ports';
@@ -169,6 +170,7 @@ export function createRuntime(): Runtime {
     tidal: tidalStreamResolver,
   });
   const groupManager = createGroupManager({ notifier: ports.notifier, airplayGroup: airplayGroupController });
+  const mixedGroupController = createMixedGroupController(configPort, audioManager);
   const favoritesManager = createFavoritesManager({ notifier: ports.notifier, contentPort: contentAdapter });
   const recentsManager = createRecentsManager({ notifier: ports.notifier, contentPort: contentAdapter });
   let zoneManagerRef: ZoneManagerFacade | null = null;
@@ -213,11 +215,13 @@ export function createRuntime(): Runtime {
     config: configPort,
     recents: recentsManager,
     audioManager,
+    mixedGroup: mixedGroupController,
   });
   zoneManagerRef = zoneManager;
   lineInMetadataService.initOnce({ zoneManager, configPort });
   snapcastCore.initOnce({ zoneManager });
   groupManager.initOnce({ zoneManager });
+  mixedGroupController.initOnce({ zoneManager });
   favoritesManager.initOnce({ zoneManager });
   alertsManager.initOnce({ zoneManager });
   fadeController.initOnce({ zoneManager });

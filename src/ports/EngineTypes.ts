@@ -5,6 +5,8 @@ export type PlaybackSource =
       loop?: boolean;
       padTailSec?: number;
       preDelayMs?: number;
+      /** Optional start offset in seconds. */
+      startAtSec?: number;
       /** Whether ffmpeg should pace input with -re (default: true). */
       realTime?: boolean;
     }
@@ -16,6 +18,8 @@ export type PlaybackSource =
       tlsVerifyHost?: string;
       inputFormat?: string;
       logLevel?: string;
+      /** Optional start offset in seconds. */
+      startAtSec?: number;
       realTime?: boolean;
       lowLatency?: boolean;
       restartOnFailure?: boolean;
@@ -41,6 +45,8 @@ export type EngineInputSpec =
       loop?: boolean;
       padTailSec?: number;
       preDelayMs?: number;
+      /** Optional start offset in seconds. */
+      startAtSec?: number;
       /** Whether ffmpeg should pace input with -re (default: true). */
       realTime?: boolean;
     }
@@ -52,6 +58,8 @@ export type EngineInputSpec =
       tlsVerifyHost?: string;
       inputFormat?: string;
       logLevel?: string;
+      /** Optional start offset in seconds. */
+      startAtSec?: number;
       realTime?: boolean;
       lowLatency?: boolean;
       restartOnFailure?: boolean;

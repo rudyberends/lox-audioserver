@@ -22,6 +22,7 @@ import { InputAdapter } from '@/application/playback/inputAdapter';
 import { SpotifyInputAdapter } from '@/application/playback/adapters/SpotifyInputAdapter';
 import { registerPlayer, unregisterPlayer, clearPlayers } from '@/application/playback/playerRegistry';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
+import type { MixedGroupCoordinator } from '@/application/groups/mixedGroupController';
 import type { OutputsPort } from '@/ports/OutputsPort';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import type { InputsPort } from '@/ports/InputsPort';
@@ -130,6 +131,7 @@ export class ZoneManager {
     configPort: ConfigPort,
     recentsManager: RecentsManager,
     audioManager: AudioManager,
+    mixedGroup: MixedGroupCoordinator | null = null,
   ) {
     this.notifier = notifier;
     this.inputsPort = inputsPort;
@@ -162,6 +164,9 @@ export class ZoneManager {
       isLineInAudiopath: audioHelpers.isLineInAudiopath,
       syncGroupMembersPatch: (leaderId, patch, force) =>
         this.groupingCoordinator.syncGroupMembersPatch(leaderId, patch, force),
+      onStatePatch: mixedGroup
+        ? (zoneId, patch, nextState) => mixedGroup.handleStatePatch(zoneId, patch, nextState)
+        : undefined,
       notifyOutputMetadata: (zoneId, ctx, patch) =>
         this.notifyOutputMetadata(zoneId, ctx, patch),
       notifier: notifierProxy,
@@ -446,8 +451,9 @@ export class ZoneManager {
     uri: string,
     type: string,
     metadata?: PlaybackMetadata,
+    options?: { startAtSec?: number },
   ): Promise<void> {
-    return this.playbackCoordinator.playContent(zoneId, uri, type, metadata);
+    return this.playbackCoordinator.playContent(zoneId, uri, type, metadata, options);
   }
 
   public playInputSource(

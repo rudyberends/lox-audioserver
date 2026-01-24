@@ -91,6 +91,9 @@ class AirplayGroupController {
       return false;
     }
     const leader = this.outputs.get(group.leader);
+    if (!leader) {
+      return false;
+    }
     if (output.isAttachedToLeader(group.leader) && output.getSender().isRunning()) {
       return true;
     }

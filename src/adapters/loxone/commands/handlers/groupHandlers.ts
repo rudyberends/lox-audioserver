@@ -7,6 +7,7 @@ import {
   removeGroupByLeader,
 } from '@/application/groups/groupTracker';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
+import type { ConfigPort } from '@/ports/ConfigPort';
 import { createLogger } from '@/shared/logging/logger';
 
 function clampVolume(value: unknown): number {
@@ -25,10 +26,11 @@ const GROUP_PLAYBACK_RE = /^audio\/grouped\/(pause|play|resume|stop)\/([^/]+)(?:
 export function createGroupHandlers(
   zoneManager: ZoneManagerFacade,
   groupManager: GroupManager,
+  configPort: ConfigPort,
 ) {
   return {
     audioCfgDynamicGroup: (command: string) =>
-      audioCfgDynamicGroup(groupManager, zoneManager, command),
+      audioCfgDynamicGroup(groupManager, zoneManager, configPort, command),
     audioMasterVolume: (command: string) =>
       audioMasterVolume(groupManager, zoneManager, command),
     audioGroupedVolume: (command: string) =>
@@ -46,18 +48,10 @@ function resolveOutputProtocol(zoneManager: ZoneManagerFacade, zoneId: number): 
   return snapshot.activeOutput ?? fallback ?? 'unknown';
 }
 
-function filterMembersByProtocol(
-  zoneManager: ZoneManagerFacade,
-  leader: number,
-  members: number[],
-): number[] {
-  const leaderProtocol = resolveOutputProtocol(zoneManager, leader);
-  return members.filter((memberId) => resolveOutputProtocol(zoneManager, memberId) === leaderProtocol);
-}
-
 async function audioCfgDynamicGroup(
   groupManager: GroupManager,
   zoneManager: ZoneManagerFacade,
+  configPort: ConfigPort,
   command: string,
 ) {
   const match = command.match(GROUP_UPDATE_RE);
@@ -90,8 +84,18 @@ async function audioCfgDynamicGroup(
   if (!leaderState) {
     return buildResponse(command, 'dgroup_update', { success: false, error: 'leader-missing' });
   }
-  const filteredMembers = filterMembersByProtocol(zoneManager, leader, members);
-  const droppedMembers = members.filter((memberId) => !filteredMembers.includes(memberId));
+  const allowMixedGroup = configPort.getConfig()?.groups?.mixedGroupEnabled === true;
+  const leaderProtocol = resolveOutputProtocol(zoneManager, leader);
+  const memberProtocols = members.map((memberId) => ({
+    id: memberId,
+    protocol: resolveOutputProtocol(zoneManager, memberId),
+  }));
+  const filteredMembers = allowMixedGroup
+    ? members
+    : memberProtocols.filter((member) => member.protocol === leaderProtocol).map((member) => member.id);
+  const droppedMembers = allowMixedGroup
+    ? []
+    : members.filter((memberId) => !filteredMembers.includes(memberId));
   if (droppedMembers.length) {
     createLogger('Groups', 'Handlers').debug('dropped group members (protocol mismatch)', {
       leader,
@@ -104,9 +108,11 @@ async function audioCfgDynamicGroup(
     removeGroupByLeader(existing.leader);
   }
 
+  const protocols = new Set([leaderProtocol, ...memberProtocols.map((member) => member.protocol)]);
+  const groupProtocol = allowMixedGroup && protocols.size > 1 ? 'mixedgroup' : leaderProtocol;
   const externalId =
     groupIdRaw === 'new'
-      ? `grp-${leader}-${resolveOutputProtocol(zoneManager, leader)}-${Date.now().toString(36)}`
+      ? `grp-${leader}-${groupProtocol}-${Date.now().toString(36)}`
       : groupIdRaw;
   groupManager.upsert({
     leader,

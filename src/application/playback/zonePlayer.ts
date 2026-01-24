@@ -28,17 +28,28 @@ export class ZonePlayer {
     private readonly requiresPcm: boolean,
   ) {}
 
-  public playUri(uri: string, metadata?: PlaybackMetadata): PlaybackSession | null {
-    const session = this.audioManager.startPlayback(this.zoneId, uri, metadata, this.requiresPcm);
+  public playUri(uri: string, metadata?: PlaybackMetadata, startAtSec?: number): PlaybackSession | null {
+    const normalizedStartAt = this.normalizeStartAtSec(startAtSec, metadata?.duration ?? 0);
+    const session = this.audioManager.startPlayback(
+      this.zoneId,
+      uri,
+      metadata,
+      this.requiresPcm,
+      { startAtSec: normalizedStartAt },
+    );
     if (!session) {
       this.emit('error', 'no playback source resolved');
       return null;
     }
+    const effectiveStartAt = this.normalizeStartAtSec(
+      normalizedStartAt,
+      session.duration ?? metadata?.duration ?? 0,
+    );
     this.endedEmitted = false;
-    this.startTickerWhenReady(session);
+    this.startTickerWhenReady(session, effectiveStartAt);
     this.state = {
       mode: 'playing',
-      time: 0,
+      time: effectiveStartAt,
       duration: session.duration ?? metadata?.duration ?? 0,
       metadata: metadata ?? session.metadata,
       sourceLabel: uri,
@@ -52,23 +63,30 @@ export class ZonePlayer {
     label: string,
     playbackSource: PlaybackSource | null,
     metadata?: PlaybackMetadata,
+    startAtSec?: number,
   ): PlaybackSession | null {
+    const normalizedStartAt = this.normalizeStartAtSec(startAtSec, metadata?.duration ?? 0);
     const session = this.audioManager.startExternalPlayback(
       this.zoneId,
       label,
       playbackSource,
       metadata,
       this.requiresPcm,
+      { startAtSec: normalizedStartAt },
     );
     if (!session) {
       this.emit('error', 'no playback source resolved');
       return null;
     }
+    const effectiveStartAt = this.normalizeStartAtSec(
+      normalizedStartAt,
+      session.duration ?? metadata?.duration ?? 0,
+    );
     this.endedEmitted = false;
-    this.startTickerWhenReady(session);
+    this.startTickerWhenReady(session, effectiveStartAt);
     this.state = {
       mode: 'playing',
-      time: 0,
+      time: effectiveStartAt,
       duration: session.duration ?? metadata?.duration ?? 0,
       metadata: metadata ?? session.metadata,
       sourceLabel: label,
@@ -183,7 +201,7 @@ export class ZonePlayer {
     this.tickTimer = setInterval(() => this.tick(), 1000);
   }
 
-  private startTickerWhenReady(session: PlaybackSession | null): void {
+  private startTickerWhenReady(session: PlaybackSession | null, startAtSec = 0): void {
     this.stopTicker();
     const token = ++this.tickerToken;
     if (!session?.playbackSource) {
@@ -196,7 +214,7 @@ export class ZonePlayer {
       if (this.tickerToken !== token) {
         return;
       }
-      this.state.time = 0;
+      this.state.time = startAtSec;
       this.emit('position', this.state.time, this.state.duration);
       this.lastTickAt = Date.now();
       if (!ready) {
@@ -232,6 +250,17 @@ export class ZonePlayer {
       this.emit('position', this.state.time, this.state.duration);
       this.maybeEmitEnded();
     }
+  }
+
+  private normalizeStartAtSec(startAtSec?: number, duration?: number): number {
+    if (!Number.isFinite(startAtSec)) {
+      return 0;
+    }
+    const safe = Math.max(0, startAtSec ?? 0);
+    if (!Number.isFinite(duration) || (duration ?? 0) <= 0) {
+      return safe;
+    }
+    return Math.min(safe, Math.max(0, (duration ?? 0) - 1));
   }
 
   private maybeEmitEnded(): void {

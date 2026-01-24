@@ -91,6 +91,7 @@ export interface ZoneContext {
     | 'airplay'
     | 'musicassistant'
     | 'linein'
+    | 'mixedgroup'
     | 'alert'
     | null;
   alert?: ActiveAlertState;
