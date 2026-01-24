@@ -1,5 +1,5 @@
-import Bonjour from 'bonjour-service';
 import { createLogger } from '@/shared/logging/logger';
+import type { MdnsPort, MdnsRegistration } from '@/ports/MdnsPort';
 
 type AdvertiseOptions = {
   name: string;
@@ -10,14 +10,14 @@ type AdvertiseOptions = {
 
 export class LoxAudioMdnsAdvertiser {
   private readonly log = createLogger('Http', 'LoxAudioMdns');
-  private bonjour: Bonjour | null = null;
-  private service: ReturnType<Bonjour['publish']> | null = null;
+  private registration: MdnsRegistration | null = null;
+
+  constructor(private readonly mdns: MdnsPort) {}
 
   public advertise(options: AdvertiseOptions): void {
-    const bonjour = this.ensureBonjour();
     this.stop();
     const txt = this.cleanTxt(options.txt);
-    const service = bonjour.publish({
+    this.registration = this.mdns.publish({
       name: options.name,
       type: 'loxaudio',
       protocol: 'tcp',
@@ -25,8 +25,6 @@ export class LoxAudioMdnsAdvertiser {
       host: options.host,
       txt,
     });
-    service.start?.();
-    this.service = service;
     this.log.info('Lox Audio server advertised via mDNS', {
       name: options.name,
       host: options.host,
@@ -36,22 +34,8 @@ export class LoxAudioMdnsAdvertiser {
   }
 
   public stop(): void {
-    if (!this.service) {
-      return;
-    }
-    try {
-      this.service.stop?.();
-    } catch {
-      /* ignore */
-    }
-    this.service = null;
-  }
-
-  private ensureBonjour(): Bonjour {
-    if (!this.bonjour) {
-      this.bonjour = new Bonjour();
-    }
-    return this.bonjour;
+    this.registration?.stop();
+    this.registration = null;
   }
 
   private cleanTxt(

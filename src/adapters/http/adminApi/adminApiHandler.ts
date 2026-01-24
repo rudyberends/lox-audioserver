@@ -42,7 +42,7 @@ import type { AudioManager } from '@/application/playback/audioManager';
 import { audioResampler } from '@/ports/types/audioFormat';
 import https from 'node:https';
 import { loadConfig as loadRuntimeConfig } from '@/config';
-import type { SnapcastCore } from '@/adapters/http/snapcast/snapcastCore';
+import type { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';

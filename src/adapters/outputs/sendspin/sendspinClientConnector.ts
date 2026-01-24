@@ -1,17 +1,9 @@
 import type { IncomingMessage } from 'node:http';
-import Bonjour from 'bonjour-service';
 import WebSocket from 'ws';
 import type { RawData } from 'ws';
 import { createLogger } from '@/shared/logging/logger';
 import { ConnectionReason, sendspinCore } from '@lox-audioserver/node-sendspin';
-
-type MdnsService = {
-  name?: string;
-  host?: string;
-  port: number;
-  addresses?: string[];
-  txt?: Record<string, unknown>;
-};
+import type { MdnsBrowser, MdnsPort, MdnsRegistration, MdnsServiceRecord } from '@/ports/MdnsPort';
 
 interface Endpoint {
   url: string;
@@ -36,11 +28,12 @@ export class SendspinClientConnector {
   private readonly failures = new Map<string, { count: number; lastError: string | null; suppressedUntil: number | null }>();
   private readonly lastAttempts = new Map<string, number>();
   private readonly retryTimers = new Map<string, NodeJS.Timeout>();
-  private readonly knownServices = new Map<string, MdnsService>();
+  private readonly knownServices = new Map<string, MdnsServiceRecord>();
   private readonly inboundClients = new Set<string>();
-  private bonjour: Bonjour | null = null;
-  private browser: ReturnType<Bonjour['find']> | null = null;
-  private serverService: ReturnType<Bonjour['publish']> | null = null;
+  private browser: MdnsBrowser | null = null;
+  private serverRegistration: MdnsRegistration | null = null;
+
+  constructor(private readonly mdns: MdnsPort) {}
 
   public watchClient(clientId: string): () => void {
     const normalized = clientId.trim();
@@ -87,16 +80,8 @@ export class SendspinClientConnector {
   }
 
   public advertiseServer(options: { port: number; host?: string; name?: string; path?: string }): void {
-    this.ensureBonjour();
-    if (this.serverService) {
-      try {
-        this.serverService.stop?.();
-      } catch {
-        /* ignore */
-      }
-      this.serverService = null;
-    }
-    const service = this.bonjour!.publish({
+    this.stopAdvertising();
+    this.serverRegistration = this.mdns.publish({
       name: options.name || 'Lox Audio Server',
       type: 'sendspin-server',
       protocol: 'tcp',
@@ -104,10 +89,8 @@ export class SendspinClientConnector {
       host: options.host,
       txt: { path: this.normalizePathValue(options.path) },
     });
-    service.start?.();
-    this.serverService = service;
     this.log.info('Sendspin server advertised via mDNS', {
-      name: service.name,
+      name: options.name || 'Lox Audio Server',
       host: options.host,
       port: options.port,
       path: this.normalizePathValue(options.path),
@@ -115,33 +98,18 @@ export class SendspinClientConnector {
   }
 
   public stopAdvertising(): void {
-    if (this.serverService) {
-      try {
-        this.serverService.stop?.();
-      } catch {
-        /* ignore */
-      }
-      this.serverService = null;
-    }
+    this.serverRegistration?.stop();
+    this.serverRegistration = null;
   }
 
   private ensureBrowser(): void {
-    const bonjour = this.ensureBonjour();
     if (this.browser) {
       return;
     }
-    this.browser = bonjour.find(
+    this.browser = this.mdns.browse(
       { type: 'sendspin', protocol: 'tcp' },
       (service) => this.handleService(service),
     );
-    this.browser.start();
-  }
-
-  private ensureBonjour(): Bonjour {
-    if (!this.bonjour) {
-      this.bonjour = new Bonjour();
-    }
-    return this.bonjour;
   }
 
   private retryKnownServices(): void {
@@ -150,7 +118,7 @@ export class SendspinClientConnector {
     }
   }
 
-  private handleService(service: MdnsService): void {
+  private handleService(service: MdnsServiceRecord): void {
     const key = this.serviceKey(service);
     this.knownServices.set(key, service);
     if (!this.desiredClientIds.size) {
@@ -312,7 +280,7 @@ export class SendspinClientConnector {
     }
   }
 
-  private toEndpoint(service: MdnsService, clientId: string): Endpoint | null {
+  private toEndpoint(service: MdnsServiceRecord, clientId: string): Endpoint | null {
     const address = this.pickAddress(service);
     if (!address || !service.port) {
       this.log.debug('Sendspin mDNS entry missing address/port', { service: service.name });
@@ -371,7 +339,7 @@ export class SendspinClientConnector {
     };
   }
 
-  private pickAddress(service: MdnsService): string | null {
+  private pickAddress(service: MdnsServiceRecord): string | null {
     const addresses = (service.addresses || []).filter(Boolean) as string[];
     const ipv4 = addresses.find((addr) => addr.includes('.'));
     if (ipv4) {
@@ -395,7 +363,7 @@ export class SendspinClientConnector {
     return raw.startsWith('/') ? raw : `/${raw}`;
   }
 
-  private serviceMatches(service: MdnsService, clientId: string): boolean {
+  private serviceMatches(service: MdnsServiceRecord, clientId: string): boolean {
     const id = clientId.toLowerCase();
     const values = [
       service.name,
@@ -407,7 +375,7 @@ export class SendspinClientConnector {
     return values.some((val) => val === id || val.startsWith(id) || id.startsWith(val));
   }
 
-  private resolveReasonForService(service: MdnsService): 'discovery' | 'playback' {
+  private resolveReasonForService(service: MdnsServiceRecord): 'discovery' | 'playback' {
     for (const id of this.desiredClientIds) {
       if (this.serviceMatches(service, id) && this.desiredReasons.get(id) === 'playback') {
         return 'playback';
@@ -416,7 +384,7 @@ export class SendspinClientConnector {
     return 'discovery';
   }
 
-  private serviceKey(service: MdnsService): string {
+  private serviceKey(service: MdnsServiceRecord): string {
     return `${service.name || service.host || 'unknown'}:${service.port}`;
   }
 

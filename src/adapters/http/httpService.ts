@@ -7,17 +7,11 @@ import { AdminApiHandler } from '@/adapters/http/adminApi/adminApiHandler';
 import { MusicStreamingHandler } from '@/adapters/http/music/musicStreamingHandler';
 import { StaticFileHandler } from '@/adapters/http/static/staticFileHandler';
 import { SendspinGateway } from '@/adapters/http/sendspin/sendspinGateway';
-import type { SendspinClientConnector } from '@/adapters/http/sendspin/sendspinClientConnector';
 import { SnapcastGateway } from '@/adapters/http/snapcast/snapcastGateway';
-import { SnapcastTcpServer } from '@/adapters/http/snapcast/snapcastTcpServer';
-import { SnapcastMdnsAdvertiser } from '@/adapters/http/snapcast/snapcastMdnsAdvertiser';
 import { AudioStreamHandler } from '@/adapters/http/streams/audioStreamHandler';
 import { AudioProxyHandler } from '@/adapters/http/streams/audioProxyHandler';
 import { LineInIngestWebSocket } from '@/adapters/http/streams/lineInIngestWs';
-import { LineInIngestTcp } from '@/adapters/http/streams/lineInIngestTcp';
 import { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
-import { LoxAudioMdnsAdvertiser } from '@/adapters/http/loxAudioMdnsAdvertiser';
-import { networkInterfaces } from 'node:os';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
@@ -31,7 +25,7 @@ import type { LineInMetadataService } from '@/adapters/inputs/linein/lineInMetad
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
 import type { MusicAssistantStreamService } from '@/adapters/inputs/musicassistant/musicAssistantStreamService';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
-import type { SnapcastCore } from '@/adapters/http/snapcast/snapcastCore';
+import type { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import type { StreamEvents } from '@/adapters/http/streams/streamEvents';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
@@ -50,17 +44,10 @@ export class HttpService {
   private readonly audioStream: AudioStreamHandler;
   private readonly audioProxy: AudioProxyHandler;
   private readonly lineInIngestWs: LineInIngestWebSocket;
-  private readonly lineInIngestTcp: LineInIngestTcp;
   private readonly lineInApi: LineInApiHandler;
-  private readonly loxAudioMdns = new LoxAudioMdnsAdvertiser();
-  private readonly snapcastMdns = new SnapcastMdnsAdvertiser();
   private readonly sendspin: SendspinGateway;
   private readonly snapcast: SnapcastGateway;
-  private readonly snapcastTcp: SnapcastTcpServer;
-  private readonly sendspinConnector: SendspinClientConnector;
-  private readonly configPort: ConfigPort;
   private server?: http.Server;
-  private stopMdnsAdvert?: () => void;
 
   constructor(
     private readonly config: HttpServerConfig,
@@ -81,7 +68,6 @@ export class HttpService {
       spotifyInputService: SpotifyInputService;
       snapcastCore: SnapcastCore;
       squeezeliteCore: SqueezeliteCore;
-      sendspinConnector: SendspinClientConnector;
       recentsManager: RecentsManager;
       favoritesManager: FavoritesManager;
       groupManager: GroupManagerReadPort;
@@ -113,13 +99,9 @@ export class HttpService {
     this.audioStream = new AudioStreamHandler(options.engine, options.streamEvents, options.audioManager);
     this.audioProxy = new AudioProxyHandler(options.zoneManager);
     this.lineInIngestWs = new LineInIngestWebSocket(options.lineInRegistry);
-    this.lineInIngestTcp = new LineInIngestTcp(options.lineInRegistry);
     this.lineInApi = new LineInApiHandler(options.configPort, options.lineInMetadataService);
     this.sendspin = new SendspinGateway();
     this.snapcast = new SnapcastGateway(options.snapcastCore);
-    this.snapcastTcp = new SnapcastTcpServer(options.snapcastCore);
-    this.sendspinConnector = options.sendspinConnector;
-    this.configPort = options.configPort;
   }
 
   public async start(): Promise<void> {
@@ -151,24 +133,13 @@ export class HttpService {
             port: this.config.port,
             host: this.config.host,
           });
-          this.advertiseSendspinMdns();
-          this.advertiseLoxAudioMdns();
           resolve();
         })
         .on('error', reject);
     });
-    await this.lineInIngestTcp.start();
-    await this.snapcastTcp.start();
-    this.advertiseSnapcastMdns();
   }
 
   public async stop(): Promise<void> {
-    if (this.stopMdnsAdvert) {
-      this.stopMdnsAdvert();
-      this.stopMdnsAdvert = undefined;
-    }
-    this.loxAudioMdns.stop();
-    this.snapcastMdns.stop();
     await new Promise<void>((resolve) => {
       if (!this.server) {
         resolve();
@@ -177,8 +148,6 @@ export class HttpService {
       this.server.close(() => resolve());
       this.server = undefined;
     });
-    await this.lineInIngestTcp.stop();
-    await this.snapcastTcp.stop();
     this.sendspin.close();
     this.snapcast.close();
   }
@@ -271,70 +240,5 @@ export class HttpService {
     } catch {
       return path || '/';
     }
-  }
-
-  private advertiseSendspinMdns(): void {
-    const systemName = this.configPort.getSystemConfig()?.audioserver?.name || 'Lox Audio Server';
-    const host =
-      this.config.host && this.config.host !== '0.0.0.0' ? this.config.host : this.pickLocalAddress();
-    const mdnsHost = host === '0.0.0.0' ? undefined : host;
-    this.sendspinConnector.advertiseServer({
-      port: this.config.port,
-      host: mdnsHost,
-      path: '/sendspin',
-      name: systemName,
-    });
-    this.stopMdnsAdvert = () => this.sendspinConnector.stopAdvertising();
-  }
-
-  private advertiseLoxAudioMdns(): void {
-    const systemConfig = this.configPort.getSystemConfig();
-    const systemName = systemConfig?.audioserver?.name || 'Lox Audio Server';
-    const host =
-      this.config.host && this.config.host !== '0.0.0.0' ? this.config.host : this.pickLocalAddress();
-    const mdnsHost = host === '0.0.0.0' ? undefined : host;
-    const mac = systemConfig?.audioserver?.macId?.trim();
-    this.loxAudioMdns.advertise({
-      name: systemName,
-      host: mdnsHost,
-      port: this.config.port,
-      txt: {
-        api: '/api',
-        linein: '/api/linein',
-        linein_register: '/api/linein/bridges/register',
-        linein_status: '/api/linein/bridges/{bridge_id}/status',
-        mac: mac ? mac.toUpperCase() : undefined,
-      },
-    });
-  }
-
-  private advertiseSnapcastMdns(): void {
-    const systemName = this.configPort.getSystemConfig()?.audioserver?.name || 'Lox Audio Server';
-    const host =
-      this.config.host && this.config.host !== '0.0.0.0' ? this.config.host : this.pickLocalAddress();
-    const mdnsHost = host === '0.0.0.0' ? undefined : host;
-    const streamPort = this.snapcastTcp.getAdvertisePort();
-    if (!streamPort) {
-      this.log.warn('snapcast mdns skipped (tcp server not listening)');
-      return;
-    }
-    this.snapcastMdns.advertise({
-      name: systemName,
-      host: mdnsHost,
-      streamPort,
-      jsonrpcPort: this.config.port,
-    });
-  }
-
-  private pickLocalAddress(): string {
-    const nets = networkInterfaces();
-    for (const name of Object.keys(nets)) {
-      for (const net of nets[name] || []) {
-        if (net.family === 'IPv4' && !net.internal && net.address) {
-          return net.address;
-        }
-      }
-    }
-    return '0.0.0.0';
   }
 }

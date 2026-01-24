@@ -1,6 +1,6 @@
 import net from 'node:net';
 import { createLogger } from '@/shared/logging/logger';
-import type { SnapcastCore } from '@/adapters/http/snapcast/snapcastCore';
+import type { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 
 const DEFAULT_TCP_PORT = 1704;
 

@@ -14,3 +14,11 @@ export function defaultLocalIp(): string {
   }
   return '';
 }
+
+export function resolveMdnsHost(host?: string): string | undefined {
+  const candidate = host && host !== '0.0.0.0' ? host : defaultLocalIp();
+  if (!candidate || candidate === '0.0.0.0') {
+    return undefined;
+  }
+  return candidate;
+}

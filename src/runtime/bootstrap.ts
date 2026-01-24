@@ -30,10 +30,16 @@ import { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegis
 import { SendspinHookRegistry } from '@/adapters/outputs/sendspin/sendspinHookRegistry';
 import { SpotifyDeviceRegistry } from '@/adapters/outputs/spotify/deviceRegistry';
 import { StreamEvents } from '@/adapters/http/streams/streamEvents';
-import { SendspinClientConnector } from '@/adapters/http/sendspin/sendspinClientConnector';
-import { SnapcastCore } from '@/adapters/http/snapcast/snapcastCore';
+import { SendspinClientConnector } from '@/adapters/outputs/sendspin/sendspinClientConnector';
+import { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import { AudioManager } from '@/application/playback/audioManager';
 import { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
+import { NetworkService } from '@/adapters/network';
+import { MdnsService } from '@/adapters/discovery';
+import { LoxAudioMdnsService } from '@/adapters/discovery/loxAudioMdnsService';
+import { SnapcastMdnsService } from '@/adapters/outputs/snapcast/snapcastMdnsService';
+import { SendspinServerAdvertiser } from '@/adapters/outputs/sendspin/sendspinServerAdvertiser';
+import type { MdnsLifecycleService } from '@/adapters/discovery/mdnsLifecycle';
 import { createAirplayGroupController } from '@/application/outputs/airplayGroupController';
 import { createSnapcastGroupController } from '@/application/outputs/snapcastGroupController';
 import { sonosGroupController } from '@/application/outputs/sonosGroupController';
@@ -106,7 +112,12 @@ export function createRuntime(): Runtime {
   const tidalStreamResolver = new TidalStreamResolver(tidalStreamService);
   const engine = new EngineAdapter(audioStreamEngine);
   const lineInRegistry = new LineInIngestRegistry();
-  const sendspinConnector = new SendspinClientConnector();
+  const mdnsService = new MdnsService();
+  const sendspinConnector = new SendspinClientConnector(mdnsService);
+  let sendspinServerAdvertiser: SendspinServerAdvertiser | null = null;
+  let loxAudioMdnsService: LoxAudioMdnsService | null = null;
+  let snapcastMdnsService: SnapcastMdnsService | null = null;
+  const mdnsServices: MdnsLifecycleService[] = [];
   const streamEvents = new StreamEvents();
   const serverHeartbeat = new ServerHeartbeat(connectionRegistry);
   const sendspinHookRegistry = new SendspinHookRegistry();
@@ -220,6 +231,7 @@ export function createRuntime(): Runtime {
   outputHandlers = zoneManager.getOutputHandlers();
 
   let httpService: HttpService | null = null;
+  let networkService: NetworkService | null = null;
   let loxoneService: LoxoneHttpService | null = null;
   let restartInFlight = false;
 
@@ -302,12 +314,15 @@ export function createRuntime(): Runtime {
       spotifyInputService,
       snapcastCore,
       squeezeliteCore,
-      sendspinConnector,
       recentsManager,
       favoritesManager,
       groupManager,
       contentManager,
       audioManager,
+    });
+    networkService = new NetworkService({
+      lineInRegistry,
+      snapcastCore,
     });
     loxoneService = new LoxoneHttpService(config.loxone, {
       host: config.env.hostname,
@@ -329,6 +344,24 @@ export function createRuntime(): Runtime {
     });
 
     await httpService.start();
+    await networkService.start();
+
+    sendspinServerAdvertiser = new SendspinServerAdvertiser(
+      config.http,
+      configPort,
+      sendspinConnector,
+    );
+    loxAudioMdnsService = new LoxAudioMdnsService(config.http, configPort, mdnsService);
+    snapcastMdnsService = new SnapcastMdnsService(
+      config.http,
+      configPort,
+      networkService,
+      mdnsService,
+    );
+
+    mdnsServices.length = 0;
+    mdnsServices.push(sendspinServerAdvertiser, loxAudioMdnsService, snapcastMdnsService);
+    mdnsServices.forEach((service) => service.start());
     await loxoneService.start();
     await notifyMiniserverStartup(storedConfig);
 
@@ -347,6 +380,17 @@ export function createRuntime(): Runtime {
     if (loxoneService) {
       services.push({ name: 'loxone', stop: () => loxoneService!.stop() });
     }
+    services.push({
+      name: 'mdns',
+      stop: async () => {
+        mdnsServices.forEach((service) => service.stop());
+        mdnsServices.length = 0;
+        mdnsService.shutdown();
+      },
+    });
+    if (networkService) {
+      services.push({ name: 'network', stop: () => networkService!.stop() });
+    }
     if (httpService) {
       services.push({ name: 'http', stop: () => httpService!.stop() });
     }
@@ -358,6 +402,10 @@ export function createRuntime(): Runtime {
     );
 
     httpService = null;
+    networkService = null;
+    sendspinServerAdvertiser = null;
+    loxAudioMdnsService = null;
+    snapcastMdnsService = null;
     loxoneService = null;
   }
 

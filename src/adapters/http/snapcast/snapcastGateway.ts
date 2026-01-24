@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
-import type { SnapcastCore } from '@/adapters/http/snapcast/snapcastCore';
+import type { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 
 /**
  * WebSocket gateway for the Snapcast-compatible stream.
