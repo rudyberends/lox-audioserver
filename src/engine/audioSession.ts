@@ -12,7 +12,15 @@ import {
 } from '@/engine/audioFormat';
 
 export type PlaybackSource =
-  | { kind: 'file'; path: string; loop?: boolean; padTailSec?: number; preDelayMs?: number }
+  | {
+      kind: 'file';
+      path: string;
+      loop?: boolean;
+      padTailSec?: number;
+      preDelayMs?: number;
+      /** Whether ffmpeg should pace input with -re (default: true). */
+      realTime?: boolean;
+    }
   | {
       kind: 'url';
       url: string;
@@ -478,8 +486,9 @@ export class AudioSession {
     const loopArgs = this.source.loop ? ['-stream_loop', '-1'] : [];
     const inputLatencyArgs = this.isAlertSource ? this.buildBufferedArgs() : this.buildLowLatencyArgs();
     // Pace file sources in real-time so downstream outputs (e.g., Snapcast) don’t get flooded.
-    const realTimeArg = ['-re'];
-    inputs.push(...inputLatencyArgs, ...loopArgs, ...realTimeArg, '-i', this.source.path);
+    const paceInput = this.source.realTime !== false;
+    const realTimeArgs = paceInput ? ['-re'] : [];
+    inputs.push(...inputLatencyArgs, ...loopArgs, ...realTimeArgs, '-i', this.source.path);
     return inputs;
   }
 

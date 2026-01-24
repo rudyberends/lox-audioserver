@@ -37,6 +37,7 @@ import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { CustomRadioStore } from '@/adapters/content/providers/customRadioStore';
 import type { AudioManager } from '@/application/playback/audioManager';
+import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
 
 /**
  * Hosts the public HTTP gateway (admin UI, API stub, music streaming, Sendspin).
@@ -79,6 +80,7 @@ export class HttpService {
       musicAssistantStreamService: MusicAssistantStreamService;
       spotifyInputService: SpotifyInputService;
       snapcastCore: SnapcastCore;
+      squeezeliteCore: SqueezeliteCore;
       sendspinConnector: SendspinClientConnector;
       recentsManager: RecentsManager;
       favoritesManager: FavoritesManager;
@@ -99,6 +101,7 @@ export class HttpService {
       sendspinLineInService: options.sendspinLineInService,
       musicAssistantStreamService: options.musicAssistantStreamService,
       snapcastCore: options.snapcastCore,
+      squeezeliteCore: options.squeezeliteCore,
       recentsManager: options.recentsManager,
       favoritesManager: options.favoritesManager,
       groupManager: options.groupManager,

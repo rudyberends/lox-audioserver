@@ -19,6 +19,7 @@ import { MusicAssistantStreamService } from '../src/adapters/inputs/musicassista
 import { SpotifyInputService } from '../src/adapters/inputs/spotify/spotifyInputService';
 import { SendspinHookRegistry } from '../src/adapters/outputs/sendspin/sendspinHookRegistry';
 import { SnapcastCore } from '../src/adapters/http/snapcast/snapcastCore';
+import { SqueezeliteCore } from '../src/adapters/outputs/squeezelite/squeezeliteCore';
 import { ConnectionRegistry } from '../src/adapters/loxone/ws/connectionRegistry';
 import { LoxoneWsNotifier } from '../src/adapters/loxone/ws/notifier';
 import { CustomRadioStore } from '../src/adapters/content/providers/customRadioStore';
@@ -121,6 +122,7 @@ function createHandler(): AdminApiHandler {
   const snapcastCore = new SnapcastCore(audioManager);
   const zoneManager = {} as ZoneManagerFacade;
   snapcastCore.initOnce({ zoneManager });
+  const squeezeliteCore = new SqueezeliteCore(noopConfigPort);
   const loxoneNotifier = new LoxoneWsNotifier(new ConnectionRegistry());
   const customRadioStore = new CustomRadioStore();
   const favoritesManager = createFavoritesManager({
@@ -139,6 +141,7 @@ function createHandler(): AdminApiHandler {
     sendspinLineInService,
     musicAssistantStreamService,
     snapcastCore,
+    squeezeliteCore,
     recentsManager: createRecentsManager({ notifier: makeNotifierFake(), contentPort: noopContentPort }),
     favoritesManager,
     groupManager: { getAllGroups: () => [] },

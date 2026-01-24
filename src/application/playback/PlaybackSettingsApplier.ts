@@ -10,4 +10,7 @@ export function applyPreferredPlaybackSettings(
   if (Object.prototype.hasOwnProperty.call(settings, 'httpPrefs')) {
     audioManager.setHttpPreferences(zoneId, settings.httpPrefs ?? null);
   }
+  if (Object.prototype.hasOwnProperty.call(settings, 'inputPrefs')) {
+    audioManager.setInputPreferences(zoneId, settings.inputPrefs ?? null);
+  }
 }

@@ -45,6 +45,7 @@ import { loadConfig as loadRuntimeConfig } from '@/config';
 import type { SnapcastCore } from '@/adapters/http/snapcast/snapcastCore';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
+import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
 
 type AdminApiOptions = {
   onReinitialize?: () => Promise<boolean>;
@@ -58,6 +59,7 @@ type AdminApiOptions = {
   sendspinLineInService: SendspinLineInService;
   musicAssistantStreamService: MusicAssistantStreamService;
   snapcastCore: SnapcastCore;
+  squeezeliteCore: SqueezeliteCore;
   recentsManager: RecentsManager;
   favoritesManager: FavoritesManager;
   groupManager: GroupManagerReadPort;
@@ -97,6 +99,7 @@ export class AdminApiHandler {
   private readonly sendspinLineInService: SendspinLineInService;
   private readonly musicAssistantStreamService: MusicAssistantStreamService;
   private readonly snapcastCore: SnapcastCore;
+  private readonly squeezeliteCore: SqueezeliteCore;
   private readonly recentsManager: RecentsManager;
   private readonly favoritesManager: FavoritesManager;
   private readonly groupManager: GroupManagerReadPort;
@@ -117,6 +120,7 @@ export class AdminApiHandler {
     this.sendspinLineInService = options.sendspinLineInService;
     this.musicAssistantStreamService = options.musicAssistantStreamService;
     this.snapcastCore = options.snapcastCore;
+    this.squeezeliteCore = options.squeezeliteCore;
     this.recentsManager = options.recentsManager;
     this.favoritesManager = options.favoritesManager;
     this.groupManager = options.groupManager;
@@ -306,6 +310,11 @@ export class AdminApiHandler {
         method: 'GET',
         pattern: /^\/transports\/snapcast\/clients$/,
         handler: async (_req, res) => this.handleSnapcastDiscovery(res),
+      },
+      {
+        method: 'GET',
+        pattern: /^\/transports\/squeezelite\/clients$/,
+        handler: async (_req, res) => this.handleSqueezeliteDiscovery(res),
       },
       {
         method: 'GET',
@@ -964,6 +973,24 @@ export class AdminApiHandler {
     } catch (err) {
       this.log.warn('snapcast discovery failed', { err });
       this.sendJson(res, 500, { error: 'snapcast-discovery-failed' });
+    }
+  }
+
+  private handleSqueezeliteDiscovery(res: ServerResponse): void {
+    try {
+      const clients = this.squeezeliteCore.players.map((player) => ({
+        id: player.playerId,
+        playerId: player.playerId,
+        name: player.name,
+        address: player.deviceAddress ?? null,
+        port: player.devicePort ?? null,
+        state: player.state,
+        connected: player.connected,
+      }));
+      this.sendJson(res, 200, { clients });
+    } catch (err) {
+      this.log.warn('squeezelite discovery failed', { err });
+      this.sendJson(res, 500, { error: 'squeezelite-discovery-failed' });
     }
   }
 

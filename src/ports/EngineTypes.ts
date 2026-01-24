@@ -1,5 +1,13 @@
 export type PlaybackSource =
-  | { kind: 'file'; path: string; loop?: boolean; padTailSec?: number; preDelayMs?: number }
+  | {
+      kind: 'file';
+      path: string;
+      loop?: boolean;
+      padTailSec?: number;
+      preDelayMs?: number;
+      /** Whether ffmpeg should pace input with -re (default: true). */
+      realTime?: boolean;
+    }
   | {
       kind: 'url';
       url: string;
@@ -27,7 +35,15 @@ export type PlaybackSource =
 export type OutputProfile = 'mp3' | 'aac' | 'pcm' | 'opus' | 'flac';
 
 export type EngineInputSpec =
-  | { kind: 'file'; path: string; loop?: boolean; padTailSec?: number; preDelayMs?: number }
+  | {
+      kind: 'file';
+      path: string;
+      loop?: boolean;
+      padTailSec?: number;
+      preDelayMs?: number;
+      /** Whether ffmpeg should pace input with -re (default: true). */
+      realTime?: boolean;
+    }
   | {
       kind: 'url';
       url: string;

@@ -44,6 +44,11 @@ import {
   SONOS_OUTPUT_DEFINITION,
   type SonosOutputConfig,
 } from '@/adapters/outputs/sonos/sonosOutput';
+import {
+  SqueezeliteOutput,
+  SQUEEZELITE_OUTPUT_DEFINITION,
+  type SqueezeliteOutputConfig,
+} from '@/adapters/outputs/squeezelite/squeezeliteOutput';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 
 type OutputDefinitions =
@@ -55,7 +60,8 @@ type OutputDefinitions =
   | typeof GOOGLE_CAST_OUTPUT_DEFINITION
   | typeof SENDSPIN_CAST_OUTPUT_DEFINITION
   | typeof SNAPCAST_CAST_OUTPUT_DEFINITION
-  | typeof SONOS_OUTPUT_DEFINITION;
+  | typeof SONOS_OUTPUT_DEFINITION
+  | typeof SQUEEZELITE_OUTPUT_DEFINITION;
 
 export const OUTPUT_DEFINITIONS: OutputDefinitions[] = [
   DLNA_OUTPUT_DEFINITION,
@@ -67,6 +73,7 @@ export const OUTPUT_DEFINITIONS: OutputDefinitions[] = [
   SENDSPIN_CAST_OUTPUT_DEFINITION,
   SNAPCAST_CAST_OUTPUT_DEFINITION,
   SONOS_OUTPUT_DEFINITION,
+  SQUEEZELITE_OUTPUT_DEFINITION,
 ];
 const log = createLogger('Output', 'Factory');
 
@@ -134,6 +141,12 @@ export function buildZoneOutputs(
     }
     if (id === 'sonos') {
       const output = createSonosOutput(entry, zone, ports);
+      if (output) {
+        outputs.push(output);
+      }
+    }
+    if (id === 'squeezelite') {
+      const output = createSqueezeliteOutput(entry, zone, ports);
       if (output) {
         outputs.push(output);
       }
@@ -233,6 +246,26 @@ function createSpotifyController(
 
   log.info('Spotify Connect output skipped; offload is false', { zoneId: zone.id });
   return null;
+}
+
+function createSqueezeliteOutput(
+  config: ZoneTransportConfig,
+  zone: ZoneConfig,
+  ports: OutputPorts,
+): ZoneOutput | null {
+  const rawPlayerId = (config as Record<string, unknown>).playerId;
+  const rawPlayerName = (config as Record<string, unknown>).playerName;
+  const playerId = typeof rawPlayerId === 'string' ? rawPlayerId.trim() : '';
+  const playerName = typeof rawPlayerName === 'string' ? rawPlayerName.trim() : '';
+
+  if (!playerId && !playerName) {
+    log.warn('Squeezelite output skipped; missing playerId/playerName', { zoneId: zone.id });
+    return null;
+  }
+
+  const cfg: SqueezeliteOutputConfig = { playerId: playerId || undefined, playerName: playerName || undefined };
+  log.info('Squeezelite output registered', { zoneId: zone.id, playerId: cfg.playerId, playerName: cfg.playerName });
+  return new SqueezeliteOutput(zone.id, zone.name, cfg, ports);
 }
 
 function isSpotifyInputEnabled(zone: ZoneConfig): boolean {

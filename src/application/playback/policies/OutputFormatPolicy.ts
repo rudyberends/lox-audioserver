@@ -4,9 +4,14 @@ import type { HttpPreferences, PreferredOutput, ZoneOutput } from '@/ports/Outpu
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import { selectPlayOutputs } from '@/application/zones/services/outputOrchestrator';
 
+export type InputPreferences = {
+  fileRealTime?: boolean;
+};
+
 export type PreferredPlaybackSettings = {
   outputOverride: (Partial<AudioOutputSettings> & { profile?: OutputProfile }) | null;
   httpPrefs?: HttpPreferences | null;
+  inputPrefs?: InputPreferences | null;
 };
 
 type ComputeArgs = {
@@ -88,7 +93,10 @@ export function computePreferredPlaybackSettings(args: ComputeArgs): PreferredPl
     httpPrefs = null;
   }
 
-  const settings: PreferredPlaybackSettings = { outputOverride: override };
+  const inputPrefs: InputPreferences | null =
+    primaryOutput?.type === 'squeezelite' ? { fileRealTime: false } : null;
+
+  const settings: PreferredPlaybackSettings = { outputOverride: override, inputPrefs };
   if (typeof httpPrefs !== 'undefined') {
     settings.httpPrefs = httpPrefs;
   }

@@ -1,0 +1,241 @@
+import { createLogger } from '@/shared/logging/logger';
+import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
+import type { PlaybackSession } from '@/application/playback/audioManager';
+import type { OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
+import type { OutputPorts } from '@/adapters/outputs/outputPorts';
+import type { SlimClient, SlimEvent } from '@lox-audioserver/node-slimproto';
+import { EventType, PlayerState } from '@lox-audioserver/node-slimproto';
+
+export interface SqueezeliteOutputConfig {
+  playerId?: string;
+  playerName?: string;
+}
+
+export const SQUEEZELITE_OUTPUT_DEFINITION: OutputConfigDefinition = {
+  id: 'squeezelite',
+  label: 'Squeezelite / SlimProto',
+  description: 'Streams audio to Squeezelite/Squeezebox players via SlimProto.',
+  fields: [
+    {
+      id: 'playerId',
+      label: 'Player ID (MAC)',
+      type: 'text',
+      placeholder: 'aa:bb:cc:dd:ee:ff',
+      description: 'Preferred target MAC address. Use this for a stable binding.',
+    },
+    {
+      id: 'playerName',
+      label: 'Player name',
+      type: 'text',
+      placeholder: 'Living Room',
+      description: 'Optional player name when no MAC is configured.',
+    },
+  ],
+};
+
+export class SqueezeliteOutput implements ZoneOutput {
+  public readonly type = 'squeezelite';
+  private readonly log = createLogger('Output', 'Squeezelite');
+  private readonly normalizedPlayerId: string;
+  private readonly normalizedPlayerName: string;
+  private readonly unsubscribe: () => void;
+  private lastStatus: 'playing' | 'paused' | 'stopped' | null = null;
+
+  constructor(
+    private readonly zoneId: number,
+    private readonly zoneName: string,
+    config: SqueezeliteOutputConfig,
+    private readonly ports: OutputPorts,
+  ) {
+    this.normalizedPlayerId = normalizePlayerId(config.playerId);
+    this.normalizedPlayerName = normalizeName(config.playerName);
+    this.unsubscribe = this.ports.squeezeliteCore.subscribe((event) => this.handleEvent(event));
+    this.ports.squeezeliteGroup.register({
+      zoneId: this.zoneId,
+      getPlayer: () => this.resolvePlayer(),
+    });
+  }
+
+  public isReady(): boolean {
+    return Boolean(this.resolvePlayer());
+  }
+
+  public async play(session: PlaybackSession): Promise<void> {
+    if (!session.playbackSource) {
+      this.log.warn('Squeezelite output skipped; no playback source', { zoneId: this.zoneId });
+      this.ports.outputHandlers.onOutputError(this.zoneId, 'squeezelite no source');
+      return;
+    }
+    const player = await this.ensurePlayer();
+    if (!player) {
+      this.ports.outputHandlers.onOutputError(this.zoneId, 'squeezelite no player');
+      return;
+    }
+    const streamUrl = this.buildStreamUrl(session);
+    if (!streamUrl) {
+      this.ports.outputHandlers.onOutputError(this.zoneId, 'squeezelite no stream');
+      return;
+    }
+    const meta = this.buildMetadata(session, streamUrl);
+    await player.playUrl(streamUrl, 'audio/mpeg', meta);
+    this.ports.squeezeliteGroup.requestSync(this.zoneId);
+  }
+
+  public async pause(_session: PlaybackSession | null): Promise<void> {
+    const player = this.resolvePlayer();
+    if (!player) return;
+    await player.pause();
+  }
+
+  public async resume(session: PlaybackSession | null): Promise<void> {
+    const player = this.resolvePlayer();
+    if (player) {
+      await player.play();
+      this.ports.squeezeliteGroup.requestSync(this.zoneId);
+      return;
+    }
+    if (session) {
+      await this.play(session);
+    }
+  }
+
+  public async stop(_session: PlaybackSession | null): Promise<void> {
+    const player = this.resolvePlayer();
+    if (!player) return;
+    await player.stop();
+  }
+
+  public async setVolume(level: number): Promise<void> {
+    const player = this.resolvePlayer();
+    if (!player) return;
+    const clamped = Math.min(100, Math.max(0, Math.round(level)));
+    await player.volumeSet(clamped);
+  }
+
+  public getPreferredOutput(): { profile: 'mp3'; sampleRate: number; channels: number; prebufferBytes: number } {
+    return { profile: 'mp3', sampleRate: 44100, channels: 2, prebufferBytes: 64 * 1024 };
+  }
+
+  public dispose(): void {
+    this.unsubscribe();
+    this.ports.squeezeliteGroup.unregister(this.zoneId);
+  }
+
+  private async ensurePlayer(): Promise<SlimClient | null> {
+    const existing = this.resolvePlayer();
+    if (existing) return existing;
+    return await this.ports.squeezeliteCore.waitForPlayer((player) => this.matchesPlayer(player));
+  }
+
+  private resolvePlayer(): SlimClient | null {
+    const players = this.ports.squeezeliteCore.players;
+    if (!players.length) return null;
+    const match = players.find((player) => this.matchesPlayer(player));
+    if (match) return match;
+    if (!this.normalizedPlayerId && !this.normalizedPlayerName && players.length === 1) {
+      return players[0];
+    }
+    return null;
+  }
+
+  private matchesPlayer(player: SlimClient): boolean {
+    if (this.normalizedPlayerId) {
+      return normalizePlayerId(player.playerId) === this.normalizedPlayerId;
+    }
+    if (this.normalizedPlayerName) {
+      return normalizeName(player.name) === this.normalizedPlayerName;
+    }
+    return false;
+  }
+
+  private handleEvent(event: SlimEvent): void {
+    const player = this.ports.squeezeliteCore.getPlayer(event.playerId);
+    if (!player || !this.matchesPlayer(player)) {
+      return;
+    }
+    if (event.type === EventType.PLAYER_DISCONNECTED) {
+      this.lastStatus = 'stopped';
+      this.ports.outputHandlers.onOutputState(this.zoneId, { status: 'stopped' });
+      return;
+    }
+    if (event.type === EventType.PLAYER_UPDATED) {
+      this.emitState(player);
+    }
+    if (event.type === EventType.PLAYER_DECODER_ERROR) {
+      this.ports.outputHandlers.onOutputError(this.zoneId, 'squeezelite decode');
+    }
+  }
+
+  private emitState(player: SlimClient): void {
+    const status = mapPlayerState(player.state);
+    if (!status) return;
+    if (this.lastStatus === status) return;
+    this.lastStatus = status;
+    this.ports.outputHandlers.onOutputState(this.zoneId, {
+      status,
+      uri: player.currentMedia?.metadata?.item_id,
+      duration: player.currentMedia?.metadata?.duration,
+    });
+  }
+
+  private buildStreamUrl(session: PlaybackSession): string | null {
+    const stablePath = `/streams/${this.zoneId}/current.mp3?prime=0`;
+    const fallbackUrl = this.appendPrimeFlag(session.stream.url);
+    return this.buildAbsoluteUrl(stablePath) ?? this.buildAbsoluteUrl(fallbackUrl);
+  }
+
+  private buildAbsoluteUrl(pathname: string): string | null {
+    if (!pathname) return null;
+    if (isHttpUrl(pathname)) return pathname;
+    if (!pathname.startsWith('/')) return null;
+    const sys = this.ports.config.getSystemConfig();
+    const host = sys.audioserver.ip?.trim() || '127.0.0.1';
+    const port = 7090;
+    return `http://${host}:${port}${pathname}`;
+  }
+
+  private appendPrimeFlag(url: string): string {
+    if (!url) return url;
+    if (url.includes('prime=')) return url;
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}prime=0`;
+  }
+
+  private buildMetadata(session: PlaybackSession, streamUrl: string): Record<string, string | number> {
+    const meta = session.metadata;
+    const itemId = meta?.audiopath || meta?.trackId || streamUrl;
+    const cover = resolveSessionCover(session);
+    const coverUrl = cover ? this.buildAbsoluteUrl(cover) ?? cover : '';
+    return {
+      item_id: itemId,
+      title: meta?.title || this.zoneName,
+      artist: meta?.artist || '',
+      album: meta?.album || '',
+      image_url: coverUrl,
+      duration: session.duration || meta?.duration || 0,
+    };
+  }
+}
+
+function normalizePlayerId(value?: string | null): string {
+  if (!value) return '';
+  return value.replace(/[^a-f0-9]/gi, '').toLowerCase();
+}
+
+function normalizeName(value?: string | null): string {
+  if (!value) return '';
+  return value.trim().toLowerCase();
+}
+
+function mapPlayerState(state: PlayerState): 'playing' | 'paused' | 'stopped' | null {
+  switch (state) {
+    case PlayerState.PLAYING:
+      return 'playing';
+    case PlayerState.PAUSED:
+      return 'paused';
+    case PlayerState.STOPPED:
+      return 'stopped';
+    default:
+      return null;
+  }
+}

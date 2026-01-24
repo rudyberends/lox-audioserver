@@ -8,6 +8,7 @@ import type { SendspinGroupCoordinator } from '../../src/application/outputs/sen
 import type { SnapcastCorePort } from '../../src/ports/SnapcastCorePort';
 import type { SnapcastGroupCoordinator } from '../../src/application/outputs/snapcastGroupController';
 import type { SonosGroupCoordinator } from '../../src/application/outputs/sonosGroupController';
+import type { SqueezeliteGroupCoordinator } from '../../src/application/outputs/squeezeliteGroupController';
 import type { SendspinHookRegistryPort } from '../../src/adapters/outputs/sendspin/sendspinHookRegistry';
 import { SpotifyServiceManagerProvider } from '../../src/adapters/content/providers/spotifyServiceManager';
 import { SpotifyDeviceRegistry } from '../../src/adapters/outputs/spotify/deviceRegistry';
@@ -174,6 +175,18 @@ export const noopSonosGroupController: SonosGroupCoordinator = {
   },
 };
 
+export const noopSqueezeliteGroupController: SqueezeliteGroupCoordinator = {
+  register: () => {
+    /* noop */
+  },
+  unregister: () => {
+    /* noop */
+  },
+  requestSync: () => {
+    /* noop */
+  },
+};
+
 export const noopOutputHandlers = {
   onQueueUpdate: () => {
     /* noop */
@@ -182,6 +195,21 @@ export const noopOutputHandlers = {
     /* noop */
   },
   onOutputState: () => {
+    /* noop */
+  },
+};
+
+const noopSqueezeliteCore: OutputPorts['squeezeliteCore'] = {
+  players: [],
+  getPlayer: () => undefined,
+  subscribe: () => () => {
+    /* noop */
+  },
+  waitForPlayer: async () => null,
+  start: async () => {
+    /* noop */
+  },
+  stop: async () => {
     /* noop */
   },
 };
@@ -204,6 +232,8 @@ export function makeOutputPortsFake(
     snapcastGroup: noopSnapcastGroupController,
     sendspinGroup: noopSendspinGroupController,
     sendspinHooks: noopSendspinHooks,
+    squeezeliteGroup: noopSqueezeliteGroupController,
+    squeezeliteCore: noopSqueezeliteCore,
     zoneManager: noopZoneManager,
     groupManager: noopGroupManager,
     sonosGroup: noopSonosGroupController,

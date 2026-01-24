@@ -86,6 +86,7 @@ export class AudioManager {
   private readonly zonePcmPreference = new Map<number, boolean>();
   private readonly zoneOutputOverrides = new Map<number, Partial<AudioOutputSettings>>();
   private readonly zoneProfileOverrides = new Map<number, OutputProfile>();
+  private readonly zoneInputPreferences = new Map<number, { fileRealTime?: boolean }>();
   private readonly zoneHttpPreferences = new Map<
     number,
     { httpProfile?: HttpProfile; icyEnabled?: boolean; icyInterval?: number; icyName?: string }
@@ -374,6 +375,7 @@ export class AudioManager {
           loop: source.loop,
           padTailSec: source.padTailSec,
           preDelayMs: source.preDelayMs,
+          realTime: source.realTime,
         };
       default:
         throw new Error('Unknown PlaybackSource.');
@@ -418,10 +420,14 @@ export class AudioManager {
     metadata?: PlaybackMetadata,
     requiresPcm?: boolean,
   ): PlaybackSession | null {
-    const effectiveSource =
+    let effectiveSource =
       playbackSource?.kind === 'url' && metadata?.isRadio
         ? { ...playbackSource, restartOnFailure: true }
         : playbackSource;
+    const inputPrefs = this.zoneInputPreferences.get(zoneId);
+    if (inputPrefs?.fileRealTime === false && effectiveSource?.kind === 'file') {
+      effectiveSource = { ...effectiveSource, realTime: false };
+    }
     this.log.info('startWithResolvedSource', {
       zoneId,
       label,
@@ -438,20 +444,21 @@ export class AudioManager {
     }
     const preferredProfile = this.zoneProfileOverrides.get(zoneId);
     const profiles = this.computeProfiles(
-      playbackSource,
+      effectiveSource,
       effectivePcmPreference,
       preferredProfile ? [preferredProfile] : undefined,
     );
     const effectiveOutput = this.getEffectiveOutputSettings(zoneId);
     const outputSignature = this.buildOutputSignature(effectiveOutput);
-    const outputOnly = !playbackSource && (label.toLowerCase() === 'spotify' || label.toLowerCase() === 'musicassistant');
+    const outputOnly =
+      !effectiveSource && (label.toLowerCase() === 'spotify' || label.toLowerCase() === 'musicassistant');
 
     // If we are already on the same source (e.g. track change on the same pipe),
     // keep the existing stream URLs and engine session running.
-    if (existing && this.isSamePlaybackSource(existing.playbackSource, playbackSource)) {
+    if (existing && this.isSamePlaybackSource(existing.playbackSource, effectiveSource)) {
       existing.source = label;
-      if (playbackSource) {
-        existing.playbackSource = playbackSource;
+      if (effectiveSource) {
+        existing.playbackSource = effectiveSource;
       }
       if (metadata) {
         existing.metadata = metadata;
@@ -471,7 +478,7 @@ export class AudioManager {
         existing.outputSettings.channels !== outputSignature.channels ||
         existing.outputSettings.pcmBitDepth !== outputSignature.pcmBitDepth;
       // Ensure engine session exists (resume after a pause).
-      if (playbackSource && (outputChanged || profilesChanged || !this.playbackService.hasSession(zoneId))) {
+      if (effectiveSource && (outputChanged || profilesChanged || !this.playbackService.hasSession(zoneId))) {
         if ((outputChanged || profilesChanged) && this.playbackService.hasSession(zoneId)) {
           this.log.info('restarting audio engine to apply output format', {
             zoneId,
@@ -482,7 +489,7 @@ export class AudioManager {
           });
           this.playbackService.stop(zoneId, 'reconfigure', { discardSubscribers: true });
         }
-        const startOptions = this.buildEngineStartOptions(zoneId, playbackSource, profiles, effectiveOutput);
+        const startOptions = this.buildEngineStartOptions(zoneId, effectiveSource, profiles, effectiveOutput);
         this.playbackService.start(startOptions);
       }
       existing.outputSettings = outputSignature;
@@ -589,7 +596,12 @@ export class AudioManager {
           );
         }
       case 'file':
-        return prev.path === (next as { kind: 'file'; path: string }).path;
+        {
+          const nextFile = next as { kind: 'file'; path: string; realTime?: boolean };
+          const prevPace = (prev as { realTime?: boolean }).realTime !== false;
+          const nextPace = nextFile.realTime !== false;
+          return prev.path === nextFile.path && prevPace === nextPace;
+        }
       default:
         return false;
     }
@@ -750,6 +762,14 @@ export class AudioManager {
     if (override.profile) {
       this.zoneProfileOverrides.set(zoneId, override.profile);
     }
+  }
+
+  public setInputPreferences(zoneId: number, prefs: { fileRealTime?: boolean } | null): void {
+    if (!prefs || Object.keys(prefs).length === 0) {
+      this.zoneInputPreferences.delete(zoneId);
+      return;
+    }
+    this.zoneInputPreferences.set(zoneId, prefs);
   }
 
   public getEffectiveOutputSettings(zoneId: number): AudioOutputSettings {

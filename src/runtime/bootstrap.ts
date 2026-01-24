@@ -33,10 +33,12 @@ import { StreamEvents } from '@/adapters/http/streams/streamEvents';
 import { SendspinClientConnector } from '@/adapters/http/sendspin/sendspinClientConnector';
 import { SnapcastCore } from '@/adapters/http/snapcast/snapcastCore';
 import { AudioManager } from '@/application/playback/audioManager';
+import { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
 import { createAirplayGroupController } from '@/application/outputs/airplayGroupController';
 import { createSnapcastGroupController } from '@/application/outputs/snapcastGroupController';
 import { sonosGroupController } from '@/application/outputs/sonosGroupController';
 import { sendspinGroupController } from '@/application/outputs/sendspinGroupController';
+import { createSqueezeliteGroupController } from '@/application/outputs/squeezeliteGroupController';
 import { createGroupManager } from '@/application/groups/groupManager';
 import { createFavoritesManager } from '@/application/zones/favorites/favoritesManager';
 import { createRecentsManager } from '@/application/zones/recents/recentsManager';
@@ -141,7 +143,9 @@ export function createRuntime(): Runtime {
   const audioManager = new AudioManager(new PlaybackService(engine), outputNotifier);
   const airplayGroupController = createAirplayGroupController(audioManager);
   const snapcastGroupController = createSnapcastGroupController(audioManager);
+  const squeezeliteGroupController = createSqueezeliteGroupController();
   const snapcastCore = new SnapcastCore(audioManager);
+  const squeezeliteCore = new SqueezeliteCore(configPort);
   const contentManager = createContentManager({
     notifier: ports.notifier,
     configPort,
@@ -180,6 +184,8 @@ export function createRuntime(): Runtime {
     sonosGroup: sonosGroupController,
     sendspinGroup: sendspinGroupController,
     sendspinHooks: sendspinHookRegistry,
+    squeezeliteGroup: squeezeliteGroupController,
+    squeezeliteCore,
     zoneManager: zoneManagerProxy,
     groupManager,
     outputHandlers: outputHandlersProxy,
@@ -277,6 +283,7 @@ export function createRuntime(): Runtime {
     await contentManager.reinitialize();
     lineInMetadataService.start();
     sendspinLineInService.start();
+    await squeezeliteCore.start();
 
     httpService = new HttpService(config.http, {
       onReinitialize: handleReinitialize,
@@ -294,6 +301,7 @@ export function createRuntime(): Runtime {
       musicAssistantStreamService,
       spotifyInputService,
       snapcastCore,
+      squeezeliteCore,
       sendspinConnector,
       recentsManager,
       favoritesManager,
@@ -334,6 +342,7 @@ export function createRuntime(): Runtime {
     ];
     services.push({ name: 'linein-metadata', stop: async () => lineInMetadataService.stop() });
     services.push({ name: 'sendspin-linein', stop: async () => sendspinLineInService.stop() });
+    services.push({ name: 'squeezelite', stop: async () => squeezeliteCore.stop() });
 
     if (loxoneService) {
       services.push({ name: 'loxone', stop: () => loxoneService!.stop() });
