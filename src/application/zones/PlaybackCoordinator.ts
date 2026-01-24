@@ -90,6 +90,7 @@ export class PlaybackCoordinator {
   private readonly configPort: ConfigPort;
   private readonly recentsManager: RecentsManager;
   private readonly audioManager: AudioManager;
+  private readonly zonesMissingOutput = new Set<number>();
   private readonly musicAssistantInputHandlers: MusicAssistantInputHandlers = {
     startPlayback: (zoneId: number, label: string, source: PlaybackSource, metadata?: PlaybackMetadata) => {
       const ctx = this.zoneRepo.get(zoneId);
@@ -516,6 +517,10 @@ export class PlaybackCoordinator {
   }
 
   private handleUnplayableSource(ctx: ZoneContext, itemAudiopath: string): void {
+    if (this.zonesMissingOutput.has(ctx.id)) {
+      this.zonesMissingOutput.delete(ctx.id);
+      return;
+    }
     this.log.warn('playback skipped; no playable source resolved', {
       zoneId: ctx.id,
       audiopath: itemAudiopath,
@@ -539,6 +544,17 @@ export class PlaybackCoordinator {
     metadata?: PlaybackMetadata,
     options?: { skipExternalStop?: boolean; startAtSec?: number },
   ): Promise<PlaybackSession | null> {
+    const classification = this.classifyAudiopath(audiopath);
+    if (!this.hasPlaybackOutput(ctx, classification)) {
+      this.zonesMissingOutput.add(ctx.id);
+      this.handlePlaybackError(ctx.id, 'No output configured', 'output');
+      this.log.warn('playback blocked; no output configured', {
+        zoneId: ctx.id,
+        audiopath,
+      });
+      return null;
+    }
+    this.zonesMissingOutput.delete(ctx.id);
     // Apply preferred output from the primary target output so we can resample/format accordingly.
     const outputTargets =
       ctx.activeOutput !== null
@@ -557,7 +573,6 @@ export class PlaybackCoordinator {
       activeOutputType: ctx.activeOutput,
       defaults: audioOutputSettings,
     });
-    const classification = this.classifyAudiopath(audiopath);
     this.applyPlaybackInputTransition(ctx, classification.nextInput, {
       skipExternalStop: options?.skipExternalStop,
     });
@@ -602,6 +617,21 @@ export class PlaybackCoordinator {
       }
     }
     return session;
+  }
+
+  private hasPlaybackOutput(
+    ctx: ZoneContext,
+    classification: { isSpotify: boolean },
+  ): boolean {
+    const outputCandidates = ctx.outputs.filter((output) => output.type !== 'spotify-input');
+    if (outputCandidates.length > 0) {
+      return true;
+    }
+    const spotifyOffload = ctx.config.inputs?.spotify?.offload === true;
+    if (classification.isSpotify && spotifyOffload) {
+      return ctx.outputs.some((output) => output.type === 'spotify-input');
+    }
+    return false;
   }
 
   private computeOutputLatencyMs(outputs: ZoneOutput[]): number {
