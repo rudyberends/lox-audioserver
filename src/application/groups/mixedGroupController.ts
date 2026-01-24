@@ -33,6 +33,7 @@ class MixedGroupController implements MixedGroupCoordinator {
   private zoneManager: ZoneManagerFacade | null = null;
   private readonly lastSignature = new Map<number, string>();
   private readonly lastSyncAt = new Map<number, number>();
+  private readonly lastLeaderStreamId = new Map<number, string>();
   private readonly pipeFanouts = new Map<number, PipeFanout>();
   private readonly localPcmTaps = new Map<number, LocalPcmTap>();
 
@@ -84,6 +85,13 @@ class MixedGroupController implements MixedGroupCoordinator {
     }
     if (patch.mode || patch.audiopath) {
       this.syncMembersToLeader(group, nextState);
+    } else if (hasMetadataPatch) {
+      const leaderSession = this.audioManager.getSession(group.leader);
+      const streamId = leaderSession?.stream?.id ?? '';
+      const lastStreamId = this.lastLeaderStreamId.get(group.leader) ?? '';
+      if (streamId && streamId !== lastStreamId) {
+        this.syncMembersToLeader(group, nextState, { force: true });
+      }
     }
   }
 
@@ -98,10 +106,12 @@ class MixedGroupController implements MixedGroupCoordinator {
     if (event === 'remove') {
       this.lastSignature.delete(leader);
       this.lastSyncAt.delete(leader);
+      this.lastLeaderStreamId.delete(leader);
       this.teardownFanout(leader);
       return;
     }
     if (!this.isMixedGroup(record)) {
+      this.lastLeaderStreamId.delete(leader);
       this.teardownFanout(leader);
       return;
     }
@@ -252,7 +262,12 @@ class MixedGroupController implements MixedGroupCoordinator {
       this.stopLocalPcmTap(leaderId);
       return null;
     }
-    const contentKey = (leaderSession.metadata?.audiopath || leaderState.audiopath || '').trim();
+    const sessionPath = (leaderSession.metadata?.audiopath || '').trim();
+    const statePath = (leaderState.audiopath || '').trim();
+    let contentKey = sessionPath || statePath;
+    if (sessionPath && statePath && !isSameAudiopath(sessionPath, statePath)) {
+      contentKey = `${sessionPath}|${statePath}`;
+    }
     const key = this.buildSourceKey(source, outputSettings, contentKey || undefined);
     const existing = this.localPcmTaps.get(leaderId);
     if (existing && existing.sourceKey === key) {
@@ -303,16 +318,30 @@ class MixedGroupController implements MixedGroupCoordinator {
     leaderState: LoxoneZoneState,
     leaderSession: ReturnType<AudioManager['getSession']>,
   ): number {
-    if (typeof leaderState.time === 'number' && leaderState.time > 0) {
-      return leaderState.time;
-    }
     if (!leaderSession) {
       return 0;
     }
     const elapsedFromClock = leaderSession.startedAt
       ? Math.round(Math.max(0, Date.now() - leaderSession.startedAt) / 1000)
       : 0;
-    return Math.max(leaderSession.elapsed ?? 0, elapsedFromClock);
+    const sessionElapsed = Math.max(leaderSession.elapsed ?? 0, elapsedFromClock);
+    const stateTime = typeof leaderState.time === 'number' ? leaderState.time : 0;
+    const statePath = (leaderState.audiopath ?? '').trim();
+    const sessionPath = (leaderSession.metadata?.audiopath ?? '').trim();
+    const hasMismatch = statePath && sessionPath && !isSameAudiopath(statePath, sessionPath);
+    if (hasMismatch) {
+      return sessionElapsed;
+    }
+    if (leaderSession.startedAt && Date.now() - leaderSession.startedAt < 3000) {
+      return sessionElapsed;
+    }
+    if (stateTime > 0) {
+      if (sessionElapsed > 0 && Math.abs(stateTime - sessionElapsed) > 5) {
+        return sessionElapsed;
+      }
+      return stateTime;
+    }
+    return sessionElapsed;
   }
 
   private resolveLeaderDurationSec(
@@ -382,6 +411,7 @@ class MixedGroupController implements MixedGroupCoordinator {
     }
 
     const leaderSession = this.audioManager.getSession(group.leader);
+    this.lastLeaderStreamId.set(group.leader, leaderSession?.stream?.id ?? '');
     const metadata = leaderSession?.metadata ?? this.buildMetadata(leaderState);
     if (leaderSession?.playbackSource?.kind === 'pipe' && leaderSession.playbackSource.stream) {
       this.stopLocalPcmTap(group.leader);
