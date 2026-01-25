@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { spawnSync, execFile } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { recognizeBytes, type DecodedSignature } from 'shazamio-core';
 import ffmpegPath from 'ffmpeg-static';
@@ -28,7 +28,6 @@ type CaptureState = {
 
 const CHANNELS = 2;
 const BYTES_PER_SAMPLE = 2;
-const ACOUSTID_ENDPOINT = 'https://api.acoustid.org/v2/lookup';
 const SHAZAM_BASE_URL = 'https://amp.shazam.com/discovery/v5';
 const LINEIN_ID_START = 1000001;
 const DEFAULT_CAPTURE_SECONDS = 5;
@@ -37,7 +36,6 @@ const DEFAULT_POLL_INTERVAL_MS = 25000;
 const DEFAULT_SHAZAM_LOCALE = 'en-US';
 const DEFAULT_LOOKUP_TIMEOUT_MS = 15000;
 const execFileAsync = promisify(execFile);
-
 export class LineInMetadataService {
   private readonly log = createLogger('Audio', 'LineInMetadata');
   private readonly registry: LineInIngestRegistry;
@@ -45,8 +43,6 @@ export class LineInMetadataService {
   private readonly lastLookup = new Map<string, number>();
   private readonly pollTimers = new Map<string, NodeJS.Timeout>();
   private stopListeners: Array<() => void> = [];
-  private readonly apiKey = '4Ed6WmQ8oG';
-  private fpcalcAvailable: boolean | null = null;
   private zoneManager: ZoneManagerFacade | null = null;
   private configPort: ConfigPort | null = null;
 
@@ -262,20 +258,9 @@ export class LineInMetadataService {
     pcm: Buffer,
     durationSeconds: number,
   ): Promise<LineInMetadata | null> {
-    if (!this.ensureFpcalcAvailable()) {
-      return null;
-    }
-    const key = this.apiKey.trim();
-    if (!key) {
-      return null;
-    }
     const filePath = await this.writeWav(inputId, pcm);
     const keepWav = this.shouldKeepWav();
     try {
-      const fingerprint = await this.runFpcalc(filePath, durationSeconds);
-      if (!fingerprint) {
-        return null;
-      }
       if (this.isShazamEnabled()) {
         this.log.info('line-in shazam lookup started', { seconds: durationSeconds });
         const shazam = await this.lookupShazam(filePath);
@@ -283,22 +268,7 @@ export class LineInMetadataService {
           return shazam;
         }
       }
-      if (!this.isAcoustidEnabled()) {
-        return null;
-      }
-      this.log.info('line-in acoustid lookup started', { seconds: durationSeconds });
-      const results = await this.queryAcoustid(key, fingerprint);
-      const best = results[0]?.recordings?.[0];
-      if (!best) {
-        this.log.info('line-in acoustid lookup returned no match');
-        return null;
-      }
-      const meta = {
-        title: best.title,
-        artist: best.artists?.[0]?.name,
-        album: best.releasegroups?.[0]?.title ?? best.releases?.[0]?.title,
-      };
-      return meta;
+      return null;
     } finally {
       if (keepWav) {
         this.log.info('line-in metadata wav preserved', { filePath });
@@ -320,71 +290,6 @@ export class LineInMetadataService {
     return filePath;
   }
 
-  private async runFpcalc(
-    filePath: string,
-    durationSeconds: number,
-  ): Promise<{ duration: number; fingerprint: string } | null> {
-    try {
-      const { stdout } = await execFileAsync('fpcalc', [
-        '-length',
-        String(durationSeconds),
-        filePath,
-      ]);
-      let duration = 0;
-      let fingerprint = '';
-      for (const line of stdout.split('\n')) {
-        if (line.startsWith('DURATION=')) {
-          duration = Number(line.slice('DURATION='.length).trim());
-        } else if (line.startsWith('FINGERPRINT=')) {
-          fingerprint = line.slice('FINGERPRINT='.length).trim();
-        }
-      }
-      if (!Number.isFinite(duration) || duration <= 0 || !fingerprint) {
-        this.log.warn('line-in metadata fpcalc output invalid', { duration, fingerprint });
-        return null;
-      }
-      return { duration, fingerprint };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log.warn('line-in metadata fpcalc failed', { message });
-      return null;
-    }
-  }
-
-  private async queryAcoustid(
-    key: string,
-    fingerprint: { duration: number; fingerprint: string },
-  ): Promise<any[]> {
-    const params = new URLSearchParams({
-      client: key,
-      meta: 'recordings releases releasegroups tracks usermeta sources',
-      duration: String(fingerprint.duration),
-      fingerprint: fingerprint.fingerprint,
-    });
-    const response = await this.fetchWithTimeout(
-      ACOUSTID_ENDPOINT,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: params.toString(),
-      },
-      this.getLookupTimeoutMs(),
-    );
-    if (!response.ok) {
-      const text = await safeReadText(response, '', {
-        onError: 'debug',
-        log: this.log,
-        label: 'line-in metadata lookup read failed',
-        context: { status: response.status },
-      });
-      throw new Error(`acoustid lookup failed (${response.status}): ${text}`);
-    }
-    const json = (await response.json()) as { status?: string; results?: any[] };
-    if (json.status !== 'ok') {
-      return [];
-    }
-    return Array.isArray(json.results) ? json.results : [];
-  }
 
   private async lookupShazam(filePath: string): Promise<LineInMetadata | null> {
     const shazamPath = await this.buildShazamWav(filePath);
@@ -714,25 +619,8 @@ export class LineInMetadataService {
     return true;
   }
 
-  private isAcoustidEnabled(): boolean {
-    return false;
-  }
-
   private shouldKeepWav(): boolean {
     return false;
-  }
-
-  private ensureFpcalcAvailable(): boolean {
-    if (this.fpcalcAvailable != null) {
-      return this.fpcalcAvailable;
-    }
-    const result = spawnSync('fpcalc', ['-h'], { stdio: 'ignore' });
-    const available = !result.error && result.status === 0;
-    this.fpcalcAvailable = available;
-    if (!available) {
-      this.log.warn('fpcalc not found; line-in metadata disabled');
-    }
-    return available;
   }
 }
 
