@@ -77,6 +77,8 @@ export class SendspinOutput implements ZoneOutput {
   private lastSentPlaybackState: 'playing' | 'paused' | 'stopped' | null = null;
   private lastKnownVolume = 50;
   private lastClientStateSignature: string | null = null;
+  private lastLoggedClientState: string | null = null;
+  private lastLoggedMuted: boolean | null = null;
   private initialClientStateSkipped = false;
   private clientState: 'synchronized' | 'error' | 'external_source' | null = null;
   private externalSourceActive = false;
@@ -130,7 +132,7 @@ export class SendspinOutput implements ZoneOutput {
     private readonly ports: OutputPorts,
   ) {
     this.clientId = config.clientId;
-    this.options = options;
+    this.options = { ignoreVolumeUpdates: true, ...options };
     this.ports.sendspinGroup.register(this.zoneId, this);
     this.hooksStop = this.ports.sendspinHooks.register(this.clientId, {
       onIdentified: (sendspinSession: SendspinSession) => {
@@ -140,6 +142,8 @@ export class SendspinOutput implements ZoneOutput {
         }
         this.initialClientStateSkipped = false;
         this.lastClientStateSignature = null;
+        this.lastLoggedClientState = null;
+        this.lastLoggedMuted = null;
         this.activeSession = sendspinSession;
         this.clientConnected = true;
         this.clientState = null;
@@ -171,6 +175,8 @@ export class SendspinOutput implements ZoneOutput {
         this.activeSession = null;
         this.initialClientStateSkipped = false;
         this.lastClientStateSignature = null;
+        this.lastLoggedClientState = null;
+        this.lastLoggedMuted = null;
         this.clientState = null;
         this.externalSourceActive = false;
         this.log.info('Sendspin client disconnected', { zoneId: this.zoneId, clientId: this.clientId });
@@ -316,8 +322,10 @@ export class SendspinOutput implements ZoneOutput {
     }
     const stateLevel =
       update.state === 'error' ? 'warn' : update.state === 'synchronized' ? 'debug' : 'info';
+    const stateChanged = update.state != null && update.state !== this.lastLoggedClientState;
+    const muteChanged = typeof update.muted === 'boolean' && update.muted !== this.lastLoggedMuted;
     // Only log interesting changes: warn on errors, debug when synchronized, otherwise skip.
-    if (stateLevel === 'warn' || stateLevel === 'debug') {
+    if ((stateLevel === 'warn' || stateLevel === 'debug') && (stateChanged || muteChanged)) {
       this.log[stateLevel]('Sendspin client state update', {
         zoneId: this.zoneId,
         clientId: this.clientId,
@@ -325,6 +333,12 @@ export class SendspinOutput implements ZoneOutput {
         volume: update.volume,
         muted: update.muted,
       });
+    }
+    if (update.state != null) {
+      this.lastLoggedClientState = update.state;
+    }
+    if (typeof update.muted === 'boolean') {
+      this.lastLoggedMuted = update.muted;
     }
     if (!this.options.ignoreVolumeUpdates && typeof update.volume === 'number') {
       const vol = Math.min(100, Math.max(0, Math.round(update.volume)));
@@ -379,6 +393,9 @@ export class SendspinOutput implements ZoneOutput {
         this.ports.zoneManager.handleCommand(this.zoneId, 'previous');
         break;
       case 'volume':
+        if (this.options.ignoreVolumeUpdates) {
+          break;
+        }
         if (typeof command.volume === 'number') {
           const vol = Math.min(100, Math.max(0, Math.round(command.volume)));
           this.lastKnownVolume = vol;
@@ -388,6 +405,9 @@ export class SendspinOutput implements ZoneOutput {
         }
         break;
       case 'mute':
+        if (this.options.ignoreVolumeUpdates) {
+          break;
+        }
         if (typeof command.mute === 'boolean') {
           if (command.mute) {
             this.ports.zoneManager.handleCommand(this.zoneId, 'volume_set', '0');
