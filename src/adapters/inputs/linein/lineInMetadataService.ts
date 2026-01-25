@@ -1,13 +1,7 @@
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { recognizeBytes, type DecodedSignature } from 'shazamio-core';
-import ffmpegPath from 'ffmpeg-static';
 import { createLogger } from '@/shared/logging/logger';
-import { bestEffort, safeReadText } from '@/shared/bestEffort';
+import { safeReadText } from '@/shared/bestEffort';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import { resolveLineInSampleRate } from '@/adapters/inputs/linein/lineInConstants';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
@@ -26,8 +20,17 @@ type CaptureState = {
   stop: () => void;
 };
 
+type CaptureFormat = {
+  sampleRate: number;
+  channels: number;
+  bitDepth: number;
+};
+
 const CHANNELS = 2;
 const BYTES_PER_SAMPLE = 2;
+const SHAZAM_SAMPLE_RATE = 16000;
+const SHAZAM_CHANNELS = 1;
+const SHAZAM_BIT_DEPTH = 16;
 const SHAZAM_BASE_URL = 'https://amp.shazam.com/discovery/v5';
 const LINEIN_ID_START = 1000001;
 const DEFAULT_CAPTURE_SECONDS = 5;
@@ -35,7 +38,6 @@ const DEFAULT_COOLDOWN_MS = 25000;
 const DEFAULT_POLL_INTERVAL_MS = 25000;
 const DEFAULT_SHAZAM_LOCALE = 'en-US';
 const DEFAULT_LOOKUP_TIMEOUT_MS = 15000;
-const execFileAsync = promisify(execFile);
 export class LineInMetadataService {
   private readonly log = createLogger('Audio', 'LineInMetadata');
   private readonly registry: LineInIngestRegistry;
@@ -169,8 +171,9 @@ export class LineInMetadataService {
     targetSeconds = this.getCaptureSeconds(),
     allowRetry = true,
   ): CaptureState {
-    const sampleRate = this.resolveSampleRate(inputId);
-    const targetBytes = sampleRate * CHANNELS * BYTES_PER_SAMPLE * targetSeconds;
+    const format = this.resolveIngestFormat(inputId);
+    const bytesPerSample = Math.max(1, Math.floor(format.bitDepth / 8));
+    const targetBytes = format.sampleRate * format.channels * bytesPerSample * targetSeconds;
     const buffers: Buffer[] = [];
     let bytes = 0;
     let finished = false;
@@ -212,7 +215,7 @@ export class LineInMetadataService {
           seconds: targetSeconds,
           bytes,
         });
-        const meta = await this.lookupMetadata(inputId, pcm, targetSeconds);
+        const meta = await this.lookupMetadata(pcm, targetSeconds, format);
         if (meta) {
           this.applyMetadata(inputId, meta);
         } else {
@@ -254,52 +257,29 @@ export class LineInMetadataService {
   }
 
   private async lookupMetadata(
-    inputId: string,
     pcm: Buffer,
     durationSeconds: number,
+    format: CaptureFormat,
   ): Promise<LineInMetadata | null> {
-    const filePath = await this.writeWav(inputId, pcm);
-    const keepWav = this.shouldKeepWav();
-    try {
-      if (this.isShazamEnabled()) {
-        this.log.info('line-in shazam lookup started', { seconds: durationSeconds });
-        const shazam = await this.lookupShazam(filePath);
-        if (shazam) {
-          return shazam;
-        }
-      }
+    const wavBytes = this.buildShazamWavBytes(pcm, format);
+    if (!wavBytes) {
       return null;
-    } finally {
-      if (keepWav) {
-        this.log.info('line-in metadata wav preserved', { filePath });
-      } else {
-        // Best-effort cleanup; missing temp file is fine.
-        await bestEffort(() => fs.unlink(filePath), { fallback: undefined });
+    }
+    if (this.isShazamEnabled()) {
+      this.log.info('line-in shazam lookup started', { seconds: durationSeconds });
+      const shazam = await this.lookupShazam(wavBytes);
+      if (shazam) {
+        return shazam;
       }
     }
-  }
-
-  private async writeWav(inputId: string, pcm: Buffer): Promise<string> {
-    const filePath = path.join(os.tmpdir(), `linein-${randomUUID()}.wav`);
-    const header = buildWavHeader({
-      sampleRate: this.resolveSampleRate(inputId),
-      channels: CHANNELS,
-      bitDepth: BYTES_PER_SAMPLE * 8,
-    });
-    await fs.writeFile(filePath, Buffer.concat([header, pcm]));
-    return filePath;
+    return null;
   }
 
 
-  private async lookupShazam(filePath: string): Promise<LineInMetadata | null> {
-    const shazamPath = await this.buildShazamWav(filePath);
-    if (!shazamPath) {
-      return null;
-    }
+  private async lookupShazam(wavBytes: Buffer): Promise<LineInMetadata | null> {
     let signatures: DecodedSignature[] = [];
     try {
-      const bytes = await fs.readFile(shazamPath);
-      signatures = recognizeBytes(bytes, 0, Number.MAX_SAFE_INTEGER);
+      signatures = recognizeBytes(wavBytes, 0, Number.MAX_SAFE_INTEGER);
       if (!signatures.length) {
         this.log.info('line-in shazam signature empty', { count: 0 });
         return null;
@@ -376,8 +356,6 @@ export class LineInMetadataService {
           /* ignore */
         }
       }
-      // Best-effort cleanup; missing temp file is fine.
-      await bestEffort(() => fs.unlink(shazamPath), { fallback: undefined });
     }
   }
 
@@ -453,36 +431,115 @@ export class LineInMetadataService {
     return undefined;
   }
 
-  private async buildShazamWav(filePath: string): Promise<string | null> {
-    const outPath = path.join(os.tmpdir(), `linein-shazam-${randomUUID()}.wav`);
-    if (!ffmpegPath) {
-      this.log.warn('line-in shazam resample failed; ffmpeg not available');
+  private buildShazamWavBytes(pcm: Buffer, format: CaptureFormat): Buffer | null {
+    if (!pcm?.length) {
       return null;
     }
-    try {
-      await execFileAsync(ffmpegPath, [
-        '-hide_banner',
-        '-loglevel',
-        'error',
-        '-y',
-        '-i',
-        filePath,
-        '-ac',
-        '1',
-        '-ar',
-        '16000',
-        '-f',
-        'wav',
-        outPath,
-      ]);
-      return outPath;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log.warn('line-in shazam resample failed', { message });
-      // Best-effort cleanup; missing temp file is fine.
-      await bestEffort(() => fs.unlink(outPath), { fallback: undefined });
+    const samples = this.decodePcmToFloat32(pcm, format.bitDepth);
+    if (!samples) {
       return null;
     }
+    const mono = this.downmixToMono(samples, format.channels);
+    const resampled = this.resampleLinear(mono, format.sampleRate, SHAZAM_SAMPLE_RATE);
+    if (!resampled.length) {
+      return null;
+    }
+    const encoded = this.encodeFloat32ToInt16(resampled);
+    return this.buildWavBytes(encoded, SHAZAM_SAMPLE_RATE, SHAZAM_CHANNELS, SHAZAM_BIT_DEPTH);
+  }
+
+  private decodePcmToFloat32(pcm: Buffer, bitDepth: number): Float32Array | null {
+    const bytesPerSample = Math.max(1, Math.floor(bitDepth / 8));
+    const sampleCount = Math.floor(pcm.length / bytesPerSample);
+    if (sampleCount <= 0) {
+      return null;
+    }
+    const output = new Float32Array(sampleCount);
+    switch (bitDepth) {
+      case 16: {
+        for (let i = 0; i < sampleCount; i += 1) {
+          const offset = i * 2;
+          output[i] = pcm.readInt16LE(offset) / 32768;
+        }
+        return output;
+      }
+      case 24: {
+        for (let i = 0; i < sampleCount; i += 1) {
+          const offset = i * 3;
+          output[i] = pcm.readIntLE(offset, 3) / 8388608;
+        }
+        return output;
+      }
+      case 32: {
+        for (let i = 0; i < sampleCount; i += 1) {
+          const offset = i * 4;
+          output[i] = pcm.readInt32LE(offset) / 2147483648;
+        }
+        return output;
+      }
+      default: {
+        this.log.warn('line-in metadata unsupported bit depth', { bitDepth });
+        return null;
+      }
+    }
+  }
+
+  private downmixToMono(samples: Float32Array, channels: number): Float32Array {
+    if (channels <= 1) {
+      return samples;
+    }
+    const frameCount = Math.floor(samples.length / channels);
+    const mono = new Float32Array(frameCount);
+    let offset = 0;
+    for (let frame = 0; frame < frameCount; frame += 1) {
+      let sum = 0;
+      for (let ch = 0; ch < channels; ch += 1) {
+        sum += samples[offset] ?? 0;
+        offset += 1;
+      }
+      mono[frame] = sum / channels;
+    }
+    return mono;
+  }
+
+  // Linear resample is enough for fingerprinting and avoids spawning ffmpeg.
+  private resampleLinear(samples: Float32Array, fromRate: number, toRate: number): Float32Array {
+    if (!Number.isFinite(fromRate) || !Number.isFinite(toRate) || fromRate <= 0 || toRate <= 0) {
+      return samples;
+    }
+    if (fromRate === toRate) {
+      return samples;
+    }
+    const ratio = fromRate / toRate;
+    const outLength = Math.max(1, Math.floor(samples.length / ratio));
+    const output = new Float32Array(outLength);
+    for (let i = 0; i < outLength; i += 1) {
+      const position = i * ratio;
+      const left = Math.floor(position);
+      const right = Math.min(left + 1, samples.length - 1);
+      const fraction = position - left;
+      const leftSample = samples[left] ?? 0;
+      const rightSample = samples[right] ?? leftSample;
+      output[i] = leftSample + (rightSample - leftSample) * fraction;
+    }
+    return output;
+  }
+
+  private encodeFloat32ToInt16(samples: Float32Array): Buffer {
+    const buffer = Buffer.alloc(samples.length * 2);
+    for (let i = 0; i < samples.length; i += 1) {
+      const clamped = Math.max(-1, Math.min(1, samples[i] ?? 0));
+      buffer.writeInt16LE(Math.round(clamped * 32767), i * 2);
+    }
+    return buffer;
+  }
+
+  private buildWavBytes(pcm: Buffer, sampleRate: number, channels: number, bitDepth: number): Buffer {
+    const header = buildWavHeader({ sampleRate, channels, bitDepth });
+    const dataSize = pcm.length;
+    header.writeUInt32LE(dataSize, 40);
+    header.writeUInt32LE(36 + dataSize, 4);
+    return Buffer.concat([header, pcm]);
   }
 
   private applyMetadata(inputId: string, metadata: LineInMetadata): void {
@@ -543,6 +600,21 @@ export class LineInMetadataService {
     const macId = config.system?.audioserver?.macId?.trim().toUpperCase() || 'UNKNOWN';
     const entry = resolveLineInInputConfig(inputId, inputs, macId);
     return resolveLineInSampleRate(entry);
+  }
+
+  private resolveIngestFormat(inputId: string): CaptureFormat {
+    const session = this.registry.getSession(inputId);
+    const sampleRate =
+      session?.format?.sampleRate && session.format.sampleRate > 0
+        ? session.format.sampleRate
+        : this.resolveSampleRate(inputId);
+    const channels =
+      session?.format?.channels && session.format.channels > 0 ? session.format.channels : CHANNELS;
+    const bitDepth =
+      session?.format?.bitDepth && session.format.bitDepth > 0
+        ? session.format.bitDepth
+        : BYTES_PER_SAMPLE * 8;
+    return { sampleRate, channels, bitDepth };
   }
 
   private getCaptureSeconds(): number {
@@ -617,10 +689,6 @@ export class LineInMetadataService {
 
   private isShazamEnabled(): boolean {
     return true;
-  }
-
-  private shouldKeepWav(): boolean {
-    return false;
   }
 }
 
