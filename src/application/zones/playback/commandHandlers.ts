@@ -8,7 +8,8 @@ import type { LoxoneZoneState } from '@/domain/loxone/types';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import type { QueueAuthority } from '@/application/zones/internal/zoneTypes';
 import type { PlaybackSession } from '@/application/playback/audioManager';
-import type { AirplayRemoteCommand } from '@/ports/InputsPort';
+import type { AirplayRemoteCommand, LineInControlCommand } from '@/ports/InputsPort';
+import { parseLineInInputId } from '@/application/zones/internal/zoneAudioHelpers';
 
 type CommandCoordinator = {
   log: ComponentLogger;
@@ -28,6 +29,7 @@ type CommandCoordinator = {
   remoteControl: (zoneId: number, command: AirplayRemoteCommand) => void;
   remoteVolume: (zoneId: number, volume: number) => void;
   playerCommand: (zoneId: number, command: string, args?: Record<string, unknown>) => Promise<boolean>;
+  requestLineInControl: (inputId: string, command: LineInControlCommand) => void;
   getVolumeOrigin: () => string;
 };
 
@@ -91,6 +93,9 @@ function handlePlayResume(
   zoneId: number,
   mode: ZoneContext['inputMode'],
 ): void {
+  if (mode === 'linein') {
+    requestLineInControl(coordinator, ctx, 'play');
+  }
   if (mode === 'airplay') {
     coordinator.remoteControl(zoneId, 'Play');
     return;
@@ -113,6 +118,9 @@ function handlePause(
   zoneId: number,
   mode: ZoneContext['inputMode'],
 ): void {
+  if (mode === 'linein') {
+    requestLineInControl(coordinator, ctx, 'pause');
+  }
   if (mode === 'airplay') {
     coordinator.remoteControl(zoneId, 'Pause');
     coordinator.applyPatch(zoneId, { mode: 'pause', clientState: 'on', power: 'on' });
@@ -241,6 +249,10 @@ function handleQueueStep(
   mode: ZoneContext['inputMode'],
   delta: 1 | -1,
 ): void {
+  if (mode === 'linein') {
+    requestLineInControl(coordinator, ctx, delta === 1 ? 'next' : 'previous');
+    return;
+  }
   if (mode === 'airplay') {
     coordinator.remoteControl(zoneId, delta === 1 ? 'Next' : 'Previous');
     return;
@@ -257,6 +269,19 @@ function handleQueueStep(
       coordinator.stepQueue(zoneId, delta);
     }
   }
+}
+
+function requestLineInControl(
+  coordinator: CommandCoordinator,
+  ctx: ZoneContext,
+  command: LineInControlCommand,
+): void {
+  const audiopath = ctx.queueController.current()?.audiopath ?? ctx.state.audiopath ?? '';
+  const inputId = parseLineInInputId(audiopath);
+  if (!inputId) {
+    return;
+  }
+  coordinator.requestLineInControl(inputId, command);
 }
 
 function handleShuffle(

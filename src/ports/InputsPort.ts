@@ -26,6 +26,14 @@ export type AirplayRemoteCommand =
   | 'Previous'
   | 'ToggleMute';
 
+export type LineInControlCommand =
+  | 'play'
+  | 'pause'
+  | 'next'
+  | 'previous'
+  | 'activate'
+  | 'deactivate';
+
 export type AirplayController = {
   startPlayback(
     zoneId: number,
@@ -108,4 +116,5 @@ export interface InputsPort {
   remoteVolume(zoneId: number, volumePercent: number): void;
   playerCommand(zoneId: number, command: string, args?: Record<string, unknown>): Promise<boolean>;
   requestLineInStop(inputId: string): void;
+  requestLineInControl(inputId: string, command: LineInControlCommand): void;
 }

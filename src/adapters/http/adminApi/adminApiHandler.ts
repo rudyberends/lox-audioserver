@@ -1123,16 +1123,23 @@ export class AdminApiHandler {
       const clients = sendspinCore
         .listClients()
         .filter((client) => (roles.length ? roles.some((role) => client.roles.includes(role)) : true))
-        .map((client) => ({
-          id: client.clientId,
-          clientId: client.clientId,
-          name: client.name,
-          remote: client.remote,
-          roles: client.roles,
-          playbackState: client.playbackState,
-          sourceState: client.sourceState,
-          sourceSignal: client.sourceSignal,
-        }));
+        .map((client) => {
+          const clientId = client.clientId;
+          const controls = clientId
+            ? sendspinCore.getSessionByClientId(clientId)?.getSourceSupport()?.controls ?? null
+            : null;
+          return {
+            id: client.clientId,
+            clientId: client.clientId,
+            name: client.name,
+            remote: client.remote,
+            roles: client.roles,
+            playbackState: client.playbackState,
+            sourceState: client.sourceState,
+            sourceSignal: client.sourceSignal,
+            controls,
+          };
+        });
         this.sendJson(res, 200, { clients });
     } catch (err) {
       this.log.warn('sendspin discovery failed', { err });
@@ -1145,16 +1152,23 @@ export class AdminApiHandler {
       const clients = sendspinCore
         .listClients()
         .filter((client) => client.roles.includes('source@v1'))
-        .map((client) => ({
-          id: client.clientId,
-          clientId: client.clientId,
-          name: client.name,
-          remote: client.remote,
-          roles: client.roles,
-          playbackState: client.playbackState,
-          sourceState: client.sourceState,
-          sourceSignal: client.sourceSignal,
-        }));
+        .map((client) => {
+          const clientId = client.clientId;
+          const controls = clientId
+            ? sendspinCore.getSessionByClientId(clientId)?.getSourceSupport()?.controls ?? null
+            : null;
+          return {
+            id: client.clientId,
+            clientId: client.clientId,
+            name: client.name,
+            remote: client.remote,
+            roles: client.roles,
+            playbackState: client.playbackState,
+            sourceState: client.sourceState,
+            sourceSignal: client.sourceSignal,
+            controls,
+          };
+        });
       this.sendJson(res, 200, { clients });
     } catch (err) {
       this.log.warn('sendspin source discovery failed', { err });

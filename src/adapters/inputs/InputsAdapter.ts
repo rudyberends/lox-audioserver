@@ -116,6 +116,10 @@ export class InputsAdapter implements InputsPort {
   public requestLineInStop(...args: Parameters<InputsPort['requestLineInStop']>): void {
     this.deps.sendspinLineIn.requestStop(...args);
   }
+
+  public requestLineInControl(...args: Parameters<InputsPort['requestLineInControl']>): void {
+    this.deps.sendspinLineIn.requestControl(...args);
+  }
 }
 
 export function createInputsAdapter(deps: InputsAdapterDeps): InputsAdapter {

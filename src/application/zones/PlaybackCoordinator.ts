@@ -723,6 +723,7 @@ export class PlaybackCoordinator {
         remoteControl: (id, cmd) => this.inputsPort.remoteControl(id, cmd),
         remoteVolume: (id, volume) => this.inputsPort.remoteVolume(id, volume),
         playerCommand: (id, cmd, args) => this.inputsPort.playerCommand(id, cmd, args),
+        requestLineInControl: (inputId, cmd) => this.inputsPort.requestLineInControl(inputId, cmd),
         getVolumeOrigin: this.getVolumeOrigin.bind(this),
       },
       ctx,

@@ -5,6 +5,7 @@ import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { AudioServerConfig, LineInInputConfig } from '@/domain/config/types';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
+import { AudioType, FileType } from '@/domain/loxone/enums';
 import { resolveLineInSampleRate } from '@/adapters/inputs/linein/lineInConstants';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
@@ -239,7 +240,7 @@ function startLineInPlayback(
   const stream = session?.stream ?? null;
   if (!stream) {
     log.info('line-in ingest pending; waiting for stream', { zoneId, inputId });
-    overwriteLineInState(zoneManager, configPort, zoneId, inputId, NO_SIGNAL_TITLE, iconType, 'pause');
+    overwriteLineInState(zoneManager, configPort, deps, zoneId, inputId, NO_SIGNAL_TITLE, iconType, 'pause');
     return;
   }
 
@@ -249,7 +250,7 @@ function startLineInPlayback(
   const channels = sessionFormat?.channels ?? PCM_CHANNELS;
   const pcmFormat = sessionFormat?.pcmFormat ?? 's16le';
 
-  overwriteLineInState(zoneManager, configPort, zoneId, inputId, title, iconType, 'play');
+  overwriteLineInState(zoneManager, configPort, deps, zoneId, inputId, title, iconType, 'play');
   const stop = deps.registry.onStop(inputId, () => {
     const active = state.activeLineInByZone.get(zoneId);
     if (!active || active.inputId !== inputId) {
@@ -318,7 +319,7 @@ function handleLineInStopped(
       album: '',
       station: '',
       audiopath: `linein:${inputId}`,
-      audiotype: 3,
+      ...resolveLineInLoxoneTypes(deps, inputId),
     },
     true,
   );
@@ -332,6 +333,17 @@ function resolveLineInMeta(configPort: ConfigPort, inputId: string): { title: st
     title: match?.name ?? NO_SIGNAL_TITLE,
     iconType: match?.iconType ?? DEFAULT_ICON_TYPE,
   };
+}
+
+function resolveLineInLoxoneTypes(
+  deps: LineInDeps,
+  inputId: string,
+): { audiotype: number; type: number } {
+  const controls = deps.sendspinLineIn.getControlSupport(inputId);
+  if (controls && controls.length) {
+    return { audiotype: AudioType.File, type: FileType.File };
+  }
+  return { audiotype: AudioType.LineIn, type: FileType.LineIn };
 }
 
 function ensureLineInWatch(
@@ -371,6 +383,7 @@ function ensureLineInWatch(
 function overwriteLineInState(
   zoneManager: ZoneManagerFacade,
   configPort: ConfigPort,
+  deps: LineInDeps,
   zoneId: number,
   inputId: string,
   title: string,
@@ -381,6 +394,7 @@ function overwriteLineInState(
   if (!current) {
     return;
   }
+  const { audiotype, type } = resolveLineInLoxoneTypes(deps, inputId);
   const sourceName = resolveZoneSourceName(configPort, zoneId) ?? current.sourceName;
   const patch: Partial<LoxoneZoneState> = {
     playerid: current.playerid,
@@ -393,9 +407,9 @@ function overwriteLineInState(
     time: 0,
     duration: 0,
     audiopath: `linein:${inputId}`,
-    audiotype: 3,
+    audiotype,
     icontype: iconType,
-    type: 6,
+    type,
     title,
     artist: '',
     album: '',

@@ -3,9 +3,10 @@ import { createLogger } from '@/shared/logging/logger';
 import type { LineInInputConfig } from '@/domain/config/types';
 import type { LineInIngestFormat, LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import { pcmFormatFromBitDepth } from '@/ports/types/audioFormat';
-import { sendspinCore, SourceCommand } from '@lox-audioserver/node-sendspin';
+import { sendspinCore, SourceCommand, SourceControl } from '@lox-audioserver/node-sendspin';
 import type { SendspinHookRegistryPort } from '@/adapters/outputs/sendspin/sendspinHookRegistry';
 import type { ConfigPort } from '@/ports/ConfigPort';
+import type { LineInControlCommand } from '@/ports/InputsPort';
 
 type SendspinLineInMapping = {
   inputId: string;
@@ -16,6 +17,23 @@ type ActiveSource = {
   inputId: string;
   stream: PassThrough;
   format?: LineInIngestFormat;
+};
+
+const SOURCE_CONTROL_MAP: Record<LineInControlCommand, SourceControl> = {
+  play: SourceControl.PLAY,
+  pause: SourceControl.PAUSE,
+  next: SourceControl.NEXT,
+  previous: SourceControl.PREVIOUS,
+  activate: SourceControl.ACTIVATE,
+  deactivate: SourceControl.DEACTIVATE,
+};
+const SOURCE_CONTROL_REVERSE: Record<SourceControl, LineInControlCommand> = {
+  [SourceControl.PLAY]: 'play',
+  [SourceControl.PAUSE]: 'pause',
+  [SourceControl.NEXT]: 'next',
+  [SourceControl.PREVIOUS]: 'previous',
+  [SourceControl.ACTIVATE]: 'activate',
+  [SourceControl.DEACTIVATE]: 'deactivate',
 };
 
 const LINEIN_ID_START = 1000001;
@@ -106,6 +124,7 @@ export class SendspinLineInService {
       return;
     }
     this.log.debug('sendspin line-in start requested', { inputId, clientId: mapping.clientId });
+    this.sendSourceControl(mapping.clientId, 'activate');
     const sent = this.sendSourceSettings(mapping.clientId, inputId, SourceCommand.START);
     if (!sent) {
       this.sendSourceCommand(mapping.clientId, SourceCommand.START);
@@ -120,6 +139,34 @@ export class SendspinLineInService {
     }
     this.log.debug('sendspin line-in stop requested', { inputId, clientId: mapping.clientId });
     this.sendSourceCommand(mapping.clientId, SourceCommand.STOP);
+    this.sendSourceControl(mapping.clientId, 'deactivate');
+  }
+
+  public requestControl(inputId: string, command: LineInControlCommand): void {
+    const mapping = this.findMappingByInput(inputId);
+    if (!mapping) {
+      this.log.debug('sendspin line-in control skipped; no mapping', { inputId, command });
+      return;
+    }
+    this.log.debug('sendspin line-in control requested', {
+      inputId,
+      clientId: mapping.clientId,
+      command,
+    });
+    this.sendSourceControl(mapping.clientId, command);
+  }
+
+  public getControlSupport(inputId: string): LineInControlCommand[] | null {
+    const mapping = this.findMappingByInput(inputId);
+    if (!mapping) {
+      return null;
+    }
+    const session = sendspinCore.getSessionByClientId(mapping.clientId);
+    const supported = session?.getSourceSupport()?.controls ?? null;
+    if (!supported || !supported.length) {
+      return null;
+    }
+    return supported.map((control) => SOURCE_CONTROL_REVERSE[control]);
   }
 
   private registerHooks(clientId: string): void {
@@ -210,6 +257,22 @@ export class SendspinLineInService {
   private sendSourceCommand(clientId: string, command: SourceCommand): void {
     this.log.debug('sendspin line-in source command', { clientId, command });
     sendspinCore.sendServerCommand(clientId, { source: { command } });
+  }
+
+  private sendSourceControl(clientId: string, command: LineInControlCommand): void {
+    const session = sendspinCore.getSessionByClientId(clientId);
+    const control = SOURCE_CONTROL_MAP[command];
+    const supported = session?.getSourceSupport()?.controls ?? null;
+    if (supported && supported.length && !supported.includes(control)) {
+      this.log.debug('sendspin line-in control skipped; unsupported by client', {
+        clientId,
+        command,
+        supported,
+      });
+      return;
+    }
+    this.log.debug('sendspin line-in source control', { clientId, command });
+    sendspinCore.sendServerCommand(clientId, { source: { control } });
   }
 
   private sendSourceSettings(clientId: string, inputId: string, command?: SourceCommand): boolean {

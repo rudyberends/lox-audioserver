@@ -2,6 +2,7 @@ import type { PlaybackMetadata, PlaybackSource, CoverArtPayload } from '@/applic
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 import { clampVolumeForZone } from '@/application/zones/helpers/stateHelpers';
+import { AudioType, FileType } from '@/domain/loxone/enums';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import type { ComponentLogger } from '@/shared/logging/logger';
 import { allowsInputCover, allowsInputMetadata, allowsInputVolume, isActiveInputMode } from '@/application/zones/playback/guards';
@@ -162,6 +163,24 @@ export function updateInputMetadata(args: {
     queueAuthority: ctx.queue.authority,
     stateIcontype: ctx.state.icontype,
   });
+  if (ctx.inputMode === 'linein') {
+    const hasMetadata = Boolean(metadata.title || metadata.artist || metadata.album || metadata.coverurl);
+    const prefersFile =
+      hasMetadata ||
+      ctx.state.audiotype === AudioType.File ||
+      ctx.state.audiotype === AudioType.Playlist;
+    if (prefersFile) {
+      patch.audiotype = AudioType.File;
+      patch.type = FileType.File;
+    } else {
+      if (typeof ctx.state.audiotype === 'number') {
+        patch.audiotype = ctx.state.audiotype;
+      }
+      if (typeof ctx.state.type === 'number') {
+        patch.type = ctx.state.type;
+      }
+    }
+  }
   if (Object.keys(patch).length > 0) {
     coordinator.applyPatch(zoneId, patch);
   }
