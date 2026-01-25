@@ -304,7 +304,11 @@ export class AirplaySender {
           .some((value) => value.toLowerCase() === target);
       });
       if (matches.length > 0) {
-        const preferred = matches.find((device) => device.protocol === 'airplay') ?? matches[0];
+        const preferAp2 = this.config.forceAp2 === true;
+        const preferred =
+          matches.find((device) => device.protocol === (preferAp2 ? 'airplay' : 'raop')) ??
+          matches.find((device) => device.protocol === 'airplay') ??
+          matches[0];
         const txt = preferred.txt
           ? Object.entries(preferred.txt)
               .map(([key, value]) => {
@@ -315,9 +319,10 @@ export class AirplaySender {
               })
               .filter((entry) => entry.length > 0)
           : undefined;
+        const hasRaop = matches.some((device) => device.protocol === 'raop');
         this.resolvedConfig = {
           port: preferred.port,
-          forceAp2: preferred.protocol === 'airplay',
+          forceAp2: preferAp2 || (preferred.protocol === 'airplay' && !hasRaop),
           txt,
         };
         this.log.info('airplay discovery resolved device', {

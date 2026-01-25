@@ -285,12 +285,14 @@ function createAirplayOutput(
   const primaryOutput = getPrimaryOutputConfig(zone);
   const rawEntry =
     primaryOutput && primaryOutput.id?.toLowerCase() === 'airplay' ? primaryOutput : null;
+  const inputAirplay = (zone.inputs as any)?.airplay;
+  const inputHost = typeof inputAirplay?.host === 'string' ? inputAirplay.host : undefined;
   const host =
     (rawEntry as unknown as AirPlayOutputConfig | undefined)?.host ||
-    (zone.inputs as any)?.airplay?.host;
+    inputHost;
   const rawPort =
     (rawEntry as unknown as AirPlayOutputConfig | undefined)?.port ||
-    (zone.inputs as any)?.airplay?.port;
+    (inputHost ? inputAirplay?.port : undefined);
   if (!host || !isAirplayInputEnabled(zone)) {
     log.debug('AirPlay output skipped; airplay input disabled', { zoneId: zone.id });
     return null;
