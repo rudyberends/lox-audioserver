@@ -716,6 +716,9 @@ export class MusicAssistantStreamService {
   private apiKey?: string;
   private registerAll = true;
   private api: MusicAssistantApi | null = null;
+  private lastConnectionStatus:
+    | { ok: boolean; checkedAt: number; message?: string; host?: string; port?: number }
+    | null = null;
   private streams = new Map<number, StreamEntry>();
   private playerToZone = new Map<string, number>();
   private zonePlayers = new Map<number, string>();
@@ -795,6 +798,59 @@ export class MusicAssistantStreamService {
 
   public getProviderId(): string {
     return this.providerId;
+  }
+
+  public getLastConnectionStatus():
+    | { ok: boolean; checkedAt: number; message?: string; host?: string; port?: number }
+    | null {
+    return this.lastConnectionStatus;
+  }
+
+  public async testConnection(): Promise<{
+    ok: boolean;
+    checkedAt: number;
+    message?: string;
+    host?: string;
+    port?: number;
+  }> {
+    const checkedAt = Date.now();
+    if (!this.host) {
+      const status = {
+        ok: false,
+        checkedAt,
+        message: 'music assistant bridge not configured',
+      };
+      this.lastConnectionStatus = status;
+      return status;
+    }
+    const api = this.getApi();
+    if (!api) {
+      const status = {
+        ok: false,
+        checkedAt,
+        message: 'music assistant bridge not configured',
+        host: this.host ?? undefined,
+        port: this.port,
+      };
+      this.lastConnectionStatus = status;
+      return status;
+    }
+    try {
+      await api.connect();
+      const status = { ok: true, checkedAt, host: this.host ?? undefined, port: this.port };
+      this.lastConnectionStatus = status;
+      return status;
+    } catch (err) {
+      const status = {
+        ok: false,
+        checkedAt,
+        message: err instanceof Error ? err.message : String(err),
+        host: this.host ?? undefined,
+        port: this.port,
+      };
+      this.lastConnectionStatus = status;
+      return status;
+    }
   }
 
   public configureFromConfig(): void {

@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
-import { createConnection } from 'node:net';
+import { createConnection, isIP } from 'node:net';
 import { createWriteStream, promises as fs, readFileSync } from 'node:fs';
 import os from 'node:os';
 import { join, resolve } from 'node:path';
@@ -33,6 +33,7 @@ import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
 import type { ContentManager } from '@/adapters/content/contentManager';
 import type { MusicAssistantStreamService } from '@/adapters/inputs/musicassistant/musicAssistantStreamService';
+import { MusicAssistantApi } from '@/shared/musicassistant/musicAssistantApi';
 import type { StorageConfig } from '@/adapters/content/storage/storageManager';
 import { listAlertFiles, revertAlertFile, updateAlertFile } from '@/application/alerts/alertFileManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
@@ -309,6 +310,11 @@ export class AdminApiHandler {
         method: 'GET',
         pattern: /^\/transports\/musicassistant\/devices$/,
         handler: async (_req, res) => this.handleMusicAssistantPlayerDiscovery(res),
+      },
+      {
+        method: 'GET',
+        pattern: /^\/transports\/musicassistant\/status$/,
+        handler: async (_req, res) => this.handleMusicAssistantStatus(res),
       },
       {
         method: 'POST',
@@ -1071,6 +1077,62 @@ export class AdminApiHandler {
     }
   }
 
+  private async handleMusicAssistantStatus(res: ServerResponse): Promise<void> {
+    try {
+      const status = await this.musicAssistantStreamService.testConnection();
+      this.sendJson(res, 200, status);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.warn('music assistant status failed', { message });
+      this.sendJson(res, 500, { ok: false, error: 'musicassistant-status-failed', message });
+    }
+  }
+
+  private isValidMusicAssistantHost(host: string): boolean {
+    const trimmed = host.trim();
+    if (!trimmed || trimmed === '0.0.0.0') return false;
+    const bracketed =
+      trimmed.startsWith('[') && trimmed.endsWith(']') ? trimmed.slice(1, -1).trim() : trimmed;
+    if (isIP(bracketed)) return true;
+    if (trimmed.includes('://')) return false;
+    if (trimmed.length > 253) return false;
+    const labels = trimmed.split('.');
+    if (labels.some((label) => !label || label.length > 63)) return false;
+    return labels.every((label) => /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label));
+  }
+
+  private async testMusicAssistantBridge(
+    host: string,
+    port: number,
+    apiKey: string,
+  ): Promise<{ ok: boolean; checkedAt: number; message?: string; host: string; port: number }> {
+    const checkedAt = Date.now();
+    const api = MusicAssistantApi.acquire(host, port, apiKey);
+    try {
+      await this.withTimeout(api.connect(), 8000, 'music assistant connection timed out');
+      return { ok: true, checkedAt, host, port };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, checkedAt, message, host, port };
+    } finally {
+      api.release();
+    }
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+    let timeout: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+    });
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  }
+
   private async handleTransportPing(
     req: IncomingMessage,
     res: ServerResponse,
@@ -1788,12 +1850,56 @@ export class AdminApiHandler {
       this.sendJson(res, 400, { error: 'invalid-bridge-payload' });
       return;
     }
+    const isMusicAssistant = provider === 'musicassistant';
     if (provider === 'musicassistant') {
       const apiKeyValid = typeof body?.apiKey === 'string' && body.apiKey.trim().length > 0;
       if (!apiKeyValid) {
         this.sendJson(res, 400, { error: 'api-key-required' });
         return;
       }
+    }
+
+    let musicAssistantHost: string | undefined;
+    let musicAssistantPort: number | undefined;
+    let musicAssistantApiKey: string | undefined;
+    let musicAssistantConnection:
+      | { ok: boolean; checkedAt: number; message?: string; host: string; port: number }
+      | null = null;
+
+    if (isMusicAssistant) {
+      const hostRaw = typeof body?.host === 'string' ? body.host.trim() : '';
+      const portRaw = body?.port;
+      musicAssistantHost = hostRaw || '127.0.0.1';
+      musicAssistantPort =
+        typeof portRaw === 'number' && Number.isFinite(portRaw) && portRaw > 0
+          ? Math.round(portRaw)
+          : 8095;
+      musicAssistantApiKey = typeof body?.apiKey === 'string' ? body.apiKey.trim() : '';
+
+      if (!this.isValidMusicAssistantHost(musicAssistantHost)) {
+        this.sendJson(res, 400, { error: 'invalid-musicassistant-host', message: 'Invalid Music Assistant host.' });
+        return;
+      }
+      if (!musicAssistantPort || musicAssistantPort < 1 || musicAssistantPort > 65535) {
+        this.sendJson(res, 400, { error: 'invalid-musicassistant-port', message: 'Invalid Music Assistant port.' });
+        return;
+      }
+      if (!musicAssistantApiKey) {
+        this.sendJson(res, 400, { error: 'api-key-required' });
+        return;
+      }
+
+      const testResult = await this.testMusicAssistantBridge(musicAssistantHost, musicAssistantPort, musicAssistantApiKey);
+      if (!testResult.ok) {
+        this.sendJson(res, 400, {
+          error: 'musicassistant-connection-failed',
+          message: testResult.message || 'Unable to connect to Music Assistant.',
+          host: testResult.host,
+          port: testResult.port,
+        });
+        return;
+      }
+      musicAssistantConnection = testResult;
     }
 
     const generatedId = `bridge-${provider}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1816,14 +1922,21 @@ export class AdminApiHandler {
       enabled: body?.enabled !== false,
       registerAll: body?.registerAll !== false,
       accountId: undefined,
-      host: typeof body?.host === 'string' && body.host.trim() ? body.host.trim() : undefined,
-      port:
-        typeof body?.port === 'number' && Number.isFinite(body.port) && body.port > 0
+      host: isMusicAssistant
+        ? musicAssistantHost
+        : typeof body?.host === 'string' && body.host.trim()
+          ? body.host.trim()
+          : undefined,
+      port: isMusicAssistant
+        ? musicAssistantPort
+        : typeof body?.port === 'number' && Number.isFinite(body.port) && body.port > 0
           ? Math.round(body.port)
-          : provider === 'musicassistant'
-            ? 8095
-            : undefined,
-      apiKey: typeof body?.apiKey === 'string' && body.apiKey.trim() ? body.apiKey.trim() : undefined,
+          : undefined,
+      apiKey: isMusicAssistant
+        ? musicAssistantApiKey
+        : typeof body?.apiKey === 'string' && body.apiKey.trim()
+          ? body.apiKey.trim()
+          : undefined,
       developerToken:
         typeof body?.developerToken === 'string' && body.developerToken.trim() ? body.developerToken.trim() : undefined,
       userToken: typeof body?.userToken === 'string' && body.userToken.trim() ? body.userToken.trim() : undefined,
@@ -1861,8 +1974,12 @@ export class AdminApiHandler {
       this.musicAssistantStreamService.configureFromConfig();
       const cfg = this.configPort.getConfig();
       await this.musicAssistantStreamService.registerZones(cfg.zones ?? []);
+      const connection = isMusicAssistant ? musicAssistantConnection ?? undefined : undefined;
+      if (connection?.ok) {
+        this.log.info('music assistant connection ok', { host: connection.host, port: connection.port });
+      }
       this.notifier.notifyReloadMusicApp('useradd', bridge.provider || 'spotify', bridge.id);
-      this.sendJson(res, 200, { bridge });
+      this.sendJson(res, 200, { bridge, connection });
     } catch (err) {
       this.log.warn('spotify bridge create failed', { err });
       this.sendJson(res, 500, { error: 'spotify-bridge-create-failed' });
