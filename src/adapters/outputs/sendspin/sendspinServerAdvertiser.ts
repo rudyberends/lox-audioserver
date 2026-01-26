@@ -18,9 +18,10 @@ export class SendspinServerAdvertiser implements MdnsLifecycleService {
       return;
     }
     const systemName = this.configPort.getSystemConfig()?.audioserver?.name || 'Lox Audio Server';
+    const systemIp = this.configPort.getSystemConfig()?.audioserver?.ip?.trim();
     this.connector.advertiseServer({
       port: this.config.port,
-      host: resolveMdnsHost(this.config.host),
+      host: resolveMdnsHost(this.config.host, systemIp),
       path: '/sendspin',
       name: systemName,
     });

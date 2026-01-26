@@ -29,6 +29,7 @@ export class SnapcastMdnsService implements MdnsLifecycleService {
       return;
     }
     const systemName = this.configPort.getSystemConfig()?.audioserver?.name || 'Lox Audio Server';
+    const systemIp = this.configPort.getSystemConfig()?.audioserver?.ip?.trim();
     const streamPort = this.portProvider.getSnapcastAdvertisePort();
     if (!streamPort) {
       this.log.warn('snapcast mdns skipped (tcp server not listening)');
@@ -36,7 +37,7 @@ export class SnapcastMdnsService implements MdnsLifecycleService {
     }
     this.advertiser.advertise({
       name: systemName,
-      host: resolveMdnsHost(this.config.host),
+      host: resolveMdnsHost(this.config.host, systemIp),
       streamPort,
       jsonrpcPort: this.config.port,
     });

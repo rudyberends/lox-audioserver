@@ -51,10 +51,16 @@ export class SnapcastMdnsAdvertiser {
 
   private normalizeHost(host?: string): string | undefined {
     const trimmed = host?.trim() ?? '';
-    const candidate = trimmed && !net.isIP(trimmed) ? trimmed : os.hostname();
-    if (!candidate) {
+    if (trimmed) {
+      if (net.isIP(trimmed)) {
+        return trimmed;
+      }
+      return trimmed.includes('.') ? trimmed : `${trimmed}.local`;
+    }
+    const hostname = os.hostname();
+    if (!hostname) {
       return undefined;
     }
-    return candidate.includes('.') ? candidate : `${candidate}.local`;
+    return hostname.includes('.') ? hostname : `${hostname}.local`;
   }
 }

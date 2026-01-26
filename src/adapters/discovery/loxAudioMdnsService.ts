@@ -23,10 +23,11 @@ export class LoxAudioMdnsService implements MdnsLifecycleService {
     }
     const systemConfig = this.configPort.getSystemConfig();
     const systemName = systemConfig?.audioserver?.name || 'Lox Audio Server';
+    const systemIp = systemConfig?.audioserver?.ip?.trim();
     const mac = systemConfig?.audioserver?.macId?.trim();
     this.advertiser.advertise({
       name: systemName,
-      host: resolveMdnsHost(this.config.host),
+      host: resolveMdnsHost(this.config.host, systemIp),
       port: this.config.port,
       txt: {
         api: '/api',

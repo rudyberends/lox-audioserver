@@ -15,7 +15,11 @@ export function defaultLocalIp(): string {
   return '';
 }
 
-export function resolveMdnsHost(host?: string): string | undefined {
+export function resolveMdnsHost(host?: string, preferredIp?: string): string | undefined {
+  const preferred = preferredIp?.trim();
+  if (preferred && preferred !== '0.0.0.0') {
+    return preferred;
+  }
   const candidate = host && host !== '0.0.0.0' ? host : defaultLocalIp();
   if (!candidate || candidate === '0.0.0.0') {
     return undefined;
