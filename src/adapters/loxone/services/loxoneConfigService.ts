@@ -230,13 +230,31 @@ export class LoxoneConfigService {
     cfg.system.audioserver.paired = true;
 
     if (Array.isArray(section.extensions)) {
+      const baseMac = macId.trim().toUpperCase();
+      const seen = new Set<string>();
+      if (baseMac) {
+        seen.add(baseMac);
+      }
+      let fallbackIndex = 1;
+
       cfg.system.audioserver.extensions = section.extensions
         .map((entry: any) => {
-          const mac = this.normalizeString(entry?.serial)?.toUpperCase();
+          let mac = this.normalizeString(entry?.serial)?.toUpperCase();
           const extName = this.normalizeString(entry?.name);
+
+          if (!mac || seen.has(mac)) {
+            mac = this.computeExtensionSerial(baseMac, fallbackIndex);
+            fallbackIndex += 1;
+            while (mac && seen.has(mac)) {
+              mac = this.computeExtensionSerial(baseMac, fallbackIndex);
+              fallbackIndex += 1;
+            }
+          }
+
           if (!mac) {
             return null;
           }
+          seen.add(mac);
           return {
             mac,
             name: extName || `Extension ${mac.slice(-4)}`,
@@ -254,6 +272,19 @@ export class LoxoneConfigService {
     }
     if (masterSerial) {
       cfg.system.miniserver.serial = masterSerial;
+    }
+  }
+
+  private computeExtensionSerial(baseMac: string, index: number): string | undefined {
+    const normalized = baseMac.trim().toUpperCase().replace(/[^0-9A-F]/g, '');
+    if (!normalized) return undefined;
+    const offset = BigInt(Math.max(0, index));
+    try {
+      const baseValue = BigInt(`0x${normalized}`);
+      const next = baseValue + offset;
+      return next.toString(16).toUpperCase().padStart(normalized.length, '0');
+    } catch {
+      return undefined;
     }
   }
 
