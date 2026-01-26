@@ -60,9 +60,16 @@ type AppleMusicDrmStreamInfo = {
   keyUri?: string;
 };
 
+type AppleMusicDrmKeyCacheEntry = {
+  key?: string;
+  expiresAt: number;
+  inFlight?: Promise<string | null>;
+};
+
 type OutputErrorHandler = (zoneId: number, reason?: string) => void;
 
 const WIDEVINE_KEYFORMAT_UUID = 'urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed';
+const DRM_KEY_TTL_MS = 60 * 60 * 1000;
 
 const WIDEVINE_PSSH_PROTO = `
 syntax = "proto2";
@@ -85,6 +92,7 @@ export class AppleMusicStreamService {
   private readonly bearerTokens = new Map<string, BearerState>();
   private readonly storefronts = new Map<string, StorefrontState>();
   private readonly proxySessions = new Map<string, AppleMusicProxySession>();
+  private readonly drmKeyCache = new Map<string, AppleMusicDrmKeyCacheEntry>();
   private proxyServer?: ReturnType<typeof createServer>;
   private proxyPort?: number;
   private readonly proxyHost = '127.0.0.1';
@@ -202,7 +210,7 @@ export class AppleMusicStreamService {
 
     const requiresDrm = await this.detectDrm(streamUrl, headers);
     if (!requiresDrm) {
-      return { playbackSource: await this.buildStreamPlaybackSource(streamUrl, headers) };
+      return { playbackSource: await this.buildStreamPlaybackSource(streamUrl, headers, request.bridge) };
     }
 
     const drmHandled = await this.tryPrepareDrmStream(
@@ -210,6 +218,7 @@ export class AppleMusicStreamService {
       streamUrl,
       drmTrackId,
       drmIsLibrary,
+      request.bridge,
       webPlayback,
     );
     if (drmHandled?.playbackSource) return drmHandled;
@@ -353,6 +362,7 @@ export class AppleMusicStreamService {
     streamUrl: string,
     trackId: string,
     isLibrary: boolean,
+    bridge: SpotifyBridgeConfig,
     webPlayback?: any,
   ): Promise<AppleMusicPlaybackResult | null> {
     const drmStreamInfo = await this.resolveCtrp256StreamInfo(webPlayback, headers);
@@ -397,7 +407,7 @@ export class AppleMusicStreamService {
     }
 
     if (!keyUri) {
-      return { playbackSource: await this.buildStreamPlaybackSource(playbackUrl, headers) };
+      return { playbackSource: await this.buildStreamPlaybackSource(playbackUrl, headers, bridge) };
     }
 
     const licenseUrl = this.normalizeLicenseUrl(webPlayback?.['hls-key-server-url']);
@@ -416,7 +426,7 @@ export class AppleMusicStreamService {
     if (!drmKey) return null;
 
     this.log.info('DRM key ready, streaming with decryption', { keyPreview: `${drmKey.slice(0, 16)}...` });
-    return { playbackSource: await this.buildStreamPlaybackSource(playbackUrl, headers, drmKey) };
+    return { playbackSource: await this.buildStreamPlaybackSource(playbackUrl, headers, bridge, drmKey) };
   }
 
   private extractKeyInfo(playlist: string): { uri: string; line: string; format?: string } | null {
@@ -437,6 +447,55 @@ export class AppleMusicStreamService {
   }
 
   private async fetchDrmKey(
+    headers: Record<string, string>,
+    licenseUrl: string,
+    keyUri: string,
+    _keyFormat: string | undefined,
+    trackId: string,
+    isLibrary: boolean,
+  ): Promise<string | null> {
+    const cacheKey = this.buildDrmCacheKey(trackId, isLibrary);
+    const now = Date.now();
+    const cached = this.drmKeyCache.get(cacheKey);
+    if (cached?.key && cached.expiresAt > now) {
+      this.log.debug('Apple Music DRM: using cached key', {
+        trackId,
+        isLibrary,
+        expiresInMs: cached.expiresAt - now,
+      });
+      return cached.key;
+    }
+    if (cached?.expiresAt && cached.expiresAt <= now && !cached.inFlight) {
+      this.drmKeyCache.delete(cacheKey);
+    }
+    if (cached?.inFlight) {
+      const key = await cached.inFlight;
+      if (key) {
+        return key;
+      }
+    }
+    const inFlight = this.fetchDrmKeyUncached(headers, licenseUrl, keyUri, _keyFormat, trackId, isLibrary);
+    this.drmKeyCache.set(cacheKey, {
+      key: cached?.key,
+      expiresAt: cached?.expiresAt ?? 0,
+      inFlight,
+    });
+    const keyHex = await inFlight;
+    const entry = this.drmKeyCache.get(cacheKey);
+    if (entry?.inFlight === inFlight) {
+      if (keyHex) {
+        this.drmKeyCache.set(cacheKey, {
+          key: keyHex,
+          expiresAt: Date.now() + DRM_KEY_TTL_MS,
+        });
+      } else {
+        this.drmKeyCache.delete(cacheKey);
+      }
+    }
+    return keyHex;
+  }
+
+  private async fetchDrmKeyUncached(
     headers: Record<string, string>,
     licenseUrl: string,
     keyUri: string,
@@ -593,6 +652,10 @@ export class AppleMusicStreamService {
       this.log.error('DRM key extraction failed', { error: err instanceof Error ? err.message : String(err) });
       return null;
     }
+  }
+
+  private buildDrmCacheKey(trackId: string, isLibrary: boolean): string {
+    return `${isLibrary ? 'library' : 'catalog'}:${trackId}`;
   }
 
   private readM3u8Attribute(line: string, name: string): string | undefined {
@@ -777,33 +840,48 @@ export class AppleMusicStreamService {
   private async buildStreamPlaybackSource(
     streamUrl: string,
     headers: Record<string, string>,
+    bridge: SpotifyBridgeConfig,
     decryptionKey?: string,
   ): Promise<PlaybackSource> {
     const streamHeaders = this.buildStreamHeaders(headers);
     if (decryptionKey) {
-      const directDrm = await this.buildDirectDrmPlaybackSource(streamUrl, streamHeaders, decryptionKey);
+      const directDrm = await this.buildDirectDrmPlaybackSource(
+        streamUrl,
+        streamHeaders,
+        bridge,
+        decryptionKey,
+      );
       if (directDrm) return directDrm;
-      return this.buildProxyPlaybackSource(streamUrl, streamHeaders, decryptionKey);
+      return this.buildProxyPlaybackSource(streamUrl, streamHeaders, bridge, decryptionKey);
     }
     const resolved = await this.resolveUrlForFfmpeg(streamUrl, streamHeaders);
     await this.logInputDetails('direct', resolved.url, resolved.headers, undefined);
+    const realTime = this.resolvePaceInput(bridge);
+    if (!realTime) {
+      this.log.info('Apple Music pacing disabled (direct)', { inputFormat: null });
+    }
     return {
       kind: 'url',
       url: resolved.url,
       headers: resolved.headers,
       decryptionKey,
       tlsVerifyHost: resolved.tlsVerifyHost,
-      realTime: true,
+      realTime,
     };
   }
 
   private async buildDirectDrmPlaybackSource(
     streamUrl: string,
     headers: Record<string, string> | undefined,
+    bridge: SpotifyBridgeConfig,
     decryptionKey: string,
   ): Promise<PlaybackSource | null> {
     const resolved = await this.resolveUrlForFfmpeg(streamUrl, headers);
     await this.logInputDetails('direct', resolved.url, resolved.headers, 'mov');
+    const realTime = this.resolvePaceInput(bridge);
+    if (!realTime) {
+      this.log.info('Apple Music pacing disabled (direct DRM)', { inputFormat: 'mov' });
+    }
     return {
       kind: 'url',
       url: resolved.url,
@@ -811,7 +889,7 @@ export class AppleMusicStreamService {
       decryptionKey,
       tlsVerifyHost: resolved.tlsVerifyHost,
       inputFormat: 'mov',
-      realTime: true,
+      realTime,
     };
   }
 
@@ -912,12 +990,24 @@ export class AppleMusicStreamService {
   private async buildProxyPlaybackSource(
     streamUrl: string,
     headers: Record<string, string> | undefined,
+    bridge: SpotifyBridgeConfig,
     decryptionKey: string,
   ): Promise<PlaybackSource> {
     const { host, port, sessionId } = await this.ensureProxySession(streamUrl, headers, decryptionKey);
     const url = `http://${host}:${port}/applemusic/${sessionId}/playlist.m3u8`;
     await this.logInputDetails('proxy', streamUrl, headers, 'hls', sessionId);
-    return { kind: 'url', url, inputFormat: 'hls', realTime: true };
+    const realTime = this.resolvePaceInput(bridge);
+    if (!realTime) {
+      this.log.info('Apple Music pacing disabled (proxy)', { inputFormat: 'hls', sessionId });
+    }
+    return { kind: 'url', url, inputFormat: 'hls', realTime };
+  }
+
+  private resolvePaceInput(bridge: SpotifyBridgeConfig): boolean {
+    if (typeof bridge.appleMusicPaceInput === 'boolean') {
+      return bridge.appleMusicPaceInput;
+    }
+    return true;
   }
 
   private async logInputDetails(
@@ -927,14 +1017,11 @@ export class AppleMusicStreamService {
     inputFormat?: string,
     sessionId?: string,
   ): Promise<void> {
-    const info = await this.fetchStreamInfo(streamUrl, headers);
     this.log.debug('Apple Music input details', {
       kind,
       streamUrl,
       inputFormat,
       sessionId,
-      contentType: info?.contentType,
-      contentLength: info?.contentLength,
     });
   }
 
