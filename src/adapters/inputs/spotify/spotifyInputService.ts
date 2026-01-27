@@ -367,11 +367,12 @@ class SpotifyConnectInstance {
     }
 
     if (durationSec !== undefined || positionSec !== undefined) {
-      this.controller.updateTiming(
-        this.zoneId,
-        positionSec ?? 0,
-        durationSec ?? this.currentMetadata?.duration ?? 0,
-      );
+      const playerState = this.resolvePlayer(this.zoneId)?.getState?.();
+      const fallbackElapsed = playerState?.time ?? 0;
+      const fallbackDuration = playerState?.duration ?? this.currentMetadata?.duration ?? 0;
+      const nextElapsed = positionSec ?? fallbackElapsed;
+      const nextDuration = durationSec ?? fallbackDuration;
+      this.controller.updateTiming(this.zoneId, nextElapsed, nextDuration);
     }
 
     if (!this.hasActiveSession) {
@@ -416,12 +417,23 @@ class SpotifyConnectInstance {
     if (!this.isActive) {
       return;
     }
+    const prevMetadata = this.currentMetadata;
+    const prevTrackId = prevMetadata?.trackId ?? this.currentTrackId ?? null;
+    const nextTrackId = metadata.trackId ?? prevTrackId;
+    const prevKey = prevMetadata
+      ? `${prevMetadata.title ?? ''}::${prevMetadata.artist ?? ''}::${prevMetadata.album ?? ''}`
+      : '';
+    const nextKey = `${metadata.title ?? prevMetadata?.title ?? ''}::${metadata.artist ?? prevMetadata?.artist ?? ''}::${metadata.album ?? prevMetadata?.album ?? ''}`;
+    const trackChanged =
+      (prevTrackId && nextTrackId && prevTrackId !== nextTrackId) ||
+      (!prevTrackId && Boolean(nextTrackId)) ||
+      (prevKey && nextKey && prevKey !== nextKey);
     this.currentMetadata = metadata;
     this.ensurePlaybackSession(metadata);
     this.controller.updateMetadata(this.zoneId, metadata);
     const player = this.resolvePlayer(this.zoneId);
     player?.updateMetadata(metadata);
-    if (metadata.duration !== undefined) {
+    if (metadata.duration !== undefined && trackChanged) {
       this.controller.updateTiming(this.zoneId, 0, metadata.duration);
       player?.updateTiming(0, metadata.duration);
     }
