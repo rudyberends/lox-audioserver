@@ -62,7 +62,7 @@
     "typescript-eslint": "^8.46.1"
   },
   "dependencies": {
-    "@lox-audioserver/node-airplay-sender": "^0.4.6",
+    "@lox-audioserver/node-airplay-sender": "0.4.7",
     "@lox-audioserver/node-googlecast": "^0.1.1",
     "@lox-audioserver/node-libraop": "^0.3.3",
     "@lox-audioserver/node-librespot": "^0.3.2",
