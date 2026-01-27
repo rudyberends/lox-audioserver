@@ -11,6 +11,7 @@ import type {
 import { SonosClient } from '@lox-audioserver/node-sonos';
 import { resolveDlnaEndpoints } from '@/adapters/outputs/dlna/dlnaDiscovery';
 import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
+import { buildBaseUrl, normalizeStreamUrl, resolveAbsoluteUrl } from '@/shared/streamUrl';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import { discoverSonosDevice } from '@/adapters/outputs/sonos/sonosDiscovery';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
@@ -753,14 +754,14 @@ export class SonosOutput implements ZoneOutput {
     if (!coverSource) {
       return '';
     }
-    const proxied = this.buildAbsoluteUrl(session.stream.coverUrl);
+    const proxied = resolveAbsoluteUrl(this.buildBaseUrl(), session.stream.coverUrl);
     return proxied ?? coverSource;
   }
 
   private resolveStreamUri(session: PlaybackSession): string | null {
     const streamUrl = session.stream.url;
     if (streamUrl) {
-      const absolute = this.buildAbsoluteUrl(streamUrl);
+      const absolute = resolveAbsoluteUrl(this.buildBaseUrl(), streamUrl);
       if (absolute) {
         return absolute;
       }
@@ -773,34 +774,15 @@ export class SonosOutput implements ZoneOutput {
   }
 
   private normalizeStreamUri(uri: string): string {
-    const match = uri.match(/\/streams\/(\d+)\/[^/?#]+\.(mp3|aac)/i);
-    if (!match) {
-      return uri;
-    }
-    const zoneId = Number(match[1]);
-    if (!Number.isFinite(zoneId)) {
-      return uri;
-    }
-    const ext = match[2]?.toLowerCase() === 'aac' ? 'aac' : 'mp3';
-    const stablePath = `/streams/${zoneId}/current.${ext}`;
-    const absolute = this.buildAbsoluteUrl(stablePath);
-    return absolute ?? uri;
+    return normalizeStreamUrl(uri, this.buildBaseUrl(), ['mp3', 'aac']);
   }
 
-  private buildAbsoluteUrl(pathname: string): string | null {
-    if (!pathname) {
-      return null;
-    }
-    if (isHttpUrl(pathname)) {
-      return pathname;
-    }
-    if (!pathname.startsWith('/')) {
-      return null;
-    }
+  private buildBaseUrl(): string {
     const sys = this.ports.config.getSystemConfig();
-    const host = sys.audioserver.ip?.trim() || '127.0.0.1';
-    const port = 7090;
-    return `http://${host}:${port}${pathname}`;
+    return buildBaseUrl({
+      host: sys.audioserver.ip?.trim(),
+      fallbackHost: '127.0.0.1',
+    });
   }
 
   private buildProtocolInfo(uri: string, isStream: boolean): string {

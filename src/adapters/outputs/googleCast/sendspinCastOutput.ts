@@ -2,6 +2,7 @@ import { createLogger } from '@/shared/logging/logger';
 import { bestEffort } from '@/shared/bestEffort';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
+import { buildBaseUrl } from '@/shared/streamUrl';
 import {
   SendspinOutput,
   type SendspinMetadataPayload,
@@ -321,7 +322,7 @@ export class SendspinCastOutput implements ZoneOutput {
     if (!host) {
       throw new Error('audioserver ip missing');
     }
-    return `http://${host}:7090`;
+    return buildBaseUrl({ host });
   }
 
   private buildDeviceDescriptor(): DiscoveredDevice {

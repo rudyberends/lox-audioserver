@@ -101,6 +101,8 @@ export interface SpotifyBridgeConfig {
   tidalAccessToken?: string;
   /** Optional Tidal country code if provider === 'tidal' */
   tidalCountryCode?: string;
+  /** Optional Apple Music input pacing toggle (true keeps ffmpeg -re; false disables pacing). */
+  appleMusicPaceInput?: boolean;
   /** When true, register all zones as players up front; otherwise register on-demand. */
   registerAll?: boolean;
 }

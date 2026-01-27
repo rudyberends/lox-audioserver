@@ -4,6 +4,7 @@ import { bestEffort } from '@/shared/bestEffort';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { HttpPreferences, PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import { isHttpUrl } from '@/shared/coverArt';
+import { buildBaseUrl, resolveStreamUrl } from '@/shared/streamUrl';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import type { CastDevice, DiscoveredDevice, MediaStatusModel } from '@lox-audioserver/node-googlecast';
 import { loadGoogleCastModule } from '@/adapters/outputs/googleCast/googlecastLoader';
@@ -462,12 +463,14 @@ export class GoogleCastOutput implements ZoneOutput {
 
   private resolveStreamUrls(session: PlaybackSession): { baseUrl: string; streamUrl: string; coverUrl?: string } {
     const baseUrl = this.resolveBaseUrl();
-    const streamPath = session.stream?.url || `/streams/${this.zoneId}/current.mp3`;
-    const streamUrl = this.appendQueryParam(
-      isHttpUrl(streamPath) ? streamPath : `${baseUrl}${streamPath}`,
-      'prime',
-      '0',
-    );
+    const streamUrl = resolveStreamUrl({
+      baseUrl,
+      zoneId: this.zoneId,
+      streamPath: session.stream?.url,
+      defaultExt: 'mp3',
+      prime: '0',
+      primeMode: 'upsert',
+    });
     return { baseUrl, streamUrl };
   }
 
@@ -521,9 +524,10 @@ export class GoogleCastOutput implements ZoneOutput {
 
   private resolveBaseUrl(): string {
     const sys = this.ports.config.getSystemConfig() as any;
-    const host = sys?.audioserver?.ip?.trim() || this.pickLocalAddress();
-    const port = 7090;
-    return `http://${host}:${port}`;
+    return buildBaseUrl({
+      host: sys?.audioserver?.ip?.trim(),
+      fallbackHost: this.pickLocalAddress(),
+    });
   }
 
   private buildDeviceDescriptor(): DiscoveredDevice {
@@ -535,16 +539,6 @@ export class GoogleCastOutput implements ZoneOutput {
       port: 8009,
       lastSeen: Date.now(),
     };
-  }
-
-  private appendQueryParam(url: string, key: string, value: string): string {
-    try {
-      const parsed = new URL(url);
-      parsed.searchParams.set(key, value);
-      return parsed.toString();
-    } catch {
-      return url;
-    }
   }
 
   private resolveCoverUrl(session: PlaybackSession): string | undefined {

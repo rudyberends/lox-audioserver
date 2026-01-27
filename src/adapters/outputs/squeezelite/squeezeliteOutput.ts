@@ -1,5 +1,6 @@
 import { createLogger } from '@/shared/logging/logger';
-import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
+import { resolveSessionCover } from '@/shared/coverArt';
+import { buildBaseUrl, resolveAbsoluteUrl, resolveStreamUrl } from '@/shared/streamUrl';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
@@ -179,33 +180,31 @@ export class SqueezeliteOutput implements ZoneOutput {
   }
 
   private buildStreamUrl(session: PlaybackSession): string | null {
-    const stablePath = `/streams/${this.zoneId}/current.mp3?prime=0`;
-    const fallbackUrl = this.appendPrimeFlag(session.stream.url);
-    return this.buildAbsoluteUrl(stablePath) ?? this.buildAbsoluteUrl(fallbackUrl);
-  }
-
-  private buildAbsoluteUrl(pathname: string): string | null {
-    if (!pathname) return null;
-    if (isHttpUrl(pathname)) return pathname;
-    if (!pathname.startsWith('/')) return null;
     const sys = this.ports.config.getSystemConfig();
-    const host = sys.audioserver.ip?.trim() || '127.0.0.1';
-    const port = 7090;
-    return `http://${host}:${port}${pathname}`;
-  }
-
-  private appendPrimeFlag(url: string): string {
-    if (!url) return url;
-    if (url.includes('prime=')) return url;
-    const separator = url.includes('?') ? '&' : '?';
-    return `${url}${separator}prime=0`;
+    const baseUrl = buildBaseUrl({
+      host: sys.audioserver.ip?.trim(),
+      fallbackHost: '127.0.0.1',
+    });
+    return resolveStreamUrl({
+      baseUrl,
+      zoneId: this.zoneId,
+      streamPath: session.stream?.url,
+      defaultExt: 'mp3',
+      prime: '0',
+      primeMode: 'ensure',
+    });
   }
 
   private buildMetadata(session: PlaybackSession, streamUrl: string): Record<string, string | number> {
     const meta = session.metadata;
     const itemId = meta?.audiopath || meta?.trackId || streamUrl;
     const cover = resolveSessionCover(session);
-    const coverUrl = cover ? this.buildAbsoluteUrl(cover) ?? cover : '';
+    const sys = this.ports.config.getSystemConfig();
+    const baseUrl = buildBaseUrl({
+      host: sys.audioserver.ip?.trim(),
+      fallbackHost: '127.0.0.1',
+    });
+    const coverUrl = cover ? resolveAbsoluteUrl(baseUrl, cover) ?? cover : '';
     return {
       item_id: itemId,
       title: meta?.title || this.zoneName,

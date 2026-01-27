@@ -8,6 +8,8 @@ import { AirplayFlowSession } from '@/adapters/outputs/airplay/airplayFlowSessio
 import type { AirplaySenderOverrides } from '@/adapters/outputs/airplay/airplaySender';
 import type { AirplaySenderLike } from '@/application/outputs/airplayGroupController';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
+import { buildBaseUrl, resolveStreamUrl } from '@/shared/streamUrl';
+import { waitForReadableStream } from '@/shared/audio/streamReadiness';
 
 export interface AirPlayOutputConfig {
   host: string;
@@ -345,37 +347,7 @@ export class AirPlayOutput implements ZoneOutput {
   }
 
   private async waitForPcmStream(stream: PassThrough, timeoutMs: number): Promise<boolean> {
-    if (stream.readableLength > 0) {
-      return true;
-    }
-    return new Promise((resolve) => {
-      let settled = false;
-      const done = (value: boolean) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve(value);
-      };
-      const onReadable = () => {
-        if (stream.readableLength > 0) {
-          done(true);
-        }
-      };
-      const onEnd = () => done(false);
-      const onError = () => done(false);
-      const timer = setTimeout(() => done(false), timeoutMs);
-      const cleanup = () => {
-        clearTimeout(timer);
-        stream.off('readable', onReadable);
-        stream.off('end', onEnd);
-        stream.off('close', onEnd);
-        stream.off('error', onError);
-      };
-      stream.on('readable', onReadable);
-      stream.once('end', onEnd);
-      stream.once('close', onEnd);
-      stream.once('error', onError);
-    });
+    return waitForReadableStream(stream, { timeoutMs });
   }
 
   private async waitForEngine(retries = 5, delayMs = 150): Promise<boolean> {
@@ -443,10 +415,21 @@ export class AirPlayOutput implements ZoneOutput {
     const source = (stream as ReturnType<AirplayStreamSession['getStream']> | null) ??
       this.streamSession.getStream() ??
       null;
+    const sys = this.ports.config.getSystemConfig();
+    const baseUrl = buildBaseUrl({
+      host: sys.audioserver.ip?.trim(),
+      fallbackHost: '127.0.0.1',
+    });
+    const fallbackUrl = resolveStreamUrl({
+      baseUrl,
+      zoneId: this.zoneId,
+      streamPath: this.lastInputUrl,
+      defaultExt: 'wav',
+    });
     await this.flowSession.startClient(
       clientId,
       sender as AirplaySender,
-      inputUrl ?? this.lastInputUrl ?? `/streams/${this.zoneId}/current.wav`,
+      inputUrl ?? fallbackUrl,
       source,
       volume,
       ntpStart,
