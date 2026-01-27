@@ -302,7 +302,14 @@ export class AirPlayOutput implements ZoneOutput {
 
   public getPreferredOutput(): PreferredOutput {
     // AirPlay devices typically expect 44.1kHz PCM16 stereo.
-    return { profile: 'pcm', sampleRate: 44100, channels: 2, bitDepth: 16 };
+    return {
+      profile: 'pcm',
+      sampleRate: 44100,
+      channels: 2,
+      bitDepth: 16,
+      // Add a small rolling prebuffer to smooth bursty PCM delivery.
+      prebufferBytes: 256 * 1024,
+    };
   }
 
   public getLatencyMs(): number {
