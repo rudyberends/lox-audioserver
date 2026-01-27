@@ -873,10 +873,7 @@ export class SpotifyInputService {
   public syncZones(zones: ZoneConfig[], spotifyConfig?: GlobalSpotifyConfig | null): void {
     this.configPort.ensureInputs();
     this.enabled = spotifyConfig?.enabled ?? true;
-    if (!this.enabled) {
-      this.disableAllInstances();
-      return;
-    }
+    const inputsEnabled = this.enabled;
     if (!this.controller) {
       this.log.debug('spotify controller not configured; skipping sync');
       return;
@@ -919,7 +916,7 @@ export class SpotifyInputService {
 
       const config = zone.inputs?.spotify ?? this.buildDefaultZoneConfig(zone);
       const offloadEnabled = config.offload === true;
-      const connectEnabled = Boolean(config?.enabled) && !offloadEnabled;
+      const connectEnabled = inputsEnabled && Boolean(config?.enabled) && !offloadEnabled;
       const account = this.resolveAccount(config.accountId) ?? defaultAccount;
       const credPath = 'inline';
       desired.add(zone.id);
@@ -964,7 +961,7 @@ export class SpotifyInputService {
           });
         });
       } else {
-        if (!offloadEnabled) {
+        if (inputsEnabled && !offloadEnabled) {
           // Best-effort warm start; failure will be retried via normal lifecycle.
           void bestEffort(() => instance.start(), {
             fallback: undefined,
