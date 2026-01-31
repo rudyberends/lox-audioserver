@@ -541,7 +541,12 @@ class SpotifyConnectInstance {
           return;
         }
         if (posSec !== undefined || durSec !== undefined) {
-          this.controller.updateTiming(this.zoneId, posSec ?? 0, durSec ?? 0);
+          const playerState = this.resolvePlayer(this.zoneId)?.getState?.();
+          const fallbackElapsed = playerState?.time ?? 0;
+          const fallbackDuration = playerState?.duration ?? this.currentMetadata?.duration ?? 0;
+          const nextElapsed = posSec ?? fallbackElapsed;
+          const nextDuration = durSec ?? fallbackDuration;
+          this.controller.updateTiming(this.zoneId, nextElapsed, nextDuration);
         }
       },
     });

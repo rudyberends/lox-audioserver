@@ -430,6 +430,9 @@ export class PlaybackCoordinator {
       isSpotify: req.isSpotify,
       bridgeProvider,
     });
+    if (req.isSpotify && ctx.config.inputs?.spotify?.offload !== true) {
+      ctx.queue.authority = 'local';
+    }
     this.log.debug('queue rebuilt', {
       zoneId: ctx.id,
       items: queueItems.length,
@@ -761,6 +764,17 @@ export class PlaybackCoordinator {
     source: 'player' | 'output',
     extraLog?: Record<string, unknown>,
   ): void {
+    const ctx = this.zoneRepo.get(zoneId);
+    const normalized = typeof reason === 'string' ? reason.trim().toLowerCase() : '';
+    if (ctx && normalized.includes('end_of_track') && this.isLocalQueueAuthority(ctx.queue.authority)) {
+      this.log.debug('treating end_of_track as queue advance', {
+        zoneId,
+        reason,
+        source,
+      });
+      void this.handleEndOfTrack(ctx);
+      return;
+    }
     handlePlaybackErrorTransition({
       coordinator: {
         getZone: (id) => this.zoneRepo.get(id),
