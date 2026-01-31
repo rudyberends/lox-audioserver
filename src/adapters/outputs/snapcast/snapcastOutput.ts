@@ -133,6 +133,12 @@ export class SnapcastOutput implements ZoneOutput {
     const outputSettings = session?.outputSettings
       ? { ...audioOutputSettings, ...session.outputSettings }
       : audioOutputSettings;
+    // Keep prebuffer moderate to reduce jitter while avoiding drift spikes.
+    const prebufferMs = 250;
+    const bytesPerSecond =
+      outputSettings.sampleRate * outputSettings.channels * (outputSettings.pcmBitDepth / 8);
+    const targetPrebufferBytes = Math.round((bytesPerSecond * prebufferMs) / 1000);
+    outputSettings.prebufferBytes = Math.max(outputSettings.prebufferBytes, targetPrebufferBytes);
     this.activeOutputSettings = outputSettings;
     const codec = pcmCodecFromBitDepth(outputSettings.pcmBitDepth);
     this.log.debug('serving PCM to Snapclients (ws)', {

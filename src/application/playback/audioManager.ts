@@ -223,10 +223,10 @@ export class AudioManager {
     if (!session || session.state !== 'playing') {
       return null;
     }
-    // For pipe-based sources (e.g. embedded librespot), keep the engine alive so
-    // downstream outputs (AirPlay/DLNA) don't thrash on quick pauses/track changes.
-    if (session.playbackSource?.kind !== 'pipe') {
-      this.playbackService.stop(zoneId, 'pause', { discardSubscribers: true });
+    // Keep the engine alive on pause so outputs can resume instantly.
+    // Backpressure from zero subscribers will stall ffmpeg output safely.
+    if (session.startedAt) {
+      session.elapsed = Math.max(0, Math.round((Date.now() - session.startedAt) / 1000));
     }
     session.state = 'paused';
     session.updatedAt = Date.now();
@@ -250,15 +250,12 @@ export class AudioManager {
       this.log.debug('playback resumed (output-only)', { zoneId, source: session.source });
       return session;
     }
-    // If we never tore down the engine (pipe-based sources), just flip state.
-    if (
-      session.playbackSource.kind === 'pipe' &&
-      this.playbackService.hasSession(zoneId)
-    ) {
+    // If we never tore down the engine, just flip state.
+    if (this.playbackService.hasSession(zoneId)) {
       session.state = 'playing';
       session.updatedAt = Date.now();
-      session.startedAt = Date.now();
-      this.log.debug('playback resumed (reusing pipe session)', { zoneId, source: session.source });
+      session.startedAt = Date.now() - (session.elapsed ?? 0) * 1000;
+      this.log.debug('playback resumed (reusing engine session)', { zoneId, source: session.source });
       return session;
     }
     const rawElapsed = Number.isFinite(session.elapsed) ? Math.max(0, session.elapsed) : 0;

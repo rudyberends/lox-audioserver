@@ -123,6 +123,9 @@ export class SendspinOutput implements ZoneOutput {
   private lastStreamStartSentAtMs: number | null = null;
   private streamToken = 0;
   private hooksStop: (() => void) | null = null;
+  private paused = false;
+  private resumeGate: Promise<void> | null = null;
+  private resumeGateResolve: (() => void) | null = null;
 
   constructor(
     private readonly zoneId: number,
@@ -250,14 +253,14 @@ export class SendspinOutput implements ZoneOutput {
     this.pushPlaybackState('playing');
   }
 
-  /** Pause playback and tear down the current stream. */
+  /** Pause playback without tearing down the stream. */
   public async pause(_session: PlaybackSession | null): Promise<void> {
     this.log.info('Sendspin pause', {
       zoneId: this.zoneId,
       zoneName: this.zoneName,
       clientId: this.clientId,
     });
-    this.teardown();
+    this.paused = true;
     this.sendProgressUpdate();
     this.pushPlaybackState('paused');
   }
@@ -269,6 +272,17 @@ export class SendspinOutput implements ZoneOutput {
       zoneName: this.zoneName,
       clientId: this.clientId,
     });
+    if (this.currentStream && this.paused) {
+      this.paused = false;
+      if (this.resumeGateResolve) {
+        this.resumeGateResolve();
+      }
+      this.resumeGateResolve = null;
+      this.resumeGate = null;
+      this.sendProgressUpdate();
+      this.pushPlaybackState('playing');
+      return;
+    }
     if (session) {
       await this.play(session);
     } else {
@@ -1011,43 +1025,47 @@ export class SendspinOutput implements ZoneOutput {
         }
       };
 
-      // Stream PCM immediately; timestamps keep a fixed lead, so no manual prefill needed.
-      let sendChain: Promise<void> = Promise.resolve();
-      pcmStream.on('data', (chunk: Buffer) => {
-        if (!chunk?.length) {
-          return;
-        }
-        // Prevent a long train of queued Promises when the client is slow; drop chunk if chain is too deep.
-        const pending = (sendChain as any)._pendingCount as number | undefined;
-        if (typeof pending === 'number' && pending > 4) {
-          return;
-        }
-        sendChain = sendChain.then(() => sendLiveChunk(chunk)).catch((err) => {
-          this.log.warn('Sendspin send error', { zoneId: this.zoneId, message: (err as Error).message });
-        });
-      });
-
+      // Stream PCM with pull-based backpressure: wait for each chunk to be sent before reading more.
       const streamRef = pcmStream;
-      pcmStream.on('error', (error) => {
-        if (streamRef !== this.currentStream) {
-          return;
+      const localToken = token;
+      const consumeStream = async (): Promise<void> => {
+        try {
+          for await (const chunk of pcmStream) {
+            if (localToken !== this.streamToken || streamRef !== this.currentStream) {
+              return;
+            }
+            while (this.paused && localToken === this.streamToken && streamRef === this.currentStream) {
+              if (!this.resumeGate) {
+                this.resumeGate = new Promise<void>((resolve) => {
+                  this.resumeGateResolve = resolve;
+                });
+              }
+              await this.resumeGate;
+            }
+            if (!chunk?.length) {
+              continue;
+            }
+            await sendLiveChunk(chunk as Buffer);
+          }
+          if (localToken !== this.streamToken || streamRef !== this.currentStream) {
+            return;
+          }
+          this.log.debug('Sendspin stream closed', { zoneId: this.zoneId });
+          this.teardown();
+          this.scheduleRestart();
+        } catch (error) {
+          if (localToken !== this.streamToken || streamRef !== this.currentStream) {
+            return;
+          }
+          this.log.warn('Sendspin stream error', {
+            zoneId: this.zoneId,
+            message: (error as Error).message,
+          });
+          this.teardown();
+          this.scheduleRestart();
         }
-        this.log.warn('Sendspin stream error', {
-          zoneId: this.zoneId,
-          message: (error as Error).message,
-        });
-        this.teardown();
-        this.scheduleRestart();
-      });
-
-      pcmStream.on('close', () => {
-        if (streamRef !== this.currentStream) {
-          return;
-        }
-        this.log.debug('Sendspin stream closed', { zoneId: this.zoneId });
-        this.teardown();
-        this.scheduleRestart();
-      });
+      };
+      void consumeStream();
 
 
       this.log.info('Sendspin stream started', {
@@ -1106,6 +1124,12 @@ export class SendspinOutput implements ZoneOutput {
       }
       this.currentStream = null;
     }
+    if (this.resumeGateResolve) {
+      this.resumeGateResolve();
+    }
+    this.paused = false;
+    this.resumeGateResolve = null;
+    this.resumeGate = null;
     this.stopProgressUpdates();
     // Notify client to clear/end only when we are really stopping; skip during keep-alive restarts.
     if (!preserveAnchor) {
@@ -1142,6 +1166,13 @@ export class SendspinOutput implements ZoneOutput {
     }
     const session = this.ports.audioManager.getSession(this.zoneId);
     if (!session?.playbackSource) {
+      return;
+    }
+    const source = session.playbackSource;
+    if (source.kind !== 'pipe' && source.kind !== 'url') {
+      return;
+    }
+    if (source.kind === 'url' && source.restartOnFailure !== true) {
       return;
     }
     // Avoid rapid restart loops if the source keeps closing.
@@ -1570,8 +1601,8 @@ export class SendspinOutput implements ZoneOutput {
   }
 
   private static resolveAnchorLeadUs(): number {
-    const defaultMs = 300;
-    const clampedMs = Math.max(300, Math.min(8000, Math.round(defaultMs)));
+    const defaultMs = 250;
+    const clampedMs = Math.max(250, Math.min(8000, Math.round(defaultMs)));
     return clampedMs * 1000;
   }
 }

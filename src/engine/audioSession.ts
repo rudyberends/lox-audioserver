@@ -99,6 +99,9 @@ export class AudioSession {
   private killTimer?: NodeJS.Timeout;
   private readonly killTimeoutMs = DEFAULT_KILL_TIMEOUT_MS;
   private discardSubscribersOnStop = false;
+  private stdoutPaused = false;
+  private backpressureCount = 0;
+  private readonly backpressureListeners = new Map<PassThrough, () => void>();
 
   constructor(
     private readonly zoneId: number,
@@ -439,6 +442,46 @@ export class AudioSession {
     return ['-probesize', '256k', '-analyzeduration', '1M'];
   }
 
+  private pauseStdout(): void {
+    if (!this.process?.stdout || this.stdoutPaused) {
+      return;
+    }
+    this.process.stdout.pause();
+    this.stdoutPaused = true;
+  }
+
+  private resumeStdout(): void {
+    if (!this.process?.stdout || !this.stdoutPaused || this.backpressureCount > 0) {
+      return;
+    }
+    this.process.stdout.resume();
+    this.stdoutPaused = false;
+  }
+
+  private addBackpressure(subscriber: PassThrough): void {
+    if (this.backpressureListeners.has(subscriber)) {
+      return;
+    }
+    const onDrain = () => {
+      this.clearBackpressure(subscriber);
+    };
+    this.backpressureListeners.set(subscriber, onDrain);
+    this.backpressureCount += 1;
+    subscriber.once('drain', onDrain);
+    this.pauseStdout();
+  }
+
+  private clearBackpressure(subscriber: PassThrough): void {
+    const onDrain = this.backpressureListeners.get(subscriber);
+    if (!onDrain) {
+      return;
+    }
+    subscriber.off('drain', onDrain);
+    this.backpressureListeners.delete(subscriber);
+    this.backpressureCount = Math.max(0, this.backpressureCount - 1);
+    this.resumeStdout();
+  }
+
   private buildInputArgs(): string[] {
     if (this.source.kind === 'url') {
       const lowLatency = this.source.lowLatency !== false;
@@ -675,6 +718,9 @@ export class AudioSession {
       }
     }
     this.subscribers.add(stream);
+    if (this.subscribers.size === 1) {
+      this.resumeStdout();
+    }
     const label = options.label ?? `sub-${++this.subscriberCounter}`;
     this.subscriberLabels.set(stream, label);
     this.log.debug('audio subscriber attached', {
@@ -684,6 +730,7 @@ export class AudioSession {
       subscriberCount: this.subscribers.size,
     });
     const remove = () => {
+      this.clearBackpressure(stream);
       if (this.subscribers.delete(stream)) {
         const tag = this.subscriberLabels.get(stream);
         this.subscriberLabels.delete(stream);
@@ -693,6 +740,9 @@ export class AudioSession {
           label: tag ?? label,
           subscriberCount: this.subscribers.size,
         });
+        if (this.subscribers.size === 0) {
+          this.pauseStdout();
+        }
       }
     };
     stream.on('close', remove);
@@ -756,6 +806,12 @@ export class AudioSession {
       this.process.stderr?.removeAllListeners();
       this.process = undefined;
     }
+    for (const [subscriber, onDrain] of this.backpressureListeners.entries()) {
+      subscriber.off('drain', onDrain);
+    }
+    this.backpressureListeners.clear();
+    this.backpressureCount = 0;
+    this.stdoutPaused = false;
     for (const subscriber of this.subscribers) {
       if (subscriber.writableEnded) {
         continue;
@@ -784,15 +840,21 @@ export class AudioSession {
   private writeToSubscribers(chunk: Buffer): void {
     for (const subscriber of Array.from(this.subscribers)) {
       if (subscriber.writableEnded) {
+        this.clearBackpressure(subscriber);
         this.subscribers.delete(subscriber);
+        if (this.subscribers.size === 0) {
+          this.pauseStdout();
+        }
         continue;
       }
       const ok = subscriber.write(chunk);
       if (!ok) {
         const pending = (subscriber as any)?._writableState?.length ?? 0;
+        this.addBackpressure(subscriber);
         if (pending > this.maxSubscriberLagBytes) {
           subscriber.destroy();
           this.subscribers.delete(subscriber);
+          this.clearBackpressure(subscriber);
           this.subscriberDropCount += 1;
           this.lastSubscriberDropAt = Date.now();
         }
