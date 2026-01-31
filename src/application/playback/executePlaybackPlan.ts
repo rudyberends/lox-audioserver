@@ -86,11 +86,12 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
     const accountId = parseSpotifyUser(plan.audiopath);
     let playbackSource: PlaybackSource | null = null;
     if (!offloadEnabled) {
+      const seekPositionMs = normalizedStartAt ? Math.max(0, Math.round(normalizedStartAt * 1000)) : 0;
       playbackSource =
         (await inputs.getPlaybackSourceForUri(
           ctx.id,
           normalizeSpotifyAudiopath(plan.audiopath),
-          0,
+          seekPositionMs,
           accountId,
         )) ?? inputs.getPlaybackSource(ctx.id);
     }
@@ -114,7 +115,8 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
       queue: queueUris,
       queueIndex,
     } as PlaybackMetadata;
-    const session = ctx.player.playExternal('spotify', playbackSource, meta);
+    const startAt = playbackSource && normalizedStartAt ? normalizedStartAt : undefined;
+    const session = ctx.player.playExternal('spotify', playbackSource, meta, startAt);
     if (playbackIsPipe) {
       inputs.markSessionActive(ctx.id, plan.metadata);
     }

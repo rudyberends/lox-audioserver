@@ -143,9 +143,6 @@ export class AudioManager {
     if (source.kind === 'pipe') {
       return source;
     }
-    if (source.kind === 'url' && source.realTime) {
-      return source;
-    }
     return { ...source, startAtSec };
   }
 
@@ -264,8 +261,16 @@ export class AudioManager {
       this.log.debug('playback resumed (reusing pipe session)', { zoneId, source: session.source });
       return session;
     }
+    const rawElapsed = Number.isFinite(session.elapsed) ? Math.max(0, session.elapsed) : 0;
+    const duration = session.duration ?? session.metadata?.duration ?? 0;
+    const boundedElapsed =
+      duration > 0 ? Math.min(rawElapsed, Math.max(0, duration - 1)) : rawElapsed;
+    const resumeAtSec = this.normalizeStartAtSec(boundedElapsed);
+    const effectiveSource =
+      this.applyStartAt(session.playbackSource, resumeAtSec, session.metadata) ??
+      session.playbackSource;
     const profiles = this.computeProfiles(
-      session.playbackSource,
+      effectiveSource,
       this.zonePcmPreference.get(zoneId) ?? true,
       session.profiles,
     );
@@ -275,12 +280,16 @@ export class AudioManager {
     session.pcmStream = handles.pcmStream;
     const effectiveOutput = this.getEffectiveOutputSettings(zoneId);
     const outputSignature = this.buildOutputSignature(effectiveOutput);
-    const startOptions = this.buildEngineStartOptions(zoneId, session.playbackSource, profiles, effectiveOutput);
+    const startOptions = this.buildEngineStartOptions(zoneId, effectiveSource, profiles, effectiveOutput);
     this.playbackService.start(startOptions);
+    session.playbackSource = effectiveSource;
     session.profiles = profiles;
     session.outputSettings = outputSignature;
     session.state = 'playing';
     session.updatedAt = Date.now();
+    session.startedAt =
+      resumeAtSec && resumeAtSec > 0 ? Date.now() - resumeAtSec * 1000 : Date.now();
+    session.elapsed = boundedElapsed;
     this.log.debug('playback resumed', { zoneId, source: session.source });
     return session;
   }

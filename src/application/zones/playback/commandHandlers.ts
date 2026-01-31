@@ -7,9 +7,10 @@ import type { ComponentLogger } from '@/shared/logging/logger';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import type { QueueAuthority } from '@/application/zones/internal/zoneTypes';
-import type { PlaybackSession } from '@/application/playback/audioManager';
+import type { PlaybackMetadata, PlaybackSession } from '@/application/playback/audioManager';
 import type { AirplayRemoteCommand, LineInControlCommand } from '@/ports/InputsPort';
 import { parseLineInInputId } from '@/application/zones/internal/zoneAudioHelpers';
+import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
 
 type CommandCoordinator = {
   log: ComponentLogger;
@@ -26,6 +27,13 @@ type CommandCoordinator = {
   setShuffle: (zoneId: number, enabled: boolean) => void;
   stepQueue: (zoneId: number, delta: number) => void;
   isLocalQueueAuthority: (authority: QueueAuthority | undefined | null) => boolean;
+  startQueuePlayback: (
+    ctx: ZoneContext,
+    audiopath: string,
+    metadata?: PlaybackMetadata,
+    options?: { skipExternalStop?: boolean; startAtSec?: number },
+  ) => Promise<PlaybackSession | null>;
+  audioHelpers: ZoneAudioHelpers;
   remoteControl: (zoneId: number, command: AirplayRemoteCommand) => void;
   remoteVolume: (zoneId: number, volume: number) => void;
   playerCommand: (zoneId: number, command: string, args?: Record<string, unknown>) => Promise<boolean>;
@@ -108,7 +116,50 @@ function handlePlayResume(
     return;
   }
   const session = ctx.player.resume();
-  coordinator.dispatchOutputs(ctx, ctx.outputs, 'resume', session ?? ctx.player.getSession());
+  if (!session && isQueueDrivenInput(mode) && coordinator.isLocalQueueAuthority(ctx.queue.authority)) {
+    const current = ctx.queueController.current();
+    const fallbackAudiopath = current?.audiopath ?? ctx.state.audiopath ?? '';
+    if (fallbackAudiopath) {
+      const isRadio = current
+        ? coordinator.audioHelpers.isRadioAudiopath(current.audiopath, current.audiotype)
+        : coordinator.audioHelpers.isRadioAudiopath(fallbackAudiopath, ctx.state.audiotype);
+      const rawStartAt = Number.isFinite(ctx.state.time) ? Math.max(0, ctx.state.time) : 0;
+      const duration = current?.duration ?? ctx.state.duration ?? 0;
+      const boundedStartAt = duration > 0 ? Math.min(rawStartAt, Math.max(0, duration - 1)) : rawStartAt;
+      const resumeStartAt = !isRadio && boundedStartAt > 0 ? boundedStartAt : undefined;
+      const metadata: PlaybackMetadata = current
+        ? {
+            title: current.title,
+            artist: current.artist,
+            album: current.album,
+            coverurl: current.coverurl,
+            audiopath: current.audiopath,
+            duration: current.duration,
+            station: current.station,
+            isRadio,
+          }
+        : {
+            title: ctx.state.title,
+            artist: ctx.state.artist,
+            album: ctx.state.album,
+            coverurl: ctx.state.coverurl,
+            audiopath: fallbackAudiopath,
+            duration: ctx.state.duration,
+            station: ctx.state.station,
+            isRadio,
+          };
+      void (async () => {
+        const restored = await coordinator.startQueuePlayback(ctx, fallbackAudiopath, metadata, {
+          startAtSec: resumeStartAt,
+        });
+        if (!restored) {
+          coordinator.log.debug('resume fallback failed', { zoneId, audiopath: fallbackAudiopath });
+        }
+      })();
+    }
+  } else {
+    coordinator.dispatchOutputs(ctx, ctx.outputs, 'resume', session ?? ctx.player.getSession());
+  }
   coordinator.applyPatch(zoneId, { mode: 'play', clientState: 'on', power: 'on' });
 }
 

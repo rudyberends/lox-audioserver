@@ -720,6 +720,8 @@ export class PlaybackCoordinator {
         setShuffle: this.queueController.setShuffle.bind(this.queueController),
         stepQueue: this.stepQueue.bind(this),
         isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
+        startQueuePlayback: this.startQueuePlayback.bind(this),
+        audioHelpers: this.audioHelpers,
         remoteControl: (id, cmd) => this.inputsPort.remoteControl(id, cmd),
         remoteVolume: (id, volume) => this.inputsPort.remoteVolume(id, volume),
         playerCommand: (id, cmd, args) => this.inputsPort.playerCommand(id, cmd, args),
