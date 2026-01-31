@@ -58,7 +58,8 @@ export class LineInIngestTcp {
       if (resolved) {
         return;
       }
-      buffer = Buffer.concat([buffer, chunk]);
+      const data = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+      buffer = Buffer.concat([buffer, data]);
       if (buffer.length > MAX_ID_BYTES) {
         socket.destroy();
         return;
@@ -96,7 +97,8 @@ export class LineInIngestTcp {
 
     socket.on('data', (chunk) => {
       if (!chunk?.length) return;
-      source.write(chunk);
+      const data = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+      source.write(data);
     });
 
     socket.on('close', () => {

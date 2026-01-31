@@ -804,7 +804,7 @@ export class LocalLibraryProvider {
     const outPath = path.join(dir, fileName);
 
     await ensureDir(dir);
-    const image = await Jimp.read(picture.data);
+    const image = await Jimp.read(Buffer.from(picture.data));
     const maxSize = 500;
     const width = image.bitmap.width;
     const height = image.bitmap.height;
@@ -817,7 +817,7 @@ export class LocalLibraryProvider {
         ? await image.getBuffer(JimpMime.png)
         : await image.getBuffer(JimpMime.jpeg, { quality: 85 });
 
-    await fsp.writeFile(outPath, buffer);
+    await fsp.writeFile(outPath, Buffer.from(buffer));
     return fileName;
   }
 

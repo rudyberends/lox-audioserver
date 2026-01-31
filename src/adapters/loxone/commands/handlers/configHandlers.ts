@@ -3,7 +3,7 @@ import {
   privateDecrypt,
   constants as cryptoConstants,
 } from 'node:crypto';
-import type { JsonWebKey, KeyObject } from 'node:crypto';
+import type { KeyObject } from 'node:crypto';
 import type { LoxoneHttpConfig } from '@/config/loxone';
 import { buildResponse } from '@/adapters/loxone/commands/responses';
 import type { CommandResult, HandlerFn } from '@/adapters/loxone/commands/types';
@@ -20,6 +20,11 @@ type KeyMaterial = {
   modulusHex: string;
   exponent: number;
   publicKeyPem: string;
+};
+
+type JsonWebKey = {
+  n?: string;
+  e?: string;
 };
 
 let keyPair: { publicKey: KeyObject; privateKey: KeyObject } | null = null;
