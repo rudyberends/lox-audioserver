@@ -112,6 +112,12 @@ export class AirplaySender {
     }
   }
 
+  public clearBuffers(): void {
+    for (const fb of this.flowBuffers) {
+      fb.reset(true);
+    }
+  }
+
   // --- Sender helpers ------------------------------------------------------
 
   private async startSender(
@@ -156,14 +162,18 @@ export class AirplaySender {
         } else if (data !== undefined) {
           payload.data = data;
         }
+        const effectiveLevel =
+          message.includes('Receiving request') ? 'spam' : level;
         const logFn =
-          level === 'error'
+          effectiveLevel === 'error'
             ? this.log.error
-            : level === 'warn'
+            : effectiveLevel === 'warn'
               ? this.log.warn
-              : level === 'info'
+              : effectiveLevel === 'info'
                 ? this.log.info
-                : this.log.debug;
+                : effectiveLevel === 'spam'
+                  ? this.log.spam
+                  : this.log.debug;
         logFn.call(this.log, message, payload);
       },
     };
@@ -248,7 +258,7 @@ export class AirplaySender {
         }),
     );
     this.flowBuffers.add(flow);
-    const readyTimer = setTimeout(() => flow.ready(), 700);
+    const readyTimer = setTimeout(() => flow.ready(), 150);
     const cleanup = () => {
       clearTimeout(readyTimer);
       this.flowBuffers.delete(flow);
@@ -386,6 +396,12 @@ export class AirplaySender {
     }
     return '0.0.0.0';
   }
+
+  public flush(): void {
+    for (const flow of this.flowBuffers) {
+      flow.flush();
+    }
+  }
 }
 
 class FlowBuffer {
@@ -395,8 +411,8 @@ class FlowBuffer {
   constructor(
     private readonly write: (chunk: Buffer) => void,
     private readonly onError: (err: unknown) => void,
-    private readonly flushSize = 1024 * 384,
-    private readonly maxSize = 1024 * 2048,
+    private readonly flushSize = 1024 * 128,
+    private readonly maxSize = 1024 * 512,
   ) {}
 
   public push(chunk: Buffer): void {
@@ -419,6 +435,14 @@ class FlowBuffer {
     if (this.readyFlag) return;
     this.readyFlag = true;
     this.flush();
+  }
+
+  public reset(keepReady = false): void {
+    this.buffer.length = 0;
+    this.bytes = 0;
+    if (!keepReady) {
+      this.readyFlag = false;
+    }
   }
 
   public flush(): void {

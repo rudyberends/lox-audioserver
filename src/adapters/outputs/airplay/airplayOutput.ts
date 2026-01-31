@@ -87,10 +87,15 @@ export class AirPlayOutput implements ZoneOutput {
   private readonly streamSession: AirplayStreamSession;
   private readonly flowSession: AirplayFlowSession;
   private readonly clientId: string;
-  private readonly startDelayMs = 500; // simple barrier; later can use NTP
+  private readonly startDelayMs = 50; // simple barrier; later can use NTP
   private attachedLeaderId: number | null = null;
   private readonly pcmStartTimeoutMs = 8000;
   private readonly pcmPipeTimeoutMs = 20000;
+  private paused = false;
+  private lastStopAt = 0;
+  private resumeInFlight = false;
+  private fastStartNext = false;
+  private noBacklogNext = false;
 
   constructor(
     private readonly zoneId: number,
@@ -100,8 +105,8 @@ export class AirPlayOutput implements ZoneOutput {
     initialVolume?: number,
   ) {
     const configOverrides: AirplaySenderOverrides = {
-      packets_in_buffer: 340,
-      stream_latency: 250,
+      packets_in_buffer: 520,
+      stream_latency: 350,
       // TODO: tune sync_period; temporarily higher to reduce sync noise.
       sync_period: 70000,
       jump_forward_threshold_ms: 240,
@@ -140,6 +145,7 @@ export class AirPlayOutput implements ZoneOutput {
   }
 
   public async play(session: PlaybackSession): Promise<void> {
+    this.paused = false;
     const isNewTrack = Boolean(
       this.lastSession && this.lastSession.stream?.id !== session.stream?.id,
     );
@@ -181,11 +187,28 @@ export class AirPlayOutput implements ZoneOutput {
     this.lastInputUrl = effectiveStream ? 'shared' : null;
     if (isNewTrack) {
       this.flowSession.resetBuffers('new_track');
+      this.sender.clearBuffers();
+      this.fastStartNext = true;
+      this.noBacklogNext = true;
+      if (this.sender.isRunning()) {
+        this.log.info('AirPlay track change; restarting sender to drop buffered audio', {
+          zoneId: this.zoneId,
+          zoneName: this.zoneName,
+        });
+        await this.flowSession.stopAll();
+        this.lastInputUrl = null;
+        this.running = false;
+        this.starting = false;
+        this.clientStarted = false;
+      }
     }
     if (this.clientStarted || this.starting || this.running) {
       // Sender already active (or starting); keep the session and just refresh stream + volume.
       if (effectiveStream) {
         await this.flowSession.setSharedStream(effectiveStream);
+      }
+      if (isNewTrack) {
+        this.sender.clearBuffers();
       }
       await this.flowSession.setVolume(this.clientId, this.currentVolume);
       this.running = true;
@@ -223,19 +246,24 @@ export class AirPlayOutput implements ZoneOutput {
       source: session.source,
     });
     this.starting = true;
-    const pcmTimeoutMs =
-      session.playbackSource?.kind === 'pipe' ? this.pcmPipeTimeoutMs : this.pcmStartTimeoutMs;
-    const streamReady = await this.waitForPcmStream(effectiveStream, pcmTimeoutMs);
-    if (!streamReady) {
-      this.log.warn('AirPlay output skipped; PCM stream not ready', {
-        zoneId: this.zoneId,
-        timeoutMs: pcmTimeoutMs,
-      });
-      this.starting = false;
-      this.scheduleRetry();
-      return;
+    const skipPcmWait = this.fastStartNext;
+    this.fastStartNext = false;
+    if (!skipPcmWait) {
+      const pcmTimeoutMs =
+        session.playbackSource?.kind === 'pipe' ? this.pcmPipeTimeoutMs : this.pcmStartTimeoutMs;
+      const streamReady = await this.waitForPcmStream(effectiveStream, pcmTimeoutMs);
+      if (!streamReady) {
+        this.log.warn('AirPlay output skipped; PCM stream not ready', {
+          zoneId: this.zoneId,
+          timeoutMs: pcmTimeoutMs,
+        });
+        this.starting = false;
+        this.scheduleRetry();
+        return;
+      }
     }
-    const primeBacklog = !isNewTrack;
+    const primeBacklog = !isNewTrack && !this.noBacklogNext;
+    this.noBacklogNext = false;
     try {
       await this.flowSession.startClient(
         this.clientId,
@@ -257,15 +285,41 @@ export class AirPlayOutput implements ZoneOutput {
   }
 
   public async pause(_session: PlaybackSession | null): Promise<void> {
-    // Basic RAOP sender cannot pause; stop instead.
-    this.log.info('AirPlay pause (mapped to stop)', { zoneId: this.zoneId, zoneName: this.zoneName });
-    await this.stop(_session);
+    this.log.info('AirPlay pause (flush)', { zoneId: this.zoneId, zoneName: this.zoneName });
+    if (this.paused) {
+      return;
+    }
+    this.paused = true;
+    this.fastStartNext = true;
+    await this.flowSession.pauseClients();
+    this.lastStopAt = Date.now();
+    this.running = false;
+    this.starting = false;
+    this.clientStarted = false;
   }
 
   public async resume(session: PlaybackSession | null): Promise<void> {
     this.log.info('AirPlay resume', { zoneId: this.zoneId, zoneName: this.zoneName });
-    if (session) {
-      await this.play(session);
+    if (this.resumeInFlight) {
+      return;
+    }
+    if (this.running || this.starting) {
+      return;
+    }
+    this.resumeInFlight = true;
+    try {
+      if (this.paused) {
+        const waitMs = 150 - (Date.now() - this.lastStopAt);
+        if (waitMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+        }
+        this.paused = false;
+      }
+      if (session) {
+        await this.play(session);
+      }
+    } finally {
+      this.resumeInFlight = false;
     }
   }
 

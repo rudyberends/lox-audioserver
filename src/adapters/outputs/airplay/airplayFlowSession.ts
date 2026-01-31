@@ -25,13 +25,14 @@ export class AirplayFlowSession {
   private sharedStream: PassThrough | null = null;
   private readonly backlog: Buffer[] = [];
   private backlogBytes = 0;
-  private readonly maxBacklogBytes = 1024 * 2048; // 2MB rolling buffer for late joiners
+  private readonly maxBacklogBytes = 1024 * 512; // 512KB rolling buffer for late joiners
   private readonly chunkQueue: Buffer[] = [];
   private chunkQueueBytes = 0;
   private chunkTimer: NodeJS.Timeout | null = null;
-  private readonly chunkDurationMs = 1000;
-  private readonly maxChunkQueueSeconds = 10;
+  private readonly chunkDurationMs = 80;
+  private readonly maxChunkQueueSeconds = 2;
   private chunkSizeBytes = 44100 * 2 * 2;
+  private maxChunkQueueBytes = 44100 * 2 * 2;
   private preloadBytes = 44100 * 2 * 2;
   private preloadComplete = false;
   private lastTrimLogAt = 0;
@@ -42,6 +43,7 @@ export class AirplayFlowSession {
   private pendingEndStream: PassThrough | null = null;
   private lastMetricsLogAt = 0;
   private readonly metricsLogIntervalMs = 2000;
+  private paused = false;
 
   constructor(private readonly zoneId: number) {}
 
@@ -54,6 +56,7 @@ export class AirplayFlowSession {
     ntpStart?: bigint | null,
     primeBacklog = true,
   ): Promise<void> {
+    this.paused = false;
     this.log.debug('airplay flow start client', {
       zoneId: this.zoneId,
       clientId,
@@ -201,6 +204,35 @@ export class AirplayFlowSession {
     this.chunkQueue.length = 0;
     this.chunkQueueBytes = 0;
     this.preloadComplete = false;
+    this.paused = false;
+  }
+
+  public async pauseClients(): Promise<void> {
+    if (this.paused) {
+      return;
+    }
+    this.paused = true;
+    this.stopChunker();
+    this.resetBuffers('pause');
+    await Promise.all(Array.from(this.clients.values()).map((c) => this.stopClientSafe(c.id)));
+  }
+
+  public pause(): void {
+    if (this.paused) {
+      return;
+    }
+    this.paused = true;
+    this.stopChunker();
+    this.resetBuffers('pause');
+  }
+
+  public resume(): void {
+    if (!this.paused) {
+      return;
+    }
+    this.paused = false;
+    this.resetBuffers('resume');
+    this.ensureChunker();
   }
 
   public getClient(clientId: ClientId): FlowClient | undefined {
@@ -262,7 +294,8 @@ export class AirplayFlowSession {
     }
     this.bytesPerSecond = sampleRate * channels * bytesPerSample;
     this.chunkSizeBytes = Math.max(1, Math.round((this.bytesPerSecond * this.chunkDurationMs) / 1000));
-    this.preloadBytes = Math.max(1, this.bytesPerSecond);
+    this.maxChunkQueueBytes = Math.max(1, Math.round(this.bytesPerSecond * this.maxChunkQueueSeconds));
+    this.preloadBytes = Math.max(1, Math.round(this.bytesPerSecond * 0.25));
   }
 
   public async stopClientSafe(clientId: ClientId): Promise<void> {
@@ -355,6 +388,9 @@ export class AirplayFlowSession {
     if (!chunk?.length) {
       return;
     }
+    if (this.paused) {
+      return;
+    }
     // Maintain a rolling backlog for late joiners.
     if (this.backlogBytes < this.maxBacklogBytes) {
       this.backlog.push(chunk);
@@ -431,7 +467,15 @@ export class AirplayFlowSession {
 
   private enqueueChunk(chunk: Buffer): void {
     if (!chunk?.length) return;
-    const maxBytes = Math.max(1, this.bytesPerSecond * this.maxChunkQueueSeconds);
+    const maxBytes = this.maxChunkQueueBytes || Math.max(1, this.bytesPerSecond * this.maxChunkQueueSeconds);
+    let droppedBytes = 0;
+    while (this.chunkQueueBytes + chunk.length > maxBytes && this.chunkQueue.length > 0) {
+      const removed = this.chunkQueue.shift();
+      if (removed) {
+        this.chunkQueueBytes -= removed.length;
+        droppedBytes += removed.length;
+      }
+    }
     if (this.chunkQueueBytes + chunk.length > maxBytes) {
       const now = Date.now();
       if (now - this.lastTrimLogAt > this.metricsLogIntervalMs) {
@@ -441,9 +485,23 @@ export class AirplayFlowSession {
           maxBytes,
           queuedBytes: this.chunkQueueBytes,
           incomingBytes: chunk.length,
+          droppedBytes,
         });
       }
       return;
+    }
+    if (droppedBytes > 0) {
+      const now = Date.now();
+      if (now - this.lastTrimLogAt > this.metricsLogIntervalMs) {
+        this.lastTrimLogAt = now;
+        this.log.debug('airplay flow chunk queue drop', {
+          zoneId: this.zoneId,
+          maxBytes,
+          queuedBytes: this.chunkQueueBytes,
+          incomingBytes: chunk.length,
+          droppedBytes,
+        });
+      }
     }
     this.chunkQueue.push(chunk);
     this.chunkQueueBytes += chunk.length;
@@ -451,6 +509,9 @@ export class AirplayFlowSession {
 
   private ensureChunker(): void {
     if (this.chunkTimer || this.clients.size === 0) {
+      return;
+    }
+    if (this.paused) {
       return;
     }
     this.chunkTimer = setTimeout(() => this.runChunker(), this.chunkDurationMs);
@@ -467,6 +528,9 @@ export class AirplayFlowSession {
     if (this.clients.size === 0) {
       return;
     }
+    if (this.paused) {
+      return;
+    }
     if (!this.preloadComplete) {
       if (this.chunkQueueBytes >= this.preloadBytes) {
         this.preloadComplete = true;
@@ -479,8 +543,11 @@ export class AirplayFlowSession {
         return;
       }
     }
-    const next = this.popChunk(this.chunkSizeBytes);
-    if (next) {
+    const drainCount =
+      this.maxChunkQueueBytes > 0 && this.chunkQueueBytes > this.maxChunkQueueBytes * 0.75 ? 2 : 1;
+    for (let i = 0; i < drainCount; i += 1) {
+      const next = this.popChunk(this.chunkSizeBytes);
+      if (!next) break;
       for (const client of this.clients.values()) {
         client.buffer?.push(next);
       }
@@ -528,7 +595,7 @@ export class AirplayFlowSession {
         feedBytes: (client.feed as any)?.readableLength ?? 0,
       };
     });
-    this.log.debug('airplay flow metrics', {
+    this.log.spam('airplay flow metrics', {
       zoneId: this.zoneId,
       clients: this.clients.size,
       ready,
