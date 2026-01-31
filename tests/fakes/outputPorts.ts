@@ -183,7 +183,12 @@ export const noopSqueezeliteGroupController: SqueezeliteGroupCoordinator = {
   unregister: () => {
     /* noop */
   },
-  requestSync: () => {
+  preparePlayback: (zoneId: number) => ({
+    grouped: false,
+    leaderZoneId: zoneId,
+    expectedCount: 1,
+  }),
+  notifyBufferReady: () => {
     /* noop */
   },
 };

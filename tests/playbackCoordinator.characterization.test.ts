@@ -11,7 +11,7 @@ import { createZoneAudioHelpers } from '../src/application/zones/internal/zoneAu
 import type { ZoneConfig, AudioServerConfig, RawAudioConfig } from '../src/domain/config/types';
 import type { QueueItem } from '../src/ports/types/queueTypes';
 import type { ZoneContext, QueueAuthority } from '../src/application/zones/internal/zoneTypes';
-import type { InputsPort, InputStreamResult } from '../src/ports/InputsPort';
+import type { InputsPort, InputStreamResult, LineInControlCommand } from '../src/ports/InputsPort';
 import type { ContentPort } from '../src/ports/ContentPort';
 import type { NotifierPort } from '../src/ports/NotifierPort';
 import type { ConfigPort } from '../src/ports/ConfigPort';
@@ -85,6 +85,7 @@ class FakeInputsPort implements InputsPort {
   public readonly remoteVolumeCalls: Array<{ zoneId: number; volume: number }> = [];
   public readonly playerCommandCalls: Array<{ zoneId: number; command: string; args?: Record<string, unknown> }> = [];
   public readonly requestLineInStopCalls: string[] = [];
+  public readonly requestLineInControlCalls: Array<{ inputId: string; command: LineInControlCommand }> = [];
   public readonly markSessionCalls: Array<{ zoneId: number; metadata?: PlaybackMetadata | null }> = [];
   public playbackSource: PlaybackSource | null = null;
   public streamResult: InputStreamResult = { playbackSource: null };
@@ -188,6 +189,10 @@ class FakeInputsPort implements InputsPort {
 
   public requestLineInStop(inputId: string): void {
     this.requestLineInStopCalls.push(inputId);
+  }
+
+  public requestLineInControl(inputId: string, command: LineInControlCommand): void {
+    this.requestLineInControlCalls.push({ inputId, command });
   }
 }
 
