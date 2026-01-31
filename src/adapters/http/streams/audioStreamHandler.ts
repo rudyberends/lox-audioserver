@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { Readable } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import type { AudioManager, PlaybackSession } from '@/application/playback/audioManager';
 import type { EnginePort } from '@/ports/EnginePort';
@@ -19,6 +19,7 @@ import type { StreamEvents } from '@/adapters/http/streams/streamEvents';
  */
 export class AudioStreamHandler {
   private readonly log = createLogger('Http', 'Streams');
+  private readonly syncStreams = new Map<string, SyncStreamEntry>();
 
   constructor(
     private readonly engine: EnginePort,
@@ -80,6 +81,15 @@ export class AudioStreamHandler {
     const icyNameOverride = httpPrefs?.icyName ?? audioOutputSettings.httpIcyName;
 
     const outputProfile = isWav ? 'pcm' : isAac ? 'aac' : 'mp3';
+    const syncParams = this.parseSyncParams(req.url ?? '');
+    if (syncParams && outputProfile === 'mp3') {
+      await this.handleSyncStream(req, res, session, zoneId, 'mp3', outputSettings, httpProfile, {
+        icyEnabledOverride,
+        icyIntervalOverride,
+        icyNameOverride,
+      }, syncParams);
+      return;
+    }
     const clientLabel = this.buildClientLabel(req, outputProfile);
     const primeWithBuffer = this.shouldPrimeWithBuffer(req);
     let audioStream = this.engine.createStream(zoneId, outputProfile, {
@@ -436,4 +446,214 @@ export class AudioStreamHandler {
     }
     return Math.round((bps / 8) * duration);
   }
+
+  private parseSyncParams(rawUrl: string): { syncId: string; expected: number } | null {
+    if (!rawUrl) return null;
+    try {
+      const url = new URL(rawUrl, 'http://localhost');
+      const syncId = url.searchParams.get('sync');
+      const expected = Number(url.searchParams.get('expect') ?? '');
+      if (!syncId || !Number.isFinite(expected) || expected < 2) {
+        return null;
+      }
+      return { syncId, expected: Math.floor(expected) };
+    } catch {
+      return null;
+    }
+  }
+
+  private async handleSyncStream(
+    req: IncomingMessage,
+    res: ServerResponse,
+    session: PlaybackSession,
+    zoneId: number,
+    outputProfile: 'mp3',
+    outputSettings: AudioOutputSettings,
+    httpProfile: HttpProfile,
+    icyOverrides: { icyEnabledOverride: boolean; icyIntervalOverride?: number; icyNameOverride?: string },
+    sync: { syncId: string; expected: number },
+  ): Promise<void> {
+    const contentType = 'audio/mpeg';
+    const durationSeconds = this.resolveDurationSeconds(session);
+    const icyEnabled = this.shouldUseIcy(req, icyOverrides.icyEnabledOverride);
+    const contentLength = icyEnabled
+      ? null
+      : this.estimateContentLength(
+          outputProfile,
+          durationSeconds,
+          httpProfile,
+          outputSettings,
+        );
+    const useChunked = this.shouldUseChunked(httpProfile);
+
+    let entry: SyncStreamEntry;
+    try {
+      entry = this.getOrCreateSyncEntry(
+        sync.syncId,
+        zoneId,
+        outputProfile,
+        outputSettings,
+        session,
+        sync.expected,
+      );
+    } catch {
+      this.engineUnavailable(res);
+      return;
+    }
+    const clientId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const passThrough = new PassThrough();
+
+    entry.clients.set(clientId, {
+      req,
+      res,
+      passThrough,
+      icyEnabled,
+      icyInterval: icyOverrides.icyIntervalOverride,
+      icyName: icyOverrides.icyNameOverride,
+    });
+
+    this.writeHeaders(res, contentType, {
+      contentLength,
+      chunked: useChunked,
+      icy: icyEnabled,
+      icyInterval: icyOverrides.icyIntervalOverride,
+      icyName: icyOverrides.icyNameOverride,
+    });
+
+    const cleanup = () => this.removeSyncClient(sync.syncId, clientId);
+    req.on('close', cleanup);
+    req.on('aborted', cleanup);
+    res.on('close', cleanup);
+
+    if (entry.clients.size >= entry.expectedCount) {
+      this.startSyncEntry(entry);
+    }
+  }
+
+  private getOrCreateSyncEntry(
+    syncId: string,
+    zoneId: number,
+    outputProfile: 'mp3',
+    outputSettings: AudioOutputSettings,
+    session: PlaybackSession,
+    expectedCount: number,
+  ): SyncStreamEntry {
+    const existing = this.syncStreams.get(syncId);
+    if (existing) {
+      existing.expectedCount = Math.max(existing.expectedCount, expectedCount);
+      return existing;
+    }
+
+    const clientLabel = `sync:${syncId}`;
+    let audioStream = this.engine.createStream(zoneId, outputProfile, {
+      label: clientLabel,
+      primeWithBuffer: true,
+    });
+    if (!audioStream && session.playbackSource) {
+      this.engine.start(zoneId, session.playbackSource, ['mp3', 'pcm'] as any);
+      audioStream = this.engine.createStream(zoneId, outputProfile, {
+        label: clientLabel,
+        primeWithBuffer: true,
+      });
+    }
+    if (!audioStream) {
+      throw new Error('sync stream unavailable');
+    }
+
+    const entry: SyncStreamEntry = {
+      id: syncId,
+      zoneId,
+      outputProfile,
+      outputSettings,
+      session,
+      expectedCount,
+      clients: new Map(),
+      stream: audioStream,
+      started: false,
+      timeoutId: setTimeout(() => this.startSyncEntry(entry), 10000),
+    };
+    audioStream.on('error', (error) => {
+      this.log.warn('sync stream error', {
+        syncId,
+        zoneId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      this.cleanupSyncEntry(entry);
+    });
+    audioStream.on('end', () => this.cleanupSyncEntry(entry));
+    audioStream.on('close', () => this.cleanupSyncEntry(entry));
+
+    this.syncStreams.set(syncId, entry);
+    return entry;
+  }
+
+  private startSyncEntry(entry: SyncStreamEntry): void {
+    if (entry.started) return;
+    entry.started = true;
+    clearTimeout(entry.timeoutId);
+    const stream = entry.stream;
+
+    for (const client of entry.clients.values()) {
+      if (client.icyEnabled) {
+        this.pipeWithIcyMetadata(
+          client.req,
+          client.res,
+          client.passThrough,
+          entry.session,
+          client.icyInterval,
+          client.icyName,
+        );
+      } else {
+        client.passThrough.pipe(client.res);
+      }
+      stream.pipe(client.passThrough, { end: true });
+    }
+  }
+
+  private removeSyncClient(syncId: string, clientId: string): void {
+    const entry = this.syncStreams.get(syncId);
+    if (!entry) return;
+    entry.clients.delete(clientId);
+    if (entry.clients.size === 0) {
+      this.cleanupSyncEntry(entry);
+    }
+  }
+
+  private cleanupSyncEntry(entry: SyncStreamEntry): void {
+    clearTimeout(entry.timeoutId);
+    if (this.syncStreams.get(entry.id) === entry) {
+      this.syncStreams.delete(entry.id);
+    }
+    entry.clients.forEach((client) => {
+      if (!client.res.writableEnded) {
+        client.res.end();
+      }
+    });
+    entry.clients.clear();
+    if (typeof (entry.stream as any).destroy === 'function') {
+      (entry.stream as any).destroy();
+    }
+  }
 }
+
+type SyncClient = {
+  req: IncomingMessage;
+  res: ServerResponse;
+  passThrough: PassThrough;
+  icyEnabled: boolean;
+  icyInterval?: number;
+  icyName?: string;
+};
+
+type SyncStreamEntry = {
+  id: string;
+  zoneId: number;
+  outputProfile: 'mp3';
+  outputSettings: AudioOutputSettings;
+  session: PlaybackSession;
+  expectedCount: number;
+  clients: Map<string, SyncClient>;
+  stream: NodeJS.ReadableStream;
+  started: boolean;
+  timeoutId: NodeJS.Timeout;
+};

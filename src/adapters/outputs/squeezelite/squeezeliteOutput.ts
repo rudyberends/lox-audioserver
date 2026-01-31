@@ -72,14 +72,22 @@ export class SqueezeliteOutput implements ZoneOutput {
       this.ports.outputHandlers.onOutputError(this.zoneId, 'squeezelite no player');
       return;
     }
-    const streamUrl = this.buildStreamUrl(session);
+    const groupInfo = this.ports.squeezeliteGroup.preparePlayback(this.zoneId);
+    const streamUrl = this.buildStreamUrl(session, groupInfo);
     if (!streamUrl) {
       this.ports.outputHandlers.onOutputError(this.zoneId, 'squeezelite no stream');
       return;
     }
     const meta = this.buildMetadata(session, streamUrl);
-    await player.playUrl(streamUrl, 'audio/mpeg', meta);
-    this.ports.squeezeliteGroup.requestSync(this.zoneId);
+    await player.playUrl(
+      streamUrl,
+      'audio/mpeg',
+      meta,
+      undefined,
+      0,
+      false,
+      !groupInfo.grouped,
+    );
   }
 
   public async pause(_session: PlaybackSession | null): Promise<void> {
@@ -92,7 +100,6 @@ export class SqueezeliteOutput implements ZoneOutput {
     const player = this.resolvePlayer();
     if (player) {
       await player.play();
-      this.ports.squeezeliteGroup.requestSync(this.zoneId);
       return;
     }
     if (session) {
@@ -166,6 +173,9 @@ export class SqueezeliteOutput implements ZoneOutput {
     if (event.type === EventType.PLAYER_UPDATED) {
       this.emitState(player);
     }
+    if (event.type === EventType.PLAYER_BUFFER_READY) {
+      this.ports.squeezeliteGroup.notifyBufferReady(this.zoneId);
+    }
     if (event.type === EventType.PLAYER_DECODER_ERROR) {
       this.ports.outputHandlers.onOutputError(this.zoneId, 'squeezelite decode');
     }
@@ -183,21 +193,30 @@ export class SqueezeliteOutput implements ZoneOutput {
     });
   }
 
-  private buildStreamUrl(session: PlaybackSession): string | null {
+  private buildStreamUrl(
+    session: PlaybackSession,
+    groupInfo?: { grouped: boolean; leaderZoneId: number; expectedCount: number },
+  ): string | null {
     const sys = this.ports.config.getSystemConfig();
     const baseUrl = buildBaseUrl({
       host: sys.audioserver.ip?.trim(),
       fallbackHost: '127.0.0.1',
     });
+    const leaderZoneId = groupInfo?.grouped ? groupInfo.leaderZoneId : this.zoneId;
     const url = resolveStreamUrl({
       baseUrl,
-      zoneId: this.zoneId,
-      streamPath: session.stream?.url,
+      zoneId: leaderZoneId,
+      streamPath: groupInfo?.grouped ? undefined : session.stream?.url,
       defaultExt: 'mp3',
       prime: '0',
       primeMode: 'ensure',
     });
-    return ensureQueryParam(url, 'icy', '1');
+    let result = ensureQueryParam(url, 'icy', '1');
+    if (groupInfo?.grouped && groupInfo.expectedCount > 1) {
+      result = ensureQueryParam(result, 'sync', String(groupInfo.leaderZoneId));
+      result = ensureQueryParam(result, 'expect', String(groupInfo.expectedCount));
+    }
+    return result;
   }
 
   private buildMetadata(session: PlaybackSession, streamUrl: string): Record<string, string | number> {
