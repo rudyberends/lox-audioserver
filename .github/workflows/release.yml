@@ -30,6 +30,11 @@ jobs:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: package-lock.json
+      - name: Pin npm
+        run: |
+          corepack enable
+          corepack prepare npm@11.8.0 --activate
+          npm -v
 
       - name: Install dependencies
         run: npm ci
@@ -100,6 +105,11 @@ jobs:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: package-lock.json
+      - name: Pin npm
+        run: |
+          corepack enable
+          corepack prepare npm@11.8.0 --activate
+          npm -v
 
       - name: Install dependencies
         run: npm ci
