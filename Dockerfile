@@ -1,5 +1,5 @@
 # Stage 1: Install dependencies and build the project
-FROM node:20-bookworm-slim AS builder
+FROM node:24-bookworm-slim AS builder
 WORKDIR /app
 COPY package*.json ./
 
@@ -22,7 +22,7 @@ RUN npm run build
 RUN npm prune --omit=dev
 
 # Stage 2: Runtime image with mount tools
-FROM node:20-bookworm-slim AS runtime
+FROM node:24-bookworm-slim AS runtime
 ARG BUILD_VERSION
 ARG BUILD_TIMESTAMP
 ENV APP_VERSION=${BUILD_VERSION}
