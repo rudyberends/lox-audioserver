@@ -7,13 +7,13 @@ type SnapcastAdvertiseOptions = {
   name: string;
   host?: string;
   streamPort: number;
-  jsonrpcPort: number;
+  httpPort: number;
 };
 
 export class SnapcastMdnsAdvertiser {
   private readonly log = createLogger('Http', 'SnapcastMdns');
   private streamRegistration: MdnsRegistration | null = null;
-  private rpcRegistration: MdnsRegistration | null = null;
+  private httpRegistration: MdnsRegistration | null = null;
 
   constructor(private readonly mdns: MdnsPort) {}
 
@@ -27,40 +27,47 @@ export class SnapcastMdnsAdvertiser {
       port: options.streamPort,
       host,
     });
-    this.rpcRegistration = this.mdns.publish({
+    this.httpRegistration = this.mdns.publish({
       name: options.name,
-      type: 'snapcast-jsonrpc',
+      type: 'snapcast-http',
       protocol: 'tcp',
-      port: options.jsonrpcPort,
+      port: options.httpPort,
       host,
     });
     this.log.info('Snapcast services advertised via mDNS', {
       name: options.name,
       host,
       streamPort: options.streamPort,
-      jsonrpcPort: options.jsonrpcPort,
+      httpPort: options.httpPort,
     });
   }
 
   public stop(): void {
     this.streamRegistration?.stop();
-    this.rpcRegistration?.stop();
+    this.httpRegistration?.stop();
     this.streamRegistration = null;
-    this.rpcRegistration = null;
+    this.httpRegistration = null;
   }
 
   private normalizeHost(host?: string): string | undefined {
     const trimmed = host?.trim() ?? '';
     if (trimmed) {
       if (net.isIP(trimmed)) {
-        return trimmed;
+        const hostname = os.hostname();
+        if (!hostname) {
+          return undefined;
+        }
+        const normalized = hostname.endsWith('.') ? hostname.slice(0, -1) : hostname;
+        return normalized.includes('.') ? normalized : `${normalized}.local`;
       }
-      return trimmed.includes('.') ? trimmed : `${trimmed}.local`;
+      const normalized = trimmed.endsWith('.') ? trimmed.slice(0, -1) : trimmed;
+      return normalized.includes('.') ? normalized : `${normalized}.local`;
     }
     const hostname = os.hostname();
     if (!hostname) {
       return undefined;
     }
-    return hostname.includes('.') ? hostname : `${hostname}.local`;
+    const normalized = hostname.endsWith('.') ? hostname.slice(0, -1) : hostname;
+    return normalized.includes('.') ? normalized : `${normalized}.local`;
   }
 }

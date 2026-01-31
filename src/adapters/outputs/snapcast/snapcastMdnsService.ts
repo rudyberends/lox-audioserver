@@ -39,7 +39,7 @@ export class SnapcastMdnsService implements MdnsLifecycleService {
       name: systemName,
       host: resolveMdnsHost(this.config.host, systemIp),
       streamPort,
-      jsonrpcPort: this.config.port,
+      httpPort: this.config.port,
     });
     this.started = true;
   }
