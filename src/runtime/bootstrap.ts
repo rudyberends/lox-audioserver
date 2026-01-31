@@ -34,6 +34,7 @@ import { SendspinClientConnector } from '@/adapters/outputs/sendspin/sendspinCli
 import { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import { AudioManager } from '@/application/playback/audioManager';
 import { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
+import { LmsCliServer } from '@/adapters/outputs/squeezelite/lmsCliServer';
 import { NetworkService } from '@/adapters/network';
 import { MdnsService } from '@/adapters/discovery';
 import { LoxAudioMdnsService } from '@/adapters/discovery/loxAudioMdnsService';
@@ -158,6 +159,7 @@ export function createRuntime(): Runtime {
   const squeezeliteGroupController = createSqueezeliteGroupController();
   const snapcastCore = new SnapcastCore(audioManager);
   const squeezeliteCore = new SqueezeliteCore(configPort);
+  const squeezeliteCli = new LmsCliServer(squeezeliteCore, configPort);
   const contentManager = createContentManager({
     notifier: ports.notifier,
     configPort,
@@ -300,6 +302,7 @@ export function createRuntime(): Runtime {
     lineInMetadataService.start();
     sendspinLineInService.start();
     await squeezeliteCore.start();
+    await squeezeliteCli.start();
 
     httpService = new HttpService(config.http, {
       onReinitialize: handleReinitialize,
@@ -318,6 +321,7 @@ export function createRuntime(): Runtime {
       spotifyInputService,
       snapcastCore,
       squeezeliteCore,
+      squeezeliteCli,
       recentsManager,
       favoritesManager,
       groupManager,
@@ -380,6 +384,7 @@ export function createRuntime(): Runtime {
     services.push({ name: 'linein-metadata', stop: async () => lineInMetadataService.stop() });
     services.push({ name: 'sendspin-linein', stop: async () => sendspinLineInService.stop() });
     services.push({ name: 'squeezelite', stop: async () => squeezeliteCore.stop() });
+    services.push({ name: 'squeezelite-cli', stop: async () => squeezeliteCli.stop() });
 
     if (loxoneService) {
       services.push({ name: 'loxone', stop: () => loxoneService!.stop() });

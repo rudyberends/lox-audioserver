@@ -20,8 +20,20 @@ export class SqueezeliteCore {
     const sys = this.configPort.getSystemConfig();
     const ipAddress = sys?.audioserver?.ip?.trim() || undefined;
     const name = sys?.audioserver?.name?.trim() || 'Loxone Audio Server';
+    const controlPort = normalizePort(sys?.audioserver?.slimprotoPort);
+    const cliPort = normalizePort(sys?.audioserver?.slimprotoCliPort);
+    const cliPortJson = normalizePort(sys?.audioserver?.slimprotoJsonPort);
     this.server.options.ipAddress = ipAddress;
     this.server.options.name = name;
+    if (controlPort) {
+      this.server.options.controlPort = controlPort;
+    }
+    if (cliPort) {
+      this.server.options.cliPort = cliPort;
+    }
+    if (cliPortJson) {
+      this.server.options.cliPortJson = cliPortJson;
+    }
     await this.server.start();
     this.started = true;
     this.bindLogging();
@@ -104,4 +116,12 @@ export class SqueezeliteCore {
       });
     });
   }
+}
+
+function normalizePort(value?: number | string | null): number | null {
+  if (value === null || value === undefined) return null;
+  const parsed =
+    typeof value === 'number' ? value : typeof value === 'string' ? Number.parseInt(value, 10) : NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 65535) return null;
+  return Math.trunc(parsed);
 }

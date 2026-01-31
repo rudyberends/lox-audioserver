@@ -25,10 +25,11 @@ export class ConfigRepository {
     if (!loaded) {
       await this.storage.writeJson(CONFIG_PATH, fallback);
     }
+    const systemMigrated = normalizeSystem(this.config);
     normalizeInputs(this.config);
     normalizeGroups(this.config);
     const outputMigrated = normalizeZones(this.config);
-    if (outputMigrated) {
+    if (systemMigrated || outputMigrated) {
       await this.storage.writeJson(CONFIG_PATH, this.config);
     }
     return this.config;
@@ -45,6 +46,7 @@ export class ConfigRepository {
     if (!this.config) {
       throw new Error('configuration not loaded');
     }
+    normalizeSystem(this.config);
     normalizeInputs(this.config);
     normalizeGroups(this.config);
     normalizeZones(this.config);
@@ -70,6 +72,7 @@ export class ConfigRepository {
     }
 
     await mutator(this.config!);
+    normalizeSystem(this.config!);
     normalizeInputs(this.config!);
     normalizeGroups(this.config!);
     normalizeZones(this.config!);
@@ -83,6 +86,7 @@ export class ConfigRepository {
     return this.patch(async (cfg) => {
       const before = serializeConfig(cfg);
       await mutator(cfg);
+      normalizeSystem(cfg);
       normalizeInputs(cfg);
       normalizeGroups(cfg);
       normalizeZones(cfg);
@@ -115,6 +119,9 @@ function defaultConfig(): AudioServerConfig {
         macId: defaultMacId(),
         paired: false,
         extensions: [],
+        slimprotoPort: 3483,
+        slimprotoCliPort: 9090,
+        slimprotoJsonPort: 9000,
       },
       logging: {
         consoleLevel: 'info',
@@ -218,6 +225,31 @@ function normalizeZones(config: AudioServerConfig): boolean {
     }
   });
   return outputMigrated;
+}
+
+function normalizeSystem(config: AudioServerConfig): boolean {
+  let changed = false;
+  if (!config.system) {
+    config.system = defaultConfig().system;
+    return true;
+  }
+  if (!config.system.audioserver) {
+    config.system.audioserver = defaultConfig().system.audioserver;
+    return true;
+  }
+  if (typeof config.system.audioserver.slimprotoPort !== 'number') {
+    config.system.audioserver.slimprotoPort = 3483;
+    changed = true;
+  }
+  if (typeof config.system.audioserver.slimprotoCliPort !== 'number') {
+    config.system.audioserver.slimprotoCliPort = 9090;
+    changed = true;
+  }
+  if (typeof config.system.audioserver.slimprotoJsonPort !== 'number') {
+    config.system.audioserver.slimprotoJsonPort = 9000;
+    changed = true;
+  }
+  return changed;
 }
 
 function normalizeInputs(config: AudioServerConfig): void {

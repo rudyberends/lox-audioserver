@@ -32,6 +32,7 @@ import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers
 import type { CustomRadioStore } from '@/adapters/content/providers/customRadioStore';
 import type { AudioManager } from '@/application/playback/audioManager';
 import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
+import type { LmsCliServer } from '@/adapters/outputs/squeezelite/lmsCliServer';
 
 /**
  * Hosts the public HTTP gateway (admin UI, API stub, music streaming, Sendspin).
@@ -47,6 +48,7 @@ export class HttpService {
   private readonly lineInApi: LineInApiHandler;
   private readonly sendspin: SendspinGateway;
   private readonly snapcast: SnapcastGateway;
+  private readonly lmsCli: LmsCliServer;
   private server?: http.Server;
 
   constructor(
@@ -73,6 +75,7 @@ export class HttpService {
       groupManager: GroupManagerReadPort;
       contentManager: ContentManager;
       audioManager: AudioManager;
+      squeezeliteCli: LmsCliServer;
     },
   ) {
     this.adminApi = new AdminApiHandler({
@@ -102,6 +105,7 @@ export class HttpService {
     this.lineInApi = new LineInApiHandler(options.configPort, options.lineInMetadataService);
     this.sendspin = new SendspinGateway();
     this.snapcast = new SnapcastGateway(options.snapcastCore);
+    this.lmsCli = options.squeezeliteCli;
   }
 
   public async start(): Promise<void> {
@@ -175,6 +179,11 @@ export class HttpService {
     if (pathname === '/sendspin') {
       res.writeHead(426, { 'Content-Type': 'text/plain' });
       res.end('Upgrade Required');
+      return;
+    }
+
+    if (pathname === '/jsonrpc.js') {
+      await this.lmsCli.handleJsonRpcRequest(req, res);
       return;
     }
 

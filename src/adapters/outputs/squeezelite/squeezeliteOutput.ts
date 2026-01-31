@@ -1,8 +1,8 @@
 import { createLogger } from '@/shared/logging/logger';
 import { resolveSessionCover } from '@/shared/coverArt';
-import { buildBaseUrl, resolveAbsoluteUrl, resolveStreamUrl } from '@/shared/streamUrl';
+import { buildBaseUrl, resolveAbsoluteUrl, resolveStreamUrl, ensureQueryParam } from '@/shared/streamUrl';
 import type { PlaybackSession } from '@/application/playback/audioManager';
-import type { OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
+import type { HttpPreferences, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import type { SlimClient, SlimEvent } from '@lox-audioserver/node-slimproto';
 import { EventType, PlayerState } from '@lox-audioserver/node-slimproto';
@@ -117,6 +117,10 @@ export class SqueezeliteOutput implements ZoneOutput {
     return { profile: 'mp3', sampleRate: 44100, channels: 2, prebufferBytes: 64 * 1024 };
   }
 
+  public getHttpPreferences(): HttpPreferences {
+    return { icyEnabled: true };
+  }
+
   public dispose(): void {
     this.unsubscribe();
     this.ports.squeezeliteGroup.unregister(this.zoneId);
@@ -185,7 +189,7 @@ export class SqueezeliteOutput implements ZoneOutput {
       host: sys.audioserver.ip?.trim(),
       fallbackHost: '127.0.0.1',
     });
-    return resolveStreamUrl({
+    const url = resolveStreamUrl({
       baseUrl,
       zoneId: this.zoneId,
       streamPath: session.stream?.url,
@@ -193,6 +197,7 @@ export class SqueezeliteOutput implements ZoneOutput {
       prime: '0',
       primeMode: 'ensure',
     });
+    return ensureQueryParam(url, 'icy', '1');
   }
 
   private buildMetadata(session: PlaybackSession, streamUrl: string): Record<string, string | number> {

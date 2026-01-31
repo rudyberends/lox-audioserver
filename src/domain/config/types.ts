@@ -27,6 +27,12 @@ export interface AudioserverConfig {
   macId: string;
   paired: boolean;
   extensions: AudioserverExtensionConfig[];
+  /** Optional SlimProto control port (default 3483). */
+  slimprotoPort?: number;
+  /** Optional LMS-compatible telnet CLI port (default 9090). */
+  slimprotoCliPort?: number;
+  /** Optional LMS-compatible JSON-RPC port (default 9000). */
+  slimprotoJsonPort?: number;
 }
 
 export interface AudioserverExtensionConfig {
