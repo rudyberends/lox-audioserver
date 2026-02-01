@@ -35,6 +35,7 @@ export type ZoneManagerFacade = Pick<
   | 'startAlert'
   | 'stopAlert'
   | 'syncGroupMembersToLeader'
+  | 'refreshContentProviders'
   | 'setNotifier'
 >;
 

@@ -323,6 +323,14 @@ export class ZoneManager {
     this.inputsConfigured = true;
   }
 
+  public refreshContentProviders(): void {
+    const contentPort = this.contentPort;
+    contentPort.configureAppleMusic();
+    contentPort.configureDeezer();
+    contentPort.configureTidal();
+    this.playbackCoordinator.refreshMusicAssistantProviderId();
+  }
+
   public async initialize(): Promise<void> {
     if (!this.initialized) {
       await this.configPort.load();
