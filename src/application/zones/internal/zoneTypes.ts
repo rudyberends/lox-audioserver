@@ -70,6 +70,8 @@ export interface ZoneContext {
    */
   lastPositionUpdateAt: number;
   lastPositionValue: number;
+  lastPlaybackErrorAt: number;
+  lastPlaybackErrorReason?: string;
   activeOutputTypes: Set<string>;
   /**
    * Single-output slot for the zone; only this output should receive play/pause/stop/metadata/volume.

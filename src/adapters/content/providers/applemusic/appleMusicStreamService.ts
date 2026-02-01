@@ -5,7 +5,7 @@ import type { SpotifyBridgeConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import Widevine, { LicenseType as WvLicenseType } from 'widevine';
-import { loadWidevineArtifacts } from './widevine';
+import { loadWidevineArtifacts, WidevineArtifactsError } from './widevine';
 import protobuf from 'protobufjs';
 import { gunzipSync } from 'zlib';
 import { lookup } from 'node:dns/promises';
@@ -23,6 +23,7 @@ const BEARER_TOKEN_TTL_MS = 30 * 60 * 1000;
 type AppleMusicPlaybackResult = {
   playbackSource: PlaybackSource | null;
   outputOnly?: boolean;
+  errorReason?: string;
 };
 
 type AppleMusicTrackRequest = {
@@ -63,13 +64,19 @@ type AppleMusicDrmStreamInfo = {
 type AppleMusicDrmKeyCacheEntry = {
   key?: string;
   expiresAt: number;
-  inFlight?: Promise<string | null>;
+  inFlight?: Promise<DrmKeyResult>;
 };
 
 type OutputErrorHandler = (zoneId: number, reason?: string) => void;
 
 const WIDEVINE_KEYFORMAT_UUID = 'urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed';
 const DRM_KEY_TTL_MS = 60 * 60 * 1000;
+const WIDEVINE_MISSING_REASON = 'widevine missing';
+
+type DrmKeyResult = {
+  key: string | null;
+  errorReason?: string;
+};
 
 const WIDEVINE_PSSH_PROTO = `
 syntax = "proto2";
@@ -222,6 +229,16 @@ export class AppleMusicStreamService {
       webPlayback,
     );
     if (drmHandled?.playbackSource) return drmHandled;
+
+    if (drmHandled?.errorReason) {
+      this.log.warn('apple music stream blocked; drm not available', {
+        zoneId,
+        trackId: request.trackId,
+        reason: drmHandled.errorReason,
+      });
+      this.reportPlaybackError(zoneId, drmHandled.errorReason);
+      return { playbackSource: null };
+    }
 
     this.log.warn('apple music stream blocked; drm not available', { zoneId, trackId: request.trackId });
     this.reportPlaybackError(zoneId, 'apple music drm unavailable');
@@ -415,7 +432,7 @@ export class AppleMusicStreamService {
       this.log.warn('Apple Music DRM: missing license URL in playback metadata', { trackId, isLibrary });
       return null;
     }
-    const drmKey = await this.fetchDrmKey(
+    const drmKeyResult = await this.fetchDrmKey(
       headers,
       licenseUrl,
       keyUri,
@@ -423,10 +440,16 @@ export class AppleMusicStreamService {
       trackId,
       isLibrary,
     );
-    if (!drmKey) return null;
+    if (!drmKeyResult.key) {
+      return { playbackSource: null, errorReason: drmKeyResult.errorReason };
+    }
 
-    this.log.info('DRM key ready, streaming with decryption', { keyPreview: `${drmKey.slice(0, 16)}...` });
-    return { playbackSource: await this.buildStreamPlaybackSource(playbackUrl, headers, bridge, drmKey) };
+    this.log.info('DRM key ready, streaming with decryption', {
+      keyPreview: `${drmKeyResult.key.slice(0, 16)}...`,
+    });
+    return {
+      playbackSource: await this.buildStreamPlaybackSource(playbackUrl, headers, bridge, drmKeyResult.key),
+    };
   }
 
   private extractKeyInfo(playlist: string): { uri: string; line: string; format?: string } | null {
@@ -453,7 +476,7 @@ export class AppleMusicStreamService {
     _keyFormat: string | undefined,
     trackId: string,
     isLibrary: boolean,
-  ): Promise<string | null> {
+  ): Promise<DrmKeyResult> {
     const cacheKey = this.buildDrmCacheKey(trackId, isLibrary);
     const now = Date.now();
     const cached = this.drmKeyCache.get(cacheKey);
@@ -463,15 +486,15 @@ export class AppleMusicStreamService {
         isLibrary,
         expiresInMs: cached.expiresAt - now,
       });
-      return cached.key;
+      return { key: cached.key };
     }
     if (cached?.expiresAt && cached.expiresAt <= now && !cached.inFlight) {
       this.drmKeyCache.delete(cacheKey);
     }
     if (cached?.inFlight) {
-      const key = await cached.inFlight;
-      if (key) {
-        return key;
+      const result = await cached.inFlight;
+      if (result.key || result.errorReason) {
+        return result;
       }
     }
     const inFlight = this.fetchDrmKeyUncached(headers, licenseUrl, keyUri, _keyFormat, trackId, isLibrary);
@@ -480,19 +503,19 @@ export class AppleMusicStreamService {
       expiresAt: cached?.expiresAt ?? 0,
       inFlight,
     });
-    const keyHex = await inFlight;
+    const keyResult = await inFlight;
     const entry = this.drmKeyCache.get(cacheKey);
     if (entry?.inFlight === inFlight) {
-      if (keyHex) {
+      if (keyResult.key) {
         this.drmKeyCache.set(cacheKey, {
-          key: keyHex,
+          key: keyResult.key,
           expiresAt: Date.now() + DRM_KEY_TTL_MS,
         });
       } else {
         this.drmKeyCache.delete(cacheKey);
       }
     }
-    return keyHex;
+    return keyResult;
   }
 
   private async fetchDrmKeyUncached(
@@ -502,14 +525,14 @@ export class AppleMusicStreamService {
     _keyFormat: string | undefined,
     trackId: string,
     isLibrary: boolean,
-  ): Promise<string | null> {
+  ): Promise<DrmKeyResult> {
     try {
       this.log.info('Apple Music DRM: starting key extraction (new format)', { trackId, isLibrary, keyUri });
 
       const pssh = this.extractPsshFromKeyUri(keyUri);
       if (!pssh) {
         this.log.warn('Apple Music DRM: unsupported key URI; missing PSSH data', { keyUri });
-        return null;
+        return { key: null };
       }
       const expectedKid = this.extractKidFromKeyUri(keyUri, pssh);
       const expectedKidHex = expectedKid ? expectedKid.toString('hex') : null;
@@ -519,10 +542,17 @@ export class AppleMusicStreamService {
       try {
         artifacts = await loadWidevineArtifacts();
       } catch (err) {
+        if (err instanceof WidevineArtifactsError) {
+          this.log.error('Apple Music DRM: Widevine artifacts missing', {
+            error: err.message,
+            details: err.details,
+          });
+          return { key: null, errorReason: WIDEVINE_MISSING_REASON };
+        }
         this.log.error('Apple Music DRM: Widevine artifacts unavailable', {
           error: err instanceof Error ? err.message : String(err),
         });
-        return null;
+        return { key: null };
       }
 
       try {
@@ -532,7 +562,7 @@ export class AppleMusicStreamService {
           error: err instanceof Error ? err.message : String(err),
           usingWvd: false,
         });
-        return null;
+        return { key: null };
       }
 
       let session: ReturnType<typeof device.createSession>;
@@ -542,7 +572,7 @@ export class AppleMusicStreamService {
         this.log.error('Apple Music DRM: Widevine session creation failed', {
           error: err instanceof Error ? err.message : String(err),
         });
-        return null;
+        return { key: null };
       }
 
       let challenge: Buffer;
@@ -552,7 +582,7 @@ export class AppleMusicStreamService {
         this.log.error('Apple Music DRM: Widevine challenge generation failed', {
           error: err instanceof Error ? err.message : String(err),
         });
-        return null;
+        return { key: null };
       }
 
       const payload = {
@@ -580,7 +610,7 @@ export class AppleMusicStreamService {
           context: { status: licenseRes.status },
         });
         this.log.warn('License request failed', { status: licenseRes.status, body: text.slice(0, 300) });
-        return null;
+        return { key: null };
       }
 
       const licenseJson = (await licenseRes.json()) as { license?: string; failureType?: string; message?: string };
@@ -589,12 +619,12 @@ export class AppleMusicStreamService {
           failureType: licenseJson.failureType,
           message: licenseJson.message,
         });
-        return null;
+        return { key: null };
       }
       const licenseBase64 = licenseJson.license;
       if (!licenseBase64) {
         this.log.warn('No license in response');
-        return null;
+        return { key: null };
       }
 
       let license = Buffer.from(this.normalizeBase64(licenseBase64), 'base64');
@@ -606,7 +636,7 @@ export class AppleMusicStreamService {
           this.log.warn('Failed to gunzip license response', {
             message: err instanceof Error ? err.message : String(err),
           });
-          return null;
+          return { key: null };
         }
       }
       this.log.debug('License response header', {
@@ -622,12 +652,12 @@ export class AppleMusicStreamService {
           error: err instanceof Error ? err.message : String(err),
           licenseHeaderHex: license.subarray(0, 12).toString('hex'),
         });
-        return null;
+        return { key: null };
       }
 
       if (!keys.length) {
         this.log.warn('No keys in license');
-        return null;
+        return { key: null };
       }
 
       this.log.debug('DRM license keys parsed', {
@@ -644,13 +674,13 @@ export class AppleMusicStreamService {
           expectedKid: expectedKidHex ?? undefined,
           availableKids: keys.map((entry: any) => entry?.kid).filter(Boolean),
         });
-        return null;
+        return { key: null };
       }
       this.log.info('DRM key extracted successfully', { keyPreview: `${keyHex.slice(0, 16)}...` });
-      return keyHex;
+      return { key: keyHex };
     } catch (err) {
       this.log.error('DRM key extraction failed', { error: err instanceof Error ? err.message : String(err) });
-      return null;
+      return { key: null };
     }
   }
 
