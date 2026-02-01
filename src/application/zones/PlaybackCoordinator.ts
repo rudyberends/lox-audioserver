@@ -603,13 +603,18 @@ export class PlaybackCoordinator {
       startAtSec: options?.startAtSec,
     });
     if (!session) {
+      const lastError = ctx.lastPlaybackErrorReason?.trim().toLowerCase();
+      const hasRecentWidevineMissing =
+        this.hasRecentPlaybackError(ctx) && lastError === 'widevine missing';
       if (plan.playExternalLabel === 'musicassistant') {
         this.handlePlaybackError(ctx.id, 'music assistant stream unavailable', 'output');
         this.log.warn('music assistant stream not ready; skipping playback', {
           zoneId: ctx.id,
         });
       } else if (plan.provider === 'applemusic') {
-        this.handlePlaybackError(ctx.id, 'apple music stream unavailable', 'output');
+        if (!hasRecentWidevineMissing) {
+          this.handlePlaybackError(ctx.id, 'apple music stream unavailable', 'output');
+        }
         this.log.warn('apple music stream not ready; skipping playback', { zoneId: ctx.id });
       } else if (plan.provider === 'deezer') {
         this.handlePlaybackError(ctx.id, 'deezer stream unavailable', 'output');
@@ -775,6 +780,10 @@ export class PlaybackCoordinator {
       void this.handleEndOfTrack(ctx);
       return;
     }
+    if (ctx) {
+      ctx.lastPlaybackErrorAt = Date.now();
+      ctx.lastPlaybackErrorReason = typeof reason === 'string' ? reason.trim() : undefined;
+    }
     handlePlaybackErrorTransition({
       coordinator: {
         getZone: (id) => this.zoneRepo.get(id),
@@ -786,6 +795,12 @@ export class PlaybackCoordinator {
       source,
       extraLog,
     });
+  }
+
+  private hasRecentPlaybackError(ctx: ZoneContext, windowMs = 2000): boolean {
+    if (!ctx.lastPlaybackErrorAt) return false;
+    if (Date.now() - ctx.lastPlaybackErrorAt > windowMs) return false;
+    return Boolean(ctx.lastPlaybackErrorReason && ctx.lastPlaybackErrorReason.trim());
   }
 
   public setupPlayerListeners(

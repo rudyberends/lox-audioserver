@@ -634,6 +634,8 @@ export class ZoneManager {
       lastZoneBroadcastAt: 0,
       lastPositionUpdateAt: 0,
       lastPositionValue: 0,
+      lastPlaybackErrorAt: 0,
+      lastPlaybackErrorReason: undefined,
       lastMetadataDispatchAt: 0,
       activeOutputTypes: new Set(),
       activeOutput: null,
