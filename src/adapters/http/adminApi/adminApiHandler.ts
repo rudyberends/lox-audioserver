@@ -1971,6 +1971,9 @@ export class AdminApiHandler {
         }
       });
       this.contentManager.refreshFromConfig();
+      if (provider === 'applemusic' || provider === 'deezer' || provider === 'tidal') {
+        this.zoneManager.refreshContentProviders();
+      }
       this.musicAssistantStreamService.configureFromConfig();
       const cfg = this.configPort.getConfig();
       await this.musicAssistantStreamService.registerZones(cfg.zones ?? []);
@@ -2004,6 +2007,10 @@ export class AdminApiHandler {
         );
       });
       this.contentManager.refreshFromConfig();
+      const provider = typeof existing?.provider === 'string' ? existing.provider.trim().toLowerCase() : '';
+      if (provider === 'applemusic' || provider === 'deezer' || provider === 'tidal') {
+        this.zoneManager.refreshContentProviders();
+      }
       this.musicAssistantStreamService.configureFromConfig();
       const cfg = this.configPort.getConfig();
       await this.musicAssistantStreamService.registerZones(cfg.zones ?? []);
