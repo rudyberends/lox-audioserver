@@ -105,6 +105,9 @@ export function detectServiceFromAudiopath(
   if (lower.includes('tidal')) {
     return 'tidal';
   }
+  if (lower.includes('radioparadise')) {
+    return 'radio';
+  }
   if (lower.startsWith('tunein:') || lower.startsWith('radio:') || /(tunein|radio)/.test(lower)) {
     return 'radio';
   }

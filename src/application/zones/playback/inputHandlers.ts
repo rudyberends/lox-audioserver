@@ -189,7 +189,7 @@ export function updateInputMetadata(args: {
 export function updateRadioMetadata(args: {
   coordinator: InputCoordinator;
   zoneId: number;
-  metadata: { title: string; artist: string };
+  metadata: { title: string; artist: string; coverurl?: string; duration?: number; controllable?: boolean };
 }): void {
   const { coordinator, zoneId, metadata } = args;
   const ctx = coordinator.getZone(zoneId);
@@ -204,6 +204,7 @@ export function updateRadioMetadata(args: {
     radioStationFallback: typeof ctx.metadata.radioStationFallback === 'string'
       ? ctx.metadata.radioStationFallback
       : undefined,
+    radioControllable: ctx.metadata.radioControllable === true,
   });
   if (!result) {
     return;
@@ -212,6 +213,9 @@ export function updateRadioMetadata(args: {
     for (const action of result.actions) {
       if (action.type === 'setRadioStationFallback') {
         ctx.metadata.radioStationFallback = action.value;
+      }
+      if (action.type === 'setRadioControllable') {
+        ctx.metadata.radioControllable = action.value;
       }
     }
   }

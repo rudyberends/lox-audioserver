@@ -110,6 +110,9 @@ export function resolvePlayRequest(args: {
       audioHelpers.deriveRadioStationLabel(uri) ??
       '';
   }
+  if (isRadio && stationValue && stationValue.toLowerCase().startsWith('radioparadise:')) {
+    stationValue = audioHelpers.deriveRadioStationLabel(stationValue) ?? stationValue;
+  }
 
   const queueSourcePath = isAppleMusic && parentContext?.parent ? parentContext.parent : uri;
   const targetForQueueBuild = normalizeSpotifyAudiopath(resolvedTarget || '');

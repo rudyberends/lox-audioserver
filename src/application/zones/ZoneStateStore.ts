@@ -89,7 +89,10 @@ export class ZoneStateStore {
     }
 
     const mergedForType = applyZonePatch(ctx.state, patch);
-    const isRadioState = this.deps.isRadioAudiopath(mergedForType.audiopath, mergedForType.audiotype);
+    const radioControllable = ctx.metadata.radioControllable === true;
+    const isRadioState =
+      this.deps.isRadioAudiopath(mergedForType.audiopath, mergedForType.audiotype) &&
+      !radioControllable;
     const isLineInState = this.deps.isLineInAudiopath(mergedForType.audiopath);
     const desiredType = resolveLoxoneType(mergedForType.audiopath, mergedForType.audiotype);
     if (desiredType !== mergedForType.type) {

@@ -9,7 +9,8 @@ export type InputStartDecision = {
 };
 
 export type ProviderAction =
-  | { type: 'setRadioStationFallback'; value: string };
+  | { type: 'setRadioStationFallback'; value: string }
+  | { type: 'setRadioControllable'; value: boolean };
 
 export type ProviderPatchResult = {
   patch: Partial<LoxoneZoneState>;

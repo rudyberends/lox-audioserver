@@ -1,0 +1,670 @@
+import { createLogger } from '@/shared/logging/logger';
+import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
+import { decodeAudiopath } from '@/domain/loxone/audiopath';
+
+const API_PLAY_URL = 'https://api.radioparadise.com/api/play';
+const COVER_BASE_URL = 'https://img.radioparadise.com/';
+const DEFAULT_BITRATE = 4; // FLAC
+const NOW_PLAYING_INTERVAL_MS = 10000;
+
+const RADIO_PARADISE_LABELS = new Map<string, string>([
+  ['0', 'Radio Paradise - Main Mix'],
+  ['1', 'Radio Paradise - Mellow Mix'],
+  ['2', 'Radio Paradise - Rock Mix'],
+  ['3', 'Radio Paradise - Global'],
+  ['4', 'Radio Paradise - Beyond'],
+  ['5', 'Radio Paradise - Serenity'],
+]);
+const RADIO_PARADISE_STREAMS = new Map<string, { streamUrl: string; nowPlayingUrl: string }>([
+  ['0', {
+    streamUrl: 'https://stream.radioparadise.com/flac',
+    nowPlayingUrl: 'https://api.radioparadise.com/api/now_playing',
+  }],
+  ['1', {
+    streamUrl: 'https://stream.radioparadise.com/mellow-flac',
+    nowPlayingUrl: 'https://api.radioparadise.com/api/now_playing?chan=1',
+  }],
+  ['2', {
+    streamUrl: 'https://stream.radioparadise.com/rock-flac',
+    nowPlayingUrl: 'https://api.radioparadise.com/api/now_playing?chan=2',
+  }],
+  ['3', {
+    streamUrl: 'https://stream.radioparadise.com/global-flac',
+    nowPlayingUrl: 'https://api.radioparadise.com/api/now_playing?chan=3',
+  }],
+  ['4', {
+    streamUrl: 'https://stream.radioparadise.com/beyond-flac',
+    nowPlayingUrl: 'https://api.radioparadise.com/api/now_playing?chan=4',
+  }],
+  ['5', {
+    streamUrl: 'https://stream.radioparadise.com/serenity',
+    nowPlayingUrl: 'https://api.radioparadise.com/api/now_playing?chan=5',
+  }],
+]);
+
+type RadioParadiseTrack = {
+  startSec: number;
+  durationSec: number;
+  artist: string;
+  title: string;
+  album: string;
+  year?: number;
+  coverurl?: string;
+  gaplessUrl?: string;
+};
+
+type RadioParadiseBlock = {
+  url: string;
+  lengthSec: number;
+  endEvent?: string;
+  eventId?: string;
+  cueSec?: number;
+  tracks: RadioParadiseTrack[];
+};
+
+type RadioParadiseSession = {
+  stationId: string;
+  current: RadioParadiseBlock;
+  next?: RadioParadiseBlock;
+  previous?: RadioParadiseBlock;
+  lastSignature?: string;
+  timer?: NodeJS.Timeout;
+  mode: 'block' | 'nowPlaying';
+  nowPlayingUrl?: string;
+  nowPlayingPending?: boolean;
+  lastNowPlayingAt?: number;
+  trackMode?: boolean;
+  currentTrackIndex?: number;
+};
+
+type ResolveResult = {
+  url: string;
+  startAtSec: number;
+  blockDurationSec: number;
+  track?: RadioParadiseTrack;
+  stationLabel: string;
+  isRadio: boolean;
+};
+
+export class RadioParadiseBlockService {
+  private readonly log = createLogger('Audio', 'RadioParadiseBlock');
+  private readonly sessions = new Map<number, RadioParadiseSession>();
+  private readonly pollIntervalMs = 5000;
+  private readonly timeoutMs = 8000;
+
+  constructor(
+    private readonly deps: {
+      getZone: (zoneId: number) => ZoneContext | undefined;
+      updateRadioMetadata: (
+        zoneId: number,
+        metadata: { title: string; artist: string; coverurl?: string; duration?: number; controllable?: boolean },
+      ) => void;
+    },
+  ) {}
+
+  public isRadioParadiseAudiopath(audiopath: string): boolean {
+    const raw = audiopath.trim();
+    if (!raw) return false;
+    if (/^radioparadise:(?:\/\/)?/i.test(raw)) {
+      return true;
+    }
+    const decoded = decodeAudiopath(raw) || raw;
+    return /^radioparadise:(?:\/\/)?/i.test(decoded);
+  }
+
+  public parseStationId(audiopath: string): string | null {
+    const raw = audiopath.trim();
+    if (!raw) return null;
+    const decoded = decodeAudiopath(raw) || raw;
+    const match = /^radioparadise:(?:\/\/)?(.+)$/.exec(decoded);
+    if (!match || !match[1]) return null;
+    const stationId = match[1].split(/[/?#]/)[0]?.trim();
+    return stationId ? stationId.toLowerCase() : null;
+  }
+
+  public stationLabel(stationId: string | null | undefined): string {
+    if (!stationId) return 'Radio Paradise';
+    return RADIO_PARADISE_LABELS.get(stationId) || 'Radio Paradise';
+  }
+
+  public async resolveStart(zoneId: number, stationId: string): Promise<ResolveResult | null> {
+    const block = await this.fetchBlock(stationId);
+    if (block) {
+      const cueSec =
+        typeof block.cueSec === 'number' && block.cueSec >= 0
+          ? block.cueSec
+          : block.tracks[0]?.startSec ?? 0;
+      const cueIndex = this.findTrackIndex(block.tracks, cueSec);
+      const cueTrack = block.tracks[cueIndex];
+      const useGapless = Boolean(cueTrack?.gaplessUrl);
+      const startAtSec = useGapless ? 0 : cueSec;
+      const durationSec =
+        useGapless && cueTrack?.durationSec ? cueTrack.durationSec : block.lengthSec;
+
+      const session: RadioParadiseSession = {
+        stationId,
+        current: block,
+        mode: 'block',
+        trackMode: useGapless,
+        currentTrackIndex: cueTrack ? cueIndex : undefined,
+      };
+      this.sessions.set(zoneId, session);
+      this.prefetchNext(zoneId, session).catch(() => undefined);
+      this.ensureTicker(zoneId);
+
+      const firstTrack = cueTrack ?? this.trackAtTime(block, cueSec) ?? undefined;
+      return {
+        url: useGapless && cueTrack?.gaplessUrl ? cueTrack.gaplessUrl : block.url,
+        startAtSec,
+        blockDurationSec: durationSec || block.lengthSec,
+        track: firstTrack,
+        stationLabel: this.stationLabel(stationId),
+        isRadio: false,
+      };
+    }
+
+    const fallback = this.resolveStream(stationId);
+    if (!fallback) {
+      return null;
+    }
+    const track = await this.fetchNowPlayingTrack(stationId);
+    const blockFallback: RadioParadiseBlock = {
+      url: this.appendSrc(fallback.streamUrl),
+      lengthSec: 0,
+      tracks: track ? [track] : [],
+    };
+    const session: RadioParadiseSession = {
+      stationId,
+      current: blockFallback,
+      mode: 'nowPlaying',
+      nowPlayingUrl: fallback.nowPlayingUrl,
+    };
+    this.sessions.set(zoneId, session);
+    this.ensureTicker(zoneId);
+    return {
+      url: blockFallback.url,
+      startAtSec: 0,
+      blockDurationSec: 0,
+      track: track ?? undefined,
+      stationLabel: this.stationLabel(stationId),
+      isRadio: true,
+    };
+  }
+
+  public async resolveSkip(
+    zoneId: number,
+    currentTimeSec: number,
+    delta: 1 | -1,
+  ): Promise<ResolveResult | null> {
+    const session = this.sessions.get(zoneId);
+    if (!session || session.mode !== 'block') return null;
+
+    let block = session.current;
+    if (session.trackMode && typeof session.currentTrackIndex === 'number') {
+      const nextIndex = session.currentTrackIndex + delta;
+      if (nextIndex >= 0 && nextIndex < block.tracks.length) {
+        session.currentTrackIndex = nextIndex;
+        const track = block.tracks[nextIndex];
+        const useGapless = Boolean(track?.gaplessUrl);
+        return {
+          url: useGapless && track?.gaplessUrl ? track.gaplessUrl : block.url,
+          startAtSec: useGapless ? 0 : track?.startSec ?? 0,
+          blockDurationSec: useGapless && track?.durationSec ? track.durationSec : block.lengthSec,
+          track,
+          stationLabel: this.stationLabel(session.stationId),
+          isRadio: false,
+        };
+      }
+      if (delta === 1 && block.eventId) {
+        const baseTrack = block.tracks[session.currentTrackIndex];
+        const elapsedBase = baseTrack?.startSec ?? 0;
+        const skipElapsed = Math.max(0, Math.floor(elapsedBase + currentTimeSec));
+        const skipBlock = await this.fetchBlock(session.stationId, block.eventId, skipElapsed);
+        if (skipBlock) {
+          const cueSec =
+            typeof skipBlock.cueSec === 'number' && skipBlock.cueSec >= 0
+              ? skipBlock.cueSec
+              : skipBlock.tracks[0]?.startSec ?? 0;
+          const cueIndex = this.findTrackIndex(skipBlock.tracks, cueSec);
+          const cueTrack = skipBlock.tracks[cueIndex];
+          const useGapless = Boolean(cueTrack?.gaplessUrl);
+          session.previous = block;
+          session.current = skipBlock;
+          session.next = undefined;
+          session.trackMode = useGapless;
+          session.currentTrackIndex = cueTrack ? cueIndex : undefined;
+          this.prefetchNext(zoneId, session).catch(() => undefined);
+          this.ensureTicker(zoneId);
+          return {
+            url: useGapless && cueTrack?.gaplessUrl ? cueTrack.gaplessUrl : skipBlock.url,
+            startAtSec: useGapless ? 0 : cueSec,
+            blockDurationSec:
+              useGapless && cueTrack?.durationSec ? cueTrack.durationSec : skipBlock.lengthSec,
+            track: cueTrack ?? this.trackAtTime(skipBlock, cueSec) ?? undefined,
+            stationLabel: this.stationLabel(session.stationId),
+            isRadio: false,
+          };
+        }
+      }
+    }
+    const currentIndex = this.findTrackIndex(block.tracks, currentTimeSec);
+    let nextIndex = currentIndex + delta;
+
+    if (nextIndex < 0) {
+      if (session.previous) {
+        session.next = block;
+        block = session.previous;
+        session.current = block;
+        session.previous = undefined;
+        nextIndex = block.tracks.length - 1;
+        if (session.trackMode) {
+          session.currentTrackIndex = nextIndex;
+        }
+      } else {
+        nextIndex = 0;
+      }
+    }
+
+    if (nextIndex >= block.tracks.length) {
+      const nextBlock = session.next ?? (await this.fetchBlock(session.stationId, block.endEvent));
+      if (!nextBlock) {
+        return null;
+      }
+      const useGapless = session.trackMode && Boolean(nextBlock.tracks[0]?.gaplessUrl);
+      session.previous = block;
+      session.current = nextBlock;
+      session.next = undefined;
+      block = nextBlock;
+      nextIndex = 0;
+      session.trackMode = useGapless;
+      session.currentTrackIndex = nextBlock.tracks.length ? 0 : undefined;
+      this.prefetchNext(zoneId, session).catch(() => undefined);
+    }
+
+    const track = block.tracks[nextIndex];
+    this.ensureTicker(zoneId);
+
+    return {
+      url: session.trackMode && track?.gaplessUrl ? track.gaplessUrl : block.url,
+      startAtSec: session.trackMode && track?.gaplessUrl ? 0 : track?.startSec ?? 0,
+      blockDurationSec:
+        session.trackMode && track?.gaplessUrl && track?.durationSec
+          ? track.durationSec
+          : block.lengthSec,
+      track,
+      stationLabel: this.stationLabel(session.stationId),
+      isRadio: false,
+    };
+  }
+
+  public async resolveNextBlock(zoneId: number): Promise<ResolveResult | null> {
+    const session = this.sessions.get(zoneId);
+    if (!session || session.mode !== 'block') return null;
+
+    const nextBlock = session.next ?? (await this.fetchBlock(session.stationId, session.current.endEvent));
+    if (!nextBlock) return null;
+
+    session.previous = session.current;
+    session.current = nextBlock;
+    session.next = undefined;
+    const useGapless = session.trackMode && Boolean(nextBlock.tracks[0]?.gaplessUrl);
+    session.trackMode = useGapless;
+    session.currentTrackIndex = nextBlock.tracks.length ? 0 : undefined;
+    this.prefetchNext(zoneId, session).catch(() => undefined);
+    this.ensureTicker(zoneId);
+
+    const startAtSec =
+      useGapless
+        ? 0
+        : typeof nextBlock.cueSec === 'number' && nextBlock.cueSec >= 0
+          ? nextBlock.cueSec
+          : nextBlock.tracks[0]?.startSec ?? 0;
+    const track = (useGapless ? nextBlock.tracks[0] : this.trackAtTime(nextBlock, startAtSec)) ?? undefined;
+    return {
+      url: useGapless && nextBlock.tracks[0]?.gaplessUrl ? nextBlock.tracks[0].gaplessUrl : nextBlock.url,
+      startAtSec,
+      blockDurationSec:
+        useGapless && nextBlock.tracks[0]?.durationSec
+          ? nextBlock.tracks[0].durationSec
+          : nextBlock.lengthSec,
+      track,
+      stationLabel: this.stationLabel(session.stationId),
+      isRadio: false,
+    };
+  }
+
+  public canSkip(zoneId: number): boolean {
+    const session = this.sessions.get(zoneId);
+    return Boolean(session && session.mode === 'block');
+  }
+
+  public stop(zoneId: number): void {
+    const session = this.sessions.get(zoneId);
+    if (!session) return;
+    if (session.timer) {
+      clearInterval(session.timer);
+    }
+    this.sessions.delete(zoneId);
+  }
+
+  private ensureTicker(zoneId: number): void {
+    const session = this.sessions.get(zoneId);
+    if (!session || session.timer) return;
+    session.timer = setInterval(() => this.tick(zoneId), this.pollIntervalMs);
+  }
+
+  private tick(zoneId: number): void {
+    const session = this.sessions.get(zoneId);
+    if (!session) return;
+    const ctx = this.deps.getZone(zoneId);
+    if (!ctx) {
+      this.stop(zoneId);
+      return;
+    }
+    const audiopath = ctx.state.audiopath || '';
+    if (!this.isRadioParadiseAudiopath(audiopath)) {
+      this.stop(zoneId);
+      return;
+    }
+    if (ctx.state.mode !== 'play') {
+      return;
+    }
+    if (session.mode === 'nowPlaying') {
+      void this.tickNowPlaying(zoneId, session);
+      return;
+    }
+    if (session.trackMode) {
+      return;
+    }
+    const timeSec = Number(ctx.player.getState().time) || 0;
+    const track = this.trackAtTime(session.current, timeSec);
+    if (!track) return;
+    const signature = `${track.artist}|||${track.title}|||${track.coverurl ?? ''}`;
+    if (signature === session.lastSignature) return;
+    session.lastSignature = signature;
+    this.deps.updateRadioMetadata(zoneId, {
+      title: track.title,
+      artist: track.artist,
+      coverurl: track.coverurl,
+      duration: track.durationSec,
+      controllable: true,
+    });
+  }
+
+  private async tickNowPlaying(zoneId: number, session: RadioParadiseSession): Promise<void> {
+    if (session.nowPlayingPending) return;
+    const now = Date.now();
+    if (session.lastNowPlayingAt && now - session.lastNowPlayingAt < NOW_PLAYING_INTERVAL_MS) {
+      return;
+    }
+    session.nowPlayingPending = true;
+    session.lastNowPlayingAt = now;
+    try {
+      const track = await this.fetchNowPlayingTrack(session.stationId);
+      if (!track) return;
+      const signature = `${track.artist}|||${track.title}|||${track.coverurl ?? ''}`;
+      if (signature === session.lastSignature) return;
+      session.lastSignature = signature;
+      session.current.tracks = [track];
+      this.deps.updateRadioMetadata(zoneId, {
+        title: track.title,
+        artist: track.artist,
+        coverurl: track.coverurl,
+        duration: track.durationSec,
+        controllable: true,
+      });
+    } finally {
+      session.nowPlayingPending = false;
+    }
+  }
+
+  private trackAtTime(block: RadioParadiseBlock, timeSec: number): RadioParadiseTrack | null {
+    if (!block.tracks.length) return null;
+    let idx = 0;
+    for (let i = 0; i < block.tracks.length; i += 1) {
+      if (timeSec + 0.5 >= block.tracks[i].startSec) {
+        idx = i;
+      }
+    }
+    return block.tracks[idx] ?? null;
+  }
+
+  private findTrackIndex(tracks: RadioParadiseTrack[], timeSec: number): number {
+    if (!tracks.length) return 0;
+    let idx = 0;
+    for (let i = 0; i < tracks.length; i += 1) {
+      if (timeSec + 0.5 >= tracks[i].startSec) {
+        idx = i;
+      }
+    }
+    return idx;
+  }
+
+  private async prefetchNext(zoneId: number, session: RadioParadiseSession): Promise<void> {
+    if (session.mode !== 'block') return;
+    if (!session.current.endEvent) return;
+    const currentSession = this.sessions.get(zoneId);
+    if (!currentSession || currentSession !== session) return;
+    const next = await this.fetchBlock(session.stationId, session.current.endEvent);
+    if (!next) return;
+    const latest = this.sessions.get(zoneId);
+    if (!latest || latest !== session) return;
+    session.next = next;
+  }
+
+  private async fetchBlock(
+    stationId: string,
+    eventId?: string,
+    elapsedSec?: number,
+  ): Promise<RadioParadiseBlock | null> {
+    const params = new URLSearchParams();
+    params.set('action', 'play');
+    params.set('bitrate', String(DEFAULT_BITRATE));
+    params.set('info', 'true');
+    if (stationId && stationId !== '0') {
+      params.set('chan', stationId);
+    }
+    if (eventId) {
+      params.set('event', eventId);
+    }
+    if (typeof elapsedSec === 'number' && Number.isFinite(elapsedSec) && elapsedSec > 0) {
+      params.set('elapsed', String(Math.floor(elapsedSec)));
+    }
+    const url = `${API_PLAY_URL}?${params.toString()}`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) {
+        this.log.debug('radio paradise block fetch failed', { stationId, status: res.status });
+        return null;
+      }
+      const raw = await res.text();
+      if (!raw) {
+        this.log.debug('radio paradise block fetch empty response', { stationId });
+        return null;
+      }
+      const parsed = this.parseJsonPayload(raw);
+      if (!parsed) {
+        this.log.debug('radio paradise block fetch invalid json', {
+          stationId,
+          sample: raw.slice(0, 160),
+        });
+        return null;
+      }
+      const data = parsed as {
+        url?: string;
+        length?: number;
+        end_event?: string;
+        event?: string;
+        cue?: number;
+        song?: unknown;
+      };
+      const rawUrl = typeof data?.url === 'string' ? data.url : '';
+      if (!rawUrl) return null;
+      const lengthRaw = Number(data?.length ?? 0) || 0;
+      const lengthSec = lengthRaw > 10000 ? lengthRaw / 1000 : lengthRaw;
+      const endEvent = typeof data?.end_event === 'string' ? data.end_event : undefined;
+      const event = typeof data?.event === 'string' ? data.event : undefined;
+      const cueRaw = Number(data?.cue ?? 0) || 0;
+      const cueSec = cueRaw > 10000 ? cueRaw / 1000 : cueRaw;
+      const tracks = this.parseTracks(data?.song, lengthSec);
+      return {
+        url: this.appendSrc(rawUrl),
+        lengthSec: lengthSec > 0 ? lengthSec : this.deriveBlockLength(tracks),
+        endEvent,
+        eventId: event,
+        cueSec: cueSec >= 0 ? cueSec : undefined,
+        tracks,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.debug('radio paradise block fetch error', { stationId, message });
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private appendSrc(url: string): string {
+    if (!url) return url;
+    return url.includes('?') ? `${url}&src=alexa` : `${url}?src=alexa`;
+  }
+
+  private resolveStream(stationId: string): { streamUrl: string; nowPlayingUrl: string } | null {
+    return RADIO_PARADISE_STREAMS.get(stationId) ?? null;
+  }
+
+  private async fetchNowPlayingTrack(stationId: string): Promise<RadioParadiseTrack | null> {
+    const config = this.resolveStream(stationId);
+    if (!config) return null;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const res = await fetch(config.nowPlayingUrl, { signal: controller.signal });
+      if (!res.ok) {
+        this.log.debug('radio paradise now playing failed', { stationId, status: res.status });
+        return null;
+      }
+      const data = (await res.json()) as {
+        artist?: string;
+        title?: string;
+        album?: string;
+        year?: number;
+        cover?: string;
+        cover_med?: string;
+        cover_small?: string;
+      };
+      const artist = typeof data?.artist === 'string' ? data.artist.trim() : '';
+      const title = typeof data?.title === 'string' ? data.title.trim() : '';
+      if (!artist && !title) return null;
+      const album = typeof data?.album === 'string' ? data.album.trim() : '';
+      const year = Number(data?.year) || undefined;
+      const coverCandidate = data?.cover ?? data?.cover_med ?? data?.cover_small ?? '';
+      const coverurl = typeof coverCandidate === 'string' ? coverCandidate.trim() : '';
+      return {
+        startSec: 0,
+        durationSec: 0,
+        artist,
+        title,
+        album,
+        year,
+        coverurl: coverurl || undefined,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.debug('radio paradise now playing error', { stationId, message });
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private parseJsonPayload(raw: string): unknown | null {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return null;
+    }
+    try {
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        return JSON.parse(trimmed);
+      }
+      const start = trimmed.indexOf('{');
+      const end = trimmed.lastIndexOf('}');
+      if (start >= 0 && end > start) {
+        return JSON.parse(trimmed.slice(start, end + 1));
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  private parseTracks(payload: unknown, fallbackLengthSec: number): RadioParadiseTrack[] {
+    const list = Array.isArray(payload)
+      ? payload
+      : payload && typeof payload === 'object'
+        ? Object.values(payload as Record<string, any>)
+        : [];
+    const tracks = list
+      .map((item) => {
+        const startRaw = Number(item?.elapsed ?? 0) || 0;
+        const durationRaw = Number(item?.duration ?? 0) || 0;
+        const startSec = startRaw > 10000 ? startRaw / 1000 : startRaw;
+        const durationSec = durationRaw > 10000 ? durationRaw / 1000 : durationRaw;
+        const artist = typeof item?.artist === 'string' ? item.artist.trim() : '';
+        const title = typeof item?.title === 'string' ? item.title.trim() : '';
+        const album = typeof item?.album === 'string' ? item.album.trim() : '';
+        const year = Number(item?.year) || undefined;
+        const gaplessRaw =
+          typeof item?.gapless_url === 'string'
+            ? item.gapless_url
+            : typeof item?.gaplessUrl === 'string'
+              ? item.gaplessUrl
+              : '';
+        const gaplessUrl = gaplessRaw
+          ? this.appendSrc(gaplessRaw.startsWith('//') ? `https:${gaplessRaw}` : gaplessRaw)
+          : undefined;
+        let coverurl = '';
+        if (typeof item?.cover === 'string' && item.cover.trim()) {
+          const cover = item.cover.trim();
+          coverurl = cover.startsWith('http') ? cover : `${COVER_BASE_URL}${cover}`;
+        }
+        if (!artist && !title) {
+          return null;
+        }
+        return {
+          startSec,
+          durationSec,
+          artist,
+          title,
+          album,
+          year,
+          coverurl,
+          gaplessUrl,
+        } satisfies RadioParadiseTrack;
+      })
+      .filter(Boolean) as RadioParadiseTrack[];
+    tracks.sort((a, b) => a.startSec - b.startSec);
+    if (tracks.length) {
+      for (let i = 0; i < tracks.length; i += 1) {
+        const current = tracks[i];
+        if (current.durationSec > 0) continue;
+        const next = tracks[i + 1];
+        if (next) {
+          current.durationSec = Math.max(0, next.startSec - current.startSec);
+        } else if (fallbackLengthSec > 0) {
+          current.durationSec = Math.max(0, fallbackLengthSec - current.startSec);
+        }
+      }
+    }
+    return tracks;
+  }
+
+  private deriveBlockLength(tracks: RadioParadiseTrack[]): number {
+    if (!tracks.length) return 0;
+    const last = tracks[tracks.length - 1];
+    return Math.max(0, last.startSec + (last.durationSec || 0));
+  }
+}

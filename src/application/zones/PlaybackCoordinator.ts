@@ -55,6 +55,7 @@ import {
 } from '@/application/zones/playback/inputHandlers';
 import { handlePlaybackError as handlePlaybackErrorTransition } from '@/application/zones/playback/playbackErrors';
 import { updateOutputState as handleUpdateOutputState } from '@/application/zones/playback/outputStateUpdater';
+import { RadioParadiseBlockService } from '@/application/zones/radioparadise/radioParadiseBlockService';
 
 type PlaybackCoordinatorDeps = {
   zones: ZoneRepository;
@@ -90,6 +91,7 @@ export class PlaybackCoordinator {
   private readonly configPort: ConfigPort;
   private readonly recentsManager: RecentsManager;
   private readonly audioManager: AudioManager;
+  private readonly radioParadise: RadioParadiseBlockService;
   private readonly zonesMissingOutput = new Set<number>();
   private readonly queueBuildTokens = new Map<number, string>();
   private readonly queueStepState = new Map<
@@ -149,6 +151,10 @@ export class PlaybackCoordinator {
     this.configPort = deps.configPort;
     this.recentsManager = deps.recentsManager;
     this.audioManager = deps.audioManager;
+    this.radioParadise = new RadioParadiseBlockService({
+      getZone: (zoneId) => this.zoneRepo.get(zoneId),
+      updateRadioMetadata: (zoneId, metadata) => this.updateRadioMetadata(zoneId, metadata),
+    });
   }
 
   public getMusicAssistantInputHandlers(): MusicAssistantInputHandlers {
@@ -231,7 +237,10 @@ export class PlaybackCoordinator {
     });
   }
 
-  public updateRadioMetadata(zoneId: number, metadata: { title: string; artist: string }): void {
+  public updateRadioMetadata(
+    zoneId: number,
+    metadata: { title: string; artist: string; coverurl?: string; duration?: number; controllable?: boolean },
+  ): void {
     handleUpdateRadioMetadata({
       coordinator: this.buildInputCoordinator(),
       zoneId,
@@ -705,6 +714,50 @@ export class PlaybackCoordinator {
     metadata?: PlaybackMetadata,
     options?: { skipExternalStop?: boolean; startAtSec?: number },
   ): Promise<PlaybackSession | null> {
+    const hasRadioParadise =
+      this.radioParadise.isRadioParadiseAudiopath(audiopath) ||
+      this.radioParadise.isRadioParadiseAudiopath(metadata?.audiopath ?? '') ||
+      this.radioParadise.isRadioParadiseAudiopath(ctx.state.audiopath ?? '');
+    if (!hasRadioParadise) {
+      this.radioParadise.stop(ctx.id);
+    }
+    let resolvedAudiopath = audiopath;
+    let resolvedMetadata = metadata;
+    let startAtSec = options?.startAtSec;
+    if (this.radioParadise.isRadioParadiseAudiopath(audiopath)) {
+      const stationId = this.radioParadise.parseStationId(audiopath);
+      if (!stationId) {
+        this.log.warn('radio paradise station id missing', { zoneId: ctx.id, audiopath });
+        return null;
+      }
+      const resolved = await this.radioParadise.resolveStart(ctx.id, stationId);
+      if (!resolved) {
+        this.log.warn('radio paradise block resolve failed', { zoneId: ctx.id, stationId });
+        return null;
+      }
+      resolvedAudiopath = resolved.url;
+      startAtSec = resolved.startAtSec;
+      const base = resolvedMetadata ?? { title: '', artist: '', album: '' };
+      resolvedMetadata = {
+        ...base,
+        isRadio: resolved.isRadio,
+        title: resolved.track?.title ?? base.title ?? '',
+        artist: resolved.track?.artist ?? base.artist ?? '',
+        album: resolved.track?.album ?? base.album ?? '',
+        coverurl: resolved.track?.coverurl ?? base.coverurl ?? '',
+        duration: resolved.blockDurationSec || base.duration,
+        station: base.station ?? resolved.stationLabel,
+        audiopath,
+      };
+    }
+    const isRadioAudiopath = this.audioHelpers.isRadioAudiopath(audiopath);
+    if (isRadioAudiopath) {
+      ctx.metadata.radioControllable = this.radioParadise.isRadioParadiseAudiopath(audiopath)
+        ? true
+        : resolvedMetadata?.isRadio === false;
+    } else if (ctx.metadata.radioControllable) {
+      ctx.metadata.radioControllable = false;
+    }
     const classification = this.classifyAudiopath(audiopath);
     if (!this.hasPlaybackOutput(ctx, classification)) {
       this.zonesMissingOutput.add(ctx.id);
@@ -728,7 +781,7 @@ export class PlaybackCoordinator {
     const settings = computePreferredPlaybackSettings({
       zoneId: ctx.id,
       zoneName: ctx.name,
-      audiopath,
+      audiopath: resolvedAudiopath,
       isRadio,
       queueAuthority: ctx.queue.authority,
       outputs: ctx.outputs,
@@ -738,11 +791,11 @@ export class PlaybackCoordinator {
     this.applyPlaybackInputTransition(ctx, classification.nextInput, {
       skipExternalStop: options?.skipExternalStop,
     });
-    const enrichedMetadata = this.buildEnrichedPlaybackMetadata(audiopath, metadata);
+    const enrichedMetadata = this.buildEnrichedPlaybackMetadata(audiopath, resolvedMetadata);
     const provider: ProviderKind = classification.provider;
     const plan = buildPlaybackPlan({
       ctx,
-      audiopath,
+      audiopath: resolvedAudiopath,
       metadata: enrichedMetadata,
       isRadio,
       preferredSettings: settings,
@@ -759,7 +812,7 @@ export class PlaybackCoordinator {
       inputs: this.inputsPort,
       log: this.log,
       audioManager: this.audioManager,
-      startAtSec: options?.startAtSec,
+      startAtSec,
     });
     if (!session) {
       this.audioManager.clearPlayRequest(ctx.id);
@@ -926,6 +979,14 @@ export class PlaybackCoordinator {
     const ctx = this.zoneRepo.get(zoneId);
     if (!ctx) {
       return;
+    }
+    if (command === 'next' || command === 'previous' || command === 'queueplus' || command === 'queueminus') {
+      const currentAudiopath = ctx.queueController.current()?.audiopath ?? ctx.state.audiopath ?? '';
+      if (this.radioParadise.isRadioParadiseAudiopath(currentAudiopath) && this.radioParadise.canSkip(ctx.id)) {
+        const delta = command === 'previous' || command === 'queueminus' ? -1 : 1;
+        void this.handleRadioParadiseSkip(ctx, delta);
+        return;
+      }
     }
     handleZoneCommand({
       coordinator: {
@@ -1228,6 +1289,27 @@ export class PlaybackCoordinator {
   }
 
   private async handleEndOfTrack(ctx: ZoneContext): Promise<void> {
+    const currentAudiopath = ctx.queueController.current()?.audiopath ?? ctx.state.audiopath ?? '';
+    if (this.radioParadise.isRadioParadiseAudiopath(currentAudiopath) && this.radioParadise.canSkip(ctx.id)) {
+      const resolved = await this.radioParadise.resolveNextBlock(ctx.id);
+      if (resolved) {
+        const metadata = this.buildRadioParadiseMetadata(ctx, resolved);
+        const session = await this.startQueuePlayback(ctx, resolved.url, metadata, {
+          startAtSec: resolved.startAtSec,
+          skipExternalStop: true,
+        });
+      if (session && resolved.track) {
+        this.updateRadioMetadata(ctx.id, {
+          title: resolved.track.title,
+          artist: resolved.track.artist,
+          coverurl: resolved.track.coverurl,
+          duration: resolved.track.durationSec ?? resolved.blockDurationSec,
+          controllable: true,
+        });
+      }
+        return;
+      }
+    }
     await handleEndOfTrackTransition({
       coordinator: {
         getZone: (id) => this.zoneRepo.get(id),
@@ -1240,6 +1322,54 @@ export class PlaybackCoordinator {
       },
       ctx,
     });
+  }
+
+  private async handleRadioParadiseSkip(ctx: ZoneContext, delta: 1 | -1): Promise<void> {
+    const timeSec = Number(ctx.player.getState().time) || 0;
+    const resolved = await this.radioParadise.resolveSkip(ctx.id, timeSec, delta);
+    if (!resolved) {
+      return;
+    }
+    const metadata = this.buildRadioParadiseMetadata(ctx, resolved);
+    const session = await this.startQueuePlayback(ctx, resolved.url, metadata, {
+      startAtSec: resolved.startAtSec,
+      skipExternalStop: true,
+    });
+    if (session && resolved.track) {
+      this.updateRadioMetadata(ctx.id, {
+        title: resolved.track.title,
+        artist: resolved.track.artist,
+        coverurl: resolved.track.coverurl,
+        duration: resolved.track.durationSec ?? resolved.blockDurationSec,
+        controllable: true,
+      });
+    }
+  }
+
+  private buildRadioParadiseMetadata(
+    ctx: ZoneContext,
+    resolved: {
+      track?: { title: string; artist: string; album: string; coverurl?: string; durationSec?: number };
+      blockDurationSec: number;
+      stationLabel: string;
+      isRadio: boolean;
+    },
+  ): PlaybackMetadata {
+    const base: PlaybackMetadata = { title: '', artist: '', album: '' };
+    const current = ctx.queueController.current();
+    const audiopath = current?.audiopath ?? ctx.state.audiopath ?? '';
+    const track = resolved.track;
+    return {
+      ...base,
+      isRadio: resolved.isRadio,
+      title: track?.title ?? base.title,
+      artist: track?.artist ?? base.artist,
+      album: track?.album ?? base.album,
+      coverurl: track?.coverurl,
+      duration: (track?.durationSec ?? resolved.blockDurationSec) || base.duration,
+      station: resolved.stationLabel,
+      audiopath,
+    };
   }
 
   private reorderQueue(

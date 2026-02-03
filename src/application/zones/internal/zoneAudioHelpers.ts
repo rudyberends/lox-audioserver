@@ -6,6 +6,23 @@ import { getMusicAssistantProviderId, getMusicAssistantUserId } from '@/applicat
 import type { ContentPort } from '@/ports/ContentPort';
 import type { ConfigPort } from '@/ports/ConfigPort';
 
+const RADIO_PARADISE_PATH_LABELS = new Map<string, string>([
+  ['/flac', 'Radio Paradise - Main Mix'],
+  ['/mellow-flac', 'Radio Paradise - Mellow Mix'],
+  ['/rock-flac', 'Radio Paradise - Rock Mix'],
+  ['/global-flac', 'Radio Paradise - Global'],
+  ['/beyond-flac', 'Radio Paradise - Beyond'],
+  ['/serenity', 'Radio Paradise - Serenity'],
+]);
+const RADIO_PARADISE_ID_LABELS = new Map<string, string>([
+  ['0', 'Radio Paradise - Main Mix'],
+  ['1', 'Radio Paradise - Mellow Mix'],
+  ['2', 'Radio Paradise - Rock Mix'],
+  ['3', 'Radio Paradise - Global'],
+  ['4', 'Radio Paradise - Beyond'],
+  ['5', 'Radio Paradise - Serenity'],
+]);
+
 export type ZoneAudioHelpers = {
   isSpotifyAudiopath: (audiopath: string | null | undefined) => boolean;
   isAppleMusicAudiopath: (audiopath: string | null | undefined) => boolean;
@@ -246,6 +263,9 @@ export function getInputAudioType(ctx: ZoneContext, audiopathOverride?: string):
     return AudioType.Spotify;
   }
   if (detectServiceFromAudiopath(audiopath) === 'radio') {
+    if (ctx.metadata.radioControllable === true) {
+      return AudioType.File;
+    }
     return AudioType.Radio;
   }
   return null;
@@ -271,6 +291,9 @@ export function isRadioAudiopath(audiopath: string | undefined, audiotype?: numb
   const raw = (audiopath ?? '').trim();
   const lower = raw.toLowerCase();
   if (lower.startsWith('airplay://')) {
+    return false;
+  }
+  if (audiotype === AudioType.File) {
     return false;
   }
   if (audiotype === 1 || audiotype === 4) {
@@ -349,13 +372,28 @@ export function deriveRadioStationLabel(audiopath: string | undefined): string |
   if (!raw) {
     return undefined;
   }
+  const rpMatch = /^radioparadise:(?:\/\/)?([^/?#]+)/i.exec(raw);
+  if (rpMatch && rpMatch[1]) {
+    const label = RADIO_PARADISE_ID_LABELS.get(rpMatch[1]);
+    return label || 'Radio Paradise';
+  }
   const decoded = decodeAudiopath(raw) ?? raw;
+  const decodedRpMatch = /^radioparadise:(?:\/\/)?([^/?#]+)/i.exec(decoded);
+  if (decodedRpMatch && decodedRpMatch[1]) {
+    const label = RADIO_PARADISE_ID_LABELS.get(decodedRpMatch[1]);
+    return label || 'Radio Paradise';
+  }
   if (!/^https?:\/\//i.test(decoded)) {
     return undefined;
   }
   try {
     const url = new URL(decoded);
     const host = url.hostname.replace(/^www\./i, '').trim();
+    if (host.endsWith('radioparadise.com')) {
+      const path = url.pathname.replace(/\/$/, '').toLowerCase();
+      const label = RADIO_PARADISE_PATH_LABELS.get(path);
+      return label || 'Radio Paradise';
+    }
     return host || undefined;
   } catch {
     return undefined;

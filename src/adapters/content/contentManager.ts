@@ -12,6 +12,7 @@ import { decodeAudiopath, detectServiceFromAudiopath } from '@/domain/loxone/aud
 import { LocalLibraryProvider, type LibraryCoverSample, type LibraryStats } from '@/adapters/content/providers/localLibraryProvider';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import { TuneInProvider, type TuneInProviderOptions } from '@/adapters/content/providers/tunein/tuneinProvider';
+import { RadioParadiseProvider } from '@/adapters/content/providers/radioparadise/radioParadiseProvider';
 import {
   SpotifyServiceManager,
   SpotifyServiceManagerProvider,
@@ -55,6 +56,7 @@ export class ContentManager {
   private readonly spotifyManagerProvider: SpotifyServiceManagerProvider;
   private readonly library: LocalLibraryProvider;
   private tunein: TuneInProvider;
+  private radioParadise: RadioParadiseProvider;
   private readonly cache = new ContentCacheManager();
   private initialized = false;
   private readonly configPort: ConfigPort;
@@ -71,6 +73,7 @@ export class ContentManager {
     this.spotifyManagerProvider = spotifyManagerProvider;
     this.customRadioStore = customRadioStore;
     this.tunein = new TuneInProvider(this.customRadioStore, this.readTuneInConfig());
+    this.radioParadise = new RadioParadiseProvider();
   }
 
   public setNotifier(notifier: NotifierPort): void {
@@ -106,6 +109,7 @@ export class ContentManager {
     this.cache.clearAll();
     this.spotify = this.spotifyManagerProvider.reload();
     this.tunein = new TuneInProvider(this.customRadioStore, this.readTuneInConfig());
+    this.radioParadise = new RadioParadiseProvider();
   }
 
   public getAvailableServices() {
@@ -145,8 +149,9 @@ export class ContentManager {
     return this.library.getMediaFolder(folderId || 'root', offset, limit);
   }
 
-  public getRadios(): Promise<RadioMenuEntry[]> {
-    return this.tunein.getMenuEntries();
+  public async getRadios(): Promise<RadioMenuEntry[]> {
+    const entries = await this.tunein.getMenuEntries();
+    return [...entries, this.radioParadise.getMenuEntry()];
   }
 
   public getPlaylists(
@@ -187,6 +192,9 @@ export class ContentManager {
   ): Promise<ContentFolder | null> {
     if (service === 'local' || service === 'custom') {
       return this.tunein.getFolder(service, folderId, offset, limit);
+    }
+    if (service.toLowerCase() === 'radioparadise') {
+      return this.radioParadise.getFolder(folderId, offset, limit);
     }
     return this.requireSpotify().getFolder(service, user, folderId, offset, limit);
   }

@@ -1,26 +1,45 @@
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
+import { AudioType, FileType } from '@/domain/loxone/enums';
 import { fallbackTitle, sanitizeTitle } from '@/application/zones/helpers/stateHelpers';
 import type { ProviderAction, ProviderPatchResult } from '@/application/zones/playback/types';
 
 export function handleRadioMetadataUpdate(args: {
   state: LoxoneZoneState;
   zoneName: string;
-  metadata: { title: string; artist: string };
+  metadata: { title: string; artist: string; coverurl?: string; duration?: number; controllable?: boolean };
   audioHelpers: ZoneAudioHelpers;
   radioStationFallback?: string | null;
+  radioControllable?: boolean;
 }): ProviderPatchResult | null {
-  const { state, zoneName, metadata, audioHelpers, radioStationFallback } = args;
-  if (state.mode !== 'play' || !audioHelpers.isRadioAudiopath(state.audiopath, state.audiotype)) {
+  const { state, zoneName, metadata, audioHelpers, radioStationFallback, radioControllable } = args;
+  if (state.mode !== 'play') {
+    return null;
+  }
+  const isRadioState = audioHelpers.isRadioAudiopath(state.audiopath, state.audiotype);
+  if (!isRadioState && !radioControllable) {
     return null;
   }
   const patch: Partial<LoxoneZoneState> = {};
   if (metadata.title) {
     patch.title = sanitizeTitle(metadata.title, fallbackTitle(state.title, zoneName));
   }
+  if (metadata.coverurl) {
+    patch.coverurl = metadata.coverurl;
+  }
+  if (typeof metadata.duration === 'number' && metadata.duration > 0) {
+    patch.duration = Math.round(metadata.duration);
+  }
+  if (metadata.controllable === true) {
+    patch.audiotype = AudioType.File;
+    patch.type = FileType.File;
+  }
   const artist = metadata.artist ?? '';
   patch.artist = artist;
   const actions: ProviderAction[] = [];
+  if (typeof metadata.controllable === 'boolean') {
+    actions.push({ type: 'setRadioControllable', value: metadata.controllable });
+  }
   if (artist.trim()) {
     if (state.station) {
       patch.station = state.station;

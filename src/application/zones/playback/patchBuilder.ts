@@ -131,6 +131,7 @@ export function buildStartedPatch(args: {
 }): Partial<LoxoneZoneState> {
   const { ctx, session, audioHelpers } = args;
   const meta = session?.metadata ?? ({} as PlaybackMetadata);
+  const radioControllable = ctx.metadata.radioControllable === true;
   const basePatch: Partial<LoxoneZoneState> = {
     mode: 'play',
     clientState: 'on',
@@ -146,7 +147,14 @@ export function buildStartedPatch(args: {
         ? Math.max(ctx.state.duration ?? 0, Math.round(meta.duration))
         : ctx.state.duration,
   };
-  return { ...basePatch, ...buildActiveItemPatch(ctx, audioHelpers) };
+  const activePatch = buildActiveItemPatch(ctx, audioHelpers);
+  if (radioControllable) {
+    delete (activePatch as any).title;
+    delete (activePatch as any).artist;
+    delete (activePatch as any).album;
+    delete (activePatch as any).coverurl;
+  }
+  return { ...basePatch, ...activePatch };
 }
 
 export function buildResumedPatch(args: {
@@ -154,11 +162,19 @@ export function buildResumedPatch(args: {
   audioHelpers: ZoneAudioHelpers;
 }): Partial<LoxoneZoneState> {
   const { ctx, audioHelpers } = args;
+  const radioControllable = ctx.metadata.radioControllable === true;
+  const activePatch = buildActiveItemPatch(ctx, audioHelpers);
+  if (radioControllable) {
+    delete (activePatch as any).title;
+    delete (activePatch as any).artist;
+    delete (activePatch as any).album;
+    delete (activePatch as any).coverurl;
+  }
   return {
     mode: 'play',
     clientState: 'on',
     power: 'on',
-    ...buildActiveItemPatch(ctx, audioHelpers),
+    ...activePatch,
   };
 }
 
