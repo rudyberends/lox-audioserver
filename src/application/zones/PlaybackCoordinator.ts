@@ -37,6 +37,7 @@ import { resolvePlayRequest } from '@/application/zones/playback/playRequestReso
 import type { ResolvedPlayRequest } from '@/application/zones/playback/types';
 import { isSameAudiopath } from '@/application/zones/playback/targetResolution';
 import { attachPlayerListeners } from '@/application/zones/playback/playerListeners';
+import { buildQueueItemPlaybackPatch } from '@/application/zones/playback/patchBuilder';
 import { handleZoneCommand } from '@/application/zones/playback/commandHandlers';
 import {
   handleEndOfTrack as handleEndOfTrackTransition,
@@ -500,6 +501,18 @@ export class PlaybackCoordinator {
     });
     ctx.queueController.setItems(queueItems, clampedIndex);
     ctx.metadata.queueShuffled = false;
+    const immediateCurrent = ctx.queueController.current();
+    if (immediateCurrent) {
+      const immediatePatch = buildQueueItemPlaybackPatch(
+        ctx,
+        immediateCurrent,
+        ctx.queueController.currentIndex(),
+        this.audioHelpers,
+      );
+      if (Object.keys(immediatePatch).length > 0) {
+        this.applyPatch(ctx.id, immediatePatch);
+      }
+    }
     const pendingShuffle = ctx.metadata.pendingShuffle;
     if (typeof pendingShuffle === 'boolean') {
       ctx.queue.shuffle = pendingShuffle;
