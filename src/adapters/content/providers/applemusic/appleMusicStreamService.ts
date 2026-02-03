@@ -8,8 +8,7 @@ import Widevine, { LicenseType as WvLicenseType } from 'widevine';
 import { loadWidevineArtifacts, WidevineArtifactsError } from './widevine';
 import protobuf from 'protobufjs';
 import { gunzipSync } from 'zlib';
-import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import { Agent } from 'undici';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -94,6 +93,12 @@ const WidevinePsshDataMsg = (() => {
 
 export class AppleMusicStreamService {
   private readonly log = createLogger('Content', 'AppleMusicStream');
+  private readonly proxyAgent = new Agent({
+    keepAliveTimeout: 30_000,
+    keepAliveMaxTimeout: 120_000,
+    connections: 10,
+    pipelining: 1,
+  });
   private readonly bridgesByProvider = new Map<string, SpotifyBridgeConfig>();
   private readonly bridgesById = new Map<string, SpotifyBridgeConfig>();
   private readonly bearerTokens = new Map<string, BearerState>();
@@ -134,11 +139,13 @@ export class AppleMusicStreamService {
     zoneId: number,
     _zoneName: string,
     audiopath: string,
+    options?: { suppressErrors?: boolean },
   ): Promise<AppleMusicPlaybackResult> {
+    const suppressErrors = options?.suppressErrors === true;
     const request = this.parseTrackRequest(audiopath);
     if (!request) {
       this.log.warn('apple music stream request unresolved', { zoneId, audiopath });
-      this.reportPlaybackError(zoneId, 'apple music invalid request');
+      this.reportPlaybackError(zoneId, 'apple music invalid request', suppressErrors);
       return { playbackSource: null };
     }
 
@@ -211,7 +218,7 @@ export class AppleMusicStreamService {
         trackId: request.trackId,
         failureType: webPlaybackError?.failureType,
       });
-      this.reportPlaybackError(zoneId, failureReason || 'apple music stream url unavailable');
+      this.reportPlaybackError(zoneId, failureReason || 'apple music stream url unavailable', suppressErrors);
       return { playbackSource: null };
     }
 
@@ -236,16 +243,17 @@ export class AppleMusicStreamService {
         trackId: request.trackId,
         reason: drmHandled.errorReason,
       });
-      this.reportPlaybackError(zoneId, drmHandled.errorReason);
+      this.reportPlaybackError(zoneId, drmHandled.errorReason, suppressErrors);
       return { playbackSource: null };
     }
 
     this.log.warn('apple music stream blocked; drm not available', { zoneId, trackId: request.trackId });
-    this.reportPlaybackError(zoneId, 'apple music drm unavailable');
+    this.reportPlaybackError(zoneId, 'apple music drm unavailable', suppressErrors);
     return { playbackSource: null };
   }
 
-  private reportPlaybackError(zoneId: number, reason: string): void {
+  private reportPlaybackError(zoneId: number, reason: string, suppressErrors = false): void {
+    if (suppressErrors) return;
     const trimmed = reason.trim();
     if (!trimmed) return;
     this.notifyOutputError(zoneId, trimmed);
@@ -874,105 +882,36 @@ export class AppleMusicStreamService {
     decryptionKey?: string,
   ): Promise<PlaybackSource> {
     const streamHeaders = this.buildStreamHeaders(headers);
-    if (decryptionKey) {
-      const directDrm = await this.buildDirectDrmPlaybackSource(
-        streamUrl,
-        streamHeaders,
-        bridge,
-        decryptionKey,
-      );
-      if (directDrm) return directDrm;
+    if (this.isHlsUrl(streamUrl)) {
       return this.buildProxyPlaybackSource(streamUrl, streamHeaders, bridge, decryptionKey);
     }
-    const resolved = await this.resolveUrlForFfmpeg(streamUrl, streamHeaders);
-    await this.logInputDetails('direct', resolved.url, resolved.headers, undefined);
-    const realTime = this.resolvePaceInput(bridge);
-    if (!realTime) {
-      this.log.info('Apple Music pacing disabled (direct)', { inputFormat: null });
-    }
-    return {
-      kind: 'url',
-      url: resolved.url,
-      headers: resolved.headers,
-      decryptionKey,
-      tlsVerifyHost: resolved.tlsVerifyHost,
-      realTime,
-    };
+    return this.buildDirectProxyPlaybackSource(streamUrl, streamHeaders, bridge, decryptionKey);
   }
 
-  private async buildDirectDrmPlaybackSource(
+  private isHlsUrl(streamUrl: string): boolean {
+    return /\.m3u8($|\?)/i.test(streamUrl);
+  }
+
+  private async buildDirectProxyPlaybackSource(
     streamUrl: string,
     headers: Record<string, string> | undefined,
     bridge: SpotifyBridgeConfig,
-    decryptionKey: string,
-  ): Promise<PlaybackSource | null> {
-    const resolved = await this.resolveUrlForFfmpeg(streamUrl, headers);
-    await this.logInputDetails('direct', resolved.url, resolved.headers, 'mov');
+    decryptionKey?: string,
+  ): Promise<PlaybackSource> {
+    const { host, port, sessionId } = await this.ensureProxySession(streamUrl, headers, decryptionKey);
+    const url = `http://${host}:${port}/applemusic/${sessionId}/segment?u=${encodeURIComponent(streamUrl)}`;
+    await this.logInputDetails('proxy', streamUrl, headers, 'mov', sessionId);
     const realTime = this.resolvePaceInput(bridge);
     if (!realTime) {
-      this.log.info('Apple Music pacing disabled (direct DRM)', { inputFormat: 'mov' });
+      this.log.info('Apple Music pacing disabled (proxy direct)', { inputFormat: 'mov', sessionId });
     }
     return {
       kind: 'url',
-      url: resolved.url,
-      headers: resolved.headers,
-      decryptionKey,
-      tlsVerifyHost: resolved.tlsVerifyHost,
+      url,
       inputFormat: 'mov',
       realTime,
+      decryptionKey,
     };
-  }
-
-  private async resolveUrlForFfmpeg(
-    streamUrl: string,
-    headers?: Record<string, string>,
-  ): Promise<{ url: string; headers?: Record<string, string>; tlsVerifyHost?: string }> {
-    let parsed: URL;
-    try {
-      parsed = new URL(streamUrl);
-    } catch {
-      return { url: streamUrl, headers };
-    }
-
-    if (!/^https?:$/i.test(parsed.protocol)) {
-      return { url: streamUrl, headers };
-    }
-
-    const hostname = parsed.hostname;
-    if (!hostname || isIP(hostname)) {
-      return { url: streamUrl, headers };
-    }
-    if (hostname.endsWith('blobstore.apple.com')) {
-      return { url: streamUrl, headers };
-    }
-    for (const key of parsed.searchParams.keys()) {
-      if (key.startsWith('X-Amz-')) {
-        return { url: streamUrl, headers };
-      }
-    }
-
-    try {
-      const records = await lookup(hostname, { all: true });
-      if (!records.length) return { url: streamUrl, headers };
-      const selected = records.find((record) => record.family === 4) ?? records[0];
-      if (!selected?.address) return { url: streamUrl, headers };
-
-      const resolvedUrl = new URL(streamUrl);
-      resolvedUrl.hostname = selected.address;
-      const resolvedHeaders = headers ? { ...headers, Host: hostname } : { Host: hostname };
-
-      this.log.debug('Apple Music stream DNS resolved for ffmpeg', {
-        hostname,
-        address: selected.address,
-      });
-      return { url: resolvedUrl.toString(), headers: resolvedHeaders, tlsVerifyHost: hostname };
-    } catch (err) {
-      this.log.warn('Apple Music stream DNS resolve failed', {
-        hostname,
-        message: err instanceof Error ? err.message : String(err),
-      });
-      return { url: streamUrl, headers };
-    }
   }
 
   private async resolveCtrp256StreamInfo(
@@ -1021,7 +960,7 @@ export class AppleMusicStreamService {
     streamUrl: string,
     headers: Record<string, string> | undefined,
     bridge: SpotifyBridgeConfig,
-    decryptionKey: string,
+    decryptionKey?: string,
   ): Promise<PlaybackSource> {
     const { host, port, sessionId } = await this.ensureProxySession(streamUrl, headers, decryptionKey);
     const url = `http://${host}:${port}/applemusic/${sessionId}/playlist.m3u8`;
@@ -1077,7 +1016,7 @@ export class AppleMusicStreamService {
   private async ensureProxySession(
     streamUrl: string,
     headers: Record<string, string> | undefined,
-    decryptionKey: string,
+    decryptionKey?: string,
   ): Promise<{ host: string; port: number; sessionId: string }> {
     const { host, port } = await this.ensureProxyServer();
     this.pruneProxySessions();
@@ -1086,7 +1025,7 @@ export class AppleMusicStreamService {
       id: sessionId,
       streamUrl,
       headers,
-      keyBytes: Buffer.from(decryptionKey, 'hex'),
+      keyBytes: decryptionKey ? Buffer.from(decryptionKey, 'hex') : undefined,
       createdAt: Date.now(),
     };
     this.proxySessions.set(sessionId, session);
@@ -1257,7 +1196,13 @@ export class AppleMusicStreamService {
     headers?: Record<string, string>,
   ): Promise<void> {
     try {
-      const response = await fetch(targetUrl, headers ? { headers } : undefined);
+      const upstreamHeaders = this.sanitizeProxyHeaders(targetUrl, headers);
+      const response = await fetch(
+        targetUrl,
+        upstreamHeaders
+          ? { headers: upstreamHeaders, dispatcher: this.proxyAgent as any }
+          : { dispatcher: this.proxyAgent as any },
+      );
       if (!response.ok || !response.body) {
         let bodyPreview = '';
         try {
@@ -1377,7 +1322,13 @@ export class AppleMusicStreamService {
     res: ServerResponse,
   ): Promise<boolean> {
     try {
-      const response = await fetch(targetUrl, headers ? { headers } : undefined);
+      const upstreamHeaders = this.sanitizeProxyHeaders(targetUrl, headers);
+      const response = await fetch(
+        targetUrl,
+        upstreamHeaders
+          ? { headers: upstreamHeaders, dispatcher: this.proxyAgent as any }
+          : { dispatcher: this.proxyAgent as any },
+      );
       if (!response.ok || !response.body) {
         this.log.warn('Apple Music proxy stream segment failed', {
           status: response.status,
@@ -1399,6 +1350,33 @@ export class AppleMusicStreamService {
       res.end();
       return false;
     }
+  }
+
+  private sanitizeProxyHeaders(
+    targetUrl: string,
+    headers?: Record<string, string>,
+  ): Record<string, string> | undefined {
+    if (!headers) {
+      return headers;
+    }
+    let host = '';
+    try {
+      host = new URL(targetUrl).hostname.toLowerCase();
+    } catch {
+      host = '';
+    }
+    const sanitized = { ...headers };
+    delete (sanitized as Record<string, string>).Host;
+    delete (sanitized as Record<string, string>).host;
+    if (host.endsWith('blobstore.apple.com')) {
+      delete (sanitized as Record<string, string>).authorization;
+      delete (sanitized as Record<string, string>).Authorization;
+      delete (sanitized as Record<string, string>)['Music-User-Token'];
+      delete (sanitized as Record<string, string>)['Media-User-Token'];
+      delete (sanitized as Record<string, string>).origin;
+      delete (sanitized as Record<string, string>).referer;
+    }
+    return sanitized;
   }
 
   private pruneProxySessions(maxAgeMs = 10 * 60 * 1000): void {

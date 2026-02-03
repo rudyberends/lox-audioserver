@@ -22,6 +22,8 @@ export function resolveQueueAuthority(args: {
 }): QueueAuthority {
   const forceLocalQueue =
     args.isAppleMusic ||
+    args.isDeezer ||
+    args.isTidal ||
     (args.isSpotify && Boolean(args.bridgeProvider && args.bridgeProvider !== 'spotify'));
   if (forceLocalQueue) {
     return 'local';

@@ -19,6 +19,7 @@ export class ZonePlayer {
   private endedEmitted = false;
   private tickerToken = 0;
   private endGuardSec = 0;
+  private lastPlayRequestAtLogged: number | null = null;
 
   constructor(
     private readonly audioManager: AudioManager,
@@ -217,6 +218,25 @@ export class ZonePlayer {
       this.state.time = startAtSec;
       this.emit('position', this.state.time, this.state.duration);
       this.lastTickAt = Date.now();
+      if (session.playRequestAt && session.playRequestAt !== this.lastPlayRequestAtLogged) {
+        const now = Date.now();
+        const playbackStartedAt = session.playbackStartedAt ?? session.updatedAt ?? null;
+        const sincePlayContentMs = Math.max(0, now - session.playRequestAt);
+        const sincePlaybackStartedMs = playbackStartedAt ? Math.max(0, now - playbackStartedAt) : null;
+        const playContentToStartedMs = playbackStartedAt
+          ? Math.max(0, playbackStartedAt - session.playRequestAt)
+          : null;
+        this.lastPlayRequestAtLogged = session.playRequestAt;
+        this.log.info('playback first audio ready', {
+          zoneId: this.zoneId,
+          source: session.source,
+          profile,
+          ready,
+          sincePlayContentMs,
+          sincePlaybackStartedMs,
+          playContentToStartedMs,
+        });
+      }
       if (!ready) {
         this.log.debug('ticker started without first chunk', { zoneId: this.zoneId, timeoutMs });
       }

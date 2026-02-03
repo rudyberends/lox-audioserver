@@ -15,6 +15,7 @@ type QueueTransitionCoordinator = {
     metadata?: PlaybackMetadata,
     options?: { startAtSec?: number },
   ) => Promise<PlaybackSession | null>;
+  prefetchPlaybackSource?: (ctx: ZoneContext, audiopath: string) => void;
   applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
   dispatchOutputs: (
     ctx: ZoneContext,
@@ -49,6 +50,7 @@ export async function stepQueueAsync(args: {
   if (!item) {
     return;
   }
+  coordinator.prefetchPlaybackSource?.(ctx, item.audiopath);
   const session = await coordinator.startQueuePlayback(ctx, item.audiopath, {
     title: item.title,
     artist: item.artist,

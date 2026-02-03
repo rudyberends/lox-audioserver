@@ -91,6 +91,12 @@ export class PlaybackCoordinator {
   private readonly recentsManager: RecentsManager;
   private readonly audioManager: AudioManager;
   private readonly zonesMissingOutput = new Set<number>();
+  private readonly queueBuildTokens = new Map<number, string>();
+  private readonly queueStepState = new Map<
+    number,
+    { pending: number; running: boolean; timer?: NodeJS.Timeout }
+  >();
+  private readonly queueStepCoalesceMs = 150;
   private readonly musicAssistantInputHandlers: MusicAssistantInputHandlers = {
     startPlayback: (zoneId: number, label: string, source: PlaybackSource, metadata?: PlaybackMetadata) => {
       const ctx = this.zoneRepo.get(zoneId);
@@ -299,6 +305,8 @@ export class PlaybackCoordinator {
       }
     }
 
+    this.audioManager.markPlayRequest(zoneId, { uri, type });
+
     this.stopExternalInputSessions(zoneId, ctx.inputMode ?? null, req.nextInput);
 
     if (req.isRadio && req.stationValue?.trim() && !this.audioHelpers.isLikelyHostLabel(req.stationValue)) {
@@ -319,8 +327,57 @@ export class PlaybackCoordinator {
       return;
     }
 
+    this.prefetchOnDemandSource(ctx, req, type);
+
+    const fastStarted = await this.tryStartImmediateTrackPlayback(
+      ctx,
+      req,
+      type,
+      metadata,
+      options?.startAtSec,
+    );
+    if (fastStarted) {
+      return;
+    }
+
     const queueBuild = await this.rebuildQueue(ctx, req, metadata);
+    if (!queueBuild) {
+      this.log.debug('queue build skipped; request superseded', { zoneId: ctx.id, uri: req.uri });
+      return;
+    }
     await this.startFromCurrentQueueItem(ctx, req, queueBuild, options?.startAtSec);
+  }
+
+  private prefetchOnDemandSource(ctx: ZoneContext, req: ResolvedPlayRequest, requestType: string): void {
+    if (requestType !== 'serviceplay') {
+      return;
+    }
+    if (req.isRadio || req.isLineIn || req.isMusicAssistant) {
+      return;
+    }
+    if (!req.isAppleMusic && !req.isDeezer && !req.isTidal) {
+      return;
+    }
+    const audiopath = req.parentContext?.startItem ?? req.queueAudiopath;
+    if (!audiopath || !this.isTrackAudiopath(audiopath)) {
+      return;
+    }
+    void this.contentPort.resolvePlaybackSource({
+      zoneId: ctx.id,
+      zoneName: ctx.name,
+      audiopath,
+      prefetch: true,
+    }).catch((error) => {
+      this.log.debug('playback source prefetch failed', {
+        zoneId: ctx.id,
+        audiopath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  private isTrackAudiopath(audiopath: string): boolean {
+    return /:track:|:library-track:/i.test(audiopath);
   }
 
   private async trySeekExistingQueue(
@@ -338,6 +395,7 @@ export class PlaybackCoordinator {
     const current = ctx.queueController.current();
     if (!current) {
       this.log.warn('queue seek failed; no current item', { zoneId: ctx.id, target: req.normalizedTarget });
+      this.audioManager.clearPlayRequest(ctx.id);
       return true;
     }
     const session = await this.startQueuePlayback(
@@ -362,6 +420,7 @@ export class PlaybackCoordinator {
         this.notifier.notifyQueueUpdated(ctx.id, ctx.queue.items.length);
       }
     } else {
+      this.audioManager.clearPlayRequest(ctx.id);
       this.handleUnplayableSource(ctx, current.audiopath);
     }
     return true;
@@ -371,7 +430,8 @@ export class PlaybackCoordinator {
     ctx: ZoneContext,
     req: ResolvedPlayRequest,
     metadata?: PlaybackMetadata,
-  ): Promise<QueueBuildResult> {
+    options?: { applyToken?: string },
+  ): Promise<QueueBuildResult | null> {
     const queueBuild = await buildQueueForRequest({
       request: {
         zoneId: ctx.id,
@@ -408,6 +468,9 @@ export class PlaybackCoordinator {
         incoming: metadata,
       }),
     });
+    if (options?.applyToken && this.queueBuildTokens.get(ctx.id) !== options.applyToken) {
+      return null;
+    }
     this.log.debug('queue build resolved', {
       zoneId: ctx.id,
       queueSourcePath: req.queueSourcePath,
@@ -418,21 +481,7 @@ export class PlaybackCoordinator {
     });
     const queueItems = queueBuild.items;
     const clampedIndex = queueBuild.startIndex;
-    const bridgeProvider =
-      this.audioHelpers.resolveBridgeProvider(req.queueAudiopath) ??
-      this.audioHelpers.resolveBridgeProvider(req.resolvedTarget) ??
-      this.audioHelpers.resolveBridgeProvider(req.uri);
-    ctx.queue.authority = resolveQueueAuthority({
-      isMusicAssistant: req.isMusicAssistant,
-      isAppleMusic: req.isAppleMusic,
-      isDeezer: req.isDeezer,
-      isTidal: req.isTidal,
-      isSpotify: req.isSpotify,
-      bridgeProvider,
-    });
-    if (req.isSpotify && ctx.config.inputs?.spotify?.offload !== true) {
-      ctx.queue.authority = 'local';
-    }
+    this.setQueueAuthorityForRequest(ctx, req);
     this.log.debug('queue rebuilt', {
       zoneId: ctx.id,
       items: queueItems.length,
@@ -461,7 +510,9 @@ export class PlaybackCoordinator {
         ctx.queueController.setCurrentIndex(0);
         this.applyPatch(ctx.id, { qindex: 0 });
       }
+      this.prefetchNextQueueItem(ctx);
     }
+    this.prefetchNextQueueItem(ctx);
     if (queueBuild.shouldFillInBackground && queueBuild.fillArgs) {
       const token = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
       ctx.metadata.queueFillToken = token;
@@ -477,6 +528,111 @@ export class PlaybackCoordinator {
     return queueBuild;
   }
 
+  private async tryStartImmediateTrackPlayback(
+    ctx: ZoneContext,
+    req: ResolvedPlayRequest,
+    requestType: string,
+    metadata?: PlaybackMetadata,
+    startAtSec?: number,
+  ): Promise<boolean> {
+    if (requestType === 'linein' || req.isRadio || req.isMusicAssistant) {
+      return false;
+    }
+    if (!req.isAppleMusic && !req.isDeezer && !req.isTidal) {
+      return false;
+    }
+    if (requestType !== 'serviceplay') {
+      return false;
+    }
+    const audiopath = req.parentContext?.startItem ?? req.queueAudiopath;
+    if (!audiopath || !this.isTrackAudiopath(audiopath)) {
+      return false;
+    }
+    this.setQueueAuthorityForRequest(ctx, req);
+    const session = await this.startQueuePlayback(
+      ctx,
+      audiopath,
+      {
+        title: metadata?.title?.trim() || ctx.name,
+        artist: metadata?.artist?.trim() || '',
+        album: metadata?.album?.trim() || '',
+        coverurl: metadata?.coverurl,
+        duration: metadata?.duration,
+        audiopath: metadata?.audiopath ?? audiopath,
+        trackId: metadata?.trackId,
+        station: req.stationValue,
+        isRadio: false,
+      },
+      { skipExternalStop: true, startAtSec },
+    );
+    if (!session) {
+      return false;
+    }
+    const token = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    this.queueBuildTokens.set(ctx.id, token);
+    void this.rebuildQueue(ctx, req, metadata, { applyToken: token })
+      .then((queueBuild) => {
+        if (!queueBuild) {
+          return;
+        }
+        if (this.queueBuildTokens.get(ctx.id) === token) {
+          this.queueBuildTokens.delete(ctx.id);
+        }
+        const current = ctx.queueController.current();
+        const currentAudiopath = current?.audiopath ?? ctx.state.audiopath ?? '';
+        if (current && isSameAudiopath(currentAudiopath, audiopath)) {
+          void this.recentsManager.record(ctx.id, current);
+          this.notifier.notifyQueueUpdated(ctx.id, ctx.queue.items.length);
+        }
+        if (current && isSameAudiopath(currentAudiopath, audiopath)) {
+          const baseMeta = queueBuild.metadata ?? ({} as PlaybackMetadata);
+          const resolvedMeta = {
+            title: baseMeta.title?.trim() || current.title,
+            artist: baseMeta.artist?.trim() || current.artist,
+            album: baseMeta.album?.trim() || current.album,
+            coverurl: baseMeta.coverurl || current.coverurl,
+            duration:
+              typeof baseMeta.duration === 'number' && baseMeta.duration > 0
+                ? baseMeta.duration
+                : current.duration,
+            audiopath: baseMeta.audiopath ?? current.audiopath ?? audiopath,
+            station: baseMeta.station ?? current.station,
+            trackId: baseMeta.trackId,
+            stationIndex: baseMeta.stationIndex,
+            queue: baseMeta.queue,
+            queueIndex: baseMeta.queueIndex,
+          };
+          ctx.player.updateMetadata(resolvedMeta);
+        }
+      })
+      .catch((error) => {
+        this.log.debug('queue build after fast start failed', {
+          zoneId: ctx.id,
+          audiopath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return true;
+  }
+
+  private setQueueAuthorityForRequest(ctx: ZoneContext, req: ResolvedPlayRequest): void {
+    const bridgeProvider =
+      this.audioHelpers.resolveBridgeProvider(req.queueAudiopath) ??
+      this.audioHelpers.resolveBridgeProvider(req.resolvedTarget) ??
+      this.audioHelpers.resolveBridgeProvider(req.uri);
+    ctx.queue.authority = resolveQueueAuthority({
+      isMusicAssistant: req.isMusicAssistant,
+      isAppleMusic: req.isAppleMusic,
+      isDeezer: req.isDeezer,
+      isTidal: req.isTidal,
+      isSpotify: req.isSpotify,
+      bridgeProvider,
+    });
+    if (req.isSpotify && ctx.config.inputs?.spotify?.offload !== true) {
+      ctx.queue.authority = 'local';
+    }
+  }
+
   private async startFromCurrentQueueItem(
     ctx: ZoneContext,
     req: ResolvedPlayRequest,
@@ -486,6 +642,7 @@ export class PlaybackCoordinator {
     const current = ctx.queueController.current();
     if (!current) {
       this.log.warn('playback skipped; empty queue after build', { zoneId: ctx.id, uri: req.uri });
+      this.audioManager.clearPlayRequest(ctx.id);
       return;
     }
 
@@ -515,6 +672,7 @@ export class PlaybackCoordinator {
         this.notifier.notifyQueueUpdated(ctx.id, ctx.queue.items.length);
       }
     } else {
+      this.audioManager.clearPlayRequest(ctx.id);
       this.handleUnplayableSource(ctx, current.audiopath);
     }
   }
@@ -555,6 +713,7 @@ export class PlaybackCoordinator {
         zoneId: ctx.id,
         audiopath,
       });
+      this.audioManager.clearPlayRequest(ctx.id);
       return null;
     }
     this.zonesMissingOutput.delete(ctx.id);
@@ -603,6 +762,7 @@ export class PlaybackCoordinator {
       startAtSec: options?.startAtSec,
     });
     if (!session) {
+      this.audioManager.clearPlayRequest(ctx.id);
       const lastError = ctx.lastPlaybackErrorReason?.trim().toLowerCase();
       const hasRecentWidevineMissing =
         this.hasRecentPlaybackError(ctx) && lastError === 'widevine missing';
@@ -623,8 +783,58 @@ export class PlaybackCoordinator {
         this.handlePlaybackError(ctx.id, 'tidal stream unavailable', 'output');
         this.log.warn('tidal stream not ready; skipping playback', { zoneId: ctx.id });
       }
+      return null;
     }
+    this.prefetchNextQueueItem(ctx);
     return session;
+  }
+
+  private prefetchNextQueueItem(ctx: ZoneContext): void {
+    if (!this.isLocalQueueAuthority(ctx.queue.authority)) {
+      return;
+    }
+    if (ctx.queue.items.length === 0) {
+      return;
+    }
+    const schedulePrefetch = (index: number): void => {
+      if (index < 0 || index >= ctx.queue.items.length) {
+        return;
+      }
+      const item = ctx.queue.items[index];
+      if (!item) {
+        return;
+      }
+      if (this.audioHelpers.isRadioAudiopath(item.audiopath, item.audiotype)) {
+        return;
+      }
+      const isAppleMusic = this.audioHelpers.isAppleMusicAudiopath(item.audiopath);
+      const isDeezer = this.audioHelpers.isDeezerAudiopath(item.audiopath);
+      const isTidal = this.audioHelpers.isTidalAudiopath(item.audiopath);
+      if (!isAppleMusic && !isDeezer && !isTidal) {
+        return;
+      }
+      if (!this.isTrackAudiopath(item.audiopath)) {
+        return;
+      }
+      void this.contentPort.resolvePlaybackSource({
+        zoneId: ctx.id,
+        zoneName: ctx.name,
+        audiopath: item.audiopath,
+        prefetch: true,
+      }).catch((error) => {
+        this.log.debug('next track prefetch failed', {
+          zoneId: ctx.id,
+          audiopath: item.audiopath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    };
+    const nextIndex = ctx.queueController.nextIndex();
+    if (nextIndex < 0) {
+      return;
+    }
+    schedulePrefetch(nextIndex);
+    schedulePrefetch(nextIndex + 1);
   }
 
   private hasPlaybackOutput(
@@ -924,19 +1134,97 @@ export class PlaybackCoordinator {
   }
 
   private stepQueue(zoneId: number, delta: number): void {
-    void stepQueueAsyncTransition({
-      coordinator: {
-        getZone: (id) => this.zoneRepo.get(id),
-        isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
-        startQueuePlayback: this.startQueuePlayback.bind(this),
-        applyPatch: this.applyPatch,
-        dispatchOutputs: this.dispatchOutputs.bind(this),
-        recentsRecord: this.recentsManager.record.bind(this.recentsManager),
-        audioHelpers: this.audioHelpers,
-      },
-      zoneId,
-      delta,
+    void this.enqueueQueueStep(zoneId, delta);
+  }
+
+  private prefetchPlaybackSource(ctx: ZoneContext, audiopath: string): void {
+    if (this.audioHelpers.isRadioAudiopath(audiopath)) {
+      return;
+    }
+    const isAppleMusic = this.audioHelpers.isAppleMusicAudiopath(audiopath);
+    const isDeezer = this.audioHelpers.isDeezerAudiopath(audiopath);
+    const isTidal = this.audioHelpers.isTidalAudiopath(audiopath);
+    if (!isAppleMusic && !isDeezer && !isTidal) {
+      return;
+    }
+    if (!this.isTrackAudiopath(audiopath)) {
+      return;
+    }
+    void this.contentPort.resolvePlaybackSource({
+      zoneId: ctx.id,
+      zoneName: ctx.name,
+      audiopath,
+      prefetch: true,
+    }).catch((error) => {
+      this.log.debug('step prefetch failed', {
+        zoneId: ctx.id,
+        audiopath,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
+  }
+
+  private async enqueueQueueStep(zoneId: number, delta: number): Promise<void> {
+    const state = this.queueStepState.get(zoneId) ?? { pending: 0, running: false };
+    state.pending += delta;
+    this.queueStepState.set(zoneId, state);
+    if (state.running) {
+      return;
+    }
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+    state.timer = setTimeout(() => {
+      void this.runQueuedSteps(zoneId);
+    }, this.queueStepCoalesceMs);
+  }
+
+  private async runQueuedSteps(zoneId: number): Promise<void> {
+    const state = this.queueStepState.get(zoneId);
+    if (!state || state.running) {
+      return;
+    }
+    if (state.timer) {
+      clearTimeout(state.timer);
+      state.timer = undefined;
+    }
+    state.running = true;
+    try {
+      while (state.pending !== 0) {
+        const step = state.pending > 0 ? 1 : -1;
+        state.pending -= step;
+        await stepQueueAsyncTransition({
+          coordinator: {
+            getZone: (id) => this.zoneRepo.get(id),
+            isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
+            startQueuePlayback: this.startQueuePlayback.bind(this),
+            prefetchPlaybackSource: this.prefetchPlaybackSource.bind(this),
+            applyPatch: this.applyPatch,
+            dispatchOutputs: this.dispatchOutputs.bind(this),
+            recentsRecord: this.recentsManager.record.bind(this.recentsManager),
+            audioHelpers: this.audioHelpers,
+          },
+          zoneId,
+          delta: step as 1 | -1,
+        });
+        const ready = await this.audioManager.waitForFirstChunk(zoneId, 'pcm', 1500);
+        if (!ready) {
+          break;
+        }
+      }
+    } finally {
+      state.running = false;
+      if (state.pending === 0) {
+        this.queueStepState.delete(zoneId);
+      } else {
+        this.queueStepState.set(zoneId, state);
+        if (!state.timer) {
+          state.timer = setTimeout(() => {
+            void this.runQueuedSteps(zoneId);
+          }, this.queueStepCoalesceMs);
+        }
+      }
+    }
   }
 
   private async handleEndOfTrack(ctx: ZoneContext): Promise<void> {

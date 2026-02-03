@@ -15,6 +15,10 @@ type ContentStreamResolvers = {
 };
 
 export class ContentAdapter implements ContentPort {
+  private readonly resolveCache = new Map<string, { expiresAt: number; result: StreamResolution }>();
+  private readonly resolveInflight = new Map<string, Promise<StreamResolution>>();
+  private readonly resolveCacheTtlMs = 60_000;
+
   constructor(
     private readonly contentManager: ContentManager,
     private readonly streamResolvers: ContentStreamResolvers,
@@ -32,6 +36,41 @@ export class ContentAdapter implements ContentPort {
     args: PlaybackSourceResolveArgs,
   ): Promise<StreamResolution> {
     const { audiopath, zoneId, zoneName } = args;
+    const cacheKey = `${zoneId}:${audiopath}`;
+    const now = Date.now();
+    const cached = this.resolveCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return cached.result;
+    }
+    if (cached) {
+      this.resolveCache.delete(cacheKey);
+    }
+    const inflight = this.resolveInflight.get(cacheKey);
+    if (inflight) {
+      return inflight;
+    }
+    const promise = this.resolvePlaybackSourceInternal(args)
+      .then((result) => {
+        if (result.playbackSource || result.outputOnly) {
+          this.resolveCache.set(cacheKey, {
+            expiresAt: Date.now() + this.resolveCacheTtlMs,
+            result,
+          });
+        }
+        return result;
+      })
+      .finally(() => {
+        this.resolveInflight.delete(cacheKey);
+      });
+    this.resolveInflight.set(cacheKey, promise);
+    return promise;
+  }
+
+  private async resolvePlaybackSourceInternal(
+    args: PlaybackSourceResolveArgs,
+  ): Promise<StreamResolution> {
+    const { audiopath, zoneId, zoneName } = args;
+    const suppressErrors = args.prefetch === true;
     const providerSegment = (audiopath.split(':')[0] ?? '').trim();
     const detectedService = detectServiceFromAudiopath(audiopath);
     const { appleMusic, deezer, tidal } = this.streamResolvers;
@@ -40,6 +79,7 @@ export class ContentAdapter implements ContentPort {
         zoneId,
         zoneName,
         audiopath,
+        { suppressErrors },
       );
       return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'applemusic' };
     }
@@ -48,6 +88,7 @@ export class ContentAdapter implements ContentPort {
         zoneId,
         zoneName,
         audiopath,
+        { suppressErrors },
       );
       return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'deezer' };
     }
@@ -56,6 +97,7 @@ export class ContentAdapter implements ContentPort {
         zoneId,
         zoneName,
         audiopath,
+        { suppressErrors },
       );
       return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'tidal' };
     }
@@ -64,6 +106,7 @@ export class ContentAdapter implements ContentPort {
         zoneId,
         zoneName,
         audiopath,
+        { suppressErrors },
       );
       return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'applemusic' };
     }
@@ -72,6 +115,7 @@ export class ContentAdapter implements ContentPort {
         zoneId,
         zoneName,
         audiopath,
+        { suppressErrors },
       );
       return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'deezer' };
     }
@@ -80,6 +124,7 @@ export class ContentAdapter implements ContentPort {
         zoneId,
         zoneName,
         audiopath,
+        { suppressErrors },
       );
       return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'tidal' };
     }

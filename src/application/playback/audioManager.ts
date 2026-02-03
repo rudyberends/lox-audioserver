@@ -62,6 +62,10 @@ export interface PlaybackSession {
   cover?: CoverArtPayload;
   profiles?: OutputProfile[];
   outputSettings?: Pick<AudioOutputSettings, 'sampleRate' | 'channels' | 'pcmBitDepth'>;
+  playRequestAt?: number;
+  playRequestUri?: string;
+  playRequestType?: string;
+  playbackStartedAt?: number;
 }
 
 type OutputState = {
@@ -92,6 +96,8 @@ export class AudioManager {
     number,
     { httpProfile?: HttpProfile; icyEnabled?: boolean; icyInterval?: number; icyName?: string }
   >();
+  private readonly playRequestTimes = new Map<number, { requestedAt: number; uri?: string; type?: string }>();
+  private readonly playRequestMaxAgeMs = 60_000;
   private readonly playbackService: PlaybackService;
   private readonly outputNotifier: OutputNotifier;
 
@@ -101,6 +107,30 @@ export class AudioManager {
     this.playbackService.setSessionTerminationHandler((zoneId, stats, reason) =>
       this.handleEngineTermination(zoneId, stats, reason),
     );
+  }
+
+  public markPlayRequest(zoneId: number, details?: { uri?: string; type?: string }): void {
+    this.playRequestTimes.set(zoneId, {
+      requestedAt: Date.now(),
+      uri: details?.uri,
+      type: details?.type,
+    });
+  }
+
+  public clearPlayRequest(zoneId: number): void {
+    this.playRequestTimes.delete(zoneId);
+  }
+
+  private claimPlayRequest(zoneId: number): { requestedAt: number; uri?: string; type?: string } | null {
+    const entry = this.playRequestTimes.get(zoneId);
+    if (!entry) {
+      return null;
+    }
+    this.playRequestTimes.delete(zoneId);
+    if (Date.now() - entry.requestedAt > this.playRequestMaxAgeMs) {
+      return null;
+    }
+    return entry;
   }
 
   private decorateRadioSource(
@@ -128,6 +158,7 @@ export class AudioManager {
     const safe = Math.max(0, startAtSec ?? 0);
     return safe > 0 ? safe : null;
   }
+
 
   private applyStartAt(
     source: PlaybackSource | null,
@@ -531,6 +562,12 @@ export class AudioManager {
       playbackSource?.kind === 'url' && metadata?.isRadio
         ? { ...playbackSource, restartOnFailure: true }
         : playbackSource;
+    if (
+      (effectiveSource?.kind === 'file' || effectiveSource?.kind === 'pipe') &&
+      effectiveSource.realTime === true
+    ) {
+      effectiveSource = { ...effectiveSource, realTime: false };
+    }
     const inputPrefs = this.zoneInputPreferences.get(zoneId);
     if (inputPrefs?.fileRealTime === false && effectiveSource?.kind === 'file') {
       effectiveSource = { ...effectiveSource, realTime: false };
@@ -564,6 +601,8 @@ export class AudioManager {
     // If we are already on the same source (e.g. track change on the same pipe),
     // keep the existing stream URLs and engine session running.
     if (existing && this.isSamePlaybackSource(existing.playbackSource, effectiveSource)) {
+      const now = Date.now();
+      const playRequest = this.claimPlayRequest(zoneId);
       existing.source = label;
       if (effectiveSource) {
         existing.playbackSource = effectiveSource;
@@ -576,8 +615,14 @@ export class AudioManager {
       }
       existing.elapsed = startAtSec;
       existing.state = 'playing';
-      existing.startedAt = Date.now() - startAtSec * 1000;
-      existing.updatedAt = Date.now();
+      existing.startedAt = now - startAtSec * 1000;
+      existing.updatedAt = now;
+      existing.playbackStartedAt = now;
+      if (playRequest) {
+        existing.playRequestAt = playRequest.requestedAt;
+        existing.playRequestUri = playRequest.uri;
+        existing.playRequestType = playRequest.type;
+      }
       const profilesChanged = !this.sameProfiles(existing.profiles, profiles);
       existing.profiles = profiles;
       const outputChanged =
@@ -635,6 +680,8 @@ export class AudioManager {
     }
     const streamProfile = profiles.includes('aac') ? 'aac' : 'mp3';
     const { stream, pcmStream } = this.createStreamHandles(zoneId, streamProfile);
+    const playRequest = this.claimPlayRequest(zoneId);
+    const now = Date.now();
     const session: PlaybackSession = {
       zoneId,
       source: label,
@@ -644,12 +691,16 @@ export class AudioManager {
       state: 'playing',
       elapsed: startAtSec,
       duration: metadata?.duration ?? 0,
-      startedAt: Date.now() - startAtSec * 1000,
-      updatedAt: Date.now(),
+      startedAt: now - startAtSec * 1000,
+      updatedAt: now,
       playbackSource: effectiveSource,
       cover: undefined,
       profiles,
       outputSettings: outputSignature,
+      playRequestAt: playRequest?.requestedAt,
+      playRequestUri: playRequest?.uri,
+      playRequestType: playRequest?.type,
+      playbackStartedAt: now,
     };
     this.sessions.set(zoneId, session);
     this.log.info(outputOnly ? 'playback started (output-only)' : 'playback started', {
@@ -657,6 +708,7 @@ export class AudioManager {
       source: label,
       stream: stream.id,
       title: metadata?.title,
+      sincePlayContentMs: playRequest?.requestedAt ? Math.max(0, now - playRequest.requestedAt) : null,
     });
     return session;
   }

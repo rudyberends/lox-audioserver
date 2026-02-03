@@ -11,6 +11,7 @@ export class AudioStreamEngine {
   private readonly sessions = new Map<number, Map<OutputProfile, AudioSession>>();
   private readonly stopReasons = new WeakMap<Map<OutputProfile, AudioSession>, string>();
   private readonly outputSettings = audioOutputSettings;
+  private readonly handoffTokens = new Map<number, string>();
   private onSessionTerminated?: (
     zoneId: number,
     stats: {
@@ -102,6 +103,8 @@ export class AudioStreamEngine {
     options: { waitProfile?: OutputProfile; timeoutMs?: number } = {},
   ): void {
     const existing = this.sessions.get(zoneId) ?? null;
+    const handoffToken = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    this.handoffTokens.set(zoneId, handoffToken);
     const profileMap = new Map<OutputProfile, AudioSession>();
     const effectiveOutput = outputSettings ?? this.outputSettings;
     profiles.forEach((profile) => {
@@ -138,20 +141,45 @@ export class AudioStreamEngine {
       profileMap.forEach((session) => session.stop());
       return;
     }
+    const existingWaitSession =
+      (waitProfile ? existing?.get(waitProfile) : null) ??
+      existing?.values().next().value ??
+      null;
+    const existingReady = existingWaitSession?.hasFirstChunk() ?? false;
+    const skipHandoff = Boolean(existing && !existingReady);
+    if (skipHandoff && existing) {
+      this.stopReasons.set(existing, 'switch');
+      existing.forEach((session) => session.stop(true));
+      this.log.info('audio handoff skipped; existing not ready', { zoneId });
+    }
     const timeoutMs = options.timeoutMs ?? 8000;
     void (async () => {
       const ready = await waitSession.waitForFirstChunk(timeoutMs);
+      if (this.handoffTokens.get(zoneId) !== handoffToken) {
+        return;
+      }
       if (!ready) {
-        this.log.warn('audio handoff failed; keeping existing session', { zoneId, timeoutMs });
+        this.log.warn(
+          skipHandoff
+            ? 'audio start failed; stopping session'
+            : 'audio handoff failed; keeping existing session',
+          { zoneId, timeoutMs },
+        );
         profileMap.forEach((session) => session.stop());
-        if (existing && this.sessions.get(zoneId) === profileMap) {
+        if (!skipHandoff && existing && this.sessions.get(zoneId) === profileMap) {
           this.sessions.set(zoneId, existing);
+        }
+        if (this.handoffTokens.get(zoneId) === handoffToken) {
+          this.handoffTokens.delete(zoneId);
         }
         return;
       }
-      if (existing) {
+      if (!skipHandoff && existing) {
         this.stopReasons.set(existing, 'switch');
         existing.forEach((session) => session.stop(true));
+      }
+      if (this.handoffTokens.get(zoneId) === handoffToken) {
+        this.handoffTokens.delete(zoneId);
       }
       this.log.info('audio handoff complete', { zoneId });
     })();

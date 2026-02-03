@@ -341,10 +341,12 @@ export class AudioSession {
           this.firstChunkResolve(true);
           this.firstChunkResolve = null;
         }
+        const now = Date.now();
         this.log.info('ffmpeg first chunk', {
           zoneId: this.zoneId,
           profile: this.profile,
           bytes: chunk.length,
+          spawnToFirstChunkMs: this.startTs ? Math.max(0, now - this.startTs) : null,
         });
       }
       if (this.maxBufferBytes > 0 && this.bufferBytes < this.maxBufferBytes) {
@@ -704,6 +706,10 @@ export class AudioSession {
         resolve(ok);
       });
     });
+  }
+
+  public hasFirstChunk(): boolean {
+    return this.firstChunkLogged;
   }
 
   public createSubscriber(options: { primeWithBuffer?: boolean; label?: string } = {}): PassThrough | null {
