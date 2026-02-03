@@ -489,7 +489,10 @@ export class ZoneManager {
     this.playbackCoordinator.updateInputMetadata(zoneId, metadata);
   }
 
-  public updateRadioMetadata(zoneId: number, metadata: { title: string; artist: string }): void {
+  public updateRadioMetadata(
+    zoneId: number,
+    metadata: { title: string; artist: string; coverurl?: string; duration?: number; controllable?: boolean },
+  ): void {
     this.playbackCoordinator.updateRadioMetadata(zoneId, metadata);
   }
 

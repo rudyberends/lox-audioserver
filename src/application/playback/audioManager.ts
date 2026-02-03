@@ -202,12 +202,22 @@ export class AudioManager {
       return false;
     }
     const rawLower = rawSource.toLowerCase();
-    if (rawLower.startsWith('tunein:') || rawLower.startsWith('radio:') || rawLower.includes('tunein')) {
+    if (
+      rawLower.startsWith('tunein:') ||
+      rawLower.startsWith('radio:') ||
+      rawLower.includes('tunein') ||
+      rawLower.includes('radioparadise')
+    ) {
       return true;
     }
     const decoded = decodeAudiopath(rawSource);
     const decodedLower = (decoded || '').toLowerCase();
-    return decodedLower.startsWith('tunein:') || decodedLower.startsWith('radio:') || decodedLower.includes('tunein');
+    return (
+      decodedLower.startsWith('tunein:') ||
+      decodedLower.startsWith('radio:') ||
+      decodedLower.includes('tunein') ||
+      decodedLower.includes('radioparadise')
+    );
   }
 
   public startPlayback(
