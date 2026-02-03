@@ -67,23 +67,25 @@ export class TidalStreamService {
     zoneId: number,
     _zoneName: string,
     audiopath: string,
+    options?: { suppressErrors?: boolean },
   ): Promise<TidalPlaybackResult> {
+    const suppressErrors = options?.suppressErrors === true;
     const request = this.parseTrackRequest(audiopath);
     if (!request) {
       this.log.warn('tidal stream request unresolved', { zoneId, audiopath });
-      this.reportPlaybackError(zoneId, 'tidal invalid request');
+      this.reportPlaybackError(zoneId, 'tidal invalid request', suppressErrors);
       return { playbackSource: null };
     }
 
     const playback = await this.fetchPlaybackInfo(request);
     if (!playback) {
-      this.reportPlaybackError(zoneId, 'tidal playback info unavailable');
+      this.reportPlaybackError(zoneId, 'tidal playback info unavailable', suppressErrors);
       return { playbackSource: null };
     }
 
     const manifest = decodeManifest(playback.manifest);
     if (!manifest) {
-      this.reportPlaybackError(zoneId, 'tidal manifest decode failed');
+      this.reportPlaybackError(zoneId, 'tidal manifest decode failed', suppressErrors);
       return { playbackSource: null };
     }
 
@@ -94,7 +96,7 @@ export class TidalStreamService {
 
     if (!manifest.trim().startsWith('<?xml')) {
       this.log.warn('tidal manifest format not supported', { zoneId });
-      this.reportPlaybackError(zoneId, 'tidal manifest unsupported');
+      this.reportPlaybackError(zoneId, 'tidal manifest unsupported', suppressErrors);
       return { playbackSource: null };
     }
 
@@ -120,7 +122,8 @@ export class TidalStreamService {
     };
   }
 
-  private reportPlaybackError(zoneId: number, reason: string): void {
+  private reportPlaybackError(zoneId: number, reason: string, suppressErrors = false): void {
+    if (suppressErrors) return;
     const trimmed = reason.trim();
     if (!trimmed) return;
     this.notifyOutputError(zoneId, trimmed);

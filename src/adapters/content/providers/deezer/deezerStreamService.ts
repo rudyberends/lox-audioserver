@@ -181,11 +181,13 @@ export class DeezerStreamService {
     zoneId: number,
     _zoneName: string,
     audiopath: string,
+    options?: { suppressErrors?: boolean },
   ): Promise<DeezerPlaybackResult> {
+    const suppressErrors = options?.suppressErrors === true;
     const request = this.parseTrackRequest(audiopath);
     if (!request) {
       this.log.warn('deezer stream request unresolved', { zoneId, audiopath });
-      this.reportPlaybackError(zoneId, 'deezer invalid request');
+      this.reportPlaybackError(zoneId, 'deezer invalid request', suppressErrors);
       return { playbackSource: null };
     }
 
@@ -203,7 +205,7 @@ export class DeezerStreamService {
     } else {
       const song = await this.fetchSongData(request);
       if (!song) {
-        this.reportPlaybackError(zoneId, 'deezer track data unavailable');
+        this.reportPlaybackError(zoneId, 'deezer track data unavailable', suppressErrors);
         return { playbackSource: null };
       }
 
@@ -217,7 +219,7 @@ export class DeezerStreamService {
           md5OriginRaw,
           mediaVersion,
         });
-        this.reportPlaybackError(zoneId, 'deezer missing stream metadata');
+        this.reportPlaybackError(zoneId, 'deezer missing stream metadata', suppressErrors);
         return { playbackSource: null };
       }
 
@@ -233,14 +235,14 @@ export class DeezerStreamService {
         formats,
       });
       if (urls.length === 0) {
-        this.reportPlaybackError(zoneId, 'deezer stream url unavailable');
+        this.reportPlaybackError(zoneId, 'deezer stream url unavailable', suppressErrors);
         return { playbackSource: null };
       }
       blowfishKey = calcBlowfishKey(songId);
     }
 
     if (!blowfishKey) {
-      this.reportPlaybackError(zoneId, 'deezer stream key unavailable');
+      this.reportPlaybackError(zoneId, 'deezer stream key unavailable', suppressErrors);
       return { playbackSource: null };
     }
     const sessionId = randomUUID();
@@ -273,7 +275,8 @@ export class DeezerStreamService {
     };
   }
 
-  private reportPlaybackError(zoneId: number, reason: string): void {
+  private reportPlaybackError(zoneId: number, reason: string, suppressErrors = false): void {
+    if (suppressErrors) return;
     const trimmed = reason.trim();
     if (!trimmed) return;
     this.notifyOutputError(zoneId, trimmed);

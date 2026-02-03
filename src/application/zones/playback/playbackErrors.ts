@@ -28,11 +28,23 @@ const PLAYBACK_ERROR_ALIASES: Record<string, string> = {
   'airplay stream not ready': 'AirPlay stream not ready',
 };
 
+const MAX_ERROR_TITLE_LENGTH = 140;
+const URL_PATTERN = /\bhttps?:\/\/[^\s)]+/gi;
+
 type PlaybackErrorCoordinator = {
   getZone: (zoneId: number) => ZoneContext | undefined;
   applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
   log: ComponentLogger;
 };
+
+function sanitizeErrorReason(reason: string): string {
+  let sanitized = reason.replace(URL_PATTERN, 'url');
+  sanitized = sanitized.replace(/\s+/g, ' ').trim();
+  if (sanitized.length > MAX_ERROR_TITLE_LENGTH) {
+    sanitized = `${sanitized.slice(0, MAX_ERROR_TITLE_LENGTH - 3)}...`;
+  }
+  return sanitized;
+}
 
 export function handlePlaybackError(args: {
   coordinator: PlaybackErrorCoordinator;
@@ -52,7 +64,7 @@ export function handlePlaybackError(args: {
   }
   const cleaned = normalized ? normalized.replace(/\s+/g, ' ') : '';
   const alias = cleaned ? PLAYBACK_ERROR_ALIASES[cleaned.toLowerCase()] : undefined;
-  const detail = alias ?? cleaned;
+  const detail = alias ?? (cleaned ? sanitizeErrorReason(cleaned) : '');
   const title = detail ? `Playback error: ${detail}` : 'Playback error';
   coordinator.applyPatch(zoneId, {
     title,

@@ -5,6 +5,7 @@ export type PlaybackSourceResolveArgs = {
   zoneId: number;
   zoneName: string;
   audiopath: string;
+  prefetch?: boolean;
 };
 
 export type StreamResolution = {

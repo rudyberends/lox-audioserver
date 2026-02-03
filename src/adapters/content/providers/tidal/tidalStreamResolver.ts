@@ -24,7 +24,8 @@ export class TidalStreamResolver {
     zoneId: number,
     zoneName: string,
     audiopath: string,
+    options?: { suppressErrors?: boolean },
   ): Promise<{ playbackSource: PlaybackSource | null; outputOnly?: boolean }> {
-    return this.streamService.startStreamForAudiopath(zoneId, zoneName, audiopath);
+    return this.streamService.startStreamForAudiopath(zoneId, zoneName, audiopath, options);
   }
 }
