@@ -130,6 +130,13 @@ export class SnapcastOutput implements ZoneOutput {
       this.log.warn('Snapcast stream unavailable (pcm profile missing)', { zoneId: this.zoneId });
       return;
     }
+    // Snapcast timestamps audio against the server clock. If we register the stream before the first PCM
+    // bytes exist, snapclient can briefly see "old" chunks and drop them. Waiting here keeps the initial
+    // timeline aligned without delaying the main playback pipeline.
+    const ready = await this.ports.engine.waitForFirstChunk(this.zoneId, 'pcm', 1500);
+    if (!ready) {
+      this.log.debug('Snapcast stream started without first chunk', { zoneId: this.zoneId });
+    }
     const outputSettings = session?.outputSettings
       ? { ...audioOutputSettings, ...session.outputSettings }
       : audioOutputSettings;
