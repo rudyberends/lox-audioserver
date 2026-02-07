@@ -1200,13 +1200,24 @@ export class AppleMusicStreamService {
   ): Promise<void> {
     const controller = new AbortController();
     const abort = () => controller.abort();
-    const timeout = setTimeout(() => controller.abort(), 30_000);
-    timeout.unref();
+    // Use an inactivity timeout, not an absolute wall-clock timeout.
+    // Apple Music can proxy full-track MP4s; those requests can legitimately exceed 30s.
+    let idleTimer: NodeJS.Timeout | null = null;
+    const bumpIdleTimer = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+      }
+      idleTimer = setTimeout(() => controller.abort(), 30_000);
+      idleTimer.unref();
+    };
     let cleanedUp = false;
     const cleanup = () => {
       if (cleanedUp) return;
       cleanedUp = true;
-      clearTimeout(timeout);
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
       req.off('aborted', abort);
       res.off('close', abort);
       res.off('close', cleanup);
@@ -1253,13 +1264,25 @@ export class AppleMusicStreamService {
       });
       res.writeHead(200, { 'Content-Type': contentType });
       const stream = Readable.fromWeb(response.body as any);
+      bumpIdleTimer();
+      stream.on('data', bumpIdleTimer);
+      stream.on('end', cleanup);
+      stream.on('close', cleanup);
       stream.on('error', (error) => {
         const message = error instanceof Error ? error.message : String(error);
-        this.log.warn('Apple Music proxy stream failed', { message });
+        const name = error && typeof error === 'object' && 'name' in error ? String((error as any).name) : '';
+        const aborted = controller.signal.aborted || name === 'AbortError' || message.toLowerCase().includes('aborted');
+        if (aborted) {
+          this.log.debug('Apple Music proxy stream aborted', { targetUrl });
+        } else {
+          this.log.warn('Apple Music proxy stream failed', { message, targetUrl });
+        }
         if (!res.headersSent) {
           res.writeHead(502, { 'Content-Type': 'text/plain' });
         }
-        res.end();
+        if (!res.writableEnded && !res.destroyed) {
+          res.end();
+        }
       });
       stream.pipe(res);
     } catch (error) {
