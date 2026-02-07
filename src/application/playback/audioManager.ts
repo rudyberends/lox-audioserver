@@ -851,12 +851,25 @@ export class AudioManager {
       ? Math.round(Math.max(0, Date.now() - session.startedAt) / 1000)
       : session.elapsed;
     const observedElapsed = Math.max(session.elapsed ?? 0, elapsedFromClock);
+    const exitCode = stats?.lastExitCode;
+    const exitSignal = stats?.lastExitSignal;
+    const stderr = stats?.lastStderr?.trim() ?? '';
+    const cleanExit = exitCode === 0 && !exitSignal && !stderr;
     const shouldEmitEnded =
       !reason &&
       session.state === 'playing' &&
       duration > 0 &&
       !session.metadata?.isRadio &&
       observedElapsed >= Math.max(0, duration - 1);
+    const shouldEmitEndedWithoutDuration =
+      !reason &&
+      session.state === 'playing' &&
+      duration <= 0 &&
+      !session.metadata?.isRadio &&
+      Boolean(session.playbackSource) &&
+      cleanExit &&
+      observedElapsed >= 2 &&
+      (stats?.totalBytes ?? 0) > 0;
     if (reason === 'pause') {
       this.log.debug('engine stopped for pause; keeping session', {
         zoneId,
@@ -876,6 +889,10 @@ export class AudioManager {
         duration,
         uri: session.metadata?.audiopath,
       });
+    } else if (shouldEmitEndedWithoutDuration) {
+      // Some providers do not surface durations reliably. If the engine ends cleanly
+      // after producing output, treat it as an end-of-track so the queue can advance.
+      this.outputNotifier.notifyOutputError(zoneId, 'end_of_track');
     }
     if (reason) {
       this.log.debug('suppressing output error; engine stopped intentionally', {
