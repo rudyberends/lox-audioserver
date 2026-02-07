@@ -83,7 +83,10 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
 
   if (plan.playExternalLabel === 'spotify') {
     const offloadEnabled = ctx.config.inputs?.spotify?.offload === true;
-    const accountId = parseSpotifyUser(plan.audiopath);
+    const parsedUser = parseSpotifyUser(plan.audiopath);
+    // When the queue normalizes to `spotify:...`, parsing yields `nouser`. Never pass `nouser`
+    // to the spotify input, since it overrides the configured/default account selection.
+    const accountId = parsedUser && parsedUser !== 'nouser' ? parsedUser : undefined;
     let playbackSource: PlaybackSource | null = null;
     if (!offloadEnabled) {
       const seekPositionMs = normalizedStartAt ? Math.max(0, Math.round(normalizedStartAt * 1000)) : 0;
