@@ -31,8 +31,15 @@ export class GoogleCastOutput implements ZoneOutput {
   private readonly log = createLogger('Output', 'GoogleCast');
   private castDevice: CastDevice | null = null;
   private connected = false;
+  private connectPromise?: Promise<void>;
+  private receiverPromise?: Promise<void>;
   private lastLoadAt = 0;
   private lastLoadSignature: string | null = null;
+  private loadPromise?: Promise<void>;
+  private loadInFlightSignature: string | null = null;
+  private loadToken = 0;
+  private lastLoadTimeoutAt = 0;
+  private lastLoadReconnectAt = 0;
   private lastMediaSessionId: number | null = null;
   private lastMetadataSignature: string | null = null;
   private lastMetadataUpdateAt = 0;
@@ -141,6 +148,12 @@ export class GoogleCastOutput implements ZoneOutput {
     if (signature === this.lastMetadataSignature) {
       return;
     }
+    if (signature === this.loadInFlightSignature) {
+      // Avoid concurrent loads while a play/load is already running.
+      this.lastMetadataSignature = signature;
+      this.lastMetadataUpdateAt = Date.now();
+      return;
+    }
     const now = Date.now();
     if (signature === this.lastLoadSignature && now - this.lastLoadAt < 3000) {
       this.lastMetadataSignature = signature;
@@ -196,26 +209,46 @@ export class GoogleCastOutput implements ZoneOutput {
 
   private async connect(): Promise<void> {
     if (this.connected) return;
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
     const { connect } = await loadGoogleCastModule();
     const device = this.buildDeviceDescriptor();
-    const castDevice = await connect(device);
-    this.castDevice = castDevice;
-    this.connected = true;
-    this.log.info('Google Cast connected', { zoneId: this.zoneId, host: this.config.host });
-    castDevice.on('disconnected', (err?: Error) => {
-      this.log.warn('Google Cast disconnected', {
+
+    const pending = (async (): Promise<void> => {
+      const startedAt = Date.now();
+      const castDevice = await connect(device);
+      const durationMs = Math.max(0, Date.now() - startedAt);
+      this.castDevice = castDevice;
+      this.connected = true;
+      this.log.info('Google Cast connected', {
         zoneId: this.zoneId,
         host: this.config.host,
-        message: err?.message,
+        durationMs,
       });
-      this.disconnect();
+      castDevice.on('disconnected', (err?: Error) => {
+        this.log.warn('Google Cast disconnected', {
+          zoneId: this.zoneId,
+          host: this.config.host,
+          message: err?.message,
+        });
+        this.disconnect();
+      });
+      castDevice.on('error', (err: Error) => {
+        this.log.warn('Google Cast client error', { zoneId: this.zoneId, message: err?.message });
+        this.disconnect();
+      });
+      castDevice.on('mediaStatusModel', (status: MediaStatusModel) => this.handleStatus(status));
+      castDevice.on('volumeChanged', (volume) => this.handleVolume(volume));
+    })();
+
+    this.connectPromise = pending.finally(() => {
+      if (this.connectPromise === pending) {
+        this.connectPromise = undefined;
+      }
     });
-    castDevice.on('error', (err: Error) => {
-      this.log.warn('Google Cast client error', { zoneId: this.zoneId, message: err?.message });
-      this.disconnect();
-    });
-    castDevice.on('mediaStatusModel', (status: MediaStatusModel) => this.handleStatus(status));
-    castDevice.on('volumeChanged', (volume) => this.handleVolume(volume));
+
+    return this.connectPromise;
   }
 
   private disconnect(): void {
@@ -244,28 +277,71 @@ export class GoogleCastOutput implements ZoneOutput {
     if (this.lastLoadSignature === signature && Date.now() - this.lastLoadAt < 1000) {
       return;
     }
+    if (this.loadPromise && this.loadInFlightSignature === signature) {
+      return this.loadPromise;
+    }
 
-    await this.ensureReceiver();
-    const now = Date.now();
-    this.suppressRemoteStateUntil = Math.max(this.suppressRemoteStateUntil, now + 3000);
-    let loaded = await this.loadMedia(media, {
-      autoplay: true,
-      currentTime: session.elapsed ? session.elapsed : 0,
-    });
-    if (!loaded) {
+    const token = (this.loadToken += 1);
+    this.loadInFlightSignature = signature;
+    const pending = (async (): Promise<void> => {
+      const startedAt = Date.now();
+      this.log.debug('Google Cast load start', {
+        zoneId: this.zoneId,
+        host: this.config.host,
+        token,
+        elapsed: session.elapsed ?? 0,
+      });
       await this.ensureReceiver();
-      loaded = await this.loadMedia(media, {
+      const now = Date.now();
+      this.suppressRemoteStateUntil = Math.max(this.suppressRemoteStateUntil, now + 3000);
+      let loaded = await this.loadMedia(media, {
         autoplay: true,
         currentTime: session.elapsed ? session.elapsed : 0,
       });
-    }
-    if (!loaded) {
-      return;
-    }
-    this.lastLoadSignature = signature;
-    this.lastMetadataSignature = signature;
-    this.lastLoadAt = Date.now();
-    await this.ensurePlayback();
+      if (!loaded) {
+        // If the load times out, the cast stack may be in a bad state; reconnect once and retry.
+        const shouldReconnect = Date.now() - this.lastLoadTimeoutAt < 3000;
+        const canReconnect = Date.now() - this.lastLoadReconnectAt > 10000;
+        if (shouldReconnect && canReconnect) {
+          this.lastLoadReconnectAt = Date.now();
+          this.log.warn('Google Cast load timed out; reconnecting', {
+            zoneId: this.zoneId,
+            host: this.config.host,
+          });
+          this.disconnect();
+          await this.connect();
+        }
+
+        await this.ensureReceiver();
+        loaded = await this.loadMedia(media, {
+          autoplay: true,
+          currentTime: session.elapsed ? session.elapsed : 0,
+        });
+      }
+      if (!loaded) {
+        return;
+      }
+      this.lastLoadSignature = signature;
+      this.lastMetadataSignature = signature;
+      this.lastLoadAt = Date.now();
+      // Autoplay should start playback; only attempt an explicit play when we see PAUSED later.
+      void this.ensurePlayback();
+      this.log.debug('Google Cast load finished', {
+        zoneId: this.zoneId,
+        host: this.config.host,
+        token,
+        durationMs: Math.max(0, Date.now() - startedAt),
+      });
+    })();
+
+    this.loadPromise = pending.finally(() => {
+      if (this.loadToken === token) {
+        this.loadPromise = undefined;
+        this.loadInFlightSignature = null;
+      }
+    });
+
+    return this.loadPromise;
   }
 
   private async stopStream(): Promise<void> {
@@ -282,8 +358,36 @@ export class GoogleCastOutput implements ZoneOutput {
 
   private async ensureReceiver(): Promise<void> {
     if (!this.castDevice) return;
+    const sessionAppId = this.castDevice.getSession?.()?.appId;
+    if (sessionAppId === DEFAULT_MEDIA_RECEIVER_APP_ID) return;
+
+    // Refresh status before making decisions; stale sessions can cause media.load to time out.
+    await bestEffort(() => this.castDevice!.receiver.getStatus(2000), {
+      fallback: undefined,
+      onError: 'debug',
+      log: this.log,
+      label: 'cast receiver status refresh failed',
+      context: { zoneId: this.zoneId, host: this.config.host },
+    });
+    const refreshedAppId =
+      this.castDevice.getSession?.()?.appId ??
+      this.castDevice.receiver.getCachedStatus?.()?.status?.applications?.[0]?.appId;
+    if (refreshedAppId === DEFAULT_MEDIA_RECEIVER_APP_ID) return;
+
+    if (this.receiverPromise) {
+      return this.receiverPromise;
+    }
     try {
-      await this.castDevice.launchApp(DEFAULT_MEDIA_RECEIVER_APP_ID);
+      const startedAt = Date.now();
+      const pending = this.castDevice.launchApp(DEFAULT_MEDIA_RECEIVER_APP_ID).then(() => undefined);
+      this.receiverPromise = pending.finally(() => {
+        if (this.receiverPromise === pending) {
+          this.receiverPromise = undefined;
+        }
+      });
+      await this.receiverPromise;
+      const durationMs = Math.max(0, Date.now() - startedAt);
+      this.log.debug('Google Cast receiver ready', { zoneId: this.zoneId, durationMs });
     } catch (err: any) {
       this.log.warn('Google Cast launch error', { zoneId: this.zoneId, message: err?.message });
       throw err;
@@ -468,6 +572,7 @@ export class GoogleCastOutput implements ZoneOutput {
       zoneId: this.zoneId,
       streamPath: session.stream?.url,
       defaultExt: 'mp3',
+      // Keep priming disabled for cast until we have stable field-test results.
       prime: '0',
       primeMode: 'upsert',
     });
@@ -480,6 +585,7 @@ export class GoogleCastOutput implements ZoneOutput {
   ): Promise<boolean> {
     if (!this.castDevice) return false;
     try {
+      const startedAt = Date.now();
       const response: any = await this.castDevice.media.load(media.contentId, media.contentType, {
         metadata: media.metadata,
         streamType: media.streamType,
@@ -491,11 +597,24 @@ export class GoogleCastOutput implements ZoneOutput {
       if (typeof sessionId === 'number') {
         this.lastMediaSessionId = sessionId;
       }
-      this.log.info('Google Cast stream loaded', { zoneId: this.zoneId });
+      this.log.info('Google Cast stream loaded', {
+        zoneId: this.zoneId,
+        host: this.config.host,
+        durationMs: Math.max(0, Date.now() - startedAt),
+      });
       return true;
     } catch (loadErr: any) {
-      this.log.warn('Google Cast load error', { zoneId: this.zoneId, message: loadErr?.message });
       const message = loadErr?.message ?? '';
+      if (typeof message === 'string' && message.toLowerCase().includes('request timed out')) {
+        this.lastLoadTimeoutAt = Date.now();
+      }
+      this.log.warn('Google Cast load error', {
+        zoneId: this.zoneId,
+        host: this.config.host,
+        appId: this.castDevice?.getSession?.()?.appId,
+        message,
+        contentId: media?.contentId,
+      });
       if (typeof message === 'string' && message.toLowerCase().includes('load cancelled')) {
         this.metadataLoadCooldownUntil = Date.now() + 3000;
       }
