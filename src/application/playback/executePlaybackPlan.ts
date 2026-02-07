@@ -41,9 +41,7 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
         flow: true,
         parentAudiopath: plan.metadata.station,
         startItem: plan.audiopath,
-        startIndex: typeof (plan.metadata as any).stationIndex === 'number'
-          ? (plan.metadata as any).stationIndex
-          : undefined,
+        startIndex: typeof plan.metadata.stationIndex === 'number' ? plan.metadata.stationIndex : undefined,
         zoneConfig: ctx.config,
       },
     );
@@ -118,10 +116,11 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
       queue: queueUris,
       queueIndex,
     } as PlaybackMetadata;
-    const startAt = playbackSource && normalizedStartAt ? normalizedStartAt : undefined;
+    const startAt = resolveStartAt(playbackSource);
     const session = ctx.player.playExternal('spotify', playbackSource, meta, startAt);
     if (playbackIsPipe) {
-      inputs.markSessionActive(ctx.id, plan.metadata);
+      // Preserve queue/trackId context for spotify session tracking.
+      inputs.markSessionActive(ctx.id, meta);
     }
     return session;
   }
