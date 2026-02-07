@@ -6,6 +6,7 @@ import ffmpegStatic from 'ffmpeg-static';
 import { createLogger } from '@/shared/logging/logger';
 import {
   audioResampler,
+  mp3BitrateToBps,
   pcmCodecFromBitDepth,
   pcmFormatFromBitDepth,
   type AudioOutputSettings,
@@ -102,6 +103,10 @@ export class AudioSession {
   private stdoutPaused = false;
   private backpressureCount = 0;
   private readonly backpressureListeners = new Map<PassThrough, () => void>();
+  private readonly pacingBps: number | null;
+  private readonly pacingMaxAheadBytes: number;
+  private pacingPaused = false;
+  private pacingTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly zoneId: number,
@@ -150,6 +155,17 @@ export class AudioSession {
       const clampedAlert = Math.min(hardMax, Math.max(alertBufferBytes, hardMin));
       this.maxBufferBytes = Math.max(this.maxBufferBytes, clampedAlert);
     }
+
+    // When URL input pacing is explicitly disabled (realTime=false), ffmpeg may process finite
+    // sources (e.g. Apple Music track MP4s) far ahead of wall clock time and then exit,
+    // terminating the session while pull-based outputs (Cast) still expect a live stream.
+    // We prevent that by backpressuring ffmpeg stdout to keep a bounded lead buffer.
+    this.pacingBps = this.computePacingBps();
+    const minLeadBytes =
+      this.pacingBps && this.targetLeadMs > 0
+        ? Math.round((this.pacingBps * this.targetLeadMs) / 1000)
+        : 0;
+    this.pacingMaxAheadBytes = Math.max(minLeadBytes, this.maxBufferBytes, 0);
   }
 
   public start(): void {
@@ -363,6 +379,7 @@ export class AudioSession {
       }
       this.recordBytes(chunk.length);
       this.writeToSubscribers(chunk);
+      this.maybeApplyOutputPacing();
     });
 
     proc.stdout.on('close', () => {
@@ -458,6 +475,91 @@ export class AudioSession {
     }
     this.process.stdout.resume();
     this.stdoutPaused = false;
+  }
+
+  private computePacingBps(): number | null {
+    if (this.source.kind !== 'url') {
+      return null;
+    }
+    // Only pace when -re has been explicitly disabled.
+    if (this.source.realTime !== false) {
+      return null;
+    }
+    const { sampleRate, channels, pcmBitDepth, mp3Bitrate } = this.outputSettings;
+    switch (this.profile) {
+      case 'mp3':
+      case 'aac':
+      case 'opus': {
+        // Bitrate is stored as "k" bits/sec; convert to bytes/sec.
+        const bytesPerSec = Math.round(mp3BitrateToBps(mp3Bitrate || '160k') / 8);
+        return bytesPerSec > 0 ? bytesPerSec : null;
+      }
+      case 'pcm': {
+        const bytesPerSec = Math.round(sampleRate * channels * (pcmBitDepth / 8));
+        return bytesPerSec > 0 ? bytesPerSec : null;
+      }
+      case 'flac':
+      default:
+        return null;
+    }
+  }
+
+  private clearPacingTimer(): void {
+    if (this.pacingTimer) {
+      clearTimeout(this.pacingTimer);
+      this.pacingTimer = undefined;
+    }
+  }
+
+  private maybeApplyOutputPacing(): void {
+    if (!this.process?.stdout) return;
+    if (!this.pacingBps || this.pacingBps <= 0) return;
+    if (!this.startTs) return;
+    if (this.backpressureCount > 0) return;
+    if (this.pacingMaxAheadBytes <= 0) return;
+
+    const now = Date.now();
+    const elapsedMs = Math.max(0, now - this.startTs);
+    const expectedBytes = (this.pacingBps * elapsedMs) / 1000;
+    const allowedBytes = expectedBytes + this.pacingMaxAheadBytes;
+    const overshoot = this.totalBytes - allowedBytes;
+
+    if (overshoot > 0) {
+      if (!this.pacingPaused) {
+        this.pacingPaused = true;
+        this.log.spam('ffmpeg output pacing pause', {
+          zoneId: this.zoneId,
+          profile: this.profile,
+          overshootBytes: Math.round(overshoot),
+          maxAheadBytes: this.pacingMaxAheadBytes,
+          subscribers: this.subscribers.size,
+        });
+      }
+      this.pauseStdout();
+
+      // Resume when wall clock catches up. Keep the stream paused when no subscribers are present.
+      const waitMs = Math.min(15_000, Math.max(5, Math.ceil((overshoot / this.pacingBps) * 1000)));
+      if (!this.pacingTimer) {
+        this.pacingTimer = setTimeout(() => {
+          this.pacingTimer = undefined;
+          if (this.subscribers.size === 0) {
+            return;
+          }
+          this.pacingPaused = false;
+          this.log.spam('ffmpeg output pacing resume', { zoneId: this.zoneId, profile: this.profile });
+          this.resumeStdout();
+        }, waitMs);
+        this.pacingTimer.unref();
+      }
+      return;
+    }
+
+    if (this.pacingPaused && this.subscribers.size > 0) {
+      this.pacingPaused = false;
+      this.log.spam('ffmpeg output pacing resume', { zoneId: this.zoneId, profile: this.profile });
+      this.clearPacingTimer();
+      this.resumeStdout();
+    }
   }
 
   private addBackpressure(subscriber: PassThrough): void {
@@ -800,6 +902,7 @@ export class AudioSession {
     this.bytesSinceLog = 0;
     this.lastLogTs = 0;
     this.clearKillTimer();
+    this.clearPacingTimer();
     this.detachPipeSourceListeners();
     if (this.firstChunkResolve) {
       this.firstChunkResolve(false);
@@ -818,6 +921,7 @@ export class AudioSession {
     this.backpressureListeners.clear();
     this.backpressureCount = 0;
     this.stdoutPaused = false;
+    this.pacingPaused = false;
     for (const subscriber of this.subscribers) {
       if (subscriber.writableEnded) {
         continue;
