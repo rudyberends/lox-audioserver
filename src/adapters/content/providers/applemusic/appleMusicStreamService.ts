@@ -1200,23 +1200,30 @@ export class AppleMusicStreamService {
   ): Promise<void> {
     const controller = new AbortController();
     const abort = () => controller.abort();
-    // Use an inactivity timeout, not an absolute wall-clock timeout.
-    // Apple Music can proxy full-track MP4s; those requests can legitimately exceed 30s.
-    let idleTimer: NodeJS.Timeout | null = null;
-    const bumpIdleTimer = () => {
-      if (idleTimer) {
-        clearTimeout(idleTimer);
+    // Important: do NOT apply a strict "no data for N seconds" body timeout here.
+    // The downstream consumer (ffmpeg) can legitimately apply backpressure (pause/seek/output buffering),
+    // which would stop us from reading from `response.body` and would make an "idle" timer fire even
+    // though the connection is healthy. That leads to truncated MP4s and AAC decode errors.
+    //
+    // We only enforce a time-to-first-byte (TTFB) timeout; after the first chunk arrives, we let the
+    // stream run until the client disconnects or the upstream ends.
+    let ttfbTimer: NodeJS.Timeout | null = null;
+    let sawFirstByte = false;
+    const bumpFirstByte = () => {
+      if (sawFirstByte) return;
+      sawFirstByte = true;
+      if (ttfbTimer) {
+        clearTimeout(ttfbTimer);
+        ttfbTimer = null;
       }
-      idleTimer = setTimeout(() => controller.abort(), 30_000);
-      idleTimer.unref();
     };
     let cleanedUp = false;
     const cleanup = () => {
       if (cleanedUp) return;
       cleanedUp = true;
-      if (idleTimer) {
-        clearTimeout(idleTimer);
-        idleTimer = null;
+      if (ttfbTimer) {
+        clearTimeout(ttfbTimer);
+        ttfbTimer = null;
       }
       req.off('aborted', abort);
       res.off('close', abort);
@@ -1264,8 +1271,10 @@ export class AppleMusicStreamService {
       });
       res.writeHead(200, { 'Content-Type': contentType });
       const stream = Readable.fromWeb(response.body as any);
-      bumpIdleTimer();
-      stream.on('data', bumpIdleTimer);
+      // TTFB guard: abort if the upstream body never yields any bytes.
+      ttfbTimer = setTimeout(() => controller.abort(), 30_000);
+      ttfbTimer.unref();
+      stream.once('data', bumpFirstByte);
       stream.on('end', cleanup);
       stream.on('close', cleanup);
       stream.on('error', (error) => {
@@ -1273,7 +1282,10 @@ export class AppleMusicStreamService {
         const name = error && typeof error === 'object' && 'name' in error ? String((error as any).name) : '';
         const aborted = controller.signal.aborted || name === 'AbortError' || message.toLowerCase().includes('aborted');
         if (aborted) {
-          this.log.debug('Apple Music proxy stream aborted', { targetUrl });
+          this.log.debug('Apple Music proxy stream aborted', {
+            targetUrl,
+            sawFirstByte,
+          });
         } else {
           this.log.warn('Apple Music proxy stream failed', { message, targetUrl });
         }
