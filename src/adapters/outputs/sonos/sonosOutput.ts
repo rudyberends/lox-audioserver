@@ -185,8 +185,8 @@ export class SonosOutput implements ZoneOutput {
       this.ports.outputHandlers.onOutputError(this.zoneId, 'sonos no stream uri');
       return;
     }
-    const streamUri = this.withPrimeToken(this.normalizeStreamUri(uri), session);
-    const s2Played = await this.playViaS2(streamUri, session);
+    const httpStreamUri = this.withPrimeToken(this.normalizeStreamUri(uri), session);
+    const s2Played = await this.playViaS2(httpStreamUri, session);
     if (s2Played) {
       return;
     }
@@ -194,7 +194,7 @@ export class SonosOutput implements ZoneOutput {
       return;
     }
     await this.ports.sonosGroup.syncGroupMembers(this);
-    await this.sendPlaybackWithSoap(streamUri, session);
+    await this.sendPlaybackWithSoap(httpStreamUri, session);
   }
 
   public async pause(session: PlaybackSession | null): Promise<void> {
@@ -331,7 +331,8 @@ export class SonosOutput implements ZoneOutput {
   }
 
   public getPreferredOutput(): PreferredOutput {
-    return { profile: 'aac', sampleRate: 44100, channels: 2 };
+    // MP3 is the most compatible Sonos ingest format and enables radio-mode URIs (x-rincon-mp3radio://).
+    return { profile: 'mp3', sampleRate: 44100, channels: 2 };
   }
 
   public getHttpPreferences(): HttpPreferences {
@@ -565,14 +566,16 @@ export class SonosOutput implements ZoneOutput {
     };
   }
 
-  private async sendPlaybackWithSoap(uri: string, session: PlaybackSession): Promise<void> {
-    this.log.info('sending playback command', { zoneId: this.zoneId, uri });
-    await this.runCommand('Stop', this.buildStopBody(), { optional: true });
-    const didl = this.buildDidlMetadata(uri, session);
+  private async sendPlaybackWithSoap(httpUri: string, session: PlaybackSession): Promise<void> {
+    const transportUri = this.buildTransportUri(httpUri, session);
+    this.log.info('sending playback command', { zoneId: this.zoneId, uri: transportUri });
+    // Do not block on Stop; it can take multiple seconds when switching sources.
+    // SetAVTransportURI should be enough for most transitions.
+    const didl = this.buildDidlMetadata(httpUri, session);
     let timedOut = false;
     const setResult = await this.invokeActionWithRetry(
       'SetAVTransportURI',
-      this.buildSetUriBody(uri, didl),
+      this.buildSetUriBody(transportUri, didl),
       1,
       {
         retryDelayMs: 1000,
@@ -597,7 +600,7 @@ export class SonosOutput implements ZoneOutput {
     ) {
       return;
     }
-    this.log.info('Sonos playback started', { zoneId: this.zoneId, uri });
+    this.log.info('Sonos playback started', { zoneId: this.zoneId, uri: transportUri });
   }
 
   private async runCommand(action: string, body: string, options: InvokeOptions = {}): Promise<void> {
@@ -857,6 +860,25 @@ export class SonosOutput implements ZoneOutput {
 
   private normalizeStreamUri(uri: string): string {
     return normalizeStreamUrl(uri, this.buildBaseUrl(), ['mp3', 'aac']);
+  }
+
+  private isRadioSession(session: PlaybackSession): boolean {
+    const duration = Number(session.duration ?? 0);
+    const metaDuration = Number(session.metadata?.duration ?? 0);
+    return !(duration > 0) && !(metaDuration > 0);
+  }
+
+  private buildTransportUri(httpUri: string, session: PlaybackSession): string {
+    if (!this.isRadioSession(session)) {
+      return httpUri;
+    }
+    const ext = httpUri.split('?')[0]?.split('.').pop()?.toLowerCase() ?? '';
+    if (ext !== 'mp3' && ext !== 'mpeg') {
+      return httpUri;
+    }
+    // Sonos radio mode expects x-rincon-mp3radio:// and treats the item as a broadcast stream.
+    // Keep DIDL resource as the HTTP URL; only the transport URI is converted.
+    return httpUri.replace(/^https?:\/\//i, 'x-rincon-mp3radio://');
   }
 
   private withPrimeToken(uri: string, session: PlaybackSession): string {
