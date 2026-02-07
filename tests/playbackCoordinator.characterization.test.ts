@@ -243,6 +243,8 @@ class FakeAudioManager {
   public readonly inputPrefs: Array<{ zoneId: number; prefs: unknown }> = [];
   public readonly playRequests: Array<{ zoneId: number; req: { uri: string; type: string } }> = [];
   public readonly clearedPlayRequests: number[] = [];
+  public readonly sessionMetadataUpdates: Array<{ zoneId: number; metadata: PlaybackMetadata }> = [];
+  public session: PlaybackSession | null = null;
 
   public setPreferredOutputSettings(zoneId: number, settings: unknown): void {
     this.preferred.push({ zoneId, settings });
@@ -266,6 +268,18 @@ class FakeAudioManager {
 
   public async waitForFirstChunk(): Promise<boolean> {
     return true;
+  }
+
+  public getSession(_zoneId: number): PlaybackSession | null {
+    return this.session;
+  }
+
+  public updateSessionMetadata(zoneId: number, metadata: PlaybackMetadata): PlaybackSession | null {
+    this.sessionMetadataUpdates.push({ zoneId, metadata });
+    if (this.session && this.session.zoneId === zoneId) {
+      this.session.metadata = metadata;
+    }
+    return this.session;
   }
 }
 
@@ -646,6 +660,7 @@ function createHarness(options?: {
     inputsPort,
     outputRouter,
     recentsManager,
+    audioManager,
     stopCalls,
     playbackQueue,
     notifier,
@@ -1139,6 +1154,44 @@ test('startQueuePlayback transitions input and stops external sessions once', as
   assert.equal(inputsPort.stopSpotifyCalls.length, 1);
   assert.equal(inputsPort.stopSpotifyCalls[0]?.reason, 'switch_to_queue');
   assert.equal(stopCalls.length, 1);
+});
+
+test('radio metadata updates propagate into audio session metadata (ICY)', () => {
+  const { coordinator, ctx, audioManager } = createHarness();
+  ctx.state.mode = 'play' as any;
+  ctx.state.audiopath = 'tunein:station:abc';
+  ctx.state.audiotype = 1 as any;
+
+  const now = Date.now();
+  audioManager.session = {
+    zoneId: ctx.id,
+    source: 'tunein:station:abc',
+    metadata: {
+      title: 'Station',
+      artist: '',
+      album: '',
+      audiopath: 'tunein:station:abc',
+      isRadio: true,
+    },
+    stream: {
+      id: 'stream',
+      url: 'http://example.com/stream',
+      coverUrl: '',
+      createdAt: now,
+    },
+    state: 'playing',
+    elapsed: 0,
+    duration: 0,
+    startedAt: now,
+    updatedAt: now,
+    playbackSource: { kind: 'url', url: 'http://example.com/radio' },
+  };
+
+  coordinator.updateRadioMetadata(ctx.id, { title: 'Track', artist: 'Artist' });
+
+  assert.equal(audioManager.sessionMetadataUpdates.length, 1);
+  assert.equal(audioManager.sessionMetadataUpdates[0]?.metadata.title, 'Track');
+  assert.equal(audioManager.sessionMetadataUpdates[0]?.metadata.artist, 'Artist');
 });
 
 test('playContent does not double-stop external sessions', async () => {

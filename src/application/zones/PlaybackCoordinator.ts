@@ -247,6 +247,33 @@ export class PlaybackCoordinator {
       zoneId,
       metadata,
     });
+
+    // Keep audio session metadata in sync so HTTP clients (e.g. Squeezelite)
+    // can receive dynamic "now playing" updates via ICY metadata blocks.
+    const session = this.audioManager.getSession(zoneId);
+    if (!session) {
+      return;
+    }
+    const prev = session.metadata;
+    const next: PlaybackMetadata = {
+      title: metadata.title?.trim() || prev?.title || '',
+      artist: metadata.artist?.trim() || '',
+      album: prev?.album || '',
+      coverurl: metadata.coverurl || prev?.coverurl,
+      duration: typeof metadata.duration === 'number' ? metadata.duration : prev?.duration,
+      isRadio: prev?.isRadio ?? true,
+      audiopath: prev?.audiopath,
+      trackId: prev?.trackId,
+      station: prev?.station,
+      stationIndex: prev?.stationIndex,
+      queue: prev?.queue,
+      queueIndex: prev?.queueIndex,
+    };
+    // Avoid overwriting sessions with empty mandatory fields.
+    if (!next.title) {
+      return;
+    }
+    this.audioManager.updateSessionMetadata(zoneId, next);
   }
 
   public updateInputCover(zoneId: number, cover?: CoverArtPayload): string | undefined {
