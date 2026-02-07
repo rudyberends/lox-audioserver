@@ -976,7 +976,9 @@ export class AppleMusicStreamService {
     if (typeof bridge.appleMusicPaceInput === 'boolean') {
       return bridge.appleMusicPaceInput;
     }
-    return true;
+    // Default to unpaced input for faster startup; the engine will apply bounded output pacing
+    // when needed to avoid running finite sources ahead of wall clock.
+    return false;
   }
 
   private async logInputDetails(
