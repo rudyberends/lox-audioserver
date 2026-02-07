@@ -1110,7 +1110,7 @@ export class AppleMusicStreamService {
         res.end();
         return;
       }
-      await this.proxyUpstreamResponse(res, target, session.headers);
+      await this.proxyUpstreamResponse(req, res, target, session.headers);
       return;
     }
 
@@ -1193,17 +1193,39 @@ export class AppleMusicStreamService {
   }
 
   private async proxyUpstreamResponse(
+    req: IncomingMessage,
     res: ServerResponse,
     targetUrl: string,
     headers?: Record<string, string>,
   ): Promise<void> {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    timeout.unref();
+    let cleanedUp = false;
+    const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      clearTimeout(timeout);
+      req.off('aborted', abort);
+      res.off('close', abort);
+      res.off('close', cleanup);
+      res.off('finish', cleanup);
+    };
+    // ffmpeg is often killed during rapid skips; without aborting the upstream request, undici will
+    // keep downloading the MP4 even though nobody is listening anymore, eventually stalling new
+    // requests due to connection/resource exhaustion.
+    req.on('aborted', abort);
+    res.on('close', abort);
+    res.on('close', cleanup);
+    res.on('finish', cleanup);
     try {
       const upstreamHeaders = this.sanitizeProxyHeaders(targetUrl, headers);
       const response = await fetch(
         targetUrl,
         upstreamHeaders
-          ? { headers: upstreamHeaders, dispatcher: this.proxyAgent as any }
-          : { dispatcher: this.proxyAgent as any },
+          ? { headers: upstreamHeaders, dispatcher: this.proxyAgent as any, signal: controller.signal }
+          : { dispatcher: this.proxyAgent as any, signal: controller.signal },
       );
       if (!response.ok || !response.body) {
         let bodyPreview = '';
@@ -1241,10 +1263,23 @@ export class AppleMusicStreamService {
       });
       stream.pipe(res);
     } catch (error) {
+      cleanup();
       const message = error instanceof Error ? error.message : String(error);
+      if (controller.signal.aborted) {
+        this.log.debug('Apple Music proxy fetch aborted', { targetUrl });
+        // Client went away; nothing to do.
+        if (!res.headersSent && !res.writableEnded && !res.destroyed) {
+          res.writeHead(499, { 'Content-Type': 'text/plain' });
+        }
+        if (!res.writableEnded && !res.destroyed) {
+          res.end();
+        }
+        return;
+      }
       this.log.warn('Apple Music proxy fetch failed', { message, targetUrl });
       res.writeHead(502, { 'Content-Type': 'text/plain' });
       res.end();
+      return;
     }
   }
 
