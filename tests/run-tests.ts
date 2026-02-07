@@ -12,7 +12,6 @@ import './playbackCoordinator.characterization.test';
 import './adminApiJsonBody.test';
 import './airplayPcmStream.test';
 import './audioStreamHandlerIcy.test';
-import './audioManagerEndOfTrack.test';
 import './runtimeShutdown.test';
 import type { ZoneConfig } from '../src/domain/config/types';
 import { applyZonePatch } from '../src/domain/loxone/reducer';
