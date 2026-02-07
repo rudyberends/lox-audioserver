@@ -104,7 +104,16 @@ export class QueueController {
   }
 
   public isLocalQueueAuthority(authority: QueueAuthority | undefined | null): boolean {
-    return !authority || authority === 'local';
+    // Provider-backed queues (Apple Music/Deezer/Tidal) are still driven by the local queue controller.
+    // Treat them as "local" so auto-advance and next/prev keep working even if an output snapshot
+    // reports a provider-flavored authority.
+    return (
+      !authority ||
+      authority === 'local' ||
+      authority === 'applemusic' ||
+      authority === 'deezer' ||
+      authority === 'tidal'
+    );
   }
 
   public seekInQueue(zoneId: number, target: string): boolean {
