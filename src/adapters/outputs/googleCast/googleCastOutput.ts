@@ -148,6 +148,12 @@ export class GoogleCastOutput implements ZoneOutput {
     if (signature === this.lastMetadataSignature) {
       return;
     }
+    // Metadata often arrives while a load is still pending (Apple Music DRM/key extraction etc).
+    // Do not start a second cast LOAD in parallel; it tends to time out and/or disconnect.
+    if (this.loadPromise) {
+      this.lastMetadataUpdateAt = Date.now();
+      return;
+    }
     if (signature === this.loadInFlightSignature) {
       // Avoid concurrent loads while a play/load is already running.
       this.lastMetadataSignature = signature;
@@ -305,7 +311,7 @@ export class GoogleCastOutput implements ZoneOutput {
       this.suppressRemoteStateUntil = Math.max(this.suppressRemoteStateUntil, now + 3000);
       let loaded = await this.loadMedia(media, {
         autoplay: true,
-        currentTime: session.elapsed ? session.elapsed : 0,
+        currentTime: 0,
       });
       if (!loaded) {
         // If the load times out, the cast stack may be in a bad state; reconnect once and retry.
@@ -324,7 +330,7 @@ export class GoogleCastOutput implements ZoneOutput {
         await this.ensureReceiver();
         loaded = await this.loadMedia(media, {
           autoplay: true,
-          currentTime: session.elapsed ? session.elapsed : 0,
+          currentTime: 0,
         });
       }
       if (!loaded) {
@@ -371,18 +377,8 @@ export class GoogleCastOutput implements ZoneOutput {
     const sessionAppId = this.castDevice.getSession?.()?.appId;
     if (sessionAppId === DEFAULT_MEDIA_RECEIVER_APP_ID) return;
 
-    // Refresh status before making decisions; stale sessions can cause media.load to time out.
-    await bestEffort(() => this.castDevice!.receiver.getStatus(2000), {
-      fallback: undefined,
-      onError: 'debug',
-      log: this.log,
-      label: 'cast receiver status refresh failed',
-      context: { zoneId: this.zoneId, host: this.config.host },
-    });
-    const refreshedAppId =
-      this.castDevice.getSession?.()?.appId ??
-      this.castDevice.receiver.getCachedStatus?.()?.status?.applications?.[0]?.appId;
-    if (refreshedAppId === DEFAULT_MEDIA_RECEIVER_APP_ID) return;
+    // IMPORTANT: receiver.getStatus() does not update CastDevice.session (it doesn't emit),
+    // so "cached active appId" is not sufficient; we must (re)launch to get a transportId.
 
     if (this.receiverPromise) {
       return this.receiverPromise;
@@ -529,14 +525,14 @@ export class GoogleCastOutput implements ZoneOutput {
     };
     const durationSec = session.duration || meta.duration || 0;
     const normalizedDuration = durationSec > 0 ? durationSec : undefined;
-    const streamType = normalizedDuration && normalizedDuration > 0 ? 'BUFFERED' : 'LIVE';
-    const currentTimeSec = session.elapsed ? session.elapsed : 0;
+    // Our `/streams/...` endpoints are live transcoded streams even when duration is known.
+    // Declaring them as LIVE avoids cast trying to treat them like random-access VOD.
+    const streamType = 'LIVE';
     return {
       contentId: streamUrl,
       contentType: 'audio/mpeg',
       streamType,
       duration: normalizedDuration,
-      currentTime: currentTimeSec,
       metadata: {
         metadataType: 3, // MUSIC_TRACK
         title: meta.title ?? this.zoneName,
@@ -557,7 +553,15 @@ export class GoogleCastOutput implements ZoneOutput {
   }
 
   private buildMediaSignature(session: PlaybackSession): string {
-    const { streamUrl, coverUrl } = this.resolveStreamUrls(session);
+    const baseUrl = this.resolveBaseUrl();
+    // Signature must be stable across time; do not include `prime` decisions.
+    const streamUrl = resolveStreamUrl({
+      baseUrl,
+      zoneId: this.zoneId,
+      streamPath: session.stream?.url,
+      defaultExt: 'mp3',
+    });
+    const coverUrl = this.resolveCoverUrl(session);
     const meta = (session.metadata ?? {}) as {
       title?: string;
       artist?: string;
@@ -575,15 +579,25 @@ export class GoogleCastOutput implements ZoneOutput {
     });
   }
 
+  private shouldPrimeStream(session: PlaybackSession): boolean {
+    const startedAt = session.playbackStartedAt ?? session.startedAt ?? 0;
+    if (!startedAt) {
+      return true;
+    }
+    // Prime only near the beginning so reconnects later in the track don't rewind audio.
+    return Date.now() - startedAt < 2500;
+  }
+
   private resolveStreamUrls(session: PlaybackSession): { baseUrl: string; streamUrl: string; coverUrl?: string } {
     const baseUrl = this.resolveBaseUrl();
+    const prime = this.shouldPrimeStream(session) ? undefined : '0';
     const streamUrl = resolveStreamUrl({
       baseUrl,
       zoneId: this.zoneId,
       streamPath: session.stream?.url,
       defaultExt: 'mp3',
-      // Keep priming disabled for cast until we have stable field-test results.
-      prime: '0',
+      // Prime sends buffered audio immediately, which typically shortens cast "BUFFERING" time.
+      prime,
       primeMode: 'upsert',
     });
     return { baseUrl, streamUrl };
