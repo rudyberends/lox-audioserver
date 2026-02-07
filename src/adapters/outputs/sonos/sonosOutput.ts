@@ -11,9 +11,9 @@ import type {
 import { SonosClient } from '@lox-audioserver/node-sonos';
 import { resolveDlnaEndpoints } from '@/adapters/outputs/dlna/dlnaDiscovery';
 import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
-import { buildBaseUrl, normalizeStreamUrl, resolveAbsoluteUrl } from '@/shared/streamUrl';
+import { buildBaseUrl, normalizeStreamUrl, resolveAbsoluteUrl, upsertQueryParam } from '@/shared/streamUrl';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
-import { discoverSonosDevice } from '@/adapters/outputs/sonos/sonosDiscovery';
+import { discoverSonosDevice, resolveSonosCoordinatorHost } from '@/adapters/outputs/sonos/sonosDiscovery';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 
 export interface SonosOutputConfig {
@@ -29,7 +29,56 @@ export const SONOS_OUTPUT_DEFINITION: OutputConfigDefinition = {
   id: 'sonos',
   label: 'Sonos (S1/S2 via UPnP)',
   description: 'Streams audio to a Sonos renderer via UPnP AVTransport.',
-  fields: [],
+  fields: [
+    {
+      id: 'host',
+      label: 'Sonos IP or hostname',
+      type: 'text',
+      placeholder: '192.168.1.60',
+      description:
+        'Optional IP/hostname of the Sonos player. When provided, AVTransport endpoints are discovered automatically.',
+    },
+    {
+      id: 'controlUrl',
+      label: 'AVTransport control URL',
+      type: 'text',
+      placeholder: 'http://192.168.1.60:1400/MediaRenderer/AVTransport/Control',
+      description:
+        'Optional manual AVTransport endpoint. Use this only when discovery is not working.',
+    },
+    {
+      id: 'autoDiscover',
+      label: 'Auto discover',
+      type: 'text',
+      placeholder: 'true',
+      description:
+        "When host isn't set, discover a Sonos device via SSDP (true/false). Defaults to true.",
+    },
+    {
+      id: 'deviceName',
+      label: 'Preferred device name',
+      type: 'text',
+      placeholder: 'Living Room',
+      description:
+        "Used to match a discovered Sonos by name/room. If omitted, the zone name is used.",
+    },
+    {
+      id: 'householdId',
+      label: 'Household ID',
+      type: 'text',
+      placeholder: 'Sonos household id',
+      description:
+        'Optional filter for discovery (HouseholdControlID) when multiple Sonos households are present.',
+    },
+    {
+      id: 'networkScan',
+      label: 'Network scan fallback',
+      type: 'text',
+      placeholder: 'false',
+      description:
+        'When SSDP discovery returns no devices, allow scanning the local subnet for Sonos status pages (true/false).',
+    },
+  ],
 };
 
 export class SonosOutput implements ZoneOutput {
@@ -43,6 +92,7 @@ export class SonosOutput implements ZoneOutput {
   private readonly householdId: string | null;
   private readonly preferredName: string | null;
   private discoveredHost: string | null = null;
+  private effectiveHost: string | null = null;
   private controlUrl?: string;
   private renderingControlUrl?: string;
   private discoveryPromise?: Promise<boolean>;
@@ -135,7 +185,7 @@ export class SonosOutput implements ZoneOutput {
       this.ports.outputHandlers.onOutputError(this.zoneId, 'sonos no stream uri');
       return;
     }
-    const streamUri = this.normalizeStreamUri(uri);
+    const streamUri = this.withPrimeToken(this.normalizeStreamUri(uri), session);
     const s2Played = await this.playViaS2(streamUri, session);
     if (s2Played) {
       return;
@@ -289,7 +339,7 @@ export class SonosOutput implements ZoneOutput {
   }
 
   private async fetchDeviceInfo(): Promise<string | null> {
-    const host = this.host || this.discoveredHost || this.hostFromControlUrl();
+    const host = this.effectiveHost || this.host || this.discoveredHost || this.hostFromControlUrl();
     if (!host) {
       return null;
     }
@@ -393,11 +443,16 @@ export class SonosOutput implements ZoneOutput {
   }
 
   private async ensureHost(): Promise<string | null> {
+    if (this.effectiveHost) {
+      return this.effectiveHost;
+    }
     if (this.host) {
-      return this.host;
+      this.effectiveHost = await this.resolveCoordinatorHost(this.host);
+      return this.effectiveHost;
     }
     if (this.discoveredHost) {
-      return this.discoveredHost;
+      this.effectiveHost = await this.resolveCoordinatorHost(this.discoveredHost);
+      return this.effectiveHost;
     }
     if (!this.autoDiscover) {
       return null;
@@ -413,13 +468,32 @@ export class SonosOutput implements ZoneOutput {
       return null;
     }
     this.discoveredHost = device.host;
+    this.effectiveHost = await this.resolveCoordinatorHost(this.discoveredHost);
     this.log.info('Sonos device discovered', {
       zoneId: this.zoneId,
-      host: device.host,
+      host: this.effectiveHost,
       name: device.name ?? device.roomName,
       householdId: device.householdId,
     });
-    return this.discoveredHost;
+    return this.effectiveHost;
+  }
+
+  private async resolveCoordinatorHost(host: string): Promise<string> {
+    const trimmed = host.trim();
+    if (!trimmed) return '';
+    try {
+      const mapped = await resolveSonosCoordinatorHost({ host: trimmed, timeoutMs: 1200 });
+      if (mapped && mapped !== trimmed) {
+        this.log.info('Sonos host mapped to coordinator', {
+          zoneId: this.zoneId,
+          host: trimmed,
+          coordinator: mapped,
+        });
+      }
+      return mapped || trimmed;
+    } catch {
+      return trimmed;
+    }
   }
 
   private async ensureS2Client(): Promise<SonosClient | null> {
@@ -470,8 +544,16 @@ export class SonosOutput implements ZoneOutput {
     }
     const group = client.player.group;
     const container = this.buildS2Container(session);
-    await group.playStreamUrl(uri, container);
-    return true;
+    try {
+      await group.playStreamUrl(uri, container);
+      return true;
+    } catch (err) {
+      this.log.debug('sonos s2 play failed', {
+        zoneId: this.zoneId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
   }
 
   private buildS2Container(session: PlaybackSession): { _objectType: 'container'; name: string; type: string } {
@@ -775,6 +857,21 @@ export class SonosOutput implements ZoneOutput {
 
   private normalizeStreamUri(uri: string): string {
     return normalizeStreamUrl(uri, this.buildBaseUrl(), ['mp3', 'aac']);
+  }
+
+  private withPrimeToken(uri: string, session: PlaybackSession): string {
+    // Sonos (especially when switching between sources/alerts) can ignore a "same URI" update.
+    // Add a stable cache-busting query param to force a fresh fetch.
+    try {
+      const parsed = new URL(uri);
+      if (!parsed.pathname.startsWith('/streams/')) {
+        return uri;
+      }
+    } catch {
+      return uri;
+    }
+    const token = session.playRequestAt ?? Date.now();
+    return upsertQueryParam(uri, 'prime', String(token));
   }
 
   private buildBaseUrl(): string {

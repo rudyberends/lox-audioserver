@@ -338,6 +338,7 @@ function createSonosOutput(
   const rawControlUrl = (config as Record<string, unknown>).controlUrl;
   const host = typeof rawHost === 'string' ? rawHost.trim() : '';
   const controlUrl = typeof rawControlUrl === 'string' ? rawControlUrl.trim() : '';
+  const rawAutoDiscover = (config as Record<string, unknown>).autoDiscover;
 
   log.info('Sonos output registered', {
     zoneId: zone.id,
@@ -348,6 +349,7 @@ function createSonosOutput(
   return new SonosOutput(zone.id, zone.name, {
     host,
     controlUrl,
+    autoDiscover: rawAutoDiscover,
     networkScan: (config as Record<string, unknown>).networkScan,
     householdId: (config as Record<string, unknown>).householdId as string | undefined,
     deviceName: (config as Record<string, unknown>).deviceName as string | undefined,
