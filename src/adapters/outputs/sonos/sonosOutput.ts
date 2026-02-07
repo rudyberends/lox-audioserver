@@ -86,6 +86,7 @@ export class SonosOutput implements ZoneOutput {
   private readonly log = createLogger('Output', 'Sonos');
   private readonly controllers = new Set<AbortController>();
   private readonly commandTimeoutMs = 2500;
+  private readonly slowCommandMs = 1200;
   private readonly host: string;
   private readonly autoDiscover: boolean;
   private readonly networkScan: boolean;
@@ -670,8 +671,17 @@ export class SonosOutput implements ZoneOutput {
   ): Promise<boolean> {
     const controller = new AbortController();
     this.controllers.add(controller);
-    const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? this.commandTimeoutMs);
+    const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     timeout.unref();
+    const startedAt = Date.now();
+    const urlHost = (() => {
+      try {
+        return new URL(url).host;
+      } catch {
+        return '';
+      }
+    })();
     try {
       this.log.debug('Sonos soap request', { action, service, zoneId: this.zoneId });
       const response = await fetch(url, {
@@ -690,11 +700,29 @@ export class SonosOutput implements ZoneOutput {
         label: 'sonos output response read failed',
         context: { status: response.status },
       });
+      const durationMs = Math.max(0, Date.now() - startedAt);
       if (!response.ok && response.status !== 500) {
         throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
       }
       if (response.ok) {
-        this.log.info('Sonos action succeeded', { action, service, zoneId: this.zoneId });
+        if (durationMs >= this.slowCommandMs) {
+          this.log.warn('Sonos action slow', {
+            action,
+            service,
+            zoneId: this.zoneId,
+            host: urlHost || undefined,
+            durationMs,
+            timeoutMs,
+          });
+        }
+        this.log.info('Sonos action succeeded', {
+          action,
+          service,
+          zoneId: this.zoneId,
+          host: urlHost || undefined,
+          status: response.status,
+          durationMs,
+        });
         return true;
       }
       const fault = text.slice(0, 2000);
@@ -703,6 +731,8 @@ export class SonosOutput implements ZoneOutput {
         status: response.status,
         service,
         zoneId: this.zoneId,
+        host: urlHost || undefined,
+        durationMs,
         body: fault,
       });
       if (options.softFaultOk) {
@@ -710,17 +740,41 @@ export class SonosOutput implements ZoneOutput {
       }
       return options.optional ?? false;
     } catch (error) {
+      const durationMs = Math.max(0, Date.now() - startedAt);
       const message = error instanceof Error ? error.message : String(error);
       const isAbort = error instanceof Error && error.name === 'AbortError';
       if (isAbort && options.timeoutOk) {
-        this.log.debug('Sonos request timed out; continuing', { action, service, zoneId: this.zoneId });
+        this.log.debug('Sonos request timed out; continuing', {
+          action,
+          service,
+          zoneId: this.zoneId,
+          host: urlHost || undefined,
+          durationMs,
+          timeoutMs,
+        });
         options.onTimeout?.();
         return false;
       }
       if (options.optional) {
-        this.log.debug('optional command failed', { action, service, message, zoneId: this.zoneId });
+        this.log.debug('optional command failed', {
+          action,
+          service,
+          message,
+          zoneId: this.zoneId,
+          host: urlHost || undefined,
+          durationMs,
+          timeoutMs,
+        });
       } else {
-        this.log.warn('command failed', { action, service, message, zoneId: this.zoneId });
+        this.log.warn('command failed', {
+          action,
+          service,
+          message,
+          zoneId: this.zoneId,
+          host: urlHost || undefined,
+          durationMs,
+          timeoutMs,
+        });
       }
       return options.optional ?? false;
     } finally {
