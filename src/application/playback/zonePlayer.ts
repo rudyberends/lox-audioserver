@@ -262,8 +262,15 @@ export class ZonePlayer {
       return;
     }
     this.lastTickAt = now;
-    const nextTime = this.state.duration > 0
-      ? Math.min(this.state.time + deltaSeconds, this.state.duration)
+    // Allow the internal clock to advance beyond `duration` by `endGuardSec`.
+    // Player listeners clamp the exposed position to `duration`, but `ended` needs
+    // to be able to fire when an output latency guard is configured.
+    const endCap =
+      this.state.duration > 0
+        ? Math.max(0, this.state.duration + (this.endGuardSec > 0 ? this.endGuardSec : 0))
+        : 0;
+    const nextTime = endCap > 0
+      ? Math.min(this.state.time + deltaSeconds, endCap)
       : this.state.time + deltaSeconds;
     if (nextTime !== this.state.time) {
       this.state.time = nextTime;

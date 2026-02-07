@@ -13,6 +13,7 @@ import './adminApiJsonBody.test';
 import './airplayPcmStream.test';
 import './audioStreamHandlerIcy.test';
 import './queueAuthority.test';
+import './zonePlayerEndGuard.test';
 import './runtimeShutdown.test';
 import type { ZoneConfig } from '../src/domain/config/types';
 import { applyZonePatch } from '../src/domain/loxone/reducer';
