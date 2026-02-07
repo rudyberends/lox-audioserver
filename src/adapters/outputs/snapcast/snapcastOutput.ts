@@ -145,7 +145,8 @@ export class SnapcastOutput implements ZoneOutput {
     const bytesPerSecond =
       outputSettings.sampleRate * outputSettings.channels * (outputSettings.pcmBitDepth / 8);
     const targetPrebufferBytes = Math.round((bytesPerSecond * prebufferMs) / 1000);
-    outputSettings.prebufferBytes = Math.max(outputSettings.prebufferBytes, targetPrebufferBytes);
+    // Snapcast already buffers on the client; keep our rolling prebuffer small to reduce latency.
+    outputSettings.prebufferBytes = Math.max(8 * 1024, targetPrebufferBytes);
     this.activeOutputSettings = outputSettings;
     const codec = pcmCodecFromBitDepth(outputSettings.pcmBitDepth);
     this.log.debug('serving PCM to Snapclients (ws)', {
