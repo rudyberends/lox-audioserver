@@ -19,6 +19,8 @@ const SNAPCAST_DEFAULT_OUTPUT: AudioOutputSettings = {
   sampleRate: 48000,
   channels: 2,
   pcmBitDepth: 16,
+  // Keep buffer modest; snapclient also buffers locally.
+  prebufferBytes: Math.round(48000 * 2 * (16 / 8) * 0.25),
 };
 
 export class SnapcastCore {
