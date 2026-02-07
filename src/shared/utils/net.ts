@@ -1,7 +1,13 @@
 import { networkInterfaces } from 'node:os';
 
 export function defaultLocalIp(): string {
-  const nets = networkInterfaces();
+  let nets: ReturnType<typeof networkInterfaces>;
+  try {
+    nets = networkInterfaces();
+  } catch {
+    // Some restricted runtimes (tests/containers) can throw here; fall back to empty.
+    return '';
+  }
   for (const name of Object.keys(nets)) {
     for (const net of nets[name] || []) {
       if (!net || net.internal) {

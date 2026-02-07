@@ -13,7 +13,13 @@ export function normalizeMacId(value?: string | null): string | null {
 }
 
 export function resolveLocalMacId(): string | null {
-  const nets = networkInterfaces();
+  let nets: ReturnType<typeof networkInterfaces>;
+  try {
+    nets = networkInterfaces();
+  } catch {
+    // Some restricted runtimes (tests/containers) can throw here; fall back to null.
+    return null;
+  }
   for (const name of Object.keys(nets)) {
     for (const net of nets[name] || []) {
       if (!net || net.internal) {

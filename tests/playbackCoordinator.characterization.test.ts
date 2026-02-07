@@ -241,6 +241,8 @@ class FakeAudioManager {
   public readonly preferred: Array<{ zoneId: number; settings: unknown }> = [];
   public readonly httpPrefs: Array<{ zoneId: number; prefs: unknown }> = [];
   public readonly inputPrefs: Array<{ zoneId: number; prefs: unknown }> = [];
+  public readonly playRequests: Array<{ zoneId: number; req: { uri: string; type: string } }> = [];
+  public readonly clearedPlayRequests: number[] = [];
 
   public setPreferredOutputSettings(zoneId: number, settings: unknown): void {
     this.preferred.push({ zoneId, settings });
@@ -252,6 +254,18 @@ class FakeAudioManager {
 
   public setInputPreferences(zoneId: number, prefs: unknown): void {
     this.inputPrefs.push({ zoneId, prefs });
+  }
+
+  public markPlayRequest(zoneId: number, req: { uri: string; type: string }): void {
+    this.playRequests.push({ zoneId, req });
+  }
+
+  public clearPlayRequest(zoneId: number): void {
+    this.clearedPlayRequests.push(zoneId);
+  }
+
+  public async waitForFirstChunk(): Promise<boolean> {
+    return true;
   }
 }
 
@@ -622,6 +636,8 @@ function createHarness(options?: {
     recentsManager: recentsManager as unknown as RecentsManager,
     audioManager: audioManager as unknown as AudioManager,
   });
+  // Speed up queue stepping for tests (otherwise waits 150ms).
+  (coordinator as any).queueStepCoalesceMs = 0;
 
   return {
     coordinator,
@@ -637,7 +653,8 @@ function createHarness(options?: {
 }
 
 async function flushAsync(): Promise<void> {
-  await new Promise((resolve) => setImmediate(resolve));
+  // PlaybackCoordinator queue stepping is coalesced using setTimeout; prefer timers-phase flushing.
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 test('input switching gates callbacks and stops prior sessions', async () => {

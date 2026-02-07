@@ -328,6 +328,20 @@ export class AudioStreamHandler {
     if (!icyEnabled) {
       return false;
     }
+    // Some clients (e.g. Squeezelite) don't reliably send `Icy-MetaData: 1`.
+    // We allow forcing ICY via `?icy=1` on the stream URL.
+    const rawUrl = req.url ?? '';
+    if (rawUrl) {
+      try {
+        const url = new URL(rawUrl, 'http://localhost');
+        const param = (url.searchParams.get('icy') ?? '').trim().toLowerCase();
+        if (param === '1' || param === 'true') {
+          return true;
+        }
+      } catch {
+        // ignore
+      }
+    }
     const header = req.headers['icy-metadata'] ?? req.headers['icy-metadata'.toLowerCase()];
     return String(header ?? '').trim() === '1';
   }
