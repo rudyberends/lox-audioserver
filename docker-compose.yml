@@ -1,7 +1,7 @@
 services:
   loxoneaudioserver:
     container_name: lox-audioserver
-    image: ghcr.io/rudyberends/lox-audioserver:latest
+    image: ghcr.io/lox-audioserver/lox-audioserver:latest
     hostname: lox-audioserver
     build:
       context: .

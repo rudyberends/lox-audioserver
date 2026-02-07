@@ -72,7 +72,7 @@ docker run -d \
   --name lox-audioserver \
   --network host \
   -v $(pwd)/data:/app/data \
-  ghcr.io/rudyberends/lox-audioserver:latest
+  ghcr.io/lox-audioserver/lox-audioserver:latest
 ```
 
 If you must use bridge networking instead, remove `--network host` and add port mappings `-p 7090:7090 -p 7091:7091 -p 7095:7095`.
@@ -92,7 +92,7 @@ Step-by-step
 1. Clone the repository and change directory:
 
 ```bash
-git clone https://github.com/rudyberends/lox-audioserver.git
+git clone https://github.com/lox-audioserver/lox-audioserver.git
 cd lox-audioserver
 ```
 
