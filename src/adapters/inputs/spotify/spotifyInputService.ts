@@ -16,11 +16,13 @@ import type { SpotifyConnectController } from '@/ports/InputsPort';
 import { PassThrough } from 'node:stream';
 import { getPlayer } from '@/application/playback/playerRegistry';
 import {
+  createNativeLibrespotSession,
   getNativeLibrespotStream,
   startNativeConnectHost,
 } from '@/adapters/inputs/spotify/spotifyStreamingService';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
+import type { LibrespotSession } from '@lox-audioserver/node-librespot';
 
 type AirplaySessionStopper = (zoneId: number, reason?: string) => void;
 type OutputErrorHandler = (zoneId: number, reason?: string) => void;
@@ -44,6 +46,10 @@ class SpotifyConnectInstance {
   private nativeChannels = 2;
   private nativeStream: PassThrough | null = null;
   private nativeStreamStop?: () => void;
+  private nativeSession: LibrespotSession | null = null;
+  private nativeSessionAccessToken: string | null = null;
+  private nativeSessionClientId: string | null = null;
+  private nativeSessionDeviceName: string | null = null;
   private credentialsPayload: string | null = null;
   private currentMetadata: PlaybackMetadata | null = null;
   private currentTrackId: string | null = null;
@@ -100,7 +106,7 @@ class SpotifyConnectInstance {
 
     const manager = this.spotifyManagers.get();
     const accessToken = await manager?.getAccessTokenForAccount(this.accountId ?? undefined);
-    const clientId = undefined;
+    const clientId = this.resolveClientId(this.accountId);
     const canUseToken = Boolean(accessToken);
 
     const haveCreds = await this.ensureCredentials(credPath, deviceId, publishName);
@@ -151,6 +157,7 @@ class SpotifyConnectInstance {
     this.stopping = true;
     this.stopConnectHost();
     this.stopNativeStream(true);
+    await this.closeNativeSession('stop');
     this.teardownPlaybackSession();
     this.stopping = false;
     this.isReady = false;
@@ -506,17 +513,32 @@ class SpotifyConnectInstance {
       return null;
     }
     const deviceId = this.deviceId || `lox-zone-${this.zoneId}`;
+    const deviceName = `${deviceId}-stream`;
+    const clientId = this.resolveClientId(this.accountId);
+
+    const session = await this.ensureNativeSession({
+      accessToken,
+      clientId,
+      deviceName,
+    });
+    if (!session) {
+      this.log.warn('native librespot session unavailable', { zoneId: this.zoneId });
+      return null;
+    }
 
     this.stopNativeStream(false);
 
     const nativeStream = await getNativeLibrespotStream({
       uri: spotifyUri,
       accessToken,
-      deviceName: `${deviceId}-stream`,
+      clientId,
+      deviceName,
       bitrate: 320,
       startPositionMs: seekPositionMs > 0 ? Math.round(seekPositionMs) : undefined,
       reuseStream: this.nativeStream,
+      reuseSession: session,
       endStreamOnStop: false,
+      closeSessionOnStop: false,
       onEvent: (ev: any) => {
         if (!ev || typeof ev !== 'object') {
           return;
@@ -538,6 +560,7 @@ class SpotifyConnectInstance {
                 : 'playback failed';
           this.notifyOutputError(this.zoneId, `spotify ${message}`);
           this.stopNativeStream(true);
+          void this.closeNativeSession('stream_error');
           return;
         }
         if (posSec !== undefined || durSec !== undefined) {
@@ -709,6 +732,7 @@ class SpotifyConnectInstance {
       this.isReady = false;
     }
     this.stopNativeStream(true);
+    void this.closeNativeSession('teardown');
   }
 
   private stopNativeStream(endStream = false): void {
@@ -727,6 +751,54 @@ class SpotifyConnectInstance {
         /* ignore */
       }
       this.nativeStream = null;
+    }
+  }
+
+  private async ensureNativeSession(params: {
+    accessToken: string;
+    clientId: string | null;
+    deviceName: string;
+  }): Promise<LibrespotSession | null> {
+    const { accessToken, clientId, deviceName } = params;
+    // Avoid churning sessions for consecutive tracks on the same token/device.
+    if (
+      this.nativeSession &&
+      this.nativeSessionAccessToken === accessToken &&
+      this.nativeSessionClientId === (clientId ?? null) &&
+      this.nativeSessionDeviceName === deviceName
+    ) {
+      return this.nativeSession;
+    }
+    await this.closeNativeSession('replace');
+    const session = await createNativeLibrespotSession({
+      accessToken,
+      clientId,
+      deviceName,
+    });
+    if (!session) {
+      return null;
+    }
+    this.nativeSession = session;
+    this.nativeSessionAccessToken = accessToken;
+    this.nativeSessionClientId = clientId ?? null;
+    this.nativeSessionDeviceName = deviceName;
+    return session;
+  }
+
+  private async closeNativeSession(reason: string): Promise<void> {
+    const session = this.nativeSession;
+    if (!session) {
+      return;
+    }
+    this.nativeSession = null;
+    this.nativeSessionAccessToken = null;
+    this.nativeSessionClientId = null;
+    this.nativeSessionDeviceName = null;
+    try {
+      await session.close();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.debug('native librespot session close failed', { zoneId: this.zoneId, reason, message });
     }
   }
 

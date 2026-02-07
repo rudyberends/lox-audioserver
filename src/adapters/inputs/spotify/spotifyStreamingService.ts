@@ -74,6 +74,22 @@ async function getSession(
   }
 }
 
+export async function createNativeLibrespotSession(params: {
+  accessToken: string;
+  clientId?: string | null;
+  deviceName?: string;
+}): Promise<LibrespotSession | null> {
+  const { accessToken, clientId, deviceName } = params;
+  if (!accessToken) {
+    return null;
+  }
+  return getSession({
+    accessToken,
+    clientId: clientId || undefined,
+    deviceName,
+  });
+}
+
 export type NativeStreamResult = NativeStreamHandle & {
   stream: NodeJS.ReadableStream;
   format: 's16le';
@@ -118,8 +134,12 @@ export async function getNativeLibrespotStream(params: {
   onEvent?: (event: ConnectEvent) => void;
   /** Reuse an existing PassThrough to keep the stream reference stable across tracks. */
   reuseStream?: NodeJS.ReadWriteStream | null;
+  /** Reuse an existing session to avoid reconnect/handshake overhead. */
+  reuseSession?: LibrespotSession | null;
   /** Whether stop() should end the provided stream. Defaults to true for fresh streams. */
   endStreamOnStop?: boolean;
+  /** Whether stop() should also close the underlying session (when we created it). Defaults to true. */
+  closeSessionOnStop?: boolean;
 }): Promise<NativeStreamResult | null> {
   const {
     uri,
@@ -130,7 +150,9 @@ export async function getNativeLibrespotStream(params: {
     startPositionMs,
     onEvent,
     reuseStream,
+    reuseSession,
     endStreamOnStop,
+    closeSessionOnStop,
   } = params;
   if (!uri) {
     return null;
@@ -139,17 +161,20 @@ export async function getNativeLibrespotStream(params: {
     log.warn('native librespot stream skipped; missing access token');
     return null;
   }
-  let session: LibrespotSession | null;
-  try {
-    session = await getSession({
-      accessToken,
-      clientId: clientId || undefined,
-      deviceName,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    log.warn('native librespot session unavailable', { message });
-    return null;
+  const shouldCloseSession = reuseSession ? false : closeSessionOnStop !== false;
+  let session: LibrespotSession | null = reuseSession ?? null;
+  if (!session) {
+    try {
+      session = await getSession({
+        accessToken,
+        clientId: clientId || undefined,
+        deviceName,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.warn('native librespot session unavailable', { message });
+      return null;
+    }
   }
   if (!session) {
     return null;
@@ -158,6 +183,7 @@ export async function getNativeLibrespotStream(params: {
     const pass = reuseStream ?? new PassThrough();
     let ended = false;
     let errorEmitted = false;
+    let sessionClosed = false;
     const safeWrite = (chunk: Buffer) => {
       const state = pass as any;
       if (ended || state.destroyed || state.writableEnded) {
@@ -233,6 +259,15 @@ export async function getNativeLibrespotStream(params: {
         } catch {
           /* ignore */
         }
+      }
+      if (shouldCloseSession && !sessionClosed) {
+        sessionClosed = true;
+        // Intentionally fire-and-forget; the stop() surface is sync.
+        session
+          .close()
+          .catch(() => {
+            /* ignore */
+          });
       }
     };
     return {
