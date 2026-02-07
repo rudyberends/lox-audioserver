@@ -23,6 +23,8 @@ const SNAPCAST_DEFAULT_OUTPUT: AudioOutputSettings = {
   prebufferBytes: Math.round(48000 * 2 * (16 / 8) * 0.25),
 };
 
+const SNAPCAST_MAX_BUFFER_MS = 500;
+
 export class SnapcastCore {
   private readonly log = createLogger('Http', 'Snapcast');
   private readonly core: NodeSnapcastCore;
@@ -121,10 +123,49 @@ export class SnapcastCore {
     clientIds: string[],
   ): void {
     this.core.setStream(streamId, zoneId, output, stream, clientIds);
+    // Snapclient may drop the first few chunks if their timestamps are already "in the past"
+    // by the time they arrive. Prime the stream clock with the configured buffer lead so the
+    // first chunk lands safely in the future.
+    this.primeStreamClock(streamId, output);
   }
 
   public clearStream(zoneId: number): void {
     this.core.clearStream(zoneId);
+  }
+
+  private computeBufferMs(output: AudioOutputSettings): number {
+    const denom = output.sampleRate * output.channels * (output.pcmBitDepth / 8);
+    const computed =
+      output.prebufferBytes && denom > 0
+        ? Math.round((output.prebufferBytes / denom) * 1000)
+        : 0;
+    if (!Number.isFinite(computed) || computed <= 0) {
+      return SNAPCAST_MAX_BUFFER_MS;
+    }
+    return Math.min(computed, SNAPCAST_MAX_BUFFER_MS);
+  }
+
+  private primeStreamClock(streamId: string, output: AudioOutputSettings): void {
+    const core = this.core as any;
+    const streams: any = core?.streams;
+    const nowUsFn: any = core?.nowUs;
+    if (!streams || typeof streams.get !== 'function' || typeof nowUsFn !== 'function') {
+      return;
+    }
+    const active = streams.get(streamId);
+    if (!active || active.closed) {
+      return;
+    }
+    // Only prime when the clock hasn't started yet (fresh stream registration).
+    if (Number.isFinite(active.nextTimestampUs) && active.nextTimestampUs > 0) {
+      return;
+    }
+    const bufferMs = this.computeBufferMs(output);
+    const nowUs = nowUsFn.call(core) as number;
+    if (!Number.isFinite(nowUs)) {
+      return;
+    }
+    active.nextTimestampUs = nowUs + Math.max(0, Math.floor(bufferMs * 1000));
   }
 
   private buildStreamProperties(stream: SnapcastStreamContext): SnapcastStreamProperties {
