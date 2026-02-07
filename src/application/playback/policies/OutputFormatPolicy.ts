@@ -6,6 +6,7 @@ import { selectPlayOutputs } from '@/application/zones/services/outputOrchestrat
 
 export type InputPreferences = {
   fileRealTime?: boolean;
+  urlRealTime?: boolean;
 };
 
 export type PreferredPlaybackSettings = {
@@ -94,7 +95,11 @@ export function computePreferredPlaybackSettings(args: ComputeArgs): PreferredPl
   }
 
   const inputPrefs: InputPreferences | null =
-    primaryOutput?.type === 'squeezelite' ? { fileRealTime: false } : null;
+    primaryOutput?.type === 'squeezelite'
+      ? { fileRealTime: false }
+      : primaryOutput?.type === 'googleCast'
+        ? { urlRealTime: false }
+        : null;
 
   const settings: PreferredPlaybackSettings = { outputOverride: override, inputPrefs };
   if (typeof httpPrefs !== 'undefined') {

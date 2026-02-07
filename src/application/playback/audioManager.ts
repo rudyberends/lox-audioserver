@@ -91,7 +91,7 @@ export class AudioManager {
   private readonly zonePcmPreference = new Map<number, boolean>();
   private readonly zoneOutputOverrides = new Map<number, Partial<AudioOutputSettings>>();
   private readonly zoneProfileOverrides = new Map<number, OutputProfile>();
-  private readonly zoneInputPreferences = new Map<number, { fileRealTime?: boolean }>();
+  private readonly zoneInputPreferences = new Map<number, { fileRealTime?: boolean; urlRealTime?: boolean }>();
   private readonly zoneHttpPreferences = new Map<
     number,
     { httpProfile?: HttpProfile; icyEnabled?: boolean; icyInterval?: number; icyName?: string }
@@ -580,6 +580,9 @@ export class AudioManager {
     }
     const inputPrefs = this.zoneInputPreferences.get(zoneId);
     if (inputPrefs?.fileRealTime === false && effectiveSource?.kind === 'file') {
+      effectiveSource = { ...effectiveSource, realTime: false };
+    }
+    if (inputPrefs?.urlRealTime === false && effectiveSource?.kind === 'url') {
       effectiveSource = { ...effectiveSource, realTime: false };
     }
     this.log.info('startWithResolvedSource', {
