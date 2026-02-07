@@ -596,6 +596,7 @@ function createHarness(options?: {
     lastZoneBroadcastAt: 0,
     lastPositionUpdateAt: 0,
     lastPositionValue: 0,
+    lastPlaybackErrorAt: 0,
     activeOutputTypes: new Set(),
     activeOutput: null,
     activeInput: null,
