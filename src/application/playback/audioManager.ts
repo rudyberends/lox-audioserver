@@ -578,6 +578,15 @@ export class AudioManager {
     ) {
       effectiveSource = { ...effectiveSource, realTime: false };
     }
+    if (
+      effectiveSource?.kind === 'url' &&
+      effectiveSource.realTime !== true &&
+      !metadata?.isRadio
+    ) {
+      // Default URL inputs to unpaced mode for faster startup; output pacing (and/or true live
+      // sources) will keep playback aligned without relying on ffmpeg's `-re`.
+      effectiveSource = { ...effectiveSource, realTime: false };
+    }
     const inputPrefs = this.zoneInputPreferences.get(zoneId);
     if (inputPrefs?.fileRealTime === false && effectiveSource?.kind === 'file') {
       effectiveSource = { ...effectiveSource, realTime: false };
