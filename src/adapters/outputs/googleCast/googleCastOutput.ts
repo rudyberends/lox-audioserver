@@ -155,6 +155,14 @@ export class GoogleCastOutput implements ZoneOutput {
       return;
     }
     const now = Date.now();
+    // Metadata is often populated/adjusted shortly after playback start (e.g. title/artist),
+    // but re-loading the receiver can interrupt playback and slow start. Keep metadata updates
+    // local for a short period after a successful load.
+    if (this.lastLoadAt && now - this.lastLoadAt < 5000) {
+      this.lastMetadataSignature = signature;
+      this.lastMetadataUpdateAt = now;
+      return;
+    }
     if (signature === this.lastLoadSignature && now - this.lastLoadAt < 3000) {
       this.lastMetadataSignature = signature;
       this.lastMetadataUpdateAt = now;
@@ -290,6 +298,7 @@ export class GoogleCastOutput implements ZoneOutput {
         host: this.config.host,
         token,
         elapsed: session.elapsed ?? 0,
+        contentId: media?.contentId,
       });
       await this.ensureReceiver();
       const now = Date.now();
@@ -324,6 +333,7 @@ export class GoogleCastOutput implements ZoneOutput {
       this.lastLoadSignature = signature;
       this.lastMetadataSignature = signature;
       this.lastLoadAt = Date.now();
+      this.metadataLoadCooldownUntil = Date.now() + 5000;
       // Autoplay should start playback; only attempt an explicit play when we see PAUSED later.
       void this.ensurePlayback();
       this.log.debug('Google Cast load finished', {
@@ -629,8 +639,8 @@ export class GoogleCastOutput implements ZoneOutput {
       if (typeof status.mediaSessionId === 'number') {
         this.lastMediaSessionId = status.mediaSessionId;
       }
-      const shouldPlay = status.mediaSessionId && status.playerState !== 'PLAYING';
-      if (shouldPlay) {
+      // Avoid spamming play() during transitions (BUFFERING/IDLE can reject with "Invalid request").
+      if (status.playerState === 'PAUSED') {
         await this.castDevice.media.playCurrent();
       }
     } catch (err: any) {
