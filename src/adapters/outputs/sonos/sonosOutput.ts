@@ -100,6 +100,7 @@ export class SonosOutput implements ZoneOutput {
   private deviceUdn: string | null = null;
   private deviceInfoPromise?: Promise<string | null>;
   private s2Client: SonosClient | null = null;
+  private s2ClientPromise?: Promise<SonosClient | null>;
   private s2RetryAfter = 0;
 
   constructor(
@@ -506,37 +507,51 @@ export class SonosOutput implements ZoneOutput {
     if (now < this.s2RetryAfter) {
       return null;
     }
+    if (this.s2ClientPromise) {
+      return this.s2ClientPromise;
+    }
     const host = await this.ensureHost();
     if (!host) {
       return null;
     }
-    const client = new SonosClient(host, { logger: console });
-    try {
-      await withTimeout(client.connect(), 4000);
-      this.s2Client = client;
-      void client.start().catch((err) => {
-        this.log.debug('sonos s2 client stopped', {
+
+    const pending = (async (): Promise<SonosClient | null> => {
+      const client = new SonosClient(host, { logger: console });
+      try {
+        await withTimeout(client.connect(), 4000);
+        this.s2Client = client;
+        void client.start().catch((err) => {
+          this.log.debug('sonos s2 client stopped', {
+            zoneId: this.zoneId,
+            message: err instanceof Error ? err.message : String(err),
+          });
+          if (this.s2Client === client) {
+            this.s2Client = null;
+          }
+        });
+        return client;
+      } catch (err) {
+        this.log.debug('sonos s2 connect failed', {
           zoneId: this.zoneId,
           message: err instanceof Error ? err.message : String(err),
         });
-        if (this.s2Client === client) {
-          this.s2Client = null;
+        this.s2RetryAfter = Date.now() + 30000;
+        try {
+          await client.disconnect();
+        } catch {
+          /* ignore */
         }
-      });
-      return client;
-    } catch (err) {
-      this.log.debug('sonos s2 connect failed', {
-        zoneId: this.zoneId,
-        message: err instanceof Error ? err.message : String(err),
-      });
-      this.s2RetryAfter = Date.now() + 30000;
-      try {
-        await client.disconnect();
-      } catch {
-        /* ignore */
+        return null;
       }
-      return null;
-    }
+    })();
+
+    this.s2ClientPromise = pending.finally(() => {
+      if (this.s2ClientPromise === pending) {
+        this.s2ClientPromise = undefined;
+      }
+    });
+
+    return this.s2ClientPromise;
   }
 
   private async playViaS2(uri: string, session: PlaybackSession): Promise<boolean> {
@@ -572,7 +587,9 @@ export class SonosOutput implements ZoneOutput {
     this.log.info('sending playback command', { zoneId: this.zoneId, uri: transportUri });
     // Do not block on Stop; it can take multiple seconds when switching sources.
     // SetAVTransportURI should be enough for most transitions.
-    const didl = this.buildDidlMetadata(httpUri, session);
+    const didl = this.buildDidlMetadata(httpUri, session, {
+      minimal: this.isRadioSession(session),
+    });
     let timedOut = false;
     const setResult = await this.invokeActionWithRetry(
       'SetAVTransportURI',
@@ -860,7 +877,11 @@ export class SonosOutput implements ZoneOutput {
 </s:Envelope>`;
   }
 
-  private buildDidlMetadata(uri: string, session: PlaybackSession): string {
+  private buildDidlMetadata(
+    uri: string,
+    session: PlaybackSession,
+    options: { minimal?: boolean } = {},
+  ): string {
     const cover = this.resolveCoverArt(session);
     const title = session.metadata?.title || this.zoneName;
     const album = session.metadata?.album || '';
@@ -872,6 +893,22 @@ export class SonosOutput implements ZoneOutput {
       ? 'object.item.audioItem.audioBroadcast'
       : 'object.item.audioItem.musicTrack';
     const durationAttr = duration ? ` duration="${duration}"` : '';
+
+    if (options.minimal) {
+      const art = cover ? `<upnp:albumArtURI>${escapeXmlMetadata(cover)}</upnp:albumArtURI>` : '';
+      return `<?xml version="1.0"?>
+<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"
+           xmlns:dc="http://purl.org/dc/elements/1.1/"
+           xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">
+  <item id="0" parentID="0" restricted="1">
+    <dc:title>${escapeXmlMetadata(title)}</dc:title>
+    ${art}
+    <upnp:class>${mediaClass}</upnp:class>
+    <res${durationAttr} protocolInfo="${protocolInfo}">${escapeXmlMetadata(uri)}</res>
+  </item>
+</DIDL-Lite>`;
+    }
+
     return `<?xml version="1.0"?>
 <DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"
            xmlns:dc="http://purl.org/dc/elements/1.1/"
