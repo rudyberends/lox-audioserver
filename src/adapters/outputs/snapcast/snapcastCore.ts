@@ -12,6 +12,15 @@ import { audioOutputSettings, type AudioOutputSettings } from '@/ports/types/aud
 import type { AudioManager } from '@/application/playback/audioManager';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 
+// Snapclient defaults to PCM 48kHz/16-bit stereo; advertise that from the start so clients
+// don't have to restart their audio pipeline when a stream becomes active.
+const SNAPCAST_DEFAULT_OUTPUT: AudioOutputSettings = {
+  ...audioOutputSettings,
+  sampleRate: 48000,
+  channels: 2,
+  pcmBitDepth: 16,
+};
+
 export class SnapcastCore {
   private readonly log = createLogger('Http', 'Snapcast');
   private readonly core: NodeSnapcastCore;
@@ -35,7 +44,7 @@ export class SnapcastCore {
         info: (message, meta) => this.log.info(message, meta),
         warn: (message, meta) => this.log.warn(message, meta),
       },
-      defaultOutput: audioOutputSettings,
+      defaultOutput: SNAPCAST_DEFAULT_OUTPUT,
       serverName: 'Lox Audio Server',
       serverVersion: '0.0.0',
       streamUri: {
