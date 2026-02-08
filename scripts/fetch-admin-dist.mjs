@@ -17,6 +17,9 @@ const distUrl =
 
 const targetDir = join(process.cwd(), 'public', 'admin');
 const archivePath = join(tmpdir(), `admin-dist-${Date.now()}.tgz`);
+const localAdminUiDir = join(process.cwd(), 'data', 'module_code', 'adminui');
+const localAdminUiPackageJson = join(localAdminUiDir, 'package.json');
+const localAdminUiDist = join(localAdminUiDir, 'dist');
 
 async function download(url, dest, redirects = 0) {
   if (redirects > 5) {
@@ -63,9 +66,40 @@ async function extract(archive, dest) {
   });
 }
 
+async function run(cmd, args, options = {}) {
+  await new Promise((resolve, reject) => {
+    const proc = spawn(cmd, args, { stdio: 'inherit', ...options });
+    proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} exited with code ${code}`))));
+    proc.on('error', reject);
+  });
+}
+
+async function hasLocalAdminUi() {
+  if (process.env.ADMINUI_SOURCE?.toLowerCase() === 'remote') return false;
+  if (process.env.ADMINUI_SOURCE?.toLowerCase() === 'local') return true;
+  try {
+    await fs.stat(localAdminUiPackageJson);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function buildLocalAdminUi(destDir) {
+  // Build the checked-in UI (data/module_code/adminui) instead of downloading a release tarball.
+  // This keeps UI assets (including provider icons) versioned alongside the UI code.
+  await run('npm', ['ci'], { cwd: localAdminUiDir });
+  await run('npm', ['run', 'build'], { cwd: localAdminUiDir });
+  await fs.cp(localAdminUiDist, destDir, { recursive: true });
+}
+
 await fs.rm(targetDir, { recursive: true, force: true });
 await fs.mkdir(targetDir, { recursive: true });
 
-await download(distUrl, archivePath);
-await extract(archivePath, targetDir);
-await fs.rm(archivePath, { force: true });
+if (await hasLocalAdminUi()) {
+  await buildLocalAdminUi(targetDir);
+} else {
+  await download(distUrl, archivePath);
+  await extract(archivePath, targetDir);
+  await fs.rm(archivePath, { force: true });
+}
