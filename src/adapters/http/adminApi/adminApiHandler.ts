@@ -1287,7 +1287,7 @@ export class AdminApiHandler {
     try {
       const snapshot = logBuffer.snapshot();
       const cfg = this.configPort.getConfig();
-      const consoleLevel = cfg.system?.logging?.consoleLevel ?? 'info';
+      const consoleLevel = cfg.system?.logging?.consoleLevel ?? 'none';
       this.sendJson(res, 200, {
         ...snapshot,
         consoleLevel,
@@ -2663,7 +2663,7 @@ export class AdminApiHandler {
           extensions: [],
         },
         logging: {
-          consoleLevel: 'info',
+          consoleLevel: 'none',
           fileLevel: 'none',
         },
         adminHttp: { enabled: true },
