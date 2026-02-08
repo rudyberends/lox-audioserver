@@ -32,6 +32,7 @@ export class DeezerProvider {
   private readonly log = createLogger('Content', 'Deezer');
   private readonly label: string;
   private readonly arl?: string;
+  private readonly requestTimeoutMs = 10_000;
 
   constructor(options: DeezerProviderOptions) {
     this.providerId = options.providerId;
@@ -183,22 +184,54 @@ export class DeezerProvider {
     const activeTypes =
       requestedTypes.length > 0 ? new Set(requestedTypes) : new Set(['track', 'album', 'artist', 'playlist']);
 
+    // Parallelize calls per type; global search often asks for multiple categories at once.
+    const tasks: Array<Promise<void>> = [];
     if (activeTypes.has('track')) {
-      const tracks = await this.fetchSearchResults('track', query, limits.track ?? limit);
-      result.tracks = tracks.map((track) => this.mapTrack(track));
+      tasks.push(
+        this.fetchSearchResults('track', query, limits.track ?? limit)
+          .then((tracks) => {
+            result.tracks = tracks.map((track) => this.mapTrack(track));
+          })
+          .catch(() => {
+            result.tracks = [];
+          }),
+      );
     }
     if (activeTypes.has('album')) {
-      const albums = await this.fetchSearchResults('album', query, limits.album ?? limit);
-      result.albums = albums.map((album) => this.mapAlbum(album));
+      tasks.push(
+        this.fetchSearchResults('album', query, limits.album ?? limit)
+          .then((albums) => {
+            result.albums = albums.map((album) => this.mapAlbum(album));
+          })
+          .catch(() => {
+            result.albums = [];
+          }),
+      );
     }
     if (activeTypes.has('artist')) {
-      const artists = await this.fetchSearchResults('artist', query, limits.artist ?? limit);
-      result.artists = artists.map((artist) => this.mapArtist(artist));
+      tasks.push(
+        this.fetchSearchResults('artist', query, limits.artist ?? limit)
+          .then((artists) => {
+            result.artists = artists.map((artist) => this.mapArtist(artist));
+          })
+          .catch(() => {
+            result.artists = [];
+          }),
+      );
     }
     if (activeTypes.has('playlist')) {
-      const playlists = await this.fetchSearchResults('playlist', query, limits.playlist ?? limit);
-      result.playlists = playlists.map((playlist) => this.mapPlaylist(playlist));
+      tasks.push(
+        this.fetchSearchResults('playlist', query, limits.playlist ?? limit)
+          .then((playlists) => {
+            result.playlists = playlists.map((playlist) => this.mapPlaylist(playlist));
+          })
+          .catch(() => {
+            result.playlists = [];
+          }),
+      );
     }
+
+    await Promise.all(tasks);
 
     return { result, providerId: this.providerId, user: 'deezer' };
   }
@@ -396,7 +429,12 @@ export class DeezerProvider {
 
   private async fetchJson<T>(url: string): Promise<T | null> {
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        headers: {
+          Accept: 'application/json',
+        },
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
+      });
       if (!res.ok) {
         return null;
       }
