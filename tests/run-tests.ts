@@ -14,6 +14,7 @@ import './airplayPcmStream.test';
 import './audioStreamHandlerIcy.test';
 import './queueAuthority.test';
 import './ytmusicNative.mock.test';
+import './localLibraryStore.search.test';
 import './zonePlayerEndGuard.test';
 import './runtimeShutdown.test';
 import type { ZoneConfig } from '../src/domain/config/types';

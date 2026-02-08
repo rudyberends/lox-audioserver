@@ -58,6 +58,19 @@ export class ContentManager {
   private tunein: TuneInProvider;
   private radioParadise: RadioParadiseProvider;
   private readonly cache = new ContentCacheManager();
+  private readonly globalSearchCache = new Map<
+    string,
+    {
+      expiresAt: number;
+      value: { result: Record<string, ContentFolderItem[]>; user: string; providerId: string };
+    }
+  >();
+  private readonly globalSearchInflight = new Map<
+    string,
+    Promise<{ result: Record<string, ContentFolderItem[]>; user: string; providerId: string }>
+  >();
+  private readonly globalSearchTtlMs = 10_000;
+  private readonly globalSearchNegativeTtlMs = 2_000;
   private readonly metadataCache = new Map<string, { expiresAt: number; value: ContentItemMetadata | null }>();
   private readonly metadataInflight = new Map<string, Promise<ContentItemMetadata | null>>();
   private readonly metadataTtlMs = 5 * 60 * 1000;
@@ -111,6 +124,8 @@ export class ContentManager {
    */
   public refreshFromConfig(): void {
     this.cache.clearAll();
+    this.globalSearchCache.clear();
+    this.globalSearchInflight.clear();
     this.metadataCache.clear();
     this.metadataInflight.clear();
     this.spotify = this.spotifyManagerProvider.reload();
@@ -152,7 +167,14 @@ export class ContentManager {
     offset: number,
     limit: number,
   ): Promise<ContentFolder | null> {
-    return this.library.getMediaFolder(folderId || 'root', offset, limit);
+    const safeFolderId = folderId || 'root';
+    const cacheKey = this.cache.key('media', 'local', safeFolderId, offset, limit);
+    const cached = this.cache.get(cacheKey);
+    if (cached) {
+      void this.cache.refresh(cacheKey, () => this.library.getMediaFolder(safeFolderId, offset, limit));
+      return Promise.resolve(cached);
+    }
+    return this.cache.refresh(cacheKey, () => this.library.getMediaFolder(safeFolderId, offset, limit));
   }
 
   public async getRadios(): Promise<RadioMenuEntry[]> {
@@ -214,6 +236,8 @@ export class ContentManager {
   }
 
   public rescanLibrary(): Promise<void> {
+    // A scan can significantly change local library folders; drop cached folder pages.
+    this.cache.clearAll();
     return this.library.rescan();
   }
 
@@ -270,16 +294,47 @@ export class ContentManager {
     source: string,
     query: string,
   ): Promise<{ result: Record<string, ContentFolderItem[]>; user: string; providerId: string }> {
-    // Spotify search (supports multiple accounts)
-    const spotify = this.requireSpotify();
+    const safeSource = String(source || '').trim();
+    const safeQuery = String(query || '').trim();
+    if (!safeSource || !safeQuery) {
+      return { result: {}, user: 'nouser', providerId: 'unknown' };
+    }
+
+    const now = Date.now();
+    const cacheKey = `${safeSource}|${safeQuery.toLowerCase()}`;
+    const cached = this.globalSearchCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return cached.value;
+    }
+
+    const inflight = this.globalSearchInflight.get(cacheKey);
+    if (inflight) {
+      return inflight;
+    }
+
+    const promise = this.globalSearchUncached(safeSource, safeQuery)
+      .then((value) => {
+        const hasResults = Object.keys(value.result ?? {}).length > 0;
+        const ttl = hasResults ? this.globalSearchTtlMs : this.globalSearchNegativeTtlMs;
+        this.globalSearchCache.set(cacheKey, { expiresAt: Date.now() + ttl, value });
+        return value;
+      })
+      .finally(() => {
+        this.globalSearchInflight.delete(cacheKey);
+      });
+
+    this.globalSearchInflight.set(cacheKey, promise);
+    return promise;
+  }
+
+  private async globalSearchUncached(
+    source: string,
+    query: string,
+  ): Promise<{ result: Record<string, ContentFolderItem[]>; user: string; providerId: string }> {
     const [providerPart, filterPart = ''] = source.split(':');
     const { limits } = parseSearchLimits(filterPart);
     const [providerIdRaw, userRaw = ''] = providerPart.split('@');
     const providerCandidate = providerPart || providerIdRaw || '';
-    if (spotify.hasProvider(providerCandidate)) {
-      const { result, user, providerId } = await spotify.search(source, query);
-      return { result, user, providerId };
-    }
 
     // Local library search
     const providerId = providerIdRaw || 'local';
@@ -300,6 +355,13 @@ export class ContentManager {
         user: userRaw || 'nouser',
         providerId: 'tunein',
       };
+    }
+
+    // Spotify + bridge providers (supports multiple accounts)
+    const spotify = this.requireSpotify();
+    if (spotify.hasProvider(providerCandidate)) {
+      const { result, user, providerId } = await spotify.search(source, query);
+      return { result, user, providerId };
     }
 
     const user = source.split('@')[1]?.split(':')[0] ?? 'nouser';

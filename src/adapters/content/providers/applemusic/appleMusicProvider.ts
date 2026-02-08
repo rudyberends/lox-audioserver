@@ -246,21 +246,36 @@ export class AppleMusicProvider {
     const url = new URL(`${APPLE_MUSIC_API_BASE}/catalog/${storefront}/search`);
     url.searchParams.set('term', query);
     url.searchParams.set('limit', String(limit));
-    url.searchParams.set('types', ['songs', 'albums', 'artists', 'playlists'].join(','));
+    const requestedTypes = Object.keys(limits).map((k) => k.trim().toLowerCase()).filter(Boolean);
+    const typeSet = requestedTypes.length ? new Set(requestedTypes) : null;
+    const activeTypes: Array<'songs' | 'albums' | 'artists' | 'playlists'> = [];
+    const wants = (key: string) => (typeSet ? typeSet.has(key) : true);
+    if (wants('track') || wants('tracks') || wants('song') || wants('songs')) activeTypes.push('songs');
+    if (wants('album') || wants('albums')) activeTypes.push('albums');
+    if (wants('artist') || wants('artists')) activeTypes.push('artists');
+    if (wants('playlist') || wants('playlists')) activeTypes.push('playlists');
+    if (!activeTypes.length) {
+      activeTypes.push('songs', 'albums', 'artists', 'playlists');
+    }
+    url.searchParams.set('types', activeTypes.join(','));
 
     const data = await this.fetchJson<any>(url.toString());
     const result: SearchResult = {};
     if (data?.results?.songs?.data) {
-      result.tracks = (data.results.songs.data as any[]).map((t) => this.mapTrack(t));
+      const max = limits.track ?? limits.tracks ?? limit;
+      result.tracks = (data.results.songs.data as any[]).slice(0, max).map((t) => this.mapTrack(t));
     }
     if (data?.results?.albums?.data) {
-      result.albums = (data.results.albums.data as any[]).map((a) => this.mapAlbum(a));
+      const max = limits.album ?? limits.albums ?? limit;
+      result.albums = (data.results.albums.data as any[]).slice(0, max).map((a) => this.mapAlbum(a));
     }
     if (data?.results?.artists?.data) {
-      result.artists = (data.results.artists.data as any[]).map((a) => this.mapArtist(a));
+      const max = limits.artist ?? limits.artists ?? limit;
+      result.artists = (data.results.artists.data as any[]).slice(0, max).map((a) => this.mapArtist(a));
     }
     if (data?.results?.playlists?.data) {
-      result.playlists = (data.results.playlists.data as any[]).map((p) => this.mapPlaylist(p));
+      const max = limits.playlist ?? limits.playlists ?? limit;
+      result.playlists = (data.results.playlists.data as any[]).slice(0, max).map((p) => this.mapPlaylist(p));
     }
     return { result, providerId: this.providerId, user: 'applemusic' };
   }
