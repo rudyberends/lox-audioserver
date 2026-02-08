@@ -39,6 +39,7 @@ export interface LoxoneCommandProcessorOptions {
 export class LoxoneCommandProcessor {
   private readonly log = createLogger('LoxoneHttp', 'Processor');
   private readonly router = new LoxoneRouter();
+  private readonly slowCommandWarnMs = 100;
 
   constructor(config: LoxoneHttpConfig, options: LoxoneCommandProcessorOptions) {
     registerRoutes(this.router, {
@@ -61,7 +62,15 @@ export class LoxoneCommandProcessor {
 
   public async execute(command: string, payload?: Buffer): Promise<string> {
     this.log.debug('command received', { command: formatCommand(command) });
-    const result = await this.router.dispatch(command, payload);
-    return serializeResult(result);
+    const startedAt = Date.now();
+    try {
+      const result = await this.router.dispatch(command, payload);
+      return serializeResult(result);
+    } finally {
+      const tookMs = Date.now() - startedAt;
+      if (tookMs >= this.slowCommandWarnMs) {
+        this.log.debug('slow command', { command: formatCommand(command), tookMs });
+      }
+    }
   }
 }
