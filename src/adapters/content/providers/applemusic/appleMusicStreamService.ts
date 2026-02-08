@@ -1544,7 +1544,8 @@ export class AppleMusicStreamService {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:95.0) Gecko/20100101 Firefox/95.0',
       Accept: 'application/json',
       'Accept-Language': 'en-US',
-      'Accept-Encoding': 'utf-8',
+      // Allow response compression; the previous value ('utf-8') is not a valid encoding token.
+      'Accept-Encoding': 'gzip, deflate, br',
       'content-type': 'application/json',
       'x-apple-renewal': 'true',
       DNT: '1',
