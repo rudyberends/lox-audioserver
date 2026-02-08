@@ -49,6 +49,8 @@ import type { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
+import { invalidateWidevineArtifactsCache, loadWidevineArtifacts, WidevineArtifactsError } from '@/adapters/content/providers/applemusic/widevine';
+import { ensureDir, resolveDataDir } from '@/shared/utils/file';
 
 type AdminApiOptions = {
   onReinitialize?: () => Promise<boolean>;
@@ -97,6 +99,8 @@ type AdminUiUpdateResult = {
 };
 
 const MAX_JSON_BODY_BYTES = 1 * 1024 * 1024;
+const MAX_WIDEVINE_PRIVATE_KEY_BYTES = 256 * 1024;
+const MAX_WIDEVINE_CLIENT_ID_BYTES = 10 * 1024 * 1024;
 
 /**
  * Temporary admin API stub that returns 501 for every endpoint.
@@ -169,6 +173,21 @@ export class AdminApiHandler {
         method: 'GET',
         pattern: /^\/applemusic\/auth$/,
         handler: async (req, res) => this.handleAppleMusicAuth(req, res),
+      },
+      {
+        method: 'GET',
+        pattern: /^\/applemusic\/widevine\/status$/,
+        handler: async (_req, res) => this.handleAppleMusicWidevineStatus(res),
+      },
+      {
+        method: 'PUT',
+        pattern: /^\/applemusic\/widevine\/private-key$/,
+        handler: async (req, res) => this.handleAppleMusicWidevineUpload(req, res, 'privateKey'),
+      },
+      {
+        method: 'PUT',
+        pattern: /^\/applemusic\/widevine\/client-id$/,
+        handler: async (req, res) => this.handleAppleMusicWidevineUpload(req, res, 'clientId'),
       },
       {
         pattern: /^\/spotify\/auth\/callback/,
@@ -2048,6 +2067,86 @@ export class AdminApiHandler {
     }
   }
 
+  private async handleAppleMusicWidevineStatus(res: ServerResponse): Promise<void> {
+    const files = await this.readWidevineFileStatus();
+    try {
+      invalidateWidevineArtifactsCache();
+      await loadWidevineArtifacts();
+      this.sendJson(res, 200, { ok: true, status: 'valid', files });
+    } catch (err) {
+      if (err instanceof WidevineArtifactsError) {
+        this.sendJson(res, 200, { ok: false, status: err.code, details: err.details, files });
+        return;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      this.sendJson(res, 200, { ok: false, status: 'error', details: [message], files });
+    }
+  }
+
+  private async handleAppleMusicWidevineUpload(
+    req: IncomingMessage,
+    res: ServerResponse,
+    kind: 'privateKey' | 'clientId',
+  ): Promise<void> {
+    const maxBytes = kind === 'privateKey' ? MAX_WIDEVINE_PRIVATE_KEY_BYTES : MAX_WIDEVINE_CLIENT_ID_BYTES;
+    const body = await this.readBinaryBody(req, res, maxBytes);
+    if (res.writableEnded) return;
+    if (!body || body.length === 0) {
+      this.sendJson(res, 400, { error: 'empty-body' });
+      return;
+    }
+
+    const cdmDir = resolveDataDir('widevine_cdm');
+    const targetPath =
+      kind === 'privateKey'
+        ? join(cdmDir, 'private_key.pem')
+        : join(cdmDir, 'client_id.bin');
+
+    try {
+      await ensureDir(cdmDir);
+      await fs.writeFile(targetPath, body, { mode: 0o600 });
+      invalidateWidevineArtifactsCache();
+      try {
+        await loadWidevineArtifacts();
+      } catch (err) {
+        if (err instanceof WidevineArtifactsError) {
+          const files = await this.readWidevineFileStatus();
+          this.sendJson(res, 200, { ok: false, status: err.code, details: err.details, files });
+          return;
+        }
+        throw err;
+      }
+      const files = await this.readWidevineFileStatus();
+      this.sendJson(res, 200, { ok: true, status: 'valid', files });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.warn('widevine upload failed', { kind, message });
+      this.sendJson(res, 500, { error: 'widevine-upload-failed', message });
+    }
+  }
+
+  private async readWidevineFileStatus(): Promise<{
+    privateKey: { present: boolean; bytes: number };
+    clientId: { present: boolean; bytes: number };
+  }> {
+    const cdmDir = resolveDataDir('widevine_cdm');
+    const privatePath = join(cdmDir, 'private_key.pem');
+    const clientPath = join(cdmDir, 'client_id.bin');
+    const readOne = async (filePath: string): Promise<{ present: boolean; bytes: number }> => {
+      try {
+        const stat = await fs.stat(filePath);
+        return { present: stat.isFile(), bytes: stat.isFile() ? stat.size : 0 };
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          return { present: false, bytes: 0 };
+        }
+        return { present: false, bytes: 0 };
+      }
+    };
+    const [privateKey, clientId] = await Promise.all([readOne(privatePath), readOne(clientPath)]);
+    return { privateKey, clientId };
+  }
+
   private async reloadZones(zoneIds?: number[]): Promise<void> {
     const cfg = this.configPort.getConfig();
     if (!zoneIds || zoneIds.length === 0) {
@@ -2635,6 +2734,85 @@ export class AdminApiHandler {
       const onError = () => {
         if (!res.writableEnded) {
           this.sendJson(res, 400, { error: 'invalid-json' });
+        }
+        done(null);
+      };
+
+      const onAborted = () => {
+        done(null);
+      };
+
+      req.on('data', onData);
+      req.once('end', onEnd);
+      req.once('error', onError);
+      req.once('aborted', onAborted);
+    });
+  }
+
+  private async readBinaryBody(
+    req: IncomingMessage,
+    res: ServerResponse,
+    maxBytes: number,
+  ): Promise<Buffer | null> {
+    return new Promise((resolve) => {
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      let settled = false;
+
+      const cleanup = () => {
+        req.off('data', onData);
+        req.off('end', onEnd);
+        req.off('error', onError);
+        req.off('aborted', onAborted);
+      };
+
+      const done = (value: Buffer | null) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      };
+
+      const closeSocket = () => {
+        const socket = req.socket;
+        if (socket && !socket.destroyed) {
+          socket.destroy();
+        }
+      };
+
+      const rejectTooLarge = () => {
+        if (!res.writableEnded) {
+          this.sendJson(res, 413, { error: 'payload-too-large' });
+        }
+        req.pause();
+        res.once('finish', closeSocket);
+        res.once('close', closeSocket);
+        done(null);
+      };
+
+      const onData = (chunk: Buffer | string) => {
+        if (settled) return;
+        const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+        totalBytes += buffer.length;
+        if (totalBytes > maxBytes) {
+          rejectTooLarge();
+          return;
+        }
+        chunks.push(buffer);
+      };
+
+      const onEnd = () => {
+        if (settled) return;
+        if (totalBytes === 0) {
+          done(null);
+          return;
+        }
+        done(Buffer.concat(chunks));
+      };
+
+      const onError = () => {
+        if (!res.writableEnded) {
+          this.sendJson(res, 400, { error: 'invalid-body' });
         }
         done(null);
       };
