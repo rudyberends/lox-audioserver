@@ -268,12 +268,14 @@ export class SendspinCastOutput implements ZoneOutput {
       return now - this.lastCastLogMs > 10000;
     };
 
-    const volFraction =
+    const vol =
       typeof status.volume === 'number' && Number.isFinite(status.volume)
-        ? Math.min(1, Math.max(0, status.volume))
+        ? // Accept either 0-1 (cast-style) or 0-100 (sendspin-js/hardware-style) volume reports.
+          status.volume <= 1
+          ? Math.round(Math.min(1, Math.max(0, status.volume)) * 100)
+          : Math.round(Math.min(100, Math.max(0, status.volume)))
         : null;
-    if (volFraction !== null) {
-      const vol = Math.round(volFraction * 100);
+    if (vol !== null) {
       this.lastKnownVolume = vol;
       const changed = this.lastCastVolumeLogged === null || vol !== this.lastCastVolumeLogged;
       if (shouldLog(changed)) {
@@ -322,6 +324,7 @@ export class SendspinCastOutput implements ZoneOutput {
     if (!host) {
       throw new Error('audioserver ip missing');
     }
+    // Sendspin JS (>=2.x) expects a base URL and will connect to /sendspin itself.
     return buildBaseUrl({ host });
   }
 
