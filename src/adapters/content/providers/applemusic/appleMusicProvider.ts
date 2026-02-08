@@ -674,11 +674,11 @@ export class AppleMusicProvider {
   private async fetchJson<T>(url: string, retryAuth = true): Promise<T | null> {
     try {
       const headers = await this.buildAuthHeaders();
-      let res = await fetch(url, { headers });
+      let res = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
       if ((res.status === 401 || res.status === 403) && retryAuth) {
         await this.refreshBearerToken();
         const retryHeaders = await this.buildAuthHeaders();
-        res = await fetch(url, { headers: retryHeaders });
+        res = await fetch(url, { headers: retryHeaders, signal: AbortSignal.timeout(15_000) });
       }
       if (!res.ok) {
         return null;
@@ -908,7 +908,8 @@ export class AppleMusicProvider {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:95.0) Gecko/20100101 Firefox/95.0',
       Accept: 'application/json',
       'Accept-Language': 'en-US',
-      'Accept-Encoding': 'utf-8',
+      // Allow response compression; the previous value ('utf-8') is not a valid encoding token.
+      'Accept-Encoding': 'gzip, deflate, br',
       'content-type': 'application/json',
       'Media-User-Token': this.userToken || '',
       'x-apple-renewal': 'true',
@@ -930,10 +931,9 @@ export class AppleMusicProvider {
     } else {
       delete headers['Media-User-Token'];
     }
-    let bearer = await this.ensureBearerToken();
-    if (!bearer && this.developerToken) {
-      bearer = this.developerToken;
-    }
+    // Prefer configured developer token to avoid expensive bearer scraping.
+    let bearer = this.developerToken ?? null;
+    if (!bearer) bearer = await this.ensureBearerToken();
     if (bearer) {
       headers.authorization = `Bearer ${bearer}`;
     }
@@ -952,14 +952,14 @@ export class AppleMusicProvider {
     }
     this.bearerTokenPromise = (async () => {
       try {
-        const homeRes = await fetch('https://music.apple.com', { headers: this.baseHeaders() });
+        const homeRes = await fetch('https://music.apple.com', { headers: this.baseHeaders(), signal: AbortSignal.timeout(15_000) });
         const homeText = await homeRes.text();
         const match = homeText.match(/\/(assets\/index-legacy[~-][^/\"]+\.js)/i);
         if (!match) {
           this.log.warn('apple music token fetch failed: index js not found');
           return null;
         }
-        const jsRes = await fetch(`https://music.apple.com/${match[1]}`, { headers: this.baseHeaders() });
+        const jsRes = await fetch(`https://music.apple.com/${match[1]}`, { headers: this.baseHeaders(), signal: AbortSignal.timeout(15_000) });
         const jsText = await jsRes.text();
         const tokenMatch = jsText.match(/eyJh[^"]+/);
         if (!tokenMatch) {
