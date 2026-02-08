@@ -27,7 +27,7 @@ export interface SonosOutputConfig {
 
 export const SONOS_OUTPUT_DEFINITION: OutputConfigDefinition = {
   id: 'sonos',
-  label: 'Sonos (S1/S2 via UPnP)',
+  label: 'Sonos',
   description: 'Streams audio to a Sonos renderer via UPnP AVTransport.',
   fields: [
     {
