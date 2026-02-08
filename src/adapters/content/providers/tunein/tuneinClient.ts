@@ -29,6 +29,7 @@ export class TuneInClient {
         'User-Agent': 'lox-audioserver/1.0 (+https://github.com/loxone-audioserver)',
         'Accept-Language': 'nl-NL,nl;q=0.9,*;q=0.5',
       },
+      signal: AbortSignal.timeout(10_000),
     });
 
     if (!res.ok) {

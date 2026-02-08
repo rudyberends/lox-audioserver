@@ -58,6 +58,10 @@ export class ContentManager {
   private tunein: TuneInProvider;
   private radioParadise: RadioParadiseProvider;
   private readonly cache = new ContentCacheManager();
+  private readonly metadataCache = new Map<string, { expiresAt: number; value: ContentItemMetadata | null }>();
+  private readonly metadataInflight = new Map<string, Promise<ContentItemMetadata | null>>();
+  private readonly metadataTtlMs = 5 * 60 * 1000;
+  private readonly metadataNegativeTtlMs = 30 * 1000;
   private initialized = false;
   private readonly configPort: ConfigPort;
   private readonly customRadioStore: CustomRadioStore;
@@ -107,6 +111,8 @@ export class ContentManager {
    */
   public refreshFromConfig(): void {
     this.cache.clearAll();
+    this.metadataCache.clear();
+    this.metadataInflight.clear();
     this.spotify = this.spotifyManagerProvider.reload();
     this.tunein = new TuneInProvider(this.customRadioStore, this.readTuneInConfig());
     this.radioParadise = new RadioParadiseProvider();
@@ -302,6 +308,46 @@ export class ContentManager {
   }
 
   public async resolveMetadata(audiopath: string): Promise<ContentItemMetadata | null> {
+    const raw = String(audiopath || '').trim();
+    const decoded = decodeAudiopath(raw);
+    const cacheKey = (decoded && decoded !== raw ? decoded : raw) || raw;
+    const now = Date.now();
+
+    const cached = this.metadataCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return cached.value;
+    }
+    if (cached) {
+      this.metadataCache.delete(cacheKey);
+    }
+
+    const inflight = this.metadataInflight.get(cacheKey);
+    if (inflight) {
+      return inflight;
+    }
+
+    const promise = this.resolveMetadataUncached(raw)
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log.debug('resolve metadata failed', { audiopath: raw, message: msg });
+        return null;
+      })
+      .then((value) => {
+        const ttl = value ? this.metadataTtlMs : this.metadataNegativeTtlMs;
+        this.metadataCache.set(cacheKey, { value, expiresAt: Date.now() + ttl });
+        return value;
+      })
+      .finally(() => {
+        if (this.metadataInflight.get(cacheKey) === promise) {
+          this.metadataInflight.delete(cacheKey);
+        }
+      });
+
+    this.metadataInflight.set(cacheKey, promise);
+    return promise;
+  }
+
+  private async resolveMetadataUncached(audiopath: string): Promise<ContentItemMetadata | null> {
     const decodedPath = decodeAudiopath(audiopath);
     const detectedService = detectServiceFromAudiopath(audiopath);
 
