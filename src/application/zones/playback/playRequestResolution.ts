@@ -53,9 +53,10 @@ export function resolvePlayRequest(args: {
   const isAppleMusicUri = audioHelpers.isAppleMusicAudiopath(uri);
   const isDeezerUri = audioHelpers.isDeezerAudiopath(uri);
   const isTidalUri = audioHelpers.isTidalAudiopath(uri);
+  const isYtMusicUri = audioHelpers.isYtMusicAudiopath(uri);
   let resolvedTarget =
     parentContext?.parent ??
-    (isAppleMusicUri || isDeezerUri || isTidalUri ? uri : decodeAudiopath(uri));
+    (isAppleMusicUri || isDeezerUri || isTidalUri || isYtMusicUri ? uri : decodeAudiopath(uri));
   let stationUri = parentContext?.parent ? normalizeSpotifyAudiopath(parentContext.parent) : '';
   let normalizedTarget = normalizeSpotifyAudiopath(resolvedTarget);
   const isMusicAssistantInitial = audioHelpers.isMusicAssistantAudiopath(uri) ||
@@ -84,6 +85,8 @@ export function resolvePlayRequest(args: {
     audioHelpers.isDeezerAudiopath(resolvedTarget);
   const isTidal = audioHelpers.isTidalAudiopath(queueAudiopath) ||
     audioHelpers.isTidalAudiopath(resolvedTarget);
+  const isYtMusic = audioHelpers.isYtMusicAudiopath(queueAudiopath) ||
+    audioHelpers.isYtMusicAudiopath(resolvedTarget);
   const isSpotify = audioHelpers.isSpotifyAudiopath(queueAudiopath);
   const nextInput = isSpotify
     ? 'spotify'
@@ -137,6 +140,7 @@ export function resolvePlayRequest(args: {
     isAppleMusic,
     isDeezer,
     isTidal,
+    isYtMusic,
     isSpotify,
     nextInput,
     stationValue,
@@ -149,5 +153,6 @@ export function resolvePlayRequest(args: {
     isAppleMusicUri,
     isDeezerUri,
     isTidalUri,
+    isYtMusicUri,
   };
 }

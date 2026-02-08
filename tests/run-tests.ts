@@ -13,6 +13,7 @@ import './adminApiJsonBody.test';
 import './airplayPcmStream.test';
 import './audioStreamHandlerIcy.test';
 import './queueAuthority.test';
+import './ytmusicNative.mock.test';
 import './zonePlayerEndGuard.test';
 import './runtimeShutdown.test';
 import type { ZoneConfig } from '../src/domain/config/types';
@@ -51,9 +52,11 @@ const noopContentPort: ContentPort = {
   configureAppleMusic: () => {},
   configureDeezer: () => {},
   configureTidal: () => {},
+  configureYtMusic: () => {},
   isAppleMusicProvider: () => false,
   isDeezerProvider: () => false,
   isTidalProvider: () => false,
+  isYtMusicProvider: () => false,
   getMediaFolder: async () => null,
   getServiceTrack: async () => null,
   getServiceFolder: async () => null,
@@ -337,12 +340,19 @@ class FakeProcess extends EventEmitter {
   }
 }
 
-const childProcess = require('node:child_process') as {
-  spawn: (...args: any[]) => FakeProcess;
-};
+const childProcess = require('node:child_process') as typeof import('node:child_process');
 const originalSpawn = childProcess.spawn;
 let spawnImpl: (...args: any[]) => FakeProcess = () => new FakeProcess(true);
-childProcess.spawn = (...args: any[]) => spawnImpl(...args);
+
+// Only mock ffmpeg spawns. Other subprocesses (e.g. yt-dlp) should run normally.
+childProcess.spawn = ((command: any, ...rest: any[]) => {
+  const cmd = typeof command === 'string' ? command : '';
+  const base = cmd ? path.basename(cmd).toLowerCase() : '';
+  if (base.startsWith('ffmpeg')) {
+    return spawnImpl(command, ...rest) as any;
+  }
+  return (originalSpawn as any)(command, ...rest);
+}) as any;
 
 const { AudioSession } = require('../src/engine/audioSession') as typeof import('../src/engine/audioSession');
 const { audioOutputSettings } = require('../src/engine/audioFormat') as typeof import('../src/engine/audioFormat');

@@ -182,6 +182,7 @@ export class ZoneManager {
       isAppleMusicAudiopath: audioHelpers.isAppleMusicAudiopath,
       isDeezerAudiopath: audioHelpers.isDeezerAudiopath,
       isTidalAudiopath: audioHelpers.isTidalAudiopath,
+      isYtMusicAudiopath: audioHelpers.isYtMusicAudiopath,
       resolveBridgeProvider: audioHelpers.resolveBridgeProvider,
       getMusicAssistantUserId,
       getStateAudiotype: audioHelpers.getStateAudiotype,
@@ -328,6 +329,7 @@ export class ZoneManager {
     contentPort.configureAppleMusic();
     contentPort.configureDeezer();
     contentPort.configureTidal();
+    contentPort.configureYtMusic();
     this.playbackCoordinator.refreshMusicAssistantProviderId();
   }
 
@@ -355,6 +357,7 @@ export class ZoneManager {
     contentPort.configureAppleMusic();
     contentPort.configureDeezer();
     contentPort.configureTidal();
+    contentPort.configureYtMusic();
     this.playbackCoordinator.refreshMusicAssistantProviderId();
     await inputsPort.syncMusicAssistantZones(zoneConfigs);
     const contexts = this.zoneRepo.list();

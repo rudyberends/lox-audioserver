@@ -29,6 +29,9 @@ const mapProvider = (service: string): ProviderKind => {
   if (service === 'tidal') {
     return 'tidal';
   }
+  if (service === 'ytmusic') {
+    return 'ytmusic';
+  }
   return null;
 };
 

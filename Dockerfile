@@ -25,20 +25,27 @@ RUN npm prune --omit=dev
 FROM node:24-bookworm-slim AS runtime
 ARG BUILD_VERSION
 ARG BUILD_TIMESTAMP
+ARG YTDLP_VERSION=2026.02.04
 ENV APP_VERSION=${BUILD_VERSION}
 ENV BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
+ENV XDG_CACHE_HOME=/app/data/.cache
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         cifs-utils \
         keyutils \
         nfs-common \
+        curl \
+        python3 \
     && rm -rf /var/lib/apt/lists/*
+RUN curl -L -o /usr/local/bin/yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp" \
+    && chmod +x /usr/local/bin/yt-dlp \
+    && /usr/local/bin/yt-dlp --version
 WORKDIR /app
 COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --from=builder --chown=node:node /app/public ./public
 COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/package*.json ./
-RUN mkdir -p /app/data && chown -R node:node /app/data
+RUN mkdir -p /app/data/.cache && chown -R node:node /app/data
 # Start the application
 CMD ["node", "dist/server.js"]

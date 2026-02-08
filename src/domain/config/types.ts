@@ -98,6 +98,8 @@ export interface SpotifyBridgeConfig {
   host?: string;
   port?: number;
   apiKey?: string;
+  /** Optional YouTube Music cookie header string when provider === 'ytmusic' (e.g. "SID=...; HSID=..."). */
+  ytmusicCookie?: string;
   /** Optional Apple Music tokens if provider === 'applemusic' */
   developerToken?: string;
   userToken?: string;

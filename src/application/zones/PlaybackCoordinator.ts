@@ -392,7 +392,7 @@ export class PlaybackCoordinator {
     if (req.isRadio || req.isLineIn || req.isMusicAssistant) {
       return;
     }
-    if (!req.isAppleMusic && !req.isDeezer && !req.isTidal) {
+    if (!req.isAppleMusic && !req.isDeezer && !req.isTidal && !req.isYtMusic) {
       return;
     }
     const audiopath = req.parentContext?.startItem ?? req.queueAudiopath;
@@ -484,6 +484,7 @@ export class PlaybackCoordinator {
         isAppleMusic: req.isAppleMusic,
         isDeezer: req.isDeezer,
         isTidal: req.isTidal,
+        isYtMusic: req.isYtMusic,
         isMusicAssistant: req.isMusicAssistant,
         isLineIn: req.isLineIn,
         queueBuildLimit: req.queueBuildLimit,
@@ -587,7 +588,7 @@ export class PlaybackCoordinator {
     if (requestType === 'linein' || req.isRadio || req.isMusicAssistant) {
       return false;
     }
-    if (!req.isAppleMusic && !req.isDeezer && !req.isTidal) {
+    if (!req.isAppleMusic && !req.isDeezer && !req.isTidal && !req.isYtMusic) {
       return false;
     }
     if (requestType !== 'serviceplay') {
@@ -875,6 +876,9 @@ export class PlaybackCoordinator {
       } else if (plan.provider === 'tidal') {
         this.handlePlaybackError(ctx.id, 'tidal stream unavailable', 'output');
         this.log.warn('tidal stream not ready; skipping playback', { zoneId: ctx.id });
+      } else if (plan.provider === 'ytmusic') {
+        this.handlePlaybackError(ctx.id, 'ytmusic stream unavailable', 'output');
+        this.log.warn('ytmusic stream not ready; skipping playback', { zoneId: ctx.id });
       }
       return null;
     }
@@ -903,7 +907,8 @@ export class PlaybackCoordinator {
       const isAppleMusic = this.audioHelpers.isAppleMusicAudiopath(item.audiopath);
       const isDeezer = this.audioHelpers.isDeezerAudiopath(item.audiopath);
       const isTidal = this.audioHelpers.isTidalAudiopath(item.audiopath);
-      if (!isAppleMusic && !isDeezer && !isTidal) {
+      const isYtMusic = this.audioHelpers.isYtMusicAudiopath(item.audiopath);
+      if (!isAppleMusic && !isDeezer && !isTidal && !isYtMusic) {
         return;
       }
       if (!this.isTrackAudiopath(item.audiopath)) {
@@ -958,6 +963,7 @@ export class PlaybackCoordinator {
     isAppleMusic: boolean;
     isDeezer: boolean;
     isTidal: boolean;
+    isYtMusic: boolean;
     provider: ProviderKind;
     nextInput: ZoneContext['inputMode'];
   } {
@@ -966,6 +972,7 @@ export class PlaybackCoordinator {
     const isAppleMusic = this.audioHelpers.isAppleMusicAudiopath(audiopath);
     const isDeezer = this.audioHelpers.isDeezerAudiopath(audiopath);
     const isTidal = this.audioHelpers.isTidalAudiopath(audiopath);
+    const isYtMusic = this.audioHelpers.isYtMusicAudiopath(audiopath);
     const nextInput: ZoneContext['inputMode'] =
       isSpotify
         ? 'spotify'
@@ -978,6 +985,8 @@ export class PlaybackCoordinator {
         ? 'deezer'
         : isTidal
           ? 'tidal'
+          : isYtMusic
+            ? 'ytmusic'
           : null;
     return {
       isSpotify,
@@ -985,6 +994,7 @@ export class PlaybackCoordinator {
       isAppleMusic,
       isDeezer,
       isTidal,
+      isYtMusic,
       provider,
       nextInput,
     };
@@ -1245,7 +1255,8 @@ export class PlaybackCoordinator {
     const isAppleMusic = this.audioHelpers.isAppleMusicAudiopath(audiopath);
     const isDeezer = this.audioHelpers.isDeezerAudiopath(audiopath);
     const isTidal = this.audioHelpers.isTidalAudiopath(audiopath);
-    if (!isAppleMusic && !isDeezer && !isTidal) {
+    const isYtMusic = this.audioHelpers.isYtMusicAudiopath(audiopath);
+    if (!isAppleMusic && !isDeezer && !isTidal && !isYtMusic) {
       return;
     }
     if (!this.isTrackAudiopath(audiopath)) {

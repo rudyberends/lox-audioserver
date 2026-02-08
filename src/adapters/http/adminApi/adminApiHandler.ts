@@ -1913,6 +1913,8 @@ export class AdminApiHandler {
             ? 'Deezer'
             : provider === 'tidal'
               ? 'Tidal'
+              : provider === 'ytmusic'
+                ? 'YouTube Music'
               : id;
 
     const bridge: SpotifyBridgeConfig = {
@@ -1949,6 +1951,10 @@ export class AdminApiHandler {
         typeof body?.tidalCountryCode === 'string' && body.tidalCountryCode.trim()
           ? body.tidalCountryCode.trim().toUpperCase()
           : undefined,
+      ytmusicCookie:
+        typeof body?.ytmusicCookie === 'string' && body.ytmusicCookie.trim()
+          ? body.ytmusicCookie.trim()
+          : undefined,
     };
 
     try {
@@ -1971,7 +1977,7 @@ export class AdminApiHandler {
         }
       });
       this.contentManager.refreshFromConfig();
-      if (provider === 'applemusic' || provider === 'deezer' || provider === 'tidal') {
+      if (provider === 'applemusic' || provider === 'deezer' || provider === 'tidal' || provider === 'ytmusic') {
         this.zoneManager.refreshContentProviders();
       }
       this.musicAssistantStreamService.configureFromConfig();
@@ -2008,7 +2014,7 @@ export class AdminApiHandler {
       });
       this.contentManager.refreshFromConfig();
       const provider = typeof existing?.provider === 'string' ? existing.provider.trim().toLowerCase() : '';
-      if (provider === 'applemusic' || provider === 'deezer' || provider === 'tidal') {
+      if (provider === 'applemusic' || provider === 'deezer' || provider === 'tidal' || provider === 'ytmusic') {
         this.zoneManager.refreshContentProviders();
       }
       this.musicAssistantStreamService.configureFromConfig();
