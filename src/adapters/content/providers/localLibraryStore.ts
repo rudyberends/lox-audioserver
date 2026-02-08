@@ -60,7 +60,15 @@ export interface ArtistRow {
 
 export class LocalLibraryStore {
   private db: Database.Database | null = null;
-  private readonly dbPath = resolveDataDir('music', 'library.db');
+  private readonly dbPath: string;
+
+  // Schema versions for `PRAGMA user_version`.
+  private static readonly SCHEMA_V1 = 1; // base tracks table + indexes
+  private static readonly SCHEMA_V2 = 2; // adds FTS5 search table + triggers
+
+  public constructor(options: { dbPath?: string } = {}) {
+    this.dbPath = options.dbPath ?? resolveDataDir('music', 'library.db');
+  }
 
   public async init(): Promise<void> {
     await ensureDir(path.dirname(this.dbPath));
@@ -329,63 +337,131 @@ export class LocalLibraryStore {
 
   public searchTracks(query: string, limit: number): StoredTrack[] {
     const db = this.requireDb();
+    const fts = this.toFtsQuery(query);
+    if (fts) {
+      try {
+        return db
+          .prepare(
+            `
+            SELECT t.* FROM tracks_fts
+            JOIN tracks t ON t.id = tracks_fts.rowid
+            WHERE tracks_fts MATCH ?
+            ORDER BY LOWER(t.artist), LOWER(t.album), LOWER(t.title)
+            LIMIT ?
+          `,
+          )
+          .all(fts, limit) as StoredTrack[];
+      } catch {
+        // FTS missing/disabled; fall back to LIKE.
+      }
+    }
+
     const like = `%${query.toLowerCase()}%`;
     return db
       .prepare(
         `
-        SELECT * FROM tracks
-        WHERE LOWER(title) LIKE ? OR LOWER(artist) LIKE ? OR LOWER(album) LIKE ?
-        ORDER BY LOWER(artist), LOWER(album), LOWER(title)
-        LIMIT ?
-      `,
+          SELECT * FROM tracks
+          WHERE LOWER(title) LIKE ? OR LOWER(artist) LIKE ? OR LOWER(album) LIKE ?
+          ORDER BY LOWER(artist), LOWER(album), LOWER(title)
+          LIMIT ?
+        `,
       )
       .all(like, like, like, limit) as StoredTrack[];
   }
 
   public searchAlbums(query: string, limit: number): AlbumRow[] {
     const db = this.requireDb();
+    const fts = this.toFtsQuery(query);
+    if (fts) {
+      try {
+        return db
+          .prepare(
+            `
+            SELECT t.storage_id,
+                   t.album,
+                   t.artist,
+                   COUNT(*) AS track_count,
+                   MAX(t.cover) AS cover,
+                   MAX(t.rel_path) AS rel_path
+            FROM tracks_fts
+            JOIN tracks t ON t.id = tracks_fts.rowid
+            WHERE tracks_fts MATCH ?
+            GROUP BY t.storage_id, t.artist, t.album
+            ORDER BY LOWER(t.artist), LOWER(t.album)
+            LIMIT ?
+          `,
+          )
+          .all(fts, limit) as AlbumRow[];
+      } catch {
+        // fall back to LIKE
+      }
+    }
+
     const like = `%${query.toLowerCase()}%`;
     return db
       .prepare(
         `
-        SELECT storage_id,
-               album,
-               artist,
-               COUNT(*) AS track_count,
-               MAX(cover) AS cover,
-               MAX(rel_path) AS rel_path
-        FROM tracks
-        WHERE LOWER(album) LIKE ? OR LOWER(artist) LIKE ?
-        GROUP BY storage_id, artist, album
-        ORDER BY LOWER(artist), LOWER(album)
-        LIMIT ?
-      `,
+          SELECT storage_id,
+                 album,
+                 artist,
+                 COUNT(*) AS track_count,
+                 MAX(cover) AS cover,
+                 MAX(rel_path) AS rel_path
+          FROM tracks
+          WHERE LOWER(album) LIKE ? OR LOWER(artist) LIKE ?
+          GROUP BY storage_id, artist, album
+          ORDER BY LOWER(artist), LOWER(album)
+          LIMIT ?
+        `,
       )
       .all(like, like, limit) as AlbumRow[];
   }
 
   public searchArtists(query: string, limit: number): ArtistRow[] {
     const db = this.requireDb();
+    const fts = this.toFtsQuery(query);
+    if (fts) {
+      try {
+        return db
+          .prepare(
+            `
+            SELECT t.storage_id,
+                   t.artist AS name,
+                   COUNT(*) AS track_count
+            FROM tracks_fts
+            JOIN tracks t ON t.id = tracks_fts.rowid
+            WHERE tracks_fts MATCH ?
+            GROUP BY t.storage_id, t.artist
+            ORDER BY LOWER(t.artist)
+            LIMIT ?
+          `,
+          )
+          .all(fts, limit) as ArtistRow[];
+      } catch {
+        // fall back to LIKE
+      }
+    }
+
     const like = `%${query.toLowerCase()}%`;
     return db
       .prepare(
         `
-        SELECT storage_id,
-               artist AS name,
-               COUNT(*) AS track_count
-        FROM tracks
-        WHERE LOWER(artist) LIKE ?
-        GROUP BY storage_id, artist
-        ORDER BY LOWER(artist)
-        LIMIT ?
-      `,
+          SELECT storage_id,
+                 artist AS name,
+                 COUNT(*) AS track_count
+          FROM tracks
+          WHERE LOWER(artist) LIKE ?
+          GROUP BY storage_id, artist
+          ORDER BY LOWER(artist)
+          LIMIT ?
+        `,
       )
       .all(like, limit) as ArtistRow[];
   }
 
   private migrate(): void {
     const db = this.requireDb();
-    db.exec(`
+    const baseSchema = `
       CREATE TABLE IF NOT EXISTS tracks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         storage_id TEXT NOT NULL,
@@ -404,7 +480,70 @@ export class LocalLibraryStore {
       CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(storage_id, album);
       CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(storage_id, artist);
       CREATE INDEX IF NOT EXISTS idx_tracks_audiopath ON tracks(audiopath);
-    `);
+    `;
+    db.exec(baseSchema);
+
+    const userVersion = Number(db.pragma('user_version', { simple: true }) ?? 0);
+    if (userVersion < LocalLibraryStore.SCHEMA_V1) {
+      db.pragma(`user_version = ${LocalLibraryStore.SCHEMA_V1}`);
+    }
+
+    // Add FTS-backed searching for large libraries. If FTS5 is unavailable, we keep the LIKE fallback.
+    if (userVersion < LocalLibraryStore.SCHEMA_V2) {
+      const enabled = this.tryEnableFts(db);
+      if (enabled) {
+        // Build the index once for existing databases.
+        try {
+          db.exec(`INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild');`);
+        } catch {
+          /* ignore */
+        }
+      }
+      db.pragma(`user_version = ${LocalLibraryStore.SCHEMA_V2}`);
+    } else {
+      // Ensure the virtual table still exists even if user_version was bumped previously.
+      this.tryEnableFts(db);
+    }
+  }
+
+  private tryEnableFts(db: Database.Database): boolean {
+    try {
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts
+        USING fts5(title, album, artist, content='tracks', content_rowid='id');
+
+        CREATE TRIGGER IF NOT EXISTS tracks_ai AFTER INSERT ON tracks BEGIN
+          INSERT INTO tracks_fts(rowid, title, album, artist)
+          VALUES (new.id, new.title, new.album, new.artist);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tracks_ad AFTER DELETE ON tracks BEGIN
+          INSERT INTO tracks_fts(tracks_fts, rowid, title, album, artist)
+          VALUES('delete', old.id, old.title, old.album, old.artist);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tracks_au AFTER UPDATE ON tracks BEGIN
+          INSERT INTO tracks_fts(tracks_fts, rowid, title, album, artist)
+          VALUES('delete', old.id, old.title, old.album, old.artist);
+          INSERT INTO tracks_fts(rowid, title, album, artist)
+          VALUES (new.id, new.title, new.album, new.artist);
+        END;
+      `);
+      // Touch the table to ensure it's usable.
+      db.prepare('SELECT 1 FROM tracks_fts LIMIT 1').get();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private toFtsQuery(query: string): string | null {
+    const raw = String(query || '').trim().toLowerCase();
+    if (!raw) return null;
+    const tokens = raw.match(/[a-z0-9]+/g) ?? [];
+    if (!tokens.length) return null;
+    // Prefix matching keeps "typed as you go" searches responsive.
+    return tokens.map((t) => `${t}*`).join(' ');
   }
 
   private requireDb(): Database.Database {
