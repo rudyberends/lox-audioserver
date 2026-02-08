@@ -678,71 +678,11 @@
 
       const loadSendspin = async () => {
         if (sendspinModule) return sendspinModule;
-        sendspinModule = await import('https://unpkg.com/@music-assistant/sendspin-js@0.4.5/dist/index.js');
+        sendspinModule = await import('https://unpkg.com/@music-assistant/sendspin-js@2.0.0/dist/index.js');
         return sendspinModule;
       };
 
-      const patchSendspinPlayer = (p) => {
-        if (!p || p._loxPatched) return;
-        const protocol = p?.protocolHandler;
-        if (!protocol) return;
-        const originalHello = protocol.sendClientHello.bind(protocol);
-        protocol.sendClientHello = () => {
-          try {
-            const clientId = protocol.playerId || resolveClientId('sendspin');
-            const name = protocol.playerName || 'Sendspin Web';
-            const supportedFormats = protocol.getSupportedFormats ? protocol.getSupportedFormats() : [];
-            const hello = {
-              type: 'client/hello',
-              payload: {
-                client_id: clientId,
-                name,
-                version: 1,
-                supported_roles: ['player@v1', 'metadata@v1', 'artwork@v1'],
-                device_info: {
-                  product_name: (typeof navigator !== 'undefined' && navigator.userAgent) || 'Browser',
-                  manufacturer: (typeof navigator !== 'undefined' && navigator.vendor) || 'Unknown',
-                  software_version: (typeof navigator !== 'undefined' && navigator.appVersion) || 'N/A',
-                },
-                player_support: {
-                  supported_formats: supportedFormats,
-                  buffer_capacity: protocol.bufferCapacity,
-                  supported_commands: ['volume', 'mute'],
-                },
-                'artwork@v1_support': {
-                  channels: [
-                    {
-                      source: 'album',
-                      format: 'jpeg',
-                      media_width: 800,
-                      media_height: 800,
-                    },
-                  ],
-                },
-              },
-            };
-            protocol.wsManager.send(hello);
-          } catch (err) {
-            console.warn('[Sendspin] custom hello failed, using default', err);
-            originalHello();
-          }
-        };
-
-        const originalHandle = protocol.handleServerMessage.bind(protocol);
-        protocol.handleServerMessage = (message) => {
-          try {
-            const meta = message?.payload?.metadata;
-            if (meta) {
-              applyMetadata(meta);
-            }
-          } catch (err) {
-            console.warn('[Sendspin] metadata apply failed', err);
-          }
-          return originalHandle(message);
-        };
-
-        p._loxPatched = true;
-      };
+      const patchSendspinPlayer = (_p) => {};
 
       const ensurePathForProtocol = (url, proto) => {
         try {
@@ -1176,7 +1116,7 @@
           gainNode.gain.value = value / 100;
         }
         if (sendspinPlayer && typeof sendspinPlayer.setVolume === 'function') {
-          sendspinPlayer.setVolume(value / 100);
+          sendspinPlayer.setVolume(value);
         }
         logDebug();
         resetIdleFullscreen();
@@ -1312,30 +1252,37 @@
           bufferCapacity: 2 * 1024 * 1024,
           useHardwareVolume: false,
           onStateChange: (state) => {
-            if (state?.isConnected) {
-              isConnected = true;
-              autoConnectDone = true;
-            }
             isPlaying = !!state?.isPlaying;
             setStatus(state.isPlaying ? 'Playing' : 'Stopped', state.isPlaying, false);
-            const meta = state.metadata || state?.payload?.metadata;
-            if (meta) applyMetadata(meta);
+            const meta = state?.serverState?.metadata;
+            if (meta) {
+              applyMetadata({
+                title: meta.title ?? null,
+                artist: meta.artist ?? null,
+                album: meta.album ?? null,
+                artUrl: meta.artwork_url ?? null,
+                progress: meta.progress
+                  ? {
+                      position: meta.progress.track_progress / 1000,
+                      duration: meta.progress.track_duration / 1000,
+                    }
+                  : null,
+              });
+            }
           },
         });
-        patchSendspinPlayer(sendspinPlayer);
-          if (typeof sendspinPlayer.setVolume === 'function') {
-            const vol = inlineVolume?.valueAsNumber ?? 100;
-            sendspinPlayer.setVolume(vol / 100);
-          }
           await sendspinPlayer.connect();
           isConnected = true;
           autoConnectDone = true;
           setStatus('Ready (Sendspin)', true, false);
-          const meta = sendspinPlayer?.metadata || sendspinPlayer?.payload?.metadata;
-          if (meta?.progress) {
-            const pos = typeof meta.progress.position === 'number' ? meta.progress.position : 0;
-            const dur = typeof meta.progress.duration === 'number' ? meta.progress.duration : 0;
-            setTiming(pos, dur);
+          patchSendspinPlayer(sendspinPlayer);
+          if (typeof sendspinPlayer.setVolume === 'function') {
+            const vol = inlineVolume?.valueAsNumber ?? 100;
+            sendspinPlayer.setVolume(vol);
+          }
+          const prog = sendspinPlayer?.trackProgress;
+          if (prog) {
+            setTiming(prog.positionMs / 1000, prog.durationMs / 1000);
           }
         } catch (err) {
           setStatus(`Sendspin error: ${err?.message || err}`, false, true);
