@@ -48,6 +48,12 @@ export class TuneInProvider {
   private readonly searchCache = new Map<string, { station: RadioStation; seenAt: number }>();
   private readonly searchCacheTtlMs = 30 * 60 * 1000;
   private readonly searchCacheMaxSize = 200;
+  private readonly tuneCache = new Map<
+    string,
+    { url: string | null; fetchedAt: number; inFlight?: Promise<string | null> }
+  >();
+  private readonly tuneCacheTtlMs = 60 * 60 * 1000;
+  private localStationsCache: { items: RadioStation[]; fetchedAt: number; inFlight?: Promise<RadioStation[]> } | null = null;
   private readonly customRadioStore: CustomRadioStore;
 
   constructor(customRadioStore: CustomRadioStore, options: TuneInProviderOptions = {}) {
@@ -138,7 +144,10 @@ export class TuneInProvider {
       log.warn('tunein search failed', { message, query: normalizedQuery });
     }
 
-    const stations = await this.mapTuneInItems(outlines);
+    // Avoid resolving streams for an unbounded number of outlines.
+    // Overfetch a bit because some entries are filtered out as unavailable/non-audio.
+    const outlineCap = Math.max(25, stationLimit * 3);
+    const stations = await this.mapTuneInItems(outlines.slice(0, outlineCap));
     this.cacheStations(stations);
     const stationItems = stations
       .slice(0, stationLimit)
@@ -157,19 +166,45 @@ export class TuneInProvider {
   }
 
   private async getLocalStations(): Promise<RadioStation[]> {
-    if (!this.username) {
+    const username = this.username;
+    if (!username) {
       return DEMO_STATIONS;
     }
 
-    try {
-      const outlines = await this.api.browsePresets(this.username);
-      const stations = await this.mapTuneInItems(outlines);
-      return stations.length ? stations : DEMO_STATIONS;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log.warn('failed to load TuneIn presets', { message });
-      return DEMO_STATIONS;
+    const cached = this.localStationsCache;
+    if (cached && Date.now() - cached.fetchedAt <= this.searchCacheTtlMs) {
+      return cached.items;
     }
+    if (cached?.inFlight) {
+      return cached.inFlight;
+    }
+
+    let inFlight: Promise<RadioStation[]>;
+    inFlight = (async () => {
+      try {
+        const outlines = await this.api.browsePresets(username);
+        const stations = await this.mapTuneInItems(outlines);
+        const items = stations.length ? stations : DEMO_STATIONS;
+        this.localStationsCache = { items, fetchedAt: Date.now() };
+        return items;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log.warn('failed to load TuneIn presets', { message });
+        this.localStationsCache = { items: DEMO_STATIONS, fetchedAt: Date.now() };
+        return DEMO_STATIONS;
+      } finally {
+        // Clear inFlight so subsequent calls can refresh after the TTL.
+        const next = this.localStationsCache;
+        if (next?.inFlight) delete next.inFlight;
+      }
+    })();
+
+    this.localStationsCache = {
+      items: cached?.items ?? DEMO_STATIONS,
+      fetchedAt: cached?.fetchedAt ?? 0,
+      inFlight,
+    };
+    return inFlight;
   }
 
   private async getCustomStations(): Promise<RadioStation[]> {
@@ -182,71 +217,119 @@ export class TuneInProvider {
     }));
   }
 
-  private async mapTuneInItems(outlines: unknown[]): Promise<RadioStation[]> {
-    const tasks = outlines.map(async (raw): Promise<RadioStation | null> => {
-      const item = raw as {
-        type?: string;
-        preset_id?: string;
-        guide_id?: string;
-        URL?: string;
-        text?: string;
-        image?: string;
-        playing_image?: string;
-        key?: string;
-      };
-
-      if (!item || item.type !== 'audio' || item.key === 'unavailable') {
-        return null;
-      }
-
-      const id = item.preset_id ?? item.guide_id;
-      if (!id) {
-        return null;
-      }
-
-      const stream = await this.resolveStreamUrl(id, item.URL);
-      if (!stream) {
-        return null;
-      }
-
-      let coverurl = item.image ?? item.playing_image;
-      if (coverurl) {
-        coverurl = coverurl.replace(/q(?=\.[^.]*$)/, 'd'); // replaces `q` char before file extension to `d` to get 300x300 pixel squared cover
-      } else {
-        coverurl = DEFAULT_ICON;
-      }
-
-      let name = item.text;
-      if (name) {
-        name = name.replace(/^(?:\d+\.\d+ \| )?(.+?)(?: \([^)]+\))?$/, '$1'); // removes frequency and genre if present in name
-      } else {
-        name = 'Unknown station';
-      }
-
-      return {
-        id,
-        name,
-        stream,
-        coverurl,
-      } satisfies RadioStation;
-    });
-
-    const resolved = await Promise.all(tasks);
-    return resolved.filter((station): station is RadioStation => Boolean(station));
+  private isDirectStreamUrl(url: string | undefined): boolean {
+    const raw = (url ?? '').trim();
+    if (!/^https?:\/\//i.test(raw)) return false;
+    try {
+      const u = new URL(raw);
+      const host = u.hostname.toLowerCase();
+      // TuneIn uses radiotime endpoints that require a Tune call to resolve to the real stream.
+      if (host.endsWith('radiotime.com')) return false;
+      if (host.endsWith('tunein.com')) return false;
+      return true;
+    } catch {
+      return false;
+    }
   }
 
-  private async resolveStreamUrl(id: string, fallback?: string): Promise<string | null> {
-    try {
-      const outlines = await this.api.tune(id);
-      const match = outlines.find((entry) => entry && typeof (entry as any).url === 'string') as
-        | { url?: string }
-        | undefined;
-      return match?.url ?? fallback ?? null;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log.debug('tunein tune failed', { id, message });
+  private async resolveStreamUrlCached(id: string, fallback?: string): Promise<string | null> {
+    if (this.isDirectStreamUrl(fallback)) {
       return fallback ?? null;
     }
+
+    const cached = this.tuneCache.get(id);
+    if (cached && Date.now() - cached.fetchedAt <= this.tuneCacheTtlMs) {
+      return cached.url ?? fallback ?? null;
+    }
+    if (cached?.inFlight) {
+      const url = await cached.inFlight;
+      return url ?? fallback ?? null;
+    }
+
+    const state = cached ?? { url: null, fetchedAt: 0 };
+    state.inFlight = (async () => {
+      try {
+        const outlines = await this.api.tune(id);
+        const match = outlines.find((entry) => entry && typeof (entry as any).url === 'string') as
+          | { url?: string }
+          | undefined;
+        const resolved = match?.url ?? null;
+        state.url = resolved;
+        state.fetchedAt = Date.now();
+        return resolved;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log.debug('tunein tune failed', { id, message });
+        state.url = null;
+        state.fetchedAt = Date.now();
+        return null;
+      } finally {
+        state.inFlight = undefined;
+      }
+    })();
+
+    this.tuneCache.set(id, state);
+    const url = await state.inFlight;
+    return url ?? fallback ?? null;
+  }
+
+  private async mapTuneInItems(outlines: unknown[]): Promise<RadioStation[]> {
+    const concurrency = 8;
+    const out: Array<RadioStation | null> = [];
+    for (let i = 0; i < outlines.length; i += concurrency) {
+      const batch = outlines.slice(i, i + concurrency);
+      const resolved = await Promise.all(batch.map((raw) => this.mapTuneInItem(raw)));
+      out.push(...resolved);
+    }
+    return out.filter((station): station is RadioStation => Boolean(station));
+  }
+
+  private async mapTuneInItem(raw: unknown): Promise<RadioStation | null> {
+    const item = raw as {
+      type?: string;
+      preset_id?: string;
+      guide_id?: string;
+      URL?: string;
+      text?: string;
+      image?: string;
+      playing_image?: string;
+      key?: string;
+    };
+
+    if (!item || item.type !== 'audio' || item.key === 'unavailable') {
+      return null;
+    }
+
+    const id = item.preset_id ?? item.guide_id;
+    if (!id) {
+      return null;
+    }
+
+    const stream = await this.resolveStreamUrlCached(id, item.URL);
+    if (!stream) {
+      return null;
+    }
+
+    let coverurl = item.image ?? item.playing_image;
+    if (coverurl) {
+      coverurl = coverurl.replace(/q(?=\.[^.]*$)/, 'd'); // replaces `q` char before file extension to `d` to get 300x300 pixel squared cover
+    } else {
+      coverurl = DEFAULT_ICON;
+    }
+
+    let name = item.text;
+    if (name) {
+      name = name.replace(/^(?:\d+\.\d+ \| )?(.+?)(?: \([^)]+\))?$/, '$1'); // removes frequency and genre if present in name
+    } else {
+      name = 'Unknown station';
+    }
+
+    return {
+      id,
+      name,
+      stream,
+      coverurl,
+    } satisfies RadioStation;
   }
 
   private normalizeStreamUrl(streamUrl: string | undefined): string {
