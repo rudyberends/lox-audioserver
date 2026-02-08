@@ -3,7 +3,7 @@
 Minimal yt-dlp mock for offline tests.
 
 Supports the subset of flags/URLs used by the native YTMusic provider:
-- `-J`, `-g`, `--flat-playlist`, `--no-playlist`, `--skip-download`
+- `-J`, `-j`, `-g`, `--flat-playlist`, `--no-playlist`, `--skip-download`
 - `--playlist-start`, `--playlist-end`
 - `--version`
 """
@@ -40,9 +40,10 @@ def last_url(args: list[str]) -> str | None:
 def build_search(url: str, args: list[str]) -> dict:
     parsed = urlparse(url)
     q = (parse_qs(parsed.query).get("q") or ["query"])[0]
+    start = to_int(arg_value(args, "--playlist-start"), 1)
     end = to_int(arg_value(args, "--playlist-end"), 5)
     entries = []
-    for i in range(1, end + 1):
+    for i in range(start, end + 1):
         # YouTube video ids are 11 chars; keep tests aligned with production parsing.
         vid = f"m{i:010d}"
         entries.append(
@@ -104,6 +105,34 @@ def build_watch(url: str) -> dict:
         "http_headers": {"User-Agent": "yt-dlp-mock", "Accept": "*/*"},
     }
 
+def build_browse(url: str, args: list[str]) -> dict:
+    parsed = urlparse(url)
+    parts = [p for p in parsed.path.split("/") if p]
+    browse_id = parts[-1] if parts else "BROWSE_MOCK"
+    start = to_int(arg_value(args, "--playlist-start"), 1)
+    end = to_int(arg_value(args, "--playlist-end"), start + 4)
+    base = sum(ord(c) for c in str(browse_id)) % 100000
+    entries = []
+    for idx in range(start, end + 1):
+        vid_int = base * 1000 + idx
+        vid = f"b{vid_int:010d}"
+        entries.append(
+            {
+                "id": vid,
+                "title": f"Browse {browse_id} track {idx}",
+                "duration": 210 + idx,
+                "thumbnail": f"https://example.invalid/thumb/{vid}.jpg",
+                "channel_id": f"UC_{browse_id}_{idx}",
+                "channel": f"Artist {idx}",
+                "channel_url": f"https://www.youtube.com/channel/UC_{browse_id}_{idx}",
+            }
+        )
+    return {"_type": "playlist", "id": browse_id, "title": f"Browse: {browse_id}", "entries": entries}
+
+def wants_json_lines(args: list[str]) -> bool:
+    # yt-dlp uses -j/--dump-json for per-entry JSON (one JSON object per line).
+    return ("-j" in args) or ("--dump-json" in args) or ("--print-json" in args)
+
 
 def main() -> int:
     args = sys.argv[1:]
@@ -121,12 +150,25 @@ def main() -> int:
         out = build_search(url, args)
     elif "music.youtube.com/playlist" in url:
         out = build_playlist(url, args)
+    elif "music.youtube.com/browse/" in url:
+        out = build_browse(url, args)
     elif "music.youtube.com/watch" in url:
         out = build_watch(url)
 
     if "-g" in args or "--get-url" in args:
         stream = out.get("url") if isinstance(out, dict) else None
         sys.stdout.write(str(stream or "") + "\n")
+        return 0
+
+    if wants_json_lines(args):
+        # Per-entry JSON lines. For playlists/search/browse, emit one JSON object per entry.
+        entries = out.get("entries") if isinstance(out, dict) else None
+        if isinstance(entries, list):
+            for e in entries:
+                sys.stdout.write(json.dumps(e) + "\n")
+            return 0
+        # For single videos, just dump the object.
+        sys.stdout.write(json.dumps(out) + "\n")
         return 0
 
     sys.stdout.write(json.dumps(out) + "\n")

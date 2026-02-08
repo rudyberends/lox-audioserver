@@ -10,6 +10,7 @@ import {
   buildYtMusicSearchUrl,
   buildYtMusicWatchUrl,
   extractVideoId,
+  runYtDlpJsonLines,
   runYtDlpJson,
   type YtDlpExecOptions,
   YtDlpError,
@@ -68,6 +69,9 @@ export class YtMusicProvider {
     artists?: { items: ContentFolderItem[]; fetchedAt: number };
   } = {};
   private artistTracksCache = new Map<string, { items: ContentFolderItem[]; fetchedAt: number }>();
+  private readonly playlistMetaCacheTtlMs = 5 * 60_000;
+  private playlistMetaCache = new Map<string, { title: string; count: number | null; fetchedAt: number }>();
+  private playlistMetaInflight = new Map<string, Promise<{ title: string; count: number | null }>>();
 
   constructor(options: YtMusicProviderOptions) {
     this.providerId = options.providerId;
@@ -272,8 +276,9 @@ export class YtMusicProvider {
         const playlistUrl = isBrowseLikePlaylistId(playlistId)
           ? buildYtMusicBrowseUrl(playlistId)
           : buildYtMusicPlaylistUrl(playlistId);
-        const args = [
-          '-J',
+        // Fetch playlist entries via JSON-lines for lower overhead.
+        const entriesArgs = [
+          '-j',
           '--js-runtimes',
           'node',
           '--flat-playlist',
@@ -286,15 +291,22 @@ export class YtMusicProvider {
           ...this.buildCookieArgs(cookieFile),
           playlistUrl,
         ];
-        const data = await runYtDlpJson(args, this.execOptions());
-        const entries = Array.isArray(data?.entries) ? data.entries : [];
-        const mapped = entries
+        // Only fetch playlist metadata on the first page (then reuse cached values for subsequent pages).
+        // This avoids paying extra "playlist_count/title" work per page.
+        const meta =
+          start === 0 ? await this.fetchPlaylistMetaCached(playlistUrl, cookieFile) : this.getPlaylistMetaCached(playlistUrl);
+
+        const entries = await runYtDlpJsonLines(entriesArgs, this.execOptions());
+        const mapped = (entries ?? [])
           .map((e: any) => this.mapSearchEntryToTrack(e))
           .filter(Boolean) as ContentFolderItem[];
-        const total = typeof data?.playlist_count === 'number' ? data.playlist_count : mapped.length;
+        const total =
+          typeof meta?.count === 'number'
+            ? meta.count
+            : estimateTotal(start, mapped.length, cap);
         return {
           id: folderId,
-          name: data?.title || 'Playlist',
+          name: meta?.title || 'Playlist',
           service: 'ytmusic',
           start,
           totalitems: total,
@@ -367,7 +379,7 @@ export class YtMusicProvider {
     try {
       const url = buildYtMusicSearchUrl(query);
       const args = [
-        '-J',
+        '-j',
         '--js-runtimes',
         'node',
         '--flat-playlist',
@@ -378,8 +390,7 @@ export class YtMusicProvider {
         ...this.buildCookieArgs(cookieFile),
         url,
       ];
-      const data = await runYtDlpJson(args, this.execOptions());
-      const entries = Array.isArray(data?.entries) ? data.entries : [];
+      const entries = await runYtDlpJsonLines(args, this.execOptions());
       const tracks = entries
         .map((e: any) => this.mapSearchEntryToTrack(e))
         .filter(Boolean) as ContentFolderItem[];
@@ -429,6 +440,59 @@ export class YtMusicProvider {
     await fsp.writeFile(tmpPath, content, { encoding: 'utf8', mode: 0o600 });
     this.cookieFile = { cookie, path: tmpPath };
     return tmpPath;
+  }
+
+  private getPlaylistMetaCached(playlistUrl: string): { title: string; count: number | null } | null {
+    const cached = this.playlistMetaCache.get(playlistUrl);
+    if (!cached) return null;
+    if (Date.now() - cached.fetchedAt > this.playlistMetaCacheTtlMs) return null;
+    return { title: cached.title, count: cached.count };
+  }
+
+  private async fetchPlaylistMetaCached(
+    playlistUrl: string,
+    cookieFile: string | null,
+  ): Promise<{ title: string; count: number | null }> {
+    const cached = this.getPlaylistMetaCached(playlistUrl);
+    if (cached) return cached;
+
+    const inflight = this.playlistMetaInflight.get(playlistUrl);
+    if (inflight) return inflight;
+
+    const promise = (async () => {
+      try {
+        const args = [
+          '-J',
+          '--js-runtimes',
+          'node',
+          '--flat-playlist',
+          '--no-warnings',
+          '--skip-download',
+          // Only fetch minimal items; still yields playlist title/count when available.
+          '--playlist-end',
+          '1',
+          ...this.buildCookieArgs(cookieFile),
+          playlistUrl,
+        ];
+        const data = await runYtDlpJson(args, this.execOptions());
+        const title = typeof data?.title === 'string' ? data.title : '';
+        const count = typeof data?.playlist_count === 'number' ? data.playlist_count : null;
+        const meta = { title: title || 'Playlist', count };
+        this.playlistMetaCache.set(playlistUrl, { ...meta, fetchedAt: Date.now() });
+        return meta;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log.debug('ytmusic playlist meta fetch failed', { providerId: this.providerId, playlistUrl, message: msg });
+        const meta = { title: 'Playlist', count: null };
+        this.playlistMetaCache.set(playlistUrl, { ...meta, fetchedAt: Date.now() });
+        return meta;
+      } finally {
+        this.playlistMetaInflight.delete(playlistUrl);
+      }
+    })();
+
+    this.playlistMetaInflight.set(playlistUrl, promise);
+    return promise;
   }
 
   private normalizeFolderId(folderId: string): FolderKind {
@@ -533,7 +597,7 @@ export class YtMusicProvider {
     const cookieFile = await this.ensureCookieFile();
     try {
       const args = [
-        '-J',
+        '-j',
         '--js-runtimes',
         'node',
         '--flat-playlist',
@@ -546,8 +610,7 @@ export class YtMusicProvider {
         ...this.buildCookieArgs(cookieFile),
         browseUrl,
       ];
-      const data = await runYtDlpJson(args, this.execOptions());
-      const entries = Array.isArray(data?.entries) ? data.entries : [];
+      const entries = await runYtDlpJsonLines(args, this.execOptions());
       return entries
         .map((e: any) => this.mapEntryToTrack(e))
         .filter(Boolean) as ContentFolderItem[];
@@ -572,25 +635,30 @@ export class YtMusicProvider {
     const cookieFile = await this.ensureCookieFile();
     try {
       const url = buildYtMusicSearchUrl(opts.query);
-      const fetchCount = Math.max(25, (opts.offset + opts.limit) * 3);
+      // Overfetch a bit to compensate for non-track items that get filtered out.
+      // Use playlist-start to avoid fetching the full first N pages when paging.
+      const overfetchFactor = 4;
+      const rawStart = Math.max(1, opts.offset + 1);
+      const rawEnd = Math.max(rawStart, opts.offset + Math.max(1, opts.limit) * overfetchFactor);
       const args = [
-        '-J',
+        '-j',
         '--js-runtimes',
         'node',
         '--flat-playlist',
         '--no-warnings',
         '--skip-download',
+        '--playlist-start',
+        String(rawStart),
         '--playlist-end',
-        String(fetchCount),
+        String(rawEnd),
         ...this.buildCookieArgs(cookieFile),
         url,
       ];
-      const data = await runYtDlpJson(args, this.execOptions());
-      const entries = Array.isArray(data?.entries) ? data.entries : [];
+      const entries = await runYtDlpJsonLines(args, this.execOptions());
       const tracks = entries
         .map((e: any) => this.mapEntryToTrack(e))
         .filter(Boolean) as ContentFolderItem[];
-      return tracks.slice(opts.offset, opts.offset + opts.limit);
+      return tracks.slice(0, opts.limit);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.debug('ytmusic track search failed', { providerId: this.providerId, query: opts.query, message: msg });
