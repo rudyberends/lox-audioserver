@@ -14,7 +14,7 @@ export interface SqueezeliteOutputConfig {
 
 export const SQUEEZELITE_OUTPUT_DEFINITION: OutputConfigDefinition = {
   id: 'squeezelite',
-  label: 'Squeezelite / SlimProto',
+  label: 'Squeezelite',
   description: 'Streams audio to Squeezelite/Squeezebox players via SlimProto.',
   fields: [
     {
