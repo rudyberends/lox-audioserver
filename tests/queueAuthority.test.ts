@@ -15,6 +15,7 @@ test('isLocalQueueAuthority treats provider authorities as local', () => {
     isAppleMusicAudiopath: () => false,
     isDeezerAudiopath: () => false,
     isTidalAudiopath: () => false,
+    isYtMusicAudiopath: () => false,
     resolveBridgeProvider: () => null,
     getMusicAssistantUserId: () => 'musicassistant',
     getStateAudiotype: () => null,
@@ -28,10 +29,10 @@ test('isLocalQueueAuthority treats provider authorities as local', () => {
   assert.equal(qc.isLocalQueueAuthority('applemusic'), true);
   assert.equal(qc.isLocalQueueAuthority('deezer'), true);
   assert.equal(qc.isLocalQueueAuthority('tidal'), true);
+  assert.equal(qc.isLocalQueueAuthority('ytmusic'), true);
 
   assert.equal(qc.isLocalQueueAuthority('spotify'), false);
   assert.equal(qc.isLocalQueueAuthority('musicassistant'), false);
   assert.equal(qc.isLocalQueueAuthority('airplay'), false);
   assert.equal(qc.isLocalQueueAuthority('external:foo'), false);
 });
-

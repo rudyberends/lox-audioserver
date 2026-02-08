@@ -70,7 +70,7 @@ function stripRoutingSuffix(path: string): string {
  */
 export function detectServiceFromAudiopath(
   p: string,
-): 'spotify' | 'radio' | 'library' | 'musicassistant' | 'applemusic' | 'deezer' | 'tidal' {
+): 'spotify' | 'radio' | 'library' | 'musicassistant' | 'applemusic' | 'deezer' | 'tidal' | 'ytmusic' {
   const raw = (p || '').toLowerCase();
   if (
     raw.includes('musicassistant') ||
@@ -88,6 +88,9 @@ export function detectServiceFromAudiopath(
   if (raw.includes('tidal')) {
     return 'tidal';
   }
+  if (raw.includes('ytmusic') || raw.includes('youtube music') || raw.includes('bridge-ytmusic')) {
+    return 'ytmusic';
+  }
   if (raw.startsWith('tunein:') || raw.startsWith('radio:') || raw.includes('tunein')) {
     return 'radio';
   }
@@ -104,6 +107,9 @@ export function detectServiceFromAudiopath(
   }
   if (lower.includes('tidal')) {
     return 'tidal';
+  }
+  if (lower.includes('ytmusic') || lower.includes('youtube music') || lower.includes('bridge-ytmusic')) {
+    return 'ytmusic';
   }
   if (lower.includes('radioparadise')) {
     return 'radio';

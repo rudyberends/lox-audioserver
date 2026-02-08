@@ -24,6 +24,7 @@ type QueueControllerDeps = {
   isAppleMusicAudiopath: (audiopath: string | null | undefined) => boolean;
   isDeezerAudiopath: (audiopath: string | null | undefined) => boolean;
   isTidalAudiopath: (audiopath: string | null | undefined) => boolean;
+  isYtMusicAudiopath: (audiopath: string | null | undefined) => boolean;
   resolveBridgeProvider: (rawAudiopath: string | undefined | null) => string | null;
   getMusicAssistantUserId: () => string;
   getStateAudiotype: (ctx: ZoneContext, item?: QueueItem | null) => number | null;
@@ -112,7 +113,8 @@ export class QueueController {
       authority === 'local' ||
       authority === 'applemusic' ||
       authority === 'deezer' ||
-      authority === 'tidal'
+      authority === 'tidal' ||
+      authority === 'ytmusic'
     );
   }
 
@@ -324,6 +326,7 @@ export class QueueController {
     const isAppleMusic = !forceSpotify && (service === 'applemusic' || /applemusic/i.test(rawPath));
     const isDeezer = !forceSpotify && (service === 'deezer' || /deezer/i.test(rawPath));
     const isTidal = !forceSpotify && (service === 'tidal' || /tidal/i.test(rawPath));
+    const isYtMusic = !forceSpotify && (service === 'ytmusic' || /ytmusic/i.test(rawPath));
     const defaultSpotifyUserId = this.contentPort.getDefaultSpotifyAccountId();
 
     // Local library content
@@ -543,6 +546,57 @@ export class QueueController {
       }
     }
 
+    // YouTube Music bridge content
+    if (!forceSpotify && (isYtMusic || service === 'ytmusic' || /ytmusic/i.test(rawPath))) {
+      const providerId = rawClean.split(':')[0] || 'ytmusic';
+      const user = providerId.split('@')[1] ?? 'ytmusic';
+      const sourcePath = pickSourcePath();
+      const folderId = sourcePath
+        .replace(/^spotify@[^:]+:/i, '')
+        .replace(/^ytmusic@[^:]+:/i, '')
+        .replace(/^spotify:/i, '')
+        .replace(/^ytmusic:/i, '');
+      if (/^track:/i.test(folderId)) {
+        const trackId = folderId.split(':').slice(1).join(':');
+        const track = await this.contentPort.getServiceTrack(providerId, user, `track:${trackId}`);
+        if (track) {
+          return mapFolderItemsToQueue([track], zoneName, 5, user, undefined, defaultSpotifyUserId);
+        }
+        this.log.debug('ytmusic queue track lookup failed', {
+          providerId,
+          folderId,
+          trackId,
+        });
+      }
+      const allItems: ContentFolderItem[] = [];
+      const pageSize = 50;
+      let offset = 0;
+      let total = Number.MAX_SAFE_INTEGER;
+      while (offset < total) {
+        const folder = await this.contentPort.getServiceFolder(providerId, user, folderId, offset, pageSize);
+        const items = folder?.items ?? [];
+        if (items.length === 0) {
+          break;
+        }
+        allItems.push(...items);
+        total = Number.isFinite(folder?.totalitems) ? (folder as any).totalitems : Number.MAX_SAFE_INTEGER;
+        offset += items.length;
+        if (items.length < pageSize) {
+          break;
+        }
+        if (maxItems && allItems.length >= maxItems) {
+          break;
+        }
+        if (allItems.length >= 1000) {
+          break;
+        }
+      }
+      if (allItems.length) {
+        const trimmed = maxItems ? allItems.slice(0, maxItems) : allItems;
+        return mapFolderItemsToQueue(trimmed, zoneName, 5, user, station ?? rawClean, defaultSpotifyUserId);
+      }
+    }
+
     // Spotify content
     const spotifyCandidate =
       forceSpotify || decoded.includes(':') ? decoded : rawClean;
@@ -670,6 +724,9 @@ export class QueueController {
       }
       if (this.deps.isTidalAudiopath(item.audiopath)) {
         return 'tidal';
+      }
+      if (this.deps.isYtMusicAudiopath(item.audiopath)) {
+        return 'ytmusic';
       }
       if (this.deps.isSpotifyAudiopath(item.audiopath)) {
         return 'spotify';

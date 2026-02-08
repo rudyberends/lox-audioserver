@@ -21,6 +21,7 @@ export type QueueBuildRequest = {
   isAppleMusic: boolean;
   isDeezer?: boolean;
   isTidal?: boolean;
+  isYtMusic?: boolean;
   isMusicAssistant: boolean;
   isLineIn?: boolean;
   queueBuildLimit?: number;
@@ -58,7 +59,7 @@ export async function buildQueueForRequest(args: {
   const fallbackAudiopath = request.parentContext?.startItem ?? request.queueAudiopath;
   const queueAudioType = request.isLineIn
     ? 3
-    : request.isMusicAssistant || request.isAppleMusic || request.isDeezer || request.isTidal
+    : request.isMusicAssistant || request.isAppleMusic || request.isDeezer || request.isTidal || request.isYtMusic
       ? 5
       : request.isRadio
         ? 1

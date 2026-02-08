@@ -10,6 +10,8 @@ import { DeezerStreamService } from '@/adapters/content/providers/deezer/deezerS
 import { DeezerStreamResolver } from '@/adapters/content/providers/deezer/deezerStreamResolver';
 import { TidalStreamService } from '@/adapters/content/providers/tidal/tidalStreamService';
 import { TidalStreamResolver } from '@/adapters/content/providers/tidal/tidalStreamResolver';
+import { YtMusicStreamService } from '@/adapters/content/providers/ytmusic/ytmusicStreamService';
+import { YtMusicStreamResolver } from '@/adapters/content/providers/ytmusic/ytmusicStreamResolver';
 import { HttpService } from '@/adapters/http';
 import { LoxoneHttpService } from '@/adapters/loxone/http';
 import { createInputsAdapter } from '@/adapters/inputs/InputsAdapter';
@@ -109,9 +111,11 @@ export function createRuntime(): Runtime {
   const appleMusicStreamService = new AppleMusicStreamService(outputHandlersProxy.onOutputError, configPort);
   const deezerStreamService = new DeezerStreamService(outputHandlersProxy.onOutputError, configPort);
   const tidalStreamService = new TidalStreamService(outputHandlersProxy.onOutputError, configPort);
+  const ytmusicStreamService = new YtMusicStreamService(outputHandlersProxy.onOutputError, configPort);
   const appleMusicStreamResolver = new AppleMusicStreamResolver(appleMusicStreamService);
   const deezerStreamResolver = new DeezerStreamResolver(deezerStreamService);
   const tidalStreamResolver = new TidalStreamResolver(tidalStreamService);
+  const ytmusicStreamResolver = new YtMusicStreamResolver(ytmusicStreamService);
   const engine = new EngineAdapter(audioStreamEngine);
   const lineInRegistry = new LineInIngestRegistry();
   const mdnsService = new MdnsService();
@@ -170,6 +174,7 @@ export function createRuntime(): Runtime {
     appleMusic: appleMusicStreamResolver,
     deezer: deezerStreamResolver,
     tidal: tidalStreamResolver,
+    ytmusic: ytmusicStreamResolver,
   });
   const groupManager = createGroupManager({ notifier: ports.notifier, airplayGroup: airplayGroupController });
   const mixedGroupController = createMixedGroupController(configPort, audioManager);

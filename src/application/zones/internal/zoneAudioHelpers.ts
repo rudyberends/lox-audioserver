@@ -28,6 +28,7 @@ export type ZoneAudioHelpers = {
   isAppleMusicAudiopath: (audiopath: string | null | undefined) => boolean;
   isDeezerAudiopath: (audiopath: string | null | undefined) => boolean;
   isTidalAudiopath: (audiopath: string | null | undefined) => boolean;
+  isYtMusicAudiopath: (audiopath: string | null | undefined) => boolean;
   isMusicAssistantAudiopath: (audiopath: string | null | undefined) => boolean;
   resolveBridgeProvider: (rawAudiopath: string | undefined | null) => string | null;
   getInputAudioType: (ctx: ZoneContext, audiopathOverride?: string) => number | null;
@@ -56,6 +57,7 @@ export function createZoneAudioHelpers(
     isAppleMusicAudiopath: (audiopath) => isAppleMusicAudiopath(audiopath, contentPort),
     isDeezerAudiopath: (audiopath) => isDeezerAudiopath(audiopath, contentPort),
     isTidalAudiopath: (audiopath) => isTidalAudiopath(audiopath, contentPort),
+    isYtMusicAudiopath: (audiopath) => isYtMusicAudiopath(audiopath, contentPort),
     isMusicAssistantAudiopath,
     resolveBridgeProvider: (rawAudiopath) => resolveBridgeProvider(rawAudiopath, configPort),
     getInputAudioType,
@@ -91,6 +93,9 @@ export function isSpotifyAudiopath(
     return false;
   }
   if (isTidalAudiopath(decoded, contentPort)) {
+    return false;
+  }
+  if (isYtMusicAudiopath(decoded, contentPort)) {
     return false;
   }
   return lower.includes('spotify:') || lower.startsWith('spotify@');
@@ -165,6 +170,29 @@ export function isTidalAudiopath(
   return decoded.toLowerCase().includes('tidal');
 }
 
+export function isYtMusicAudiopath(
+  audiopath: string | null | undefined,
+  contentPort: ContentPort,
+): boolean {
+  if (!audiopath) {
+    return false;
+  }
+  const raw = String(audiopath);
+  const rawProvider = raw.split(':')[0] ?? '';
+  if (rawProvider && contentPort.isYtMusicProvider(rawProvider)) {
+    return true;
+  }
+  if (raw.toLowerCase().includes('ytmusic') || raw.toLowerCase().includes('youtube music')) {
+    return true;
+  }
+  const decoded = decodeAudiopath(raw) || raw;
+  const providerSegment = decoded.split(':')[0] ?? '';
+  if (providerSegment && contentPort.isYtMusicProvider(providerSegment)) {
+    return true;
+  }
+  return decoded.toLowerCase().includes('ytmusic') || decoded.toLowerCase().includes('youtube music');
+}
+
 export function isMusicAssistantAudiopath(audiopath: string | null | undefined): boolean {
   const providerLower = getMusicAssistantProviderId().toLowerCase();
   const userLower = getMusicAssistantUserId().toLowerCase();
@@ -184,9 +212,11 @@ export function isMusicAssistantAudiopath(audiopath: string | null | undefined):
     }
     return lower.includes('musicassistant');
   };
+
   if (matches(audiopath)) {
     return true;
   }
+
   const decoded = decodeAudiopath(audiopath ?? '');
   return matches(decoded || audiopath || '');
 }

@@ -2,6 +2,7 @@ import type { ContentManager } from '@/adapters/content/contentManager';
 import type { AppleMusicStreamResolver } from '@/adapters/content/providers/applemusic/appleMusicStreamResolver';
 import type { DeezerStreamResolver } from '@/adapters/content/providers/deezer/deezerStreamResolver';
 import type { TidalStreamResolver } from '@/adapters/content/providers/tidal/tidalStreamResolver';
+import type { YtMusicStreamResolver } from '@/adapters/content/providers/ytmusic/ytmusicStreamResolver';
 import type { ContentPort, BuildQueueOptions } from '@/ports/ContentPort';
 import type { ContentFolder, ContentFolderItem, ContentItemMetadata } from '@/ports/ContentTypes';
 import type { PlaybackSourceResolveArgs, StreamResolution } from '@/ports/types/StreamResolution';
@@ -12,6 +13,7 @@ type ContentStreamResolvers = {
   appleMusic: AppleMusicStreamResolver;
   deezer: DeezerStreamResolver;
   tidal: TidalStreamResolver;
+  ytmusic: YtMusicStreamResolver;
 };
 
 export class ContentAdapter implements ContentPort {
@@ -74,6 +76,7 @@ export class ContentAdapter implements ContentPort {
     const providerSegment = (audiopath.split(':')[0] ?? '').trim();
     const detectedService = detectServiceFromAudiopath(audiopath);
     const { appleMusic, deezer, tidal } = this.streamResolvers;
+    const ytmusic = this.streamResolvers.ytmusic;
     if (providerSegment && appleMusic.isAppleMusicProvider(providerSegment)) {
       const result = await appleMusic.startStreamForAudiopath(
         zoneId,
@@ -100,6 +103,15 @@ export class ContentAdapter implements ContentPort {
         { suppressErrors },
       );
       return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'tidal' };
+    }
+    if (providerSegment && ytmusic.isYtMusicProvider(providerSegment)) {
+      const result = await ytmusic.startStreamForAudiopath(
+        zoneId,
+        zoneName,
+        audiopath,
+        { suppressErrors },
+      );
+      return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'ytmusic' };
     }
     if (detectedService === 'applemusic') {
       const result = await appleMusic.startStreamForAudiopath(
@@ -128,6 +140,15 @@ export class ContentAdapter implements ContentPort {
       );
       return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'tidal' };
     }
+    if (detectedService === 'ytmusic') {
+      const result = await ytmusic.startStreamForAudiopath(
+        zoneId,
+        zoneName,
+        audiopath,
+        { suppressErrors },
+      );
+      return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'ytmusic' };
+    }
     return { playbackSource: null, provider: providerSegment || detectedService };
   }
 
@@ -143,6 +164,10 @@ export class ContentAdapter implements ContentPort {
     this.streamResolvers.tidal.configure();
   }
 
+  public configureYtMusic(): void {
+    this.streamResolvers.ytmusic.configure();
+  }
+
   public isAppleMusicProvider(providerId: string): boolean {
     return this.streamResolvers.appleMusic.isAppleMusicProvider(providerId);
   }
@@ -153,6 +178,10 @@ export class ContentAdapter implements ContentPort {
 
   public isTidalProvider(providerId: string): boolean {
     return this.streamResolvers.tidal.isTidalProvider(providerId);
+  }
+
+  public isYtMusicProvider(providerId: string): boolean {
+    return this.streamResolvers.ytmusic.isYtMusicProvider(providerId);
   }
 
   public getMediaFolder(
