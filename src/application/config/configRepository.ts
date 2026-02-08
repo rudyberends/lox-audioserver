@@ -124,7 +124,7 @@ function defaultConfig(): AudioServerConfig {
         slimprotoJsonPort: 9000,
       },
       logging: {
-        consoleLevel: 'info',
+        consoleLevel: 'none',
         fileLevel: 'none',
       },
       adminHttp: { enabled: true },
