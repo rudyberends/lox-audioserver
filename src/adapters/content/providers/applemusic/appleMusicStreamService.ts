@@ -910,6 +910,9 @@ export class AppleMusicStreamService {
       url,
       inputFormat: 'mov',
       realTime,
+      // Apple Music fragmented MP4 streams are finite and DRM-decrypted; avoid
+      // aggressive low-latency probing to reduce premature EOF/truncation.
+      lowLatency: false,
       decryptionKey,
     };
   }
@@ -969,7 +972,14 @@ export class AppleMusicStreamService {
     if (!realTime) {
       this.log.info('Apple Music pacing disabled (proxy)', { inputFormat: 'hls', sessionId });
     }
-    return { kind: 'url', url, inputFormat: 'hls', realTime };
+    return {
+      kind: 'url',
+      url,
+      inputFormat: 'hls',
+      realTime,
+      // Keep parser buffering enabled for better HLS end-of-track stability.
+      lowLatency: false,
+    };
   }
 
   private resolvePaceInput(bridge: SpotifyBridgeConfig): boolean {
