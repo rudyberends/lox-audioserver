@@ -766,6 +766,48 @@ test('music assistant metadata seek updates qindex/qid', () => {
   assert.equal(patches[0]?.patch.queueAuthority, 'musicassistant');
 });
 
+test('output URI mismatch is ignored before first audio chunk for local queue', () => {
+  const { coordinator, ctx, patches, playbackQueue } = createHarness();
+  const items = [
+    makeQueueItem({ title: 'One', audiopath: 'library://track/one', unique_id: 'id-1' }),
+    makeQueueItem({ title: 'Two', audiopath: 'library://track/two', unique_id: 'id-2' }),
+  ];
+  playbackQueue.setItems(items, 0);
+  ctx.queue.authority = 'local';
+  ctx.inputMode = 'queue';
+  const player = ctx.player as unknown as FakePlayer;
+  player.playUri(items[0].audiopath, {
+    title: items[0].title,
+    artist: items[0].artist,
+    album: items[0].album,
+    audiopath: items[0].audiopath,
+    duration: items[0].duration,
+  });
+
+  coordinator.updateOutputState(ctx.id, {
+    status: 'playing',
+    uri: items[1].audiopath,
+  });
+
+  assert.equal(ctx.queueController.currentIndex(), 0);
+  assert.equal((patches[0]?.patch as any).qindex, undefined);
+  assert.equal((patches[0]?.patch as any).qid, undefined);
+
+  const session = player.getSession();
+  assert.ok(session);
+  session.firstAudioReadyAt = Date.now();
+
+  coordinator.updateOutputState(ctx.id, {
+    status: 'playing',
+    uri: items[1].audiopath,
+  });
+
+  assert.equal(ctx.queueController.currentIndex(), 1);
+  assert.equal(patches.length, 2);
+  assert.equal(patches[1]?.patch.qindex, 1);
+  assert.equal(patches[1]?.patch.qid, 'id-2');
+});
+
 test('stop command for music assistant stops output and session', () => {
   const { coordinator, ctx, inputsPort, outputRouter } = createHarness();
   ctx.inputMode = 'musicassistant';

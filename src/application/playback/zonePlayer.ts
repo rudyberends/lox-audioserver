@@ -215,6 +215,9 @@ export class ZonePlayer {
       if (this.tickerToken !== token) {
         return;
       }
+      if (ready) {
+        session.firstAudioReadyAt = Date.now();
+      }
       this.state.time = startAtSec;
       this.emit('position', this.state.time, this.state.duration);
       this.lastTickAt = Date.now();

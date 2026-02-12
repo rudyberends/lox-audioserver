@@ -41,6 +41,8 @@ export class SqueezeliteOutput implements ZoneOutput {
   private readonly normalizedPlayerName: string;
   private readonly unsubscribe: () => void;
   private lastStatus: 'playing' | 'paused' | 'stopped' | null = null;
+  private pendingAutostart = false;
+  private autostartTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly zoneId: number,
@@ -78,6 +80,11 @@ export class SqueezeliteOutput implements ZoneOutput {
       this.ports.outputHandlers.onOutputError(this.zoneId, 'squeezelite no stream');
       return;
     }
+    this.clearPendingAutostart();
+    if (!groupInfo.grouped) {
+      this.pendingAutostart = true;
+      this.scheduleAutostartFallback(player);
+    }
     const meta = this.buildMetadata(session, streamUrl);
     await player.playUrl(
       streamUrl,
@@ -86,11 +93,15 @@ export class SqueezeliteOutput implements ZoneOutput {
       undefined,
       0,
       false,
-      !groupInfo.grouped,
+      false,
     );
+    if (!groupInfo.grouped && player.state === PlayerState.BUFFER_READY) {
+      this.triggerAutostart(player, 'immediate');
+    }
   }
 
   public async pause(_session: PlaybackSession | null): Promise<void> {
+    this.clearPendingAutostart();
     const player = this.resolvePlayer();
     if (!player) return;
     await player.pause();
@@ -108,6 +119,7 @@ export class SqueezeliteOutput implements ZoneOutput {
   }
 
   public async stop(_session: PlaybackSession | null): Promise<void> {
+    this.clearPendingAutostart();
     const player = this.resolvePlayer();
     if (!player) return;
     await player.stop();
@@ -125,10 +137,11 @@ export class SqueezeliteOutput implements ZoneOutput {
   }
 
   public getHttpPreferences(): HttpPreferences {
-    return { icyEnabled: true };
+    return { icyEnabled: false };
   }
 
   public dispose(): void {
+    this.clearPendingAutostart();
     this.unsubscribe();
     this.ports.squeezeliteGroup.unregister(this.zoneId);
   }
@@ -174,6 +187,7 @@ export class SqueezeliteOutput implements ZoneOutput {
       this.emitState(player);
     }
     if (event.type === EventType.PLAYER_BUFFER_READY) {
+      this.triggerAutostart(player, 'buffer_ready');
       this.ports.squeezeliteGroup.notifyBufferReady(this.zoneId);
     }
     if (event.type === EventType.PLAYER_DECODER_ERROR) {
@@ -193,6 +207,46 @@ export class SqueezeliteOutput implements ZoneOutput {
     });
   }
 
+  private triggerAutostart(player: SlimClient, source: 'buffer_ready' | 'timeout' | 'immediate'): void {
+    if (!this.pendingAutostart) {
+      return;
+    }
+    this.pendingAutostart = false;
+    if (this.autostartTimer) {
+      clearTimeout(this.autostartTimer);
+      this.autostartTimer = undefined;
+    }
+    const targetJiffies = (player.jiffies || 0) + 200;
+    void player.unpauseAt(targetJiffies).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.debug('squeezelite autostart failed', {
+        zoneId: this.zoneId,
+        source,
+        message,
+      });
+    });
+  }
+
+  private scheduleAutostartFallback(player: SlimClient): void {
+    if (this.autostartTimer) {
+      clearTimeout(this.autostartTimer);
+      this.autostartTimer = undefined;
+    }
+    this.autostartTimer = setTimeout(() => {
+      this.autostartTimer = undefined;
+      this.triggerAutostart(player, 'timeout');
+    }, 1500);
+    this.autostartTimer.unref?.();
+  }
+
+  private clearPendingAutostart(): void {
+    this.pendingAutostart = false;
+    if (this.autostartTimer) {
+      clearTimeout(this.autostartTimer);
+      this.autostartTimer = undefined;
+    }
+  }
+
   private buildStreamUrl(
     session: PlaybackSession,
     groupInfo?: { grouped: boolean; leaderZoneId: number; expectedCount: number },
@@ -208,10 +262,10 @@ export class SqueezeliteOutput implements ZoneOutput {
       zoneId: leaderZoneId,
       streamPath: groupInfo?.grouped ? undefined : session.stream?.url,
       defaultExt: 'mp3',
-      prime: '0',
+      prime: '1',
       primeMode: 'ensure',
     });
-    let result = ensureQueryParam(url, 'icy', '1');
+    let result = url;
     if (groupInfo?.grouped && groupInfo.expectedCount > 1) {
       result = ensureQueryParam(result, 'sync', String(groupInfo.leaderZoneId));
       result = ensureQueryParam(result, 'expect', String(groupInfo.expectedCount));

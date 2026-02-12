@@ -66,6 +66,7 @@ export interface PlaybackSession {
   playRequestUri?: string;
   playRequestType?: string;
   playbackStartedAt?: number;
+  firstAudioReadyAt?: number;
 }
 
 type OutputState = {
@@ -328,6 +329,7 @@ export class AudioManager {
     session.startedAt =
       resumeAtSec && resumeAtSec > 0 ? Date.now() - resumeAtSec * 1000 : Date.now();
     session.elapsed = boundedElapsed;
+    session.firstAudioReadyAt = undefined;
     this.log.debug('playback resumed', { zoneId, source: session.source });
     return session;
   }
@@ -640,6 +642,7 @@ export class AudioManager {
       existing.startedAt = now - startAtSec * 1000;
       existing.updatedAt = now;
       existing.playbackStartedAt = now;
+      existing.firstAudioReadyAt = undefined;
       if (playRequest) {
         existing.playRequestAt = playRequest.requestedAt;
         existing.playRequestUri = playRequest.uri;
@@ -723,6 +726,7 @@ export class AudioManager {
       playRequestUri: playRequest?.uri,
       playRequestType: playRequest?.type,
       playbackStartedAt: now,
+      firstAudioReadyAt: undefined,
     };
     this.sessions.set(zoneId, session);
     this.log.info(outputOnly ? 'playback started (output-only)' : 'playback started', {

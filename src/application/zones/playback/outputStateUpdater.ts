@@ -1,5 +1,6 @@
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
+import { normalizeSpotifyAudiopath } from '@/application/zones/helpers/queueHelpers';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import { buildMatchedOutputUriPatch } from '@/application/zones/playback/patchBuilder';
 import { findQueueIndexByUri } from '@/application/zones/playback/queueOps';
@@ -52,7 +53,18 @@ export function updateOutputState(args: {
   const matchedIndex = state.uri && ctx.queue.items.length
     ? findQueueIndexByUri(ctx.queue.items, state.uri)
     : -1;
-  if (matchedIndex >= 0 && matchedIndex !== ctx.queue.currentIndex) {
+  const session = ctx.player.getSession();
+  const normalizedCurrentUri = normalizeSpotifyAudiopath(ctx.queueController.current()?.audiopath ?? '');
+  const normalizedIncomingUri = normalizeSpotifyAudiopath(state.uri ?? '');
+  const ignoreStartupUriReconcile =
+    ctx.queue.authority === 'local' &&
+    state.status === 'playing' &&
+    session?.state === 'playing' &&
+    !session.firstAudioReadyAt &&
+    normalizedCurrentUri.length > 0 &&
+    normalizedIncomingUri.length > 0 &&
+    normalizedCurrentUri !== normalizedIncomingUri;
+  if (!ignoreStartupUriReconcile && matchedIndex >= 0 && matchedIndex !== ctx.queue.currentIndex) {
     ctx.queueController.setCurrentIndex(matchedIndex);
     const current = ctx.queueController.current();
     if (current) {
