@@ -2839,6 +2839,7 @@ export class AdminApiHandler {
           macId: defaultMacId(),
           paired: false,
           extensions: [],
+          alertPreDelayMs: 0,
         },
         logging: {
           consoleLevel: 'none',

@@ -230,7 +230,7 @@ export function createRuntime(): Runtime {
   groupManager.initOnce({ zoneManager });
   mixedGroupController.initOnce({ zoneManager });
   favoritesManager.initOnce({ zoneManager });
-  alertsManager.initOnce({ zoneManager });
+  alertsManager.initOnce({ zoneManager, configPort });
   fadeController.initOnce({ zoneManager });
   sendspinGroupController.initOnce({ zoneManager });
   const loxoneConfigService = new LoxoneConfigService(

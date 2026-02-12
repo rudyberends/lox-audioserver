@@ -27,6 +27,8 @@ export interface AudioserverConfig {
   macId: string;
   paired: boolean;
   extensions: AudioserverExtensionConfig[];
+  /** Optional pre-delay (ms) before alert/TTS audio starts. */
+  alertPreDelayMs?: number;
   /** Optional SlimProto control port (default 3483). */
   slimprotoPort?: number;
   /** Optional LMS-compatible telnet CLI port (default 9090). */

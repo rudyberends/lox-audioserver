@@ -8,6 +8,7 @@ import { buildProxyUrl } from '@/shared/urlProxy';
 const musicRoot = path.resolve(resolveDataDir('music'));
 const alertsRoot = path.resolve(process.cwd(), 'public', 'alerts');
 const log = createLogger('Audio', 'SourceResolver');
+const MAX_ALERT_PRE_DELAY_MS = 10_000;
 
 export function resolvePlaybackSource(audiopath: string): PlaybackSource | null {
   const decoded = decodeAudiopath(audiopath);
@@ -27,23 +28,23 @@ export function resolvePlaybackSource(audiopath: string): PlaybackSource | null 
   }
 
   if (decoded.startsWith('alerts://')) {
-    const relative = decoded.slice('alerts://'.length).split('?', 1)[0];
-    const normalized = normalizeAlertsPath(relative);
+    const parsed = parseAlertSource(decoded, 'alerts://');
+    const normalized = normalizeAlertsPath(parsed.relativePath);
     if (!normalized) {
       log.warn('failed to normalize alerts path', { audiopath: decoded });
       return null;
     }
-    return { kind: 'file', path: normalized, preDelayMs: 0, padTailSec: 0 };
+    return { kind: 'file', path: normalized, preDelayMs: parsed.preDelayMs, padTailSec: 0 };
   }
 
   if (decoded.startsWith('alerts-loop://')) {
-    const relative = decoded.slice('alerts-loop://'.length).split('?', 1)[0];
-    const normalized = normalizeAlertsPath(relative);
+    const parsed = parseAlertSource(decoded, 'alerts-loop://');
+    const normalized = normalizeAlertsPath(parsed.relativePath);
     if (!normalized) {
       log.warn('failed to normalize alerts loop path', { audiopath: decoded });
       return null;
     }
-    return { kind: 'file', path: normalized, loop: true, preDelayMs: 0, padTailSec: 0 };
+    return { kind: 'file', path: normalized, loop: true, preDelayMs: parsed.preDelayMs, padTailSec: 0 };
   }
 
   if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
@@ -97,6 +98,43 @@ function normalizeAlertsPath(input: string): string | null {
     return null;
   }
   return candidate;
+}
+
+function parseAlertSource(
+  input: string,
+  prefix: 'alerts://' | 'alerts-loop://',
+): { relativePath: string; preDelayMs: number } {
+  const raw = input.slice(prefix.length);
+  const queryIndex = raw.indexOf('?');
+  if (queryIndex === -1) {
+    return { relativePath: raw, preDelayMs: 0 };
+  }
+  const relativePath = raw.slice(0, queryIndex);
+  const query = raw.slice(queryIndex + 1);
+  return {
+    relativePath,
+    preDelayMs: parseAlertPreDelayMs(query),
+  };
+}
+
+function parseAlertPreDelayMs(query: string): number {
+  if (!query) {
+    return 0;
+  }
+  const params = new URLSearchParams(query);
+  const raw =
+    params.get('predelay') ??
+    params.get('predelayms') ??
+    params.get('preDelayMs') ??
+    params.get('pre_delay_ms');
+  if (!raw?.trim()) {
+    return 0;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return Math.min(MAX_ALERT_PRE_DELAY_MS, Math.max(0, Math.round(parsed)));
 }
 
 function safeDecode(value: string): string {
