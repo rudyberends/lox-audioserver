@@ -6,6 +6,7 @@ const API_PLAY_URL = 'https://api.radioparadise.com/api/play';
 const COVER_BASE_URL = 'https://img.radioparadise.com/';
 const DEFAULT_BITRATE = 4; // FLAC
 const NOW_PLAYING_INTERVAL_MS = 10000;
+const URL_PROBE_TIMEOUT_MS = 1500;
 
 const RADIO_PARADISE_LABELS = new Map<string, string>([
   ['0', 'Radio Paradise - Main Mix'],
@@ -128,39 +129,57 @@ export class RadioParadiseBlockService {
   }
 
   public async resolveStart(zoneId: number, stationId: string): Promise<ResolveResult | null> {
-    const block = await this.fetchBlock(stationId);
+    let block = await this.fetchBlock(stationId);
     if (block) {
       const cueSec =
         typeof block.cueSec === 'number' && block.cueSec >= 0
           ? block.cueSec
           : block.tracks[0]?.startSec ?? 0;
-      const cueIndex = this.findTrackIndex(block.tracks, cueSec);
-      const cueTrack = block.tracks[cueIndex];
-      const useGapless = Boolean(cueTrack?.gaplessUrl);
-      const startAtSec = useGapless ? 0 : cueSec;
+
+      let cueIndex = this.findTrackIndex(block.tracks, cueSec);
+      let pickedIndex = await this.findPlayableTrackIndex(block, cueIndex, 1);
+      if (pickedIndex === null && block.endEvent) {
+        // Some blocks may resolve to DJ/promo assets that are not playable as FLAC in certain regions.
+        // In that case, skip ahead to the next block.
+        const next = await this.fetchBlock(stationId, block.endEvent);
+        if (next) {
+          block = next;
+          cueIndex = 0;
+          pickedIndex = await this.findPlayableTrackIndex(block, cueIndex, 1);
+        }
+      }
+
+      const pickedTrack = pickedIndex !== null ? block.tracks[pickedIndex] : undefined;
+      const useGapless = Boolean(pickedTrack?.gaplessUrl);
+      const startAtSec = useGapless ? 0 : pickedTrack?.startSec ?? cueSec;
       const durationSec =
-        useGapless && cueTrack?.durationSec ? cueTrack.durationSec : block.lengthSec;
+        useGapless && pickedTrack?.durationSec ? pickedTrack.durationSec : block.lengthSec;
+      const url = useGapless && pickedTrack?.gaplessUrl ? pickedTrack.gaplessUrl : block.url;
 
-      const session: RadioParadiseSession = {
-        stationId,
-        current: block,
-        mode: 'block',
-        trackMode: useGapless,
-        currentTrackIndex: cueTrack ? cueIndex : undefined,
-      };
-      this.sessions.set(zoneId, session);
-      this.prefetchNext(zoneId, session).catch(() => undefined);
-      this.ensureTicker(zoneId);
+      if (this.isRiskyAudioUrl(url) && !(await this.probeUrl(url))) {
+        block = null;
+      } else {
+        const session: RadioParadiseSession = {
+          stationId,
+          current: block,
+          mode: 'block',
+          trackMode: useGapless,
+          currentTrackIndex: pickedIndex !== null ? pickedIndex : undefined,
+        };
+        this.sessions.set(zoneId, session);
+        this.prefetchNext(zoneId, session).catch(() => undefined);
+        this.ensureTicker(zoneId);
 
-      const firstTrack = cueTrack ?? this.trackAtTime(block, cueSec) ?? undefined;
-      return {
-        url: useGapless && cueTrack?.gaplessUrl ? cueTrack.gaplessUrl : block.url,
-        startAtSec,
-        blockDurationSec: durationSec || block.lengthSec,
-        track: firstTrack,
-        stationLabel: this.stationLabel(stationId),
-        isRadio: false,
-      };
+        const firstTrack = pickedTrack ?? this.trackAtTime(block, cueSec) ?? undefined;
+        return {
+          url,
+          startAtSec,
+          blockDurationSec: durationSec || block.lengthSec,
+          track: firstTrack,
+          stationLabel: this.stationLabel(stationId),
+          isRadio: false,
+        };
+      }
     }
 
     const fallback = this.resolveStream(stationId);
@@ -201,10 +220,11 @@ export class RadioParadiseBlockService {
 
     let block = session.current;
     if (session.trackMode && typeof session.currentTrackIndex === 'number') {
-      const nextIndex = session.currentTrackIndex + delta;
-      if (nextIndex >= 0 && nextIndex < block.tracks.length) {
-        session.currentTrackIndex = nextIndex;
-        const track = block.tracks[nextIndex];
+      const startIndex = session.currentTrackIndex + delta;
+      const pickedIndex = await this.findPlayableTrackIndex(block, startIndex, delta);
+      if (pickedIndex !== null) {
+        session.currentTrackIndex = pickedIndex;
+        const track = block.tracks[pickedIndex];
         const useGapless = Boolean(track?.gaplessUrl);
         return {
           url: useGapless && track?.gaplessUrl ? track.gaplessUrl : block.url,
@@ -226,13 +246,17 @@ export class RadioParadiseBlockService {
               ? skipBlock.cueSec
               : skipBlock.tracks[0]?.startSec ?? 0;
           const cueIndex = this.findTrackIndex(skipBlock.tracks, cueSec);
-          const cueTrack = skipBlock.tracks[cueIndex];
+          const pickedIndex = await this.findPlayableTrackIndex(skipBlock, cueIndex, 1);
+          const cueTrack = pickedIndex !== null ? skipBlock.tracks[pickedIndex] : undefined;
+          if (!cueTrack && this.isRiskyAudioUrl(skipBlock.url) && !(await this.probeUrl(skipBlock.url))) {
+            return null;
+          }
           const useGapless = Boolean(cueTrack?.gaplessUrl);
           session.previous = block;
           session.current = skipBlock;
           session.next = undefined;
           session.trackMode = useGapless;
-          session.currentTrackIndex = cueTrack ? cueIndex : undefined;
+          session.currentTrackIndex = pickedIndex !== null ? pickedIndex : undefined;
           this.prefetchNext(zoneId, session).catch(() => undefined);
           this.ensureTicker(zoneId);
           return {
@@ -301,6 +325,25 @@ export class RadioParadiseBlockService {
     const session = this.sessions.get(zoneId);
     if (!session || session.mode !== 'block') return null;
 
+    if (session.trackMode && typeof session.currentTrackIndex === 'number') {
+      const block = session.current;
+      const nextIndex = await this.findPlayableTrackIndex(block, session.currentTrackIndex + 1, 1);
+      if (nextIndex !== null) {
+        session.currentTrackIndex = nextIndex;
+        const track = block.tracks[nextIndex];
+        const useGapless = Boolean(track?.gaplessUrl);
+        this.ensureTicker(zoneId);
+        return {
+          url: useGapless && track?.gaplessUrl ? track.gaplessUrl : block.url,
+          startAtSec: useGapless ? 0 : track?.startSec ?? 0,
+          blockDurationSec: useGapless && track?.durationSec ? track.durationSec : block.lengthSec,
+          track,
+          stationLabel: this.stationLabel(session.stationId),
+          isRadio: false,
+        };
+      }
+    }
+
     const nextBlock = session.next ?? (await this.fetchBlock(session.stationId, session.current.endEvent));
     if (!nextBlock) return null;
 
@@ -319,13 +362,22 @@ export class RadioParadiseBlockService {
         : typeof nextBlock.cueSec === 'number' && nextBlock.cueSec >= 0
           ? nextBlock.cueSec
           : nextBlock.tracks[0]?.startSec ?? 0;
-    const track = (useGapless ? nextBlock.tracks[0] : this.trackAtTime(nextBlock, startAtSec)) ?? undefined;
+    const cueIndex = this.findTrackIndex(nextBlock.tracks, startAtSec);
+    const pickedIndex = await this.findPlayableTrackIndex(nextBlock, cueIndex, 1);
+    const pickedTrack = pickedIndex !== null ? nextBlock.tracks[pickedIndex] : undefined;
+    if (pickedIndex !== null) {
+      session.currentTrackIndex = pickedIndex;
+    }
+    if (!pickedTrack && this.isRiskyAudioUrl(nextBlock.url) && !(await this.probeUrl(nextBlock.url))) {
+      return null;
+    }
+    const track = (useGapless ? pickedTrack : this.trackAtTime(nextBlock, startAtSec)) ?? undefined;
     return {
-      url: useGapless && nextBlock.tracks[0]?.gaplessUrl ? nextBlock.tracks[0].gaplessUrl : nextBlock.url,
-      startAtSec,
+      url: useGapless && pickedTrack?.gaplessUrl ? pickedTrack.gaplessUrl : nextBlock.url,
+      startAtSec: useGapless ? 0 : startAtSec,
       blockDurationSec:
-        useGapless && nextBlock.tracks[0]?.durationSec
-          ? nextBlock.tracks[0].durationSec
+        useGapless && pickedTrack?.durationSec
+          ? pickedTrack.durationSec
           : nextBlock.lengthSec,
       track,
       stationLabel: this.stationLabel(session.stationId),
@@ -438,6 +490,50 @@ export class RadioParadiseBlockService {
       }
     }
     return idx;
+  }
+
+  private async findPlayableTrackIndex(
+    block: RadioParadiseBlock,
+    startIndex: number,
+    direction: 1 | -1,
+  ): Promise<number | null> {
+    if (!block.tracks.length) return null;
+    let idx = startIndex;
+    while (idx >= 0 && idx < block.tracks.length) {
+      const track = block.tracks[idx];
+      const candidate = track?.gaplessUrl || block.url;
+      if (!candidate) return null;
+      if (!this.isRiskyAudioUrl(candidate)) {
+        return idx;
+      }
+      // Only probe for known-risk URLs (currently /dj/). If it's actually available, we can still play it.
+      const ok = await this.probeUrl(candidate);
+      if (ok) {
+        return idx;
+      }
+      idx += direction;
+    }
+    return null;
+  }
+
+  private isRiskyAudioUrl(url: string): boolean {
+    return /\/dj\//i.test(url);
+  }
+
+  private async probeUrl(url: string): Promise<boolean> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), URL_PROBE_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, { method: 'HEAD', redirect: 'follow', signal: controller.signal });
+      // Only treat definitive "not found" as broken; other errors may be transient and should not block playback.
+      if (res.status === 404) return false;
+      if (res.status >= 500) return false;
+      return true;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private async prefetchNext(zoneId: number, session: RadioParadiseSession): Promise<void> {

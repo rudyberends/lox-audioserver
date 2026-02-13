@@ -791,9 +791,10 @@ export class PlaybackCoordinator {
         audiopath,
       };
     }
-    const isRadioAudiopath = this.audioHelpers.isRadioAudiopath(audiopath);
+    const radioContextAudiopath = resolvedMetadata?.audiopath ?? audiopath;
+    const isRadioAudiopath = this.audioHelpers.isRadioAudiopath(radioContextAudiopath);
     if (isRadioAudiopath) {
-      ctx.metadata.radioControllable = this.radioParadise.isRadioParadiseAudiopath(audiopath)
+      ctx.metadata.radioControllable = this.radioParadise.isRadioParadiseAudiopath(radioContextAudiopath)
         ? true
         : resolvedMetadata?.isRadio === false;
     } else if (ctx.metadata.radioControllable) {
