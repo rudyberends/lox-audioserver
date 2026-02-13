@@ -2470,7 +2470,7 @@ export class AdminApiHandler {
     if (req.method === 'POST' && isSystemUpdate) {
       const body = (await this.readJsonBody(req, res)) as
         | {
-            audioserver?: { macId?: string; ip?: string };
+            audioserver?: { macId?: string; ip?: string; alertPreDelayMs?: number };
           }
         | null;
       if (res.writableEnded) {
@@ -2486,7 +2486,8 @@ export class AdminApiHandler {
       }
       const rawMac = body.audioserver.macId;
       const rawIp = body.audioserver.ip;
-      if (typeof rawMac !== 'string' && typeof rawIp !== 'string') {
+      const rawAlertPreDelayMs = body.audioserver.alertPreDelayMs;
+      if (typeof rawMac !== 'string' && typeof rawIp !== 'string' && typeof rawAlertPreDelayMs !== 'number') {
         this.sendJson(res, 400, { error: 'invalid-system-payload' });
         return;
       }
@@ -2513,6 +2514,14 @@ export class AdminApiHandler {
         }
         normalizedIp = trimmedIp;
       }
+      let normalizedAlertPreDelayMs: number | null = null;
+      if (typeof rawAlertPreDelayMs === 'number') {
+        if (!Number.isFinite(rawAlertPreDelayMs) || rawAlertPreDelayMs < 0) {
+          this.sendJson(res, 400, { error: 'invalid-alert-predelay' });
+          return;
+        }
+        normalizedAlertPreDelayMs = rawAlertPreDelayMs;
+      }
 
       await this.configPort.updateConfig((cfg) => {
         if (!cfg.system) cfg.system = this.defaultConfig().system;
@@ -2524,6 +2533,9 @@ export class AdminApiHandler {
         }
         if (normalizedIp) {
           cfg.system.audioserver.ip = normalizedIp;
+        }
+        if (normalizedAlertPreDelayMs !== null) {
+          cfg.system.audioserver.alertPreDelayMs = normalizedAlertPreDelayMs;
         }
       });
       this.sendJson(res, 204, {});
