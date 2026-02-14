@@ -284,27 +284,6 @@ export class GroupManager {
       this.log.warn('failed to remove group', { identifier });
       return;
     }
-
-    // Stop playback on all members except the leader (master keeps playing).
-    const zonesToStop = new Set<number>(record.members.filter((m) => m !== record.leader));
-    zonesToStop.forEach((zoneId) => {
-      try {
-        this.zones.handleCommand(zoneId, 'stop');
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.log.warn('failed to stop zone after group removal', { zoneId, message });
-      }
-    });
-
-    const emptyPayload: AudioSyncGroupPayload = {
-      group: record.externalId ?? `group-${record.leader}`,
-      mastervolume: 0,
-      players: [],
-      type: 'dynamic',
-    };
-
-    this.notifier.notifyAudioSyncEvent([emptyPayload]);
-    this.broadcastGroupState();
   }
 
   public upsert(record: Omit<GroupRecord, 'updatedAt'>): void {
@@ -328,11 +307,6 @@ export class GroupManager {
           }
         });
       }
-      this.log.debug('group updated', {
-        leader: record.leader,
-        externalId: record.externalId,
-      });
-      this.broadcastGroupState();
     }
   }
 

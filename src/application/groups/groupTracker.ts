@@ -68,9 +68,24 @@ export function upsertGroup(
 ): { record: GroupRecord; changed: boolean } {
   const leader = Math.floor(input.leader);
   const members = normalizeMembers(leader, input.members);
-  members.forEach((zoneId) => leaderByZone.set(zoneId, leader));
 
   const previous = groupsByLeader.get(leader);
+  if (previous) {
+    const nextMembers = new Set<number>(members);
+    previous.members.forEach((zoneId) => {
+      if (nextMembers.has(zoneId)) return;
+      if (leaderByZone.get(zoneId) !== leader) return;
+      leaderByZone.delete(zoneId);
+    });
+
+    if (previous.externalId && previous.externalId !== input.externalId) {
+      if (leaderByExternalId.get(previous.externalId) === leader) {
+        leaderByExternalId.delete(previous.externalId);
+      }
+    }
+  }
+
+  members.forEach((zoneId) => leaderByZone.set(zoneId, leader));
   const changed =
     !previous ||
     previous.backend !== input.backend ||

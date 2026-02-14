@@ -313,7 +313,7 @@ export class AudioManager {
       this.zonePcmPreference.get(zoneId) ?? true,
       session.profiles,
     );
-    const streamProfile = profiles.includes('aac') ? 'aac' : 'mp3';
+    const streamProfile = profiles.includes('flac') ? 'flac' : profiles.includes('aac') ? 'aac' : profiles.includes('mp3') ? 'mp3' : 'pcm';
     const handles = this.createStreamHandles(zoneId, streamProfile);
     session.stream = handles.stream;
     session.pcmStream = handles.pcmStream;
@@ -466,7 +466,16 @@ export class AudioManager {
     const id = `${zoneId}-${randomUUID()}`;
     const basePath = `/streams/${zoneId}/${id}`;
     const createdAt = Date.now();
-    const streamExt = streamProfile === 'aac' ? 'aac' : 'mp3';
+    const streamExt =
+      streamProfile === 'aac'
+        ? 'aac'
+        : streamProfile === 'flac'
+          ? 'flac'
+          : streamProfile === 'pcm'
+            ? 'wav'
+          : streamProfile === 'opus'
+            ? 'opus'
+            : 'mp3';
     const stream: AudioStreamHandle = {
       id,
       url: `${basePath}.${streamExt}`,
@@ -703,7 +712,7 @@ export class AudioManager {
         this.playbackService.start(startOptions);
       }
     }
-    const streamProfile = profiles.includes('aac') ? 'aac' : 'mp3';
+    const streamProfile = profiles.includes('flac') ? 'flac' : profiles.includes('aac') ? 'aac' : 'mp3';
     const { stream, pcmStream } = this.createStreamHandles(zoneId, streamProfile);
     const playRequest = this.claimPlayRequest(zoneId);
     const now = Date.now();
@@ -930,7 +939,8 @@ export class AudioManager {
     preferred?: OutputProfile[],
   ): OutputProfile[] {
     if (preferred?.length) {
-      return preferred;
+      const deduped = Array.from(new Set(preferred));
+      return deduped;
     }
     if (!playbackSource || playbackSource.kind !== 'pipe') {
       if (requiresPcm) {

@@ -107,6 +107,11 @@ export class AudioSession {
   private readonly pacingMaxAheadBytes: number;
   private pacingPaused = false;
   private pacingTimer?: NodeJS.Timeout;
+  // When streaming raw PCM, ensure we only emit full audio frames.
+  // Otherwise, a subscriber that attaches mid-stream can start at an arbitrary byte offset,
+  // which results in loud noise (misaligned sample boundaries).
+  private readonly pcmFrameBytes: number | null;
+  private pcmRemainder: Buffer | null = null;
 
   constructor(
     private readonly zoneId: number,
@@ -166,6 +171,32 @@ export class AudioSession {
         ? Math.round((this.pacingBps * this.targetLeadMs) / 1000)
         : 0;
     this.pacingMaxAheadBytes = Math.max(minLeadBytes, this.maxBufferBytes, 0);
+
+    this.pcmFrameBytes =
+      this.profile === 'pcm'
+        ? Math.max(1, Math.round(this.outputSettings.channels * (this.outputSettings.pcmBitDepth / 8)))
+        : null;
+  }
+
+  private alignPcmChunk(chunk: Buffer): Buffer | null {
+    const frameBytes = this.pcmFrameBytes;
+    if (!frameBytes) {
+      return chunk;
+    }
+    const combined =
+      this.pcmRemainder && this.pcmRemainder.length
+        ? Buffer.concat([this.pcmRemainder, chunk], this.pcmRemainder.length + chunk.length)
+        : chunk;
+    const alignedLen = Math.floor(combined.length / frameBytes) * frameBytes;
+    if (alignedLen <= 0) {
+      // Not enough bytes for a full frame yet; keep accumulating.
+      this.pcmRemainder = Buffer.from(combined);
+      return null;
+    }
+    const out = combined.subarray(0, alignedLen);
+    const remLen = combined.length - alignedLen;
+    this.pcmRemainder = remLen > 0 ? Buffer.from(combined.subarray(alignedLen)) : null;
+    return out;
   }
 
   public start(): void {
@@ -351,6 +382,13 @@ export class AudioSession {
       if (!chunk?.length) {
         return;
       }
+      const aligned = this.profile === 'pcm' ? this.alignPcmChunk(chunk) : chunk;
+      if (!aligned?.length) {
+        // Hold until we have a full PCM frame so new subscribers don't start mid-sample.
+        this.recordBytes(chunk.length);
+        this.maybeApplyOutputPacing();
+        return;
+      }
       if (options.logFirstChunk !== false && !this.firstChunkLogged) {
         this.firstChunkLogged = true;
         if (this.firstChunkResolve) {
@@ -361,13 +399,13 @@ export class AudioSession {
         this.log.info('ffmpeg first chunk', {
           zoneId: this.zoneId,
           profile: this.profile,
-          bytes: chunk.length,
+          bytes: aligned.length,
           spawnToFirstChunkMs: this.startTs ? Math.max(0, now - this.startTs) : null,
         });
       }
       if (this.maxBufferBytes > 0 && this.bufferBytes < this.maxBufferBytes) {
-        this.bufferQueue.push(chunk);
-        this.bufferBytes += chunk.length;
+        this.bufferQueue.push(aligned);
+        this.bufferBytes += aligned.length;
         if (!this.keepInitialBuffer) {
           while (this.bufferBytes > this.maxBufferBytes && this.bufferQueue.length > 0) {
             const removed = this.bufferQueue.shift();
@@ -378,12 +416,12 @@ export class AudioSession {
         }
       }
       this.recordBytes(chunk.length);
-      this.writeToSubscribers(chunk);
+      this.writeToSubscribers(aligned);
       this.maybeApplyOutputPacing();
     });
 
     proc.stdout.on('close', () => {
-      this.log.debug('ffmpeg stdout closed', { zoneId: this.zoneId });
+      this.log.debug('ffmpeg stdout closed', { zoneId: this.zoneId, profile: this.profile });
     });
 
     proc.stderr?.on('data', (chunk: Buffer) => {
@@ -404,6 +442,7 @@ export class AudioSession {
       this.lastExitSignal = signal ?? null;
       this.log.info('ffmpeg exited', {
         zoneId: this.zoneId,
+        profile: this.profile,
         code,
         signal,
         stderr: this.lastStderrLine ?? undefined,
@@ -595,7 +634,14 @@ export class AudioSession {
       const needsTlsVerifyHost = Boolean(this.source.tlsVerifyHost && /^https:/i.test(this.source.url));
       const tlsArgs = needsTlsVerifyHost ? ['-tls_verify', '0', '-verifyhost', this.source.tlsVerifyHost!] : [];
       const inputFormatArgs = this.source.inputFormat ? ['-f', this.source.inputFormat] : [];
-      const realtimeArgs = this.source.realTime ? ['-re'] : [];
+      // When URL input pacing is disabled (`realTime=false`), we rely on output backpressure to prevent
+      // ffmpeg from running far ahead and exiting early on finite sources (e.g. Apple Music track MP4s).
+      // That backpressure is computed using output bitrate; FLAC is variable so we can't pace it reliably
+      // that way. For FLAC, force `-re` even when `realTime=false` to keep ffmpeg aligned with wall clock.
+      const realtimeArgs =
+        this.source.realTime === true || (this.source.realTime === false && this.profile === 'flac')
+          ? ['-re']
+          : [];
       const seekArgs = this.buildSeekArgs(this.source.startAtSec);
       return [
         ...(lowLatency ? this.buildLowLatencyArgs() : this.buildBufferedArgs()),

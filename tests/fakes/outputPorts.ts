@@ -81,6 +81,8 @@ export const noopAirplayGroupController: AirplayGroupCoordinator = {
 };
 
 export const noopSnapcastCorePort: SnapcastCorePort = {
+  listClients: () => [],
+  setClientLatency: () => ({ updated: false, connected: false, latency: 0 }),
   setStream: () => {
     /* noop */
   },
@@ -188,7 +190,14 @@ export const noopSqueezeliteGroupController: SqueezeliteGroupCoordinator = {
     leaderZoneId: zoneId,
     expectedCount: 1,
   }),
+  orchestrateGroupPlayback: async () => false,
+  orchestrateGroupPause: async () => false,
+  orchestrateGroupResume: async () => false,
+  orchestrateGroupStop: async () => false,
   notifyBufferReady: () => {
+    /* noop */
+  },
+  notifyPlaybackTick: () => {
     /* noop */
   },
 };

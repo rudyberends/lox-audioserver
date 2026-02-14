@@ -20,6 +20,19 @@ import type { StreamEvents } from '@/adapters/http/streams/streamEvents';
 export class AudioStreamHandler {
   private readonly log = createLogger('Http', 'Streams');
   private readonly syncStreams = new Map<string, SyncStreamEntry>();
+  private readonly syncClientPassThroughBytes = 2 * 1024 * 1024;
+  private readonly syncClientMaxBacklogBytes = 8 * 1024 * 1024;
+  // Buffer a short window of audio while waiting for sync clients to connect,
+  // so the engine subscriber doesn't accumulate lag and get dropped.
+  // Keep this small to avoid audible "rewind" when creating a sync-group mid-track.
+  private readonly syncPreStartMaxBytes = 64 * 1024;
+  // Keep a short post-start history so late joiners (common with squeezelite reconnects)
+  // can be caught up to the exact same byte stream without requiring a "no data" barrier.
+  private readonly syncPostStartHistoryMaxBytes = 2 * 1024 * 1024;
+  private readonly syncPostStartJoinWindowMs = 1500;
+  // Some squeezelite clients briefly close/reopen the HTTP connection around buffer_ready/unpause.
+  // Keep the sync stream alive for a short grace period to avoid sending EOF and causing underruns.
+  private readonly syncIdleCleanupMs = 4000;
 
   constructor(
     private readonly engine: EnginePort,
@@ -41,7 +54,9 @@ export class AudioStreamHandler {
     const resourceToken = extra?.split(/[?#]/)[0] ?? '';
     const streamId = this.stripExtension(streamToken);
     const isWav = streamToken.endsWith('.wav');
+    const isPcm = streamToken.endsWith('.pcm');
     const isAac = streamToken.endsWith('.aac');
+    const isFlac = streamToken.endsWith('.flac');
     const zoneId = Number(zoneStr);
     const isCoverRequest = resourceToken === 'cover';
     if (!Number.isFinite(zoneId) || !streamId) {
@@ -80,10 +95,10 @@ export class AudioStreamHandler {
     const icyIntervalOverride = httpPrefs?.icyInterval ?? audioOutputSettings.httpIcyInterval;
     const icyNameOverride = httpPrefs?.icyName ?? audioOutputSettings.httpIcyName;
 
-    const outputProfile = isWav ? 'pcm' : isAac ? 'aac' : 'mp3';
+    const outputProfile = isWav || isPcm ? 'pcm' : isAac ? 'aac' : isFlac ? 'flac' : 'mp3';
     const syncParams = this.parseSyncParams(req.url ?? '');
-    if (syncParams && outputProfile === 'mp3') {
-      await this.handleSyncStream(req, res, session, zoneId, 'mp3', outputSettings, httpProfile, {
+    if (syncParams && (outputProfile === 'mp3' || outputProfile === 'flac' || outputProfile === 'pcm')) {
+      await this.handleSyncStream(req, res, session, zoneId, outputProfile, outputSettings, httpProfile, {
         icyEnabledOverride,
         icyIntervalOverride,
         icyNameOverride,
@@ -97,12 +112,9 @@ export class AudioStreamHandler {
       primeWithBuffer,
     });
     if (!audioStream && session.playbackSource) {
-      const profiles =
-        session.playbackSource.kind === 'pipe'
-          ? (['mp3', 'pcm'] as const)
-          : (['mp3', 'pcm'] as const);
-      const withAac = isAac ? (['aac', ...profiles] as const) : profiles;
-      this.engine.start(zoneId, session.playbackSource, withAac as any);
+      // Start the engine with the requested profile (plus PCM for local consumers).
+      const profiles = Array.from(new Set<OutputProfile>([outputProfile, 'pcm']));
+      this.engine.start(zoneId, session.playbackSource, profiles as any);
       audioStream = this.engine.createStream(zoneId, outputProfile, {
         label: clientLabel,
         primeWithBuffer,
@@ -114,7 +126,15 @@ export class AudioStreamHandler {
       return;
     }
 
-    const contentType = isWav ? 'audio/wav' : isAac ? 'audio/aac' : 'audio/mpeg';
+    const contentType = isWav
+      ? 'audio/wav'
+      : isPcm
+        ? this.buildPcmContentType(outputSettings)
+        : isAac
+          ? 'audio/aac'
+          : isFlac
+            ? 'audio/flac'
+            : 'audio/mpeg';
     this.streamEvents.recordStreamRequest({
       zoneId,
       streamId,
@@ -435,7 +455,7 @@ export class AudioStreamHandler {
   }
 
   private estimateContentLength(
-    profile: 'pcm' | 'mp3' | 'aac',
+    profile: 'pcm' | 'mp3' | 'aac' | 'flac',
     durationSeconds: number | null,
     httpProfile: HttpProfile,
     output: AudioOutputSettings,
@@ -453,6 +473,10 @@ export class AudioStreamHandler {
         output.channels *
         (output.pcmBitDepth / 8);
       return Math.round(bytesPerSecond * duration);
+    }
+    if (profile !== 'mp3') {
+      // We don't attempt to estimate content-length for FLAC/AAC in forced mode.
+      return null;
     }
     const bps = mp3BitrateToBps(output.mp3Bitrate);
     if (bps <= 0) {
@@ -481,13 +505,18 @@ export class AudioStreamHandler {
     res: ServerResponse,
     session: PlaybackSession,
     zoneId: number,
-    outputProfile: 'mp3',
+    outputProfile: 'mp3' | 'flac' | 'pcm',
     outputSettings: AudioOutputSettings,
     httpProfile: HttpProfile,
     icyOverrides: { icyEnabledOverride: boolean; icyIntervalOverride?: number; icyNameOverride?: string },
     sync: { syncId: string; expected: number },
   ): Promise<void> {
-    const contentType = 'audio/mpeg';
+    const contentType =
+      outputProfile === 'flac'
+        ? 'audio/flac'
+        : outputProfile === 'pcm'
+          ? this.buildPcmContentType(outputSettings)
+          : 'audio/mpeg';
     const durationSeconds = this.resolveDurationSeconds(session);
     const icyEnabled = this.shouldUseIcy(req, icyOverrides.icyEnabledOverride);
     const contentLength = icyEnabled
@@ -515,7 +544,8 @@ export class AudioStreamHandler {
       return;
     }
     const clientId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const passThrough = new PassThrough();
+    // Use a larger buffer per client so brief network hiccups don't backpressure the whole sync group.
+    const passThrough = new PassThrough({ highWaterMark: this.syncClientPassThroughBytes });
 
     entry.clients.set(clientId, {
       req,
@@ -524,7 +554,12 @@ export class AudioStreamHandler {
       icyEnabled,
       icyInterval: icyOverrides.icyIntervalOverride,
       icyName: icyOverrides.icyNameOverride,
+      attached: false,
     });
+    if (entry.idleCleanupId) {
+      clearTimeout(entry.idleCleanupId);
+      entry.idleCleanupId = undefined;
+    }
 
     this.writeHeaders(res, contentType, {
       contentLength,
@@ -539,7 +574,33 @@ export class AudioStreamHandler {
     req.on('aborted', cleanup);
     res.on('close', cleanup);
 
-    if (entry.clients.size >= entry.expectedCount) {
+    // If the sync entry already started (e.g., timeout fallback), late joiners must be attached
+    // immediately or they'll never receive audio.
+    const client = entry.clients.get(clientId);
+    if (client && entry.started) {
+      this.attachSyncClient(entry, client);
+      this.replaySyncHistory(entry, client);
+      return;
+    }
+
+    // Start immediately on first client. Some squeezelite builds will close the HTTP connection
+    // if no bytes are delivered quickly. We keep a short history so late joiners can catch up.
+    this.maybeStartSyncEntry(entry);
+  }
+
+  private buildPcmContentType(output: AudioOutputSettings): string {
+    // node-slimproto expects these params in order to generate the correct PCM codc details.
+    // Keep them stable: `rate`, `channels`, and `bitrate` (bit-depth).
+    const rate = Number.isFinite(output.sampleRate) ? Math.round(output.sampleRate) : 44100;
+    const channels = Number.isFinite(output.channels) ? Math.round(output.channels) : 2;
+    const bitDepth = Number.isFinite(output.pcmBitDepth) ? Math.round(output.pcmBitDepth) : 16;
+    return `audio/pcm;rate=${rate};channels=${channels};bitrate=${bitDepth}`;
+  }
+
+  private maybeStartSyncEntry(entry: SyncStreamEntry): void {
+    if (entry.started) return;
+    // Start as soon as we see the first client. Late joiners will be caught up via history.
+    if (entry.clients.size > 0) {
       this.startSyncEntry(entry);
     }
   }
@@ -547,7 +608,7 @@ export class AudioStreamHandler {
   private getOrCreateSyncEntry(
     syncId: string,
     zoneId: number,
-    outputProfile: 'mp3',
+    outputProfile: 'pcm' | 'mp3' | 'flac',
     outputSettings: AudioOutputSettings,
     session: PlaybackSession,
     expectedCount: number,
@@ -561,13 +622,14 @@ export class AudioStreamHandler {
     const clientLabel = `sync:${syncId}`;
     let audioStream = this.engine.createStream(zoneId, outputProfile, {
       label: clientLabel,
-      primeWithBuffer: true,
+      // Avoid priming a backlog for sync groups; it can overwhelm some clients and cause early underruns.
+      primeWithBuffer: false,
     });
     if (!audioStream && session.playbackSource) {
-      this.engine.start(zoneId, session.playbackSource, ['mp3', 'pcm'] as any);
+      this.engine.start(zoneId, session.playbackSource, Array.from(new Set<OutputProfile>([outputProfile, 'pcm'])) as any);
       audioStream = this.engine.createStream(zoneId, outputProfile, {
         label: clientLabel,
-        primeWithBuffer: true,
+        primeWithBuffer: false,
       });
     }
     if (!audioStream) {
@@ -584,8 +646,54 @@ export class AudioStreamHandler {
       clients: new Map(),
       stream: audioStream,
       started: false,
-      timeoutId: setTimeout(() => this.startSyncEntry(entry), 10000),
+      // Align with Music Assistant: don't wait forever for all expected clients.
+      timeoutId: setTimeout(() => this.startSyncEntry(entry), 2500),
+      preStartBuffer: [],
+      preStartBytes: 0,
+      postStartHistory: [],
+      postStartHistoryBytes: 0,
+      postStartHistoryUntil: 0,
     };
+    entry.timeoutId.unref?.();
+
+    // Start consuming immediately to avoid the engine subscriber being dropped for lag.
+    // We buffer a small window so we can "release" the same bytes to all clients at start.
+    const onData = (chunk: Buffer | Uint8Array) => {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (!entry.started) {
+        entry.preStartBuffer.push(buf);
+        entry.preStartBytes += buf.length;
+        while (entry.preStartBytes > this.syncPreStartMaxBytes && entry.preStartBuffer.length > 1) {
+          const removed = entry.preStartBuffer.shift();
+          if (removed) entry.preStartBytes -= removed.length;
+        }
+        return;
+      }
+      if (entry.postStartHistoryUntil && Date.now() < entry.postStartHistoryUntil) {
+        entry.postStartHistory.push(buf);
+        entry.postStartHistoryBytes += buf.length;
+        while (
+          entry.postStartHistoryBytes > this.syncPostStartHistoryMaxBytes &&
+          entry.postStartHistory.length > 1
+        ) {
+          const removed = entry.postStartHistory.shift();
+          if (removed) entry.postStartHistoryBytes -= removed.length;
+        }
+      }
+      for (const [clientId, client] of entry.clients) {
+        if (client.passThrough.destroyed) {
+          this.removeSyncClient(entry.id, clientId);
+          continue;
+        }
+        client.passThrough.write(buf);
+        const backlog = (client.passThrough as any).writableLength as number | undefined;
+        if (typeof backlog === 'number' && backlog > this.syncClientMaxBacklogBytes) {
+          this.removeSyncClient(entry.id, clientId);
+        }
+      }
+    };
+    entry.onData = onData;
+    (entry.stream as any).on?.('data', onData);
     audioStream.on('error', (error) => {
       this.log.warn('sync stream error', {
         syncId,
@@ -605,39 +713,122 @@ export class AudioStreamHandler {
     if (entry.started) return;
     entry.started = true;
     clearTimeout(entry.timeoutId);
-    const stream = entry.stream;
+    entry.postStartHistoryUntil = Date.now() + this.syncPostStartJoinWindowMs;
 
     for (const client of entry.clients.values()) {
-      if (client.icyEnabled) {
-        this.pipeWithIcyMetadata(
-          client.req,
-          client.res,
-          client.passThrough,
-          entry.session,
-          client.icyInterval,
-          client.icyName,
-        );
-      } else {
-        client.passThrough.pipe(client.res);
+      this.attachSyncClient(entry, client);
+    }
+
+    // Release buffered data so all clients start from the same byte.
+    if (entry.preStartBuffer.length) {
+      for (const buf of entry.preStartBuffer) {
+        for (const [clientId, client] of entry.clients) {
+          if (client.passThrough.destroyed) {
+            this.removeSyncClient(entry.id, clientId);
+            continue;
+          }
+          client.passThrough.write(buf);
+          const backlog = (client.passThrough as any).writableLength as number | undefined;
+          if (typeof backlog === 'number' && backlog > this.syncClientMaxBacklogBytes) {
+            this.removeSyncClient(entry.id, clientId);
+          }
+        }
       }
-      stream.pipe(client.passThrough, { end: true });
+      entry.preStartBuffer = [];
+      entry.preStartBytes = 0;
+    }
+  }
+
+  private replaySyncHistory(entry: SyncStreamEntry, client: SyncClient): void {
+    if (!entry.postStartHistoryUntil || Date.now() > entry.postStartHistoryUntil) {
+      return;
+    }
+    if (!entry.postStartHistory.length) {
+      return;
+    }
+    if (client.passThrough.destroyed) {
+      return;
+    }
+    // Best-effort: write what we have so the client can catch up to the same byte stream.
+    for (const buf of entry.postStartHistory) {
+      client.passThrough.write(buf);
+      const backlog = (client.passThrough as any).writableLength as number | undefined;
+      if (typeof backlog === 'number' && backlog > this.syncClientMaxBacklogBytes) {
+        // Too slow to catch up; drop.
+        client.passThrough.end();
+        client.passThrough.destroy();
+        if (!client.res.writableEnded) {
+          client.res.end();
+        }
+        return;
+      }
+    }
+  }
+
+  private attachSyncClient(entry: SyncStreamEntry, client: SyncClient): void {
+    if (client.attached) {
+      return;
+    }
+    client.attached = true;
+    if (client.icyEnabled) {
+      this.pipeWithIcyMetadata(
+        client.req,
+        client.res,
+        client.passThrough,
+        entry.session,
+        client.icyInterval,
+        client.icyName,
+      );
+    } else {
+      client.passThrough.pipe(client.res);
     }
   }
 
   private removeSyncClient(syncId: string, clientId: string): void {
     const entry = this.syncStreams.get(syncId);
     if (!entry) return;
+    const existing = entry.clients.get(clientId);
     entry.clients.delete(clientId);
+    if (existing) {
+      existing.passThrough.end();
+      existing.passThrough.destroy();
+      if (!existing.res.writableEnded) {
+        existing.res.end();
+      }
+    }
     if (entry.clients.size === 0) {
-      this.cleanupSyncEntry(entry);
+      // Don't immediately tear down the engine subscriber; allow quick reconnects.
+      if (!entry.idleCleanupId) {
+        entry.idleCleanupId = setTimeout(() => {
+          entry.idleCleanupId = undefined;
+          // If nobody reconnected, stop the stream.
+          if (this.syncStreams.get(entry.id) === entry && entry.clients.size === 0) {
+            this.cleanupSyncEntry(entry);
+          }
+        }, this.syncIdleCleanupMs);
+        entry.idleCleanupId.unref?.();
+      }
     }
   }
 
   private cleanupSyncEntry(entry: SyncStreamEntry): void {
     clearTimeout(entry.timeoutId);
+    if (entry.idleCleanupId) {
+      clearTimeout(entry.idleCleanupId);
+      entry.idleCleanupId = undefined;
+    }
     if (this.syncStreams.get(entry.id) === entry) {
       this.syncStreams.delete(entry.id);
     }
+    if (entry.onData) {
+      (entry.stream as any).off?.('data', entry.onData);
+      entry.onData = undefined;
+    }
+    entry.preStartBuffer = [];
+    entry.preStartBytes = 0;
+    entry.postStartHistory = [];
+    entry.postStartHistoryBytes = 0;
+    entry.postStartHistoryUntil = 0;
     entry.clients.forEach((client) => {
       if (!client.res.writableEnded) {
         client.res.end();
@@ -657,12 +848,13 @@ type SyncClient = {
   icyEnabled: boolean;
   icyInterval?: number;
   icyName?: string;
+  attached: boolean;
 };
 
 type SyncStreamEntry = {
   id: string;
   zoneId: number;
-  outputProfile: 'mp3';
+  outputProfile: 'pcm' | 'mp3' | 'flac';
   outputSettings: AudioOutputSettings;
   session: PlaybackSession;
   expectedCount: number;
@@ -670,4 +862,11 @@ type SyncStreamEntry = {
   stream: NodeJS.ReadableStream;
   started: boolean;
   timeoutId: NodeJS.Timeout;
+  onData?: (chunk: Buffer | Uint8Array) => void;
+  idleCleanupId?: NodeJS.Timeout;
+  preStartBuffer: Buffer[];
+  preStartBytes: number;
+  postStartHistory: Buffer[];
+  postStartHistoryBytes: number;
+  postStartHistoryUntil: number;
 };

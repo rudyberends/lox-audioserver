@@ -241,24 +241,6 @@ export class AdminApiHandler {
         },
       },
       {
-        method: 'POST',
-        pattern: /^\/snapcast\/clients\/([^/]+)\/latency$/,
-        handler: async (req, res, match) => {
-          const clientId = decodeURIComponent(match[1] ?? '').trim();
-          const body = (await this.readJsonBody(req, res)) as { latency?: number } | null;
-          if (res.writableEnded) {
-            return;
-          }
-          const latency = body?.latency;
-          if (!clientId || typeof latency !== 'number') {
-            this.sendJson(res, 400, { error: 'invalid-snapcast-latency' });
-            return;
-          }
-          const result = this.snapcastCore.setClientLatency(clientId, latency);
-          this.sendJson(res, 200, { clientId, ...result });
-        },
-      },
-      {
         method: 'DELETE',
         pattern: /^\/spotify\/accounts\/([^/]+)$/,
         handler: async (_req, res, match) => {
@@ -1276,6 +1258,31 @@ export class AdminApiHandler {
 
   private handleSqueezeliteDiscovery(res: ServerResponse): void {
     try {
+      const cfg = this.configPort.getConfig();
+      const configuredByPlayerId = new Map<
+        string,
+        { zoneId: number; zoneName: string; latencyMs: number | null }
+      >();
+      (cfg.zones ?? []).forEach((zone) => {
+        const output = zone.output;
+        if (!output || typeof output !== 'object') return;
+        if (output.id !== 'squeezelite') return;
+        const rawPlayerId = typeof (output as any).playerId === 'string' ? (output as any).playerId : '';
+        const normalized = this.normalizeSqueezelitePlayerId(rawPlayerId);
+        if (!normalized) return;
+        const rawLatency = (output as any).latencyMs;
+        const parsedLatency =
+          typeof rawLatency === 'number'
+            ? rawLatency
+            : typeof rawLatency === 'string'
+              ? Number(rawLatency)
+              : null;
+        const latencyMs = typeof parsedLatency === 'number' && Number.isFinite(parsedLatency)
+          ? Math.round(parsedLatency)
+          : null;
+        configuredByPlayerId.set(normalized, { zoneId: zone.id, zoneName: zone.name, latencyMs });
+      });
+
       const clients = this.squeezeliteCore.players.map((player) => ({
         id: player.playerId,
         playerId: player.playerId,
@@ -1284,6 +1291,10 @@ export class AdminApiHandler {
         port: player.devicePort ?? null,
         state: player.state,
         connected: player.connected,
+        zoneId: configuredByPlayerId.get(this.normalizeSqueezelitePlayerId(player.playerId))?.zoneId ?? null,
+        zoneName: configuredByPlayerId.get(this.normalizeSqueezelitePlayerId(player.playerId))?.zoneName ?? null,
+        latency: configuredByPlayerId.get(this.normalizeSqueezelitePlayerId(player.playerId))?.latencyMs ?? null,
+        latencyMs: configuredByPlayerId.get(this.normalizeSqueezelitePlayerId(player.playerId))?.latencyMs ?? null,
       }));
       this.sendJson(res, 200, { clients });
     } catch (err) {
@@ -2676,6 +2687,11 @@ export class AdminApiHandler {
       return payload.transports[0] ?? null;
     }
     return null;
+  }
+
+  private normalizeSqueezelitePlayerId(value: string): string {
+    if (!value) return '';
+    return value.replace(/[^a-f0-9]/gi, '').toLowerCase();
   }
 
   private async readJsonBody(req: IncomingMessage, res: ServerResponse): Promise<unknown | null> {

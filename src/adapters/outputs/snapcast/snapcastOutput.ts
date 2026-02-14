@@ -7,6 +7,11 @@ import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 export interface SnapcastOutputConfig {
   /** Optional list of client IDs that should be mapped to this stream. */
   clientIds?: string | string[];
+  /**
+   * Optional fixed output latency (ms). For Snapcast this maps to snapclient latency,
+   * and will be applied to all configured clientIds.
+   */
+  latencyMs?: number;
 }
 
 export const SNAPCAST_OUTPUT_DEFINITION: OutputConfigDefinition = {
@@ -21,6 +26,13 @@ export const SNAPCAST_OUTPUT_DEFINITION: OutputConfigDefinition = {
       required: true,
       description: 'Snapclient Hello ID/MAC to map to this zone (comma-separated allowed for multiroom).',
     },
+    {
+      id: 'latencyMs',
+      label: 'Latency (ms)',
+      type: 'text',
+      placeholder: '0',
+      description: 'Optional snapclient latency override applied to the configured client IDs.',
+    },
   ],
 };
 
@@ -31,6 +43,7 @@ export class SnapcastOutput implements ZoneOutput {
   private activeOutputSettings = audioOutputSettings;
   private readonly baseStreamId: string;
   private readonly baseClientIds: string[];
+  private readonly configuredLatencyMs: number | null;
   private effectiveStreamId: string;
   private effectiveClientIds: string[];
 
@@ -49,8 +62,11 @@ export class SnapcastOutput implements ZoneOutput {
             .map((c: string) => c.trim())
             .filter(Boolean)
         : [];
+    this.configuredLatencyMs = normalizeLatencyMs((config as any).latencyMs);
     this.effectiveStreamId = this.baseStreamId;
     this.effectiveClientIds = [...this.baseClientIds];
+
+    this.applyConfiguredLatency(this.baseClientIds);
 
     this.ports.snapcastGroup.register({
       zoneId,
@@ -97,7 +113,23 @@ export class SnapcastOutput implements ZoneOutput {
   }
 
   public getLatencyMs(): number | null {
-    return null;
+    const ids = this.baseClientIds.length > 0 ? this.baseClientIds : this.effectiveClientIds;
+    if (ids.length === 0) {
+      return this.configuredLatencyMs;
+    }
+    try {
+      const clients = this.ports.snapcastCore.listClients();
+      const byId = new Map(clients.map((client) => [client.clientId, client.latency]));
+      const latencies = ids
+        .map((id) => byId.get(id))
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+      if (latencies.length === 0) {
+        return this.configuredLatencyMs;
+      }
+      return latencies.reduce((max, value) => Math.max(max, value), 0);
+    } catch {
+      return this.configuredLatencyMs;
+    }
   }
 
   public async dispose(): Promise<void> {
@@ -190,6 +222,7 @@ export class SnapcastOutput implements ZoneOutput {
     for (const clientId of this.baseClientIds) {
       this.ports.snapcastCore.setClientStream(clientId, this.effectiveStreamId);
     }
+    this.applyConfiguredLatency(this.effectiveClientIds);
     if (!this.currentStream) {
       return;
     }
@@ -208,4 +241,22 @@ export class SnapcastOutput implements ZoneOutput {
       );
     }
   }
+
+  private applyConfiguredLatency(clientIds: string[]): void {
+    if (this.configuredLatencyMs === null) {
+      return;
+    }
+    for (const clientId of clientIds) {
+      if (!clientId) continue;
+      this.ports.snapcastCore.setClientLatency(clientId, this.configuredLatencyMs);
+    }
+  }
+}
+
+function normalizeLatencyMs(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const num = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  if (!Number.isFinite(num)) return null;
+  // Snapcast latency cannot be negative; clamp to a sane range.
+  return Math.max(0, Math.min(10_000, Math.round(num)));
 }
