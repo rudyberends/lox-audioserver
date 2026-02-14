@@ -63,10 +63,20 @@ const handleNativeLog =
     };
 
 async function getSession(
-  opts: CreateSessionOpts & { accessToken?: string; clientId?: string },
+  opts: CreateSessionOpts & { accessToken?: string; clientId?: string; credentialsJson?: string },
 ): Promise<LibrespotSession | null> {
   try {
-    return await addon.createSession(opts);
+    const credentialsJson = (opts as any).credentialsJson;
+    if (credentialsJson && typeof (addon as any).createSessionWithCredentials === 'function') {
+      return await (addon as any).createSessionWithCredentials(credentialsJson, opts.deviceName ?? null);
+    }
+    // Intentionally omit clientId unless explicitly needed; overriding can break playback.
+    const safeOpts: any = { ...opts };
+    delete safeOpts.credentialsJson;
+    if (safeOpts.clientId && typeof safeOpts.clientId === 'string') {
+      delete safeOpts.clientId;
+    }
+    return await addon.createSession(safeOpts);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.warn('failed to create native librespot session', { message });
@@ -75,18 +85,20 @@ async function getSession(
 }
 
 export async function createNativeLibrespotSession(params: {
-  accessToken: string;
+  accessToken?: string | null;
+  credentialsJson?: string | null;
   clientId?: string | null;
   deviceName?: string;
 }): Promise<LibrespotSession | null> {
-  const { accessToken, clientId, deviceName } = params;
-  if (!accessToken) {
+  const { accessToken, credentialsJson, clientId, deviceName } = params;
+  if (!accessToken && !credentialsJson) {
     return null;
   }
   return getSession({
-    accessToken,
+    accessToken: accessToken || undefined,
     clientId: clientId || undefined,
     deviceName,
+    credentialsJson: credentialsJson || undefined,
   });
 }
 
@@ -127,6 +139,7 @@ export async function generateLibrespotCredentialsFromOAuth(params: {
 export async function getNativeLibrespotStream(params: {
   uri: string;
   accessToken?: string | null;
+  credentialsJson?: string | null;
   clientId?: string | null;
   deviceName?: string;
   bitrate?: number;
@@ -144,6 +157,7 @@ export async function getNativeLibrespotStream(params: {
   const {
     uri,
     accessToken,
+    credentialsJson,
     clientId,
     deviceName,
     bitrate,
@@ -157,8 +171,8 @@ export async function getNativeLibrespotStream(params: {
   if (!uri) {
     return null;
   }
-  if (!accessToken) {
-    log.warn('native librespot stream skipped; missing access token');
+  if (!accessToken && !credentialsJson) {
+    log.warn('native librespot stream skipped; missing access token and credentials json');
     return null;
   }
   const shouldCloseSession = reuseSession ? false : closeSessionOnStop !== false;
@@ -166,9 +180,10 @@ export async function getNativeLibrespotStream(params: {
   if (!session) {
     try {
       session = await getSession({
-        accessToken,
+        accessToken: accessToken || undefined,
         clientId: clientId || undefined,
         deviceName,
+        credentialsJson: credentialsJson || undefined,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -305,8 +320,11 @@ export async function startNativeConnectHost(params: {
   prev: () => void;
 } | null> {
   const { credentialsPath, deviceName, publishName, onEvent, accessToken, clientId } = params;
-  if (!accessToken) {
-    log.warn('native connect skipped; missing access token', {
+  const hasCredentialsPayload = Boolean(credentialsPath && credentialsPath.trim());
+  const canUseToken = Boolean(accessToken && accessToken.trim());
+  if (!hasCredentialsPayload && !canUseToken) {
+    log.warn('native connect skipped; missing credentials payload and access token', {
+      hasCredentialsPayload,
       hasAccessToken: Boolean(accessToken),
       hasClientId: Boolean(clientId),
     });
@@ -322,25 +340,38 @@ export async function startNativeConnectHost(params: {
     pass.write(chunk);
   };
   try {
-    const handle: ConnectHandle = await (addon as any).startConnectDeviceWithToken(
-      accessToken,
-      clientId,
-      publishName,
-      deviceName,
-      (chunk: Buffer) => safeWrite(chunk),
-      (event: ConnectEvent) => {
-        if (event?.type === 'error') {
-          log.warn('connect host error event', {
-            deviceName,
+    const onEvt = (event: ConnectEvent) => {
+      if (event?.type === 'error') {
+        log.warn('connect host error event', {
+          deviceName,
+          publishName,
+          errorCode: event.errorCode,
+          errorMessage: event.errorMessage,
+        });
+      }
+      onEvent?.(event);
+    };
+
+    // Prefer direct credentials when available; avoids relying on token->credential exchange.
+    const handle: ConnectHandle =
+      hasCredentialsPayload && typeof (addon as any).startConnectDeviceWithCredentials === 'function'
+        ? await (addon as any).startConnectDeviceWithCredentials(
+            credentialsPath,
             publishName,
-            errorCode: event.errorCode,
-            errorMessage: event.errorMessage,
-          });
-        }
-        onEvent?.(event);
-      },
-      handleNativeLog('connect_host'),
-    );
+            deviceName,
+            (chunk: Buffer) => safeWrite(chunk),
+            onEvt,
+            handleNativeLog('connect_host'),
+          )
+        : await (addon as any).startConnectDeviceWithToken(
+            accessToken,
+            clientId,
+            publishName,
+            deviceName,
+            (chunk: Buffer) => safeWrite(chunk),
+            onEvt,
+            handleNativeLog('connect_host'),
+          );
 
     const stop = () => {
       ended = true;

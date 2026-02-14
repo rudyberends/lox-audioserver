@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createLogger } from '@/shared/logging/logger';
@@ -27,6 +28,15 @@ import type { LibrespotSession } from '@lox-audioserver/node-librespot';
 type AirplaySessionStopper = (zoneId: number, reason?: string) => void;
 type OutputErrorHandler = (zoneId: number, reason?: string) => void;
 
+function isValidSpotifyDeviceId(deviceId: string): boolean {
+  return /^[0-9a-f]{40}$/i.test((deviceId || '').trim());
+}
+
+function stableSpotifyDeviceId(seed: string): string {
+  // Spotify/librespot device ids are typically 40-hex (sha1-like). Keep it stable per zone.
+  return crypto.createHash('sha1').update(seed).digest('hex');
+}
+
 class SpotifyConnectInstance {
   private readonly log = createLogger('Input', `Spotify][${this.zoneName}`);
   private readonly cacheDir: string;
@@ -50,6 +60,7 @@ class SpotifyConnectInstance {
   private nativeSessionAccessToken: string | null = null;
   private nativeSessionClientId: string | null = null;
   private nativeSessionDeviceName: string | null = null;
+  private nativeSessionCredentialsHash: string | null = null;
   private credentialsPayload: string | null = null;
   private currentMetadata: PlaybackMetadata | null = null;
   private currentTrackId: string | null = null;
@@ -106,7 +117,6 @@ class SpotifyConnectInstance {
 
     const manager = this.spotifyManagers.get();
     const accessToken = await manager?.getAccessTokenForAccount(this.accountId ?? undefined);
-    const clientId = this.resolveClientId(this.accountId);
     const canUseToken = Boolean(accessToken);
 
     const haveCreds = await this.ensureCredentials(credPath, deviceId, publishName);
@@ -126,7 +136,9 @@ class SpotifyConnectInstance {
       publishName,
       onEvent: (ev) => this.handleNativeEvent(ev),
       accessToken: accessToken ?? undefined,
-      clientId: clientId ?? undefined,
+      // Do not pass our Web API app client id into librespot.
+      // librespot's internal client id defaults are more likely to be accepted for playback/connect.
+      clientId: undefined,
     }).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       this.log.warn('spotify connect host start failed', { zoneId: this.zoneId, message });
@@ -510,14 +522,16 @@ class SpotifyConnectInstance {
         zoneId: this.zoneId,
         hasAccessToken: Boolean(accessToken),
       });
-      return null;
+      // Continue when we have stored librespot credentials; access token isn't required then.
     }
     const deviceId = this.deviceId || `lox-zone-${this.zoneId}`;
-    const deviceName = `${deviceId}-stream`;
-    const clientId = this.resolveClientId(this.accountId);
+    const deviceName = deviceId;
+    const clientId: string | null = null;
+    const credentialsJson = this.credentialsPayload;
 
     const session = await this.ensureNativeSession({
       accessToken,
+      credentialsJson,
       clientId,
       deviceName,
     });
@@ -531,7 +545,9 @@ class SpotifyConnectInstance {
     const nativeStream = await getNativeLibrespotStream({
       uri: spotifyUri,
       accessToken,
-      clientId,
+      credentialsJson,
+      // Do not pass our Web API app client id into librespot.
+      clientId: undefined,
       deviceName,
       bitrate: 320,
       startPositionMs: seekPositionMs > 0 ? Math.round(seekPositionMs) : undefined,
@@ -755,23 +771,32 @@ class SpotifyConnectInstance {
   }
 
   private async ensureNativeSession(params: {
-    accessToken: string;
+    accessToken?: string | null;
+    credentialsJson?: string | null;
     clientId: string | null;
     deviceName: string;
   }): Promise<LibrespotSession | null> {
-    const { accessToken, clientId, deviceName } = params;
-    // Avoid churning sessions for consecutive tracks on the same token/device.
+    const { accessToken, credentialsJson, clientId, deviceName } = params;
+    const credHash =
+      credentialsJson && credentialsJson.trim()
+        ? crypto.createHash('sha1').update(credentialsJson).digest('hex')
+        : null;
+
+    // Avoid churning sessions for consecutive tracks on the same token/credentials + device.
     if (
       this.nativeSession &&
-      this.nativeSessionAccessToken === accessToken &&
+      this.nativeSessionAccessToken === (accessToken ?? null) &&
+      this.nativeSessionCredentialsHash === credHash &&
       this.nativeSessionClientId === (clientId ?? null) &&
       this.nativeSessionDeviceName === deviceName
     ) {
       return this.nativeSession;
     }
+
     await this.closeNativeSession('replace');
     const session = await createNativeLibrespotSession({
-      accessToken,
+      accessToken: accessToken ?? null,
+      credentialsJson: credentialsJson ?? null,
       clientId,
       deviceName,
     });
@@ -779,7 +804,8 @@ class SpotifyConnectInstance {
       return null;
     }
     this.nativeSession = session;
-    this.nativeSessionAccessToken = accessToken;
+    this.nativeSessionAccessToken = accessToken ?? null;
+    this.nativeSessionCredentialsHash = credHash;
     this.nativeSessionClientId = clientId ?? null;
     this.nativeSessionDeviceName = deviceName;
     return session;
@@ -794,6 +820,7 @@ class SpotifyConnectInstance {
     this.nativeSessionAccessToken = null;
     this.nativeSessionClientId = null;
     this.nativeSessionDeviceName = null;
+    this.nativeSessionCredentialsHash = null;
     try {
       await session.close();
     } catch (error) {
@@ -1154,11 +1181,17 @@ export class SpotifyInputService {
       options.seekPositionMs && options.seekPositionMs > 0
         ? Math.max(0, Math.round(options.seekPositionMs))
         : undefined;
+    const baseDeviceId =
+      options.zoneId !== undefined
+        ? this.deviceRegistry.getSpotifyDeviceId(options.zoneId)
+        : undefined;
     const streamHandle = await getNativeLibrespotStream({
       uri: spotifyUri,
       accessToken,
       deviceName:
-        options.zoneId !== undefined ? `lox-zone-${options.zoneId}-stream` : 'lox-spotify-stream',
+        baseDeviceId && isValidSpotifyDeviceId(baseDeviceId)
+          ? baseDeviceId
+          : stableSpotifyDeviceId(`lox-audioserver:spotify:stream:${options.zoneId ?? 'global'}`),
       bitrate: 320,
       startPositionMs: startPosition,
     });
@@ -1214,10 +1247,13 @@ export class SpotifyInputService {
   }
 
   private ensureDeviceId(zone: ZoneConfig, existing?: string): string {
-    if (existing) {
+    if (existing && isValidSpotifyDeviceId(existing)) {
       return existing;
     }
-    const generated = `lox-zone-${zone.id}`;
+    const cfg: any = this.configPort.getConfig();
+    const aud = cfg?.system?.audioserver ?? {};
+    const serverSeed = (aud?.uuid || aud?.macId || 'lox-audioserver').toString();
+    const generated = stableSpotifyDeviceId(`${serverSeed}:spotify:zone:${zone.id}`);
     void this.configPort.updateConfig((cfg) => {
       const target = cfg.zones.find((z) => z.id === zone.id);
       if (!target) {

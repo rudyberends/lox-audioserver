@@ -74,7 +74,26 @@ export async function readJson<T>(filePath: string): Promise<T | undefined> {
  */
 export async function writeJson(filePath: string, data: unknown): Promise<void> {
   await ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
+  // Atomic-ish write to avoid leaving truncated/invalid JSON if the process restarts mid-write.
+  // This prevents cases where a subsequent boot reads invalid JSON and falls back to defaults.
+  const dir = path.dirname(filePath);
+  const tmpPath = path.join(
+    dir,
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`,
+  );
+  const payload = JSON.stringify(data, null, 2);
+  await fs.writeFile(tmpPath, payload, 'utf-8');
+  try {
+    await fs.rename(tmpPath, filePath);
+  } catch (error) {
+    // On some platforms rename might fail if destination exists; fall back to remove+rename.
+    try {
+      await fs.rm(filePath, { force: true });
+    } catch {
+      /* ignore */
+    }
+    await fs.rename(tmpPath, filePath);
+  }
 }
 
 /**
