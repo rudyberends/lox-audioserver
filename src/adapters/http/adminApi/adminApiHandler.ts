@@ -103,6 +103,7 @@ type AdminUiUpdateResult = {
 const MAX_JSON_BODY_BYTES = 1 * 1024 * 1024;
 const MAX_WIDEVINE_PRIVATE_KEY_BYTES = 256 * 1024;
 const MAX_WIDEVINE_CLIENT_ID_BYTES = 10 * 1024 * 1024;
+const ADDON_PACKAGE_PREFIX = '@lox-audioserver/node-';
 
 /**
  * Temporary admin API stub that returns 501 for every endpoint.
@@ -608,6 +609,7 @@ export class AdminApiHandler {
       const cfg = this.configPort.getConfig();
       const pkgVersion = this.readPackageVersion();
       const buildVersion = this.readBuildVersion(pkgVersion);
+      const packages = this.readAddonPackageVersions();
 
       const payload = {
         version: buildVersion,
@@ -621,12 +623,54 @@ export class AdminApiHandler {
         zones: cfg.zones?.length ?? 0,
         activeAdapters: cfg.system.audioserver.extensions?.length ?? 0,
         paired: !!cfg.system.audioserver.paired,
+        packages,
       };
 
       this.sendJson(res, 200, payload);
     } catch (err) {
       this.log.error('failed to produce admin info', { err });
       this.sendJson(res, 500, { error: 'info-unavailable' });
+    }
+  }
+
+  private readAddonPackageVersions(): Record<string, { installed: string | null; declared: string | null }> {
+    const declared = this.readDeclaredAddonPackages();
+    const result: Record<string, { installed: string | null; declared: string | null }> = {};
+    for (const [name, declaredRange] of Object.entries(declared)) {
+      result[name] = {
+        declared: declaredRange ?? null,
+        installed: this.readInstalledPackageVersion(name),
+      };
+    }
+    return result;
+  }
+
+  private readDeclaredAddonPackages(): Record<string, string> {
+    try {
+      const json = readFileSync(resolve(process.cwd(), 'package.json'), 'utf8');
+      const parsed = JSON.parse(json) as { dependencies?: Record<string, string> };
+      const deps = parsed.dependencies ?? {};
+      const result: Record<string, string> = {};
+      for (const [name, range] of Object.entries(deps)) {
+        if (!name.startsWith(ADDON_PACKAGE_PREFIX)) continue;
+        if (typeof range !== 'string') continue;
+        result[name] = range;
+      }
+      return result;
+    } catch {
+      return {};
+    }
+  }
+
+  private readInstalledPackageVersion(name: string): string | null {
+    try {
+      const parts = name.split('/').filter(Boolean);
+      const pkgJsonPath = resolve(process.cwd(), 'node_modules', ...parts, 'package.json');
+      const json = readFileSync(pkgJsonPath, 'utf8');
+      const parsed = JSON.parse(json) as { version?: string };
+      return typeof parsed.version === 'string' && parsed.version.trim() ? parsed.version.trim() : null;
+    } catch {
+      return null;
     }
   }
 
