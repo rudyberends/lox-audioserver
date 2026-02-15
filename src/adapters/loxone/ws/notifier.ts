@@ -23,7 +23,18 @@ export class LoxoneWsNotifier {
    * Pushes the current zone state to all Loxone clients.
    */
   public notifyZoneStateChanged(state: LoxoneZoneState): void {
-    this.log.spam('audio_event payload', { state });
+    // The full state is broadcast frequently (often once per second for progress updates).
+    // Logging the entire payload makes spam logging unusable, so keep this as a summary.
+    this.log.spam('audio_event payload', {
+      zoneId: state.playerid,
+      zoneName: state.name,
+      mode: state.mode,
+      time: state.time,
+      duration: state.duration,
+      title: state.title,
+      artist: state.artist,
+      sourceName: state.sourceName,
+    });
     this.emit({ audio_event: [state] }, 'audio_event', { zoneId: state.playerid });
   }
 

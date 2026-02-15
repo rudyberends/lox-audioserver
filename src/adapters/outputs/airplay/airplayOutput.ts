@@ -106,11 +106,8 @@ export class AirPlayOutput implements ZoneOutput {
   ) {
     const configOverrides: AirplaySenderOverrides = {
       packets_in_buffer: 520,
-      stream_latency: 350,
-      // TODO: tune sync_period; temporarily higher to reduce sync noise.
-      sync_period: 70000,
-      jump_forward_threshold_ms: 240,
-      jump_forward_lead_ms: 180,
+      // Keep default sender pacing. Large values here can increase burstiness and/or reduce sync cadence,
+      // which may show up as audible stutter on some renderers.
       control_sync_base_delay_ms: 2,
       control_sync_jitter_ms: 3,
     };

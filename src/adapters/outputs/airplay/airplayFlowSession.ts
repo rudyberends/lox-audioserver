@@ -47,7 +47,8 @@ export class AirplayFlowSession {
   private pendingEndTimer: NodeJS.Timeout | null = null;
   private pendingEndStream: PassThrough | null = null;
   private lastMetricsLogAt = 0;
-  private readonly metricsLogIntervalMs = 2000;
+  // Avoid noisy periodic metrics (especially when console logging is set to "spam").
+  private readonly metricsLogIntervalMs = 10_000;
   private paused = false;
 
   constructor(private readonly zoneId: number) {}

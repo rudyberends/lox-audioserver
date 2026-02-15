@@ -152,6 +152,12 @@ export class AirplaySender {
       metrics: true,
     config: this.config.config,
       log: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: unknown) => {
+        // AirPlay targets can be chatty (e.g. per-second SETPROGRESS). Logging those at high volume
+        // can easily add enough overhead to cause audible stutter. Only surface request-level chatter
+        // when explicit output debug is enabled.
+        if ((this.config.debug ?? false) !== true && message.includes('Receiving request')) {
+          return;
+        }
         const payload: Record<string, unknown> = {
           host: this.config.host,
           zoneId: this.context?.zoneId,
@@ -162,18 +168,14 @@ export class AirplaySender {
         } else if (data !== undefined) {
           payload.data = data;
         }
-        const effectiveLevel =
-          message.includes('Receiving request') ? 'spam' : level;
         const logFn =
-          effectiveLevel === 'error'
+          level === 'error'
             ? this.log.error
-            : effectiveLevel === 'warn'
+            : level === 'warn'
               ? this.log.warn
-              : effectiveLevel === 'info'
+              : level === 'info'
                 ? this.log.info
-                : effectiveLevel === 'spam'
-                  ? this.log.spam
-                  : this.log.debug;
+                : this.log.debug;
         logFn.call(this.log, message, payload);
       },
     };
