@@ -204,6 +204,7 @@ export function createRuntime(): Runtime {
     sonosGroup: sonosGroupController,
     sendspinGroup: sendspinGroupController,
     sendspinHooks: sendspinHookRegistry,
+    sendspinConnector,
     squeezeliteGroup: squeezeliteGroupController,
     squeezeliteCore,
     zoneManager: zoneManagerProxy,
@@ -332,6 +333,7 @@ export function createRuntime(): Runtime {
       groupManager,
       contentManager,
       audioManager,
+      mdnsPort: mdnsService,
     });
     networkService = new NetworkService({
       lineInRegistry,

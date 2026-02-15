@@ -51,6 +51,7 @@ import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers
 import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
 import { invalidateWidevineArtifactsCache, loadWidevineArtifacts, WidevineArtifactsError } from '@/adapters/content/providers/applemusic/widevine';
 import { ensureDir, resolveDataDir } from '@/shared/utils/file';
+import type { MdnsPort, MdnsServiceRecord } from '@/ports/MdnsPort';
 
 type AdminApiOptions = {
   onReinitialize?: () => Promise<boolean>;
@@ -70,6 +71,7 @@ type AdminApiOptions = {
   groupManager: GroupManagerReadPort;
   contentManager: ContentManager;
   audioManager: AudioManager;
+  mdnsPort: MdnsPort;
 };
 
 type RouteHandler = (
@@ -125,6 +127,7 @@ export class AdminApiHandler {
   private readonly groupManager: GroupManagerReadPort;
   private readonly contentManager: ContentManager;
   private readonly audioManager: AudioManager;
+  private readonly mdns: MdnsPort;
   private adminUiUpdateInFlight: Promise<AdminUiUpdateResult> | null = null;
   private clockOffsetCache: { offsetMs: number | null; sampledAt: number } = { offsetMs: null, sampledAt: 0 };
   private readonly routes: Route[];
@@ -147,6 +150,7 @@ export class AdminApiHandler {
     this.groupManager = options.groupManager;
     this.contentManager = options.contentManager;
     this.audioManager = options.audioManager;
+    this.mdns = options.mdnsPort;
     this.routes = this.buildRoutes();
   }
 
@@ -330,6 +334,11 @@ export class AdminApiHandler {
         method: 'GET',
         pattern: /^\/transports\/sendspin\/clients$/,
         handler: async (req, res) => this.handleSendspinDiscovery(req, res),
+      },
+      {
+        method: 'GET',
+        pattern: /^\/transports\/sendspin\/mdns-clients$/,
+        handler: async (req, res) => this.handleSendspinMdnsDiscovery(req, res),
       },
       {
         method: 'GET',
@@ -1183,9 +1192,10 @@ export class AdminApiHandler {
         .flatMap((value) => value.split(','))
         .map((value) => value.trim())
         .filter((value) => value.length > 0);
-      const clients = sendspinCore
+      const connected = sendspinCore
         .listClients()
         .filter((client) => (roles.length ? roles.some((role) => client.roles.includes(role)) : true))
+        .filter((client) => typeof client.clientId === 'string' && client.clientId.trim().length > 0)
         .map((client) => {
           const clientId = client.clientId;
           const controls = clientId
@@ -1194,20 +1204,154 @@ export class AdminApiHandler {
           return {
             id: client.clientId,
             clientId: client.clientId,
-            name: client.name,
+            name: client.name || client.clientId,
+            // Legacy fields (kept for backwards compatibility).
             remote: client.remote,
             roles: client.roles,
             playbackState: client.playbackState,
+            // UI-friendly fields.
+            address: client.remote ?? undefined,
             sourceState: client.sourceState,
             sourceSignal: client.sourceSignal,
             controls,
           };
         });
-        this.sendJson(res, 200, { clients });
+
+      // When filtering by role, keep the original behavior (connected sessions only).
+      if (roles.length > 0) {
+        this.sendJson(res, 200, { clients: connected });
+        return;
+      }
+
+      // Also include mDNS-discovered clients so UI can pick a target that isn't connected yet.
+      const mdnsTimeoutMsRaw = url.searchParams.get('mdnsTimeoutMs');
+      const mdnsTimeoutMsParsed = mdnsTimeoutMsRaw ? Number(mdnsTimeoutMsRaw) : null;
+      const mdnsTimeoutMs =
+        typeof mdnsTimeoutMsParsed === 'number' && Number.isFinite(mdnsTimeoutMsParsed) && mdnsTimeoutMsParsed > 0
+          ? Math.min(15_000, Math.max(250, Math.round(mdnsTimeoutMsParsed)))
+          : 1_500;
+
+      const discovered = await this.discoverMdnsServices({ type: 'sendspin', protocol: 'tcp' }, mdnsTimeoutMs);
+      const mdnsClients = discovered
+        .map((service) => this.mapSendspinMdnsService(service))
+        .filter((entry) => entry !== null)
+        .map((entry) => ({
+          id: entry.id,
+          clientId: entry.name ?? entry.addresses[0] ?? entry.host ?? entry.id,
+          name: entry.name ?? entry.addresses[0] ?? entry.host ?? entry.id,
+          host: entry.host ?? undefined,
+          address: entry.addresses[0] ?? entry.host ?? undefined,
+          port: entry.port,
+          path: entry.path,
+          controls: null,
+          sourceState: null,
+          sourceSignal: null,
+        }));
+
+      const byClientId = new Set<string>();
+      connected.forEach((c) => {
+        if (typeof c.clientId === 'string') byClientId.add(c.clientId);
+      });
+      const merged = [...connected];
+      for (const client of mdnsClients) {
+        if (!byClientId.has(client.clientId)) {
+          merged.push(client as any);
+        }
+      }
+
+      this.sendJson(res, 200, { clients: merged });
     } catch (err) {
       this.log.warn('sendspin discovery failed', { err });
       this.sendJson(res, 500, { error: 'sendspin-discovery-failed' });
     }
+  }
+
+  private async handleSendspinMdnsDiscovery(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      const url = new URL(req.url ?? '', 'http://localhost');
+      const timeoutMsRaw = url.searchParams.get('timeoutMs');
+      const timeoutMsParsed = timeoutMsRaw ? Number(timeoutMsRaw) : null;
+      const timeoutMs =
+        typeof timeoutMsParsed === 'number' && Number.isFinite(timeoutMsParsed) && timeoutMsParsed > 0
+          ? Math.min(15_000, Math.max(250, Math.round(timeoutMsParsed)))
+          : 3_000;
+
+      const discovered = await this.discoverMdnsServices({ type: 'sendspin', protocol: 'tcp' }, timeoutMs);
+      const clients = discovered
+        .map((service) => this.mapSendspinMdnsService(service))
+        .filter((entry) => entry !== null);
+
+      this.sendJson(res, 200, { clients, timeoutMs });
+    } catch (err) {
+      this.log.warn('sendspin mdns discovery failed', { err });
+      this.sendJson(res, 500, { error: 'sendspin-mdns-discovery-failed' });
+    }
+  }
+
+  private discoverMdnsServices(
+    options: { type: string; protocol?: 'tcp' | 'udp' },
+    timeoutMs: number,
+  ): Promise<MdnsServiceRecord[]> {
+    return new Promise((resolve) => {
+      const byKey = new Map<string, MdnsServiceRecord>();
+      const browser = this.mdns.browse({ type: options.type, protocol: options.protocol ?? 'tcp' }, (service) => {
+        const key = `${service.name || service.host || (service.addresses?.[0] ?? 'unknown')}:${service.port}`;
+        byKey.set(key, service);
+      });
+      setTimeout(() => {
+        browser.stop();
+        resolve([...byKey.values()]);
+      }, timeoutMs);
+    });
+  }
+
+  private mapSendspinMdnsService(
+    service: MdnsServiceRecord,
+  ): {
+    id: string;
+    name: string | null;
+    host: string | null;
+    addresses: string[];
+    port: number;
+    path: string;
+    url: string;
+    txt: Record<string, unknown> | null;
+  } | null {
+    if (!service.port) {
+      return null;
+    }
+
+    const addresses = (service.addresses || []).filter(Boolean) as string[];
+    const pickAddress = (): string | null => {
+      const ipv4 = addresses.find((addr) => addr.includes('.'));
+      if (ipv4) return ipv4;
+      if (addresses.length) return addresses[0];
+      if (typeof service.host === 'string' && service.host.trim()) return service.host.trim();
+      return null;
+    };
+
+    const address = pickAddress();
+    if (!address) {
+      return null;
+    }
+
+    const txt = service.txt && typeof service.txt === 'object' ? (service.txt as Record<string, unknown>) : null;
+    const rawPath = typeof txt?.path === 'string' ? txt.path : '/sendspin';
+    const path = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+    const hostFmt = address.includes(':') ? `[${address}]` : address;
+    const url = `ws://${hostFmt}:${service.port}${path || '/sendspin'}`;
+    const name = typeof service.name === 'string' && service.name.trim() ? service.name.trim() : null;
+
+    return {
+      id: `${name ?? address}:${service.port}`,
+      name,
+      host: typeof service.host === 'string' && service.host.trim() ? service.host.trim() : null,
+      addresses,
+      port: service.port,
+      path: path || '/sendspin',
+      url,
+      txt,
+    };
   }
 
   private async handleSendspinSourceDiscovery(res: ServerResponse): Promise<void> {

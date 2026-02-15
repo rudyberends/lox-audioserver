@@ -146,6 +146,15 @@ const noopSendspinHooks: SendspinHookRegistryPort = {
   },
 };
 
+const noopSendspinConnector: OutputPorts['sendspinConnector'] = {
+  watchClient: () => () => {},
+  requestPlaybackPriority: () => {},
+  advertiseServer: () => {},
+  stopAdvertising: () => {},
+  markInboundConnected: () => {},
+  markInboundDisconnected: () => {},
+} as any;
+
 const noopZoneManager: OutputPorts['zoneManager'] = {
   getZoneState: () => null,
   handleCommand: () => {
@@ -233,6 +242,7 @@ export function makeOutputPortsFake(
     snapcastGroup: noopSnapcastGroupController,
     sendspinGroup: noopSendspinGroupController,
     sendspinHooks: noopSendspinHooks,
+    sendspinConnector: noopSendspinConnector,
     squeezeliteGroup: noopSqueezeliteGroupController,
     squeezeliteCore,
     zoneManager: noopZoneManager,

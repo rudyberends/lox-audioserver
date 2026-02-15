@@ -29,6 +29,12 @@ type SendspinFormat = PlayerFormatWithBitDepth<PcmBitDepth>;
 
 type ArtworkChannel = Parameters<SendspinSession['sendArtworkStreamStart']>[0][number];
 
+// Multiple zones can be configured against the same Sendspin client. In that case we need
+// a single "controller" zone at a time; otherwise multiple outputs race and the client can
+// disconnect due to conflicting metadata/stream commands.
+const sendspinClientOwners = new Map<string, number>(); // clientId -> zoneId
+const sendspinOutputsByZoneId = new Map<number, SendspinOutput>();
+
 /** Minimal Sendspin output configuration. */
 export interface SendspinOutputConfig {
   clientId: string;
@@ -69,6 +75,7 @@ export class SendspinOutput implements ZoneOutput {
   private readonly log = createLogger('Output', 'Sendspin');
   private readonly clientId: string;
   private readonly options: SendspinOutputOptions;
+  private readonly unwatchClient: (() => void) | null;
   private currentStream: NodeJS.ReadableStream | null = null;
   private progressTimer: NodeJS.Timeout | null = null;
   private currentCoverUrl: string | null = null;
@@ -136,6 +143,8 @@ export class SendspinOutput implements ZoneOutput {
   ) {
     this.clientId = config.clientId;
     this.options = { ignoreVolumeUpdates: true, ...options };
+    this.unwatchClient = this.ports.sendspinConnector.watchClient(this.clientId);
+    sendspinOutputsByZoneId.set(this.zoneId, this);
     this.ports.sendspinGroup.register(this.zoneId, this);
     this.hooksStop = this.ports.sendspinHooks.register(this.clientId, {
       onIdentified: (sendspinSession: SendspinSession) => {
@@ -143,6 +152,7 @@ export class SendspinOutput implements ZoneOutput {
         if (this.activeSession === sendspinSession) {
           return;
         }
+        this.ports.sendspinConnector.markInboundConnected(this.clientId);
         this.initialClientStateSkipped = false;
         this.lastClientStateSignature = null;
         this.lastLoggedClientState = null;
@@ -152,6 +162,10 @@ export class SendspinOutput implements ZoneOutput {
         this.clientState = null;
         this.externalSourceActive = false;
         this.negotiatedFormat = this.normalizeFormat(sendspinSession.getStreamFormat());
+        if (!this.isOwner()) {
+          // Avoid multiple zones fighting over the same Sendspin client.
+          return;
+        }
         // If there is an active audio session, reflect that state immediately.
         const audioSession = this.ports.audioManager.getSession(this.zoneId);
         if (audioSession?.state) {
@@ -182,6 +196,7 @@ export class SendspinOutput implements ZoneOutput {
         this.lastLoggedMuted = null;
         this.clientState = null;
         this.externalSourceActive = false;
+        this.ports.sendspinConnector.markInboundDisconnected(this.clientId);
         this.log.info('Sendspin client disconnected', { zoneId: this.zoneId, clientId: this.clientId });
       },
       onFormatChanged: (_session: SendspinSession, format: PlayerFormat) => {
@@ -224,7 +239,9 @@ export class SendspinOutput implements ZoneOutput {
       this.lastKnownVolume = vol;
       this.lastOutboundVolume = vol;
       this.lastOutboundVolumeAt = Date.now();
-      this.activeSession.sendServerCommand(PlayerCommand.VOLUME, { volume: vol });
+      if (this.isOwner()) {
+        this.activeSession.sendServerCommand(PlayerCommand.VOLUME, { volume: vol });
+      }
     } else {
       this.lastKnownVolume = vol;
     }
@@ -239,6 +256,8 @@ export class SendspinOutput implements ZoneOutput {
       this.log.warn('Sendspin output skipped; no playback source', { zoneId: this.zoneId });
       return;
     }
+    this.claimOwnership();
+    this.ports.sendspinConnector.requestPlaybackPriority(this.clientId);
     this.log.info('Sendspin play', {
       zoneId: this.zoneId,
       zoneName: this.zoneName,
@@ -481,8 +500,11 @@ export class SendspinOutput implements ZoneOutput {
       clientId: this.clientId,
     });
     this.teardown();
-    this.sendStopMetadata();
-    this.pushPlaybackState('stopped');
+    if (this.isOwner()) {
+      this.sendStopMetadata();
+      this.pushPlaybackState('stopped');
+      this.releaseOwnership();
+    }
   }
 
   public async updateMetadata(session: PlaybackSession | null): Promise<void> {
@@ -502,6 +524,13 @@ export class SendspinOutput implements ZoneOutput {
     }
     sendspinCore.clearLeadStats(this.clientId);
     this.ports.sendspinGroup.unregister(this.zoneId);
+    if (this.unwatchClient) {
+      this.unwatchClient();
+    }
+    if (this.isOwner()) {
+      this.releaseOwnership();
+    }
+    sendspinOutputsByZoneId.delete(this.zoneId);
   }
 
   private async startStream(
@@ -510,6 +539,9 @@ export class SendspinOutput implements ZoneOutput {
       formatOverride?: Partial<SendspinFormat>;
     } = {},
   ): Promise<void> {
+    if (!this.isOwner()) {
+      return;
+    }
     if (!this.clientConnected || !this.activeSession) {
       this.log.debug('Sendspin stream start skipped; client not connected yet', {
         zoneId: this.zoneId,
@@ -807,7 +839,8 @@ export class SendspinOutput implements ZoneOutput {
         if (token !== this.streamToken) {
           return;
         }
-        if (!this.firstFrameLogged) {
+        const canSendToClient = this.isOwner() && this.clientConnected && !this.externalSourceActive;
+        if (!this.firstFrameLogged && canSendToClient) {
           this.firstFrameLogged = true;
           const now = Date.now();
           this.log.info('Sendspin first audio frame sent', {
@@ -830,14 +863,16 @@ export class SendspinOutput implements ZoneOutput {
         const targetLeadUs = this.targetLeadUs;
         const lead = frameTsUs - serverNowUs();
         this.lastLeadUs = lead;
-        sendspinCore.setLeadStats(this.clientId, {
-          leadUs: lead,
-          targetLeadUs,
-          bufferedBytes: this.bufferedBytes,
-        });
+        if (canSendToClient) {
+          sendspinCore.setLeadStats(this.clientId, {
+            leadUs: lead,
+            targetLeadUs,
+            bufferedBytes: this.bufferedBytes,
+          });
+        }
 
         const frame = { data: frameData, timestampUs: frameTsUs };
-        if (!this.externalSourceActive) {
+        if (canSendToClient) {
           sendspinCore.sendPcmFrameToClient(this.clientId, frame);
         }
         this.ports.sendspinGroup.broadcastFrame(this.zoneId, frame);
@@ -1334,6 +1369,10 @@ export class SendspinOutput implements ZoneOutput {
     if (this.lastSentPlaybackState === state) {
       return;
     }
+    if (!this.isOwner()) {
+      this.lastSentPlaybackState = state;
+      return;
+    }
     const { groupId, groupName } = this.getGroupInfo();
     const mappedState =
       state === 'playing'
@@ -1344,6 +1383,33 @@ export class SendspinOutput implements ZoneOutput {
     sendspinCore.setClientPlaybackState(this.clientId, mappedState, groupId, groupName);
     this.ports.sendspinGroup.broadcastPlaybackState(this.zoneId, mappedState, groupId, groupName);
     this.lastSentPlaybackState = state;
+  }
+
+  private isOwner(): boolean {
+    return sendspinClientOwners.get(this.clientId) === this.zoneId;
+  }
+
+  private claimOwnership(): void {
+    const existing = sendspinClientOwners.get(this.clientId);
+    if (existing === this.zoneId) {
+      return;
+    }
+    if (typeof existing === 'number') {
+      const prev = sendspinOutputsByZoneId.get(existing);
+      // Best-effort: stop previous zone's stream to prevent racing commands.
+      try {
+        prev?.teardown({ preserveAnchor: false });
+      } catch {
+        /* ignore */
+      }
+    }
+    sendspinClientOwners.set(this.clientId, this.zoneId);
+  }
+
+  private releaseOwnership(): void {
+    if (sendspinClientOwners.get(this.clientId) === this.zoneId) {
+      sendspinClientOwners.delete(this.clientId);
+    }
   }
 
   private sendCurrentSnapshot(): void {

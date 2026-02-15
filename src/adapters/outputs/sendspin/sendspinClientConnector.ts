@@ -23,6 +23,7 @@ export class SendspinClientConnector {
   private readonly desiredReasons = new Map<string, 'discovery' | 'playback'>();
   private readonly activeSockets = new Map<string, WebSocket>();
   private readonly socketReason = new Map<string, ConnectionReason>();
+  private readonly socketClientId = new Map<string, string>();
   private readonly clientSocketUrl = new Map<string, string>();
   private readonly directEndpoints = new Map<string, string>();
   private readonly failures = new Map<string, { count: number; lastError: string | null; suppressedUntil: number | null }>();
@@ -30,6 +31,7 @@ export class SendspinClientConnector {
   private readonly retryTimers = new Map<string, NodeJS.Timeout>();
   private readonly knownServices = new Map<string, MdnsServiceRecord>();
   private readonly inboundClients = new Set<string>();
+  private readonly directPortFallbackTried = new Set<string>();
   private browser: MdnsBrowser | null = null;
   private serverRegistration: MdnsRegistration | null = null;
 
@@ -63,10 +65,8 @@ export class SendspinClientConnector {
     }
     this.maybeConnectDirect(normalized);
     this.retryKnownServices();
-    if (url) {
-      const socket = this.activeSockets.get(url);
-      socket?.close();
-    }
+    // Don't force-close existing sockets just to flip the "reason"; it can race with stream start
+    // and looks like a random disconnect in the client.
   }
 
   private unwatchClient(clientId: string): void {
@@ -159,6 +159,14 @@ export class SendspinClientConnector {
     }
     this.lastAttempts.set(endpoint.url, now);
 
+    if (endpoint.clientId) {
+      const existingUrl = this.clientSocketUrl.get(endpoint.clientId);
+      if (existingUrl && this.activeSockets.has(existingUrl) && existingUrl !== endpoint.url) {
+        // Already connected to this client id.
+        return;
+      }
+    }
+
     this.log.info('Sendspin dialing client', {
       url: endpoint.url,
       service: endpoint.serviceName,
@@ -198,18 +206,28 @@ export class SendspinClientConnector {
         return;
       }
       this.log.info('Sendspin client connected', { clientId, url: endpoint.url });
-      this.clientSocketUrl.set(clientId, endpoint.url);
-      // Upgrade reason if this was a playback-priority client but the endpoint used discovery.
-      const desiredReason = this.desiredReasons.get(clientId);
-      const socketReason = this.socketReason.get(endpoint.url);
-      if (desiredReason === 'playback' && socketReason !== ConnectionReason.PLAYBACK) {
-        ws.close();
+      this.socketClientId.set(endpoint.url, clientId);
+
+      // If we already had another socket for this clientId, close it in favor of the newest one.
+      const prior = this.clientSocketUrl.get(clientId);
+      if (prior && prior !== endpoint.url) {
+        this.activeSockets.get(prior)?.close();
       }
+      this.clientSocketUrl.set(clientId, endpoint.url);
+
+      // Do not disconnect solely to "upgrade" the connection reason.
     });
 
     ws.on('close', (_code, reasonBuf) => {
       this.activeSockets.delete(endpoint.url);
       this.socketReason.delete(endpoint.url);
+      const knownClientId = this.socketClientId.get(endpoint.url);
+      if (knownClientId) {
+        this.socketClientId.delete(endpoint.url);
+        if (this.clientSocketUrl.get(knownClientId) === endpoint.url) {
+          this.clientSocketUrl.delete(knownClientId);
+        }
+      }
       const reason = reasonBuf ? reasonBuf.toString() : '';
       const goodbyeReason = this.parseGoodbyeReason(reason);
       const shouldRetry =
@@ -223,7 +241,7 @@ export class SendspinClientConnector {
         url: endpoint.url,
         message: (err as Error).message,
       });
-      this.recordFailure(endpoint.url, (err as Error).message);
+      this.recordFailure(endpoint, (err as Error).message);
     });
   }
 
@@ -237,6 +255,14 @@ export class SendspinClientConnector {
     if (this.retryTimers.has(endpoint.url)) {
       return;
     }
+
+    // If a direct endpoint on 8927 is refusing connections, try the spec default 8928 once.
+    const fallback = this.maybeFallbackDirectPort(endpoint);
+    if (fallback) {
+      this.connect(fallback);
+      return;
+    }
+
     const delayMs = endpoint.reason === 'playback' ? 500 : 5_000;
     const failureMeta = this.failures.get(endpoint.url);
     const suppressedUntil = failureMeta?.suppressedUntil ?? null;
@@ -254,7 +280,8 @@ export class SendspinClientConnector {
     this.retryTimers.set(endpoint.url, timer);
   }
 
-  private recordFailure(url: string, message: string | null): void {
+  private recordFailure(endpoint: Endpoint, message: string | null): void {
+    const url = endpoint.url;
     const meta = this.failures.get(url) ?? { count: 0, lastError: null, suppressedUntil: null };
     const nextCount = (meta.count || 0) + 1;
     const normalizedMsg = message ? message.toLowerCase() : null;
@@ -287,7 +314,8 @@ export class SendspinClientConnector {
       return null;
     }
     const path = this.normalizePathFromTxt(service.txt);
-    const url = `ws://${address}:${service.port}${path}`;
+    const hostFmt = address.includes(':') ? `[${address}]` : address;
+    const url = `ws://${hostFmt}:${service.port}${path}`;
     return {
       url,
       serviceName: service.name,
@@ -319,7 +347,11 @@ export class SendspinClientConnector {
 
     if (!hasScheme) {
       const hostPort = trimmed.includes(':') ? trimmed : `${trimmed}:8927`;
-      url = `ws://${hostPort}/sendspin`;
+      const parts = hostPort.split(':');
+      const host = parts.slice(0, -1).join(':') || hostPort;
+      const port = parts.length > 1 ? parts[parts.length - 1] : '8927';
+      const hostFmt = host.includes(':') ? `[${host}]` : host;
+      url = `ws://${hostFmt}:${port}/sendspin`;
     }
 
     try {
@@ -417,5 +449,42 @@ export class SendspinClientConnector {
       return false;
     }
     return reason === 'another_server' || reason === 'shutdown' || reason === 'user_request';
+  }
+
+  private maybeFallbackDirectPort(endpoint: Endpoint): Endpoint | null {
+    if (!endpoint.clientId) {
+      return null;
+    }
+    if (endpoint.serviceName !== 'direct') {
+      return null;
+    }
+    const failure = this.failures.get(endpoint.url);
+    const msg = (failure?.lastError ?? '').toLowerCase();
+    if (!msg.includes('econnrefused')) {
+      return null;
+    }
+
+    // Only attempt the fallback once per client id.
+    const key = endpoint.clientId;
+    if (this.directPortFallbackTried.has(key)) {
+      return null;
+    }
+
+    // Convert ws://host:8927/sendspin -> ws://host:8928/sendspin
+    if (!endpoint.url.includes(':8927/')) {
+      return null;
+    }
+    const fallbackUrl = endpoint.url.replace(':8927/', ':8928/');
+    if (fallbackUrl === endpoint.url) {
+      return null;
+    }
+
+    this.directPortFallbackTried.add(key);
+    this.lastAttempts.delete(fallbackUrl);
+    return {
+      ...endpoint,
+      url: fallbackUrl,
+      serviceName: 'direct-fallback',
+    };
   }
 }

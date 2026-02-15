@@ -33,6 +33,7 @@ import type { CustomRadioStore } from '@/adapters/content/providers/customRadioS
 import type { AudioManager } from '@/application/playback/audioManager';
 import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
 import type { LmsCliServer } from '@/adapters/outputs/squeezelite/lmsCliServer';
+import type { MdnsPort } from '@/ports/MdnsPort';
 
 /**
  * Hosts the public HTTP gateway (admin UI, API stub, music streaming, Sendspin).
@@ -76,6 +77,7 @@ export class HttpService {
       contentManager: ContentManager;
       audioManager: AudioManager;
       squeezeliteCli: LmsCliServer;
+      mdnsPort: MdnsPort;
     },
   ) {
     this.adminApi = new AdminApiHandler({
@@ -96,6 +98,7 @@ export class HttpService {
       groupManager: options.groupManager,
       contentManager: options.contentManager,
       audioManager: options.audioManager,
+      mdnsPort: options.mdnsPort,
     });
     this.music = new MusicStreamingHandler(config.musicDir);
     this.staticFiles = new StaticFileHandler(config.publicDir);

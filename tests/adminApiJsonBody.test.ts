@@ -25,6 +25,7 @@ import { LoxoneWsNotifier } from '../src/adapters/loxone/ws/notifier';
 import { CustomRadioStore } from '../src/adapters/content/providers/customRadioStore';
 import { SpotifyServiceManagerProvider } from '../src/adapters/content/providers/spotifyServiceManager';
 import { SpotifyDeviceRegistry } from '../src/adapters/outputs/spotify/deviceRegistry';
+import type { MdnsPort } from '../src/ports/MdnsPort';
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const noopConfigPort: ConfigPort = {
@@ -63,6 +64,12 @@ const noopContentPort: ContentPort = {
   getServiceTrack: async () => null,
   getServiceFolder: async () => null,
   buildQueueForUri: async () => [],
+};
+
+const noopMdnsPort: MdnsPort = {
+  publish: () => ({ stop: () => {} }),
+  browse: () => ({ stop: () => {} }),
+  shutdown: () => {},
 };
 
 class FakeResponse extends EventEmitter {
@@ -154,6 +161,7 @@ function createHandler(): AdminApiHandler {
       customRadioStore,
     }),
     audioManager,
+    mdnsPort: noopMdnsPort,
   });
 }
 
