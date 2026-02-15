@@ -142,11 +142,16 @@ export function buildStartedPatch(args: {
     coverurl: meta.coverurl ?? ctx.state.coverurl,
     audiopath: meta.audiopath ?? ctx.state.audiopath,
     queueAuthority: ctx.queue.authority,
+    // Don't "max" against prior state: new tracks can be shorter than the previous one.
     duration:
-      typeof meta.duration === 'number' && meta.duration > 0
-        ? Math.max(ctx.state.duration ?? 0, Math.round(meta.duration))
-        : ctx.state.duration,
+      typeof meta.duration === 'number' && meta.duration > 0 ? Math.round(meta.duration) : ctx.state.duration,
   };
+  if (radioControllable) {
+    // Ensure radio-controllable sources (e.g. Radio Paradise) do not get treated as "radio state"
+    // by position listeners, which would otherwise force duration/time to zero.
+    basePatch.audiotype = AudioType.File;
+    basePatch.type = audioHelpers.getStateFileType();
+  }
   const activePatch = buildActiveItemPatch(ctx, audioHelpers);
   if (radioControllable) {
     delete (activePatch as any).title;
@@ -210,8 +215,11 @@ export function buildMetadataPatch(metadata: PlaybackMetadata): Partial<LoxoneZo
   if (typeof metadata.coverurl === 'string') {
     patch.coverurl = metadata.coverurl;
   }
+  if (typeof metadata.audiopath === 'string') {
+    patch.audiopath = metadata.audiopath;
+  }
   if (typeof metadata.duration === 'number' && metadata.duration > 0) {
-    patch.duration = Math.max(patch.duration ?? 0, Math.round(metadata.duration));
+    patch.duration = Math.round(metadata.duration);
   }
   return patch;
 }

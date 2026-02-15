@@ -150,8 +150,11 @@ function onPlayerPosition(
     }
     return;
   }
+  // For controllable radio (e.g. Radio Paradise), duration is owned by metadata updates.
+  // Timing updates may carry block/stream durations and should not override the current track duration.
+  const suppressDuration = ctx.metadata.radioControllable === true;
   const now = Date.now();
-  const safeDuration = Math.max(0, duration);
+  const safeDuration = suppressDuration ? 0 : Math.max(0, duration);
   const safeTime = Math.max(0, Math.min(time, safeDuration || Number.MAX_SAFE_INTEGER));
   const durationChanged =
     safeDuration > 0 &&
@@ -163,7 +166,11 @@ function onPlayerPosition(
   }
   ctx.lastPositionUpdateAt = now;
   ctx.lastPositionValue = safeTime;
-  coordinator.applyPatch(zoneId, buildPositionPatch({ time: safeTime, duration: safeDuration }));
+  if (suppressDuration) {
+    coordinator.applyPatch(zoneId, { time: safeTime });
+  } else {
+    coordinator.applyPatch(zoneId, buildPositionPatch({ time: safeTime, duration: safeDuration }));
+  }
   if (ctx.outputTimingActive && now - ctx.lastOutputTimingAt < 8000) {
     return;
   }

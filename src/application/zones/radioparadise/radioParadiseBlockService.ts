@@ -52,6 +52,8 @@ type RadioParadiseTrack = {
   year?: number;
   coverurl?: string;
   gaplessUrl?: string;
+  /** Elapsed seconds into the current song (now_playing API only). */
+  elapsedSec?: number;
 };
 
 type RadioParadiseBlock = {
@@ -74,6 +76,8 @@ type RadioParadiseSession = {
   nowPlayingUrl?: string;
   nowPlayingPending?: boolean;
   lastNowPlayingAt?: number;
+  blockProbePending?: boolean;
+  lastBlockProbeAt?: number;
   trackMode?: boolean;
   currentTrackIndex?: number;
 };
@@ -92,6 +96,7 @@ export class RadioParadiseBlockService {
   private readonly sessions = new Map<number, RadioParadiseSession>();
   private readonly pollIntervalMs = 5000;
   private readonly timeoutMs = 8000;
+  private readonly blockProbeIntervalMs = 30_000;
 
   constructor(
     private readonly deps: {
@@ -200,6 +205,10 @@ export class RadioParadiseBlockService {
     };
     this.sessions.set(zoneId, session);
     this.ensureTicker(zoneId);
+    if (track) {
+      // Best-effort: now_playing doesn't provide duration, but api/play often does.
+      void this.tryEnrichNowPlayingDuration(zoneId, session, track);
+    }
     return {
       url: blockFallback.url,
       startAtSec: 0,
@@ -465,9 +474,110 @@ export class RadioParadiseBlockService {
         duration: track.durationSec,
         controllable: true,
       });
+      void this.tryEnrichNowPlayingDuration(zoneId, session, track);
     } finally {
       session.nowPlayingPending = false;
     }
+  }
+
+  private async tryEnrichNowPlayingDuration(
+    zoneId: number,
+    session: RadioParadiseSession,
+    track: RadioParadiseTrack,
+  ): Promise<void> {
+    if (session.mode !== 'nowPlaying') return;
+    if (!track?.title || !track?.artist) return;
+    if (track.durationSec > 0) return;
+    if (session.blockProbePending) return;
+    const now = Date.now();
+    if (session.lastBlockProbeAt && now - session.lastBlockProbeAt < this.blockProbeIntervalMs) {
+      return;
+    }
+    session.blockProbePending = true;
+    session.lastBlockProbeAt = now;
+    try {
+      const elapsedSec =
+        typeof track.elapsedSec === 'number' && Number.isFinite(track.elapsedSec) && track.elapsedSec > 0
+          ? track.elapsedSec
+          : undefined;
+      const block = await this.fetchBlock(session.stationId, undefined, elapsedSec);
+      if (!block?.tracks?.length) return;
+      // Prefer cue-based selection; exact metadata matching is unreliable (punctuation/featuring/encoding).
+      const cueSec =
+        typeof block.cueSec === 'number' && Number.isFinite(block.cueSec) && block.cueSec >= 0
+          ? block.cueSec
+          : block.tracks[0]?.startSec ?? 0;
+      const cueTrack = this.trackAtTime(block, cueSec);
+      const cueMatches =
+        cueTrack &&
+        this.looseEquals(cueTrack.artist, track.artist) &&
+        this.looseEquals(cueTrack.title, track.title);
+      const match =
+        cueTrack && cueTrack.durationSec > 0 && cueMatches
+          ? cueTrack
+          : this.findTrackByArtistTitle(block.tracks, track.artist, track.title);
+      if (!match || !(match.durationSec > 0)) return;
+      // Update cached track/session and push metadata update with resolved duration.
+      track.durationSec = match.durationSec;
+      session.current.tracks = [track];
+      this.deps.updateRadioMetadata(zoneId, {
+        title: track.title,
+        artist: track.artist,
+        coverurl: track.coverurl,
+        duration: track.durationSec,
+        controllable: true,
+      });
+    } catch {
+      // ignore enrichment errors
+    } finally {
+      session.blockProbePending = false;
+    }
+  }
+
+  private findTrackByArtistTitle(
+    tracks: RadioParadiseTrack[],
+    artist: string,
+    title: string,
+  ): RadioParadiseTrack | null {
+    const a = this.normalizeLooseText(artist);
+    const t = this.normalizeLooseText(title);
+    if (!a || !t) return null;
+    for (const track of tracks) {
+      if (!track) continue;
+      if (this.normalizeLooseText(track.artist) === a && this.normalizeLooseText(track.title) === t) {
+        return track;
+      }
+    }
+    // Fuzzy fallback: substring match to tolerate "feat." / extra punctuation.
+    for (const track of tracks) {
+      if (!track) continue;
+      const ta = this.normalizeLooseText(track.artist);
+      const tt = this.normalizeLooseText(track.title);
+      if (!ta || !tt) continue;
+      if ((ta.includes(a) || a.includes(ta)) && (tt.includes(t) || t.includes(tt))) {
+        return track;
+      }
+    }
+    return null;
+  }
+
+  private looseEquals(a: string | undefined, b: string | undefined): boolean {
+    const na = this.normalizeLooseText(a);
+    const nb = this.normalizeLooseText(b);
+    return Boolean(na && nb && na === nb);
+  }
+
+  private normalizeLooseText(value: string | undefined): string {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return '';
+    // Normalize diacritics and common separators so now_playing and api/play can be compared.
+    const deaccented = raw.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+    return deaccented
+      .toLowerCase()
+      .replace(/&/g, ' and ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   private trackAtTime(block: RadioParadiseBlock, timeSec: number): RadioParadiseTrack | null {
@@ -644,6 +754,7 @@ export class RadioParadiseBlockService {
         return null;
       }
       const data = (await res.json()) as {
+        time?: number;
         artist?: string;
         title?: string;
         album?: string;
@@ -659,6 +770,8 @@ export class RadioParadiseBlockService {
       const year = Number(data?.year) || undefined;
       const coverCandidate = data?.cover ?? data?.cover_med ?? data?.cover_small ?? '';
       const coverurl = typeof coverCandidate === 'string' ? coverCandidate.trim() : '';
+      const elapsedRaw = typeof data?.time === 'number' && Number.isFinite(data.time) ? data.time : 0;
+      const elapsedSec = elapsedRaw > 0 ? Math.max(0, Math.round(elapsedRaw)) : undefined;
       return {
         startSec: 0,
         durationSec: 0,
@@ -667,6 +780,7 @@ export class RadioParadiseBlockService {
         album,
         year,
         coverurl: coverurl || undefined,
+        elapsedSec,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

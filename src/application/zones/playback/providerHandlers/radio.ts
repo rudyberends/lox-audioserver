@@ -27,12 +27,16 @@ export function handleRadioMetadataUpdate(args: {
   if (metadata.coverurl) {
     patch.coverurl = metadata.coverurl;
   }
-  if (typeof metadata.duration === 'number' && metadata.duration > 0) {
-    patch.duration = Math.round(metadata.duration);
-  }
   if (metadata.controllable === true) {
     patch.audiotype = AudioType.File;
     patch.type = FileType.File;
+  }
+  if (typeof metadata.duration === 'number' && metadata.duration > 0) {
+    patch.duration = Math.round(metadata.duration);
+  } else if (metadata.controllable === true || radioControllable) {
+    // For controllable radio sources (Radio Paradise), duration may be unavailable.
+    // Explicitly clear duration so we don't keep the previous track's duration.
+    patch.duration = 0;
   }
   const artist = metadata.artist ?? '';
   patch.artist = artist;

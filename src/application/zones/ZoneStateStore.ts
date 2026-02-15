@@ -136,17 +136,39 @@ export class ZoneStateStore {
     }
 
     const isStopping = patch.mode === 'stop';
-    const trackChanged =
-      typeof patch.audiopath === 'string' &&
-      patch.audiopath.trim().length > 0 &&
-      normalizeSpotifyAudiopath(patch.audiopath) !== normalizeSpotifyAudiopath(ctx.state.audiopath);
+    const patchAudiopath =
+      typeof patch.audiopath === 'string' && patch.audiopath.trim().length > 0 ? patch.audiopath : null;
+    const audiopathChanged =
+      patchAudiopath !== null &&
+      normalizeSpotifyAudiopath(patchAudiopath) !== normalizeSpotifyAudiopath(ctx.state.audiopath);
+    const qidChanged =
+      typeof patch.qid === 'string' && patch.qid.trim().length > 0 && patch.qid !== ctx.state.qid;
+    const titleChanged =
+      typeof patch.title === 'string' &&
+      patch.title.trim().length > 0 &&
+      patch.title.trim() !== (ctx.state.title ?? '').trim();
+    const artistChanged =
+      typeof patch.artist === 'string' &&
+      patch.artist.trim().length > 0 &&
+      patch.artist.trim() !== (ctx.state.artist ?? '').trim();
+    const albumChanged =
+      typeof patch.album === 'string' &&
+      patch.album.trim().length > 0 &&
+      patch.album.trim() !== (ctx.state.album ?? '').trim();
+    const trackChanged = audiopathChanged || qidChanged || titleChanged || artistChanged || albumChanged;
     // Prevent overwriting a valid duration with zero/invalid values.
     if ('duration' in patch) {
       const nextDuration = patch.duration;
       const currentDuration = ctx.state.duration;
       if (
         typeof nextDuration !== 'number' ||
-        (!isRadioState && !isLineInState && !isStopping && nextDuration <= 0)
+        (!isRadioState &&
+          !isLineInState &&
+          !isStopping &&
+          nextDuration <= 0 &&
+          // Allow clearing duration on track change for controllable radio sources (e.g. Radio Paradise),
+          // where the API may not provide duration for every "now playing" update.
+          !(ctx.metadata.radioControllable === true && trackChanged && nextDuration === 0))
       ) {
         delete (patch as any).duration;
       } else if (

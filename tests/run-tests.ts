@@ -16,6 +16,7 @@ import './queueAuthority.test';
 import './ytmusicNative.mock.test';
 import './localLibraryStore.search.test';
 import './zonePlayerEndGuard.test';
+import './durationRegression.test';
 import './runtimeShutdown.test';
 import './sourceResolver.test';
 import type { ZoneConfig } from '../src/domain/config/types';
