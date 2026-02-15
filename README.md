@@ -31,6 +31,9 @@ Each bridge maps **one external service to one virtual Spotify account**, allowi
 ### Available Bridge Providers
 
 - Apple Music
+- Deezer
+- Tidal
+- Youtube Music
 - Music Assistant
 
 ## Configuration
