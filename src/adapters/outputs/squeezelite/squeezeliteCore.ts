@@ -200,7 +200,13 @@ export class SqueezeliteCore {
       snapshot.clockAgeMs = Math.max(0, Date.now() - clock.updatedAtMs);
     }
 
-    const media = player.currentMedia;
+    // `currentMedia` is only promoted once the player reports a "start" stat event.
+    // Some clients may linger in BUFFERING/PLAYING before that promotion, which would
+    // leave stale metadata visible. Prefer buffering/next media when available.
+    const media =
+      player.currentMedia ??
+      ((player as any)._bufferingMedia as typeof player.currentMedia | undefined | null) ??
+      ((player as any)._nextMedia as typeof player.currentMedia | undefined | null);
     snapshot.url = media?.url ?? snapshot.url;
     snapshot.mimeType = media?.mimeType ?? snapshot.mimeType;
     snapshot.itemId = media?.metadata?.item_id ?? snapshot.itemId;

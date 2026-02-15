@@ -9,6 +9,8 @@ const musicRoot = path.resolve(resolveDataDir('music'));
 const alertsRoot = path.resolve(process.cwd(), 'public', 'alerts');
 const log = createLogger('Audio', 'SourceResolver');
 const MAX_ALERT_PRE_DELAY_MS = 10_000;
+const MAX_ALERT_PAD_TAIL_SEC = 30;
+const DEFAULT_ALERT_PAD_TAIL_SEC = 2;
 
 export function resolvePlaybackSource(audiopath: string): PlaybackSource | null {
   const decoded = decodeAudiopath(audiopath);
@@ -34,7 +36,12 @@ export function resolvePlaybackSource(audiopath: string): PlaybackSource | null 
       log.warn('failed to normalize alerts path', { audiopath: decoded });
       return null;
     }
-    return { kind: 'file', path: normalized, preDelayMs: parsed.preDelayMs, padTailSec: 0 };
+    return {
+      kind: 'file',
+      path: normalized,
+      preDelayMs: parsed.preDelayMs,
+      padTailSec: parsed.padTailSec ?? DEFAULT_ALERT_PAD_TAIL_SEC,
+    };
   }
 
   if (decoded.startsWith('alerts-loop://')) {
@@ -44,7 +51,14 @@ export function resolvePlaybackSource(audiopath: string): PlaybackSource | null 
       log.warn('failed to normalize alerts loop path', { audiopath: decoded });
       return null;
     }
-    return { kind: 'file', path: normalized, loop: true, preDelayMs: parsed.preDelayMs, padTailSec: 0 };
+    return {
+      kind: 'file',
+      path: normalized,
+      loop: true,
+      preDelayMs: parsed.preDelayMs,
+      // For looping alerts tail padding is unnecessary; the stream does not end by itself.
+      padTailSec: 0,
+    };
   }
 
   if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
@@ -103,7 +117,7 @@ function normalizeAlertsPath(input: string): string | null {
 function parseAlertSource(
   input: string,
   prefix: 'alerts://' | 'alerts-loop://',
-): { relativePath: string; preDelayMs: number } {
+): { relativePath: string; preDelayMs: number; padTailSec?: number } {
   const raw = input.slice(prefix.length);
   const queryIndex = raw.indexOf('?');
   if (queryIndex === -1) {
@@ -114,6 +128,7 @@ function parseAlertSource(
   return {
     relativePath,
     preDelayMs: parseAlertPreDelayMs(query),
+    padTailSec: parseAlertPadTailSec(query),
   };
 }
 
@@ -135,6 +150,30 @@ function parseAlertPreDelayMs(query: string): number {
     return 0;
   }
   return Math.min(MAX_ALERT_PRE_DELAY_MS, Math.max(0, Math.round(parsed)));
+}
+
+function parseAlertPadTailSec(query: string): number | undefined {
+  if (!query) {
+    return undefined;
+  }
+  const params = new URLSearchParams(query);
+  const raw =
+    params.get('padtail') ??
+    params.get('pad_tail') ??
+    params.get('padTailSec') ??
+    params.get('pad_tail_sec') ??
+    params.get('tail') ??
+    params.get('tails') ??
+    params.get('pad');
+  if (!raw?.trim()) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  const rounded = Math.round(parsed);
+  return Math.min(MAX_ALERT_PAD_TAIL_SEC, Math.max(0, rounded));
 }
 
 function safeDecode(value: string): string {

@@ -859,6 +859,9 @@ export class AudioManager {
   ): void {
     const session = this.sessions.get(zoneId);
     if (!session) return;
+    const exitCode = stats?.lastExitCode;
+    const exitSignal = stats?.lastExitSignal;
+    const stderr = stats?.lastStderr?.trim();
     const duration = session.duration ?? session.metadata?.duration ?? 0;
     const elapsedFromClock = session.startedAt
       ? Math.round(Math.max(0, Date.now() - session.startedAt) / 1000)
@@ -878,10 +881,25 @@ export class AudioManager {
       return;
     }
     this.sessions.delete(zoneId);
-    this.log.warn('playback session terminated by engine', {
-      zoneId,
-      source: session.source,
-    });
+    const cleanExit = (exitCode === 0 || exitCode === null) && !exitSignal && !stderr;
+    const isFiniteFile = session.playbackSource?.kind === 'file' && !session.metadata?.isRadio;
+    if (!reason && cleanExit && (shouldEmitEnded || isFiniteFile)) {
+      this.log.info('playback ended', {
+        zoneId,
+        source: session.source,
+        duration,
+        elapsed: observedElapsed,
+      });
+    } else {
+      this.log.warn('playback session terminated by engine', {
+        zoneId,
+        source: session.source,
+        reason,
+        exitCode,
+        exitSignal,
+        stderr,
+      });
+    }
     if (shouldEmitEnded) {
       this.outputNotifier.notifyOutputState(zoneId, {
         status: 'stopped',
@@ -899,9 +917,6 @@ export class AudioManager {
       return;
     }
     if (session.state === 'playing') {
-      const exitCode = stats?.lastExitCode;
-      const exitSignal = stats?.lastExitSignal;
-      const stderr = stats?.lastStderr?.trim();
       if (exitCode !== 0 || exitSignal || stderr) {
         const detail =
           stderr ||

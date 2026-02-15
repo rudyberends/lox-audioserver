@@ -34,3 +34,13 @@ test('source resolver applies pre-delay for looping alert sources', () => {
   assert.equal(source.loop, true);
   assert.equal(source.preDelayMs, 500);
 });
+
+test('source resolver parses alert pad tail seconds for alerts files', () => {
+  const source = resolvePlaybackSource('alerts://cache/tts-demo.mp3?padTailSec=6');
+  assert.ok(source);
+  assert.equal(source?.kind, 'file');
+  if (!source || source.kind !== 'file') {
+    return;
+  }
+  assert.equal(source.padTailSec, 6);
+});

@@ -437,7 +437,11 @@ export class AudioSession {
       this.lastExitAt = Date.now();
       const runMs =
         this.startTs != null && this.lastExitAt != null ? this.lastExitAt - this.startTs : null;
-      const earlyExit = runMs !== null && (runMs < 1000 || this.totalBytes < 200 * 1024);
+      // Treat very short runs as suspicious, but don't flag short finite files (e.g. alert MP3s)
+      // just because they naturally produce <200KB of output.
+      const smallOutputIsSuspicious =
+        this.source.kind !== 'file' && this.totalBytes < 200 * 1024;
+      const earlyExit = runMs !== null && (runMs < 1000 || smallOutputIsSuspicious);
       this.lastExitCode = typeof code === 'number' ? code : null;
       this.lastExitSignal = signal ?? null;
       this.log.info('ffmpeg exited', {

@@ -10,7 +10,13 @@ import { PlaybackCoordinator } from '@/application/zones/PlaybackCoordinator';
 import { ZoneRepository } from '@/application/zones/ZoneRepository';
 
 const MIN_ALERT_DURATION_MS = 20000;
+// Keep alerts playing long enough for slower outputs to actually become audible.
+// This is a safety net; we also try to reduce output buffering for alerts where possible.
+const MIN_ALERT_AUDIBLE_MS = 2500;
 const ALERT_STOP_MARGIN_MS = 750;
+const SHORT_ALERT_SEC = 6;
+const GOOGLECAST_SHORT_ALERT_PAD_TAIL_SEC = 8;
+const SQUEEZELITE_SHORT_ALERT_PAD_TAIL_SEC = 4;
 
 type AlertsCoordinatorDeps = {
   zones: ZoneRepository;
@@ -59,36 +65,55 @@ export class AlertsCoordinator {
       !media.loop && typeof media.duration === 'number' && media.duration > 0
         ? Math.round(media.duration * 1000)
         : undefined;
-    const durationMs = media.loop
-      ? undefined
-      : rawDurationMs !== undefined
-        ? Math.max(rawDurationMs + ALERT_STOP_MARGIN_MS, 0)
-        : MIN_ALERT_DURATION_MS;
-    const playUrl = media.url;
-    const title = media.title ?? type;
+	    const reportedDurationSec =
+	      !media.loop && typeof media.duration === 'number' && media.duration > 0
+	        ? Math.max(0, Math.round(media.duration))
+	        : undefined;
+	    const padTailSec =
+	      /tts/i.test(type) &&
+	      !media.loop &&
+	      typeof media.duration === 'number' &&
+	      media.duration > 0 &&
+	      media.duration <= SHORT_ALERT_SEC
+	        ? this.hasCastOutput(ctx)
+	          ? GOOGLECAST_SHORT_ALERT_PAD_TAIL_SEC
+	          : this.hasOutputType(ctx, 'squeezelite')
+	            ? SQUEEZELITE_SHORT_ALERT_PAD_TAIL_SEC
+	            : 0
+	        : 0;
+	    const durationMs = media.loop
+	      ? undefined
+	      : rawDurationMs !== undefined
+	        ? Math.max(rawDurationMs + ALERT_STOP_MARGIN_MS + padTailSec * 1000, MIN_ALERT_AUDIBLE_MS, 0)
+	        : MIN_ALERT_DURATION_MS;
+	    const playUrl = padTailSec > 0 ? appendAlertPadTail(media.url, padTailSec) : media.url;
+	    const title = media.title ?? type;
 
-    ctx.alert = {
-      type,
-      title,
-      url: playUrl,
-      durationMs,
-      snapshot,
-    };
+	    ctx.alert = {
+	      type,
+	      title,
+	      url: playUrl,
+	      reportedDurationSec,
+	      durationMs,
+	      snapshot,
+	    };
 
     this.playbackCoordinator.setInputMode(ctx, 'alert');
 
     const clampedVolume = clampVolumeForZone(ctx.config, volume);
     ctx.player.setVolume(clampedVolume);
 
-    const metadata: PlaybackMetadata = {
-      title,
-      artist: '',
-      album: '',
-      coverurl: '',
-      duration: durationMs ? Math.round(durationMs / 1000) : media.duration,
-      audiopath: playUrl,
-      station: '',
-    };
+	    const metadata: PlaybackMetadata = {
+	      title,
+	      artist: '',
+	      album: '',
+	      coverurl: '',
+	      // Use a longer internal duration so outputs have time to start and render the alert.
+	      // Loxone-facing duration is overridden separately via `reportedDurationSec`.
+	      duration: durationMs ? Math.round(durationMs / 1000) : reportedDurationSec ?? media.duration,
+	      audiopath: playUrl,
+	      station: '',
+	    };
 
     const session = ctx.player.playUri(playUrl, metadata);
     if (!session) {
@@ -104,21 +129,31 @@ export class AlertsCoordinator {
       }, clampedMs);
     }
 
-    this.applyPatch(zoneId, {
-      title,
-      artist: '',
-      album: '',
-      coverurl: '',
-      audiopath: media.url,
-      station: '',
-      mode: 'play',
-      clientState: 'on',
-      power: 'on',
+	    this.applyPatch(zoneId, {
+	      title,
+	      artist: '',
+	      album: '',
+	      coverurl: '',
+	      audiopath: playUrl,
+	      station: '',
+	      mode: 'play',
+	      clientState: 'on',
+	      power: 'on',
       audiotype: AudioType.File,
       type: this.audioHelpers.resolveAlertEventType(type),
       sourceName: ctx.name,
     });
-  }
+	  }
+
+		  private hasOutputType(ctx: ZoneContext, type: string): boolean {
+		    return (ctx.outputs ?? []).some((output) => output.type === type);
+		  }
+
+      private hasCastOutput(ctx: ZoneContext): boolean {
+        return (ctx.outputs ?? []).some(
+          (output) => output.type === 'googleCast' || output.type.endsWith('-cast'),
+        );
+      }
 
   public async stopAlert(zoneId: number): Promise<void> {
     const ctx = this.zoneRepo.get(zoneId);
@@ -215,6 +250,8 @@ export class AlertsCoordinator {
         coverurl: ctx.state.coverurl,
         audiopath: ctx.state.audiopath,
         station: ctx.state.station,
+        time: ctx.state.time,
+        duration: ctx.state.duration,
         qindex: ctx.state.qindex,
         qid: ctx.state.qid,
         audiotype: ctx.state.audiotype,
@@ -255,4 +292,15 @@ export class AlertsCoordinator {
       setTimeout(tick, 50);
     });
   }
+}
+
+function appendAlertPadTail(url: string, padTailSec: number): string {
+  if (!/^alerts(?:-loop)?:\/\//i.test(url)) {
+    return url;
+  }
+  const [base, rawQuery = ''] = url.split('?', 2);
+  const params = new URLSearchParams(rawQuery);
+  params.set('padTailSec', String(Math.max(0, Math.round(padTailSec))));
+  const query = params.toString();
+  return query ? `${base}?${query}` : base;
 }

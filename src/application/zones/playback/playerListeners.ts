@@ -153,8 +153,14 @@ function onPlayerPosition(
   // For controllable radio (e.g. Radio Paradise), duration is owned by metadata updates.
   // Timing updates may carry block/stream durations and should not override the current track duration.
   const suppressDuration = ctx.metadata.radioControllable === true;
+  const alertDurationOverride =
+    ctx.alert && typeof ctx.alert.reportedDurationSec === 'number' && ctx.alert.reportedDurationSec > 0
+      ? Math.round(ctx.alert.reportedDurationSec)
+      : null;
   const now = Date.now();
-  const safeDuration = suppressDuration ? 0 : Math.max(0, duration);
+  const safeDuration = suppressDuration
+    ? 0
+    : Math.max(0, alertDurationOverride ?? duration);
   const safeTime = Math.max(0, Math.min(time, safeDuration || Number.MAX_SAFE_INTEGER));
   const durationChanged =
     safeDuration > 0 &&

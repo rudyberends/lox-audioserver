@@ -42,6 +42,11 @@ export interface ActiveAlertState {
   type: string;
   title: string;
   url: string;
+  /**
+   * Duration (seconds) to expose to Loxone clients for progress/UI.
+   * This is intentionally separate from `durationMs`, which may include stop margins.
+   */
+  reportedDurationSec?: number;
   durationMs?: number;
   stopTimer?: NodeJS.Timeout;
   snapshot: AlertSnapshot;

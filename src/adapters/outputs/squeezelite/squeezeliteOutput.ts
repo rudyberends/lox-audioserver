@@ -130,10 +130,6 @@ export class SqueezeliteOutput implements ZoneOutput {
     }
 
     const shouldAutostart = !groupInfo.grouped || groupInfo.expectedCount <= 1;
-    if (shouldAutostart) {
-      this.pendingAutostart = true;
-      this.scheduleAutostartFallback(player);
-    }
     const meta = this.buildMetadata(session, streamUrl);
     const mime = resolveMimeType(streamUrl);
     await player.playUrl(
@@ -143,11 +139,11 @@ export class SqueezeliteOutput implements ZoneOutput {
       undefined,
       0,
       false,
-      false,
+      // For non-sync playback, allow the player to autostart as soon as it has enough buffer.
+      // This avoids relying on clock/jiffies being initialized (which can be missing right after a server restart).
+      shouldAutostart,
+      true,
     );
-    if (shouldAutostart && player.state === PlayerState.BUFFER_READY) {
-      this.triggerAutostart(player, 'immediate');
-    }
   }
 
   public async pause(_session: PlaybackSession | null): Promise<void> {
@@ -495,7 +491,9 @@ export class SqueezeliteOutput implements ZoneOutput {
     }
     const headroomMs =
       Date.now() < this.joinAutostartActiveUntilMs ? this.joinAutostartHeadroomMs : this.baseAutostartHeadroomMs;
-    const targetJiffies = (player.jiffies || 0) + headroomMs;
+    // If jiffies aren't initialized yet (common right after restart), schedule an immediate unpause.
+    // Some players ignore "unpauseAt" timestamps that don't align with their local clock.
+    const targetJiffies = player.jiffies && player.jiffies > 0 ? player.jiffies + headroomMs : 0;
     void player.unpauseAt(targetJiffies).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       this.log.debug('squeezelite autostart failed', {
@@ -557,6 +555,14 @@ export class SqueezeliteOutput implements ZoneOutput {
       const syncId = `${groupInfo.leaderZoneId}-${session.stream?.id ?? 'current'}`;
       result = ensureQueryParam(result, 'sync', syncId);
       result = ensureQueryParam(result, 'expect', String(groupInfo.expectedCount));
+    }
+    // Alerts are often very short (especially TTS). Squeezelite can require a sizable buffer before it becomes
+    // audible, particularly right after a server restart. Route alerts through the sync-stream handler with
+    // `expect=1` so node-slimproto uses lower buffering thresholds (64KB vs 200KB).
+    if (!groupInfo?.grouped && (session.metadata?.audiopath ?? '').startsWith('alerts://')) {
+      const syncId = `alert-${session.stream?.id ?? `${this.zoneId}-current`}`;
+      result = ensureQueryParam(result, 'sync', syncId);
+      result = ensureQueryParam(result, 'expect', '1');
     }
     return result;
   }

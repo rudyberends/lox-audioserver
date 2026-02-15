@@ -81,6 +81,10 @@ export function buildActiveItemPatch(
   audioHelpers: ZoneAudioHelpers,
 ): Partial<LoxoneZoneState> {
   if (ctx.alert) {
+    const reportedDuration =
+      typeof ctx.alert.reportedDurationSec === 'number' && ctx.alert.reportedDurationSec > 0
+        ? Math.round(ctx.alert.reportedDurationSec)
+        : undefined;
     return {
       title: ctx.alert.title,
       artist: '',
@@ -91,6 +95,7 @@ export function buildActiveItemPatch(
       qindex: ctx.alert.snapshot.queue.currentIndex,
       qid: `alert-${ctx.id}`,
       audiotype: AudioType.File,
+      ...(reportedDuration ? { duration: reportedDuration } : {}),
       type: audioHelpers.resolveAlertEventType(ctx.alert.type),
       sourceName: ctx.name,
     };
@@ -132,10 +137,13 @@ export function buildStartedPatch(args: {
   const { ctx, session, audioHelpers } = args;
   const meta = session?.metadata ?? ({} as PlaybackMetadata);
   const radioControllable = ctx.metadata.radioControllable === true;
+  const startTime = typeof session?.elapsed === 'number' && session.elapsed > 0 ? session.elapsed : 0;
   const basePatch: Partial<LoxoneZoneState> = {
     mode: 'play',
     clientState: 'on',
     power: 'on',
+    // Avoid carrying over stale timing when a new session starts (e.g. alerts over paused content).
+    time: startTime,
     title: sanitizeTitle(meta.title, fallbackTitle(ctx.state.title, ctx.name)),
     artist: meta.artist ?? ctx.state.artist,
     album: meta.album ?? ctx.state.album,
