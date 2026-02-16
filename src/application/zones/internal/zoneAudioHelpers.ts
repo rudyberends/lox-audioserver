@@ -2,26 +2,10 @@ import type { QueueItem, ZoneContext } from '@/application/zones/internal/zoneTy
 import { normalizeSpotifyAudiopath, parseSpotifyUser } from '@/application/zones/helpers/queueHelpers';
 import { AudioEventType, AudioType, FileType } from '@/domain/loxone/enums';
 import { decodeAudiopath, detectServiceFromAudiopath, encodeAudiopath } from '@/domain/loxone/audiopath';
+import { RADIO_PARADISE_LABELS as RADIO_PARADISE_ID_LABELS, RADIO_PARADISE_PATH_LABELS } from '@/domain/radioparadise/stations';
 import { getMusicAssistantProviderId, getMusicAssistantUserId } from '@/application/zones/internal/musicAssistantProvider';
 import type { ContentPort } from '@/ports/ContentPort';
 import type { ConfigPort } from '@/ports/ConfigPort';
-
-const RADIO_PARADISE_PATH_LABELS = new Map<string, string>([
-  ['/flac', 'Radio Paradise - Main Mix'],
-  ['/mellow-flac', 'Radio Paradise - Mellow Mix'],
-  ['/rock-flac', 'Radio Paradise - Rock Mix'],
-  ['/global-flac', 'Radio Paradise - Global'],
-  ['/beyond-flac', 'Radio Paradise - Beyond'],
-  ['/serenity', 'Radio Paradise - Serenity'],
-]);
-const RADIO_PARADISE_ID_LABELS = new Map<string, string>([
-  ['0', 'Radio Paradise - Main Mix'],
-  ['1', 'Radio Paradise - Mellow Mix'],
-  ['2', 'Radio Paradise - Rock Mix'],
-  ['3', 'Radio Paradise - Global'],
-  ['4', 'Radio Paradise - Beyond'],
-  ['5', 'Radio Paradise - Serenity'],
-]);
 
 export type ZoneAudioHelpers = {
   isSpotifyAudiopath: (audiopath: string | null | undefined) => boolean;

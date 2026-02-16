@@ -40,6 +40,7 @@ export function updateOutputState(args: {
     typeof state.position === 'number' &&
     typeof state.duration === 'number' &&
     state.duration > 0 &&
+    ctx.metadata.radioControllable !== true &&
     ctx.player.getState().mode === 'playing'
   ) {
     const position = Math.round(state.position);
@@ -71,7 +72,7 @@ export function updateOutputState(args: {
       Object.assign(patch, buildMatchedOutputUriPatch(ctx, current, matchedIndex, coordinator.audioHelpers));
     }
   }
-  if (typeof state.duration === 'number' && state.duration > 0) {
+  if (ctx.metadata.radioControllable !== true && typeof state.duration === 'number' && state.duration > 0) {
     patch.duration = Math.round(state.duration);
   }
   // Ignore output-provided position ticks; the player already drives timing,

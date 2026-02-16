@@ -786,7 +786,7 @@ export class PlaybackCoordinator {
         artist: resolved.track?.artist ?? base.artist ?? '',
         album: resolved.track?.album ?? base.album ?? '',
         coverurl: resolved.track?.coverurl ?? base.coverurl ?? '',
-        duration: resolved.blockDurationSec || base.duration,
+        duration: resolved.track?.durationSec ?? base.duration,
         station: base.station ?? resolved.stationLabel,
         audiopath,
       };
@@ -1355,7 +1355,7 @@ export class PlaybackCoordinator {
           title: resolved.track.title,
           artist: resolved.track.artist,
           coverurl: resolved.track.coverurl,
-          duration: resolved.track.durationSec ?? resolved.blockDurationSec,
+          duration: resolved.track.durationSec,
           controllable: true,
         });
       }
@@ -1392,7 +1392,7 @@ export class PlaybackCoordinator {
         title: resolved.track.title,
         artist: resolved.track.artist,
         coverurl: resolved.track.coverurl,
-        duration: resolved.track.durationSec ?? resolved.blockDurationSec,
+        duration: resolved.track.durationSec,
         controllable: true,
       });
     }
@@ -1418,7 +1418,7 @@ export class PlaybackCoordinator {
       artist: track?.artist ?? base.artist,
       album: track?.album ?? base.album,
       coverurl: track?.coverurl,
-      duration: (track?.durationSec ?? resolved.blockDurationSec) || base.duration,
+      duration: track?.durationSec ?? base.duration,
       station: resolved.stationLabel,
       audiopath,
     };

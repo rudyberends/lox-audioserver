@@ -808,6 +808,37 @@ test('output URI mismatch is ignored before first audio chunk for local queue', 
   assert.equal(patches[1]?.patch.qid, 'id-2');
 });
 
+test('output stopped near end does not force end timing for controllable radio', () => {
+  const { coordinator, ctx } = createHarness();
+  const player = ctx.player as unknown as FakePlayer;
+  player.state.mode = 'playing';
+  ctx.metadata.radioControllable = true;
+
+  coordinator.updateOutputState(ctx.id, {
+    status: 'stopped',
+    position: 179.2,
+    duration: 180,
+  });
+
+  assert.equal(player.endGuardMs, 0);
+  assert.deepEqual(player.timing, { elapsed: 0, duration: 0 });
+});
+
+test('output playing duration is ignored for controllable radio', () => {
+  const { coordinator, ctx, patches } = createHarness();
+  ctx.metadata.radioControllable = true;
+  ctx.state.duration = 0;
+
+  coordinator.updateOutputState(ctx.id, {
+    status: 'playing',
+    duration: 3114,
+  });
+
+  assert.equal(patches.length, 1);
+  assert.equal((patches[0]?.patch as any).mode, 'play');
+  assert.equal(Object.prototype.hasOwnProperty.call(patches[0]?.patch ?? {}, 'duration'), false);
+});
+
 test('stop command for music assistant stops output and session', () => {
   const { coordinator, ctx, inputsPort, outputRouter } = createHarness();
   ctx.inputMode = 'musicassistant';

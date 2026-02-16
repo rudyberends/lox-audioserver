@@ -1,47 +1,13 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { RADIO_PARADISE_LABELS, RADIO_PARADISE_STREAMS } from '@/domain/radioparadise/stations';
 
 const API_PLAY_URL = 'https://api.radioparadise.com/api/play';
 const COVER_BASE_URL = 'https://img.radioparadise.com/';
 const DEFAULT_BITRATE = 4; // FLAC
 const NOW_PLAYING_INTERVAL_MS = 10000;
 const URL_PROBE_TIMEOUT_MS = 1500;
-
-const RADIO_PARADISE_LABELS = new Map<string, string>([
-  ['0', 'Radio Paradise - Main Mix'],
-  ['1', 'Radio Paradise - Mellow Mix'],
-  ['2', 'Radio Paradise - Rock Mix'],
-  ['3', 'Radio Paradise - Global'],
-  ['4', 'Radio Paradise - Beyond'],
-  ['5', 'Radio Paradise - Serenity'],
-]);
-const RADIO_PARADISE_STREAMS = new Map<string, { streamUrl: string; nowPlayingUrl: string }>([
-  ['0', {
-    streamUrl: 'https://stream.radioparadise.com/flac',
-    nowPlayingUrl: 'https://api.radioparadise.com/api/now_playing',
-  }],
-  ['1', {
-    streamUrl: 'https://stream.radioparadise.com/mellow-flac',
-    nowPlayingUrl: 'https://api.radioparadise.com/api/now_playing?chan=1',
-  }],
-  ['2', {
-    streamUrl: 'https://stream.radioparadise.com/rock-flac',
-    nowPlayingUrl: 'https://api.radioparadise.com/api/now_playing?chan=2',
-  }],
-  ['3', {
-    streamUrl: 'https://stream.radioparadise.com/global-flac',
-    nowPlayingUrl: 'https://api.radioparadise.com/api/now_playing?chan=3',
-  }],
-  ['4', {
-    streamUrl: 'https://stream.radioparadise.com/beyond-flac',
-    nowPlayingUrl: 'https://api.radioparadise.com/api/now_playing?chan=4',
-  }],
-  ['5', {
-    streamUrl: 'https://stream.radioparadise.com/serenity',
-    nowPlayingUrl: 'https://api.radioparadise.com/api/now_playing?chan=5',
-  }],
-]);
 
 type RadioParadiseTrack = {
   startSec: number;
@@ -62,6 +28,7 @@ type RadioParadiseBlock = {
   endEvent?: string;
   eventId?: string;
   cueSec?: number;
+  expiresAtMs?: number;
   tracks: RadioParadiseTrack[];
 };
 
@@ -299,7 +266,8 @@ export class RadioParadiseBlockService {
     }
 
     if (nextIndex >= block.tracks.length) {
-      const nextBlock = session.next ?? (await this.fetchBlock(session.stationId, block.endEvent));
+      const nextBlock =
+        this.takeFreshPrefetchedNext(session) ?? (await this.fetchBlock(session.stationId, block.endEvent));
       if (!nextBlock) {
         return null;
       }
@@ -353,7 +321,8 @@ export class RadioParadiseBlockService {
       }
     }
 
-    const nextBlock = session.next ?? (await this.fetchBlock(session.stationId, session.current.endEvent));
+    const nextBlock =
+      this.takeFreshPrefetchedNext(session) ?? (await this.fetchBlock(session.stationId, session.current.endEvent));
     if (!nextBlock) return null;
 
     session.previous = session.current;
@@ -640,7 +609,8 @@ export class RadioParadiseBlockService {
       if (res.status >= 500) return false;
       return true;
     } catch {
-      return false;
+      // Network/timeout errors are often transient; keep playback optimistic.
+      return true;
     } finally {
       clearTimeout(timeout);
     }
@@ -653,6 +623,7 @@ export class RadioParadiseBlockService {
     if (!currentSession || currentSession !== session) return;
     const next = await this.fetchBlock(session.stationId, session.current.endEvent);
     if (!next) return;
+    if (this.isBlockExpired(next)) return;
     const latest = this.sessions.get(zoneId);
     if (!latest || latest !== session) return;
     session.next = next;
@@ -705,6 +676,8 @@ export class RadioParadiseBlockService {
         end_event?: string;
         event?: string;
         cue?: number;
+        expiration?: number;
+        image_base?: string;
         song?: unknown;
       };
       const rawUrl = typeof data?.url === 'string' ? data.url : '';
@@ -713,15 +686,18 @@ export class RadioParadiseBlockService {
       const lengthSec = lengthRaw > 10000 ? lengthRaw / 1000 : lengthRaw;
       const endEvent = typeof data?.end_event === 'string' ? data.end_event : undefined;
       const event = typeof data?.event === 'string' ? data.event : undefined;
+      const expiresAtMs = this.parseExpiration(data?.expiration);
+      const imageBase = this.normalizeImageBase(data?.image_base);
       const cueRaw = Number(data?.cue ?? 0) || 0;
       const cueSec = cueRaw > 10000 ? cueRaw / 1000 : cueRaw;
-      const tracks = this.parseTracks(data?.song, lengthSec);
+      const tracks = this.parseTracks(data?.song, lengthSec, imageBase);
       return {
         url: this.appendSrc(rawUrl),
         lengthSec: lengthSec > 0 ? lengthSec : this.deriveBlockLength(tracks),
         endEvent,
         eventId: event,
         cueSec: cueSec >= 0 ? cueSec : undefined,
+        expiresAtMs,
         tracks,
       };
     } catch (error) {
@@ -769,7 +745,8 @@ export class RadioParadiseBlockService {
       const album = typeof data?.album === 'string' ? data.album.trim() : '';
       const year = Number(data?.year) || undefined;
       const coverCandidate = data?.cover ?? data?.cover_med ?? data?.cover_small ?? '';
-      const coverurl = typeof coverCandidate === 'string' ? coverCandidate.trim() : '';
+      const coverRaw = typeof coverCandidate === 'string' ? coverCandidate.trim() : '';
+      const coverurl = coverRaw ? (coverRaw.startsWith('http') ? coverRaw : `${COVER_BASE_URL}${coverRaw}`) : '';
       const elapsedRaw = typeof data?.time === 'number' && Number.isFinite(data.time) ? data.time : 0;
       const elapsedSec = elapsedRaw > 0 ? Math.max(0, Math.round(elapsedRaw)) : undefined;
       return {
@@ -811,7 +788,7 @@ export class RadioParadiseBlockService {
     return null;
   }
 
-  private parseTracks(payload: unknown, fallbackLengthSec: number): RadioParadiseTrack[] {
+  private parseTracks(payload: unknown, fallbackLengthSec: number, coverBaseUrl?: string): RadioParadiseTrack[] {
     const list = Array.isArray(payload)
       ? payload
       : payload && typeof payload === 'object'
@@ -838,8 +815,7 @@ export class RadioParadiseBlockService {
           : undefined;
         let coverurl = '';
         if (typeof item?.cover === 'string' && item.cover.trim()) {
-          const cover = item.cover.trim();
-          coverurl = cover.startsWith('http') ? cover : `${COVER_BASE_URL}${cover}`;
+          coverurl = this.resolveCoverUrl(item.cover, coverBaseUrl);
         }
         if (!artist && !title) {
           return null;
@@ -876,5 +852,46 @@ export class RadioParadiseBlockService {
     if (!tracks.length) return 0;
     const last = tracks[tracks.length - 1];
     return Math.max(0, last.startSec + (last.durationSec || 0));
+  }
+
+  private takeFreshPrefetchedNext(session: RadioParadiseSession): RadioParadiseBlock | undefined {
+    const next = session.next;
+    if (!next) return undefined;
+    if (this.isBlockExpired(next)) {
+      session.next = undefined;
+      return undefined;
+    }
+    return next;
+  }
+
+  private isBlockExpired(block: RadioParadiseBlock): boolean {
+    if (!block.expiresAtMs) return false;
+    const skewMs = 5_000;
+    return Date.now() + skewMs >= block.expiresAtMs;
+  }
+
+  private parseExpiration(value: unknown): number | undefined {
+    const raw = Number(value);
+    if (!Number.isFinite(raw) || raw <= 0) return undefined;
+    return raw > 1_000_000_000_000 ? Math.floor(raw) : Math.floor(raw * 1000);
+  }
+
+  private normalizeImageBase(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const withScheme = trimmed.startsWith('//') ? `https:${trimmed}` : trimmed;
+    return withScheme.endsWith('/') ? withScheme : `${withScheme}/`;
+  }
+
+  private resolveCoverUrl(rawCover: unknown, imageBaseUrl?: string): string {
+    if (typeof rawCover !== 'string') return '';
+    const trimmed = rawCover.trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('http')) return trimmed;
+    const base = imageBaseUrl || COVER_BASE_URL;
+    const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+    const normalizedPath = trimmed.startsWith('/') ? trimmed.slice(1) : trimmed;
+    return `${normalizedBase}${normalizedPath}`;
   }
 }
