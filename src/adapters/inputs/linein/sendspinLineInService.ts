@@ -232,7 +232,9 @@ export class SendspinLineInService {
     if (!session) {
       return null;
     }
-    const format = this.resolveFormat(session.getSourceSupport());
+    const format = this.resolveFormat(session.getSourceSupport() as unknown as {
+      supported_formats?: Array<{ codec?: string; sample_rate: number; channels: number; bit_depth: number }>;
+    } | null);
     const stream = new PassThrough({ highWaterMark: 1024 * 64 });
     this.registry.start(inputId, stream, { format: format ?? undefined });
     const active: ActiveSource = { inputId, stream, format: format ?? undefined };
@@ -285,8 +287,14 @@ export class SendspinLineInService {
       this.log.debug('sendspin line-in source settings skipped; command missing', { clientId, inputId });
       return false;
     }
-    this.log.debug('sendspin line-in source settings', { clientId, inputId, command, ...settings });
-    sendspinCore.sendServerCommand(clientId, { source: { command, ...settings } } as any);
+    const sourcePayload = { command, vad: settings.vad };
+    this.log.debug('sendspin line-in source settings', {
+      clientId,
+      inputId,
+      command,
+      vad: settings.vad ?? null,
+    });
+    sendspinCore.sendServerCommand(clientId, { source: sourcePayload } as any);
     return true;
   }
 
@@ -342,7 +350,6 @@ export class SendspinLineInService {
     inputId: string,
   ): {
     vad?: { threshold_db?: number; hold_ms?: number };
-    format?: { codec?: string; channels?: number; sample_rate?: number; bit_depth?: number };
   } | null {
     const entry = this.resolveLineInInputConfig(inputId);
     if (!entry) return null;
@@ -364,27 +371,8 @@ export class SendspinLineInService {
         ? { ...(threshold != null ? { threshold_db: threshold } : {}), ...(hold != null ? { hold_ms: hold } : {}) }
         : null;
 
-    const sampleRate = parseNumeric(source.sample_rate ?? source.ingest_sample_rate ?? source.rate ?? source.sampleRate);
-    const channels = parseNumeric(source.channels ?? source.ingest_channels);
-    const bitDepth = parseNumeric(source.bit_depth ?? source.ingest_bit_depth);
-    const codec =
-      typeof source.codec === 'string' && source.codec.trim()
-        ? source.codec.trim()
-        : typeof source.ingest_codec === 'string' && source.ingest_codec.trim()
-          ? source.ingest_codec.trim()
-          : null;
-    const format =
-      sampleRate != null || channels != null || bitDepth != null || codec
-        ? {
-          ...(codec ? { codec } : {}),
-          ...(channels != null && channels > 0 ? { channels: Math.round(channels) } : {}),
-          ...(sampleRate != null && sampleRate > 0 ? { sample_rate: Math.round(sampleRate) } : {}),
-          ...(bitDepth != null && bitDepth > 0 ? { bit_depth: Math.round(bitDepth) } : {}),
-        }
-        : null;
-
-    if (!vad && !format) return null;
-    return { ...(vad ? { vad } : {}), ...(format ? { format } : {}) };
+    if (!vad) return null;
+    return { vad };
   }
 
   private resolveClientId(source: Record<string, unknown>): string | null {
@@ -406,21 +394,22 @@ export class SendspinLineInService {
 
   private resolveFormat(
     support: {
-      format: { codec?: string; sample_rate: number; channels: number; bit_depth: number };
+      supported_formats?: Array<{ codec?: string; sample_rate: number; channels: number; bit_depth: number }>;
     } | null,
   ):
     | LineInIngestFormat
     | null {
-    if (!support?.format) return null;
-    if (String(support.format.codec ?? '').toLowerCase() && String(support.format.codec).toLowerCase() !== 'pcm') {
+    const rawFormat = support?.supported_formats?.[0] ?? null;
+    if (!rawFormat) return null;
+    if (String(rawFormat.codec ?? '').toLowerCase() && String(rawFormat.codec).toLowerCase() !== 'pcm') {
       this.log.warn('sendspin line-in codec not supported; expected pcm', {
-        codec: support.format.codec,
+        codec: rawFormat.codec,
       });
       return null;
     }
-    const sampleRate = Number(support.format.sample_rate);
-    const channels = Number(support.format.channels);
-    const bitDepth = Number(support.format.bit_depth);
+    const sampleRate = Number(rawFormat.sample_rate);
+    const channels = Number(rawFormat.channels);
+    const bitDepth = Number(rawFormat.bit_depth);
     if (!Number.isFinite(sampleRate) || sampleRate <= 0) return null;
     if (!Number.isFinite(channels) || channels <= 0) return null;
     if (!Number.isFinite(bitDepth) || bitDepth <= 0) return null;

@@ -26,27 +26,38 @@ export class SendspinClientConnector {
   private readonly socketClientId = new Map<string, string>();
   private readonly clientSocketUrl = new Map<string, string>();
   private readonly directEndpoints = new Map<string, string>();
+  private readonly configuredEndpointUrls = new Map<string, string>();
   private readonly failures = new Map<string, { count: number; lastError: string | null; suppressedUntil: number | null }>();
   private readonly lastAttempts = new Map<string, number>();
   private readonly retryTimers = new Map<string, NodeJS.Timeout>();
   private readonly knownServices = new Map<string, MdnsServiceRecord>();
   private readonly inboundClients = new Set<string>();
   private readonly directPortFallbackTried = new Set<string>();
+  private readonly resolvedClientIds = new Map<string, string>();
+  private readonly resolveListeners = new Map<string, Set<(resolvedClientId: string) => void>>();
   private browser: MdnsBrowser | null = null;
   private serverRegistration: MdnsRegistration | null = null;
 
   constructor(private readonly mdns: MdnsPort) {}
 
-  public watchClient(clientId: string): () => void {
+  public watchClient(clientId: string, endpointUrl?: string): () => void {
     const normalized = clientId.trim();
     if (!normalized) {
       return () => {};
+    }
+    const explicitUrl = this.normalizeExplicitEndpoint(endpointUrl);
+    if (explicitUrl) {
+      this.configuredEndpointUrls.set(normalized, explicitUrl);
+    } else {
+      this.configuredEndpointUrls.delete(normalized);
     }
     this.desiredClientIds.add(normalized);
     if (!this.desiredReasons.has(normalized)) {
       this.desiredReasons.set(normalized, 'discovery');
     }
-    this.maybeConnectDirect(normalized);
+    if (this.shouldUseDirectDial(normalized)) {
+      this.maybeConnectDirect(normalized);
+    }
     this.ensureBrowser();
     this.retryKnownServices();
     return () => this.unwatchClient(normalized);
@@ -54,7 +65,7 @@ export class SendspinClientConnector {
 
   /** Elevate a target client to playback priority (for reclaim during active playback). */
   public requestPlaybackPriority(clientId: string): void {
-    const normalized = clientId.trim();
+    const normalized = this.resolveClientId(clientId);
     if (!normalized) {
       return;
     }
@@ -63,7 +74,9 @@ export class SendspinClientConnector {
     if (url) {
       this.lastAttempts.delete(url);
     }
-    this.maybeConnectDirect(normalized);
+    if (this.shouldUseDirectDial(normalized)) {
+      this.maybeConnectDirect(normalized);
+    }
     this.retryKnownServices();
     // Don't force-close existing sockets just to flip the "reason"; it can race with stream start
     // and looks like a random disconnect in the client.
@@ -72,11 +85,79 @@ export class SendspinClientConnector {
   private unwatchClient(clientId: string): void {
     this.desiredClientIds.delete(clientId);
     this.desiredReasons.delete(clientId);
+    this.resolvedClientIds.delete(clientId);
+    this.resolveListeners.delete(clientId);
+    this.configuredEndpointUrls.delete(clientId);
     const url = this.clientSocketUrl.get(clientId);
     if (url) {
       this.clientSocketUrl.delete(clientId);
     }
     this.directEndpoints.delete(clientId);
+  }
+
+  public resolveClientId(clientId: string): string {
+    const normalized = clientId.trim();
+    if (!normalized) {
+      return normalized;
+    }
+    return this.resolvedClientIds.get(normalized) ?? normalized;
+  }
+
+  public onClientResolved(clientId: string, cb: (resolvedClientId: string) => void): () => void {
+    const normalized = clientId.trim();
+    if (!normalized) {
+      return () => {};
+    }
+    let set = this.resolveListeners.get(normalized);
+    if (!set) {
+      set = new Set();
+      this.resolveListeners.set(normalized, set);
+    }
+    set.add(cb);
+    const resolved = this.resolvedClientIds.get(normalized);
+    if (resolved) {
+      cb(resolved);
+    }
+    return () => {
+      const listeners = this.resolveListeners.get(normalized);
+      if (!listeners) {
+        return;
+      }
+      listeners.delete(cb);
+      if (!listeners.size) {
+        this.resolveListeners.delete(normalized);
+      }
+    };
+  }
+
+  private updateResolvedClientId(configuredClientId: string, resolvedClientId: string): void {
+    const configured = configuredClientId.trim();
+    const resolved = resolvedClientId.trim();
+    if (!configured || !resolved) {
+      return;
+    }
+    const prev = this.resolvedClientIds.get(configured);
+    if (prev === resolved) {
+      return;
+    }
+    this.resolvedClientIds.set(configured, resolved);
+    if (!this.desiredClientIds.has(resolved)) {
+      this.desiredClientIds.add(resolved);
+      const configuredReason = this.desiredReasons.get(configured);
+      if (configuredReason && !this.desiredReasons.has(resolved)) {
+        this.desiredReasons.set(resolved, configuredReason);
+      }
+    }
+    const listeners = this.resolveListeners.get(configured);
+    if (listeners?.size) {
+      for (const listener of listeners) {
+        try {
+          listener(resolved);
+        } catch {
+          // Ignore listener failures.
+        }
+      }
+    }
   }
 
   public advertiseServer(options: { port: number; host?: string; name?: string; path?: string }): void {
@@ -196,7 +277,18 @@ export class SendspinClientConnector {
       if (!clientId) {
         return;
       }
-      matchedDesired = this.desiredClientIds.has(clientId);
+      const configuredId = endpoint.clientId?.trim() || null;
+      const configuredDesired = configuredId ? this.desiredClientIds.has(configuredId) : false;
+      const exactDesired = this.desiredClientIds.has(clientId);
+      if (configuredId && configuredDesired && configuredId !== clientId) {
+        this.updateResolvedClientId(configuredId, clientId);
+        this.log.info('Sendspin client resolved from configured id', {
+          configuredClientId: configuredId,
+          resolvedClientId: clientId,
+          url: endpoint.url,
+        });
+      }
+      matchedDesired = exactDesired || configuredDesired;
       if (!matchedDesired) {
         this.log.info('Sendspin client not in config; closing connection', {
           clientId,
@@ -214,6 +306,13 @@ export class SendspinClientConnector {
         this.activeSockets.get(prior)?.close();
       }
       this.clientSocketUrl.set(clientId, endpoint.url);
+      if (configuredId) {
+        const priorConfigured = this.clientSocketUrl.get(configuredId);
+        if (priorConfigured && priorConfigured !== endpoint.url) {
+          this.activeSockets.get(priorConfigured)?.close();
+        }
+        this.clientSocketUrl.set(configuredId, endpoint.url);
+      }
 
       // Do not disconnect solely to "upgrade" the connection reason.
     });
@@ -226,6 +325,11 @@ export class SendspinClientConnector {
         this.socketClientId.delete(endpoint.url);
         if (this.clientSocketUrl.get(knownClientId) === endpoint.url) {
           this.clientSocketUrl.delete(knownClientId);
+        }
+        for (const [configuredId, resolvedId] of this.resolvedClientIds.entries()) {
+          if (resolvedId === knownClientId && this.clientSocketUrl.get(configuredId) === endpoint.url) {
+            this.clientSocketUrl.delete(configuredId);
+          }
         }
       }
       const reason = reasonBuf ? reasonBuf.toString() : '';
@@ -326,6 +430,9 @@ export class SendspinClientConnector {
   }
 
   private maybeConnectDirect(clientId: string): void {
+    if (!this.shouldUseDirectDial(clientId)) {
+      return;
+    }
     const endpoint = this.buildDirectEndpoint(clientId);
     if (!endpoint) {
       return;
@@ -339,6 +446,16 @@ export class SendspinClientConnector {
     const trimmed = clientId.trim();
     if (!trimmed) {
       return null;
+    }
+    const explicit = this.configuredEndpointUrls.get(trimmed);
+    if (explicit) {
+      return {
+        url: explicit,
+        serviceName: 'configured-endpoint',
+        candidateMatch: true,
+        reason,
+        clientId: trimmed,
+      };
     }
 
     // If a full WebSocket URL is provided, use it verbatim.
@@ -393,6 +510,54 @@ export class SendspinClientConnector {
   private normalizePathValue(path?: string): string {
     const raw = path || '/sendspin';
     return raw.startsWith('/') ? raw : `/${raw}`;
+  }
+
+  private normalizeExplicitEndpoint(endpointUrl?: string): string | null {
+    const raw = typeof endpointUrl === 'string' ? endpointUrl.trim() : '';
+    if (!raw) {
+      return null;
+    }
+    try {
+      const parsed = new URL(raw);
+      if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
+        return null;
+      }
+      const path = parsed.pathname || '/sendspin';
+      parsed.pathname = path.startsWith('/') ? path : `/${path}`;
+      return parsed.toString();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Use direct dialing only when the config explicitly looks like an endpoint/host target.
+   * For plain Sendspin client IDs (e.g. "sendspin-cli-Mac"), rely on mDNS discovery.
+   */
+  private shouldUseDirectDial(clientId: string): boolean {
+    const trimmed = clientId.trim();
+    if (!trimmed) {
+      return false;
+    }
+    if (this.configuredEndpointUrls.has(trimmed)) {
+      return true;
+    }
+    if (/^wss?:\/\//i.test(trimmed)) {
+      return true;
+    }
+    // Explicit host:port (or [ipv6]:port) should still dial directly.
+    if (/^\[[^\]]+\]:\d+$/.test(trimmed)) {
+      return true;
+    }
+    if (/^[^:\s]+:\d+$/.test(trimmed)) {
+      return true;
+    }
+    // Plain IPv4 literal; default port/path direct dialing is reasonable.
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(trimmed)) {
+      return true;
+    }
+    // Otherwise treat as logical Sendspin client id and wait for mDNS endpoint.
+    return false;
   }
 
   private serviceMatches(service: MdnsServiceRecord, clientId: string): boolean {

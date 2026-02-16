@@ -100,8 +100,8 @@ class SendspinGroupController {
     this.lastStreamFormat.delete(leaderZoneId);
     this.forEachMemberOutput(leaderZoneId, (output) => {
       const clientId = output.getClientId();
-      sendspinCore.sendStreamEnd(clientId, ['player@v1']);
-      sendspinCore.sendStreamClear(clientId, ['player@v1']);
+      sendspinCore.sendStreamEnd(clientId, ['player']);
+      sendspinCore.sendStreamClear(clientId, ['player']);
     });
   }
 
@@ -181,8 +181,8 @@ class SendspinGroupController {
       const participant = this.participants.get(memberId);
       if (!participant) continue;
       const clientId = participant.getClientId();
-      sendspinCore.sendStreamEnd(clientId, ['player@v1']);
-      sendspinCore.sendStreamClear(clientId, ['player@v1']);
+      sendspinCore.sendStreamEnd(clientId, ['player']);
+      sendspinCore.sendStreamClear(clientId, ['player']);
       const name = this.zones.getZoneState(memberId)?.name ?? `Zone ${memberId}`;
       const groupId = record.externalId ?? `group-${leader}`;
       sendspinCore.setClientPlaybackState(clientId, PlaybackStateType.STOPPED, groupId, name);

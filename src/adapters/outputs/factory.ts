@@ -391,13 +391,15 @@ function createSendspinOutput(
   ports: OutputPorts,
 ): ZoneOutput | null {
   const rawClientId = (config as Record<string, unknown>).clientId;
+  const rawEndpointUrl = (config as Record<string, unknown>).endpointUrl;
   const clientId = typeof rawClientId === 'string' ? rawClientId.trim() : '';
+  const endpointUrl = typeof rawEndpointUrl === 'string' ? rawEndpointUrl.trim() : '';
   if (!clientId) {
     log.warn('Sendspin output skipped; missing clientId', { zoneId: zone.id });
     return null;
   }
-  const sendspinConfig: SendspinOutputConfig = { clientId };
-  log.info('Sendspin output registered', { zoneId: zone.id, clientId });
+  const sendspinConfig: SendspinOutputConfig = { clientId, ...(endpointUrl ? { endpointUrl } : {}) };
+  log.info('Sendspin output registered', { zoneId: zone.id, clientId, endpointUrl: endpointUrl || undefined });
   return new SendspinOutput(zone.id, zone.name, sendspinConfig, undefined, ports);
 }
 

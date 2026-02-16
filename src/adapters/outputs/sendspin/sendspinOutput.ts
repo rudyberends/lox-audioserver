@@ -38,6 +38,7 @@ const sendspinOutputsByZoneId = new Map<number, SendspinOutput>();
 /** Minimal Sendspin output configuration. */
 export interface SendspinOutputConfig {
   clientId: string;
+  endpointUrl?: string;
 }
 
 export type SendspinMetadataPayload = Parameters<SendspinSession['sendMetadata']>[0];
@@ -66,6 +67,14 @@ export const SENDSPIN_OUTPUT_DEFINITION: OutputConfigDefinition = {
       required: true,
       description: 'Identifier announced by the Sendspin client (client/hello).',
     },
+    {
+      id: 'endpointUrl',
+      label: 'Sendspin endpoint URL',
+      type: 'text',
+      placeholder: 'ws://esphome.local:8928/sendspin',
+      required: false,
+      description: 'Optional direct websocket endpoint from discovery; keeps clientId for identity.',
+    },
   ],
 };
 
@@ -74,8 +83,10 @@ export class SendspinOutput implements ZoneOutput {
   public readonly type = 'sendspin';
   private readonly log = createLogger('Output', 'Sendspin');
   private readonly clientId: string;
+  private resolvedClientId: string;
   private readonly options: SendspinOutputOptions;
   private readonly unwatchClient: (() => void) | null;
+  private readonly unwatchResolvedClient: (() => void) | null;
   private currentStream: NodeJS.ReadableStream | null = null;
   private progressTimer: NodeJS.Timeout | null = null;
   private currentCoverUrl: string | null = null;
@@ -130,6 +141,7 @@ export class SendspinOutput implements ZoneOutput {
   private lastStreamStartSentAtMs: number | null = null;
   private streamToken = 0;
   private hooksStop: (() => void) | null = null;
+  private resolvedHooksStop: (() => void) | null = null;
   private paused = false;
   private resumeGate: Promise<void> | null = null;
   private resumeGateResolve: (() => void) | null = null;
@@ -142,17 +154,19 @@ export class SendspinOutput implements ZoneOutput {
     private readonly ports: OutputPorts,
   ) {
     this.clientId = config.clientId;
+    this.resolvedClientId = config.clientId;
     this.options = { ignoreVolumeUpdates: true, ...options };
-    this.unwatchClient = this.ports.sendspinConnector.watchClient(this.clientId);
+    this.unwatchClient = this.ports.sendspinConnector.watchClient(this.clientId, config.endpointUrl);
     sendspinOutputsByZoneId.set(this.zoneId, this);
     this.ports.sendspinGroup.register(this.zoneId, this);
-    this.hooksStop = this.ports.sendspinHooks.register(this.clientId, {
+    const hooks = {
       onIdentified: (sendspinSession: SendspinSession) => {
         // Avoid re-running onIdentified for the same session instance.
         if (this.activeSession === sendspinSession) {
           return;
         }
-        this.ports.sendspinConnector.markInboundConnected(this.clientId);
+        this.resolvedClientId = sendspinSession.getClientId() ?? this.resolvedClientId;
+        this.ports.sendspinConnector.markInboundConnected(this.activeClientId());
         this.initialClientStateSkipped = false;
         this.lastClientStateSignature = null;
         this.lastLoggedClientState = null;
@@ -196,7 +210,7 @@ export class SendspinOutput implements ZoneOutput {
         this.lastLoggedMuted = null;
         this.clientState = null;
         this.externalSourceActive = false;
-        this.ports.sendspinConnector.markInboundDisconnected(this.clientId);
+        this.ports.sendspinConnector.markInboundDisconnected(this.activeClientId());
         this.log.info('Sendspin client disconnected', { zoneId: this.zoneId, clientId: this.clientId });
       },
       onFormatChanged: (_session: SendspinSession, format: PlayerFormat) => {
@@ -204,6 +218,14 @@ export class SendspinOutput implements ZoneOutput {
         // Restart stream with the newly requested format.
         void this.startStream({ preserveAnchor: false, formatOverride: this.negotiatedFormat });
       },
+    };
+    this.hooksStop = this.ports.sendspinHooks.register(this.clientId, hooks);
+    this.unwatchResolvedClient = this.ports.sendspinConnector.onClientResolved(this.clientId, (resolvedClientId) => {
+      this.resolvedClientId = resolvedClientId;
+      if (resolvedClientId === this.clientId || this.resolvedHooksStop) {
+        return;
+      }
+      this.resolvedHooksStop = this.ports.sendspinHooks.register(resolvedClientId, hooks);
     });
   }
 
@@ -257,7 +279,7 @@ export class SendspinOutput implements ZoneOutput {
       return;
     }
     this.claimOwnership();
-    this.ports.sendspinConnector.requestPlaybackPriority(this.clientId);
+    this.ports.sendspinConnector.requestPlaybackPriority(this.activeClientId());
     this.log.info('Sendspin play', {
       zoneId: this.zoneId,
       zoneName: this.zoneName,
@@ -337,8 +359,8 @@ export class SendspinOutput implements ZoneOutput {
           clientId: this.clientId,
         });
         this.externalSourceActive = true;
-        sendspinCore.sendStreamEnd(this.clientId, ['player@v1']);
-        sendspinCore.sendStreamClear(this.clientId, ['player@v1']);
+        sendspinCore.sendStreamEnd(this.activeClientId(), ['player']);
+        sendspinCore.sendStreamClear(this.activeClientId(), ['player']);
       } else if (this.externalSourceActive) {
         this.externalSourceActive = false;
         this.log.info('Sendspin client returned from external_source', {
@@ -487,8 +509,8 @@ export class SendspinOutput implements ZoneOutput {
       return;
     }
     // Clear stream on this client so it can operate solo.
-    sendspinCore.sendStreamEnd(this.clientId, ['player@v1']);
-    sendspinCore.sendStreamClear(this.clientId, ['player@v1']);
+    sendspinCore.sendStreamEnd(this.activeClientId(), ['player']);
+    sendspinCore.sendStreamClear(this.activeClientId(), ['player']);
     this.pushPlaybackState('stopped');
   }
 
@@ -522,10 +544,17 @@ export class SendspinOutput implements ZoneOutput {
       this.hooksStop();
       this.hooksStop = null;
     }
-    sendspinCore.clearLeadStats(this.clientId);
+    if (this.resolvedHooksStop) {
+      this.resolvedHooksStop();
+      this.resolvedHooksStop = null;
+    }
+    sendspinCore.clearLeadStats(this.activeClientId());
     this.ports.sendspinGroup.unregister(this.zoneId);
     if (this.unwatchClient) {
       this.unwatchClient();
+    }
+    if (this.unwatchResolvedClient) {
+      this.unwatchResolvedClient();
     }
     if (this.isOwner()) {
       this.releaseOwnership();
@@ -631,7 +660,7 @@ export class SendspinOutput implements ZoneOutput {
           requestedFormat: chosenFormat,
         });
         const { sampleRate, channels, pcmBitDepth } = sendspinOutputSettings;
-        sendspinCore.sendStreamStart(this.clientId, {
+        sendspinCore.sendStreamStart(this.activeClientId(), {
           codec: chosenFormat.codec,
           sampleRate,
           channels,
@@ -732,7 +761,7 @@ export class SendspinOutput implements ZoneOutput {
       const sendTransmissionMarginUs = 100_000; // align with MA send margin (network + client processing)
       const targetBufferUs = this.targetLeadUs;
       const backpressureCapacityBytes =
-        sendspinCore.getPlayerBufferCapacity(this.clientId) || this.maxBufferedBytes || 0;
+        sendspinCore.getPlayerBufferCapacity(this.activeClientId()) || this.maxBufferedBytes || 0;
       const bufferedForCapacity: Array<{ endUs: number; byteCount: number }> = [];
       let bufferedCapacityBytes = 0;
 
@@ -864,7 +893,7 @@ export class SendspinOutput implements ZoneOutput {
         const lead = frameTsUs - serverNowUs();
         this.lastLeadUs = lead;
         if (canSendToClient) {
-          sendspinCore.setLeadStats(this.clientId, {
+          sendspinCore.setLeadStats(this.activeClientId(), {
             leadUs: lead,
             targetLeadUs,
             bufferedBytes: this.bufferedBytes,
@@ -873,7 +902,7 @@ export class SendspinOutput implements ZoneOutput {
 
         const frame = { data: frameData, timestampUs: frameTsUs };
         if (canSendToClient) {
-          sendspinCore.sendPcmFrameToClient(this.clientId, frame);
+          sendspinCore.sendPcmFrameToClient(this.activeClientId(), frame);
         }
         this.ports.sendspinGroup.broadcastFrame(this.zoneId, frame);
         registerCapacity(frameTsUs + durationUs, frameData.length);
@@ -920,7 +949,7 @@ export class SendspinOutput implements ZoneOutput {
           return;
         }
         if (!this.externalSourceActive) {
-          sendspinCore.sendStreamStart(this.clientId, {
+          sendspinCore.sendStreamStart(this.activeClientId(), {
             codec: chosenFormat.codec,
             sampleRate,
             channels,
@@ -1168,8 +1197,8 @@ export class SendspinOutput implements ZoneOutput {
     this.stopProgressUpdates();
     // Notify client to clear/end only when we are really stopping; skip during keep-alive restarts.
     if (!preserveAnchor) {
-      sendspinCore.sendStreamEnd(this.clientId, ['player@v1']);
-      sendspinCore.sendStreamClear(this.clientId, ['player@v1']);
+      sendspinCore.sendStreamEnd(this.activeClientId(), ['player']);
+      sendspinCore.sendStreamClear(this.activeClientId(), ['player']);
       this.ports.sendspinGroup.notifyStreamEnd(this.zoneId);
       this.lastStreamSignature = null;
     }
@@ -1235,7 +1264,7 @@ export class SendspinOutput implements ZoneOutput {
       album: payload.album,
     });
     this.lastProgressPayload = payload.progress ?? null;
-    sendspinCore.setClientMetadata(this.clientId, payload);
+    sendspinCore.setClientMetadata(this.activeClientId(), payload);
     this.options.onMetadata?.(cloneMetadataPayload(payload));
     this.ports.sendspinGroup.broadcastMetadata(this.zoneId, payload);
   }
@@ -1261,7 +1290,7 @@ export class SendspinOutput implements ZoneOutput {
     if (typeof zoneState?.plshuffle === 'number') {
       supportedCommands.push(MediaCommand.SHUFFLE, MediaCommand.UNSHUFFLE);
     }
-    sendspinCore.setClientControllerState(this.clientId, {
+    sendspinCore.setClientControllerState(this.activeClientId(), {
       supported_commands: supportedCommands,
       volume: vol,
       muted: false,
@@ -1325,14 +1354,14 @@ export class SendspinOutput implements ZoneOutput {
       this.lastProgressPayload = nextProgress;
       this.lastMetadataSignature = metadataSignature;
       this.currentCoverUrl = normalizedCover;
-      sendspinCore.setClientMetadata(this.clientId, payload);
+      sendspinCore.setClientMetadata(this.activeClientId(), payload);
       this.options.onMetadata?.(cloneMetadataPayload(payload));
       if (coverUrl && coverChanged) {
         void this.fetchAndSendArtwork({ metadata: session?.metadata, stream: session?.stream });
       }
     } else if (nextProgress && progressChanged) {
       this.lastProgressPayload = nextProgress;
-      sendspinCore.setClientMetadata(this.clientId, { progress: nextProgress });
+      sendspinCore.setClientMetadata(this.activeClientId(), { progress: nextProgress });
       const progressPayload: SendspinMetadataPayload = { progress: nextProgress };
       this.options.onMetadata?.(cloneMetadataPayload(progressPayload));
     }
@@ -1359,7 +1388,7 @@ export class SendspinOutput implements ZoneOutput {
     this.lastProgressPayload = payload.progress ?? null;
     this.lastMetadataSignature = this.buildMetadataSignature(payload);
     this.currentCoverUrl = null;
-    sendspinCore.setClientMetadata(this.clientId, payload);
+    sendspinCore.setClientMetadata(this.activeClientId(), payload);
     this.options.onMetadata?.(cloneMetadataPayload(payload));
     this.ports.sendspinGroup.broadcastMetadata(this.zoneId, payload);
   }
@@ -1380,7 +1409,7 @@ export class SendspinOutput implements ZoneOutput {
         : state === 'paused'
           ? PlaybackStateType.PAUSED
           : PlaybackStateType.STOPPED;
-    sendspinCore.setClientPlaybackState(this.clientId, mappedState, groupId, groupName);
+    sendspinCore.setClientPlaybackState(this.activeClientId(), mappedState, groupId, groupName);
     this.ports.sendspinGroup.broadcastPlaybackState(this.zoneId, mappedState, groupId, groupName);
     this.lastSentPlaybackState = state;
   }
@@ -1420,7 +1449,7 @@ export class SendspinOutput implements ZoneOutput {
     if (payload) {
       this.lastMetadataSignature = this.buildMetadataSignature(payload);
       this.currentCoverUrl = payload.artwork_url ?? null;
-      sendspinCore.setClientMetadata(this.clientId, payload);
+      sendspinCore.setClientMetadata(this.activeClientId(), payload);
       this.options.onMetadata?.(cloneMetadataPayload(payload));
       if (payload.artwork_url) {
         void this.fetchAndSendArtwork(session ?? ({} as PlaybackSession));
@@ -1516,7 +1545,7 @@ export class SendspinOutput implements ZoneOutput {
   // eslint-disable-next-line max-len
   private async fetchAndSendArtwork(session?: { metadata?: PlaybackSession['metadata']; stream?: PlaybackSession['stream'] }): Promise<void> {
     const preferredChannels: ArtworkChannel[] =
-      sendspinCore.getArtworkChannels(this.clientId) ??
+      sendspinCore.getArtworkChannels(this.activeClientId()) ??
       [
         { source: 'album', format: 'jpeg', width: 800, height: 800 },
       ];
@@ -1526,9 +1555,9 @@ export class SendspinOutput implements ZoneOutput {
         session?.stream?.coverUrl ??
         null;
       if (!coverUrl) {
-        sendspinCore.sendArtworkStreamStart(this.clientId, preferredChannels);
+        sendspinCore.sendArtworkStreamStart(this.activeClientId(), preferredChannels);
         preferredChannels.forEach((_channel, idx) => {
-          sendspinCore.sendArtwork(this.clientId, idx as 0 | 1 | 2 | 3, null);
+          sendspinCore.sendArtwork(this.activeClientId(), idx as 0 | 1 | 2 | 3, null);
         });
         return;
       }
@@ -1536,16 +1565,16 @@ export class SendspinOutput implements ZoneOutput {
       try {
         const parsed = new URL(coverUrl);
         if (!/^https?:$/.test(parsed.protocol)) {
-          sendspinCore.sendArtworkStreamStart(this.clientId, preferredChannels);
+          sendspinCore.sendArtworkStreamStart(this.activeClientId(), preferredChannels);
           preferredChannels.forEach((_channel, idx) => {
-            sendspinCore.sendArtwork(this.clientId, idx as 0 | 1 | 2 | 3, null);
+            sendspinCore.sendArtwork(this.activeClientId(), idx as 0 | 1 | 2 | 3, null);
           });
           return;
         }
       } catch {
-        sendspinCore.sendArtworkStreamStart(this.clientId, preferredChannels);
+        sendspinCore.sendArtworkStreamStart(this.activeClientId(), preferredChannels);
         preferredChannels.forEach((_channel, idx) => {
-          sendspinCore.sendArtwork(this.clientId, idx as 0 | 1 | 2 | 3, null);
+          sendspinCore.sendArtwork(this.activeClientId(), idx as 0 | 1 | 2 | 3, null);
         });
         return;
       }
@@ -1553,9 +1582,9 @@ export class SendspinOutput implements ZoneOutput {
       if (!buf) {
         return;
       }
-      sendspinCore.sendArtworkStreamStart(this.clientId, preferredChannels);
+      sendspinCore.sendArtworkStreamStart(this.activeClientId(), preferredChannels);
       preferredChannels.forEach((_channel, idx) => {
-        sendspinCore.sendArtwork(this.clientId, idx as 0 | 1 | 2 | 3, buf);
+        sendspinCore.sendArtwork(this.activeClientId(), idx as 0 | 1 | 2 | 3, buf);
       });
     } catch (error) {
       this.log.debug('Sendspin artwork fetch failed', {
@@ -1582,12 +1611,16 @@ export class SendspinOutput implements ZoneOutput {
 
   /** Identifier of the configured Sendspin client. */
   public getClientId(): string {
-    return this.clientId;
+    return this.activeClientId();
   }
 
   /** Indicates whether the configured Sendspin client is currently connected. */
   public isClientConnected(): boolean {
     return this.clientConnected;
+  }
+
+  private activeClientId(): string {
+    return this.resolvedClientId || this.clientId;
   }
 
   private getGroupInfo(): { groupId: string; groupName: string } {
