@@ -19,6 +19,7 @@ import './zonePlayerEndGuard.test';
 import './durationRegression.test';
 import './runtimeShutdown.test';
 import './sourceResolver.test';
+import './sendspinLineInService.test';
 import type { ZoneConfig } from '../src/domain/config/types';
 import { applyZonePatch } from '../src/domain/loxone/reducer';
 import type { LoxoneZoneState } from '../src/domain/loxone/types';

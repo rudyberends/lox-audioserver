@@ -17,6 +17,7 @@ type ActiveSource = {
   inputId: string;
   stream: PassThrough;
   format?: LineInIngestFormat;
+  droppingBackpressure?: boolean;
 };
 
 const SOURCE_CONTROL_MAP: Record<LineInControlCommand, SourceControl> = {
@@ -77,6 +78,7 @@ export class SendspinLineInService {
     }
     this.hookStops.clear();
     this.mappings.clear();
+    this.lastAudioLog.clear();
     for (const [clientId, active] of this.activeSources.entries()) {
       this.registry.stop(active.inputId, 'sendspin-disconnected');
       try {
@@ -166,7 +168,10 @@ export class SendspinLineInService {
     if (!supported || !supported.length) {
       return null;
     }
-    return supported.map((control) => SOURCE_CONTROL_REVERSE[control]);
+    const controls = supported
+      .map((control) => SOURCE_CONTROL_REVERSE[control])
+      .filter((control): control is LineInControlCommand => typeof control === 'string');
+    return controls.length ? controls : null;
   }
 
   private registerHooks(clientId: string): void {
@@ -214,8 +219,18 @@ export class SendspinLineInService {
     }
     const active = this.ensureActiveSource(clientId, mapping.inputId);
     if (!active) return;
+    if (active.droppingBackpressure) {
+      return;
+    }
     if (!active.stream.write(payload)) {
+      active.droppingBackpressure = true;
       this.log.debug('sendspin line-in backpressure drop', { clientId, inputId: mapping.inputId });
+      active.stream.once('drain', () => {
+        const current = this.activeSources.get(clientId);
+        if (current === active) {
+          current.droppingBackpressure = false;
+        }
+      });
     }
   }
 
@@ -399,22 +414,34 @@ export class SendspinLineInService {
   ):
     | LineInIngestFormat
     | null {
-    const rawFormat = support?.supported_formats?.[0] ?? null;
-    if (!rawFormat) return null;
-    if (String(rawFormat.codec ?? '').toLowerCase() && String(rawFormat.codec).toLowerCase() !== 'pcm') {
-      this.log.warn('sendspin line-in codec not supported; expected pcm', {
-        codec: rawFormat.codec,
-      });
-      return null;
+    const formats = Array.isArray(support?.supported_formats) ? support.supported_formats : [];
+    for (const rawFormat of formats) {
+      if (!rawFormat || !this.isPcmCodec(rawFormat.codec)) {
+        continue;
+      }
+      const sampleRate = Number(rawFormat.sample_rate);
+      const channels = Number(rawFormat.channels);
+      const bitDepth = Number(rawFormat.bit_depth);
+      if (!Number.isFinite(sampleRate) || sampleRate <= 0) continue;
+      if (!Number.isFinite(channels) || channels <= 0) continue;
+      if (!Number.isFinite(bitDepth) || bitDepth <= 0) continue;
+      if (![16, 24, 32].includes(bitDepth)) continue;
+      const pcmFormat = pcmFormatFromBitDepth(bitDepth as 16 | 24 | 32) as LineInIngestFormat['pcmFormat'];
+      return { sampleRate, channels, bitDepth, pcmFormat };
     }
-    const sampleRate = Number(rawFormat.sample_rate);
-    const channels = Number(rawFormat.channels);
-    const bitDepth = Number(rawFormat.bit_depth);
-    if (!Number.isFinite(sampleRate) || sampleRate <= 0) return null;
-    if (!Number.isFinite(channels) || channels <= 0) return null;
-    if (!Number.isFinite(bitDepth) || bitDepth <= 0) return null;
-    if (![16, 24, 32].includes(bitDepth)) return null;
-    const pcmFormat = pcmFormatFromBitDepth(bitDepth as 16 | 24 | 32) as LineInIngestFormat['pcmFormat'];
-    return { sampleRate, channels, bitDepth, pcmFormat };
+    if (formats.length > 0) {
+      this.log.warn('sendspin line-in no supported pcm format found', {
+        advertisedFormats: formats.length,
+      });
+    }
+    return null;
+  }
+
+  private isPcmCodec(codec: unknown): boolean {
+    const value = String(codec ?? '').trim().toLowerCase();
+    if (!value) return true;
+    if (value === 'pcm') return true;
+    if (value.includes('pcm')) return true;
+    return value === 's16le' || value === 's24le' || value === 's32le';
   }
 }
