@@ -12,6 +12,7 @@ import {
   buildStoppedPatch,
   buildVolumePatch,
 } from '@/application/zones/playback/patchBuilder';
+import { resolveZoneStateControllerId } from '@/application/zones/state/types';
 
 type PlayerListenerCoordinator = {
   getZone: (zoneId: number) => ZoneContext | undefined;
@@ -139,6 +140,12 @@ function onPlayerPosition(
 ): void {
   const ctx = coordinator.getZone(zoneId);
   if (!ctx) {
+    return;
+  }
+  const controllerId = resolveZoneStateControllerId(ctx.config);
+  const stateAudiopath = typeof ctx.state.audiopath === 'string' ? ctx.state.audiopath.trim() : '';
+  if (controllerId !== 'internal' && !stateAudiopath) {
+    // External state controller owns progress when no local audiopath is active.
     return;
   }
   if (coordinator.audioHelpers.isRadioAudiopath(ctx.state.audiopath, ctx.state.audiotype)) {

@@ -744,7 +744,7 @@ export class PlaybackCoordinator {
       ctx.id,
       shouldStayOnline
         ? { mode: 'stop', clientState: 'on', power: 'on' }
-        : { mode: 'stop', clientState: 'off', power: 'off' },
+        : { mode: 'stop', clientState: 'on', power: 'on' },
     );
     this.dispatchOutputs(ctx, ctx.outputs, 'stop', null);
   }

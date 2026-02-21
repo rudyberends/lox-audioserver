@@ -310,7 +310,7 @@ export function isRadioAudiopath(audiopath: string | undefined, audiotype?: numb
   if (audiotype === AudioType.File) {
     return false;
   }
-  if (audiotype === 1 || audiotype === 4) {
+  if (audiotype === AudioType.Radio) {
     return true;
   }
   if (!raw) {

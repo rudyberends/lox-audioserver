@@ -132,8 +132,15 @@ export interface ZoneConfig {
   sourceMac: string;
   output?: ZoneOutputConfig | null;
   transports?: ZoneTransportConfig[];
+  state?: ZoneStateConfig;
   volumes: ZoneVolumesConfig;
   inputs?: ZoneInputConfig;
+}
+
+export interface ZoneStateConfig {
+  /** State authority for this zone. "internal" means current behavior (no external state ingest). */
+  controller?: string;
+  [key: string]: unknown;
 }
 
 export interface ZoneVolumesConfig {

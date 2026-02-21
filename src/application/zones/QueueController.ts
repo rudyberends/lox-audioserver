@@ -250,6 +250,17 @@ export class QueueController {
     const stateAudiotype = this.deps.getStateAudiotype(ctx, current);
     const displayAudiotype = stateAudiotype ?? current.audiotype;
     const sourceName = this.deps.resolveSourceName(displayAudiotype, ctx, current);
+    const keepExistingExternalAudiotype =
+      displayAudiotype === 0 &&
+      typeof ctx.state.audiotype === 'number' &&
+      ctx.state.audiotype > 0 &&
+      typeof current.audiopath === 'string' &&
+      current.audiopath.trim().length === 0;
+    const keepExistingExternalSourceName =
+      sourceName === ctx.sourceMac &&
+      typeof ctx.state.sourceName === 'string' &&
+      ctx.state.sourceName.trim().length > 0 &&
+      ctx.state.sourceName !== ctx.sourceMac;
     this.deps.applyPatch(zoneId, {
       ...(useTitle ? { title: nextTitle } : {}),
       artist: current.artist,
@@ -260,10 +271,12 @@ export class QueueController {
       qindex: ctx.queueController.currentIndex(),
       qid: current.unique_id,
       type: this.deps.getStateFileType(),
-      ...(displayAudiotype != null ? { audiotype: displayAudiotype } : {}),
+      ...(!keepExistingExternalAudiotype && displayAudiotype != null
+        ? { audiotype: displayAudiotype }
+        : {}),
       duration: duration > 0 ? duration : undefined,
       queueAuthority: ctx.queue.authority,
-      ...(sourceName ? { sourceName } : {}),
+      ...(!keepExistingExternalSourceName && sourceName ? { sourceName } : {}),
     });
     if (duration <= 0) {
       void this.resolveTrackDuration(current.audiopath).then((dur) => {

@@ -21,7 +21,12 @@ import {
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
-import type { AudioServerConfig, SpotifyBridgeConfig, ZoneTransportConfig } from '@/domain/config/types';
+import type {
+  AudioServerConfig,
+  SpotifyBridgeConfig,
+  ZoneTransportConfig,
+  ZoneStateConfig,
+} from '@/domain/config/types';
 import { OUTPUT_DEFINITIONS } from '@/adapters/outputs';
 import { discoverAirplayDevices } from '@/adapters/outputs/airplay/airplayDiscovery';
 import { discoverGoogleCastDevices } from '@/adapters/outputs/googleCast/googleCastDiscovery';
@@ -105,6 +110,11 @@ const MAX_LIBRARY_UPLOAD_JSON_BODY_BYTES = 32 * 1024 * 1024;
 const MAX_WIDEVINE_PRIVATE_KEY_BYTES = 256 * 1024;
 const MAX_WIDEVINE_CLIENT_ID_BYTES = 10 * 1024 * 1024;
 const ADDON_PACKAGE_PREFIX = '@lox-audioserver/node-';
+const STATE_CONTROLLER_DEFINITIONS = [
+  { id: 'internal', label: 'Internal', description: 'Use internal playback state only.' },
+  { id: 'beolink', label: 'BeoLink', description: 'Use BeoLink external playback state.' },
+  { id: 'sonos', label: 'Sonos', description: 'Use Sonos external playback state.' },
+] as const;
 
 /**
  * Temporary admin API stub that returns 501 for every endpoint.
@@ -292,6 +302,11 @@ export class AdminApiHandler {
       },
       { method: 'GET', pattern: /^\/info$/, handler: (_req, res) => this.handleInfo(res) },
       { method: 'GET', pattern: /^\/zones\/states$/, handler: async (_req, res) => this.handleZoneStates(res) },
+      {
+        method: 'GET',
+        pattern: /^\/zones\/state-controllers$/,
+        handler: async (_req, res) => this.handleZoneStateControllerDefinitions(res),
+      },
       { method: 'GET', pattern: /^\/transports$/, handler: (_req, res) => this.handleTransportDefinitions(res) },
       {
         method: 'GET',
@@ -922,7 +937,11 @@ export class AdminApiHandler {
         required: field.required ?? false,
       })),
     }));
-    this.sendJson(res, 200, { transports: payload });
+    this.sendJson(res, 200, { transports: payload, stateControllers: STATE_CONTROLLER_DEFINITIONS });
+  }
+
+  private handleZoneStateControllerDefinitions(res: ServerResponse): void {
+    this.sendJson(res, 200, { stateControllers: STATE_CONTROLLER_DEFINITIONS });
   }
 
   private async handleZoneStates(res: ServerResponse): Promise<void> {
@@ -2683,6 +2702,9 @@ export class AdminApiHandler {
             if (incoming.inputs !== undefined) {
               target.inputs = incoming.inputs as any;
             }
+            if (incoming.state !== undefined) {
+              target.state = this.normalizeZoneStatePayload(incoming.state);
+            }
             if (incoming.name !== undefined) target.name = incoming.name;
             if (incoming.source !== undefined) target.source = incoming.source;
             if (incoming.sourceSerial !== undefined) target.sourceSerial = incoming.sourceSerial;
@@ -2704,6 +2726,9 @@ export class AdminApiHandler {
               nextZone.output = this.normalizeOutputPayload(incoming);
               delete nextZone.transport;
               delete nextZone.transports;
+            }
+            if (incoming.state !== undefined) {
+              nextZone.state = this.normalizeZoneStatePayload(incoming.state);
             }
             cfg.zones!.push(nextZone as any);
           }
@@ -2944,8 +2969,9 @@ export class AdminApiHandler {
     const zones = (config.zones ?? []).map((zone) => {
       const primaryOutput = this.getZoneOutputConfig(zone);
       const transports = primaryOutput ? [primaryOutput] : [];
+      const state = this.normalizeZoneStatePayload((zone as { state?: unknown }).state);
       const { output: _output, transports: _transports, ...rest } = zone as any;
-      return { ...rest, transports };
+      return { ...rest, transports, state };
     });
     return { ...config, zones };
   }
@@ -2977,6 +3003,25 @@ export class AdminApiHandler {
       return payload.transports[0] ?? null;
     }
     return null;
+  }
+
+  private normalizeZoneStatePayload(payload: unknown): ZoneStateConfig {
+    if (payload && typeof payload === 'object') {
+      const record = payload as Record<string, unknown>;
+      const controllerRaw = typeof record.controller === 'string' ? record.controller.trim().toLowerCase() : '';
+      const normalized = controllerRaw.replace(/[\s_-]+/g, '');
+      const controller =
+        normalized === 'beolink'
+          ? 'beolink'
+          : normalized === 'sonos'
+            ? 'sonos'
+            : 'internal';
+      return {
+        ...record,
+        controller,
+      };
+    }
+    return { controller: 'internal' };
   }
 
   private normalizeSqueezelitePlayerId(value: string): string {

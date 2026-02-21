@@ -35,6 +35,8 @@ import type {
 } from '@/application/zones/internal/zoneTypes';
 import { ZoneStateStore } from '@/application/zones/ZoneStateStore';
 import { ZoneRepository } from '@/application/zones/ZoneRepository';
+import { StateControllerManager } from '@/application/zones/state/StateControllerManager';
+import { resolveZoneStateControllerId } from '@/application/zones/state/types';
 import type { AlertMediaResource } from '@/application/alerts/types';
 import {
   buildInitialState,
@@ -84,6 +86,9 @@ export class ZoneManager {
   private readonly alertsCoordinator: AlertsCoordinator;
   private readonly inputsPort: InputsPort;
   private readonly audioHelpers: ZoneAudioHelpers;
+  private readonly stateControllers = new StateControllerManager({
+    onStatePatch: (zoneId, patch) => this.handleExternalStatePatch(zoneId, patch),
+  });
   private readonly outputsPort: OutputsPort;
   private readonly contentPort: ContentPort;
   private readonly configPort: ConfigPort;
@@ -344,6 +349,7 @@ export class ZoneManager {
   }
 
   public async replaceAll(zoneConfigs: ZoneConfig[], inputs?: InputConfig | null): Promise<void> {
+    await this.stateControllers.replaceAll(zoneConfigs);
     this.disposeAllOutputs();
     this.clearZoneContexts();
     clearPlayers();
@@ -380,11 +386,13 @@ export class ZoneManager {
 
     // Tear down existing contexts for the affected zones.
     for (const cfg of zoneConfigs) {
+      await this.stateControllers.stopForZone(cfg.id);
       await this.disposeZone(cfg.id);
     }
 
     // Register the new/updated zones.
     zoneConfigs.forEach((cfg) => this.registerZone(cfg));
+    await this.stateControllers.replaceZones(zoneConfigs);
 
     // Refresh input services using the full current set.
     const allZones = this.zoneRepo.list().map((ctx) => ctx.config);
@@ -430,6 +438,7 @@ export class ZoneManager {
   }
 
   public async shutdown(): Promise<void> {
+    await this.stateControllers.stopAll();
     await Promise.all(
       this.zoneRepo.list().map(async (ctx) => {
         const session = ctx.player.stop('shutdown');
@@ -541,7 +550,38 @@ export class ZoneManager {
   }
 
   public handleCommand(zoneId: number, command: string, payload?: string): void {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (ctx) {
+      const controllerId = resolveZoneStateControllerId(ctx.config);
+      const hasActiveLocalSession = Boolean(this.audioManager.getSession(zoneId));
+      const shouldUseExternalController = controllerId !== 'internal' && !hasActiveLocalSession;
+      if (shouldUseExternalController && this.stateControllers.handleCommand(zoneId, command, payload)) {
+        return;
+      }
+    }
     this.playbackCoordinator.handleCommand(zoneId, command, payload);
+  }
+
+  private handleExternalStatePatch(zoneId: number, patch: Partial<LoxoneZoneState>): void {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx) {
+      return;
+    }
+    const controllerId = resolveZoneStateControllerId(ctx.config);
+    if (controllerId === 'internal') {
+      this.applyPatch(zoneId, patch);
+      return;
+    }
+    const hasActiveLocalSession = Boolean(this.audioManager.getSession(zoneId));
+    if (hasActiveLocalSession) {
+      this.log.debug('ignored external state patch while local session active', {
+        zoneId,
+        controller: controllerId,
+        keys: Object.keys(patch),
+      });
+      return;
+    }
+    this.applyPatch(zoneId, patch);
   }
 
   public async startAlert(
