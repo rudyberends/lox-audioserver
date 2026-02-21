@@ -90,9 +90,11 @@ class SendspinGroupController {
   }
 
   public notifyStreamStart(leaderZoneId: number, format: PlayerStreamFormat): void {
-    this.lastStreamFormat.set(leaderZoneId, format);
+    const prev = this.lastStreamFormat.get(leaderZoneId);
+    const merged = { ...prev, ...format };
+    this.lastStreamFormat.set(leaderZoneId, merged);
     this.forEachMemberOutput(leaderZoneId, (output) => {
-      sendspinCore.sendStreamStart(output.getClientId(), format);
+      sendspinCore.sendStreamStart(output.getClientId(), merged);
     });
   }
 

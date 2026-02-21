@@ -130,6 +130,7 @@ export class SendspinOutput implements ZoneOutput {
 
   /** Actual output format of the current ffmpeg pipeline. */
   private activeOutputFormat: SendspinFormat | null = null;
+  private activeCodecHeader: string | null = null;
   private anchorLeadUs = SendspinOutput.resolveAnchorLeadUs();
   // Keep target lead aligned with the configured anchor for low-latency playback.
   private readonly targetLeadUs = this.anchorLeadUs;
@@ -660,17 +661,20 @@ export class SendspinOutput implements ZoneOutput {
           requestedFormat: chosenFormat,
         });
         const { sampleRate, channels, pcmBitDepth } = sendspinOutputSettings;
+        const codecHeader = this.activeCodecHeader ?? undefined;
         sendspinCore.sendStreamStart(this.activeClientId(), {
           codec: chosenFormat.codec,
           sampleRate,
           channels,
           bitDepth: pcmBitDepth,
+          ...(codecHeader ? { codecHeader } : {}),
         });
         this.ports.sendspinGroup.notifyStreamStart(this.zoneId, {
           codec: chosenFormat.codec,
           sampleRate,
           channels,
           bitDepth: pcmBitDepth,
+          ...(codecHeader ? { codecHeader } : {}),
         });
         // Reaffirm playback state to the client when reusing a stream.
         this.pushPlaybackState(this.playbackState);
@@ -720,6 +724,7 @@ export class SendspinOutput implements ZoneOutput {
       this.bufferedChunks = [];
       this.bufferedBytes = 0;
       this.sentInitialBuffer = true; // streaming live; timestamps provide the lead buffer
+      this.activeCodecHeader = null;
 
       let chunkCount = 0;
       let modeledTimelineUs = 0; // Sum of durations we think we sent (for drift visibility).
@@ -1071,6 +1076,7 @@ export class SendspinOutput implements ZoneOutput {
           const durationUs:number = appliedDurationUs;
           if (!codecHeaderSent && payload.length) {
             const codecHeader = payload.toString('base64');
+            this.activeCodecHeader = codecHeader;
             if (isFlac) {
               const bs = parseFlacBlocksize(payload);
               if (bs > 0) {
@@ -1173,6 +1179,7 @@ export class SendspinOutput implements ZoneOutput {
     this.sentInitialBuffer = false;
     this.maxBufferedBytes = audioOutputSettings.prebufferBytes;
     this.activeOutputFormat = null;
+    this.activeCodecHeader = null;
     if (!preserveAnchor) {
       this.playStartUs = null;
       this.wallClockAnchorUs = null;
