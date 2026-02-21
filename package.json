@@ -20,7 +20,7 @@
     "start": "node dist/server.js",
     "test": "ts-node tests/run-tests.ts",
     "release": "semantic-release",
-    "prepare": "husky install .husky"
+    "prepare": "husky .husky"
   },
   "keywords": [],
   "author": "Rudy Berends",
@@ -47,7 +47,7 @@
     "@typescript-eslint/eslint-plugin": "^8.54.0",
     "@typescript-eslint/parser": "^8.54.0",
     "dependency-cruiser": "^17.3.7",
-    "eslint": "^9.39.2",
+    "eslint": "^9.39.3",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.5",
     "husky": "^9.1.7",
@@ -58,8 +58,11 @@
     "ts-node": "^10.9.2",
     "tsc-alias": "^1.8.16",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.54.0"
+    "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "minimatch": "^10.2.2",
+    "@isaacs/brace-expansion": "^5.0.0"
   },
   "dependencies": {
     "@lox-audioserver/node-airplay-sender": "0.4.7",
