@@ -58,6 +58,12 @@ export interface ArtistRow {
   track_count: number;
 }
 
+export interface TrackFileRow {
+  storage_id: string;
+  rel_path: string;
+  cover: string | null;
+}
+
 export class LocalLibraryStore {
   private db: Database.Database | null = null;
   private readonly dbPath: string;
@@ -333,6 +339,67 @@ export class LocalLibraryStore {
       .prepare('SELECT * FROM tracks WHERE audiopath = ? LIMIT 1')
       .get(audiopath) as StoredTrack | undefined;
     return row ?? null;
+  }
+
+  public getTrackFilesForAudiopath(audiopath: string): TrackFileRow[] {
+    const db = this.requireDb();
+    return db
+      .prepare(
+        `
+        SELECT storage_id, rel_path, cover
+        FROM tracks
+        WHERE audiopath = ?
+      `,
+      )
+      .all(audiopath) as TrackFileRow[];
+  }
+
+  public getTrackFilesForAlbum(storageId: string, artist: string, album: string): TrackFileRow[] {
+    const db = this.requireDb();
+    return db
+      .prepare(
+        `
+        SELECT storage_id, rel_path, cover
+        FROM tracks
+        WHERE storage_id = ? AND artist = ? AND album = ?
+      `,
+      )
+      .all(storageId, artist, album) as TrackFileRow[];
+  }
+
+  public getTrackFilesForArtist(storageId: string, artist: string): TrackFileRow[] {
+    const db = this.requireDb();
+    return db
+      .prepare(
+        `
+        SELECT storage_id, rel_path, cover
+        FROM tracks
+        WHERE storage_id = ? AND artist = ?
+      `,
+      )
+      .all(storageId, artist) as TrackFileRow[];
+  }
+
+  public deleteTracksByAudiopath(audiopath: string): number {
+    const db = this.requireDb();
+    const result = db.prepare('DELETE FROM tracks WHERE audiopath = ?').run(audiopath);
+    return result.changes;
+  }
+
+  public deleteTracksForAlbum(storageId: string, artist: string, album: string): number {
+    const db = this.requireDb();
+    const result = db
+      .prepare('DELETE FROM tracks WHERE storage_id = ? AND artist = ? AND album = ?')
+      .run(storageId, artist, album);
+    return result.changes;
+  }
+
+  public deleteTracksForArtist(storageId: string, artist: string): number {
+    const db = this.requireDb();
+    const result = db
+      .prepare('DELETE FROM tracks WHERE storage_id = ? AND artist = ?')
+      .run(storageId, artist);
+    return result.changes;
   }
 
   public searchTracks(query: string, limit: number): StoredTrack[] {

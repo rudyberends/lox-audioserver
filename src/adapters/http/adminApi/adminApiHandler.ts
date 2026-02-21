@@ -101,6 +101,7 @@ type AdminUiUpdateResult = {
 };
 
 const MAX_JSON_BODY_BYTES = 1 * 1024 * 1024;
+const MAX_LIBRARY_UPLOAD_JSON_BODY_BYTES = 32 * 1024 * 1024;
 const MAX_WIDEVINE_PRIVATE_KEY_BYTES = 256 * 1024;
 const MAX_WIDEVINE_CLIENT_ID_BYTES = 10 * 1024 * 1024;
 const ADDON_PACKAGE_PREFIX = '@lox-audioserver/node-';
@@ -375,6 +376,21 @@ export class AdminApiHandler {
         method: 'POST',
         pattern: /^\/content\/library\/upload$/,
         handler: async (req, res) => this.handleLibraryUpload(req, res),
+      },
+      {
+        method: 'DELETE',
+        pattern: /^\/content\/library\/tracks$/,
+        handler: async (req, res) => this.handleLibraryTrackDelete(req, res),
+      },
+      {
+        method: 'DELETE',
+        pattern: /^\/content\/library\/albums$/,
+        handler: async (req, res) => this.handleLibraryAlbumDelete(req, res),
+      },
+      {
+        method: 'DELETE',
+        pattern: /^\/content\/library\/artists$/,
+        handler: async (req, res) => this.handleLibraryArtistDelete(req, res),
       },
       {
         method: 'POST',
@@ -1693,7 +1709,9 @@ export class AdminApiHandler {
   }
 
   private async handleLibraryUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const body = (await this.readJsonBody(req, res)) as { filename?: string; relativePath?: string; data?: string } | null;
+    const body = (await this.readJsonBody(req, res, MAX_LIBRARY_UPLOAD_JSON_BODY_BYTES)) as
+      | { filename?: string; relativePath?: string; data?: string }
+      | null;
     if (res.writableEnded) {
       return;
     }
@@ -1722,6 +1740,90 @@ export class AdminApiHandler {
       }
       this.log.warn('library upload failed', { err });
       this.sendJson(res, 500, { error: 'library-upload-failed' });
+    }
+  }
+
+  private async handleLibraryTrackDelete(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = (await this.readJsonBody(req, res)) as { audiopath?: string } | null;
+    if (res.writableEnded) {
+      return;
+    }
+    const audiopath = typeof body?.audiopath === 'string' ? body.audiopath.trim() : '';
+    if (!audiopath) {
+      this.sendJson(res, 400, { error: 'invalid-library-track-delete' });
+      return;
+    }
+    try {
+      const result = await this.contentManager.deleteLibraryTrackByAudiopath(audiopath);
+      this.sendJson(res, 200, { result });
+    } catch (err) {
+      const code = err instanceof Error ? err.message : 'library-track-delete-failed';
+      if (code === 'invalid-audiopath') {
+        this.sendJson(res, 400, { error: code });
+        return;
+      }
+      if (code === 'track-not-found') {
+        this.sendJson(res, 404, { error: code });
+        return;
+      }
+      this.log.warn('library track delete failed', { err, audiopath });
+      this.sendJson(res, 500, { error: 'library-track-delete-failed' });
+    }
+  }
+
+  private async handleLibraryAlbumDelete(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = (await this.readJsonBody(req, res)) as { id?: string } | null;
+    if (res.writableEnded) {
+      return;
+    }
+    const id = typeof body?.id === 'string' ? body.id.trim() : '';
+    if (!id) {
+      this.sendJson(res, 400, { error: 'invalid-library-album-delete' });
+      return;
+    }
+    try {
+      const result = await this.contentManager.deleteLibraryAlbumByFolderId(id);
+      this.sendJson(res, 200, { result });
+    } catch (err) {
+      const code = err instanceof Error ? err.message : 'library-album-delete-failed';
+      if (code === 'invalid-album-id') {
+        this.sendJson(res, 400, { error: code });
+        return;
+      }
+      if (code === 'album-not-found') {
+        this.sendJson(res, 404, { error: code });
+        return;
+      }
+      this.log.warn('library album delete failed', { err, id });
+      this.sendJson(res, 500, { error: 'library-album-delete-failed' });
+    }
+  }
+
+  private async handleLibraryArtistDelete(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = (await this.readJsonBody(req, res)) as { id?: string } | null;
+    if (res.writableEnded) {
+      return;
+    }
+    const id = typeof body?.id === 'string' ? body.id.trim() : '';
+    if (!id) {
+      this.sendJson(res, 400, { error: 'invalid-library-artist-delete' });
+      return;
+    }
+    try {
+      const result = await this.contentManager.deleteLibraryArtistByFolderId(id);
+      this.sendJson(res, 200, { result });
+    } catch (err) {
+      const code = err instanceof Error ? err.message : 'library-artist-delete-failed';
+      if (code === 'invalid-artist-id') {
+        this.sendJson(res, 400, { error: code });
+        return;
+      }
+      if (code === 'artist-not-found') {
+        this.sendJson(res, 404, { error: code });
+        return;
+      }
+      this.log.warn('library artist delete failed', { err, id });
+      this.sendJson(res, 500, { error: 'library-artist-delete-failed' });
     }
   }
 
@@ -2882,7 +2984,11 @@ export class AdminApiHandler {
     return value.replace(/[^a-f0-9]/gi, '').toLowerCase();
   }
 
-  private async readJsonBody(req: IncomingMessage, res: ServerResponse): Promise<unknown | null> {
+  private async readJsonBody(
+    req: IncomingMessage,
+    res: ServerResponse,
+    maxBytes = MAX_JSON_BODY_BYTES,
+  ): Promise<unknown | null> {
     return new Promise((resolve) => {
       const chunks: Buffer[] = [];
       let totalBytes = 0;
@@ -2923,7 +3029,7 @@ export class AdminApiHandler {
         if (settled) return;
         const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
         totalBytes += buffer.length;
-        if (totalBytes > MAX_JSON_BODY_BYTES) {
+        if (totalBytes > maxBytes) {
           rejectTooLarge();
           return;
         }

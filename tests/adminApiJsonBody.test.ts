@@ -209,3 +209,19 @@ test('readJsonBody rejects oversized payloads with 413', async () => {
   assert.equal(res.writableEnded, true);
   assert.equal(JSON.parse(res.body).error, 'payload-too-large');
 });
+
+test('readJsonBody supports route-specific max size override', async () => {
+  const handler = createHandler();
+  const stream = new PassThrough();
+  const req = stream as unknown as IncomingMessage;
+  const res = new FakeResponse();
+  const promise = (handler as any).readJsonBody(req, res as unknown as ServerResponse, MAX_JSON_BODY_BYTES + 64);
+  stream.write(Buffer.alloc(MAX_JSON_BODY_BYTES + 1, 'a'));
+  stream.end();
+
+  const body = await promise;
+  assert.equal(body, null);
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.writableEnded, true);
+  assert.equal(JSON.parse(res.body).error, 'invalid-json');
+});

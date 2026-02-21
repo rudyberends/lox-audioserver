@@ -22,6 +22,7 @@ import {
   type AlbumCoverRow,
   type ArtistRow,
   type StoredTrack,
+  type TrackFileRow,
 } from '@/adapters/content/providers/localLibraryStore';
 
 const FILE_TYPE_FOLDER = 1;
@@ -40,9 +41,16 @@ export interface LibraryStats {
 }
 
 export interface LibraryCoverSample {
+  id: string;
   album: string;
   artist: string;
   coverurl: string;
+}
+
+export interface LibraryDeleteResult {
+  deletedTracks: number;
+  deletedFiles: number;
+  missingFiles: number;
 }
 
 interface LocalTrack {
@@ -216,6 +224,65 @@ export class LocalLibraryProvider {
       relPath,
       filename: finalName,
     };
+  }
+
+  public async deleteTrackByAudiopath(audiopath: string): Promise<LibraryDeleteResult> {
+    const safeAudiopath = String(audiopath || '').trim();
+    if (!safeAudiopath) {
+      throw new Error('invalid-audiopath');
+    }
+
+    const rows = this.store.getTrackFilesForAudiopath(safeAudiopath);
+    if (rows.length === 0) {
+      throw new Error('track-not-found');
+    }
+
+    const fileResult = await this.deleteAudioFiles(rows);
+    const deletedTracks = this.store.deleteTracksByAudiopath(safeAudiopath);
+    this.stats = null;
+    return { ...fileResult, deletedTracks };
+  }
+
+  public async deleteAlbumByFolderId(albumId: string): Promise<LibraryDeleteResult> {
+    const safeId = String(albumId || '').trim();
+    if (!safeId.startsWith('library:album:')) {
+      throw new Error('invalid-album-id');
+    }
+    const payload = decodeAlbumKey(safeId.slice('library:album:'.length));
+    if (!payload) {
+      throw new Error('invalid-album-id');
+    }
+
+    const rows = this.store.getTrackFilesForAlbum(payload.storageId, payload.artist, payload.album);
+    if (rows.length === 0) {
+      throw new Error('album-not-found');
+    }
+
+    const fileResult = await this.deleteAudioFiles(rows);
+    const deletedTracks = this.store.deleteTracksForAlbum(payload.storageId, payload.artist, payload.album);
+    this.stats = null;
+    return { ...fileResult, deletedTracks };
+  }
+
+  public async deleteArtistByFolderId(artistId: string): Promise<LibraryDeleteResult> {
+    const safeId = String(artistId || '').trim();
+    if (!safeId.startsWith('library:artist:')) {
+      throw new Error('invalid-artist-id');
+    }
+    const payload = decodeArtistKey(safeId.slice('library:artist:'.length));
+    if (!payload) {
+      throw new Error('invalid-artist-id');
+    }
+
+    const rows = this.store.getTrackFilesForArtist(payload.storageId, payload.artist);
+    if (rows.length === 0) {
+      throw new Error('artist-not-found');
+    }
+
+    const fileResult = await this.deleteAudioFiles(rows);
+    const deletedTracks = this.store.deleteTracksForArtist(payload.storageId, payload.artist);
+    this.stats = null;
+    return { ...fileResult, deletedTracks };
   }
 
   /**
@@ -585,6 +652,7 @@ export class LocalLibraryProvider {
       return null;
     }
     return {
+      id: buildAlbumId(row.storage_id, row.artist, row.album),
       album: row.album,
       artist: row.artist,
       coverurl,
@@ -837,6 +905,40 @@ export class LocalLibraryProvider {
       return 'Local';
     }
     return `NAS ${storageId}`;
+  }
+
+  private async deleteAudioFiles(rows: TrackFileRow[]): Promise<{ deletedFiles: number; missingFiles: number }> {
+    let deletedFiles = 0;
+    let missingFiles = 0;
+
+    for (const row of rows) {
+      const filePath = this.resolveSafeLibraryPath(row.rel_path);
+      try {
+        await fsp.unlink(filePath);
+        deletedFiles += 1;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code === 'ENOENT') {
+          missingFiles += 1;
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    return { deletedFiles, missingFiles };
+  }
+
+  private resolveSafeLibraryPath(relPath: string): string {
+    const normalizedRelPath = String(relPath || '')
+      .replace(/\\/g, '/')
+      .replace(/^\/+/, '');
+    const resolved = path.resolve(this.baseDir, normalizedRelPath);
+    const baseDir = path.resolve(this.baseDir) + path.sep;
+    if (!resolved.startsWith(baseDir)) {
+      throw new Error('invalid-library-path');
+    }
+    return resolved;
   }
 
   public resolveItem(audiopath: string): ContentItemMetadata | null {

@@ -15,6 +15,7 @@ import './audioStreamHandlerIcy.test';
 import './queueAuthority.test';
 import './ytmusicNative.mock.test';
 import './localLibraryStore.search.test';
+import './localLibraryStore.delete.test';
 import './zonePlayerEndGuard.test';
 import './durationRegression.test';
 import './runtimeShutdown.test';

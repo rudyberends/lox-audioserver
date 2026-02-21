@@ -9,7 +9,12 @@ import type {
   ScanStatus,
 } from '@/ports/ContentTypes';
 import { decodeAudiopath, detectServiceFromAudiopath } from '@/domain/loxone/audiopath';
-import { LocalLibraryProvider, type LibraryCoverSample, type LibraryStats } from '@/adapters/content/providers/localLibraryProvider';
+import {
+  LocalLibraryProvider,
+  type LibraryCoverSample,
+  type LibraryDeleteResult,
+  type LibraryStats,
+} from '@/adapters/content/providers/localLibraryProvider';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import { TuneInProvider, type TuneInProviderOptions } from '@/adapters/content/providers/tunein/tuneinProvider';
 import { RadioParadiseProvider } from '@/adapters/content/providers/radioparadise/radioParadiseProvider';
@@ -263,6 +268,21 @@ export class ContentManager {
 
   public uploadLibraryAudio(relativePath: string, base64Data: string): Promise<{ relPath: string; filename: string }> {
     return this.library.uploadLocalAudio(relativePath, base64Data);
+  }
+
+  public deleteLibraryTrackByAudiopath(audiopath: string): Promise<LibraryDeleteResult> {
+    this.cache.clearAll();
+    return this.library.deleteTrackByAudiopath(audiopath);
+  }
+
+  public deleteLibraryAlbumByFolderId(albumId: string): Promise<LibraryDeleteResult> {
+    this.cache.clearAll();
+    return this.library.deleteAlbumByFolderId(albumId);
+  }
+
+  public deleteLibraryArtistByFolderId(artistId: string): Promise<LibraryDeleteResult> {
+    this.cache.clearAll();
+    return this.library.deleteArtistByFolderId(artistId);
   }
 
   public getGlobalSearchDescription(): Record<string, string[]> {
