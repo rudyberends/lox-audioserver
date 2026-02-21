@@ -1,5 +1,6 @@
 import type { Dirent, Stats } from 'node:fs';
 import fsp from 'node:fs/promises';
+import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import * as mm from 'music-metadata';
 import { Jimp, JimpMime } from 'jimp';
@@ -27,8 +28,12 @@ import {
 
 const FILE_TYPE_FOLDER = 1;
 const FILE_TYPE_FILE = 2;
-const COVER_CANDIDATES = ['cover.jpg', 'cover.png'];
+const COVER_CANDIDATES = ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp'];
 const NAS_DIR_TIMEOUT_MS = 3000;
+const MUSICBRAINZ_ENDPOINT = 'https://musicbrainz.org/ws/2/release/';
+const MUSICBRAINZ_USER_AGENT = 'lox-audioserver/1.0 (library-cover-fallback)';
+const COVER_ART_ARCHIVE_RELEASE = 'https://coverartarchive.org/release';
+const COVER_ART_MAX_BYTES = 8 * 1024 * 1024;
 
 interface RescanOptions {
   silent?: boolean;
@@ -92,6 +97,8 @@ export class LocalLibraryProvider {
   private scanning = false;
   private initialized = false;
   private stats: LibraryStats | null = null;
+  private readonly coverLookupCache = new Map<string, string | null>();
+  private musicBrainzNextAllowedAt = 0;
 
   constructor(notifier: NotifierPort, configPort: ConfigPort) {
     this.notifier = notifier;
@@ -152,14 +159,12 @@ export class LocalLibraryProvider {
   }
 
   public getCoverSamples(limit = 8): LibraryCoverSample[] {
-    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 24)) : 8;
+    const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.round(limit)) : 8;
     // Best-effort sample read; failure yields an empty list.
     return bestEffortSync(
       () => {
-        const rows = this.store.getAlbumCoverSamples(safeLimit);
-        return rows
-          .map((row) => this.mapCoverSample(row))
-          .filter((entry): entry is LibraryCoverSample => Boolean(entry));
+        const rows = this.store.getAlbumCoverSamples(safeLimit === 0 ? 1_000_000 : safeLimit);
+        return rows.map((row) => this.mapCoverSample(row));
       },
       { fallback: [], onError: 'debug', log: this.log, label: 'cover sample read failed' },
     );
@@ -169,14 +174,15 @@ export class LocalLibraryProvider {
     if (!storageId) {
       return [];
     }
-    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 24)) : 8;
+    const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.round(limit)) : 8;
     // Best-effort sample read; failure yields an empty list.
     return bestEffortSync(
       () => {
-        const rows = this.store.getAlbumCoverSamplesForStorage(storageId, safeLimit);
-        return rows
-          .map((row) => this.mapCoverSample(row))
-          .filter((entry): entry is LibraryCoverSample => Boolean(entry));
+        const rows = this.store.getAlbumCoverSamplesForStorage(
+          storageId,
+          safeLimit === 0 ? 1_000_000 : safeLimit,
+        );
+        return rows.map((row) => this.mapCoverSample(row));
       },
       {
         fallback: [],
@@ -206,15 +212,23 @@ export class LocalLibraryProvider {
     if (!fileName || !isAudioFile(fileName)) {
       throw new Error('invalid-audio-extension');
     }
+    const buffer = Buffer.from(base64Data, 'base64');
+    const requestedSubdir = path.dirname(safeRelative);
+    const autoSubdir =
+      !requestedSubdir || requestedSubdir === '.'
+        ? await this.resolveUploadSubdirFromMetadata(buffer, fileName)
+        : '';
+    const targetSubdir =
+      requestedSubdir && requestedSubdir !== '.'
+        ? requestedSubdir
+        : autoSubdir;
     const targetDir = path.join(this.baseDir, 'local');
-    const targetSubdir = path.dirname(safeRelative);
     const finalDir =
       targetSubdir && targetSubdir !== '.'
         ? path.join(targetDir, targetSubdir)
         : targetDir;
     await ensureDir(finalDir);
     const finalName = await ensureUniqueFilename(finalDir, fileName);
-    const buffer = Buffer.from(base64Data, 'base64');
     await fsp.writeFile(path.join(finalDir, finalName), buffer);
     const relPath =
       targetSubdir && targetSubdir !== '.'
@@ -224,6 +238,33 @@ export class LocalLibraryProvider {
       relPath,
       filename: finalName,
     };
+  }
+
+  private async resolveUploadSubdirFromMetadata(
+    data: Buffer,
+    fileName: string,
+  ): Promise<string> {
+    try {
+      const metadata = await mm.parseBuffer(data, undefined, { duration: false });
+      const artistRaw = metadata.common.artist?.trim() ?? '';
+      const albumRaw = metadata.common.album?.trim() ?? '';
+      if (!artistRaw || !albumRaw) {
+        return '';
+      }
+      if (/^unknown\b/i.test(artistRaw) || /^unknown\b/i.test(albumRaw)) {
+        return '';
+      }
+      const artistDir = sanitizePathSegment(artistRaw);
+      const albumDir = sanitizePathSegment(albumRaw);
+      if (!artistDir || !albumDir) {
+        return '';
+      }
+      return path.join(artistDir, albumDir);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.debug('upload metadata parse failed for folder grouping', { fileName, message });
+      return '';
+    }
   }
 
   public async deleteTrackByAudiopath(audiopath: string): Promise<LibraryDeleteResult> {
@@ -643,14 +684,14 @@ export class LocalLibraryProvider {
     };
   }
 
-  private mapCoverSample(row: AlbumCoverRow): LibraryCoverSample | null {
-    if (!row.cover || !row.rel_path) {
-      return null;
-    }
-    const coverurl = this.buildCoverUrl({ relPath: row.rel_path, cover: row.cover });
-    if (!coverurl) {
-      return null;
-    }
+  private mapCoverSample(row: AlbumCoverRow): LibraryCoverSample {
+    const cacheBust =
+      typeof row.last_mtime === 'number' && Number.isFinite(row.last_mtime)
+        ? Math.max(0, Math.round(row.last_mtime))
+        : undefined;
+    const coverurl = row.cover && row.rel_path
+      ? this.buildCoverUrl({ relPath: row.rel_path, cover: row.cover }, cacheBust)
+      : '';
     return {
       id: buildAlbumId(row.storage_id, row.artist, row.album),
       album: row.album,
@@ -689,13 +730,36 @@ export class LocalLibraryProvider {
     return buildAudiopath(uri, 'track', 'library:local');
   }
 
-  private buildCoverUrl(track: { relPath: string; cover?: string | null }): string {
+  private buildCoverUrl(
+    track: { relPath: string; cover?: string | null },
+    cacheBust?: number,
+  ): string {
     if (!track?.cover) {
       return '';
     }
-    const host = this.getConfigPort().getSystemConfig().audioserver.ip || '127.0.0.1';
+    const host = this.resolveCoverHost();
     const dir = path.dirname(track.relPath);
-    return `http://${host}:7090/music/${encodePath(path.join(dir, track.cover))}`;
+    const baseUrl = `http://${host}:7090/music/${encodePath(path.join(dir, track.cover))}`;
+    if (typeof cacheBust === 'number' && Number.isFinite(cacheBust) && cacheBust > 0) {
+      return `${baseUrl}?cb=${cacheBust}`;
+    }
+    return baseUrl;
+  }
+
+  private resolveCoverHost(): string {
+    const configured = this.getConfigPort().getSystemConfig().audioserver.ip?.trim();
+    if (configured && !isLoopbackHost(configured)) {
+      return configured;
+    }
+    const nets = networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name] || []) {
+        if (net.family === 'IPv4' && !net.internal && net.address && !isLoopbackHost(net.address)) {
+          return net.address;
+        }
+      }
+    }
+    return configured || '127.0.0.1';
   }
 
   private getConfigPort(): ConfigPort {
@@ -813,7 +877,7 @@ export class LocalLibraryProvider {
     };
 
     track.audiopath = this.buildAudiopath(track);
-    track.cover = await this.safeEnsureCoverArt(relPath, metadata.picture);
+    track.cover = await this.safeEnsureCoverArt(relPath, metadata.picture, track);
 
     this.store.insertTrack({
       storageId,
@@ -829,9 +893,13 @@ export class LocalLibraryProvider {
     });
   }
 
-  private async safeEnsureCoverArt(relPath: string, picture?: mm.IPicture): Promise<string | undefined> {
+  private async safeEnsureCoverArt(
+    relPath: string,
+    picture: mm.IPicture | undefined,
+    track: Pick<LocalTrack, 'title' | 'album' | 'artist'>,
+  ): Promise<string | undefined> {
     try {
-      return await this.ensureCoverArt(relPath, picture);
+      return await this.ensureCoverArt(relPath, picture, track);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.log.warn('cover extraction failed', { relPath, message });
@@ -854,7 +922,11 @@ export class LocalLibraryProvider {
     }
   }
 
-  private async ensureCoverArt(relPath: string, picture?: mm.IPicture): Promise<string | undefined> {
+  private async ensureCoverArt(
+    relPath: string,
+    picture: mm.IPicture | undefined,
+    track: Pick<LocalTrack, 'title' | 'album' | 'artist'>,
+  ): Promise<string | undefined> {
     const dir = path.join(this.baseDir, path.dirname(relPath));
 
     for (const candidate of COVER_CANDIDATES) {
@@ -864,29 +936,170 @@ export class LocalLibraryProvider {
     }
 
     if (!picture?.data?.length) {
-      return undefined;
+      return this.fetchAndStoreRemoteCoverArt(relPath, track);
     }
 
-    const extension = picture.format?.toLowerCase().includes('png') ? '.png' : '.jpg';
+    const extension = resolveCoverExtension(picture.format);
     const fileName = `cover${extension}`;
     const outPath = path.join(dir, fileName);
 
     await ensureDir(dir);
-    const image = await Jimp.read(Buffer.from(picture.data));
-    const maxSize = 500;
-    const width = image.bitmap.width;
-    const height = image.bitmap.height;
-    const scale = Math.min(1, maxSize / width, maxSize / height);
-    if (scale < 1) {
-      image.scale(scale);
+    const rawBuffer = Buffer.from(picture.data);
+    try {
+      const image = await Jimp.read(rawBuffer);
+      const maxSize = 500;
+      const width = image.bitmap.width;
+      const height = image.bitmap.height;
+      const scale = Math.min(1, maxSize / width, maxSize / height);
+      if (scale < 1) {
+        image.scale(scale);
+      }
+      const buffer =
+        extension === '.png'
+          ? await image.getBuffer(JimpMime.png)
+          : await image.getBuffer(JimpMime.jpeg, { quality: 85 });
+      await fsp.writeFile(outPath, Buffer.from(buffer));
+    } catch (error) {
+      // Some embedded cover formats are not decoded by Jimp; store raw bytes as fallback.
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.debug('cover resize failed; using raw embedded art', { relPath, message });
+      await fsp.writeFile(outPath, rawBuffer);
     }
-    const buffer =
-      extension === '.png'
-        ? await image.getBuffer(JimpMime.png)
-        : await image.getBuffer(JimpMime.jpeg, { quality: 85 });
-
-    await fsp.writeFile(outPath, Buffer.from(buffer));
     return fileName;
+  }
+
+  private async fetchAndStoreRemoteCoverArt(
+    relPath: string,
+    track: Pick<LocalTrack, 'title' | 'album' | 'artist'>,
+  ): Promise<string | undefined> {
+    const album = track.album?.trim() ?? '';
+    const artist = track.artist?.trim() ?? '';
+    if (!album || !artist) {
+      return undefined;
+    }
+    if (/^unknown\b/i.test(album) || /^unknown\b/i.test(artist)) {
+      return undefined;
+    }
+
+    const cacheKey = `${album.toLowerCase()}|||${artist.toLowerCase()}`;
+    const cached = this.coverLookupCache.get(cacheKey);
+    if (cached === null) {
+      return undefined;
+    }
+
+    let coverUrl = cached;
+    if (!coverUrl) {
+      const mbid = await this.lookupMusicBrainzReleaseMbid(album, artist);
+      if (!mbid) {
+        this.log.debug('remote cover lookup: no musicbrainz match', { relPath, artist, album });
+        this.coverLookupCache.set(cacheKey, null);
+        return undefined;
+      }
+      coverUrl = `${COVER_ART_ARCHIVE_RELEASE}/${encodeURIComponent(mbid)}/front-500`;
+      this.log.info('remote cover lookup: matched musicbrainz release', {
+        relPath,
+        artist,
+        album,
+        mbid,
+      });
+      this.coverLookupCache.set(cacheKey, coverUrl);
+    }
+
+    try {
+      const response = await fetch(coverUrl);
+      if (!response.ok) {
+        if (response.status === 404) {
+          this.coverLookupCache.set(cacheKey, null);
+        }
+        this.log.debug('remote cover download failed', {
+          relPath,
+          artist,
+          album,
+          status: response.status,
+          url: coverUrl,
+        });
+        return undefined;
+      }
+      const contentType = String(response.headers.get('content-type') ?? '').toLowerCase();
+      const ext = contentType.includes('png') ? '.png' : contentType.includes('webp') ? '.webp' : '.jpg';
+      const arrayBuffer = await response.arrayBuffer();
+      if (arrayBuffer.byteLength <= 0 || arrayBuffer.byteLength > COVER_ART_MAX_BYTES) {
+        return undefined;
+      }
+      const outDir = path.join(this.baseDir, path.dirname(relPath));
+      const fileName = `cover${ext}`;
+      const outPath = path.join(outDir, fileName);
+      await ensureDir(outDir);
+      await fsp.writeFile(outPath, Buffer.from(arrayBuffer));
+      this.log.info('remote cover stored', {
+        relPath,
+        artist,
+        album,
+        fileName,
+        bytes: arrayBuffer.byteLength,
+      });
+      return fileName;
+    } catch {
+      this.log.debug('remote cover download error', { relPath, artist, album, url: coverUrl });
+      return undefined;
+    }
+  }
+
+  private async lookupMusicBrainzReleaseMbid(album: string, artist: string): Promise<string | null> {
+    await this.waitForMusicBrainzRateLimit();
+    const query = `release:"${escapeMusicBrainzQuery(album)}" AND artist:"${escapeMusicBrainzQuery(artist)}"`;
+    const url = new URL(MUSICBRAINZ_ENDPOINT);
+    url.searchParams.set('query', query);
+    url.searchParams.set('fmt', 'json');
+    url.searchParams.set('limit', '5');
+    try {
+      const response = await fetch(url.toString(), {
+        headers: {
+          'User-Agent': MUSICBRAINZ_USER_AGENT,
+          Accept: 'application/json',
+        },
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const payload = (await response.json()) as {
+        releases?: Array<{
+          id?: string;
+          title?: string;
+          score?: number | string;
+          'artist-credit'?: Array<{ name?: string; artist?: { name?: string } }>;
+        }>;
+      };
+      const releases = Array.isArray(payload?.releases) ? payload.releases : [];
+      if (releases.length === 0) {
+        return null;
+      }
+      const targetAlbum = normalizeMetaText(album);
+      const targetArtist = normalizeMetaText(artist);
+      const exact = releases.find((release) => {
+        const releaseTitle = normalizeMetaText(String(release.title ?? ''));
+        const releaseArtist = normalizeMetaText(
+          String(release['artist-credit']?.[0]?.name ?? release['artist-credit']?.[0]?.artist?.name ?? ''),
+        );
+        return releaseTitle === targetAlbum && releaseArtist === targetArtist && release.id;
+      });
+      if (exact?.id) {
+        return exact.id;
+      }
+      releases.sort((a, b) => Number(b.score ?? 0) - Number(a.score ?? 0));
+      return releases[0]?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async waitForMusicBrainzRateLimit(): Promise<void> {
+    const now = Date.now();
+    const waitMs = Math.max(0, this.musicBrainzNextAllowedAt - now);
+    this.musicBrainzNextAllowedAt = now + waitMs + 1100;
+    if (waitMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
   }
 
   private async getStorageLabel(storageId: string): Promise<string> {
@@ -1012,6 +1225,41 @@ function sanitizeRelativePath(value: string): string {
     .filter((part) => part && part !== '.' && part !== '..')
     .map((part) => part.replace(/[^A-Za-z0-9._-]/g, '_'));
   return parts.join('/');
+}
+
+function sanitizePathSegment(value: string): string {
+  return value
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\.+/g, '.')
+    .replace(/^\.+/, '')
+    .replace(/\.+$/, '')
+    .slice(0, 96)
+    .trim();
+}
+
+function resolveCoverExtension(format: string | undefined): '.jpg' | '.png' | '.webp' {
+  const value = String(format ?? '').toLowerCase();
+  if (value.includes('png')) return '.png';
+  if (value.includes('webp')) return '.webp';
+  return '.jpg';
+}
+
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
+}
+
+function escapeMusicBrainzQuery(value: string): string {
+  return value.replace(/[\\"]/g, '\\$&').trim();
+}
+
+function normalizeMetaText(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
 }
 
 async function ensureUniqueFilename(dir: string, filename: string): Promise<string> {

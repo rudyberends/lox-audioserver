@@ -1692,8 +1692,8 @@ export class AdminApiHandler {
       const url = new URL(req.url ?? '', 'http://localhost');
       const rawLimit = Number(url.searchParams.get('limit'));
       const limit =
-        Number.isFinite(rawLimit) && rawLimit > 0
-          ? Math.min(Math.round(rawLimit), 24)
+        Number.isFinite(rawLimit) && rawLimit >= 0
+          ? Math.round(rawLimit)
           : 8;
       const covers = this.contentManager.getLibraryCoverSamples(limit);
       this.sendJson(res, 200, { covers });
@@ -1716,8 +1716,8 @@ export class AdminApiHandler {
       const url = new URL(req.url ?? '', 'http://localhost');
       const rawLimit = Number(url.searchParams.get('limit'));
       const limit =
-        Number.isFinite(rawLimit) && rawLimit > 0
-          ? Math.min(Math.round(rawLimit), 24)
+        Number.isFinite(rawLimit) && rawLimit >= 0
+          ? Math.round(rawLimit)
           : 8;
       const covers = this.contentManager.getLibraryStorageCoverSamples(storageId, limit);
       this.sendJson(res, 200, { covers });

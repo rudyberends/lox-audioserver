@@ -192,7 +192,6 @@ export class LocalLibraryStore {
           MIN(rel_path) AS rel_path,
           MAX(mtime) AS last_mtime
         FROM tracks
-        WHERE cover IS NOT NULL AND cover <> ''
         GROUP BY storage_id, artist, album
         ORDER BY last_mtime DESC, LOWER(album)
         LIMIT ?
@@ -211,7 +210,7 @@ export class LocalLibraryStore {
           MIN(rel_path) AS rel_path,
           MAX(mtime) AS last_mtime
         FROM tracks
-        WHERE storage_id = ? AND cover IS NOT NULL AND cover <> ''
+        WHERE storage_id = ?
         GROUP BY storage_id, artist, album
         ORDER BY last_mtime DESC, LOWER(album)
         LIMIT ?
