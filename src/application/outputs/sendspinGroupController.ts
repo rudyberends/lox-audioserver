@@ -1,5 +1,11 @@
 import { createLogger } from '@/shared/logging/logger';
-import { PlaybackStateType, sendspinCore, serverNowUs, type PlayerFormat } from '@lox-audioserver/node-sendspin';
+import {
+  PlaybackStateType,
+  Roles,
+  sendspinCore,
+  serverNowUs,
+  type PlayerFormat,
+} from '@lox-audioserver/node-sendspin';
 import type { SendspinSession } from '@lox-audioserver/node-sendspin';
 import { getGroupByZone, onGroupChanged } from '@/application/groups/groupTracker';
 import type { GroupRecord } from '@/application/groups/types/groupRecord';
@@ -102,8 +108,8 @@ class SendspinGroupController {
     this.lastStreamFormat.delete(leaderZoneId);
     this.forEachMemberOutput(leaderZoneId, (output) => {
       const clientId = output.getClientId();
-      sendspinCore.sendStreamEnd(clientId, ['player']);
-      sendspinCore.sendStreamClear(clientId, ['player']);
+      sendspinCore.sendStreamEnd(clientId, [Roles.PLAYER]);
+      sendspinCore.sendStreamClear(clientId, [Roles.PLAYER]);
     });
   }
 
@@ -183,8 +189,8 @@ class SendspinGroupController {
       const participant = this.participants.get(memberId);
       if (!participant) continue;
       const clientId = participant.getClientId();
-      sendspinCore.sendStreamEnd(clientId, ['player']);
-      sendspinCore.sendStreamClear(clientId, ['player']);
+      sendspinCore.sendStreamEnd(clientId, [Roles.PLAYER]);
+      sendspinCore.sendStreamClear(clientId, [Roles.PLAYER]);
       const name = this.zones.getZoneState(memberId)?.name ?? `Zone ${memberId}`;
       const groupId = record.externalId ?? `group-${leader}`;
       sendspinCore.setClientPlaybackState(clientId, PlaybackStateType.STOPPED, groupId, name);

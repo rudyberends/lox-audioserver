@@ -13,6 +13,7 @@ import {
   MediaCommand,
   PlaybackStateType,
   PlayerCommand,
+  Roles,
   RepeatMode,
   sendspinCore,
   serverNowUs,
@@ -360,8 +361,8 @@ export class SendspinOutput implements ZoneOutput {
           clientId: this.clientId,
         });
         this.externalSourceActive = true;
-        sendspinCore.sendStreamEnd(this.activeClientId(), ['player']);
-        sendspinCore.sendStreamClear(this.activeClientId(), ['player']);
+        sendspinCore.sendStreamEnd(this.activeClientId(), [Roles.PLAYER]);
+        sendspinCore.sendStreamClear(this.activeClientId(), [Roles.PLAYER]);
       } else if (this.externalSourceActive) {
         this.externalSourceActive = false;
         this.log.info('Sendspin client returned from external_source', {
@@ -510,8 +511,8 @@ export class SendspinOutput implements ZoneOutput {
       return;
     }
     // Clear stream on this client so it can operate solo.
-    sendspinCore.sendStreamEnd(this.activeClientId(), ['player']);
-    sendspinCore.sendStreamClear(this.activeClientId(), ['player']);
+    sendspinCore.sendStreamEnd(this.activeClientId(), [Roles.PLAYER]);
+    sendspinCore.sendStreamClear(this.activeClientId(), [Roles.PLAYER]);
     this.pushPlaybackState('stopped');
   }
 
@@ -1204,8 +1205,8 @@ export class SendspinOutput implements ZoneOutput {
     this.stopProgressUpdates();
     // Notify client to clear/end only when we are really stopping; skip during keep-alive restarts.
     if (!preserveAnchor) {
-      sendspinCore.sendStreamEnd(this.activeClientId(), ['player']);
-      sendspinCore.sendStreamClear(this.activeClientId(), ['player']);
+      sendspinCore.sendStreamEnd(this.activeClientId(), [Roles.PLAYER]);
+      sendspinCore.sendStreamClear(this.activeClientId(), [Roles.PLAYER]);
       this.ports.sendspinGroup.notifyStreamEnd(this.zoneId);
       this.lastStreamSignature = null;
     }
