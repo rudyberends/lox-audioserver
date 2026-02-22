@@ -16,6 +16,22 @@ const enum FileType {
 }
 
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
+const SPOTIFY_SEARCH_MAX_LIMIT = 10;
+const SPOTIFY_HTTP_TIMEOUT_MS = 10_000;
+const SPOTIFY_PLAYLIST_ITEMS_MAX_LIMIT = 20;
+const SPOTIFY_ENABLE_POPULAR_CATEGORY = false;
+const SPOTIFY_FALLBACK_CATEGORIES: Array<{ id: string; name: string }> = [
+  { id: 'pop', name: 'Pop' },
+  { id: 'rock', name: 'Rock' },
+  { id: 'hip-hop', name: 'Hip-Hop' },
+  { id: 'electronic', name: 'Electronic' },
+  { id: 'dance', name: 'Dance' },
+  { id: 'jazz', name: 'Jazz' },
+  { id: 'classical', name: 'Classical' },
+  { id: 'focus', name: 'Focus' },
+  { id: 'chill', name: 'Chill' },
+  { id: 'workout', name: 'Workout' },
+];
 
 export interface SpotifyAccountState extends SpotifyAccountConfig {
   id: string;
@@ -73,6 +89,7 @@ export class SpotifyAccountProvider {
   private tokenExpiresAt = 0;
   private authError = false;
   private refreshPromise: Promise<string | null> | null = null;
+  private readonly deniedPlaylistIds = new Set<string>();
 
   constructor(options: SpotifyAccountProviderOptions) {
     this.providerId = options.providerId;
@@ -195,7 +212,24 @@ export class SpotifyAccountProvider {
           await this.fetchUserArtists(limit || 20),
           offset,
         );
+      case 'liked':
+        return this.buildFolder(
+          folderId,
+          'Liked Songs',
+          await this.fetchLikedSongs(offset, limit || 50),
+          offset,
+        );
+      case 'podcasts':
+        return this.buildFolder(
+          folderId,
+          'Podcasts',
+          await this.fetchUserPodcasts(offset, limit || 20),
+          offset,
+        );
       case 'popular':
+        if (!SPOTIFY_ENABLE_POPULAR_CATEGORY) {
+          return this.buildFolder(folderId, 'Popular Playlists', { items: [], total: 0 }, offset);
+        }
         return this.buildFolder(
           folderId,
           'Popular Playlists',
@@ -244,6 +278,13 @@ export class SpotifyAccountProvider {
           await this.fetchArtistTopTracks(normalized.id),
           offset,
         );
+      case 'showItem':
+        return this.buildFolder(
+          folderId,
+          'Podcast',
+          await this.fetchShowEpisodes(normalized.id, offset, limit || 50),
+          offset,
+        );
       default:
         return {
           id: folderId,
@@ -261,12 +302,13 @@ export class SpotifyAccountProvider {
       name: this.displayLabel,
       service: 'spotify',
       start: offset,
-      totalitems: 6,
+      totalitems: 7,
       items: [
         this.folderLink('playlists', 'Playlists'),
         this.folderLink('albums', 'Albums'),
         this.folderLink('artists', 'Artists'),
-        this.folderLink('popular-playlists', 'Popular Playlists'),
+        this.folderLink('liked-songs', 'Liked Songs'),
+        this.folderLink('podcasts', 'Podcasts'),
         this.folderLink('new-releases', 'New Releases'),
         this.folderLink('genres', 'Genres & Moods'),
       ],
@@ -303,6 +345,8 @@ export class SpotifyAccountProvider {
     | { type: 'playlists' }
     | { type: 'albums' }
     | { type: 'artists' }
+    | { type: 'liked' }
+    | { type: 'podcasts' }
     | { type: 'popular' }
     | { type: 'new' }
     | { type: 'genres' }
@@ -310,6 +354,7 @@ export class SpotifyAccountProvider {
     | { type: 'playlistItem'; id: string }
     | { type: 'albumItem'; id: string }
     | { type: 'artistItem'; id: string }
+    | { type: 'showItem'; id: string }
     | { type: 'unknown' } {
     const raw = this.stripProviderPrefix(folderId || 'root');
     const key = raw.toLowerCase();
@@ -328,6 +373,9 @@ export class SpotifyAccountProvider {
     if (key.startsWith('artist:')) {
       return { type: 'artistItem', id: tail };
     }
+    if (key.startsWith('show:')) {
+      return { type: 'showItem', id: tail };
+    }
     if (key.startsWith('category:')) {
       return { type: 'category', id: tail };
     }
@@ -339,6 +387,12 @@ export class SpotifyAccountProvider {
     }
     if (key === 'artist' || key === 'artists' || key === '6') {
       return { type: 'artists' };
+    }
+    if (key === 'liked' || key.includes('liked-songs') || key.includes('favorites') || key === '4') {
+      return { type: 'liked' };
+    }
+    if (key === 'podcasts' || key === 'podcast' || key.includes('shows') || key === '7') {
+      return { type: 'podcasts' };
     }
     if (
       key === 'popular' ||
@@ -419,7 +473,12 @@ export class SpotifyAccountProvider {
     );
 
     const items = Array.isArray(data?.items) ? data!.items : [];
-    return { items: items.map((pl) => this.mapPlaylist(pl)), total: data?.total };
+    const visible = items.filter((pl) => {
+      const id = typeof pl?.id === 'string' ? pl.id : '';
+      if (!id) return false;
+      return !this.deniedPlaylistIds.has(id);
+    });
+    return { items: visible.map((pl) => this.mapPlaylist(pl)), total: data?.total };
   }
 
   private async fetchPlaylistTracks(
@@ -430,19 +489,81 @@ export class SpotifyAccountProvider {
     if (!playlistId) {
       return { items: [], total: 0 };
     }
+    const cappedLimit = Math.min(Math.max(limit || 50, 1), SPOTIFY_PLAYLIST_ITEMS_MAX_LIMIT);
     const data = await this.request<{ items?: any[]; total?: number; tracks?: { total?: number } }>(
-      `${SPOTIFY_API_BASE}/playlists/${encodeURIComponent(playlistId)}/tracks`,
+      `${SPOTIFY_API_BASE}/playlists/${encodeURIComponent(playlistId)}/items`,
       {
         params: {
-          offset: String(offset),
-          limit: String(limit || 50),
+          offset: String(Math.max(0, offset || 0)),
+          limit: String(cappedLimit),
         },
+        suppressWarn: true,
       },
     );
 
     const items = Array.isArray(data?.items) ? data!.items : [];
-    const mapped = items.map((entry) => entry?.track).filter(Boolean).map((track) => this.mapTrack(track));
-    return { items: mapped, total: data?.total ?? data?.tracks?.total ?? mapped.length };
+    if (items.length) {
+      this.deniedPlaylistIds.delete(playlistId);
+      const mapped = items.map((entry) => entry?.track).filter(Boolean).map((track) => this.mapTrack(track));
+      return { items: mapped, total: data?.total ?? data?.tracks?.total ?? mapped.length };
+    }
+
+    const itemsStatus = await this.probeStatus(`${SPOTIFY_API_BASE}/playlists/${encodeURIComponent(playlistId)}/items`, {
+      params: {
+        offset: String(Math.max(0, offset || 0)),
+        limit: String(cappedLimit),
+      },
+    });
+
+    // Fallback path for dev-mode/policy behavior where /items can be denied.
+    const fallback = await this.request<{ tracks?: { items?: any[]; total?: number } }>(
+      `${SPOTIFY_API_BASE}/playlists/${encodeURIComponent(playlistId)}`,
+      {
+        params: {
+          fields:
+            'tracks.total,tracks.items(track(id,name,duration_ms,artists(name),album(name,images)))',
+        },
+      },
+    );
+    const fallbackItems = Array.isArray(fallback?.tracks?.items) ? fallback.tracks.items : [];
+    const mapped = fallbackItems
+      .map((entry) => entry?.track)
+      .filter(Boolean)
+      .map((track) => this.mapTrack(track));
+    if (!mapped.length && itemsStatus === 403) {
+      this.deniedPlaylistIds.add(playlistId);
+      this.log.warn('spotify playlist hidden after forbidden items response', { playlistId });
+    } else if (mapped.length) {
+      this.deniedPlaylistIds.delete(playlistId);
+    }
+    return { items: mapped, total: fallback?.tracks?.total ?? mapped.length };
+  }
+
+  private async probeStatus(
+    url: string,
+    options?: { params?: Record<string, string>; method?: string; body?: any },
+  ): Promise<number> {
+    const token = await this.getAccessToken();
+    if (!token) {
+      return 0;
+    }
+
+    const apiUrl = new URL(url);
+    if (options?.params) {
+      for (const [key, value] of Object.entries(options.params)) {
+        apiUrl.searchParams.set(key, value);
+      }
+    }
+
+    const response = await this.rawRequest<any>(apiUrl.toString(), {
+      method: options?.method ?? 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+      },
+      body: options?.body,
+    });
+    return response.status;
   }
 
   private async fetchAlbumTracks(
@@ -491,6 +612,26 @@ export class SpotifyAccountProvider {
     return { items: mapped, total: data?.total ?? mapped.length };
   }
 
+  private async fetchLikedSongs(
+    offset: number,
+    limit: number,
+  ): Promise<{ items: ContentFolderItem[]; total?: number }> {
+    const cappedLimit = Math.min(Math.max(limit || 50, 1), 50);
+    const data = await this.request<{ items?: any[]; total?: number }>(
+      `${SPOTIFY_API_BASE}/me/tracks`,
+      {
+        params: { offset: String(Math.max(0, offset || 0)), limit: String(cappedLimit) },
+        suppressWarn: true,
+      },
+    );
+    const items = Array.isArray(data?.items) ? data.items : [];
+    const mapped = items
+      .map((entry) => entry?.track)
+      .filter(Boolean)
+      .map((track) => this.mapTrack(track));
+    return { items: mapped, total: data?.total ?? mapped.length };
+  }
+
   private async fetchUserArtists(
     limit: number,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
@@ -499,70 +640,115 @@ export class SpotifyAccountProvider {
       `${SPOTIFY_API_BASE}/me/following?type=artist&limit=${cappedLimit}`,
     );
     const items = Array.isArray(data?.artists?.items) ? data!.artists!.items : [];
-    const mapped = items.map((artist) => this.mapArtist(artist));
-    return { items: mapped, total: data?.artists?.total ?? mapped.length };
+    if (items.length) {
+      const mapped = items.map((artist) => this.mapArtist(artist));
+      return { items: mapped, total: data?.artists?.total ?? mapped.length };
+    }
+
+    // Dev-mode/scope fallback: derive artists from saved albums.
+    const albumData = await this.request<{ items?: any[]; total?: number }>(
+      `${SPOTIFY_API_BASE}/me/albums`,
+      {
+        params: { offset: '0', limit: String(cappedLimit) },
+        suppressWarn: true,
+      },
+    );
+    const albumEntries = Array.isArray(albumData?.items) ? albumData.items : [];
+    const albumArtists = albumEntries
+      .map((entry) => entry?.album?.artists)
+      .flat()
+      .filter(Boolean);
+    const uniqueArtists = this.dedupeById(albumArtists).slice(0, cappedLimit);
+    if (uniqueArtists.length) {
+      this.log.debug('spotify artists fallback to saved albums', {
+        count: uniqueArtists.length,
+      });
+      const mapped = uniqueArtists.map((artist) => this.mapArtist(artist));
+      return { items: mapped, total: mapped.length };
+    }
+
+    return { items: [], total: 0 };
+  }
+
+  private async fetchUserPodcasts(
+    offset: number,
+    limit: number,
+  ): Promise<{ items: ContentFolderItem[]; total?: number }> {
+    const cappedLimit = Math.min(Math.max(limit || 20, 1), 50);
+    const safeOffset = Math.max(0, offset || 0);
+
+    // Primary view: saved episodes ("Your Episodes").
+    const episodes = await this.request<{ items?: any[]; total?: number }>(
+      `${SPOTIFY_API_BASE}/me/episodes`,
+      {
+        params: { offset: String(safeOffset), limit: String(cappedLimit) },
+        suppressWarn: false,
+      },
+    );
+    const episodeItems = Array.isArray(episodes?.items) ? episodes.items : [];
+    const mappedEpisodes = episodeItems
+      .map((entry) => entry?.episode)
+      .filter(Boolean)
+      .map((episode) => this.mapEpisode(episode));
+    if (mappedEpisodes.length) {
+      return { items: mappedEpisodes, total: episodes?.total ?? mappedEpisodes.length };
+    }
+
+    // Secondary view: followed/saved podcast shows.
+    const shows = await this.request<{ items?: any[]; total?: number }>(
+      `${SPOTIFY_API_BASE}/me/shows`,
+      {
+        params: { offset: String(safeOffset), limit: String(cappedLimit) },
+        suppressWarn: false,
+      },
+    );
+    const showItems = Array.isArray(shows?.items) ? shows.items : [];
+    const mappedShows = showItems
+      .map((entry) => entry?.show)
+      .filter(Boolean)
+      .map((show) => this.mapShow(show));
+    return { items: mappedShows, total: shows?.total ?? mappedShows.length };
   }
 
   private async fetchPopularPlaylists(
     limit: number,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
-    const params = this.buildBrowseParams(limit);
-    const fallbackParams = { ...params };
-    delete fallbackParams.country;
-    const usParams = { ...params, country: 'US' };
-
-    const attemptOrder: Array<{ url: string; params: Record<string, string> }> = [
-      { url: `${SPOTIFY_API_BASE}/browse/categories/toplists/playlists`, params },
-      { url: `${SPOTIFY_API_BASE}/browse/categories/toplists/playlists`, params: fallbackParams },
-      { url: `${SPOTIFY_API_BASE}/browse/categories/toplists/playlists`, params: usParams },
-      { url: `${SPOTIFY_API_BASE}/browse/featured-playlists`, params },
-      { url: `${SPOTIFY_API_BASE}/browse/featured-playlists`, params: fallbackParams },
-      { url: `${SPOTIFY_API_BASE}/browse/featured-playlists`, params: usParams },
-    ];
-
-    for (const { url, params: p } of attemptOrder) {
-      const res = await this.request<{ playlists?: { items?: any[]; total?: number } }>(url, {
-        params: p,
-        suppressWarn: true,
-      });
-      if (Array.isArray(res?.playlists?.items) && res.playlists.items.length) {
-        const unique = this.dedupeById(res.playlists.items);
-        return {
-          items: unique.map((pl) => this.mapPlaylist(pl)),
-          total: res.playlists.total ?? unique.length,
-        };
-      }
-    }
-
-    // Editorial fallback: curated playlists from the official Spotify account.
-    const editorial = await this.request<{ items?: any[]; total?: number }>(
-      `${SPOTIFY_API_BASE}/users/spotify/playlists`,
-      {
-        params: { limit: String(limit || 20) },
-        suppressWarn: true,
-      },
-    );
-    const editorialItems = this.dedupeById(editorial?.items || []);
-    if (editorialItems.length) {
-      return { items: editorialItems.map((pl) => this.mapPlaylist(pl)), total: editorial?.total };
-    }
-
-    // Fallback to user's own playlists to avoid empty UI.
-    const userPlaylists = await this.fetchUserPlaylists(0, limit);
-    if (userPlaylists.items.length) {
+    const cappedLimit = Math.min(Math.max(limit || 20, 1), 50);
+    const userPlaylists = await this.fetchUserPlaylists(0, cappedLimit);
+    if (userPlaylists.items.length >= Math.min(cappedLimit, 5)) {
       return userPlaylists;
     }
 
-    // Curated known global playlists (e.g., Today's Top Hits).
-    const curatedIds = ['37i9dQZF1DXcBWIGoYBM5M'];
+    const searchTerms = ['today top hits', 'top hits', 'viral hits'];
+    const searched: any[] = [];
+    for (const query of searchTerms) {
+      const results = await this.searchPlaylistsRaw(query, cappedLimit, 0, true);
+      if (results.length) {
+        searched.push(...results);
+      }
+    }
+    const uniqueSearched = this.dedupeById(searched);
+    if (uniqueSearched.length) {
+      return {
+        items: uniqueSearched.slice(0, cappedLimit).map((pl) => this.mapPlaylist(pl)),
+        total: uniqueSearched.length,
+      };
+    }
+
+    // Final fallback: curated known global playlists (e.g., Today's Top Hits).
+    const curatedIds = ['37i9dQZF1DXcBWIGoYBM5M', '37i9dQZF1DX4JAvHpjipBk'];
     const curated: ContentFolderItem[] = [];
     for (const pid of curatedIds) {
       const pl = await this.fetchPlaylistMeta(pid);
       if (pl) curated.push(pl);
-      if (curated.length >= limit) break;
+      if (curated.length >= cappedLimit) break;
     }
     if (curated.length) {
       return { items: curated, total: curated.length };
+    }
+
+    if (userPlaylists.items.length) {
+      return userPlaylists;
     }
 
     return { items: [], total: 0 };
@@ -593,64 +779,41 @@ export class SpotifyAccountProvider {
   private async fetchNewReleases(
     limit: number,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
-    const data = await this.request<{ albums?: { items?: any[]; total?: number } }>(
-      `${SPOTIFY_API_BASE}/browse/new-releases`,
-      { params: this.buildBrowseParams(limit) },
-    );
-    const items = Array.isArray(data?.albums?.items) ? data!.albums!.items : [];
-    return { items: items.map((album) => this.mapAlbum(album)), total: data?.albums?.total };
+    const cappedLimit = Math.min(Math.max(limit || 20, 1), 50);
+    const searchItems = await this.searchAlbumsRaw('tag:new', cappedLimit, 0, true);
+    if (searchItems.length) {
+      const unique = this.dedupeById(searchItems);
+      return {
+        items: unique.slice(0, cappedLimit).map((album) => this.mapAlbum(album)),
+        total: unique.length,
+      };
+    }
+
+    // Dev-mode compatible fallback to user's recently saved albums.
+    const saved = await this.request<{ items?: any[]; total?: number }>(`${SPOTIFY_API_BASE}/me/albums`, {
+      params: { offset: '0', limit: String(cappedLimit) },
+      suppressWarn: true,
+    });
+    const items = Array.isArray(saved?.items) ? saved.items : [];
+    const mapped = items
+      .map((entry) => entry?.album)
+      .filter(Boolean)
+      .map((album) => this.mapAlbum(album, true));
+    return { items: mapped, total: saved?.total ?? mapped.length };
   }
 
   private async fetchBrowseCategories(
     offset: number,
     limit: number,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
-    const params = this.buildBrowseParams(limit, offset);
-    const fallbackParams = { ...params };
-    delete fallbackParams.country;
-    const usParams = { ...params, country: 'US' };
-
-    const attemptOrder: Array<{
-      params: Record<string, string>;
-      suppressWarn?: boolean;
-    }> = [
-      { params },
-      { params: fallbackParams, suppressWarn: true },
-      { params: usParams, suppressWarn: true },
-    ];
-
-    for (const attempt of attemptOrder) {
-      const data = await this.request<{ categories?: { items?: any[]; total?: number } }>(
-        `${SPOTIFY_API_BASE}/browse/categories`,
-        { params: attempt.params, suppressWarn: attempt.suppressWarn },
-      );
-      const items = Array.isArray(data?.categories?.items) ? data!.categories!.items : [];
-      if (items.length) {
-        return {
-          items: items.map((category) => this.mapCategory(category)),
-          total: data?.categories?.total,
-        };
-      }
-    }
-
-    // Last-resort fallback: use genre seeds if browse categories are unavailable.
-    const seeds = await this.request<{ genres?: string[] }>(
-      `${SPOTIFY_API_BASE}/recommendations/available-genre-seeds`,
-      { suppressWarn: true },
-    );
-    const seedItems = Array.isArray(seeds?.genres)
-      ? seeds!.genres!.map((name) => ({ id: name, name }))
-      : [];
-    if (seedItems.length) {
-      this.log.debug('spotify categories fallback to genre seeds', { count: seedItems.length });
-      return {
-        items: seedItems.map((entry) => this.mapCategory(entry)),
-        total: seedItems.length,
-      };
-    }
-
-    this.log.warn('spotify categories unavailable after fallbacks');
-    return { items: [], total: 0 };
+    const safeOffset = Math.max(0, offset || 0);
+    const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
+    const total = SPOTIFY_FALLBACK_CATEGORIES.length;
+    const sliced = SPOTIFY_FALLBACK_CATEGORIES.slice(safeOffset, safeOffset + safeLimit);
+    return {
+      items: sliced.map((entry) => this.mapCategory(entry)),
+      total,
+    };
   }
 
   private async fetchCategoryPlaylists(
@@ -661,41 +824,23 @@ export class SpotifyAccountProvider {
     if (!categoryId) {
       return { items: [], total: 0 };
     }
-    const params = this.buildBrowseParams(limit, offset);
-    const fallbackParams = { ...params };
-    delete fallbackParams.country;
-    const usParams = { ...params, country: 'US' };
-
-    const attemptOrder: Array<{
-      params: Record<string, string>;
-      suppressWarn?: boolean;
-    }> = [
-      { params },
-      { params: fallbackParams, suppressWarn: true },
-      { params: usParams, suppressWarn: true },
-    ];
-
-    const data = await this.request<{ playlists?: { items?: any[]; total?: number } }>(
-      `${SPOTIFY_API_BASE}/browse/categories/${encodeURIComponent(categoryId)}/playlists`,
-      { params, suppressWarn: true },
-    );
-    const primaryItems = Array.isArray(data?.playlists?.items) ? data!.playlists!.items : [];
-    if (primaryItems.length) {
-      return { items: primaryItems.map((pl) => this.mapPlaylist(pl)), total: data?.playlists?.total };
+    const query = this.resolveCategoryName(categoryId);
+    const raw = await this.searchPlaylistsRaw(query, limit || 20, offset || 0, true);
+    const unique = this.dedupeById(raw);
+    if (unique.length) {
+      return {
+        items: unique.map((pl) => this.mapPlaylist(pl)),
+        total: unique.length,
+      };
     }
 
-    for (const attempt of attemptOrder) {
-      const fallback = await this.request<{ playlists?: { items?: any[]; total?: number } }>(
-        `${SPOTIFY_API_BASE}/browse/categories/${encodeURIComponent(categoryId)}/playlists`,
-        { params: attempt.params, suppressWarn: true },
-      );
-      const items = Array.isArray(fallback?.playlists?.items) ? fallback.playlists!.items : [];
-      if (items.length) {
-        return { items: items.map((pl) => this.mapPlaylist(pl)), total: fallback?.playlists?.total };
-      }
+    const fallback = await this.fetchUserPlaylists(offset, limit || 20);
+    if (fallback.items.length) {
+      this.log.debug('spotify category fallback to user playlists', { categoryId, query });
+      return fallback;
     }
 
-    this.log.warn('spotify category playlists unavailable after fallbacks', { categoryId });
+    this.log.warn('spotify category playlists unavailable after fallbacks', { categoryId, query });
     return { items: [], total: 0 };
   }
 
@@ -705,32 +850,101 @@ export class SpotifyAccountProvider {
     if (!artistId) {
       return { items: [], total: 0 };
     }
-    const data = await this.request<{ tracks?: any[] }>(
-      `${SPOTIFY_API_BASE}/artists/${encodeURIComponent(artistId)}/top-tracks`,
+    const artist = await this.request<{ id?: string; name?: string }>(
+      `${SPOTIFY_API_BASE}/artists/${encodeURIComponent(artistId)}`,
+      { suppressWarn: true },
+    );
+    const artistName = (artist?.name || '').trim();
+    if (!artistName) {
+      return { items: [], total: 0 };
+    }
+
+    const query = `artist:\"${artistName}\"`;
+    const data = await this.request<{ tracks?: { items?: any[]; total?: number } }>(
+      `${SPOTIFY_API_BASE}/search`,
       {
-        params: { market: 'from_token' },
+        params: {
+          q: query,
+          type: 'track',
+          limit: String(SPOTIFY_SEARCH_MAX_LIMIT),
+          offset: '0',
+        },
+        suppressWarn: true,
       },
     );
-    const items = Array.isArray(data?.tracks) ? data!.tracks : [];
-    const mapped = items.map((track) => this.mapTrack(track));
+    const items = Array.isArray(data?.tracks?.items) ? data.tracks.items : [];
+    const mapped = this.dedupeById(items).map((track) => this.mapTrack(track));
     return { items: mapped, total: mapped.length };
   }
 
-  /**
-   * Build common browse params with clamped limits and optional country.
-   */
-  private buildBrowseParams(limit: number, offset?: number): Record<string, string> {
-    const params: Record<string, string> = {};
-    const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
-    params.limit = String(safeLimit);
-    if (typeof offset === 'number') {
-      params.offset = String(Math.max(0, offset));
+  private async fetchShowEpisodes(
+    showId: string,
+    offset: number,
+    limit: number,
+  ): Promise<{ items: ContentFolderItem[]; total?: number }> {
+    if (!showId) {
+      return { items: [], total: 0 };
     }
-    const country = this.account.country?.trim();
-    if (country) {
-      params.country = country.toUpperCase();
+    const cappedLimit = Math.min(Math.max(limit || 50, 1), 50);
+    const data = await this.request<{ items?: any[]; total?: number }>(
+      `${SPOTIFY_API_BASE}/shows/${encodeURIComponent(showId)}/episodes`,
+      {
+        params: { offset: String(Math.max(0, offset || 0)), limit: String(cappedLimit) },
+        suppressWarn: true,
+      },
+    );
+    const items = Array.isArray(data?.items) ? data.items : [];
+    const mapped = items.map((episode) => this.mapEpisode(episode));
+    return { items: mapped, total: data?.total ?? mapped.length };
+  }
+
+  private resolveCategoryName(categoryId: string): string {
+    const normalizedId = categoryId.trim().toLowerCase();
+    const known = SPOTIFY_FALLBACK_CATEGORIES.find((entry) => entry.id.toLowerCase() === normalizedId);
+    if (known) {
+      return known.name;
     }
-    return params;
+    return categoryId.replace(/[-_]+/g, ' ').trim() || 'music';
+  }
+
+  private async searchPlaylistsRaw(
+    query: string,
+    limit: number,
+    offset: number,
+    suppressWarn = false,
+  ): Promise<any[]> {
+    const safeLimit = Math.min(Math.max(limit || 20, 1), SPOTIFY_SEARCH_MAX_LIMIT);
+    const safeOffset = Math.max(0, offset || 0);
+    const data = await this.request<{ playlists?: { items?: any[] } }>(`${SPOTIFY_API_BASE}/search`, {
+      params: {
+        q: query,
+        type: 'playlist',
+        limit: String(safeLimit),
+        offset: String(safeOffset),
+      },
+      suppressWarn,
+    });
+    return Array.isArray(data?.playlists?.items) ? data.playlists.items : [];
+  }
+
+  private async searchAlbumsRaw(
+    query: string,
+    limit: number,
+    offset: number,
+    suppressWarn = false,
+  ): Promise<any[]> {
+    const safeLimit = Math.min(Math.max(limit || 20, 1), SPOTIFY_SEARCH_MAX_LIMIT);
+    const safeOffset = Math.max(0, offset || 0);
+    const data = await this.request<{ albums?: { items?: any[] } }>(`${SPOTIFY_API_BASE}/search`, {
+      params: {
+        q: query,
+        type: 'album',
+        limit: String(safeLimit),
+        offset: String(safeOffset),
+      },
+      suppressWarn,
+    });
+    return Array.isArray(data?.albums?.items) ? data.albums.items : [];
   }
 
   private mapPlaylist(playlist: any): ContentFolderItem {
@@ -786,6 +1000,53 @@ export class SpotifyAccountProvider {
       audiopath: this.makeUri('artist', id),
       tag: 'artist',
     };
+  }
+
+  private mapShow(show: any): ContentFolderItem {
+    const id = String(show?.id ?? '');
+    const cover = this.extractImage(show?.images);
+    const publisher = String(show?.publisher ?? '');
+    const name = String(show?.name ?? 'Podcast');
+    return {
+      id: this.makeUri('show', id),
+      name,
+      title: name,
+      type: 12,
+      coverurl: cover,
+      thumbnail: this.extractImage(show?.images, 1) ?? cover,
+      audiopath: this.makeUri('show', id),
+      owner: publisher,
+      artist: publisher,
+      tag: 'show',
+    };
+  }
+
+  private mapEpisode(episode: any): ContentFolderItem {
+    const id = String(episode?.id ?? '');
+    const showName = String(episode?.show?.name ?? '');
+    const cover =
+      this.extractImage(episode?.images) ??
+      this.extractImage(episode?.show?.images);
+    const durationSec = Number.isFinite(episode?.duration_ms)
+      ? Math.max(1, Math.round(Number(episode.duration_ms) / 1000))
+      : 120;
+    const name = String(episode?.name ?? 'Episode');
+    return {
+      id: this.makeUri('episode', id),
+      name,
+      title: name,
+      type: FileType.File,
+      coverurl: cover,
+      thumbnail:
+        this.extractImage(episode?.images, 1) ??
+        this.extractImage(episode?.show?.images, 1) ??
+        cover,
+      audiopath: this.makeUri('episode', id),
+      artist: showName,
+      album: showName,
+      duration: durationSec,
+      tag: 'episode',
+    } as ContentFolderItem;
   }
 
   private mapCategory(category: any): ContentFolderItem {
@@ -874,8 +1135,8 @@ export class SpotifyAccountProvider {
     });
 
     if (!response.ok) {
-      // Retry once on auth errors with a fresh token.
-      if (response.status === 401 || response.status === 403) {
+      // Retry once on token expiry. A 403 is often a policy/mode restriction.
+      if (response.status === 401) {
         this.authError = true;
         const retryToken = await this.getAccessToken();
         if (retryToken && retryToken !== token) {
@@ -902,6 +1163,7 @@ export class SpotifyAccountProvider {
       return null;
     }
 
+    this.authError = false;
     return response.body;
   }
 
@@ -926,8 +1188,10 @@ export class SpotifyAccountProvider {
   }
 
   private async rawRequest<T>(url: string, init: RequestInit): Promise<SpotifyApiResult<T>> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), SPOTIFY_HTTP_TIMEOUT_MS);
     try {
-      const res = await fetch(url, init);
+      const res = await fetch(url, { ...init, signal: controller.signal });
       if (!res.ok) {
         const text = await safeReadText(res, '', {
           onError: 'debug',
@@ -948,6 +1212,14 @@ export class SpotifyAccountProvider {
         body: data,
       };
     } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        this.log.warn('spotify api timeout', { url, timeoutMs: SPOTIFY_HTTP_TIMEOUT_MS });
+        return {
+          ok: false,
+          status: 0,
+          body: null,
+        };
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.log.warn('spotify api error', { url, message });
       return {
@@ -955,6 +1227,8 @@ export class SpotifyAccountProvider {
         status: 0,
         body: null,
       };
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

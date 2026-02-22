@@ -203,6 +203,13 @@ export class ContentManager {
     offset: number,
     limit: number,
   ): Promise<ContentFolder | null> {
+    // Always fetch Spotify podcasts live: users expect immediate updates and
+    // stale cache entries can mask empty/non-empty transitions.
+    if (service === 'spotify' && this.isSpotifyPodcastsFolder(folderId)) {
+      this.log.debug('content cache bypass', { service, user, folderId, offset, limit });
+      return this.fetchServiceFolder(service, user, folderId, offset, limit);
+    }
+
     // cache only browse-like folders; tunein is cheap enough to skip
     const cacheKey = this.cache.key(service, user, folderId, offset, limit);
     const cached = this.cache.get(cacheKey);
@@ -214,6 +221,15 @@ export class ContentManager {
     }
     this.log.debug('content cache miss', { service, user, folderId, offset, limit });
     return this.cache.refresh(cacheKey, () => this.fetchServiceFolder(service, user, folderId, offset, limit));
+  }
+
+  private isSpotifyPodcastsFolder(folderId: string): boolean {
+    const raw = String(folderId || '').trim().toLowerCase();
+    if (!raw) return false;
+    if (raw === '7' || raw === 'podcasts' || raw === 'podcast') return true;
+    if (raw.includes('liked')) return false;
+    if (raw.includes('podcasts') || raw.includes('show')) return true;
+    return false;
   }
 
   private async fetchServiceFolder(

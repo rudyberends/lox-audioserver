@@ -25,6 +25,7 @@ import { parseSearchLimits } from '@/adapters/content/utils/searchLimits';
 
 type ProviderId = string;
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
+const SPOTIFY_SEARCH_MAX_LIMIT = 10;
 const PROVIDER_ICONS: Record<string, string> = {
   spotify: 'https://extended-app-content.s3.eu-central-1.amazonaws.com/audioZone/services/Icon-Spotify.svg',
   applemusic: '/admin/providers/apple-music.svg',
@@ -375,7 +376,8 @@ export class SpotifyServiceManager {
     const url = new URL('https://api.spotify.com/v1/search');
     url.searchParams.set('q', query.replace(/'/g, ''));
     url.searchParams.set('type', activeTypes.join(','));
-    url.searchParams.set('limit', String(maxLimit));
+    const safeSearchLimit = Math.min(Math.max(maxLimit || 20, 1), SPOTIFY_SEARCH_MAX_LIMIT);
+    url.searchParams.set('limit', String(safeSearchLimit));
 
     const res = await fetch(url.toString(), {
       headers: {
