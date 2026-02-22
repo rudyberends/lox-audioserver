@@ -67,7 +67,7 @@ export class StateControllerManager {
     const existing = this.controllers.get(zoneId);
     if (!existing) return;
     this.controllers.delete(zoneId);
-    await Promise.resolve(existing.stop());
+    await this.stopControllerSafely(zoneId, existing);
   }
 
   public async stopAll(): Promise<void> {
@@ -75,16 +75,20 @@ export class StateControllerManager {
     this.controllers.clear();
     await Promise.all(
       entries.map(async ([zoneId, controller]) => {
-        try {
-          await Promise.resolve(controller.stop());
-        } catch (err) {
-          this.log.warn('state controller stop failed', {
-            zoneId,
-            message: err instanceof Error ? err.message : String(err),
-          });
-        }
+        await this.stopControllerSafely(zoneId, controller);
       }),
     );
+  }
+
+  private async stopControllerSafely(zoneId: number, controller: ZoneStateController): Promise<void> {
+    try {
+      await Promise.resolve(controller.stop());
+    } catch (err) {
+      this.log.warn('state controller stop failed', {
+        zoneId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private async startForZone(zone: ZoneConfig): Promise<void> {
