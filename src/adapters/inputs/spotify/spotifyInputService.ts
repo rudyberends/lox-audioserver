@@ -70,7 +70,7 @@ class SpotifyConnectInstance {
   private isReady = false;
   private restarting = false;
   private stopping = false;
-  private readonly restartBackoffMs = [2000, 4000, 8000];
+  private readonly restartBackoffMs = [4000, 8000, 15000, 30000, 45000, 60000];
   private restartBackoffIndex = 0;
   private restartStreak = { count: 0, firstAt: 0 };
   private readonly restartCooldownMs = 5 * 60 * 1000; // 5 minutes
@@ -265,7 +265,7 @@ class SpotifyConnectInstance {
     return false;
   }
 
-  private scheduleRestart(): void {
+  private scheduleRestart(options?: { minDelayMs?: number; rateLimited?: boolean }): void {
     if (this.restarting || this.stopping) {
       return;
     }
@@ -295,12 +295,23 @@ class SpotifyConnectInstance {
       return;
     }
     this.restarting = true;
-    const delay =
+    const baseDelay =
       this.restartBackoffMs[Math.min(this.restartBackoffIndex, this.restartBackoffMs.length - 1)];
     this.restartBackoffIndex = Math.min(
       this.restartBackoffIndex + 1,
       this.restartBackoffMs.length - 1,
     );
+    const rateLimitBoostMs = options?.rateLimited ? 30_000 : 0;
+    const minDelayMs = options?.minDelayMs ?? 0;
+    const zoneSpreadMs = (this.zoneId % 13) * 500;
+    const jitterMs = Math.floor(Math.random() * 1250);
+    const delay = Math.max(baseDelay + rateLimitBoostMs + zoneSpreadMs + jitterMs, minDelayMs);
+    this.log.debug('spotify connect restart scheduled', {
+      zoneId: this.zoneId,
+      delayMs: delay,
+      baseDelayMs: baseDelay,
+      rateLimited: options?.rateLimited === true,
+    });
     setTimeout(() => {
       this.restarting = false;
       this.start().catch((error) => {
@@ -354,6 +365,10 @@ class SpotifyConnectInstance {
             ? ev.errorCode
             : 'playback failed';
       const lowerMessage = message.toLowerCase();
+      const rateLimited =
+        lowerMessage.includes('429') ||
+        lowerMessage.includes('too many requests') ||
+        lowerMessage.includes('rate limit');
       if (ev.errorCode === 'audio_key_error') {
         // Audio key errors usually mean the session is unhealthy; trigger a cool-down.
         this.restartStreak = { count: 10, firstAt: Date.now() };
@@ -363,7 +378,9 @@ class SpotifyConnectInstance {
       }
       this.notifyOutputError(this.zoneId, `spotify ${message}`);
       this.stopConnectHost();
-      this.scheduleRestart();
+      this.scheduleRestart({
+        rateLimited,
+      });
       return;
     }
 
@@ -846,6 +863,7 @@ export class SpotifyInputService {
   private accountIndex = new Map<string, SpotifyAccountConfig>();
   private controller: SpotifyConnectController | null = null;
   private enabled = false;
+  private readonly pendingStartTimers = new Map<number, NodeJS.Timeout>();
   constructor(
     private readonly notifyOutputError: OutputErrorHandler,
     private readonly configPort: ConfigPort,
@@ -878,10 +896,7 @@ export class SpotifyInputService {
         return;
       }
       setTimeout(() => {
-        instance.start().catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          this.log.warn('spotify connect restart after stop failed', { zoneId, message });
-        });
+        this.queueStart(zoneId, instance, 1000, 'restart_after_stop');
       }, 1500);
     });
   }
@@ -1027,6 +1042,15 @@ export class SpotifyInputService {
     const defaultAccount = this.resolveAccount();
 
     const desired = new Set<number>();
+    const connectZones = zones.filter((zone) => {
+      const config = zone.inputs?.spotify ?? this.buildDefaultZoneConfig(zone);
+      const offloadEnabled = config.offload === true;
+      return inputsEnabled && Boolean(config.enabled) && !offloadEnabled;
+    });
+    const connectZoneOrder = new Map<number, number>();
+    connectZones.forEach((zone, index) => {
+      connectZoneOrder.set(zone.id, index);
+    });
     for (const zone of zones) {
       const deviceId =
         typeof zone.inputs?.spotify?.deviceId === 'string' && zone.inputs.spotify.deviceId.trim()
@@ -1048,13 +1072,10 @@ export class SpotifyInputService {
         existing.setAccount(account?.id);
         existing.updateCredentialPath('inline', credPath);
         if (connectEnabled) {
-          existing.start().catch((error) => {
-            this.log.warn('failed to start spotify connect', {
-              zoneId: zone.id,
-              message: error instanceof Error ? error.message : String(error),
-            });
-          });
+          const delayMs = this.computeStartupDelay(zone.id, connectZoneOrder.get(zone.id) ?? 0);
+          this.queueStart(zone.id, existing, delayMs, 'sync_existing');
         } else {
+          this.cancelQueuedStart(zone.id);
           existing.stopConnectHost();
         }
         continue;
@@ -1076,13 +1097,10 @@ export class SpotifyInputService {
       );
       this.instances.set(zone.id, instance);
       if (connectEnabled) {
-        instance.start().catch((error) => {
-          this.log.warn('failed to start spotify connect', {
-            zoneId: zone.id,
-            message: error instanceof Error ? error.message : String(error),
-          });
-        });
+        const delayMs = this.computeStartupDelay(zone.id, connectZoneOrder.get(zone.id) ?? 0);
+        this.queueStart(zone.id, instance, delayMs, 'sync_new');
       } else {
+        this.cancelQueuedStart(zone.id);
         if (inputsEnabled && !offloadEnabled) {
           // Best-effort warm start; failure will be retried via normal lifecycle.
           void bestEffort(() => instance.start(), {
@@ -1105,6 +1123,7 @@ export class SpotifyInputService {
   }
 
   public async shutdown(): Promise<void> {
+    this.clearQueuedStarts();
     await Promise.all(
       Array.from(this.instances.values()).map((instance) =>
         // Best-effort shutdown; continue stopping remaining instances.
@@ -1128,6 +1147,7 @@ export class SpotifyInputService {
   }
 
   private removeInstance(zoneId: number): void {
+    this.cancelQueuedStart(zoneId);
     const instance = this.instances.get(zoneId);
     if (!instance) {
       return;
@@ -1142,6 +1162,7 @@ export class SpotifyInputService {
   }
 
   private disableAllInstances(): void {
+    this.clearQueuedStarts();
     for (const [zoneId, instance] of this.instances.entries()) {
       instance.stop().catch((error) => {
         this.log.warn('failed to stop spotify connect', {
@@ -1287,6 +1308,57 @@ export class SpotifyInputService {
       return this.accountIndex.get(accountId);
     }
     return Array.from(this.accountIndex.values())[0];
+  }
+
+  private queueStart(
+    zoneId: number,
+    instance: SpotifyConnectInstance,
+    delayMs: number,
+    reason: 'sync_existing' | 'sync_new' | 'restart_after_stop',
+  ): void {
+    if (!this.enabled) {
+      return;
+    }
+    this.cancelQueuedStart(zoneId);
+    const timer = setTimeout(() => {
+      this.pendingStartTimers.delete(zoneId);
+      if (this.instances.get(zoneId) !== instance) {
+        return;
+      }
+      instance.start().catch((error) => {
+        this.log.warn('failed to start spotify connect', {
+          zoneId,
+          reason,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, Math.max(0, Math.round(delayMs)));
+    this.pendingStartTimers.set(zoneId, timer);
+    this.log.debug('spotify connect start queued', { zoneId, delayMs, reason });
+  }
+
+  private cancelQueuedStart(zoneId: number): void {
+    const timer = this.pendingStartTimers.get(zoneId);
+    if (!timer) {
+      return;
+    }
+    clearTimeout(timer);
+    this.pendingStartTimers.delete(zoneId);
+  }
+
+  private clearQueuedStarts(): void {
+    for (const timer of this.pendingStartTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.pendingStartTimers.clear();
+  }
+
+  private computeStartupDelay(zoneId: number, connectOrder: number): number {
+    // Spread startup attempts to avoid synchronized dealer websocket bursts.
+    const orderMs = connectOrder * 5000;
+    const zoneSpreadMs = (zoneId % 7) * 175;
+    const jitterMs = Math.floor(Math.random() * 500);
+    return orderMs + zoneSpreadMs + jitterMs;
   }
 }
 
