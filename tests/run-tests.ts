@@ -33,6 +33,8 @@ import type { ContentPort } from '../src/ports/ContentPort';
 import type { NotifierPort } from '../src/ports/NotifierPort';
 import { makeNotifierFake } from './fakes/notifierPort';
 import { makePlaybackServiceFake } from './fakes/playbackService';
+import { PlaybackService } from '../src/application/playback/PlaybackService';
+import type { EnginePort, EngineSessionStats } from '../src/ports/EnginePort';
 import type { ZoneManagerFacade } from '../src/application/zones/createZoneManager';
 import { createRecentsManager } from '../src/application/zones/recents/recentsManager';
 import type { GroupManager } from '../src/application/groups/groupManager';
@@ -416,6 +418,76 @@ test('ffmpeg stop issues SIGKILL after timeout', async () => {
   }
   const captured = proc as unknown as { signals: string[] };
   assert.deepEqual(captured.signals, ['SIGTERM', 'SIGKILL']);
+});
+
+test('audio manager active local session detection ignores stale no-subscriber sessions', () => {
+  let hasEngineSession = true;
+  const stats: EngineSessionStats[] = [
+    {
+      profile: 'mp3',
+      bps: null,
+      bufferedBytes: 0,
+      totalBytes: 0,
+      lastUpdated: null,
+      subscribers: 0,
+      restarts: 0,
+      lastError: null,
+      lastErrorAt: null,
+      lastStderr: null,
+      lastStderrAt: null,
+      lastExitCode: null,
+      lastExitSignal: null,
+      lastExitAt: null,
+      subscriberDrops: 0,
+      lastSubscriberDropAt: null,
+    },
+  ];
+  const engine: EnginePort = {
+    start: () => {},
+    startWithHandoff: () => {},
+    stop: () => {},
+    createStream: () => null,
+    createLocalSession: () => ({
+      start: () => {},
+      stop: () => {},
+      createSubscriber: () => null,
+    }),
+    waitForFirstChunk: async () => false,
+    hasSession: () => hasEngineSession,
+    getSessionStats: () => stats,
+    setSessionTerminationHandler: () => {},
+  };
+  const { AudioManager } = require('../src/application/playback/audioManager') as typeof import('../src/application/playback/audioManager');
+  const manager = new AudioManager(new PlaybackService(engine), {
+    notifyOutputError: () => {},
+    notifyOutputState: () => {},
+  });
+
+  manager.startPlayback(1, 'https://example.com/test.mp3', {
+    title: 'Track',
+    artist: 'Artist',
+    album: 'Album',
+  });
+  const session = manager.getSession(1);
+  assert.ok(session);
+  if (!session) {
+    return;
+  }
+
+  session.playbackStartedAt = Date.now() - 10_000;
+  session.startedAt = Date.now() - 10_000;
+  assert.equal(manager.hasActiveLocalSession(1), false);
+
+  stats[0].subscribers = 1;
+  assert.equal(manager.hasActiveLocalSession(1), true);
+
+  stats[0].subscribers = 0;
+  session.playbackStartedAt = Date.now() - 1000;
+  session.startedAt = Date.now() - 1000;
+  assert.equal(manager.hasActiveLocalSession(1), true);
+
+  hasEngineSession = false;
+  assert.equal(manager.hasActiveLocalSession(1), false);
 });
 
 test('applyZonePatch merges fields', () => {

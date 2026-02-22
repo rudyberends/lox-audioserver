@@ -553,7 +553,7 @@ export class ZoneManager {
     const ctx = this.zoneRepo.get(zoneId);
     if (ctx) {
       const controllerId = resolveZoneStateControllerId(ctx.config);
-      const hasActiveLocalSession = Boolean(this.audioManager.getSession(zoneId));
+      const hasActiveLocalSession = this.audioManager.hasActiveLocalSession(zoneId);
       const shouldUseExternalController = controllerId !== 'internal' && !hasActiveLocalSession;
       if (shouldUseExternalController && this.stateControllers.handleCommand(zoneId, command, payload)) {
         return;
@@ -572,7 +572,7 @@ export class ZoneManager {
       this.applyPatch(zoneId, patch);
       return;
     }
-    const hasActiveLocalSession = Boolean(this.audioManager.getSession(zoneId));
+    const hasActiveLocalSession = this.audioManager.hasActiveLocalSession(zoneId);
     if (hasActiveLocalSession) {
       this.log.debug('ignored external state patch while local session active', {
         zoneId,
@@ -580,6 +580,14 @@ export class ZoneManager {
         keys: Object.keys(patch),
       });
       return;
+    }
+    if (this.audioManager.getSession(zoneId)) {
+      // Session object can outlive real output playback; drop it before accepting external authority.
+      this.audioManager.stopPlayback(zoneId);
+      this.log.info('cleared stale local session before external state patch', {
+        zoneId,
+        controller: controllerId,
+      });
     }
     this.applyPatch(zoneId, patch);
   }

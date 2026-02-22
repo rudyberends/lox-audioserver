@@ -353,6 +353,49 @@ export class AudioManager {
     return this.sessions.get(zoneId) ?? null;
   }
 
+  /**
+   * Returns true when this zone still has an actively-driving local playback session.
+   * Used by external state controllers to avoid being blocked by stale session objects.
+   */
+  public hasActiveLocalSession(zoneId: number): boolean {
+    const session = this.sessions.get(zoneId);
+    if (!session) {
+      return false;
+    }
+    if (session.state !== 'playing') {
+      return false;
+    }
+    if (!session.playbackSource) {
+      // Output-only sessions do not own engine playback and should not block external state.
+      return false;
+    }
+    if (!this.playbackService.hasSession(zoneId)) {
+      return false;
+    }
+    const stats = this.playbackService.getSessionStats(zoneId);
+    if (!stats.length) {
+      return true;
+    }
+    let maxSubscribers = 0;
+    for (const stat of stats) {
+      const subscribers = Number.isFinite(stat.subscribers) ? Math.max(0, Math.floor(stat.subscribers)) : 0;
+      if (subscribers > maxSubscribers) {
+        maxSubscribers = subscribers;
+      }
+    }
+    if (maxSubscribers > 0) {
+      return true;
+    }
+    // Grace window: immediately after start there can be a short no-subscriber period.
+    const activeSince =
+      session.firstAudioReadyAt ??
+      session.playbackStartedAt ??
+      session.startedAt ??
+      session.updatedAt;
+    const ageMs = Number.isFinite(activeSince) ? Math.max(0, Date.now() - Number(activeSince)) : 0;
+    return ageMs < 5000;
+  }
+
   public updateSessionCover(zoneId: number, cover?: CoverArtPayload): string | undefined {
     const session = this.sessions.get(zoneId);
     if (!session) {

@@ -25,6 +25,7 @@ export class SonosStateController implements ZoneStateController {
   private lastCoverRaw: string | null = null;
   private coverRevision = 0;
   private lastTrackSignature = '';
+  private lastLoggedSnapshotSignature = '';
 
   constructor(options: SonosControllerOptions) {
     this.zone = options.zone;
@@ -147,17 +148,29 @@ export class SonosStateController implements ZoneStateController {
     if (!patch || Object.keys(patch).length === 0) {
       return;
     }
-    this.log.debug('sonos state update', {
-      zoneId: this.zone.id,
-      mode: patch.mode,
-      audiotype: patch.audiotype,
-      sourceName: patch.sourceName,
-      title: patch.title,
-      artist: patch.artist,
-      album: patch.album,
-      hasCover: Boolean(patch.coverurl),
-      keys: Object.keys(patch),
-    });
+    const snapshotSignature = [
+      String(patch.mode ?? ''),
+      String(patch.audiotype ?? ''),
+      String(patch.sourceName ?? ''),
+      String(patch.title ?? ''),
+      String(patch.artist ?? ''),
+      String(patch.album ?? ''),
+      String(patch.station ?? ''),
+    ].join('|');
+    if (snapshotSignature !== this.lastLoggedSnapshotSignature) {
+      this.lastLoggedSnapshotSignature = snapshotSignature;
+      this.log.debug('sonos state update', {
+        zoneId: this.zone.id,
+        mode: patch.mode,
+        audiotype: patch.audiotype,
+        sourceName: patch.sourceName,
+        title: patch.title,
+        artist: patch.artist,
+        album: patch.album,
+        hasCover: Boolean(patch.coverurl),
+        keys: Object.keys(patch),
+      });
+    }
     this.onStatePatch(this.zone.id, patch);
   }
 
@@ -264,7 +277,7 @@ function normalizeCommand(command: string): 'play' | 'pause' | 'stop' | 'next' |
 }
 
 function resolveSonosHost(zone: ZoneConfig): string | null {
-  const output = ((zone.output ?? null) as Record<string, unknown> | null) ?? null;
+  const output = resolvePrimaryOutput(zone);
   const controlUrl = output ? pickString(output.controlUrl) : null;
   const candidate =
     (output ? pickString(output.host) : null) ??
@@ -272,6 +285,19 @@ function resolveSonosHost(zone: ZoneConfig): string | null {
     (output ? pickString(output.address) : null) ??
     extractHostname(controlUrl);
   return candidate || null;
+}
+
+function resolvePrimaryOutput(zone: ZoneConfig): Record<string, unknown> | null {
+  if (zone.output && typeof zone.output === 'object') {
+    return zone.output as Record<string, unknown>;
+  }
+  if (Array.isArray(zone.transports) && zone.transports.length > 0) {
+    const first = zone.transports[0];
+    if (first && typeof first === 'object') {
+      return first as Record<string, unknown>;
+    }
+  }
+  return null;
 }
 
 function pickString(value: unknown): string | null {
