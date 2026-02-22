@@ -292,6 +292,16 @@ export class SendspinOutput implements ZoneOutput {
     void this.fetchAndSendArtwork(session);
     this.sendControllerState();
     this.startProgressUpdates();
+    // A fresh play request after pause must always release the pause gate,
+    // especially when startStream() reuses an existing pipeline.
+    if (this.paused) {
+      this.paused = false;
+      if (this.resumeGateResolve) {
+        this.resumeGateResolve();
+      }
+      this.resumeGateResolve = null;
+      this.resumeGate = null;
+    }
     await this.startStream();
     this.pushPlaybackState('playing');
   }
