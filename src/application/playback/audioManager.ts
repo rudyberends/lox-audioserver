@@ -674,9 +674,15 @@ export class AudioManager {
     const outputOnly =
       !effectiveSource && (label.toLowerCase() === 'spotify' || label.toLowerCase() === 'musicassistant');
 
+    const sameSource = Boolean(existing && this.isSamePlaybackSource(existing.playbackSource, effectiveSource));
+    const forcePipeRestartOnTrackChange =
+      sameSource &&
+      effectiveSource?.kind === 'pipe' &&
+      this.didTrackChange(existing?.metadata, metadata);
+
     // If we are already on the same source (e.g. track change on the same pipe),
     // keep the existing stream URLs and engine session running.
-    if (existing && this.isSamePlaybackSource(existing.playbackSource, effectiveSource)) {
+    if (sameSource && !forcePipeRestartOnTrackChange && existing) {
       const now = Date.now();
       const playRequest = this.claimPlayRequest(zoneId);
       existing.source = label;
@@ -725,6 +731,9 @@ export class AudioManager {
       existing.outputSettings = outputSignature;
       this.log.debug('playback continued on same source', { zoneId, source: label });
       return existing;
+    }
+    if (forcePipeRestartOnTrackChange) {
+      this.log.info('restarting audio engine for pipe track change', { zoneId, source: label });
     }
 
     const isAppleMusic = label.toLowerCase() === 'applemusic';
@@ -867,6 +876,22 @@ export class AudioManager {
       if (left[leftKeys[i]] !== right[rightKeys[i]]) return false;
     }
     return true;
+  }
+
+  private didTrackChange(
+    prev?: PlaybackMetadata | null,
+    next?: PlaybackMetadata | null,
+  ): boolean {
+    if (!prev || !next) {
+      return false;
+    }
+    if (prev.trackId && next.trackId && prev.trackId !== next.trackId) {
+      return true;
+    }
+    if (prev.audiopath && next.audiopath && prev.audiopath !== next.audiopath) {
+      return true;
+    }
+    return false;
   }
 
   private sameProfiles(a?: OutputProfile[] | null, b?: OutputProfile[] | null): boolean {
