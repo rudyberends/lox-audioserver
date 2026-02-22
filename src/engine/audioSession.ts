@@ -732,8 +732,12 @@ export class AudioSession {
         filters.push(`volume=${fixedGainDb}dB`);
       }
       if (audioResampler.name === 'soxr') {
+        // For live pipe inputs (e.g. librespot), ffmpeg's async resampling can build up
+        // noticeable startup latency before first output chunk. Keep resampling enabled
+        // but disable async clock correction for pipe sources.
+        const asyncPart = this.source.kind === 'pipe' ? '' : ':async=1';
         filters.push(
-          `aresample=resampler=soxr:precision=${audioResampler.precision}:cutoff=${audioResampler.cutoff}:async=1`,
+          `aresample=resampler=soxr:precision=${audioResampler.precision}:cutoff=${audioResampler.cutoff}${asyncPart}`,
         );
       }
 
