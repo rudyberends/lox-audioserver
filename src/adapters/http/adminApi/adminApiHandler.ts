@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
 import { createConnection, isIP } from 'node:net';
-import { createWriteStream, promises as fs, readFileSync } from 'node:fs';
+import { createWriteStream, promises as fs, readFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -140,8 +140,10 @@ export class AdminApiHandler {
   private readonly contentManager: ContentManager;
   private readonly audioManager: AudioManager;
   private readonly mdns: MdnsPort;
+  private readonly containerized: boolean;
   private adminUiUpdateInFlight: Promise<AdminUiUpdateResult> | null = null;
   private clockOffsetCache: { offsetMs: number | null; sampledAt: number } = { offsetMs: null, sampledAt: 0 };
+  private clockOffsetFailureLog: { message: string | null; loggedAt: number } = { message: null, loggedAt: 0 };
   private readonly routes: Route[];
 
   constructor(options: AdminApiOptions) {
@@ -163,6 +165,7 @@ export class AdminApiHandler {
     this.contentManager = options.contentManager;
     this.audioManager = options.audioManager;
     this.mdns = options.mdnsPort;
+    this.containerized = this.detectContainerized();
     this.routes = this.buildRoutes();
   }
 
@@ -596,43 +599,117 @@ export class AdminApiHandler {
     try {
       const offset = await this.fetchClockOffset();
       this.clockOffsetCache = { offsetMs: offset, sampledAt: Date.now() };
+      this.clockOffsetFailureLog = { message: null, loggedAt: 0 };
       return offset;
     } catch (err) {
-      this.log.debug('clock offset fetch failed', { message: err instanceof Error ? err.message : String(err) });
+      const message = err instanceof Error ? err.message : String(err);
+      this.logClockOffsetFailure(message);
       return this.clockOffsetCache.offsetMs;
     }
   }
 
   private fetchClockOffset(): Promise<number | null> {
+    const providers: Array<{ name: string; url: string; parse: (body: string) => number | null }> = [
+      {
+        name: 'timeapi',
+        url: 'https://timeapi.io/api/Time/current/zone?timeZone=Etc/UTC',
+        parse: (body) => {
+          const parsed = JSON.parse(body) as {
+            year?: number;
+            month?: number;
+            day?: number;
+            hour?: number;
+            minute?: number;
+            seconds?: number;
+            milliSeconds?: number;
+            dateTime?: string;
+          };
+          if (
+            typeof parsed.year === 'number' &&
+            typeof parsed.month === 'number' &&
+            typeof parsed.day === 'number' &&
+            typeof parsed.hour === 'number' &&
+            typeof parsed.minute === 'number' &&
+            typeof parsed.seconds === 'number'
+          ) {
+            const ms = typeof parsed.milliSeconds === 'number' ? parsed.milliSeconds : 0;
+            return Date.UTC(
+              parsed.year,
+              parsed.month - 1,
+              parsed.day,
+              parsed.hour,
+              parsed.minute,
+              parsed.seconds,
+              ms,
+            );
+          }
+          if (typeof parsed.dateTime === 'string') {
+            const ts = Date.parse(parsed.dateTime);
+            return Number.isNaN(ts) ? null : ts;
+          }
+          return null;
+        },
+      },
+    ];
+
     return new Promise((resolve, reject) => {
-      const req = https.get(
-        'https://worldtimeapi.org/api/timezone/Etc/UTC',
-        {
-          timeout: 1500,
-        },
-        (res) => {
-          let body = '';
-          res.on('data', (chunk) => {
-            body += chunk;
-          });
-          res.on('end', () => {
-            try {
-              const parsed = JSON.parse(body) as { unixtime?: number };
-              const remoteMs = typeof parsed.unixtime === 'number' ? parsed.unixtime * 1000 : null;
-              if (!remoteMs) return resolve(null);
-              const offset = Date.now() - remoteMs;
-              resolve(offset);
-            } catch (err) {
-              reject(err);
-            }
-          });
-        },
-      );
-      req.on('error', reject);
-      req.on('timeout', () => {
-        req.destroy(new Error('timeout'));
-      });
+      const tryProvider = (index: number, errors: string[]): void => {
+        if (index >= providers.length) {
+          reject(new Error(`clock offset providers unavailable: ${errors.join('; ')}`));
+          return;
+        }
+        const provider = providers[index];
+        const req = https.get(
+          provider.url,
+          {
+            timeout: 1500,
+            headers: { Accept: 'application/json' },
+          },
+          (res) => {
+            let body = '';
+            res.on('data', (chunk) => {
+              body += chunk;
+            });
+            res.on('end', () => {
+              if ((res.statusCode ?? 0) < 200 || (res.statusCode ?? 0) >= 300) {
+                tryProvider(index + 1, [...errors, `${provider.name}:http-${res.statusCode ?? 0}`]);
+                return;
+              }
+              try {
+                const remoteMs = provider.parse(body);
+                if (!remoteMs) {
+                  tryProvider(index + 1, [...errors, `${provider.name}:invalid-payload`]);
+                  return;
+                }
+                resolve(Date.now() - remoteMs);
+              } catch {
+                tryProvider(index + 1, [...errors, `${provider.name}:parse-error`]);
+              }
+            });
+          },
+        );
+        req.on('error', () => {
+          tryProvider(index + 1, [...errors, `${provider.name}:network-error`]);
+        });
+        req.on('timeout', () => {
+          req.destroy(new Error('timeout'));
+          tryProvider(index + 1, [...errors, `${provider.name}:timeout`]);
+        });
+      };
+      tryProvider(0, []);
     });
+  }
+
+  private logClockOffsetFailure(message: string): void {
+    const now = Date.now();
+    const minLogIntervalMs = 30 * 60 * 1000;
+    const sameMessage = this.clockOffsetFailureLog.message === message;
+    const recentlyLogged = now - this.clockOffsetFailureLog.loggedAt < minLogIntervalMs;
+    if (sameMessage && recentlyLogged) {
+      return;
+    }
+    this.clockOffsetFailureLog = { message, loggedAt: now };
+    this.log.debug('clock offset fetch failed', { message });
   }
 
   private handleInfo(res: ServerResponse): void {
@@ -655,12 +732,28 @@ export class AdminApiHandler {
         activeAdapters: cfg.system.audioserver.extensions?.length ?? 0,
         paired: !!cfg.system.audioserver.paired,
         packages,
+        containerized: this.containerized,
       };
 
       this.sendJson(res, 200, payload);
     } catch (err) {
       this.log.error('failed to produce admin info', { err });
       this.sendJson(res, 500, { error: 'info-unavailable' });
+    }
+  }
+
+  private detectContainerized(): boolean {
+    const forced = (process.env.LOX_DEPLOYMENT ?? '').trim().toLowerCase();
+    if (forced === 'docker' || forced === 'container') return true;
+    if (forced === 'git' || forced === 'host' || forced === 'standalone') return false;
+
+    if (existsSync('/.dockerenv')) return true;
+
+    try {
+      const cgroup = readFileSync('/proc/1/cgroup', 'utf8');
+      return /(docker|containerd|kubepods|podman|lxc)/i.test(cgroup);
+    } catch {
+      return false;
     }
   }
 
