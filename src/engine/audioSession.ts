@@ -97,6 +97,7 @@ export class AudioSession {
   private pipeSourceStream?: NodeJS.ReadableStream;
   private pipeSourceDataListener?: (chunk: Buffer) => void;
   private pipeSourceErrorListener?: (err: any) => void;
+  private directPipeMode = false;
   private killTimer?: NodeJS.Timeout;
   private readonly killTimeoutMs = DEFAULT_KILL_TIMEOUT_MS;
   private discardSubscribersOnStop = false;
@@ -221,10 +222,124 @@ export class AudioSession {
       const pipeSource = this.source as typeof this.source & { stream: NodeJS.ReadableStream };
       this.detachPipeSourceListeners();
       this.pipeSourceStream = pipeSource.stream;
-      // Feed the stream through ffmpeg with -re to pace output.
       const fmt = this.source.format ?? 's16le';
       const sr = this.source.sampleRate ?? this.outputSettings.sampleRate;
       const ch = this.source.channels ?? 2;
+      const canDirectPassthrough =
+        this.profile === 'pcm' &&
+        fmt === 's16le' &&
+        sr === this.outputSettings.sampleRate &&
+        ch === this.outputSettings.channels &&
+        this.outputSettings.pcmBitDepth === 16 &&
+        (!Number.isFinite(this.outputSettings.fixedGainDb) || this.outputSettings.fixedGainDb === 0) &&
+        !this.sourcePreDelayMs &&
+        !this.sourcePadTailSec;
+
+      if (canDirectPassthrough) {
+        this.directPipeMode = true;
+        this.startTs = Date.now();
+        this.log.info('using direct pipe passthrough', {
+          zoneId: this.zoneId,
+          profile: this.profile,
+          format: fmt,
+          sampleRate: sr,
+          channels: ch,
+        });
+
+        let sourceBytesSinceLog = 0;
+        let sourceLastLogTs = 0;
+        let sourceFirstChunkLogged = false;
+        this.pipeSourceDataListener = (chunk: Buffer) => {
+          if (!chunk?.length) {
+            return;
+          }
+          sourceBytesSinceLog += chunk.length;
+          if (!sourceFirstChunkLogged) {
+            sourceFirstChunkLogged = true;
+            this.log.info('pipe source first chunk', {
+              zoneId: this.zoneId,
+              bytes: chunk.length,
+              format: fmt,
+              sampleRate: sr,
+              channels: ch,
+            });
+          }
+          const now = Date.now();
+          if (!sourceLastLogTs) {
+            sourceLastLogTs = now;
+          } else {
+            const elapsed = now - sourceLastLogTs;
+            if (elapsed >= 1000) {
+              const bps = Math.round((sourceBytesSinceLog / elapsed) * 1000);
+              this.log.spam('pipe source throughput', {
+                zoneId: this.zoneId,
+                bytesPerSec: bps,
+              });
+              sourceLastLogTs = now;
+              sourceBytesSinceLog = 0;
+            }
+          }
+
+          const aligned = this.alignPcmChunk(chunk);
+          if (!aligned?.length) {
+            this.recordBytes(chunk.length);
+            return;
+          }
+          if (!this.firstChunkLogged) {
+            this.firstChunkLogged = true;
+            if (this.firstChunkResolve) {
+              this.firstChunkResolve(true);
+              this.firstChunkResolve = null;
+            }
+            this.log.info('direct pipe first chunk', {
+              zoneId: this.zoneId,
+              profile: this.profile,
+              bytes: aligned.length,
+              spawnToFirstChunkMs: this.startTs ? Math.max(0, Date.now() - this.startTs) : null,
+            });
+          }
+          if (this.maxBufferBytes > 0 && this.bufferBytes < this.maxBufferBytes) {
+            this.bufferQueue.push(aligned);
+            this.bufferBytes += aligned.length;
+            if (!this.keepInitialBuffer) {
+              while (this.bufferBytes > this.maxBufferBytes && this.bufferQueue.length > 0) {
+                const removed = this.bufferQueue.shift();
+                if (removed) {
+                  this.bufferBytes -= removed.length;
+                }
+              }
+            }
+          }
+          this.recordBytes(chunk.length);
+          this.writeToSubscribers(aligned);
+        };
+        this.pipeSourceErrorListener = (err: any) => {
+          this.log.warn('pipe source error', {
+            zoneId: this.zoneId,
+            message: err?.message || String(err),
+          });
+          if (!this.ending) {
+            this.cleanup();
+          }
+        };
+        pipeSource.stream.on('data', this.pipeSourceDataListener);
+        pipeSource.stream.on('error', this.pipeSourceErrorListener);
+        pipeSource.stream.once('end', () => {
+          this.log.debug('pipe source ended', { zoneId: this.zoneId, profile: this.profile });
+          if (!this.ending) {
+            this.cleanup();
+          }
+        });
+        pipeSource.stream.once('close', () => {
+          this.log.debug('pipe source closed', { zoneId: this.zoneId, profile: this.profile });
+          if (!this.ending) {
+            this.cleanup();
+          }
+        });
+        this.restartAttempts = 0;
+        return;
+      }
+
       const paceInput = this.source.realTime !== false;
       // When pacing is enabled, apply -re so ffmpeg throttles to real-time. Without it,
       // ffmpeg may read from the upstream pipe as fast as possible which makes the
@@ -505,7 +620,15 @@ export class AudioSession {
   }
 
   private pauseStdout(): void {
-    if (!this.process?.stdout || this.stdoutPaused) {
+    if (this.stdoutPaused) {
+      return;
+    }
+    if (this.directPipeMode && this.pipeSourceStream && typeof (this.pipeSourceStream as any).pause === 'function') {
+      (this.pipeSourceStream as any).pause();
+      this.stdoutPaused = true;
+      return;
+    }
+    if (!this.process?.stdout) {
       return;
     }
     this.process.stdout.pause();
@@ -513,7 +636,15 @@ export class AudioSession {
   }
 
   private resumeStdout(): void {
-    if (!this.process?.stdout || !this.stdoutPaused || this.backpressureCount > 0) {
+    if (!this.stdoutPaused || this.backpressureCount > 0) {
+      return;
+    }
+    if (this.directPipeMode && this.pipeSourceStream && typeof (this.pipeSourceStream as any).resume === 'function') {
+      (this.pipeSourceStream as any).resume();
+      this.stdoutPaused = false;
+      return;
+    }
+    if (!this.process?.stdout) {
       return;
     }
     this.process.stdout.resume();
@@ -721,6 +852,18 @@ export class AudioSession {
     const { sampleRate, channels, pcmBitDepth, mp3Bitrate, fixedGainDb } = this.outputSettings;
     const buildFilterArgs = (): { filterArgs: string[] } => {
       const filters: string[] = [];
+      const pipeSourceSampleRate =
+        this.source.kind === 'pipe' ? this.source.sampleRate ?? this.outputSettings.sampleRate : null;
+      const pipeSourceChannels =
+        this.source.kind === 'pipe' ? this.source.channels ?? this.outputSettings.channels : null;
+      const pipeSourceFormat = this.source.kind === 'pipe' ? this.source.format ?? 's16le' : null;
+      const canBypassResampleForPipe =
+        this.profile === 'pcm' &&
+        this.source.kind === 'pipe' &&
+        pipeSourceFormat === 's16le' &&
+        pipeSourceSampleRate === this.outputSettings.sampleRate &&
+        pipeSourceChannels === this.outputSettings.channels;
+
       if (this.sourcePreDelayMs && this.sourcePreDelayMs > 0) {
         const delayMs = Math.max(0, Math.round(this.sourcePreDelayMs));
         filters.push(`adelay=delays=${delayMs}:all=1`);
@@ -731,7 +874,7 @@ export class AudioSession {
       if (Number.isFinite(fixedGainDb) && fixedGainDb !== 0) {
         filters.push(`volume=${fixedGainDb}dB`);
       }
-      if (audioResampler.name === 'soxr') {
+      if (audioResampler.name === 'soxr' && !canBypassResampleForPipe) {
         // For live pipe inputs (e.g. librespot), ffmpeg's async resampling can build up
         // noticeable startup latency before first output chunk. Keep resampling enabled
         // but disable async clock correction for pipe sources.
@@ -869,7 +1012,7 @@ export class AudioSession {
   }
 
   public createSubscriber(options: { primeWithBuffer?: boolean; label?: string } = {}): PassThrough | null {
-    if (!this.process) {
+    if (!this.process && !this.directPipeMode) {
       return null;
     }
     const stream = new PassThrough({ highWaterMark: 1024 * 512 });
@@ -958,6 +1101,7 @@ export class AudioSession {
     this.clearKillTimer();
     this.clearPacingTimer();
     this.detachPipeSourceListeners();
+    this.directPipeMode = false;
     if (this.firstChunkResolve) {
       this.firstChunkResolve(false);
       this.firstChunkResolve = null;
