@@ -619,6 +619,8 @@ class SpotifyConnectInstance {
       format: 's16le',
       sampleRate: this.nativeSampleRate,
       channels: this.nativeChannels,
+      // Librespot already outputs in real time; disabling ffmpeg -re removes startup lag.
+      realTime: false,
       stream: this.nativeStream,
     };
   }
@@ -632,6 +634,8 @@ class SpotifyConnectInstance {
         format: 's16le',
         sampleRate,
         channels: this.nativeChannels || 2,
+        // Source is already paced; avoid extra ffmpeg input pacing.
+        realTime: false,
         stream: this.nativeConnectStream,
       };
     }
@@ -642,6 +646,7 @@ class SpotifyConnectInstance {
         format: 's16le',
         sampleRate: this.nativeSampleRate || audioOutputSettings.sampleRate,
         channels: this.nativeChannels || 2,
+        realTime: false,
         stream: this.nativeStream,
       };
     }
@@ -651,6 +656,7 @@ class SpotifyConnectInstance {
       format: 's16le',
       sampleRate: audioOutputSettings.sampleRate,
       channels: 2,
+      realTime: false,
       stream: new PassThrough(),
     };
   }
@@ -1218,6 +1224,7 @@ export class SpotifyInputService {
         format: 's16le',
         sampleRate: streamHandle.sampleRate || audioOutputSettings.sampleRate,
         channels: streamHandle.channels || 2,
+        realTime: false,
         stream,
       },
       stop,
