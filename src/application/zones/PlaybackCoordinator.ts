@@ -99,7 +99,7 @@ export class PlaybackCoordinator {
     number,
     { pending: number; running: boolean; timer?: NodeJS.Timeout }
   >();
-  private readonly queueStepCoalesceMs = 150;
+  private readonly queueStepCoalesceMs = 25;
   private readonly musicAssistantInputHandlers: MusicAssistantInputHandlers = {
     startPlayback: (zoneId: number, label: string, source: PlaybackSource, metadata?: PlaybackMetadata) => {
       const ctx = this.zoneRepo.get(zoneId);
@@ -1282,6 +1282,11 @@ export class PlaybackCoordinator {
     state.pending += delta;
     this.queueStepState.set(zoneId, state);
     if (state.running) {
+      return;
+    }
+    // Execute the first queue step immediately for snappy skip behavior.
+    if (!state.timer && Math.abs(state.pending) === 1) {
+      void this.runQueuedSteps(zoneId);
       return;
     }
     if (state.timer) {
