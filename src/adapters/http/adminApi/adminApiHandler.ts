@@ -764,7 +764,15 @@ export class AdminApiHandler {
   }
 
   private readBuildVersion(pkgVersion: string): string {
-    return pkgVersion;
+    const tsRaw = process.env.BUILD_TIMESTAMP?.trim();
+    if (!tsRaw) {
+      return pkgVersion;
+    }
+    const normalizedTs = tsRaw.replace(/[^0-9A-Za-z._-]/g, '');
+    if (!normalizedTs) {
+      return pkgVersion;
+    }
+    return `${pkgVersion}+${normalizedTs}`;
   }
 
   private async performAdminUiUpdate(releaseOverride?: string): Promise<AdminUiUpdateResult> {
