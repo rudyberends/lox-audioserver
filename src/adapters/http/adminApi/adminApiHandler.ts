@@ -117,6 +117,21 @@ type AdminUiUpdateResult = {
   error?: string;
 };
 
+type ComponentPackageUpdateRequest = {
+  name?: string;
+  version?: string;
+};
+
+type ComponentPackageUpdateResult = {
+  ok: boolean;
+  name: string;
+  requestedVersion: string | null;
+  installed: string | null;
+  declared: string | null;
+  updatedAt?: string;
+  error?: string;
+};
+
 type AdminServerSession = {
   id: string;
   username: string;
@@ -182,6 +197,7 @@ export class AdminApiHandler {
   private readonly mdns: MdnsPort;
   private readonly containerized: boolean;
   private adminUiUpdateInFlight: Promise<AdminUiUpdateResult> | null = null;
+  private componentPackageUpdateInFlight: Promise<ComponentPackageUpdateResult> | null = null;
   private clockOffsetCache: { offsetMs: number | null; sampledAt: number } = { offsetMs: null, sampledAt: 0 };
   private clockOffsetFailureLog: { message: string | null; loggedAt: number } = { message: null, loggedAt: 0 };
   private readonly routes: Route[];
@@ -357,6 +373,13 @@ export class AdminApiHandler {
         pattern: /^\/adminui\/update$/,
         handler: async (req, res) => {
           await this.handleAdminUiUpdate(req, res);
+        },
+      },
+      {
+        method: 'POST',
+        pattern: /^\/components\/update$/,
+        handler: async (req, res) => {
+          await this.handleComponentPackageUpdate(req, res);
         },
       },
       { method: 'GET', pattern: /^\/info$/, handler: (_req, res) => this.handleInfo(res) },
@@ -1582,6 +1605,55 @@ export class AdminApiHandler {
     }
   }
 
+  private async handleComponentPackageUpdate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (this.componentPackageUpdateInFlight) {
+      this.sendJson(res, 409, { error: 'component-update-in-progress' });
+      return;
+    }
+
+    const body = (await this.readJsonBody(req, res)) as ComponentPackageUpdateRequest | null;
+    if (res.writableEnded) {
+      return;
+    }
+
+    const name = typeof body?.name === 'string' ? body.name.trim() : '';
+    const requestedVersionRaw = typeof body?.version === 'string' ? body.version.trim() : '';
+    if (!name) {
+      this.sendJson(res, 400, { error: 'component-name-required' });
+      return;
+    }
+    const declaredPackages = this.readDeclaredAddonPackages();
+    if (!Object.prototype.hasOwnProperty.call(declaredPackages, name)) {
+      this.sendJson(res, 400, { error: 'component-not-declared' });
+      return;
+    }
+    if (!name.startsWith(ADDON_PACKAGE_PREFIX)) {
+      this.sendJson(res, 400, { error: 'invalid-component-package' });
+      return;
+    }
+
+    const requestedVersion = requestedVersionRaw || null;
+    if (requestedVersion && !/^[0-9A-Za-z.+_-]+$/.test(requestedVersion)) {
+      this.sendJson(res, 400, { error: 'invalid-component-version' });
+      return;
+    }
+
+    const task = this.performComponentPackageUpdate(name, requestedVersion);
+    this.componentPackageUpdateInFlight = task;
+    try {
+      const result = await task;
+      if (!result.ok) {
+        this.sendJson(res, 500, result);
+        return;
+      }
+      this.sendJson(res, 200, result);
+    } finally {
+      if (this.componentPackageUpdateInFlight === task) {
+        this.componentPackageUpdateInFlight = null;
+      }
+    }
+  }
+
   private readPackageVersion(): string {
     try {
       const json = readFileSync(resolve(process.cwd(), 'package.json'), 'utf8');
@@ -1602,6 +1674,53 @@ export class AdminApiHandler {
       return pkgVersion;
     }
     return `${pkgVersion}+${normalizedTs}`;
+  }
+
+  private async performComponentPackageUpdate(
+    name: string,
+    requestedVersion: string | null,
+  ): Promise<ComponentPackageUpdateResult> {
+    const packageSpec = requestedVersion ? `${name}@${requestedVersion}` : `${name}@latest`;
+    this.log.info('component update started', { packageSpec });
+
+    try {
+      const { code, stderr } = await this.spawnForCompletion('npm', ['install', packageSpec, '--no-audit', '--no-fund'], process.cwd());
+      if (code !== 0) {
+        const message = stderr.trim() || `npm exited with code ${code}`;
+        this.log.warn('component update failed', { packageSpec, message });
+        return {
+          ok: false,
+          name,
+          requestedVersion,
+          installed: this.readInstalledPackageVersion(name),
+          declared: this.readDeclaredAddonPackages()[name] ?? null,
+          error: message,
+        };
+      }
+
+      const installed = this.readInstalledPackageVersion(name);
+      const declared = this.readDeclaredAddonPackages()[name] ?? null;
+      this.log.info('component update finished', { packageSpec, installed, declared });
+      return {
+        ok: true,
+        name,
+        requestedVersion,
+        installed,
+        declared,
+        updatedAt: new Date().toISOString(),
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.warn('component update failed', { packageSpec, message });
+      return {
+        ok: false,
+        name,
+        requestedVersion,
+        installed: this.readInstalledPackageVersion(name),
+        declared: this.readDeclaredAddonPackages()[name] ?? null,
+        error: message,
+      };
+    }
   }
 
   private async performAdminUiUpdate(releaseOverride?: string): Promise<AdminUiUpdateResult> {
@@ -1742,6 +1861,37 @@ export class AdminApiHandler {
           const suffix = stderr.trim() ? `: ${stderr.trim()}` : '';
           reject(new Error(`tar exited with code ${code}${suffix}`));
         }
+      });
+      proc.on('error', reject);
+    });
+  }
+
+  private async spawnForCompletion(
+    command: string,
+    args: string[],
+    cwd: string,
+  ): Promise<{ code: number; stdout: string; stderr: string }> {
+    return new Promise((resolve, reject) => {
+      const proc = spawn(command, args, {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      let stdout = '';
+      let stderr = '';
+      if (proc.stdout) {
+        proc.stdout.on('data', (chunk) => {
+          stdout += chunk.toString();
+        });
+      }
+      if (proc.stderr) {
+        proc.stderr.on('data', (chunk) => {
+          stderr += chunk.toString();
+        });
+      }
+
+      proc.on('close', (code) => {
+        resolve({ code: code ?? 1, stdout, stderr });
       });
       proc.on('error', reject);
     });
