@@ -45,8 +45,10 @@ export function mapZoneCommandToIntent(input: {
       };
     }
     case 'queueplus':
+    case 'next':
       return { kind: 'QueueStep', delta: 1 };
     case 'queueminus':
+    case 'previous':
       return { kind: 'QueueStep', delta: -1 };
     case 'shuffle': {
       const normalized = typeof payload === 'string' ? payload.trim().toLowerCase() : '';

@@ -99,6 +99,7 @@ export class SpotifyConnectInputController implements ZoneOutput {
   private readonly initialPollDelayMs = 1200;
   private readonly deviceWaitTimeoutMs = 12_000;
   private readonly deviceWaitStepMs = 300;
+  private lastKnownPositionSec = 0;
 
   private isPipeSession(session: PlaybackSession | null | undefined): boolean {
     return session?.playbackSource?.kind === 'pipe';
@@ -392,11 +393,14 @@ export class SpotifyConnectInputController implements ZoneOutput {
       suppressOutputError,
     );
     if (res !== null) {
+      const pausedAt = Number.isFinite(session?.elapsed) ? Math.max(0, Math.round(session?.elapsed ?? 0)) : 0;
+      if (pausedAt > 0) {
+        this.lastKnownPositionSec = pausedAt;
+      }
+      // Stop polling immediately to avoid stale "playing" snapshots racing the pause patch.
+      this.stopPolling();
       this.outputHandlers.onOutputState(this.zoneId, { status: 'paused' });
-      void this.validatePlayback(auth.token, auth.accountId, this.lastPlayUri ?? '', suppressOutputError, true);
     }
-    // Allow poller to continue briefly to pick up external state; then stop to avoid keepalive loops.
-    setTimeout(() => this.stopPolling(), this.pollShutdownGraceMs);
   }
 
   public async resume(session: PlaybackSession | null): Promise<void> {
@@ -407,6 +411,40 @@ export class SpotifyConnectInputController implements ZoneOutput {
         });
         return;
       }
+      const suppressOutputError = false;
+      const target = this.extractTarget(session);
+      const auth = await this.resolveAuth(target?.accountId);
+      if (auth) {
+        this.lastAccountId = auth.accountId;
+        const deviceId =
+          this.preferredDeviceId ??
+          this.deviceRegistry.getSpotifyDeviceId(this.zoneId) ??
+          (await this.lookupDeviceByName(auth.token)) ??
+          (await this.ensureActiveDevice(
+            auth.accountId,
+            auth.token,
+            undefined,
+            true,
+            suppressOutputError,
+          ));
+        if (deviceId) {
+          const ok = await this.resumeOnDevice(auth.token, deviceId, suppressOutputError);
+          if (ok) {
+            void this.restoreResumePosition(auth.token, deviceId, session, true);
+            this.pollingEnabled = true;
+            this.log.debug('spotify polling enabled after resume', { zoneId: this.zoneId, deviceId });
+            const uri = this.lastPlayUri ?? target?.uri ?? '';
+            setTimeout(() => {
+              if (!this.pollingEnabled) return;
+              void this.validatePlayback(auth.token, auth.accountId, uri, true, true);
+              this.scheduleValidation(auth.token, auth.accountId, uri, true);
+            }, this.initialPollDelayMs);
+            this.outputHandlers.onOutputState(this.zoneId, { status: 'playing' });
+            return;
+          }
+        }
+      }
+      // Fallback to explicit play when transport resume is not available.
       await this.play(session);
       return;
     }
@@ -429,8 +467,9 @@ export class SpotifyConnectInputController implements ZoneOutput {
       this.log.warn('spotify resume skipped; no active device available', { zoneId: this.zoneId });
       return;
     }
-    const ok = await this.transferAndPlay(auth.token, deviceId, {}, suppressOutputError);
+    const ok = await this.resumeOnDevice(auth.token, deviceId, suppressOutputError);
     if (ok) {
+      void this.restoreResumePosition(auth.token, deviceId, session, true);
       if (!this.isPipeSession(session)) {
         this.pollingEnabled = true;
         this.log.debug('spotify polling enabled after resume', { zoneId: this.zoneId, deviceId });
@@ -445,6 +484,79 @@ export class SpotifyConnectInputController implements ZoneOutput {
         this.log.debug('spotify polling skipped for pipe session (resume)', { zoneId: this.zoneId });
       }
       this.outputHandlers.onOutputState(this.zoneId, { status: 'playing' });
+    }
+  }
+
+  private async resumeOnDevice(
+    token: string,
+    deviceId: string,
+    suppressOutputError = false,
+  ): Promise<boolean> {
+    const endpointWithDevice = this.buildEndpoint('/play', deviceId);
+    let res = await this.apiRequest(
+      'PUT',
+      endpointWithDevice,
+      token,
+      undefined,
+      deviceId,
+      true,
+      suppressOutputError,
+    );
+    if (res === null) {
+      await this.waitForActiveDevice(token, deviceId, 1500, suppressOutputError);
+      res = await this.apiRequest(
+        'PUT',
+        endpointWithDevice,
+        token,
+        undefined,
+        deviceId,
+        true,
+        suppressOutputError,
+      );
+    }
+    return res !== null;
+  }
+
+  private async restoreResumePosition(
+    token: string,
+    deviceId: string,
+    session: PlaybackSession | null | undefined,
+    suppressOutputError = true,
+  ): Promise<void> {
+    const elapsedSec = Number.isFinite(session?.elapsed) ? Math.max(0, Math.round(session?.elapsed ?? 0)) : 0;
+    const candidateSec = Math.max(elapsedSec, this.lastKnownPositionSec);
+    const durationFromSession = Number.isFinite(session?.duration) ? Math.max(0, Math.round(session?.duration ?? 0)) : 0;
+    const durationFromMeta = Number.isFinite(session?.metadata?.duration)
+      ? Math.max(0, Math.round(session?.metadata?.duration ?? 0))
+      : 0;
+    const durationSec = Math.max(durationFromSession, durationFromMeta);
+    const boundedSec = durationSec > 0 ? Math.min(candidateSec, Math.max(0, durationSec - 1)) : candidateSec;
+    if (boundedSec <= 1) {
+      return;
+    }
+    this.lastKnownPositionSec = boundedSec;
+    const positionMs = Math.round(boundedSec * 1000);
+    const delaysMs = [250, 900, 1800];
+    for (const delayMs of delaysMs) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const seekOk = await this.apiRequest(
+        'PUT',
+        this.buildEndpoint(`/seek?position_ms=${positionMs}`, deviceId),
+        token,
+        undefined,
+        deviceId,
+        true,
+        suppressOutputError,
+      );
+      this.log.debug('spotify resume seek requested', {
+        zoneId: this.zoneId,
+        positionMs,
+        delayMs,
+        accepted: seekOk !== null,
+      });
+      if (seekOk !== null) {
+        return;
+      }
     }
   }
 
@@ -644,6 +756,9 @@ export class SpotifyConnectInputController implements ZoneOutput {
       this.outputHandlers.onQueueUpdate(this.zoneId, [mapped], 0);
       const position =
         typeof snapshot.progress_ms === 'number' ? Math.max(0, Math.round(snapshot.progress_ms / 1000)) : undefined;
+      if (typeof position === 'number' && Number.isFinite(position) && position >= 0) {
+        this.lastKnownPositionSec = position;
+      }
       const duration =
         typeof mapped.duration === 'number' && mapped.duration > 0 ? mapped.duration : undefined;
       this.outputHandlers.onOutputState(this.zoneId, {

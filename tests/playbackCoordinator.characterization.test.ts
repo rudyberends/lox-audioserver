@@ -943,6 +943,22 @@ test('queueplus fallback only steps queue when output does not handle it', () =>
   assert.equal(stepCalled, true);
 });
 
+test('next/previous commands map to queue stepping fallback', () => {
+  const { coordinator, ctx, outputRouter } = createHarness();
+  ctx.inputMode = 'queue';
+  ctx.queue.authority = 'local';
+  const deltas: number[] = [];
+  (coordinator as any).stepQueue = (_zoneId: number, delta: number) => {
+    deltas.push(delta);
+  };
+
+  outputRouter.shouldHandleQueueStep = false;
+  coordinator.handleCommand(ctx.id, 'next');
+  coordinator.handleCommand(ctx.id, 'previous');
+
+  assert.deepEqual(deltas, [1, -1]);
+});
+
 test('position command forwards seek to music assistant without dispatching outputs', () => {
   const { coordinator, ctx, inputsPort, outputRouter } = createHarness();
   ctx.inputMode = 'musicassistant';
