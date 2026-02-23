@@ -22,6 +22,7 @@ import './runtimeShutdown.test';
 import './sourceResolver.test';
 import './sendspinLineInService.test';
 import './powerManager.test';
+import './zoneHandlers.serviceplay.test';
 import type { ZoneConfig } from '../src/domain/config/types';
 import { applyZonePatch } from '../src/domain/loxone/reducer';
 import type { LoxoneZoneState } from '../src/domain/loxone/types';
@@ -489,6 +490,65 @@ test('audio manager active local session detection ignores stale no-subscriber s
 
   hasEngineSession = false;
   assert.equal(manager.hasActiveLocalSession(1), false);
+});
+
+test('spotify pipe track change after pause restarts engine instead of continuing same source', () => {
+  const pipe = new PassThrough();
+  let hasSession = false;
+  let startCalls = 0;
+  const stopCalls: Array<{ zoneId: number; reason?: string }> = [];
+  const engine: EnginePort = {
+    start: () => {
+      hasSession = true;
+      startCalls += 1;
+    },
+    startWithHandoff: () => {},
+    stop: (zoneId, reason) => {
+      hasSession = false;
+      stopCalls.push({ zoneId, reason });
+    },
+    createStream: () => null,
+    createLocalSession: () => ({
+      start: () => {},
+      stop: () => {},
+      createSubscriber: () => null,
+    }),
+    waitForFirstChunk: async () => true,
+    hasSession: () => hasSession,
+    getSessionStats: () => [],
+    setSessionTerminationHandler: () => {},
+  };
+  const { AudioManager } = require('../src/application/playback/audioManager') as typeof import('../src/application/playback/audioManager');
+  const manager = new AudioManager(new PlaybackService(engine), {
+    notifyOutputError: () => {},
+    notifyOutputState: () => {},
+  });
+
+  const playbackSource = {
+    kind: 'pipe' as const,
+    path: 'spotify-pipe',
+    format: 's16le' as const,
+    sampleRate: 44100,
+    channels: 2 as const,
+    stream: pipe,
+  };
+
+  manager.startExternalPlayback(1, 'spotify', playbackSource, {
+    title: 'Old Track',
+    artist: 'Artist',
+    album: 'Album',
+  });
+  manager.pausePlayback(1);
+  manager.startExternalPlayback(1, 'spotify', playbackSource, {
+    title: 'New Track',
+    artist: 'Artist',
+    album: 'Album',
+  });
+
+  assert.equal(startCalls, 2);
+  assert.equal(stopCalls.length, 2);
+  assert.equal(stopCalls[0]?.reason, 'switch');
+  assert.equal(stopCalls[1]?.reason, 'switch');
 });
 
 test('applyZonePatch merges fields', () => {

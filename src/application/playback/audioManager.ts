@@ -675,10 +675,11 @@ export class AudioManager {
       !effectiveSource && (label.toLowerCase() === 'spotify' || label.toLowerCase() === 'musicassistant');
 
     const sameSource = Boolean(existing && this.isSamePlaybackSource(existing.playbackSource, effectiveSource));
+    const isSpotifyPipe = sameSource && effectiveSource?.kind === 'pipe' && label.toLowerCase() === 'spotify';
     const forcePipeRestartOnTrackChange =
       sameSource &&
       effectiveSource?.kind === 'pipe' &&
-      this.didTrackChange(existing?.metadata, metadata);
+      (this.didTrackChange(existing?.metadata, metadata) || (isSpotifyPipe && existing?.state === 'paused'));
 
     // If we are already on the same source (e.g. track change on the same pipe),
     // keep the existing stream URLs and engine session running.
@@ -882,16 +883,27 @@ export class AudioManager {
     prev?: PlaybackMetadata | null,
     next?: PlaybackMetadata | null,
   ): boolean {
+    // For same-source pipe playback we must restart if we cannot confidently prove
+    // we are on the same track, otherwise buffered old PCM can leak into the new start.
     if (!prev || !next) {
-      return false;
-    }
-    if (prev.trackId && next.trackId && prev.trackId !== next.trackId) {
       return true;
     }
-    if (prev.audiopath && next.audiopath && prev.audiopath !== next.audiopath) {
-      return true;
+    if (prev.trackId || next.trackId) {
+      return (prev.trackId ?? '') !== (next.trackId ?? '');
     }
-    return false;
+    if (prev.audiopath || next.audiopath) {
+      return (prev.audiopath ?? '') !== (next.audiopath ?? '');
+    }
+    const prevTitle = (prev.title ?? '').trim().toLowerCase();
+    const nextTitle = (next.title ?? '').trim().toLowerCase();
+    const prevArtist = (prev.artist ?? '').trim().toLowerCase();
+    const nextArtist = (next.artist ?? '').trim().toLowerCase();
+    const prevAlbum = (prev.album ?? '').trim().toLowerCase();
+    const nextAlbum = (next.album ?? '').trim().toLowerCase();
+    if (prevTitle || nextTitle || prevArtist || nextArtist || prevAlbum || nextAlbum) {
+      return prevTitle !== nextTitle || prevArtist !== nextArtist || prevAlbum !== nextAlbum;
+    }
+    return true;
   }
 
   private sameProfiles(a?: OutputProfile[] | null, b?: OutputProfile[] | null): boolean {

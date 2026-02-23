@@ -295,8 +295,8 @@ async function playToZone(
   const uri = payloadResolver(parts);
   const fadeOpts = fadeController.parseFadeOptions(command);
 
-  // Detect queue item clicks (no parentpath) and pre-seek within the existing queue.
-  const looksLikeQueueClick = uri && !uri.includes('/parentpath/');
+  // Detect queue item clicks (no parent context) and pre-seek within the existing queue.
+  const looksLikeQueueClick = uri && !uri.includes('/parentpath/') && !uri.includes('/parentid/');
   if (looksLikeQueueClick) {
     const candidates = [uri, decodeAudiopath(uri)].filter(Boolean);
     for (const target of candidates) {
@@ -306,9 +306,7 @@ async function playToZone(
     }
   }
 
-  const sep = '/parentpath/';
-  const metadataTarget =
-    uri && uri.includes(sep) ? decodeAudiopath(uri.slice(0, uri.indexOf(sep))) : uri;
+  const metadataTarget = sanitizeMetadataTarget(uri);
   const metadata = await contentManager.resolveMetadata(metadataTarget);
   void zoneManager.playContent(zoneId, uri, name, metadata ?? undefined);
   if (fadeOpts.fade) {
@@ -316,4 +314,18 @@ async function playToZone(
     void fadeController.fadeIn(zoneId, duration);
   }
   return buildResponse(command, name, [{ zoneId, uri }]);
+}
+
+function sanitizeMetadataTarget(uri: string): string {
+  if (!uri) {
+    return uri;
+  }
+  const cleaned = uri
+    .replace(/\/parentpath\/.*$/i, '')
+    .replace(/\/parentid\/.*$/i, '')
+    .replace(/\/noshuffle.*$/i, '')
+    .replace(/\/\?q&ZW5mb3JjZVVzZXI9dHJ1ZQ.*$/i, '')
+    .replace(/\/\?q&[A-Za-z0-9+/=]+$/i, '')
+    .replace(/\/+$/, '');
+  return decodeAudiopath(cleaned);
 }
