@@ -955,6 +955,57 @@ test('position command forwards seek to music assistant without dispatching outp
   assert.equal(outputRouter.outputCalls.length, 0);
 });
 
+test('position command seeks current queue item for local playback', async () => {
+  const { coordinator, ctx, playbackQueue, inputsPort } = createHarness();
+  ctx.inputMode = 'queue';
+  playbackQueue.setItems(
+    [makeQueueItem({ title: 'Track', audiopath: 'library://track/one', duration: 180, unique_id: 'id-1' })],
+    0,
+  );
+  const seekCalls: Array<{ audiopath: string; startAtSec?: number; skipExternalStop?: boolean }> = [];
+  (coordinator as any).startQueuePlayback = async (
+    _ctx: ZoneContext,
+    audiopath: string,
+    _metadata: PlaybackMetadata,
+    options?: { skipExternalStop?: boolean; startAtSec?: number },
+  ) => {
+    seekCalls.push({
+      audiopath,
+      startAtSec: options?.startAtSec,
+      skipExternalStop: options?.skipExternalStop,
+    });
+    return {} as PlaybackSession;
+  };
+
+  coordinator.handleCommand(ctx.id, 'position', '220');
+  await flushAsync();
+
+  assert.equal(seekCalls.length, 1);
+  assert.equal(seekCalls[0]?.audiopath, 'library://track/one');
+  assert.equal(seekCalls[0]?.startAtSec, 180);
+  assert.equal(seekCalls[0]?.skipExternalStop, true);
+  assert.equal(inputsPort.playerCommandCalls.length, 0);
+});
+
+test('position command ignores radio seek requests', async () => {
+  const { coordinator, ctx, playbackQueue } = createHarness();
+  ctx.inputMode = 'queue';
+  playbackQueue.setItems(
+    [makeQueueItem({ title: 'Station', audiopath: 'tunein:station:abc', audiotype: 1, unique_id: 'id-1' })],
+    0,
+  );
+  let seeked = false;
+  (coordinator as any).startQueuePlayback = async () => {
+    seeked = true;
+    return {} as PlaybackSession;
+  };
+
+  coordinator.handleCommand(ctx.id, 'position', '30');
+  await flushAsync();
+
+  assert.equal(seeked, false);
+});
+
 test('shuffle and repeat parsing preserves existing behavior', () => {
   const { coordinator, ctx } = createHarness();
   const queueController = (coordinator as any).queueController as FakeQueueController;

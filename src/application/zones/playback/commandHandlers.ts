@@ -219,7 +219,6 @@ function handlePosition(
   mode: ZoneContext['inputMode'],
   posSeconds: number,
 ): void {
-  // Do not drive outputs from here; seeking is handled via dedicated HTTP endpoints.
   if (!isQueueDrivenInput(mode)) {
     return;
   }
@@ -227,12 +226,40 @@ function handlePosition(
     void coordinator.playerCommand(zoneId, 'seek', { position: posSeconds });
     return;
   }
-  const session = ctx.player.getSession();
-  const duration = session?.duration ?? ctx.state.duration ?? 0;
-  const clamped = duration > 0 ? Math.min(posSeconds, duration) : posSeconds;
-  ctx.player.updateTiming(Math.round(clamped), duration);
-  coordinator.log.debug('position command ignored for outputs (manual seek endpoint only)', {
+  const current = ctx.queueController.current();
+  const audiopath = current?.audiopath ?? ctx.state.audiopath ?? '';
+  if (!audiopath || coordinator.audioHelpers.isRadioAudiopath(audiopath, current?.audiotype ?? ctx.state.audiotype)) {
+    return;
+  }
+  const duration = current?.duration ?? ctx.player.getSession()?.duration ?? ctx.state.duration ?? 0;
+  const clamped = Math.max(0, duration > 0 ? Math.min(posSeconds, duration) : posSeconds);
+  const metadata: PlaybackMetadata = {
+    title: current?.title || ctx.state.title || ctx.name,
+    artist: current?.artist || ctx.state.artist || '',
+    album: current?.album || ctx.state.album || '',
+    coverurl: current?.coverurl || ctx.state.coverurl,
+    duration: current?.duration ?? ctx.state.duration,
+    audiopath,
+    station: current?.station || ctx.state.station,
+    stationIndex: ctx.queueController.currentIndex(),
+    isRadio: false,
+  };
+  void coordinator.startQueuePlayback(ctx, audiopath, metadata, {
+    skipExternalStop: true,
+    startAtSec: clamped,
+  }).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    coordinator.log.warn('position seek failed', {
+      zoneId,
+      audiopath,
+      requestedSeconds: posSeconds,
+      clampedSeconds: clamped,
+      message,
+    });
+  });
+  coordinator.log.debug('position seek requested', {
     zoneId,
+    audiopath,
     requestedSeconds: posSeconds,
     clampedSeconds: clamped,
   });
