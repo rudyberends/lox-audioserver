@@ -13,6 +13,14 @@ import { bestEffort } from '@/shared/bestEffort';
 const MAX_RECENTS = 5;
 const MAX_DECODE_DEPTH = 4;
 const CANONICAL_RE = /^([^:]+):\/\/([^/]+)\/(.+)$/;
+const CLIENT_RECENT_SERVICES = new Set([
+  'linein',
+  'spotify',
+  'soundsuit',
+  'library',
+  'tunein',
+  'custom_stream',
+]);
 function recentsEqual(next: RecentItem[], previous: RecentItem[]): boolean {
   if (next.length !== previous.length) {
     return false;
@@ -104,7 +112,10 @@ export class RecentsManager {
 
   public async get(zoneId: number) {
     const stored = await loadRecents(zoneId);
-    return stored;
+    return {
+      ...stored,
+      items: stored.items.map((item) => this.normalizeForClient(item)),
+    };
   }
 
   public async record(zoneId: number, item: QueueItem): Promise<void> {
@@ -142,7 +153,10 @@ export class RecentsManager {
       service.service === 'spotify' && userForSpotify && !item.audiopath.startsWith('spotify@')
         ? `spotify@${userForSpotify}:${item.audiopath.replace(/^spotify:/i, '')}`
         : item.audiopath;
-    const audiopath = this.normalizeAppleMusicAudiopath(rawAudiopath);
+    const audiopath = this.normalizeRecentAudiopath(
+      this.normalizeAppleMusicAudiopath(rawAudiopath),
+      service.service,
+    );
     const canonicalAudiopath = this.toCanonicalAudiopath(audiopath);
     // Best-effort metadata lookup; missing metadata should not block recents.
     let meta = await bestEffort(() => this.contentPort.resolveMetadata(canonicalAudiopath), {
@@ -241,6 +255,11 @@ export class RecentsManager {
     if (detectedService === 'library') {
       return { service: 'library', serviceType: 2, type: 2 };
     }
+    if (detectedService === 'radio') {
+      const lower = (audiopath || '').toLowerCase();
+      const service = lower.startsWith('tunein:') ? 'tunein' : 'custom_stream';
+      return { service, serviceType: 3, type: 3 };
+    }
     if (detectedService === 'spotify' || lower.startsWith('spotify:') || lower.startsWith('spotify@')) {
       const type = lower.includes(':album:') ? 7 : 2;
       return { service: 'spotify', serviceType: 3, type };
@@ -266,6 +285,49 @@ export class RecentsManager {
       return audiopath;
     }
     return audiopath.replace(/:library-track:/i, ':track:');
+  }
+
+  private normalizeForClient(item: RecentItem): RecentItem {
+    const normalizedService = this.normalizeRecentService(item.service, item.audiopath);
+    return {
+      ...item,
+      service: normalizedService,
+      audiopath: this.normalizeRecentAudiopath(item.audiopath, normalizedService),
+    };
+  }
+
+  private normalizeRecentService(service: string, audiopath: string): string {
+    if (CLIENT_RECENT_SERVICES.has(service)) {
+      return service;
+    }
+    const lower = (audiopath || '').toLowerCase();
+    if (lower.startsWith('linein:')) {
+      return 'linein';
+    }
+    if (lower.includes('soundsuit:')) {
+      return 'soundsuit';
+    }
+    if (lower.startsWith('spotify:') || lower.startsWith('spotify@') || service === 'musicassistant') {
+      return 'spotify';
+    }
+    if (lower.startsWith('tunein:')) {
+      return 'tunein';
+    }
+    if (/^https?:\/\//.test(lower) || /(tunein|radio)/.test(lower)) {
+      return 'custom_stream';
+    }
+    return 'library';
+  }
+
+  private normalizeRecentAudiopath(audiopath: string, service: string): string {
+    if (!audiopath) {
+      return audiopath;
+    }
+    if (service === 'library' && audiopath.startsWith('library://local/')) {
+      const encoded = Buffer.from(audiopath, 'utf8').toString('base64');
+      return `library:local:track:b64_${encoded}`;
+    }
+    return audiopath;
   }
 
   public async clearAll(): Promise<void> {

@@ -1,0 +1,84 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { test } from './testHarness';
+import { createRecentsManager } from '../src/application/zones/recents/recentsManager';
+
+async function withTempCwd(fn: () => Promise<void>): Promise<void> {
+  const originalCwd = process.cwd();
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lox-recents-test-'));
+  process.chdir(tempDir);
+  try {
+    await fn();
+  } finally {
+    process.chdir(originalCwd);
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test('recents manager normalizes local library items to client-compatible audiopath', async () => {
+  await withTempCwd(async () => {
+    await fs.mkdir(path.join(process.cwd(), 'data', 'recents'), { recursive: true });
+    await fs.writeFile(
+      path.join(process.cwd(), 'data', 'recents', '27.json'),
+      JSON.stringify({
+        ts: 1,
+        items: [
+          {
+            audiopath: 'library://local/Ed_Sheeran_-_Play/03_Azizam.mp3',
+            coverurl: '',
+            owner: 'nouser',
+            owner_id: 'nouser',
+            service: 'library',
+            serviceType: 2,
+            title: 'Azizam',
+            type: 2,
+            album: 'Play',
+            artist: 'Ed Sheeran',
+          },
+        ],
+      }),
+    );
+
+    const recentsManager = createRecentsManager({
+      notifier: { notifyRecentlyPlayedChanged: () => {} } as any,
+      contentPort: { getDefaultSpotifyAccountId: () => null } as any,
+    });
+
+    const result = await recentsManager.get(27);
+    assert.match(result.items[0]?.audiopath ?? '', /^library:local:track:b64_/);
+  });
+});
+
+test('recents manager maps legacy custom radio service to custom_stream', async () => {
+  await withTempCwd(async () => {
+    await fs.mkdir(path.join(process.cwd(), 'data', 'recents'), { recursive: true });
+    await fs.writeFile(
+      path.join(process.cwd(), 'data', 'recents', '15.json'),
+      JSON.stringify({
+        ts: 1,
+        items: [
+          {
+            audiopath: 'https://example.com/radio.mp3',
+            coverurl: '',
+            owner: 'nouser',
+            owner_id: 'nouser',
+            service: 'custom',
+            serviceType: 3,
+            title: 'Web Radio',
+            type: 3,
+          },
+        ],
+      }),
+    );
+
+    const recentsManager = createRecentsManager({
+      notifier: { notifyRecentlyPlayedChanged: () => {} } as any,
+      contentPort: { getDefaultSpotifyAccountId: () => null } as any,
+    });
+
+    const result = await recentsManager.get(15);
+    assert.equal(result.items[0]?.service, 'custom_stream');
+  });
+});
