@@ -1,5 +1,17 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
+import {
+  constants as cryptoConstants,
+  createCipheriv,
+  createPublicKey,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  publicEncrypt,
+  randomBytes,
+  randomUUID,
+  X509Certificate,
+} from 'node:crypto';
 import { createConnection, isIP } from 'node:net';
 import { createWriteStream, promises as fs, readFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
@@ -105,11 +117,36 @@ type AdminUiUpdateResult = {
   error?: string;
 };
 
+type AdminServerSession = {
+  id: string;
+  username: string;
+  createdAt: number;
+  expiresAt: number;
+};
+
 const MAX_JSON_BODY_BYTES = 1 * 1024 * 1024;
 const MAX_LIBRARY_UPLOAD_JSON_BODY_BYTES = 32 * 1024 * 1024;
 const MAX_WIDEVINE_PRIVATE_KEY_BYTES = 256 * 1024;
 const MAX_WIDEVINE_CLIENT_ID_BYTES = 10 * 1024 * 1024;
 const ADDON_PACKAGE_PREFIX = '@lox-audioserver/node-';
+const MINISERVER_ADMIN_PERMISSION = 1;
+const AUTH_COOKIE_NAME = 'lox_admin_session';
+const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
+type HashAlgorithm = 'SHA1' | 'SHA256';
+class MiniserverAuthError extends Error {
+  constructor(
+    public readonly code:
+      | 'invalid-credentials'
+      | 'insufficient-permissions'
+      | 'miniserver-unreachable'
+      | 'miniserver-protocol'
+      | 'miniserver-not-configured',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'MiniserverAuthError';
+  }
+}
 const STATE_CONTROLLER_DEFINITIONS = [
   { id: 'internal', label: 'Internal', description: 'Use internal playback state only.' },
   { id: 'beolink', label: 'BeoLink', description: 'Use BeoLink external playback state.' },
@@ -145,6 +182,7 @@ export class AdminApiHandler {
   private clockOffsetCache: { offsetMs: number | null; sampledAt: number } = { offsetMs: null, sampledAt: 0 };
   private clockOffsetFailureLog: { message: string | null; loggedAt: number } = { message: null, loggedAt: 0 };
   private readonly routes: Route[];
+  private readonly adminSessions = new Map<string, AdminServerSession>();
 
   constructor(options: AdminApiOptions) {
     this.onReinitialize = options.onReinitialize;
@@ -240,6 +278,21 @@ export class AdminApiHandler {
         method: 'GET',
         pattern: /^\/spotify\/librespot\/status$/,
         handler: async (_req, res) => this.handleSpotifyLibrespotStatus(res),
+      },
+      {
+        method: 'POST',
+        pattern: /^\/auth\/login$/,
+        handler: async (req, res) => this.handleAuthLogin(req, res),
+      },
+      {
+        method: 'GET',
+        pattern: /^\/auth\/me$/,
+        handler: async (req, res) => this.handleAuthMe(req, res),
+      },
+      {
+        method: 'POST',
+        pattern: /^\/auth\/logout$/,
+        handler: async (req, res) => this.handleAuthLogout(req, res),
       },
       {
         method: 'POST',
@@ -566,6 +619,102 @@ export class AdminApiHandler {
     return false;
   }
 
+  private isPublicRoute(pathname: string, method: string): boolean {
+    if (method === 'OPTIONS') return true;
+    if (pathname === '/info' && method === 'GET') return true;
+    if (pathname === '/auth/login' && method === 'POST') return true;
+    if (pathname === '/auth/logout' && method === 'POST') return true;
+    if (pathname === '/auth/me' && method === 'GET') return true;
+    if (/^\/spotify\/auth\/callback/.test(pathname)) return true;
+    if (/^\/spotify\/librespot\/credentials/.test(pathname)) return true;
+    return false;
+  }
+
+  private parseCookies(req: IncomingMessage): Record<string, string> {
+    const raw = req.headers.cookie;
+    if (!raw) return {};
+    const cookies: Record<string, string> = {};
+    for (const entry of raw.split(';')) {
+      const [key, ...rest] = entry.split('=');
+      const name = key?.trim();
+      if (!name) continue;
+      const value = rest.join('=').trim();
+      try {
+        cookies[name] = decodeURIComponent(value);
+      } catch {
+        cookies[name] = value;
+      }
+    }
+    return cookies;
+  }
+
+  private cleanupExpiredAdminSessions(now = Date.now()): void {
+    for (const [id, session] of this.adminSessions.entries()) {
+      if (session.expiresAt <= now) {
+        this.adminSessions.delete(id);
+      }
+    }
+  }
+
+  private getAdminSessionFromRequest(req: IncomingMessage): AdminServerSession | null {
+    this.cleanupExpiredAdminSessions();
+    const sessionId = this.parseCookies(req)[AUTH_COOKIE_NAME];
+    if (!sessionId) return null;
+    const session = this.adminSessions.get(sessionId);
+    if (!session) return null;
+    if (session.expiresAt <= Date.now()) {
+      this.adminSessions.delete(sessionId);
+      return null;
+    }
+    return session;
+  }
+
+  private createAdminSession(username: string): AdminServerSession {
+    this.cleanupExpiredAdminSessions();
+    const now = Date.now();
+    const session: AdminServerSession = {
+      id: randomBytes(32).toString('hex'),
+      username,
+      createdAt: now,
+      expiresAt: now + SESSION_TTL_MS,
+    };
+    this.adminSessions.set(session.id, session);
+    return session;
+  }
+
+  private clearAdminSessionFromRequest(req: IncomingMessage): void {
+    const sessionId = this.parseCookies(req)[AUTH_COOKIE_NAME];
+    if (!sessionId) return;
+    this.adminSessions.delete(sessionId);
+  }
+
+  private buildAuthCookie(req: IncomingMessage, session: AdminServerSession): string {
+    const parts = [
+      `${AUTH_COOKIE_NAME}=${encodeURIComponent(session.id)}`,
+      'Path=/admin/api',
+      'HttpOnly',
+      'SameSite=Lax',
+    ];
+    if (Boolean((req.socket as { encrypted?: boolean }).encrypted)) {
+      parts.push('Secure');
+    }
+    return parts.join('; ');
+  }
+
+  private buildExpiredAuthCookie(req: IncomingMessage): string {
+    const parts = [
+      `${AUTH_COOKIE_NAME}=`,
+      'Path=/admin/api',
+      'HttpOnly',
+      'SameSite=Lax',
+      'Max-Age=0',
+    ];
+    if (Boolean((req.socket as { encrypted?: boolean }).encrypted)) {
+      parts.push('Secure');
+    }
+    return parts.join('; ');
+  }
+
   public async handle(
     req: IncomingMessage,
     res: ServerResponse,
@@ -580,6 +729,14 @@ export class AdminApiHandler {
     const method = (req.method ?? 'GET').toUpperCase();
 
     try {
+      const cfg = this.configPort.getConfig();
+      if (cfg.system.audioserver.paired && !this.isPublicRoute(pathname, method)) {
+        const session = this.getAdminSessionFromRequest(req);
+        if (!session) {
+          this.sendJson(res, 401, { error: 'auth-required' });
+          return;
+        }
+      }
       const handled = await this.dispatchRoute(pathname, method, req, res);
       if (!handled) {
         this.handleNotImplemented(res, method, rawPathname);
@@ -740,6 +897,577 @@ export class AdminApiHandler {
       this.log.error('failed to produce admin info', { err });
       this.sendJson(res, 500, { error: 'info-unavailable' });
     }
+  }
+
+  private async handleAuthLogin(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = (await this.readJsonBody(req, res)) as { username?: string; password?: string } | null;
+    if (res.writableEnded) return;
+
+    const username = body?.username?.trim() ?? '';
+    const password = typeof body?.password === 'string' ? body.password : '';
+    if (!username || !password) {
+      this.sendJson(res, 400, { error: 'invalid-auth-payload' });
+      return;
+    }
+
+    const cfg = this.configPort.getConfig();
+    if (!cfg.system.audioserver.paired) {
+      this.sendJson(res, 409, { error: 'miniserver-auth-required' });
+      return;
+    }
+    const miniserverHost = cfg.system.miniserver.ip?.trim() ?? '';
+    if (!miniserverHost) {
+      this.sendJson(res, 409, { error: 'miniserver-not-configured' });
+      return;
+    }
+
+    try {
+      const result = await this.verifyMiniserverAdminCredentials(miniserverHost, username, password);
+      const session = this.createAdminSession(username);
+      res.setHeader('Set-Cookie', this.buildAuthCookie(req, session));
+      this.sendJson(res, 200, {
+        ok: true,
+        username,
+        tokenRights: result.tokenRights,
+        loginAt: session.createdAt,
+        expiresAt: session.expiresAt,
+      });
+    } catch (err) {
+      if (err instanceof MiniserverAuthError) {
+        this.log.warn('miniserver auth failed', { code: err.code, message: err.message, username, miniserverHost });
+        if (err.code === 'invalid-credentials') {
+          this.sendJson(res, 401, { error: err.code });
+          return;
+        }
+        if (err.code === 'insufficient-permissions') {
+          this.sendJson(res, 403, { error: err.code });
+          return;
+        }
+        if (err.code === 'miniserver-not-configured') {
+          this.sendJson(res, 409, { error: err.code });
+          return;
+        }
+        this.sendJson(res, 502, { error: err.code, miniserverHost, message: err.message });
+        return;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.warn('miniserver auth failed', { message, username });
+      this.sendJson(res, 502, { error: 'miniserver-unreachable', miniserverHost });
+    }
+  }
+
+  private async handleAuthMe(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const session = this.getAdminSessionFromRequest(req);
+    if (!session) {
+      this.sendJson(res, 401, { error: 'auth-required' });
+      return;
+    }
+    this.sendJson(res, 200, { ok: true, username: session.username, loginAt: session.createdAt, expiresAt: session.expiresAt });
+  }
+
+  private async handleAuthLogout(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    this.clearAdminSessionFromRequest(req);
+    res.setHeader('Set-Cookie', this.buildExpiredAuthCookie(req));
+    this.sendJson(res, 204, {});
+  }
+
+  private async verifyMiniserverAdminCredentials(
+    hostOrUrl: string,
+    username: string,
+    password: string,
+  ): Promise<{ tokenRights: number | null }> {
+    const baseUrl = this.normalizeMiniserverBaseUrl(hostOrUrl);
+    let salts: { oneTimeSalt: string; salt: string; hashAlg: HashAlgorithm };
+    let authHash: string;
+    let tokenRights: number | null;
+    try {
+      const publicKey = await this.fetchMiniserverPublicKey(baseUrl);
+      salts = await this.fetchMiniserverTokenSalts(baseUrl, publicKey, username);
+      authHash = this.buildMiniserverAuthHash(username, password, salts);
+      tokenRights = await this.requestMiniserverAdminToken(baseUrl, publicKey, username, authHash);
+    } catch (err) {
+      if (!(err instanceof MiniserverAuthError) || err.code !== 'miniserver-protocol') {
+        throw err;
+      }
+      salts = await this.fetchMiniserverTokenSaltsPlain(baseUrl, username);
+      authHash = this.buildMiniserverAuthHash(username, password, salts);
+      tokenRights = await this.requestMiniserverAdminTokenPlain(baseUrl, username, authHash);
+    }
+
+    if (tokenRights !== null && (tokenRights & MINISERVER_ADMIN_PERMISSION) === 0) {
+      throw new MiniserverAuthError('insufficient-permissions', 'miniserver user is not admin');
+    }
+    return { tokenRights };
+  }
+
+  private normalizeMiniserverBaseUrl(hostOrUrl: string): string {
+    const trimmed = hostOrUrl.trim();
+    if (!trimmed) {
+      throw new MiniserverAuthError('miniserver-not-configured', 'miniserver host missing');
+    }
+    if (/^https?:\/\//i.test(trimmed)) {
+      return trimmed.replace(/\/+$/, '');
+    }
+    return `http://${trimmed}`;
+  }
+
+  private async fetchMiniserverPublicKey(baseUrl: string): Promise<string> {
+    const payload = await this.requestMiniserverJson(baseUrl, 'jdev/sys/getPublicKey');
+    const value = this.extractMiniserverValue(payload);
+    if (typeof value !== 'string' || !value.trim()) {
+      throw new MiniserverAuthError('miniserver-protocol', 'missing miniserver public key');
+    }
+    return this.normalizeMiniserverPublicKey(value);
+  }
+
+  private async fetchMiniserverTokenSalts(
+    baseUrl: string,
+    publicKey: string,
+    username: string,
+  ): Promise<{ oneTimeSalt: string; salt: string; hashAlg: HashAlgorithm }> {
+    const payload = await this.requestMiniserverEncryptedJson(baseUrl, `jdev/sys/getkey2/${encodeURIComponent(username)}`, publicKey);
+    const value = this.extractMiniserverValue(payload);
+    const obj = this.asObject(value);
+    const oneTimeSalt = this.readString(obj.key);
+    const salt = this.readString(obj.salt);
+    const hashAlg = this.normalizeHashAlgorithm(this.readString(obj.hashAlg) || 'SHA1');
+    if (!oneTimeSalt || !salt) {
+      throw new MiniserverAuthError('miniserver-protocol', 'missing miniserver salt data');
+    }
+    return { oneTimeSalt, salt, hashAlg };
+  }
+
+  private async fetchMiniserverTokenSaltsPlain(
+    baseUrl: string,
+    username: string,
+  ): Promise<{ oneTimeSalt: string; salt: string; hashAlg: HashAlgorithm }> {
+    const payload = await this.requestMiniserverJson(baseUrl, `jdev/sys/getkey2/${encodeURIComponent(username)}`);
+    const value = this.extractMiniserverValue(payload);
+    const obj = this.asObject(value);
+    const oneTimeSalt = this.readString(obj.key);
+    const salt = this.readString(obj.salt);
+    const hashAlg = this.normalizeHashAlgorithm(this.readString(obj.hashAlg) || 'SHA1');
+    if (!oneTimeSalt || !salt) {
+      throw new MiniserverAuthError('miniserver-protocol', 'missing miniserver salt data');
+    }
+    return { oneTimeSalt, salt, hashAlg };
+  }
+
+  private buildMiniserverAuthHash(
+    username: string,
+    password: string,
+    salts: { oneTimeSalt: string; salt: string; hashAlg: HashAlgorithm },
+  ): string {
+    const hashName = salts.hashAlg === 'SHA256' ? 'sha256' : 'sha1';
+    const pwHash = createHash(hashName).update(`${password}:${salts.salt}`, 'utf8').digest('hex').toUpperCase();
+    return createHmac(hashName, Buffer.from(salts.oneTimeSalt, 'hex'))
+      .update(`${username}:${pwHash}`, 'utf8')
+      .digest('hex');
+  }
+
+  private async requestMiniserverAdminToken(
+    baseUrl: string,
+    publicKey: string,
+    username: string,
+    authHash: string,
+  ): Promise<number | null> {
+    const deviceUuid = randomUUID();
+    const deviceInfo = encodeURIComponent('Lox-AudioServer Admin UI').replace(/\//g, ' ');
+    const jwtCmd =
+      `jdev/sys/getjwt/${authHash}/${encodeURIComponent(username)}/${MINISERVER_ADMIN_PERMISSION}/` +
+      `${deviceUuid}/${deviceInfo}`;
+    const tokenCmd =
+      `jdev/sys/gettoken/${authHash}/${encodeURIComponent(username)}/${MINISERVER_ADMIN_PERMISSION}/` +
+      `${deviceUuid}/${deviceInfo}`;
+
+    let payload: unknown;
+    try {
+      payload = await this.requestMiniserverEncryptedJson(baseUrl, jwtCmd, publicKey);
+    } catch (err) {
+      if (err instanceof MiniserverAuthError && err.code === 'invalid-credentials') {
+        throw err;
+      }
+      payload = await this.requestMiniserverEncryptedJson(baseUrl, tokenCmd, publicKey);
+    }
+    const value = this.extractMiniserverValue(payload);
+    const obj = this.asObject(value);
+    const rights = this.readNumber(obj.tokenRights);
+    if (rights !== null) return rights;
+    return this.readNumber(obj.msPermission);
+  }
+
+  private async requestMiniserverAdminTokenPlain(
+    baseUrl: string,
+    username: string,
+    authHash: string,
+  ): Promise<number | null> {
+    const deviceUuid = randomUUID();
+    const deviceInfo = encodeURIComponent('Lox-AudioServer Admin UI').replace(/\//g, ' ');
+    const jwtCmd =
+      `jdev/sys/getjwt/${authHash}/${encodeURIComponent(username)}/${MINISERVER_ADMIN_PERMISSION}/` +
+      `${deviceUuid}/${deviceInfo}`;
+    const tokenCmd =
+      `jdev/sys/gettoken/${authHash}/${encodeURIComponent(username)}/${MINISERVER_ADMIN_PERMISSION}/` +
+      `${deviceUuid}/${deviceInfo}`;
+
+    let payload: unknown;
+    try {
+      payload = await this.requestMiniserverJson(baseUrl, jwtCmd);
+    } catch (err) {
+      if (err instanceof MiniserverAuthError && err.code === 'invalid-credentials') {
+        throw err;
+      }
+      payload = await this.requestMiniserverJson(baseUrl, tokenCmd);
+    }
+    const value = this.extractMiniserverValue(payload);
+    const obj = this.asObject(value);
+    const rights = this.readNumber(obj.tokenRights);
+    if (rights !== null) return rights;
+    return this.readNumber(obj.msPermission);
+  }
+
+  private async requestMiniserverJson(baseUrl: string, command: string): Promise<unknown> {
+    const raw = await this.fetchMiniserverText(baseUrl, command);
+    const parsed = this.tryParseJson(raw) ?? this.tryParseLooseJson(raw);
+    if (parsed === null) {
+      const lower = raw.toLowerCase();
+      if (lower.includes('401') || lower.includes('403') || lower.includes('unauthorized') || lower.includes('forbidden')) {
+        throw new MiniserverAuthError('invalid-credentials', 'invalid miniserver credentials');
+      }
+      throw new MiniserverAuthError('miniserver-protocol', 'invalid miniserver response');
+    }
+    this.ensureMiniserverSuccess(parsed);
+    return parsed;
+  }
+
+  private async requestMiniserverEncryptedJson(
+    baseUrl: string,
+    command: string,
+    publicKey: string,
+  ): Promise<unknown> {
+    const aesKey = randomBytes(32);
+    const aesIv = randomBytes(16);
+    const salt = randomBytes(2).toString('hex');
+    const encryptedCmd = this.encryptMiniserverCommand(command, salt, aesKey, aesIv, publicKey);
+    const raw = await this.fetchMiniserverText(baseUrl, encryptedCmd);
+
+    // Some Miniserver builds can return LL-wrapped JSON even for encrypted HTTP commands.
+    const directPayload = this.tryParseJson(raw);
+    if (directPayload !== null) {
+      this.ensureMiniserverSuccess(directPayload);
+      const llValue = this.asObject(this.asObject(directPayload).LL).value;
+      if (typeof llValue === 'string' && llValue.trim()) {
+        const maybeDecrypted = this.tryDecryptMiniserverResponse(llValue, aesKey, aesIv);
+        if (maybeDecrypted !== null) {
+          this.ensureMiniserverSuccess(maybeDecrypted);
+          return maybeDecrypted;
+        }
+      }
+      return directPayload;
+    }
+
+    let decrypted: string;
+    try {
+      decrypted = this.decryptMiniserverResponse(raw, aesKey, aesIv);
+    } catch {
+      throw new MiniserverAuthError('miniserver-protocol', 'failed to decrypt miniserver response');
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(decrypted);
+    } catch {
+      throw new MiniserverAuthError('miniserver-protocol', 'invalid decrypted miniserver response');
+    }
+    this.ensureMiniserverSuccess(parsed);
+    return parsed;
+  }
+
+  private encryptMiniserverCommand(
+    command: string,
+    salt: string,
+    aesKey: Buffer,
+    aesIv: Buffer,
+    publicKey: string,
+  ): string {
+    const payload = `salt/${salt}/${command}`;
+    const blockSize = 16;
+    const payloadBuf = Buffer.from(payload, 'utf8');
+    const remainder = payloadBuf.length % blockSize;
+    const padded = remainder === 0 ? payloadBuf : Buffer.concat([payloadBuf, Buffer.alloc(blockSize - remainder)]);
+    const cipher = createCipheriv('aes-256-cbc', aesKey, aesIv);
+    cipher.setAutoPadding(false);
+    const cipherText = Buffer.concat([cipher.update(padded), cipher.final()]).toString('base64');
+    const sessionPayload = `${aesKey.toString('hex')}:${aesIv.toString('hex')}`;
+    let sk: string;
+    try {
+      sk = publicEncrypt(
+        {
+          key: publicKey,
+          padding: cryptoConstants.RSA_PKCS1_PADDING,
+        },
+        Buffer.from(sessionPayload, 'utf8'),
+      ).toString('base64');
+    } catch {
+      throw new MiniserverAuthError('miniserver-protocol', 'invalid miniserver public key');
+    }
+    return `jdev/sys/fenc/${encodeURIComponent(cipherText)}?sk=${encodeURIComponent(sk)}`;
+  }
+
+  private normalizeMiniserverPublicKey(rawValue: string): string {
+    const addCandidate = (bucket: string[], value: string): void => {
+      const normalized = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+      if (!normalized) return;
+      if (!bucket.includes(normalized)) bucket.push(normalized);
+    };
+
+    const formatPem = (label: 'CERTIFICATE' | 'PUBLIC KEY', base64Body: string): string => {
+      const chunks = base64Body.match(/.{1,64}/g) ?? [base64Body];
+      return `-----BEGIN ${label}-----\n${chunks.join('\n')}\n-----END ${label}-----`;
+    };
+
+    const maybeCanonicalPem = (value: string): string | null => {
+      const match = value.match(/^-----BEGIN ([A-Z ]+)-----([\s\S]*?)-----END \1-----$/);
+      if (!match) return null;
+      const label = (match[1] ?? '').trim();
+      if (label !== 'CERTIFICATE' && label !== 'PUBLIC KEY') return null;
+      const body = (match[2] ?? '').replace(/[^A-Za-z0-9+/=]/g, '');
+      if (!body) return null;
+      return formatPem(label as 'CERTIFICATE' | 'PUBLIC KEY', body);
+    };
+
+    const maybeBase64Body = (value: string): string | null => {
+      const compact = value.replace(/\s+/g, '');
+      if (compact.length < 64) return null;
+      if (!/^[A-Za-z0-9+/=]+$/.test(compact)) return null;
+      return compact;
+    };
+
+    const maybeBase64UrlBody = (value: string): string | null => {
+      const compact = value.replace(/\s+/g, '');
+      if (compact.length < 64) return null;
+      if (!/^[A-Za-z0-9\-_]+={0,2}$/.test(compact)) return null;
+      return compact.replace(/-/g, '+').replace(/_/g, '/');
+    };
+
+    const maybeHexBody = (value: string): string | null => {
+      const compact = value.replace(/\s+/g, '');
+      if (compact.length < 128 || compact.length % 2 !== 0) return null;
+      if (!/^[0-9a-fA-F]+$/.test(compact)) return null;
+      return compact;
+    };
+
+    const canEncryptWithKey = (key: string | Buffer): boolean => {
+      try {
+        publicEncrypt(
+          {
+            key,
+            padding: cryptoConstants.RSA_PKCS1_PADDING,
+          },
+          Buffer.from('00:00', 'utf8'),
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const extractPemPublicKeyFromCertificate = (value: string | Buffer): string | null => {
+      try {
+        const cert = new X509Certificate(value);
+        const exported = cert.publicKey.export({ type: 'spki', format: 'pem' });
+        return String(exported);
+      } catch {
+        return null;
+      }
+    };
+
+    const extractPemPublicKeyFromSpkiDer = (der: Buffer): string | null => {
+      try {
+        const key = createPublicKey({ key: der, type: 'spki', format: 'der' });
+        const exported = key.export({ type: 'spki', format: 'pem' });
+        return String(exported);
+      } catch {
+        return null;
+      }
+    };
+
+    const candidates: string[] = [];
+    addCandidate(candidates, rawValue);
+    try {
+      addCandidate(candidates, decodeURIComponent(rawValue));
+    } catch {
+      // keep raw value if it is not URL-encoded
+    }
+
+    const expandedCandidates = [...candidates];
+    for (const candidate of candidates) {
+      addCandidate(expandedCandidates, candidate.replace(/\\n/g, '\n'));
+      addCandidate(expandedCandidates, candidate.replace(/\s+/g, '+'));
+      const canonicalPem = maybeCanonicalPem(candidate);
+      if (canonicalPem) {
+        addCandidate(expandedCandidates, canonicalPem);
+      }
+      const body = maybeBase64Body(candidate) ?? maybeBase64UrlBody(candidate);
+      if (body !== null) {
+        addCandidate(expandedCandidates, formatPem('CERTIFICATE', body));
+        addCandidate(expandedCandidates, formatPem('PUBLIC KEY', body));
+      }
+    }
+
+    for (const candidate of expandedCandidates) {
+      if (canEncryptWithKey(candidate)) {
+        return candidate;
+      }
+
+      const certPem = extractPemPublicKeyFromCertificate(candidate);
+      if (certPem !== null && canEncryptWithKey(certPem)) {
+        return certPem;
+      }
+
+      const base64Body = maybeBase64Body(candidate) ?? maybeBase64UrlBody(candidate);
+      if (base64Body !== null) {
+        const der = Buffer.from(base64Body, 'base64');
+        const spkiPem = extractPemPublicKeyFromSpkiDer(der);
+        if (spkiPem !== null && canEncryptWithKey(spkiPem)) {
+          return spkiPem;
+        }
+        const certPemFromDer = extractPemPublicKeyFromCertificate(der);
+        if (certPemFromDer !== null && canEncryptWithKey(certPemFromDer)) {
+          return certPemFromDer;
+        }
+      }
+
+      const hexBody = maybeHexBody(candidate);
+      if (hexBody !== null) {
+        const der = Buffer.from(hexBody, 'hex');
+        const spkiPem = extractPemPublicKeyFromSpkiDer(der);
+        if (spkiPem !== null && canEncryptWithKey(spkiPem)) {
+          return spkiPem;
+        }
+        const certPemFromDer = extractPemPublicKeyFromCertificate(der);
+        if (certPemFromDer !== null && canEncryptWithKey(certPemFromDer)) {
+          return certPemFromDer;
+        }
+      }
+    }
+
+    throw new MiniserverAuthError('miniserver-protocol', 'unsupported miniserver public key format');
+  }
+
+  private decryptMiniserverResponse(raw: string, aesKey: Buffer, aesIv: Buffer): string {
+    const sanitized = raw.trim().replace(/\s+/g, '');
+    let cipherBuf = Buffer.from(sanitized, 'base64');
+    const blockSize = 16;
+    const remainder = cipherBuf.length % blockSize;
+    if (remainder !== 0) {
+      cipherBuf = Buffer.concat([cipherBuf, Buffer.alloc(blockSize - remainder)]);
+    }
+    const decipher = createDecipheriv('aes-256-cbc', aesKey, aesIv);
+    decipher.setAutoPadding(false);
+    const plain = Buffer.concat([decipher.update(cipherBuf), decipher.final()]);
+    return plain.toString('utf8').replace(/\u0000+$/g, '');
+  }
+
+  private async fetchMiniserverText(baseUrl: string, command: string): Promise<string> {
+    const url = `${baseUrl.replace(/\/+$/, '')}/${command.replace(/^\/+/, '')}`;
+    let res: Response;
+    try {
+      res = await fetch(url, { method: 'GET' });
+    } catch {
+      throw new MiniserverAuthError('miniserver-unreachable', 'miniserver request failed');
+    }
+    const text = await res.text().catch(() => '');
+    if (res.status === 401 || res.status === 403) {
+      throw new MiniserverAuthError('invalid-credentials', 'invalid miniserver credentials');
+    }
+    if (!res.ok && !text) {
+      throw new MiniserverAuthError('miniserver-unreachable', `miniserver http ${res.status}`);
+    }
+    return text;
+  }
+
+  private ensureMiniserverSuccess(payload: unknown): void {
+    const ll = this.asObject(this.asObject(payload).LL);
+    const code = this.readNumber(ll.Code) ?? this.readNumber(ll.code);
+    if (code === null) {
+      throw new MiniserverAuthError('miniserver-protocol', 'missing miniserver code');
+    }
+    if (code >= 200 && code < 400) return;
+    if (code === 401 || code === 403) {
+      throw new MiniserverAuthError('invalid-credentials', 'invalid miniserver credentials');
+    }
+    throw new MiniserverAuthError('miniserver-protocol', `miniserver rejected command (${code})`);
+  }
+
+  private extractMiniserverValue(payload: unknown): unknown {
+    const value = this.asObject(this.asObject(payload).LL).value;
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    if (!trimmed) return value;
+    const parsed = this.tryParseJson(trimmed) ?? this.tryParseLooseJson(trimmed);
+    return parsed ?? value;
+  }
+
+  private normalizeHashAlgorithm(value: string): HashAlgorithm {
+    return value.toUpperCase() === 'SHA256' ? 'SHA256' : 'SHA1';
+  }
+
+  private tryDecryptMiniserverResponse(raw: string, aesKey: Buffer, aesIv: Buffer): unknown | null {
+    try {
+      const decrypted = this.decryptMiniserverResponse(raw, aesKey, aesIv);
+      return this.tryParseJson(decrypted);
+    } catch {
+      return null;
+    }
+  }
+
+  private tryParseJson(raw: string): unknown | null {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  }
+
+  private tryParseLooseJson(raw: string): unknown | null {
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
+    try {
+      return JSON.parse(trimmed.replace(/\'/g, '"'));
+    } catch {
+      // fall through to more selective normalization
+    }
+    const normalized = trimmed
+      .replace(/([{,]\s*)'([^']+?)'\s*:/g, '$1"$2":')
+      .replace(/:\s*'([^']*?)'(\s*[},\]])/g, ':"$1"$2');
+    try {
+      return JSON.parse(normalized);
+    } catch {
+      return null;
+    }
+  }
+
+  private asObject(value: unknown): Record<string, unknown> {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+    throw new MiniserverAuthError('miniserver-protocol', 'invalid miniserver object response');
+  }
+
+  private readString(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  private readNumber(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
   }
 
   private detectContainerized(): boolean {
