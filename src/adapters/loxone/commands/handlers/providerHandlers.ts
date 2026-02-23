@@ -28,8 +28,9 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
       return buildResponse(command, 'getservices', services);
     },
     audioCfgGetMediaFolder: async (command: string) => {
-      const parts = splitCommand(command);
-      const folderId = parts[3] || 'root';
+      const rawParts = splitCommand(command);
+      const parts = rawParts[0] === '' ? rawParts.slice(1) : rawParts;
+      const folderId = decodeSegment(parts[3] || 'root');
       const start = parseNumberPart(parts[4], 0);
       const limit = parseNumberPart(parts[5], 50);
       const folder = await contentManager.getMediaFolder(folderId, start, limit);

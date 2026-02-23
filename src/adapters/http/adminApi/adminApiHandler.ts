@@ -15,7 +15,7 @@ import {
 import { createConnection, isIP } from 'node:net';
 import { createWriteStream, promises as fs, readFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, extname, join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createLogger, logManager } from '@/shared/logging/logger';
 import type { LogLevel } from '@/types/logLevel';
@@ -126,8 +126,11 @@ type AdminServerSession = {
 
 const MAX_JSON_BODY_BYTES = 1 * 1024 * 1024;
 const MAX_LIBRARY_UPLOAD_JSON_BODY_BYTES = 32 * 1024 * 1024;
+const MAX_EVENT_SOUND_UPLOAD_JSON_BODY_BYTES = 32 * 1024 * 1024;
 const MAX_WIDEVINE_PRIVATE_KEY_BYTES = 256 * 1024;
 const MAX_WIDEVINE_CLIENT_ID_BYTES = 10 * 1024 * 1024;
+const EVENT_SOUNDS_DIR = resolve(process.cwd(), 'public', 'alerts', 'Event_Sounds');
+const ALLOWED_EVENT_SOUND_EXTENSIONS = new Set(['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac']);
 const ADDON_PACKAGE_PREFIX = '@lox-audioserver/node-';
 const MINISERVER_ADMIN_PERMISSION = 1;
 const AUTH_COOKIE_NAME = 'lox_admin_session';
@@ -573,6 +576,11 @@ export class AdminApiHandler {
         method: 'POST',
         pattern: /^\/zones\/recents\/purge$/,
         handler: async (_req, res) => this.handleRecentsPurge(res),
+      },
+      {
+        method: 'POST',
+        pattern: /^\/alerts\/event-sounds\/upload$/,
+        handler: async (req, res) => this.handleEventSoundUpload(req, res),
       },
       {
         method: 'GET',
@@ -2591,6 +2599,54 @@ export class AdminApiHandler {
     }
   }
 
+  private async handleEventSoundUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = (await this.readJsonBody(req, res, MAX_EVENT_SOUND_UPLOAD_JSON_BODY_BYTES)) as
+      | { filename?: string; data?: string }
+      | null;
+    if (res.writableEnded) {
+      return;
+    }
+    const inputFilename = typeof body?.filename === 'string' ? body.filename.trim() : '';
+    const data = typeof body?.data === 'string' ? body.data.trim() : '';
+    const filename = sanitizeEventSoundFilename(inputFilename);
+    if (!filename || !data) {
+      this.sendJson(res, 400, { error: 'invalid-event-sound-upload' });
+      return;
+    }
+    const extension = extname(filename).toLowerCase();
+    if (!ALLOWED_EVENT_SOUND_EXTENSIONS.has(extension)) {
+      this.sendJson(res, 400, { error: 'invalid-audio-extension' });
+      return;
+    }
+
+    let payload: Buffer;
+    try {
+      payload = Buffer.from(data, 'base64');
+    } catch {
+      this.sendJson(res, 400, { error: 'invalid-audio-data' });
+      return;
+    }
+    if (!payload.length) {
+      this.sendJson(res, 400, { error: 'invalid-audio-data' });
+      return;
+    }
+
+    try {
+      await ensureDir(EVENT_SOUNDS_DIR);
+      await fs.writeFile(join(EVENT_SOUNDS_DIR, filename), payload);
+      this.sendJson(res, 201, {
+        upload: {
+          filename,
+          relativePath: `Event_Sounds/${filename}`,
+          bytes: payload.length,
+        },
+      });
+    } catch (err) {
+      this.log.warn('event sound upload failed', { err, filename });
+      this.sendJson(res, 500, { error: 'event-sound-upload-failed' });
+    }
+  }
+
   private async handleLibraryTrackDelete(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const body = (await this.readJsonBody(req, res)) as { audiopath?: string } | null;
     if (res.writableEnded) {
@@ -4079,4 +4135,18 @@ export class AdminApiHandler {
       },
     };
   }
+}
+
+function sanitizeEventSoundFilename(input: string): string | null {
+  if (!input) {
+    return null;
+  }
+  const leaf = basename(input.replace(/\\/g, '/')).trim();
+  if (!leaf || leaf === '.' || leaf === '..') {
+    return null;
+  }
+  if (/[<>:"|?*\x00-\x1f]/.test(leaf)) {
+    return null;
+  }
+  return leaf;
 }

@@ -100,6 +100,21 @@ export async function audioPlayUploadedAlert(command: string) {
   return buildResponse(command, 'groupalert', [result]);
 }
 
+export async function audioPlayEventFile(command: string) {
+  const parts = splitCommand(command);
+  const zoneTargets = parseZoneTargets(parts[3] ?? '');
+  const relativePath = decodeSegment(parts.slice(4).join('/'));
+
+  if (!relativePath || zoneTargets.length === 0) {
+    return buildResponse(command, 'groupalert', [
+      { success: false, type: 'playeventfile', action: 'on', reason: 'invalid-url' },
+    ]);
+  }
+
+  const result = await alertsManager.handlePlayEventFile(relativePath, zoneTargets);
+  return buildResponse(command, 'groupalert', [result]);
+}
+
 function resolveUploadPath(input: string): string | null {
   const safeSegments = input
     .split('/')
@@ -124,4 +139,28 @@ function safeDecode(value: string): string {
   } catch {
     return value;
   }
+}
+
+function parseZoneTargets(raw: string): Array<{ zoneId: number; volume?: number }> {
+  const targets: Array<{ zoneId: number; volume?: number }> = [];
+  for (const segment of raw.split(',')) {
+    const chunk = segment.trim();
+    if (!chunk) {
+      continue;
+    }
+    const match = chunk.match(/^(\d+)(?:~(\d+))?$/);
+    if (!match) {
+      continue;
+    }
+    const zoneId = Number(match[1]);
+    const volume = match[2] ? Number(match[2]) : undefined;
+    if (!Number.isFinite(zoneId) || zoneId <= 0) {
+      continue;
+    }
+    if (volume != null && (!Number.isFinite(volume) || volume < 0 || volume > 100)) {
+      continue;
+    }
+    targets.push({ zoneId, volume });
+  }
+  return targets;
 }

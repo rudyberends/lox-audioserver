@@ -24,8 +24,20 @@ export class FileAlertProvider {
     if (!filename) {
       return undefined;
     }
-    const relativePath = `cache/${filename}`;
+    const relativePath = normalizeAlertRelativePath(`cache/${filename}`);
+    if (!relativePath) {
+      return undefined;
+    }
     return this.buildResource(relativePath, filename);
+  }
+
+  public async resolveRelative(relativePath: string, title?: string): Promise<AlertMediaResource | undefined> {
+    const normalized = normalizeAlertRelativePath(relativePath);
+    if (!normalized) {
+      return undefined;
+    }
+    const fallbackTitle = normalized.split('/').pop() ?? normalized;
+    return this.buildResource(normalized, title ?? fallbackTitle);
   }
 
   private async buildResource(
@@ -58,6 +70,9 @@ export class FileAlertProvider {
       }
     });
     const abs = path.resolve(ALERTS_DIR, ...parts);
+    if (!abs.startsWith(ALERTS_DIR)) {
+      return undefined;
+    }
     try {
       const meta = await parseFile(abs);
       const duration = meta.format.duration;
@@ -82,4 +97,21 @@ function encodeAlertPath(relative: string): string {
     .filter(Boolean)
     .map((segment) => encodeURIComponent(segment))
     .join('/');
+}
+
+function normalizeAlertRelativePath(input: string): string | null {
+  if (!input?.trim()) {
+    return null;
+  }
+  const parts = input
+    .split(/[\\/]/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (!parts.length) {
+    return null;
+  }
+  if (parts.some((segment) => segment === '.' || segment === '..')) {
+    return null;
+  }
+  return parts.join('/');
 }

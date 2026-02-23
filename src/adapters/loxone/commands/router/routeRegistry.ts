@@ -11,6 +11,7 @@ import { createGroupHandlers } from '@/adapters/loxone/commands/handlers/groupHa
 import {
   audioGroupedAlert,
   audioCfgUploadAudiouploadAdd,
+  audioPlayEventFile,
   audioPlayUploadedAlert,
 } from '@/adapters/loxone/commands/handlers/alertHandlers';
 import { createInputHandlers } from '@/adapters/loxone/commands/handlers/inputHandlers';
@@ -156,6 +157,7 @@ export function registerRoutes(
   router.registerRegex('audio', /^audio\/grouped\/(pause|play|resume|stop)\//, groupHandlers.audioGroupedPlayback);
   router.registerRegex('audio', /^audio\/grouped\/volume\//, groupHandlers.audioGroupedVolume);
   router.registerRegex('audio', /^audio\/grouped\/playuploadedfile\//, audioPlayUploadedAlert);
+  router.registerRegex('audio', /^audio\/grouped\/playeventfile\//, audioPlayEventFile);
   router.registerRegex('audio', /^audio\/grouped\/(?!playuploadedfile)[^/]+\/.+$/, audioGroupedAlert);
 
   router.registerRegex('audio', /^audio\/\d+\/mastervolume\//, groupHandlers.audioMasterVolume);

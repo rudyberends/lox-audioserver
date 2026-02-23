@@ -34,6 +34,10 @@ const MUSICBRAINZ_ENDPOINT = 'https://musicbrainz.org/ws/2/release/';
 const MUSICBRAINZ_USER_AGENT = 'lox-audioserver/1.0 (library-cover-fallback)';
 const COVER_ART_ARCHIVE_RELEASE = 'https://coverartarchive.org/release';
 const COVER_ART_MAX_BYTES = 8 * 1024 * 1024;
+const ALERTS_PUBLIC_DIR = path.resolve(process.cwd(), 'public', 'alerts');
+const SD_ROOT_FOLDER_ID = 'library-sd';
+const SD_ALERTS_FOLDER_ID = 'library-sd-alerts';
+const SD_EVENT_SOUNDS_FOLDER_ID = 'library-sd-event-sounds';
 
 interface RescanOptions {
   silent?: boolean;
@@ -390,8 +394,30 @@ export class LocalLibraryProvider {
       return this.buildRootFolder(offset, limit);
     }
 
+    if (normalized === SD_ROOT_FOLDER_ID || normalized === 'library:sd') {
+      return this.buildSdFolder(offset, limit);
+    }
+
     if (normalized === 'library-local') {
       return this.buildStorageFolder('local', 'Local Media', offset, limit);
+    }
+
+    if (normalized === SD_ALERTS_FOLDER_ID || normalized === 'alerts://') {
+      return this.buildAlertFilesFolder(SD_ALERTS_FOLDER_ID, 'alerts', '', offset, limit);
+    }
+
+    if (
+      normalized === SD_EVENT_SOUNDS_FOLDER_ID ||
+      normalized === 'alerts://Event_Sounds' ||
+      normalized === 'alerts://Event_Sounds/'
+    ) {
+      return this.buildAlertFilesFolder(
+        SD_EVENT_SOUNDS_FOLDER_ID,
+        'Event_Sounds',
+        'Event_Sounds',
+        offset,
+        limit,
+      );
     }
 
     if (normalized.startsWith('library-nas-') && !/-albums$|-artists$|-tracks$/.test(normalized)) {
@@ -437,9 +463,19 @@ export class LocalLibraryProvider {
     });
     const items: ContentFolderItem[] = [
       this.storageRootItem('local', 'Local Media'),
+      this.sdSpecialFolderItem(SD_ALERTS_FOLDER_ID, 'alerts', 'alerts://'),
+      this.sdSpecialFolderItem(SD_EVENT_SOUNDS_FOLDER_ID, 'Event_Sounds', 'alerts://Event_Sounds'),
       ...storages.map((storage) => this.storageRootItem(String(storage.id), storage.name)),
     ];
     return this.buildFolder('root', 'Local Media', items, offset, limit);
+  }
+
+  private async buildSdFolder(offset: number, limit: number): Promise<ContentFolder> {
+    const items: ContentFolderItem[] = [
+      this.sdSpecialFolderItem(SD_ALERTS_FOLDER_ID, 'alerts', 'alerts://'),
+      this.sdSpecialFolderItem(SD_EVENT_SOUNDS_FOLDER_ID, 'Event_Sounds', 'alerts://Event_Sounds'),
+    ];
+    return this.buildFolder(SD_ROOT_FOLDER_ID, 'SD Card', items, offset, limit);
   }
 
   private async buildStorageFolder(
@@ -450,11 +486,23 @@ export class LocalLibraryProvider {
   ): Promise<ContentFolder> {
     const prefix = storageId === 'local' ? 'library-local' : `library-nas-${storageId}`;
     const items: ContentFolderItem[] = [
-      this.categoryItem(prefix, 'Albums', 'albums', storageId),
-      this.categoryItem(prefix, 'Artists', 'artists', storageId),
-      this.categoryItem(prefix, 'Tracks', 'tracks', storageId),
+      this.categoryItem(prefix, 'Albums', 'albums', storageId, { tag: 'nas', nas: true }),
+      this.categoryItem(prefix, 'Artists', 'artists', storageId, { tag: 'nas', nas: true }),
+      this.categoryItem(prefix, 'Tracks', 'tracks', storageId, { tag: 'nas', nas: true }),
     ];
     return this.buildFolder(prefix, label, items, offset, limit);
+  }
+
+  private async buildAlertFilesFolder(
+    id: string,
+    name: string,
+    relativeDir: string,
+    offset: number,
+    limit: number,
+  ): Promise<ContentFolder> {
+    const files = await this.listAlertAudioFiles(relativeDir);
+    const items = files.map((file) => this.alertFileItem(file.relativePath, file.name, file.duration));
+    return this.buildFolder(id, name, items, offset, limit);
   }
 
   private async buildAlbumFolder(
@@ -591,8 +639,9 @@ export class LocalLibraryProvider {
   }
 
   private storageRootItem(storageId: string, label: string): ContentFolderItem {
-    const id = storageId === 'local' ? 'library-local' : `library-nas-${storageId}`;
-    const audiopath = storageId === 'local' ? 'library:local' : `library:nas:${storageId}`;
+    const isLocal = storageId === 'local';
+    const id = isLocal ? 'library-local' : `library-nas-${storageId}`;
+    const audiopath = isLocal ? 'library:local' : `library:nas:${storageId}`;
     return {
       id,
       name: label,
@@ -607,16 +656,27 @@ export class LocalLibraryProvider {
     };
   }
 
+  private sdSpecialFolderItem(id: string, name: string, uri: string): ContentFolderItem {
+    return {
+      id,
+      name,
+      type: FILE_TYPE_FOLDER,
+      provider: 'library',
+      title: name,
+      audiopath: uri,
+      origin: 'local',
+      tag: 'sd',
+    };
+  }
+
   private categoryItem(
     prefix: string,
     label: string,
     suffix: 'albums' | 'artists' | 'tracks',
     storageId: string,
+    options?: { tag?: string; nas?: boolean },
   ) {
-    const audiopath =
-      storageId === 'local'
-        ? `library:nas:${storageId}:${suffix}`
-        : `library:nas:${storageId}:${suffix}`;
+    const audiopath = `library:nas:${storageId}:${suffix}`;
     return {
       id: `${prefix}-${suffix}`,
       name: label,
@@ -624,9 +684,9 @@ export class LocalLibraryProvider {
       provider: 'library',
       title: label,
       audiopath,
-      nas: true,
+      nas: options?.nas,
       origin: storageId,
-      tag: 'nas',
+      tag: options?.tag,
     };
   }
 
@@ -657,7 +717,54 @@ export class LocalLibraryProvider {
       artist: track.artist ?? '',
       album: track.album ?? '',
       duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
+      tag: track.storageId === 'local' ? 'sd' : 'nas',
     };
+  }
+
+  private alertFileItem(relativePath: string, name: string, duration?: number): ContentFolderItem {
+    const uri = `alerts://${encodePath(relativePath)}`;
+    return {
+      id: `library:alerts:${encodeURIComponent(relativePath)}`,
+      name,
+      type: FILE_TYPE_FILE,
+      audiopath: buildAudiopath(uri, 'track', 'library:local'),
+      origin: 'local',
+      tag: 'sd',
+      duration: typeof duration === 'number' && duration > 0 ? duration : undefined,
+    };
+  }
+
+  private async listAlertAudioFiles(relativeDir: string): Promise<Array<{ name: string; relativePath: string; duration?: number }>> {
+    const baseDir = relativeDir ? path.join(ALERTS_PUBLIC_DIR, relativeDir) : ALERTS_PUBLIC_DIR;
+    let entries: Dirent[];
+    try {
+      entries = await fsp.readdir(baseDir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const audioEntries = entries.filter((entry) => entry.isFile() && isAudioFile(entry.name));
+    const mapped = await Promise.all(
+      audioEntries.map(async (entry) => {
+        const relativePath = relativeDir ? path.join(relativeDir, entry.name) : entry.name;
+        const absolutePath = path.join(baseDir, entry.name);
+        let duration: number | undefined;
+        try {
+          const meta = await mm.parseFile(absolutePath);
+          if (typeof meta.format.duration === 'number' && meta.format.duration > 0) {
+            duration = Math.round(meta.format.duration);
+          }
+        } catch {
+          // Ignore probe failures; duration fallback logic will remain active.
+        }
+        return {
+          name: entry.name,
+          relativePath,
+          duration,
+        };
+      }),
+    );
+    return mapped
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   }
 
   private albumItem(album: AlbumRow): ContentFolderItem {

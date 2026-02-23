@@ -1,4 +1,5 @@
 import { createLogger } from '@/shared/logging/logger';
+import path from 'node:path';
 import { FileAlertProvider } from '@/application/alerts/fileAlertProvider';
 import { GoogleTtsProvider } from '@/application/alerts/googleTtsProvider';
 import type { AlertAction, AlertActionResult, AlertMediaResource } from '@/application/alerts/types';
@@ -8,6 +9,9 @@ import type { ConfigPort } from '@/ports/ConfigPort';
 
 const DEFAULT_ALERT_VOLUME = 30;
 const MAX_ALERT_PRE_DELAY_MS = 10_000;
+const MIN_VOLUME = 0;
+const MAX_VOLUME = 100;
+const CUSTOM_URL_PREFIX = 'custom_url/';
 
 export class AlertsManager {
   private readonly log = createLogger('Alerts', 'Manager');
@@ -109,6 +113,48 @@ export class AlertsManager {
     return { success: true, type: 'uploaded', action: 'on' };
   }
 
+  public async handlePlayEventFile(
+    relativePath: string,
+    targets: Array<{ zoneId: number; volume?: number }>,
+  ): Promise<AlertActionResult> {
+    const normalizedTargets = targets.filter((entry) => Number.isFinite(entry.zoneId) && entry.zoneId > 0);
+    if (!relativePath || !normalizedTargets.length) {
+      return { success: false, type: 'playeventfile', action: 'on', reason: 'invalid-input' };
+    }
+
+    this.log.info('ON playeventfile alert', {
+      relativePath,
+      targets: normalizedTargets,
+    });
+    const media = await this.resolvePlayEventMedia(relativePath);
+    if (!media) {
+      return { success: false, type: 'playeventfile', action: 'on', reason: 'media-unavailable' };
+    }
+    const effectiveMedia = this.applyAlertPreDelay(media);
+
+    await Promise.all(
+      normalizedTargets.map(async ({ zoneId, volume }) => {
+        const resolvedVolume = this.resolveAlertVolume(zoneId, 'playeventfile', volume);
+        await this.zones.startAlert(zoneId, 'playeventfile', effectiveMedia, resolvedVolume);
+      }),
+    );
+
+    return { success: true, type: 'playeventfile', action: 'on' };
+  }
+
+  private async resolvePlayEventMedia(input: string): Promise<AlertMediaResource | undefined> {
+    const customUrl = parseCustomEventUrl(input);
+    if (customUrl) {
+      return {
+        title: inferCustomUrlTitle(customUrl),
+        relativePath: `${CUSTOM_URL_PREFIX}${customUrl}`,
+        url: customUrl,
+      };
+    }
+    const filename = path.basename(input) || input;
+    return this.fileProvider.resolveRelative(input, filename);
+  }
+
   private async resolveMedia(
     type: string,
     ttsText?: string,
@@ -123,16 +169,22 @@ export class AlertsManager {
     return this.fileProvider.resolve(type);
   }
 
-  private resolveAlertVolume(zoneId: number, type: string): number {
+  private resolveAlertVolume(zoneId: number, type: string, override?: number): number {
     const volumes = this.zones.getZoneVolumes(zoneId);
+    const maxVolume =
+      typeof volumes?.maxVolume === 'number' && volumes.maxVolume > 0 ? volumes.maxVolume : MAX_VOLUME;
+    if (typeof override === 'number' && Number.isFinite(override)) {
+      return Math.min(Math.max(Math.round(override), MIN_VOLUME), maxVolume);
+    }
     if (!volumes) {
       return DEFAULT_ALERT_VOLUME;
     }
     const key = mapAlertTypeToVolumeKey(type);
     const requested = (volumes as any)[key] ?? volumes.default ?? DEFAULT_ALERT_VOLUME;
-    const maxVolume =
-      typeof volumes.maxVolume === 'number' && volumes.maxVolume > 0 ? volumes.maxVolume : 100;
-    const clamped = Math.min(Math.max(Number(requested) || DEFAULT_ALERT_VOLUME, 0), maxVolume);
+    const clamped = Math.min(
+      Math.max(Number(requested) || DEFAULT_ALERT_VOLUME, MIN_VOLUME),
+      maxVolume,
+    );
     return clamped;
   }
 
@@ -185,6 +237,53 @@ function appendPreDelayToAlertUrl(url: string, preDelayMs: number): string {
   params.set('predelay', String(preDelayMs));
   const query = params.toString();
   return query ? `${base}?${query}` : base;
+}
+
+function parseCustomEventUrl(input: string): string | null {
+  const raw = String(input ?? '').trim();
+  if (!raw.toLowerCase().startsWith(CUSTOM_URL_PREFIX)) {
+    return null;
+  }
+  const candidate = raw.slice(CUSTOM_URL_PREFIX.length).trim();
+  if (!candidate) {
+    return null;
+  }
+  const decoded = safeDecodeURIComponent(candidate);
+  const url = tryParseHttpUrl(decoded) ?? tryParseHttpUrl(candidate);
+  return url?.toString() ?? null;
+}
+
+function tryParseHttpUrl(value: string): URL | null {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed;
+    }
+  } catch {
+    // ignore invalid urls
+  }
+  return null;
+}
+
+function inferCustomUrlTitle(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const segment = path.posix.basename(parsed.pathname || '').trim();
+    if (segment) {
+      return safeDecodeURIComponent(segment);
+    }
+    return parsed.host || 'custom_url';
+  } catch {
+    return 'custom_url';
+  }
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 export const alertsManager = new AlertsManager();

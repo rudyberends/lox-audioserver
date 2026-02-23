@@ -196,6 +196,9 @@ export class AlertsCoordinator {
     if (activeAlert.snapshot.mode === 'play') {
       const current = ctx.queueController.current();
       if (current) {
+        const resumeAtSecRaw = Number(activeAlert.snapshot.statePatch.time ?? 0);
+        const resumeAtSec =
+          Number.isFinite(resumeAtSecRaw) && resumeAtSecRaw > 0 ? Math.round(resumeAtSecRaw) : undefined;
         const session = await this.playbackCoordinator.startQueuePlayback(ctx, current.audiopath, {
           title: current.title,
           artist: current.artist,
@@ -205,6 +208,8 @@ export class AlertsCoordinator {
           duration: current.duration,
           station: current.station,
           isRadio: this.audioHelpers.isRadioAudiopath(current.audiopath, current.audiotype),
+        }, {
+          startAtSec: resumeAtSec,
         });
         if (session) {
           const resumedAudiotype = this.audioHelpers.getStateAudiotype(ctx, current);
