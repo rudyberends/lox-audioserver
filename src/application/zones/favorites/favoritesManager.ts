@@ -75,18 +75,22 @@ export class FavoritesManager {
   public async get(zoneId: number, start = 0, limit = 50): Promise<FavoriteResponse> {
     const stored = await loadFavorites(zoneId);
     const items = limit > 0 ? stored.items.slice(start, start + limit) : stored.items;
-    const normalized = items.map((item) => ({
-      ...item,
-      plus: true,
-      audiopath: normalizeFavoriteAudiopath(item.audiopath),
-      type:
-        typeof item.type === 'string'
-          ? item.type
-          : detectTypeFromAudiopath(normalizeFavoriteAudiopath(item.audiopath)),
-      service: item.service ?? detectService(normalizeFavoriteAudiopath(item.audiopath)).name,
-      serviceType:
-        item.serviceType ?? detectService(normalizeFavoriteAudiopath(item.audiopath)).type,
-    }));
+    const normalized = items.map((item) => {
+      const normalizedPath = normalizeFavoriteAudiopath(item.audiopath);
+      const detectedService = detectService(normalizedPath);
+      const hasMeaningfulService =
+        typeof item.service === 'string' && item.service.trim().length > 0 && item.service !== 'custom';
+      const hasMeaningfulServiceType =
+        typeof item.serviceType === 'number' && item.serviceType !== 3;
+      return {
+        ...item,
+        plus: true,
+        audiopath: normalizedPath,
+        type: resolveFavoriteType(item.type, normalizedPath),
+        service: hasMeaningfulService ? item.service : detectedService.name,
+        serviceType: hasMeaningfulServiceType ? item.serviceType : detectedService.type,
+      };
+    });
     return {
       ...stored,
       start,
@@ -95,7 +99,7 @@ export class FavoritesManager {
     };
   }
 
-  public async add(zoneId: number, title: string, audiopath: string): Promise<FavoriteResponse> {
+  public async add(zoneId: number, title: string, audiopath: string): Promise<FavoriteItem> {
     const stored = await loadFavorites(zoneId);
     const nextId = stored.items.length
       ? Math.max(...stored.items.map((item) => item.id)) + 1
@@ -127,7 +131,8 @@ export class FavoritesManager {
       coverurl: meta?.coverurl ?? stateMeta?.coverurl ?? '',
       owner: providerId ?? '',
     };
-    return this.persist(zoneId, [...stored.items, item]);
+    await this.persist(zoneId, [...stored.items, item]);
+    return item;
   }
 
   public async remove(zoneId: number, id: number): Promise<FavoriteResponse> {
@@ -235,23 +240,52 @@ export function createFavoritesManager(deps: FavoritesManagerDeps): FavoritesMan
 
 function detectTypeFromAudiopath(audiopath: string): string {
   const lower = (audiopath || '').toLowerCase();
-  const service = detectService(audiopath).name;
-  if (/(tunein|radio)/.test(lower)) {
+  if (lower.startsWith('library:') || lower.startsWith('local:')) {
+    if (lower.includes(':folder:')) {
+      return 'library_folder';
+    }
+    if (lower.includes(':playlist:')) {
+      return 'playlist';
+    }
+    return 'library_track';
+  }
+  if (lower.startsWith('spotify:')) {
+    if (lower.includes(':user:collection')) {
+      return 'spotify_collection';
+    }
+    if (lower.includes(':playlist:')) {
+      return 'spotify_playlist';
+    }
+    if (lower.includes(':album:')) {
+      return 'spotify_album';
+    }
+    if (lower.includes(':artist:')) {
+      return 'spotify_artist';
+    }
+    if (lower.includes(':show:')) {
+      return 'spotify_show';
+    }
+    if (lower.includes(':episode:')) {
+      return 'spotify_episode';
+    }
+    return 'spotify_track';
+  }
+  if (lower.startsWith('linein:')) {
+    return 'linein';
+  }
+  if (/^https?:\/\//.test(lower)) {
     return 'tunein';
+  }
+  if (lower.startsWith('tunein:') || /(tunein|radio)/.test(lower)) {
+    return 'tunein';
+  }
+  if (lower.startsWith('soundsuit:') || lower.includes(':schedule:') || lower.includes(':station:')) {
+    return 'soundsuit';
   }
   if (lower.includes(':playlist')) {
     return 'playlist';
   }
-  if (lower.includes(':album:')) {
-    return `${service}_album`;
-  }
-  if (lower.includes(':artist:')) {
-    return `${service}_artist`;
-  }
-  if (lower.includes(':track:')) {
-    return `${service}_track`;
-  }
-  return 'unknown';
+  return 'custom_stream';
 }
 
 function normalizeFavoriteAudiopath(audiopath: string): string {
@@ -280,14 +314,46 @@ function detectService(
   audiopath: string,
 ): { name: string; type: number } {
   const lower = (audiopath || '').toLowerCase();
+  if (lower.startsWith('library:') || lower.startsWith('local:')) {
+    return { name: 'library', type: 2 };
+  }
   if (lower.startsWith('spotify:')) {
     return { name: 'spotify', type: 3 };
   }
   if (lower.startsWith('tunein:')) {
     return { name: 'tunein', type: 3 };
   }
+  if (lower.startsWith('soundsuit:')) {
+    return { name: 'soundsuit', type: 3 };
+  }
   if (lower.startsWith('linein:')) {
     return { name: 'linein', type: 99 };
   }
   return { name: 'custom', type: 3 };
+}
+
+const KNOWN_FAVORITE_TYPES = new Set([
+  'library_track',
+  'library_folder',
+  'playlist',
+  'linein',
+  'tunein',
+  'custom_stream',
+  'loxoneradio',
+  'soundsuit',
+  'normal',
+  'spotify_track',
+  'spotify_playlist',
+  'spotify_collection',
+  'spotify_album',
+  'spotify_artist',
+  'spotify_show',
+  'spotify_episode',
+]);
+
+function resolveFavoriteType(storedType: unknown, audiopath: string): string {
+  if (typeof storedType === 'string' && KNOWN_FAVORITE_TYPES.has(storedType)) {
+    return storedType;
+  }
+  return detectTypeFromAudiopath(audiopath);
 }
