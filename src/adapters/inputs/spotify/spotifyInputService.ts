@@ -386,12 +386,27 @@ class SpotifyConnectInstance {
 
     const eventMeta = this.buildMetadataFromNativeEvent(ev, resolvedTrackId, trackUri);
 
+    const shouldBootstrapSession =
+      typeRaw !== 'stopped' &&
+      typeRaw !== 'error' &&
+      (typeRaw === 'playing' ||
+        typeRaw === 'started' ||
+        typeRaw === 'loading' ||
+        typeRaw === 'track_changed' ||
+        typeRaw === 'paused' ||
+        typeRaw === 'position_correction' ||
+        Boolean(eventMeta) ||
+        Boolean(trackUri) ||
+        Boolean(resolvedTrackId) ||
+        positionSec !== undefined ||
+        durationSec !== undefined);
+
     if (
       this.nativeConnectStream &&
       !this.hasActiveSession &&
       !this.stopping &&
       !this.restarting &&
-      (typeRaw === 'playing' || typeRaw === 'started' || typeRaw === 'loading' || typeRaw === 'track_changed')
+      shouldBootstrapSession
     ) {
       if (resolvedTrackId) {
         this.currentTrackId = resolvedTrackId;
