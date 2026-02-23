@@ -60,7 +60,7 @@ test('favorites manager normalizes legacy local favorite types for app compatibi
   });
 });
 
-test('favorites manager stores stream favorites as tunein', async () => {
+test('favorites manager stores stream favorites as custom_stream', async () => {
   await withTempCwd(async () => {
     const favoritesManager = createFavoritesManager({
       notifier: { notifyRoomFavoritesChanged: () => {} } as any,
@@ -69,9 +69,9 @@ test('favorites manager stores stream favorites as tunein', async () => {
     favoritesManager.initOnce({ zoneManager: { getState: () => undefined } as any });
 
     const created = await favoritesManager.add(11, 'Web Radio', 'https://example.com/radio.m3u8');
-    assert.equal(created.type, 'tunein');
+    assert.equal(created.type, 'custom_stream');
 
     const result = await favoritesManager.get(11);
-    assert.equal(result.items[0]?.type, 'tunein');
+    assert.equal(result.items[0]?.type, 'custom_stream');
   });
 });

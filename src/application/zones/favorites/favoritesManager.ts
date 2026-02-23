@@ -274,7 +274,7 @@ function detectTypeFromAudiopath(audiopath: string): string {
     return 'linein';
   }
   if (/^https?:\/\//.test(lower)) {
-    return 'tunein';
+    return 'custom_stream';
   }
   if (lower.startsWith('tunein:') || /(tunein|radio)/.test(lower)) {
     return 'tunein';
