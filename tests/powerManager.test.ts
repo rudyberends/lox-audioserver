@@ -1,0 +1,105 @@
+import assert from 'node:assert/strict';
+import { test } from './testHarness';
+import { PowerManager, type PowerManagerExecutor } from '../src/application/zones/services/powerManager';
+
+type Call = { type: string; signal: 0 | 1 };
+
+class FakeExecutor implements PowerManagerExecutor {
+  public calls: Call[] = [];
+
+  public async execute(action: { type: string }, signal: 0 | 1): Promise<void> {
+    this.calls.push({ type: action.type, signal });
+  }
+}
+
+const noopLogger = {
+  debug: () => {},
+  spam: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  isEnabled: () => false,
+} as any;
+
+const baseState = { mode: 'stop' } as any;
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test('power manager is optional when no config exists', async () => {
+  const executor = new FakeExecutor();
+  const pm = new PowerManager(noopLogger, executor);
+  pm.onStatePatch(
+    1,
+    { id: 1, name: 'Living', sourceMac: '00:00:00:00:00:01', volumes: {} as any } as any,
+    { mode: 'play' } as any,
+    { ...baseState, mode: 'play' } as any,
+  );
+  await wait(10);
+  assert.equal(executor.calls.length, 0);
+});
+
+test('power manager runs all configured action types', async () => {
+  const executor = new FakeExecutor();
+  const pm = new PowerManager(noopLogger, executor);
+  const zoneConfig = {
+    id: 1,
+    name: 'Living',
+    sourceMac: '00:00:00:00:00:01',
+    volumes: {} as any,
+    powerManager: {
+      gpio: { enabled: true, pin: 21 },
+      url: { enabled: true, onUrl: 'http://amp/on', offUrl: 'http://amp/off' },
+      udp: { enabled: true, host: '127.0.0.1', port: 1234, onPayload: 'ON', offPayload: 'OFF' },
+      crelay: { enabled: true, serial: '/dev/ttyUSB0', relay: '1' },
+    },
+  } as any;
+
+  pm.onStatePatch(1, zoneConfig, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(10);
+  assert.deepEqual(executor.calls, [
+    { type: 'gpio', signal: 1 },
+    { type: 'url', signal: 1 },
+    { type: 'udp', signal: 1 },
+    { type: 'crelay', signal: 1 },
+  ]);
+
+  pm.onStatePatch(1, zoneConfig, { mode: 'stop' } as any, { ...baseState, mode: 'stop' } as any);
+  await wait(10);
+  assert.deepEqual(executor.calls, [
+    { type: 'gpio', signal: 1 },
+    { type: 'url', signal: 1 },
+    { type: 'udp', signal: 1 },
+    { type: 'crelay', signal: 1 },
+    { type: 'gpio', signal: 0 },
+    { type: 'url', signal: 0 },
+    { type: 'udp', signal: 0 },
+    { type: 'crelay', signal: 0 },
+  ]);
+});
+
+test('power manager applies off delay and cancels pending off when play resumes', async () => {
+  const executor = new FakeExecutor();
+  const pm = new PowerManager(noopLogger, executor);
+  const zoneConfig = {
+    id: 1,
+    name: 'Living',
+    sourceMac: '00:00:00:00:00:01',
+    volumes: {} as any,
+    powerManager: {
+      offDelayMs: 40,
+      gpio: { enabled: true, pin: 21 },
+      url: { enabled: true, onUrl: 'http://amp/on', offUrl: 'http://amp/off' },
+    },
+  } as any;
+
+  pm.onStatePatch(1, zoneConfig, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(10);
+  pm.onStatePatch(1, zoneConfig, { mode: 'stop' } as any, { ...baseState, mode: 'stop' } as any);
+  await wait(20);
+  pm.onStatePatch(1, zoneConfig, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(50);
+
+  assert.deepEqual(executor.calls, [
+    { type: 'gpio', signal: 1 },
+    { type: 'url', signal: 1 },
+  ]);
+});

@@ -38,6 +38,7 @@ import { ZoneRepository } from '@/application/zones/ZoneRepository';
 import { StateControllerManager } from '@/application/zones/state/StateControllerManager';
 import { resolveZoneStateControllerId } from '@/application/zones/state/types';
 import type { AlertMediaResource } from '@/application/alerts/types';
+import { PowerManager } from '@/application/zones/services/powerManager';
 import {
   buildInitialState,
   getZoneDefaultVolume,
@@ -93,6 +94,7 @@ export class ZoneManager {
   private readonly contentPort: ContentPort;
   private readonly configPort: ConfigPort;
   private readonly audioManager: AudioManager;
+  private readonly powerManager: PowerManager;
   private initialized = false;
   private inputsConfigured = false;
   private heartbeatTimer: NodeJS.Timeout | null = null;
@@ -144,6 +146,7 @@ export class ZoneManager {
     this.contentPort = contentPort;
     this.configPort = configPort;
     this.audioManager = audioManager;
+    this.powerManager = new PowerManager(this.log);
     this.audioHelpers = createZoneAudioHelpers(contentPort, configPort);
     const audioHelpers = this.audioHelpers;
     const notifierProxy: NotifierPort = {
@@ -169,9 +172,13 @@ export class ZoneManager {
       isLineInAudiopath: audioHelpers.isLineInAudiopath,
       syncGroupMembersPatch: (leaderId, patch, force) =>
         this.groupingCoordinator.syncGroupMembersPatch(leaderId, patch, force),
-      onStatePatch: mixedGroup
-        ? (zoneId, patch, nextState) => mixedGroup.handleStatePatch(zoneId, patch, nextState)
-        : undefined,
+      onStatePatch: (zoneId, patch, nextState) => {
+        mixedGroup?.handleStatePatch(zoneId, patch, nextState);
+        const ctx = this.zoneRepo.get(zoneId);
+        if (ctx) {
+          this.powerManager.onStatePatch(zoneId, ctx.config, patch, nextState);
+        }
+      },
       notifyOutputMetadata: (zoneId, ctx, patch) =>
         this.notifyOutputMetadata(zoneId, ctx, patch),
       notifier: notifierProxy,
@@ -350,6 +357,7 @@ export class ZoneManager {
 
   public async replaceAll(zoneConfigs: ZoneConfig[], inputs?: InputConfig | null): Promise<void> {
     await this.stateControllers.replaceAll(zoneConfigs);
+    this.powerManager.clearAll();
     this.disposeAllOutputs();
     this.clearZoneContexts();
     clearPlayers();
@@ -387,6 +395,7 @@ export class ZoneManager {
     // Tear down existing contexts for the affected zones.
     for (const cfg of zoneConfigs) {
       await this.stateControllers.stopForZone(cfg.id);
+      this.powerManager.clearZone(cfg.id);
       await this.disposeZone(cfg.id);
     }
 
@@ -426,6 +435,7 @@ export class ZoneManager {
     if (!ctx) {
       return;
     }
+    this.powerManager.clearZone(zoneId);
     try {
       const session = ctx.player.stop('reconfigure');
       await this.stopOutputs(ctx.outputs, session);
@@ -439,6 +449,7 @@ export class ZoneManager {
 
   public async shutdown(): Promise<void> {
     await this.stateControllers.stopAll();
+    this.powerManager.clearAll();
     await Promise.all(
       this.zoneRepo.list().map(async (ctx) => {
         const session = ctx.player.stop('shutdown');

@@ -132,9 +132,77 @@ export interface ZoneConfig {
   sourceMac: string;
   output?: ZoneOutputConfig | null;
   transports?: ZoneTransportConfig[];
+  powerManager?: ZonePowerManagerConfig | null;
   state?: ZoneStateConfig;
   volumes: ZoneVolumesConfig;
   inputs?: ZoneInputConfig;
+}
+
+export interface ZonePowerManagerConfig {
+  /** Master toggle for this zone. Defaults to enabled when omitted. */
+  enabled?: boolean;
+  /** Delay before applying ON actions (zone enters play mode). */
+  onDelayMs?: number;
+  /** Delay before applying OFF actions (zone exits play mode). */
+  offDelayMs?: number;
+  gpio?: ZoneGpioPowerConfig | null;
+  url?: ZoneUrlPowerConfig | null;
+  udp?: ZoneUdpPowerConfig | null;
+  crelay?: ZoneCrelayPowerConfig | null;
+}
+
+export interface ZoneGpioPowerConfig {
+  /** Enable GPIO power switching for this zone. */
+  enabled?: boolean;
+  /** GPIO line/pin number to toggle for this zone. */
+  pin?: number;
+  /** Delay before applying ON signal. */
+  onDelayMs?: number;
+  /** Delay before applying OFF signal. */
+  offDelayMs?: number;
+  /** true => ON writes 1, false => ON writes 0. */
+  activeHigh?: boolean;
+  /** GPIO driver backend. */
+  driver?: 'sysfs' | 'gpioset';
+  /** sysfs GPIO base path (default: /sys/class/gpio). */
+  basePath?: string;
+  /** gpioset chip path or chip name (default: gpiochip0). */
+  chip?: string;
+  /** Optional custom gpioset binary path. */
+  gpiosetPath?: string;
+}
+
+export interface ZoneUrlPowerConfig {
+  /** Enable HTTP URL on/off calls for this zone. */
+  enabled?: boolean;
+  /** URL to call when zone starts playing. */
+  onUrl?: string;
+  /** URL to call when zone stops/pauses. */
+  offUrl?: string;
+  /** Optional custom curl binary path. */
+  curlPath?: string;
+  /** Use --insecure for HTTPS calls (default true to match MS4L behavior). */
+  insecure?: boolean;
+}
+
+export interface ZoneUdpPowerConfig {
+  /** Enable UDP message based power control for this zone. */
+  enabled?: boolean;
+  host?: string;
+  port?: number;
+  onPayload?: string;
+  offPayload?: string;
+}
+
+export interface ZoneCrelayPowerConfig {
+  /** Enable CRelay switching for this zone. */
+  enabled?: boolean;
+  /** Relay card serial identifier passed via -s (optional, first detected card when omitted). */
+  serial?: string;
+  /** Relay identifier/channel passed to crelay binary. */
+  relay?: string;
+  /** Optional custom crelay binary path (default: /usr/local/bin/crelay). */
+  binaryPath?: string;
 }
 
 export interface ZoneStateConfig {
