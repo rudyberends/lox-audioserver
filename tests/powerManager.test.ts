@@ -24,9 +24,12 @@ const noopLogger = {
 const baseState = { mode: 'stop' } as any;
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test('power manager is optional when no config exists', async () => {
+test('power manager stays active for state tracking when no config exists', async () => {
   const executor = new FakeExecutor();
-  const pm = new PowerManager(noopLogger, executor);
+  const signalUpdates: Array<{ zoneId: number; signal: 0 | 1 }> = [];
+  const pm = new PowerManager(noopLogger, executor, (zoneId, signal) => {
+    signalUpdates.push({ zoneId, signal });
+  });
   pm.onStatePatch(
     1,
     { id: 1, name: 'Living', sourceMac: '00:00:00:00:00:01', volumes: {} as any } as any,
@@ -34,7 +37,18 @@ test('power manager is optional when no config exists', async () => {
     { ...baseState, mode: 'play' } as any,
   );
   await wait(10);
+  pm.onStatePatch(
+    1,
+    { id: 1, name: 'Living', sourceMac: '00:00:00:00:00:01', volumes: {} as any } as any,
+    { mode: 'stop' } as any,
+    { ...baseState, mode: 'stop' } as any,
+  );
+  await wait(10);
   assert.equal(executor.calls.length, 0);
+  assert.deepEqual(signalUpdates, [
+    { zoneId: 1, signal: 1 },
+    { zoneId: 1, signal: 0 },
+  ]);
 });
 
 test('power manager runs all configured action types', async () => {
@@ -101,5 +115,82 @@ test('power manager applies off delay and cancels pending off when play resumes'
   assert.deepEqual(executor.calls, [
     { type: 'gpio', signal: 1 },
     { type: 'url', signal: 1 },
+  ]);
+});
+
+test('power manager treats pause as off by default', async () => {
+  const executor = new FakeExecutor();
+  const pm = new PowerManager(noopLogger, executor);
+  const zoneConfig = {
+    id: 1,
+    name: 'Living',
+    sourceMac: '00:00:00:00:00:01',
+    volumes: {} as any,
+    powerManager: {
+      gpio: { enabled: true, pin: 21 },
+    },
+  } as any;
+
+  pm.onStatePatch(1, zoneConfig, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(10);
+  pm.onStatePatch(1, zoneConfig, { mode: 'pause' } as any, { ...baseState, mode: 'pause' } as any);
+  await wait(10);
+
+  assert.deepEqual(executor.calls, [
+    { type: 'gpio', signal: 1 },
+    { type: 'gpio', signal: 0 },
+  ]);
+});
+
+test('power manager can stay on during pause via activeModes', async () => {
+  const executor = new FakeExecutor();
+  const pm = new PowerManager(noopLogger, executor);
+  const zoneConfig = {
+    id: 1,
+    name: 'Living',
+    sourceMac: '00:00:00:00:00:01',
+    volumes: {} as any,
+    powerManager: {
+      activeModes: ['play', 'pause'],
+      gpio: { enabled: true, pin: 21 },
+    },
+  } as any;
+
+  pm.onStatePatch(1, zoneConfig, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(10);
+  pm.onStatePatch(1, zoneConfig, { mode: 'pause' } as any, { ...baseState, mode: 'pause' } as any);
+  await wait(10);
+  pm.onStatePatch(1, zoneConfig, { mode: 'stop' } as any, { ...baseState, mode: 'stop' } as any);
+  await wait(10);
+
+  assert.deepEqual(executor.calls, [
+    { type: 'gpio', signal: 1 },
+    { type: 'gpio', signal: 0 },
+  ]);
+});
+
+test('power manager ignores offDelayMs when offDelayEnabled is false', async () => {
+  const executor = new FakeExecutor();
+  const pm = new PowerManager(noopLogger, executor);
+  const zoneConfig = {
+    id: 1,
+    name: 'Living',
+    sourceMac: '00:00:00:00:00:01',
+    volumes: {} as any,
+    powerManager: {
+      offDelayEnabled: false,
+      offDelayMs: 1000,
+      gpio: { enabled: true, pin: 21 },
+    },
+  } as any;
+
+  pm.onStatePatch(1, zoneConfig, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(10);
+  pm.onStatePatch(1, zoneConfig, { mode: 'stop' } as any, { ...baseState, mode: 'stop' } as any);
+  await wait(20);
+
+  assert.deepEqual(executor.calls, [
+    { type: 'gpio', signal: 1 },
+    { type: 'gpio', signal: 0 },
   ]);
 });

@@ -20,6 +20,7 @@ import './zonePlayerEndGuard.test';
 import './durationRegression.test';
 import './runtimeShutdown.test';
 import './sourceResolver.test';
+import './audioManager.playbackPreDelay.test';
 import './sendspinLineInService.test';
 import './powerManager.test';
 import './zoneHandlers.serviceplay.test';
@@ -839,12 +840,12 @@ test('config loads defaults and ignores env overrides', async () => {
       assert.equal(cfg.system.adminHttp.enabled, true);
       assert.equal(cfg.inputs?.airplay?.enabled, true);
       assert.notEqual(cfg.system.audioserver.ip, '203.0.113.123');
-      assert.equal(cfg.system.audioserver.alertPreDelayMs, 0);
+      assert.equal('alertPreDelayMs' in cfg.system.audioserver, false);
 
       await fs.writeFile(path.join(process.cwd(), 'data', 'config.json'), '{bad-json');
       const next = await configPort.load();
       assert.equal(next.zones.length, 0);
-      assert.equal(next.system.audioserver.alertPreDelayMs, 0);
+      assert.equal('alertPreDelayMs' in next.system.audioserver, false);
     } finally {
       if (originalEnv === undefined) {
         delete process.env.AUDIOSERVER_IP;

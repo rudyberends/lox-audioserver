@@ -85,5 +85,6 @@ export function buildInitialState(zone: ZoneConfig): LoxoneZoneState {
     type: 3,
     clientState: 'on',
     power: 'on',
+    powerState: 'off',
   };
 }

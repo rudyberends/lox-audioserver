@@ -114,6 +114,7 @@ export class EngineAdapter implements EnginePort {
         return {
           kind: 'url',
           url: input.url,
+          preDelayMs: input.preDelayMs,
           headers: input.headers,
           decryptionKey: input.decryptionKey,
           tlsVerifyHost: input.tlsVerifyHost,
@@ -128,6 +129,7 @@ export class EngineAdapter implements EnginePort {
         return {
           kind: 'pipe',
           path: input.path,
+          preDelayMs: input.preDelayMs,
           format: input.format,
           sampleRate: input.sampleRate,
           channels: input.channels,

@@ -5,7 +5,6 @@ import { defaultLocalIp } from '@/shared/utils/net';
 import type { AudioServerConfig, RawAudioConfig, ZoneConfig } from '@/domain/config/types';
 
 const CONFIG_PATH = path.resolve(process.cwd(), 'data', 'config.json');
-const MAX_ALERT_PRE_DELAY_MS = 10_000;
 
 /**
  * Minimal configuration store backed by a JSON file on disk.
@@ -120,7 +119,6 @@ function defaultConfig(): AudioServerConfig {
         macId: defaultMacId(),
         paired: false,
         extensions: [],
-        alertPreDelayMs: 0,
         slimprotoPort: 3483,
         slimprotoCliPort: 9090,
         slimprotoJsonPort: 9000,
@@ -251,9 +249,8 @@ function normalizeSystem(config: AudioServerConfig): boolean {
     config.system.audioserver.slimprotoJsonPort = 9000;
     changed = true;
   }
-  const normalizedAlertPreDelayMs = normalizeAlertPreDelayMs(config.system.audioserver.alertPreDelayMs);
-  if (config.system.audioserver.alertPreDelayMs !== normalizedAlertPreDelayMs) {
-    config.system.audioserver.alertPreDelayMs = normalizedAlertPreDelayMs;
+  if ('alertPreDelayMs' in config.system.audioserver) {
+    delete (config.system.audioserver as any).alertPreDelayMs;
     changed = true;
   }
   return changed;
@@ -292,12 +289,4 @@ function normalizeGroups(config: AudioServerConfig): void {
   if (config.groups.mixedGroupEnabled !== true) {
     config.groups.mixedGroupEnabled = false;
   }
-}
-
-function normalizeAlertPreDelayMs(raw: unknown): number {
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
-    return 0;
-  }
-  return Math.min(MAX_ALERT_PRE_DELAY_MS, Math.max(0, Math.round(parsed)));
 }

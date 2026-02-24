@@ -8,7 +8,6 @@ import { buildProxyUrl } from '@/shared/urlProxy';
 const musicRoot = path.resolve(resolveDataDir('music'));
 const alertsRoot = path.resolve(process.cwd(), 'public', 'alerts');
 const log = createLogger('Audio', 'SourceResolver');
-const MAX_ALERT_PRE_DELAY_MS = 10_000;
 const MAX_ALERT_PAD_TAIL_SEC = 30;
 const DEFAULT_ALERT_PAD_TAIL_SEC = 2;
 
@@ -39,7 +38,6 @@ export function resolvePlaybackSource(audiopath: string): PlaybackSource | null 
     return {
       kind: 'file',
       path: normalized,
-      preDelayMs: parsed.preDelayMs,
       padTailSec: parsed.padTailSec ?? DEFAULT_ALERT_PAD_TAIL_SEC,
     };
   }
@@ -55,7 +53,6 @@ export function resolvePlaybackSource(audiopath: string): PlaybackSource | null 
       kind: 'file',
       path: normalized,
       loop: true,
-      preDelayMs: parsed.preDelayMs,
       // For looping alerts tail padding is unnecessary; the stream does not end by itself.
       padTailSec: 0,
     };
@@ -117,39 +114,18 @@ function normalizeAlertsPath(input: string): string | null {
 function parseAlertSource(
   input: string,
   prefix: 'alerts://' | 'alerts-loop://',
-): { relativePath: string; preDelayMs: number; padTailSec?: number } {
+): { relativePath: string; padTailSec?: number } {
   const raw = input.slice(prefix.length);
   const queryIndex = raw.indexOf('?');
   if (queryIndex === -1) {
-    return { relativePath: raw, preDelayMs: 0 };
+    return { relativePath: raw };
   }
   const relativePath = raw.slice(0, queryIndex);
   const query = raw.slice(queryIndex + 1);
   return {
     relativePath,
-    preDelayMs: parseAlertPreDelayMs(query),
     padTailSec: parseAlertPadTailSec(query),
   };
-}
-
-function parseAlertPreDelayMs(query: string): number {
-  if (!query) {
-    return 0;
-  }
-  const params = new URLSearchParams(query);
-  const raw =
-    params.get('predelay') ??
-    params.get('predelayms') ??
-    params.get('preDelayMs') ??
-    params.get('pre_delay_ms');
-  if (!raw?.trim()) {
-    return 0;
-  }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
-    return 0;
-  }
-  return Math.min(MAX_ALERT_PRE_DELAY_MS, Math.max(0, Math.round(parsed)));
 }
 
 function parseAlertPadTailSec(query: string): number | undefined {

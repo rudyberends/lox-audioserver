@@ -93,6 +93,8 @@ export class AudioManager {
   private readonly zoneOutputOverrides = new Map<number, Partial<AudioOutputSettings>>();
   private readonly zoneProfileOverrides = new Map<number, OutputProfile>();
   private readonly zoneInputPreferences = new Map<number, { fileRealTime?: boolean; urlRealTime?: boolean }>();
+  private readonly zonePlaybackPreDelayMs = new Map<number, number>();
+  private isZonePowerOnResolver: ((zoneId: number) => boolean) | null = null;
   private readonly zoneHttpPreferences = new Map<
     number,
     { httpProfile?: HttpProfile; icyEnabled?: boolean; icyInterval?: number; icyName?: string }
@@ -178,6 +180,30 @@ export class AudioManager {
     return { ...source, startAtSec };
   }
 
+  private applyZonePlaybackPreDelay(zoneId: number, source: PlaybackSource | null): PlaybackSource | null {
+    if (!source) {
+      return source;
+    }
+    const zoneDelay = this.zonePlaybackPreDelayMs.get(zoneId);
+    if (!Number.isFinite(zoneDelay) || (zoneDelay ?? 0) <= 0) {
+      return source;
+    }
+    const normalizedZoneDelay = Math.max(0, Math.round(zoneDelay ?? 0));
+    try {
+      if (this.isZonePowerOnResolver?.(zoneId) === true) {
+        return source;
+      }
+    } catch {
+      // Ignore resolver failures and keep safe fallback behavior.
+    }
+    const sourceDelay = Number.isFinite(source.preDelayMs) ? Math.max(0, Math.round(source.preDelayMs ?? 0)) : 0;
+    const effectiveDelay = Math.max(sourceDelay, normalizedZoneDelay);
+    if (effectiveDelay <= 0 || sourceDelay === effectiveDelay) {
+      return source;
+    }
+    return { ...source, preDelayMs: effectiveDelay };
+  }
+
   private getStartAtSec(source: PlaybackSource | null): number {
     if (!source || source.kind === 'pipe') {
       return 0;
@@ -239,7 +265,13 @@ export class AudioManager {
       source,
     );
     const effectiveSource = this.applyStartAt(playbackSource, startAtSec, metadata);
-    return this.startWithResolvedSource(zoneId, source, effectiveSource, metadata, requiresPcm);
+    return this.startWithResolvedSource(
+      zoneId,
+      source,
+      this.applyZonePlaybackPreDelay(zoneId, effectiveSource),
+      metadata,
+      requiresPcm,
+    );
   }
 
   public startExternalPlayback(
@@ -257,7 +289,13 @@ export class AudioManager {
     const rawSource = playbackSource?.kind === 'url' ? playbackSource.url : undefined;
     const decorated = this.decorateRadioSource(zoneId, playbackSource, metadata, rawSource);
     const effectiveSource = this.applyStartAt(decorated, startAtSec, metadata);
-    return this.startWithResolvedSource(zoneId, label, effectiveSource, metadata, requiresPcm);
+    return this.startWithResolvedSource(
+      zoneId,
+      label,
+      this.applyZonePlaybackPreDelay(zoneId, effectiveSource),
+      metadata,
+      requiresPcm,
+    );
   }
 
   public pausePlayback(zoneId: number): PlaybackSession | null {
@@ -549,6 +587,7 @@ export class AudioManager {
         return {
           kind: 'url',
           url: source.url,
+          preDelayMs: source.preDelayMs,
           headers: source.headers,
           decryptionKey: source.decryptionKey,
           tlsVerifyHost: source.tlsVerifyHost,
@@ -563,6 +602,7 @@ export class AudioManager {
         return {
           kind: 'pipe',
           path: source.path,
+          preDelayMs: source.preDelayMs,
           format: source.format,
           sampleRate: source.sampleRate,
           channels: source.channels,
@@ -1067,6 +1107,18 @@ export class AudioManager {
       return;
     }
     this.zoneInputPreferences.set(zoneId, prefs);
+  }
+
+  public setPlaybackPreDelayMs(zoneId: number, delayMs: number | null): void {
+    if (!Number.isFinite(delayMs) || (delayMs ?? 0) <= 0) {
+      this.zonePlaybackPreDelayMs.delete(zoneId);
+      return;
+    }
+    this.zonePlaybackPreDelayMs.set(zoneId, Math.max(0, Math.round(delayMs ?? 0)));
+  }
+
+  public setZonePowerStateResolver(resolver: ((zoneId: number) => boolean) | null): void {
+    this.isZonePowerOnResolver = resolver;
   }
 
   public getEffectiveOutputSettings(zoneId: number): AudioOutputSettings {

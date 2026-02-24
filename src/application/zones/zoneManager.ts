@@ -146,7 +146,18 @@ export class ZoneManager {
     this.contentPort = contentPort;
     this.configPort = configPort;
     this.audioManager = audioManager;
-    this.powerManager = new PowerManager(this.log);
+    this.powerManager = new PowerManager(this.log, undefined, (zoneId, signal) => {
+      if (signal === 0) {
+        this.log.info('zone power manager forcing playback stop on off transition', {
+          zoneId,
+        });
+        this.stopInputSource(zoneId);
+        this.resetZoneStateToInitial(zoneId, 'off');
+        return;
+      }
+      this.applyPatch(zoneId, { powerState: 'on' });
+    });
+    this.audioManager.setZonePowerStateResolver((zoneId) => this.powerManager.isSignalOn(zoneId));
     this.audioHelpers = createZoneAudioHelpers(contentPort, configPort);
     const audioHelpers = this.audioHelpers;
     const notifierProxy: NotifierPort = {
@@ -435,6 +446,7 @@ export class ZoneManager {
     if (!ctx) {
       return;
     }
+    this.audioManager.setPlaybackPreDelayMs(zoneId, null);
     this.powerManager.clearZone(zoneId);
     try {
       const session = ctx.player.stop('reconfigure');
@@ -620,6 +632,16 @@ export class ZoneManager {
     this.stateStore.patch(zoneId, patch, force);
   }
 
+  private resetZoneStateToInitial(zoneId: number, powerState: 'on' | 'off'): void {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx) {
+      return;
+    }
+    const initial = buildInitialState(ctx.config);
+    initial.powerState = powerState;
+    this.applyPatch(zoneId, initial, true);
+  }
+
   public syncGroupMembersToLeader(leaderId: number): void {
     this.groupingCoordinator.syncGroupMembersToLeader(leaderId);
   }
@@ -651,6 +673,10 @@ export class ZoneManager {
   }
 
   private registerZone(config: ZoneConfig): void {
+    this.audioManager.setPlaybackPreDelayMs(
+      config.id,
+      normalizeZonePlaybackPreDelayMs(config.powerManager?.playbackPreDelayMs),
+    );
     const outputs = this.outputsPort.listZoneOutputs(config.id);
     const requiresPcm = this.outputsRequirePcm(outputs);
     const player = new ZonePlayer(this.audioManager, config.id, config.name, config.sourceMac, requiresPcm);
@@ -726,6 +752,7 @@ export class ZoneManager {
 
   private clearZoneContexts(): void {
     for (const ctx of this.zoneRepo.list()) {
+      this.audioManager.setPlaybackPreDelayMs(ctx.id, null);
       this.zoneRepo.delete(ctx.id);
     }
   }
@@ -749,4 +776,12 @@ export class ZoneManager {
     await this.outputRouter.stopOutputs(outputs, session);
   }
 
+}
+
+function normalizeZonePlaybackPreDelayMs(value: number | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  const normalized = Math.max(0, Math.round(value));
+  return normalized > 0 ? normalized : null;
 }

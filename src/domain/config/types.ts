@@ -27,8 +27,6 @@ export interface AudioserverConfig {
   macId: string;
   paired: boolean;
   extensions: AudioserverExtensionConfig[];
-  /** Optional pre-delay (ms) before alert/TTS audio starts. */
-  alertPreDelayMs?: number;
   /** Optional SlimProto control port (default 3483). */
   slimprotoPort?: number;
   /** Optional LMS-compatible telnet CLI port (default 9090). */
@@ -139,10 +137,22 @@ export interface ZoneConfig {
 }
 
 export interface ZonePowerManagerConfig {
-  /** Master toggle for this zone. Defaults to enabled when omitted. */
+  /** Legacy master toggle. Power state tracking remains active even when this is false. */
   enabled?: boolean;
+  /**
+   * Zone modes that should keep power ON.
+   * Defaults to ['play'] so paused/stopped states turn power OFF.
+   */
+  activeModes?: Array<'play' | 'pause'>;
+  /**
+   * Optional audio pre-delay (ms) inserted before playback starts for this zone.
+   * Useful to let amplifiers/speakers wake up before audible content begins.
+   */
+  playbackPreDelayMs?: number;
   /** Delay before applying ON actions (zone enters play mode). */
   onDelayMs?: number;
+  /** Enable delayed OFF behavior; when false, OFF is immediate. */
+  offDelayEnabled?: boolean;
   /** Delay before applying OFF actions (zone exits play mode). */
   offDelayMs?: number;
   gpio?: ZoneGpioPowerConfig | null;

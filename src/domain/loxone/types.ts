@@ -17,6 +17,8 @@ export interface LoxoneZoneState {
   plrepeat: number;
   plshuffle: number;
   power: 'on' | 'off';
+  /** Physical/managed amplifier power state from PowerManager (separate from legacy `power`). */
+  powerState?: 'on' | 'off';
   qindex: number;
   queueAuthority?: string;
   sourceName: string;

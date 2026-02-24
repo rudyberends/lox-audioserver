@@ -3,28 +3,28 @@ import path from 'node:path';
 import { test } from './testHarness';
 import { resolvePlaybackSource } from '../src/application/playback/sourceResolver';
 
-test('source resolver parses alert pre-delay query for alerts files', () => {
+test('source resolver ignores alert pre-delay query for alerts files', () => {
   const source = resolvePlaybackSource('alerts://cache/tts-demo.mp3?predelay=125');
   assert.ok(source);
   assert.equal(source?.kind, 'file');
   if (!source || source.kind !== 'file') {
     return;
   }
-  assert.equal(source.preDelayMs, 125);
+  assert.equal(source.preDelayMs, undefined);
   assert.equal(source.path, path.resolve(process.cwd(), 'public', 'alerts', 'cache', 'tts-demo.mp3'));
 });
 
-test('source resolver clamps alert pre-delay query to zero for invalid values', () => {
+test('source resolver ignores invalid alert pre-delay query', () => {
   const source = resolvePlaybackSource('alerts://cache/tts-demo.mp3?predelay=not-a-number');
   assert.ok(source);
   assert.equal(source?.kind, 'file');
   if (!source || source.kind !== 'file') {
     return;
   }
-  assert.equal(source.preDelayMs, 0);
+  assert.equal(source.preDelayMs, undefined);
 });
 
-test('source resolver applies pre-delay for looping alert sources', () => {
+test('source resolver ignores pre-delay query for looping alert sources', () => {
   const source = resolvePlaybackSource('alerts-loop://cache/alarm.mp3?predelay=500');
   assert.ok(source);
   assert.equal(source?.kind, 'file');
@@ -32,7 +32,7 @@ test('source resolver applies pre-delay for looping alert sources', () => {
     return;
   }
   assert.equal(source.loop, true);
-  assert.equal(source.preDelayMs, 500);
+  assert.equal(source.preDelayMs, undefined);
 });
 
 test('source resolver parses alert pad tail seconds for alerts files', () => {

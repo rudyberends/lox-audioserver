@@ -27,6 +27,7 @@ export type PlaybackSource =
   | {
       kind: 'url';
       url: string;
+      preDelayMs?: number;
       headers?: Record<string, string>;
       decryptionKey?: string;
       tlsVerifyHost?: string;
@@ -41,6 +42,7 @@ export type PlaybackSource =
   | {
       kind: 'pipe';
       path: string;
+      preDelayMs?: number;
       format?: 's16le' | 's24le' | 's32le' | 's16be';
       sampleRate?: number;
       channels?: number;
@@ -126,8 +128,7 @@ export class AudioSession {
     const hardMin = 1024 * 8; // keep a small guard when enabled
     this.sourcePadTailSec =
       this.source.kind === 'file' && !this.source.loop ? this.source.padTailSec : undefined;
-    this.sourcePreDelayMs =
-      this.source.kind === 'file' && !this.source.loop ? this.source.preDelayMs : undefined;
+    this.sourcePreDelayMs = typeof this.source.preDelayMs === 'number' ? this.source.preDelayMs : undefined;
     this.debugTapEnabled =
       this.profile === 'pcm' &&
       this.source.kind === 'file' &&

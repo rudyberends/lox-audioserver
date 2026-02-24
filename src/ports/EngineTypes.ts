@@ -13,6 +13,7 @@ export type PlaybackSource =
   | {
       kind: 'url';
       url: string;
+      preDelayMs?: number;
       headers?: Record<string, string>;
       decryptionKey?: string;
       tlsVerifyHost?: string;
@@ -27,6 +28,7 @@ export type PlaybackSource =
   | {
       kind: 'pipe';
       path: string;
+      preDelayMs?: number;
       format?: 's16le' | 's24le' | 's32le' | 's16be';
       sampleRate?: number;
       channels?: number;
@@ -53,6 +55,7 @@ export type EngineInputSpec =
   | {
       kind: 'url';
       url: string;
+      preDelayMs?: number;
       headers?: Record<string, string>;
       decryptionKey?: string;
       tlsVerifyHost?: string;
@@ -67,6 +70,7 @@ export type EngineInputSpec =
   | {
       kind: 'pipe';
       path: string;
+      preDelayMs?: number;
       stream?: NodeJS.ReadableStream;
       label?: string;
       format?: 's16le' | 's24le' | 's32le' | 's16be';

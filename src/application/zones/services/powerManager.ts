@@ -1,5 +1,7 @@
 import dgram from 'node:dgram';
 import { execFile } from 'node:child_process';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { access, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import type {
@@ -19,6 +21,7 @@ type PowerSignal = 0 | 1;
 type TimerHandle = ReturnType<typeof setTimeout>;
 
 type NormalizedZonePowerConfig = {
+  activeModes: ReadonlySet<'play' | 'pause'>;
   onDelayMs: number;
   offDelayMs: number;
   actions: NormalizedPowerAction[];
@@ -42,8 +45,6 @@ type NormalizedGpioConfig = {
 type NormalizedUrlConfig = {
   onUrl: string;
   offUrl: string;
-  curlPath: string;
-  insecure: boolean;
 };
 
 type NormalizedUdpConfig = {
@@ -74,11 +75,11 @@ export interface PowerManagerExecutor {
 
 export class PowerManager {
   private readonly zones = new Map<number, ZoneRuntime>();
-  private readonly invalidConfigWarned = new Set<number>();
 
   constructor(
     private readonly log: ComponentLogger,
     private readonly executor: PowerManagerExecutor = new SystemPowerManagerExecutor(),
+    private readonly onSignalChanged?: (zoneId: number, signal: PowerSignal) => void,
   ) {}
 
   public onStatePatch(
@@ -91,20 +92,16 @@ export class PowerManager {
       return;
     }
     const normalized = normalizePowerManagerConfig(zoneConfig.powerManager ?? null);
-    if (!normalized) {
-      const raw = zoneConfig.powerManager ?? null;
-      if (raw && raw.enabled !== false && !this.invalidConfigWarned.has(zoneId)) {
-        this.invalidConfigWarned.add(zoneId);
-        this.log.warn('zone power manager disabled due to invalid config', {
-          zoneId,
-          powerManager: raw,
-        });
-      }
-      this.clearZone(zoneId);
-      return;
-    }
-    this.invalidConfigWarned.delete(zoneId);
-    const desired: PowerSignal = nextState.mode === 'play' ? 1 : 0;
+    const desired: PowerSignal = isPowerOnMode(normalized.activeModes, nextState.mode) ? 1 : 0;
+    this.log.debug('zone power manager state update', {
+      zoneId,
+      zoneName: zoneConfig.name,
+      mode: nextState.mode,
+      desiredSignal: desired,
+      actions: normalized.actions.map((action) => action.type),
+      onDelayMs: normalized.onDelayMs,
+      offDelayMs: normalized.offDelayMs,
+    });
     this.setDesired(zoneId, normalized, desired);
   }
 
@@ -122,7 +119,6 @@ export class PowerManager {
       runtime.offTimer = null;
     }
     this.zones.delete(zoneId);
-    this.invalidConfigWarned.delete(zoneId);
   }
 
   public clearAll(): void {
@@ -131,18 +127,31 @@ export class PowerManager {
     }
   }
 
+  public isSignalOn(zoneId: number): boolean {
+    return this.zones.get(zoneId)?.currentSignal === 1;
+  }
+
   private setDesired(
     zoneId: number,
     config: NormalizedZonePowerConfig,
     desiredSignal: PowerSignal,
   ): void {
     const runtime = this.ensureRuntime(zoneId, config);
+    const previousDesired = runtime.desiredSignal;
     runtime.config = config;
     runtime.desiredSignal = desiredSignal;
+    if (previousDesired !== desiredSignal) {
+      this.log.debug('zone power manager desired signal changed', {
+        zoneId,
+        previousDesired,
+        desiredSignal,
+      });
+    }
     if (desiredSignal === 1) {
       if (runtime.offTimer) {
         clearTimeout(runtime.offTimer);
         runtime.offTimer = null;
+        this.log.spam('zone power manager cancelled pending off timer', { zoneId });
       }
       this.scheduleSignal(zoneId, runtime, 1, config.onDelayMs, 'onTimer');
       return;
@@ -150,6 +159,7 @@ export class PowerManager {
     if (runtime.onTimer) {
       clearTimeout(runtime.onTimer);
       runtime.onTimer = null;
+      this.log.spam('zone power manager cancelled pending on timer', { zoneId });
     }
     this.scheduleSignal(zoneId, runtime, 0, config.offDelayMs, 'offTimer');
   }
@@ -181,14 +191,34 @@ export class PowerManager {
     if (runtime[timerKey]) {
       clearTimeout(runtime[timerKey]!);
       runtime[timerKey] = null;
+      this.log.spam('zone power manager replaced pending timer', {
+        zoneId,
+        timerKey,
+        signal,
+        delayMs,
+      });
     }
     if (runtime.currentSignal === signal) {
+      this.log.spam('zone power manager skipped schedule; signal already applied', {
+        zoneId,
+        signal,
+      });
       return;
     }
     if (delayMs <= 0) {
+      this.log.debug('zone power manager applying signal immediately', {
+        zoneId,
+        signal,
+      });
       this.applySignal(zoneId, signal);
       return;
     }
+    this.log.debug('zone power manager scheduled signal', {
+      zoneId,
+      signal,
+      delayMs,
+      timerKey,
+    });
     runtime[timerKey] = setTimeout(() => {
       runtime[timerKey] = null;
       this.applySignal(zoneId, signal);
@@ -204,8 +234,20 @@ export class PowerManager {
       .then(async () => {
         const fresh = this.zones.get(zoneId);
         if (!fresh || fresh.desiredSignal !== signal || fresh.currentSignal === signal) {
+          this.log.spam('zone power manager skipped apply', {
+            zoneId,
+            signal,
+            hasRuntime: Boolean(fresh),
+            desiredSignal: fresh?.desiredSignal,
+            currentSignal: fresh?.currentSignal,
+          });
           return;
         }
+        this.log.info('zone power manager applying signal', {
+          zoneId,
+          signal,
+          actions: fresh.config.actions.map((action) => action.type),
+        });
         for (const action of fresh.config.actions) {
           try {
             await this.executor.execute(action, signal);
@@ -221,7 +263,16 @@ export class PowerManager {
         }
         const active = this.zones.get(zoneId);
         if (active && active.desiredSignal === signal) {
+          const previous = active.currentSignal;
           active.currentSignal = signal;
+          if (previous !== signal) {
+            this.log.info('zone power manager signal applied', {
+              zoneId,
+              previousSignal: previous,
+              signal,
+            });
+            this.onSignalChanged?.(zoneId, signal);
+          }
         }
       })
       .catch((error: unknown) => {
@@ -275,12 +326,7 @@ class SystemPowerManagerExecutor implements PowerManagerExecutor {
     if (!target) {
       return;
     }
-    const args = ['-s'];
-    if (config.insecure) {
-      args.push('--insecure');
-    }
-    args.push(target);
-    await execFileAsync(config.curlPath, args);
+    await requestUrl(target);
   }
 
   private async sendUdp(config: NormalizedUdpConfig, signal: PowerSignal): Promise<void> {
@@ -308,35 +354,53 @@ class SystemPowerManagerExecutor implements PowerManagerExecutor {
   }
 }
 
-function normalizePowerManagerConfig(raw: ZonePowerManagerConfig | null): NormalizedZonePowerConfig | null {
-  if (!raw || raw.enabled === false) {
-    return null;
-  }
+function normalizePowerManagerConfig(raw: ZonePowerManagerConfig | null): NormalizedZonePowerConfig {
+  const config = raw ?? {};
   const actions: NormalizedPowerAction[] = [];
-  const gpio = normalizeGpio(raw.gpio ?? null);
+  const gpio = normalizeGpio(config.gpio ?? null);
   if (gpio) {
     actions.push({ type: 'gpio', config: gpio });
   }
-  const url = normalizeUrl(raw.url ?? null);
+  const url = normalizeUrl(config.url ?? null);
   if (url) {
     actions.push({ type: 'url', config: url });
   }
-  const udp = normalizeUdp(raw.udp ?? null);
+  const udp = normalizeUdp(config.udp ?? null);
   if (udp) {
     actions.push({ type: 'udp', config: udp });
   }
-  const crelay = normalizeCrelay(raw.crelay ?? null);
+  const crelay = normalizeCrelay(config.crelay ?? null);
   if (crelay) {
     actions.push({ type: 'crelay', config: crelay });
   }
-  if (actions.length < 1) {
-    return null;
-  }
   return {
-    onDelayMs: toDelay(raw.onDelayMs),
-    offDelayMs: toDelay(raw.offDelayMs),
+    activeModes: normalizeActiveModes(config.activeModes),
+    onDelayMs: toDelay(config.onDelayMs),
+    offDelayMs: config.offDelayEnabled === false ? 0 : toDelay(config.offDelayMs),
     actions,
   };
+}
+
+function normalizeActiveModes(raw: ZonePowerManagerConfig['activeModes']): ReadonlySet<'play' | 'pause'> {
+  const modes = new Set<'play' | 'pause'>();
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (entry === 'play' || entry === 'pause') {
+        modes.add(entry);
+      }
+    }
+  }
+  if (modes.size < 1) {
+    modes.add('play');
+  }
+  return modes;
+}
+
+function isPowerOnMode(
+  activeModes: ReadonlySet<'play' | 'pause'>,
+  mode: LoxoneZoneState['mode'],
+): boolean {
+  return mode === 'play' || (mode === 'pause' && activeModes.has('pause'));
 }
 
 function normalizeGpio(raw: ZoneGpioPowerConfig | null): NormalizedGpioConfig | null {
@@ -368,9 +432,56 @@ function normalizeUrl(raw: ZoneUrlPowerConfig | null): NormalizedUrlConfig | nul
   return {
     onUrl,
     offUrl,
-    curlPath: raw.curlPath?.trim() || 'curl',
-    insecure: raw.insecure !== false,
   };
+}
+
+async function requestUrl(rawTarget: string, redirects = 0): Promise<void> {
+  if (redirects > 5) {
+    throw new Error('too many redirects');
+  }
+  let target: URL;
+  try {
+    target = new URL(rawTarget);
+  } catch {
+    throw new Error('invalid url');
+  }
+  const isHttps = target.protocol === 'https:';
+  const client = isHttps ? httpsRequest : httpRequest;
+  await new Promise<void>((resolve, reject) => {
+    const req = client(
+      {
+        protocol: target.protocol,
+        hostname: target.hostname,
+        port: target.port,
+        path: `${target.pathname}${target.search}`,
+        method: 'GET',
+        timeout: 8000,
+        rejectUnauthorized: isHttps ? false : undefined,
+        headers: {
+          accept: '*/*',
+          'user-agent': 'lox-audioserver-power-manager',
+        },
+      },
+      (res) => {
+        const code = typeof res.statusCode === 'number' ? res.statusCode : 0;
+        if (code >= 300 && code < 400 && res.headers.location) {
+          const location = new URL(res.headers.location, target).toString();
+          res.resume();
+          resolve(requestUrl(location, redirects + 1));
+          return;
+        }
+        res.resume();
+        if (code >= 200 && code < 500) {
+          resolve();
+          return;
+        }
+        reject(new Error(`http ${code || 'request failed'}`));
+      },
+    );
+    req.on('timeout', () => req.destroy(new Error('request timeout')));
+    req.on('error', reject);
+    req.end();
+  });
 }
 
 function normalizeUdp(raw: ZoneUdpPowerConfig | null): NormalizedUdpConfig | null {

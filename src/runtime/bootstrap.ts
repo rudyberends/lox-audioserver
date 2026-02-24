@@ -231,7 +231,7 @@ export function createRuntime(): Runtime {
   groupManager.initOnce({ zoneManager });
   mixedGroupController.initOnce({ zoneManager });
   favoritesManager.initOnce({ zoneManager });
-  alertsManager.initOnce({ zoneManager, configPort });
+  alertsManager.initOnce({ zoneManager });
   fadeController.initOnce({ zoneManager });
   sendspinGroupController.initOnce({ zoneManager });
   const loxoneConfigService = new LoxoneConfigService(

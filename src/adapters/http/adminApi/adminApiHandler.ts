@@ -2038,6 +2038,7 @@ export class AdminApiHandler {
           sourceName: state?.sourceName ?? '',
           station: state?.station ?? '',
           state: state?.mode ?? '',
+          powerState: state?.powerState ?? 'off',
           coverurl: state?.coverurl ?? '',
           coverUrl: state?.coverurl ?? '',
           tech,
@@ -3737,6 +3738,9 @@ export class AdminApiHandler {
             if (incoming.inputs !== undefined) {
               target.inputs = incoming.inputs as any;
             }
+            if (incoming.powerManager !== undefined) {
+              target.powerManager = incoming.powerManager as any;
+            }
             if (incoming.state !== undefined) {
               target.state = this.normalizeZoneStatePayload(incoming.state);
             }
@@ -3764,6 +3768,9 @@ export class AdminApiHandler {
             }
             if (incoming.state !== undefined) {
               nextZone.state = this.normalizeZoneStatePayload(incoming.state);
+            }
+            if (incoming.powerManager !== undefined) {
+              nextZone.powerManager = incoming.powerManager as any;
             }
             cfg.zones!.push(nextZone as any);
           }
@@ -3831,7 +3838,7 @@ export class AdminApiHandler {
     if (req.method === 'POST' && isSystemUpdate) {
       const body = (await this.readJsonBody(req, res)) as
         | {
-            audioserver?: { macId?: string; ip?: string; alertPreDelayMs?: number };
+            audioserver?: { macId?: string; ip?: string };
           }
         | null;
       if (res.writableEnded) {
@@ -3847,8 +3854,7 @@ export class AdminApiHandler {
       }
       const rawMac = body.audioserver.macId;
       const rawIp = body.audioserver.ip;
-      const rawAlertPreDelayMs = body.audioserver.alertPreDelayMs;
-      if (typeof rawMac !== 'string' && typeof rawIp !== 'string' && typeof rawAlertPreDelayMs !== 'number') {
+      if (typeof rawMac !== 'string' && typeof rawIp !== 'string') {
         this.sendJson(res, 400, { error: 'invalid-system-payload' });
         return;
       }
@@ -3875,15 +3881,6 @@ export class AdminApiHandler {
         }
         normalizedIp = trimmedIp;
       }
-      let normalizedAlertPreDelayMs: number | null = null;
-      if (typeof rawAlertPreDelayMs === 'number') {
-        if (!Number.isFinite(rawAlertPreDelayMs) || rawAlertPreDelayMs < 0) {
-          this.sendJson(res, 400, { error: 'invalid-alert-predelay' });
-          return;
-        }
-        normalizedAlertPreDelayMs = rawAlertPreDelayMs;
-      }
-
       await this.configPort.updateConfig((cfg) => {
         if (!cfg.system) cfg.system = this.defaultConfig().system;
         if (!cfg.system.audioserver) {
@@ -3894,9 +3891,6 @@ export class AdminApiHandler {
         }
         if (normalizedIp) {
           cfg.system.audioserver.ip = normalizedIp;
-        }
-        if (normalizedAlertPreDelayMs !== null) {
-          cfg.system.audioserver.alertPreDelayMs = normalizedAlertPreDelayMs;
         }
       });
       this.sendJson(res, 204, {});
@@ -4241,7 +4235,6 @@ export class AdminApiHandler {
           macId: defaultMacId(),
           paired: false,
           extensions: [],
-          alertPreDelayMs: 0,
         },
         logging: {
           consoleLevel: 'none',
