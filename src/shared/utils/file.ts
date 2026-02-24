@@ -1,9 +1,11 @@
 import { promises as fs } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createLogger } from '@/shared/logging/logger';
 import { safeJsonParse } from '@/shared/bestEffort';
 
 const log = createLogger('Core', 'File');
+let tmpWriteCounter = 0;
 
 /**
  * Ensures that the given directory path exists on disk.
@@ -77,9 +79,10 @@ export async function writeJson(filePath: string, data: unknown): Promise<void> 
   // Atomic-ish write to avoid leaving truncated/invalid JSON if the process restarts mid-write.
   // This prevents cases where a subsequent boot reads invalid JSON and falls back to defaults.
   const dir = path.dirname(filePath);
+  tmpWriteCounter = (tmpWriteCounter + 1) % Number.MAX_SAFE_INTEGER;
   const tmpPath = path.join(
     dir,
-    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`,
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${tmpWriteCounter}.${randomUUID()}.tmp`,
   );
   const payload = JSON.stringify(data, null, 2);
   await fs.writeFile(tmpPath, payload, 'utf-8');

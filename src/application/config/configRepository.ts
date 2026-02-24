@@ -11,6 +11,7 @@ const CONFIG_PATH = path.resolve(process.cwd(), 'data', 'config.json');
  */
 export class ConfigRepository {
   private config: AudioServerConfig | null = null;
+  private updateQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly storage: StoragePort) {}
 
@@ -67,17 +68,19 @@ export class ConfigRepository {
   public async patch(
     mutator: (config: AudioServerConfig) => void | Promise<void>,
   ): Promise<AudioServerConfig> {
-    if (!this.config) {
-      await this.load();
-    }
+    return this.withUpdateLock(async () => {
+      if (!this.config) {
+        await this.load();
+      }
 
-    await mutator(this.config!);
-    normalizeSystem(this.config!);
-    normalizeInputs(this.config!);
-    normalizeGroups(this.config!);
-    normalizeZones(this.config!);
-    await this.save();
-    return this.config!;
+      await mutator(this.config!);
+      normalizeSystem(this.config!);
+      normalizeInputs(this.config!);
+      normalizeGroups(this.config!);
+      normalizeZones(this.config!);
+      await this.save();
+      return this.config!;
+    });
   }
 
   public async update(
@@ -95,6 +98,20 @@ export class ConfigRepository {
         cfg.updatedAt = new Date().toISOString();
       }
     });
+  }
+
+  private async withUpdateLock<T>(work: () => Promise<T>): Promise<T> {
+    let release: () => void = () => {};
+    const prev = this.updateQueue;
+    this.updateQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await prev;
+    try {
+      return await work();
+    } finally {
+      release();
+    }
   }
 }
 

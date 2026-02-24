@@ -856,6 +856,33 @@ test('config loads defaults and ignores env overrides', async () => {
   });
 });
 
+test('config repository serializes concurrent updates', async () => {
+  await withTempCwd(async () => {
+    const configRepositoryModule = freshRequire<typeof import('../src/application/config/configRepository')>(
+      '../src/application/config/configRepository',
+    );
+    const storage = new StorageAdapter();
+    const repo = new configRepositoryModule.ConfigRepository(storage);
+    await repo.load();
+
+    await Promise.all(
+      Array.from({ length: 12 }, (_, idx) =>
+        repo.update((cfg) => {
+          cfg.system.miniserver.serial = `ms-${idx}`;
+        }),
+      ),
+    );
+
+    const cfg = repo.get();
+    assert.ok(typeof cfg.system.miniserver.serial === 'string');
+    assert.ok(cfg.system.miniserver.serial.startsWith('ms-'));
+    const onDisk = JSON.parse(
+      await fs.readFile(path.join(process.cwd(), 'data', 'config.json'), 'utf-8'),
+    );
+    assert.ok(typeof onDisk.system?.miniserver?.serial === 'string');
+  });
+});
+
 async function run(): Promise<void> {
   let failures = 0;
   for (const { name, fn } of tests) {
