@@ -205,6 +205,12 @@ export class AudioSession {
     if (this.process) {
       return;
     }
+    this.bufferQueue.length = 0;
+    this.bufferBytes = 0;
+    this.pcmRemainder = null;
+    this.bytesSinceLog = 0;
+    this.lastLogTs = 0;
+    this.totalBytes = 0;
     this.firstChunkLogged = false;
     this.firstChunkPromise = new Promise((resolve) => {
       this.firstChunkResolve = resolve;
@@ -299,18 +305,7 @@ export class AudioSession {
               spawnToFirstChunkMs: this.startTs ? Math.max(0, Date.now() - this.startTs) : null,
             });
           }
-          if (this.maxBufferBytes > 0 && this.bufferBytes < this.maxBufferBytes) {
-            this.bufferQueue.push(aligned);
-            this.bufferBytes += aligned.length;
-            if (!this.keepInitialBuffer) {
-              while (this.bufferBytes > this.maxBufferBytes && this.bufferQueue.length > 0) {
-                const removed = this.bufferQueue.shift();
-                if (removed) {
-                  this.bufferBytes -= removed.length;
-                }
-              }
-            }
-          }
+          this.bufferChunk(aligned);
           this.recordBytes(chunk.length);
           this.writeToSubscribers(aligned);
         };
@@ -519,18 +514,7 @@ export class AudioSession {
           spawnToFirstChunkMs: this.startTs ? Math.max(0, now - this.startTs) : null,
         });
       }
-      if (this.maxBufferBytes > 0 && this.bufferBytes < this.maxBufferBytes) {
-        this.bufferQueue.push(aligned);
-        this.bufferBytes += aligned.length;
-        if (!this.keepInitialBuffer) {
-          while (this.bufferBytes > this.maxBufferBytes && this.bufferQueue.length > 0) {
-            const removed = this.bufferQueue.shift();
-            if (removed) {
-              this.bufferBytes -= removed.length;
-            }
-          }
-        }
-      }
+      this.bufferChunk(aligned);
       this.recordBytes(chunk.length);
       this.writeToSubscribers(aligned);
       this.maybeApplyOutputPacing();
@@ -759,6 +743,41 @@ export class AudioSession {
     this.backpressureListeners.delete(subscriber);
     this.backpressureCount = Math.max(0, this.backpressureCount - 1);
     this.resumeStdout();
+  }
+
+  private bufferChunk(chunk: Buffer): void {
+    if (this.maxBufferBytes <= 0 || !chunk?.length) {
+      return;
+    }
+
+    if (this.keepInitialBuffer) {
+      const remaining = this.maxBufferBytes - this.bufferBytes;
+      if (remaining <= 0) {
+        return;
+      }
+      const toStore = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+      this.bufferQueue.push(toStore);
+      this.bufferBytes += toStore.length;
+      return;
+    }
+
+    if (chunk.length >= this.maxBufferBytes) {
+      const tail = chunk.subarray(chunk.length - this.maxBufferBytes);
+      this.bufferQueue.length = 0;
+      this.bufferQueue.push(tail);
+      this.bufferBytes = tail.length;
+      return;
+    }
+
+    this.bufferQueue.push(chunk);
+    this.bufferBytes += chunk.length;
+    while (this.bufferBytes > this.maxBufferBytes && this.bufferQueue.length > 0) {
+      const removed = this.bufferQueue.shift();
+      if (!removed) {
+        break;
+      }
+      this.bufferBytes -= removed.length;
+    }
   }
 
   private buildInputArgs(): string[] {
@@ -1017,10 +1036,12 @@ export class AudioSession {
       return null;
     }
     const stream = new PassThrough({ highWaterMark: 1024 * 512 });
+    let primedBytes = 0;
     // Prime the subscriber with buffered audio to prevent initial starvation unless disabled.
     if (options.primeWithBuffer !== false && this.bufferQueue.length) {
       for (const chunk of this.bufferQueue) {
         stream.write(chunk);
+        primedBytes += chunk.length;
       }
     }
     this.subscribers.add(stream);
@@ -1033,6 +1054,22 @@ export class AudioSession {
       zoneId: this.zoneId,
       profile: this.profile,
       label,
+      primeWithBuffer: options.primeWithBuffer !== false,
+      primedBytes,
+      primedMs:
+        this.profile === 'pcm' &&
+        this.outputSettings.sampleRate > 0 &&
+        this.outputSettings.channels > 0 &&
+        this.outputSettings.pcmBitDepth > 0
+          ? Math.round(
+              (primedBytes /
+                (this.outputSettings.sampleRate *
+                  this.outputSettings.channels *
+                  (this.outputSettings.pcmBitDepth / 8))) *
+                1000,
+            )
+          : null,
+      sessionBufferedBytes: this.bufferBytes,
       subscriberCount: this.subscribers.size,
     });
     const remove = () => {

@@ -611,6 +611,17 @@ export class SendspinOutput implements ZoneOutput {
       const chosenFormat = this.normalizeFormat(options.formatOverride ?? this.negotiatedFormat);
       this.negotiatedFormat = chosenFormat;
       const prebufferBytes = this.computePrebufferBytes(chosenFormat);
+      this.log.debug('Sendspin stream prebuffer config', {
+        zoneId: this.zoneId,
+        clientId: this.clientId,
+        codec: chosenFormat.codec,
+        sampleRate: chosenFormat.sampleRate,
+        channels: chosenFormat.channels,
+        bitDepth: chosenFormat.bitDepth,
+        targetLeadMs: Math.round(this.targetLeadUs / 1000),
+        requestedPrebufferBytes: prebufferBytes,
+        configuredDefaultPrebufferBytes: audioOutputSettings.prebufferBytes,
+      });
       const sendspinOutputSettings: AudioOutputSettings = {
         ...audioOutputSettings,
         sampleRate: chosenFormat.sampleRate,

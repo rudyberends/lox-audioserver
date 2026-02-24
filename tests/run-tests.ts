@@ -390,7 +390,7 @@ test('pipe source listeners are detached after stop', () => {
   spawnImpl = () => new FakeProcess(true);
   const session = new AudioSession(
     1,
-    { kind: 'pipe', path: '/tmp/fake.pcm', stream: source },
+    { kind: 'pipe', path: '/tmp/fake.pcm', stream: source, format: 's24le' },
     'pcm',
     () => undefined,
     audioOutputSettings,
@@ -412,7 +412,7 @@ test('ffmpeg stop issues SIGKILL after timeout', async () => {
   };
   const session = new AudioSession(
     1,
-    { kind: 'pipe', path: '/tmp/fake.pcm', stream: source },
+    { kind: 'pipe', path: '/tmp/fake.pcm', stream: source, format: 's24le' },
     'pcm',
     () => undefined,
     audioOutputSettings,
