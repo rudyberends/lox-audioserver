@@ -18,7 +18,6 @@ const enum FileType {
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
 const SPOTIFY_SEARCH_MAX_LIMIT = 10;
 const SPOTIFY_HTTP_TIMEOUT_MS = 10_000;
-const SPOTIFY_PLAYLIST_ITEMS_MAX_LIMIT = 20;
 const SPOTIFY_ENABLE_POPULAR_CATEGORY = false;
 const SPOTIFY_FALLBACK_CATEGORIES: Array<{ id: string; name: string }> = [
   { id: 'pop', name: 'Pop' },
@@ -89,7 +88,6 @@ export class SpotifyAccountProvider {
   private tokenExpiresAt = 0;
   private authError = false;
   private refreshPromise: Promise<string | null> | null = null;
-  private readonly deniedPlaylistIds = new Set<string>();
 
   constructor(options: SpotifyAccountProviderOptions) {
     this.providerId = options.providerId;
@@ -474,11 +472,27 @@ export class SpotifyAccountProvider {
 
     const items = Array.isArray(data?.items) ? data!.items : [];
     const visible = items.filter((pl) => {
-      const id = typeof pl?.id === 'string' ? pl.id : '';
-      if (!id) return false;
-      return !this.deniedPlaylistIds.has(id);
+      const playlistId = typeof pl?.id === 'string' ? pl.id.trim() : '';
+      if (!playlistId) return false;
+      return this.isOwnedPlaylist(pl);
     });
-    return { items: visible.map((pl) => this.mapPlaylist(pl)), total: data?.total };
+    return { items: visible.map((pl) => this.mapPlaylist(pl)), total: visible.length };
+  }
+
+  private isOwnedPlaylist(playlist: any): boolean {
+    const ownerId = typeof playlist?.owner?.id === 'string' ? playlist.owner.id.trim().toLowerCase() : '';
+    if (!ownerId) return false;
+    const accountIds = new Set<string>();
+    const add = (value: unknown): void => {
+      if (typeof value !== 'string') return;
+      const cleaned = value.trim().toLowerCase();
+      if (!cleaned) return;
+      accountIds.add(cleaned);
+    };
+    add(this.account.spotifyId);
+    add(this.account.user);
+    add(this.account.id);
+    return accountIds.has(ownerId);
   }
 
   private async fetchPlaylistTracks(
@@ -489,81 +503,64 @@ export class SpotifyAccountProvider {
     if (!playlistId) {
       return { items: [], total: 0 };
     }
-    const cappedLimit = Math.min(Math.max(limit || 50, 1), SPOTIFY_PLAYLIST_ITEMS_MAX_LIMIT);
-    const data = await this.request<{ items?: any[]; total?: number; tracks?: { total?: number } }>(
-      `${SPOTIFY_API_BASE}/playlists/${encodeURIComponent(playlistId)}/items`,
+    // Spotify Web API (Feb 2026): playlist entries are surfaced on the playlist resource.
+    const safeOffset = Math.max(0, offset || 0);
+    const safeLimit = Math.max(1, limit || 50);
+    const playlistPayload = await this.request<{ items?: any[] | { items?: any[]; total?: number }; tracks?: any[] | { items?: any[]; total?: number } }>(
+      `${SPOTIFY_API_BASE}/playlists/${encodeURIComponent(playlistId)}`,
       {
         params: {
-          offset: String(Math.max(0, offset || 0)),
-          limit: String(cappedLimit),
+          offset: String(safeOffset),
+          limit: String(safeLimit),
         },
         suppressWarn: true,
       },
     );
 
-    const items = Array.isArray(data?.items) ? data!.items : [];
-    if (items.length) {
-      this.deniedPlaylistIds.delete(playlistId);
-      const mapped = items.map((entry) => entry?.track).filter(Boolean).map((track) => this.mapTrack(track));
-      return { items: mapped, total: data?.total ?? data?.tracks?.total ?? mapped.length };
+    const nestedItems = !Array.isArray(playlistPayload?.items) && Array.isArray(playlistPayload?.items?.items)
+      ? playlistPayload.items.items
+      : [];
+    const flatItems = Array.isArray(playlistPayload?.items) ? playlistPayload.items : [];
+    const nestedTracks = !Array.isArray(playlistPayload?.tracks) && Array.isArray(playlistPayload?.tracks?.items)
+      ? playlistPayload.tracks.items
+      : [];
+    const flatTracks = Array.isArray(playlistPayload?.tracks) ? playlistPayload.tracks : [];
+    let primaryItems: any[] = [];
+    if (nestedItems.length) {
+      primaryItems = nestedItems;
+    } else if (flatItems.length) {
+      primaryItems = flatItems;
+    } else if (nestedTracks.length) {
+      primaryItems = nestedTracks;
+    } else if (flatTracks.length) {
+      primaryItems = flatTracks;
     }
-
-    const itemsStatus = await this.probeStatus(`${SPOTIFY_API_BASE}/playlists/${encodeURIComponent(playlistId)}/items`, {
-      params: {
-        offset: String(Math.max(0, offset || 0)),
-        limit: String(cappedLimit),
-      },
-    });
-
-    // Fallback path for dev-mode/policy behavior where /items can be denied.
-    const fallback = await this.request<{ tracks?: { items?: any[]; total?: number } }>(
-      `${SPOTIFY_API_BASE}/playlists/${encodeURIComponent(playlistId)}`,
-      {
-        params: {
-          fields:
-            'tracks.total,tracks.items(track(id,name,duration_ms,artists(name),album(name,images)))',
-        },
-      },
-    );
-    const fallbackItems = Array.isArray(fallback?.tracks?.items) ? fallback.tracks.items : [];
-    const mapped = fallbackItems
-      .map((entry) => entry?.track)
-      .filter(Boolean)
-      .map((track) => this.mapTrack(track));
-    if (!mapped.length && itemsStatus === 403) {
-      this.deniedPlaylistIds.add(playlistId);
-      this.log.warn('spotify playlist hidden after forbidden items response', { playlistId });
-    } else if (mapped.length) {
-      this.deniedPlaylistIds.delete(playlistId);
+    if (primaryItems.length) {
+      const mapped = primaryItems
+        .map((entry: any) => entry?.track ?? entry?.item ?? entry)
+        .filter(Boolean)
+        .map((track: any) => this.mapTrack(track));
+      const itemsTotal =
+        !Array.isArray(playlistPayload?.items) && typeof playlistPayload?.items?.total === 'number'
+          ? playlistPayload.items.total
+          : undefined;
+      const tracksTotal =
+        !Array.isArray(playlistPayload?.tracks) && typeof playlistPayload?.tracks?.total === 'number'
+          ? playlistPayload.tracks.total
+          : undefined;
+      const total = itemsTotal ?? tracksTotal ?? mapped.length;
+      return { items: mapped, total };
     }
-    return { items: mapped, total: fallback?.tracks?.total ?? mapped.length };
-  }
-
-  private async probeStatus(
-    url: string,
-    options?: { params?: Record<string, string>; method?: string; body?: any },
-  ): Promise<number> {
-    const token = await this.getAccessToken();
-    if (!token) {
-      return 0;
-    }
-
-    const apiUrl = new URL(url);
-    if (options?.params) {
-      for (const [key, value] of Object.entries(options.params)) {
-        apiUrl.searchParams.set(key, value);
-      }
-    }
-
-    const response = await this.rawRequest<any>(apiUrl.toString(), {
-      method: options?.method ?? 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json',
-      },
-      body: options?.body,
-    });
-    return response.status;
+    const fallbackItemsTotal =
+      !Array.isArray(playlistPayload?.items) && typeof playlistPayload?.items?.total === 'number'
+        ? playlistPayload.items.total
+        : undefined;
+    const fallbackTracksTotal =
+      !Array.isArray(playlistPayload?.tracks) && typeof playlistPayload?.tracks?.total === 'number'
+        ? playlistPayload.tracks.total
+        : undefined;
+    const fallbackTotal = fallbackItemsTotal ?? fallbackTracksTotal ?? 0;
+    return { items: [], total: fallbackTotal };
   }
 
   private async fetchAlbumTracks(
@@ -950,12 +947,13 @@ export class SpotifyAccountProvider {
   private mapPlaylist(playlist: any): ContentFolderItem {
     const id = String(playlist?.id ?? '');
     const cover = this.extractImage(playlist?.images);
+    const totalItems = Number(playlist?.items?.total ?? playlist?.tracks?.total ?? 0);
     return {
       id: this.makeUri('playlist', id),
       name: String(playlist?.name ?? 'Playlist'),
       title: String(playlist?.name ?? 'Playlist'),
       type: 12,
-      items: Number(playlist?.tracks?.total ?? 0),
+      items: totalItems,
       coverurl: cover,
       thumbnail: this.extractImage(playlist?.images, 1) ?? cover,
       audiopath: this.makeUri('playlist', id),
