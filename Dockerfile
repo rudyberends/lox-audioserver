@@ -5,7 +5,7 @@ COPY package*.json ./
 
 # Install minimal build tooling (prebuilds should handle most deps on glibc)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         bash \
         ca-certificates \
         git \
@@ -25,13 +25,14 @@ RUN npm prune --omit=dev
 FROM debian:bookworm-slim AS crelay-builder
 ARG CRELAY_REF=master
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         gcc \
+        libc6-dev \
         make \
         libusb-1.0-0-dev \
-        libftdi1-dev \
+        libftdi-dev \
         libhidapi-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /tmp
@@ -50,12 +51,13 @@ ENV APP_VERSION=${BUILD_VERSION}
 ENV BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
 ENV XDG_CACHE_HOME=/app/data/.cache
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
         cifs-utils \
         keyutils \
         nfs-common \
         curl \
+        ffmpeg \
         libusb-1.0-0 \
         libftdi1-2 \
         libhidapi-libusb0 \
