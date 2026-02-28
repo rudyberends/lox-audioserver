@@ -93,6 +93,12 @@ export class AirplayStreamSession {
   }
 
   private createSourceStream(): PassThrough | null {
+    // Always prefer the zone engine stream. Starting a local decoder while the
+    // zone decoder is already running duplicates ffmpeg sessions on track switches.
+    const shared = this.engine.createStream(this.zoneId, 'pcm', { label: 'airplay' });
+    if (shared) {
+      return shared;
+    }
     if (this.localPlaybackSource) {
       if (!this.localSession) {
         this.startLocalSession();
@@ -103,7 +109,7 @@ export class AirplayStreamSession {
       });
       return subscriber ?? null;
     }
-    return this.engine.createStream(this.zoneId, 'pcm', { label: 'airplay' });
+    return null;
   }
 
   private startLocalSession(): void {

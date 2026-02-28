@@ -11,6 +11,7 @@ import './playbackRefactorSeams.test';
 import './playbackCoordinator.characterization.test';
 import './adminApiJsonBody.test';
 import './airplayPcmStream.test';
+import './airplayStreamSession.test';
 import './audioStreamHandlerIcy.test';
 import './queueAuthority.test';
 import './ytmusicNative.mock.test';
