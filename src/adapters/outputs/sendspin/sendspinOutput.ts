@@ -13,7 +13,6 @@ import {
   MediaCommand,
   PlaybackStateType,
   PlayerCommand,
-  Roles,
   RepeatMode,
   sendspinCore,
   serverNowUs,
@@ -35,6 +34,7 @@ type ArtworkChannel = Parameters<SendspinSession['sendArtworkStreamStart']>[0][n
 // disconnect due to conflicting metadata/stream commands.
 const sendspinClientOwners = new Map<string, number>(); // clientId -> zoneId
 const sendspinOutputsByZoneId = new Map<number, SendspinOutput>();
+const STREAM_PLAYER_ROLE = 'player';
 
 /** Minimal Sendspin output configuration. */
 export interface SendspinOutputConfig {
@@ -371,8 +371,8 @@ export class SendspinOutput implements ZoneOutput {
           clientId: this.clientId,
         });
         this.externalSourceActive = true;
-        sendspinCore.sendStreamEnd(this.activeClientId(), [Roles.PLAYER]);
-        sendspinCore.sendStreamClear(this.activeClientId(), [Roles.PLAYER]);
+        sendspinCore.sendStreamEnd(this.activeClientId());
+        sendspinCore.sendStreamClear(this.activeClientId(), [STREAM_PLAYER_ROLE]);
       } else if (this.externalSourceActive) {
         this.externalSourceActive = false;
         this.log.info('Sendspin client returned from external_source', {
@@ -521,8 +521,8 @@ export class SendspinOutput implements ZoneOutput {
       return;
     }
     // Clear stream on this client so it can operate solo.
-    sendspinCore.sendStreamEnd(this.activeClientId(), [Roles.PLAYER]);
-    sendspinCore.sendStreamClear(this.activeClientId(), [Roles.PLAYER]);
+    sendspinCore.sendStreamEnd(this.activeClientId());
+    sendspinCore.sendStreamClear(this.activeClientId(), [STREAM_PLAYER_ROLE]);
     this.pushPlaybackState('stopped');
   }
 
@@ -1226,8 +1226,8 @@ export class SendspinOutput implements ZoneOutput {
     this.stopProgressUpdates();
     // Notify client to clear/end only when we are really stopping; skip during keep-alive restarts.
     if (!preserveAnchor) {
-      sendspinCore.sendStreamEnd(this.activeClientId(), [Roles.PLAYER]);
-      sendspinCore.sendStreamClear(this.activeClientId(), [Roles.PLAYER]);
+      sendspinCore.sendStreamEnd(this.activeClientId());
+      sendspinCore.sendStreamClear(this.activeClientId(), [STREAM_PLAYER_ROLE]);
       this.ports.sendspinGroup.notifyStreamEnd(this.zoneId);
       this.lastStreamSignature = null;
     }
@@ -1719,12 +1719,8 @@ export class SendspinOutput implements ZoneOutput {
     const bitDepth = this.normalizeBitDepth(
       Number.isFinite(format.bitDepth) ? (format.bitDepth as number) : audioOutputSettings.pcmBitDepth,
     );
-    const codec: AudioCodec =
-      format.codec === AudioCodec.OPUS
-        ? AudioCodec.OPUS
-        : format.codec === AudioCodec.FLAC
-          ? AudioCodec.FLAC
-          : AudioCodec.PCM;
+    // Force PCM for Sendspin output stability.
+    const codec: AudioCodec = AudioCodec.PCM;
     return { codec, sampleRate, channels, bitDepth };
   }
 

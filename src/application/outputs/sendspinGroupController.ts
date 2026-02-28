@@ -1,7 +1,6 @@
 import { createLogger } from '@/shared/logging/logger';
 import {
   PlaybackStateType,
-  Roles,
   sendspinCore,
   serverNowUs,
   type PlayerFormat,
@@ -20,6 +19,7 @@ export type SendspinGroupParticipant = {
 };
 
 type PlayerStreamFormat = PlayerFormat;
+const STREAM_PLAYER_ROLE = 'player';
 
 type MetadataPayload = Parameters<SendspinSession['sendMetadata']>[0];
 type ControllerPayload = Parameters<SendspinSession['sendControllerState']>[0];
@@ -108,8 +108,8 @@ class SendspinGroupController {
     this.lastStreamFormat.delete(leaderZoneId);
     this.forEachMemberOutput(leaderZoneId, (output) => {
       const clientId = output.getClientId();
-      sendspinCore.sendStreamEnd(clientId, [Roles.PLAYER]);
-      sendspinCore.sendStreamClear(clientId, [Roles.PLAYER]);
+      sendspinCore.sendStreamEnd(clientId);
+      sendspinCore.sendStreamClear(clientId, [STREAM_PLAYER_ROLE]);
     });
   }
 
@@ -189,8 +189,8 @@ class SendspinGroupController {
       const participant = this.participants.get(memberId);
       if (!participant) continue;
       const clientId = participant.getClientId();
-      sendspinCore.sendStreamEnd(clientId, [Roles.PLAYER]);
-      sendspinCore.sendStreamClear(clientId, [Roles.PLAYER]);
+      sendspinCore.sendStreamEnd(clientId);
+      sendspinCore.sendStreamClear(clientId, [STREAM_PLAYER_ROLE]);
       const name = this.zones.getZoneState(memberId)?.name ?? `Zone ${memberId}`;
       const groupId = record.externalId ?? `group-${leader}`;
       sendspinCore.setClientPlaybackState(clientId, PlaybackStateType.STOPPED, groupId, name);
