@@ -753,6 +753,7 @@ export class SendspinOutput implements ZoneOutput {
       let codecHeaderSent = false;
       let streamStartSent = false;
       const isFlac = chosenFormat.codec === AudioCodec.FLAC;
+      let flacHeaderBuffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
       const bytesPerSample = (pcmBitDepth / 8) * channels;
       const isPcm = chosenFormat.codec === AudioCodec.PCM;
       const frameSamples = Math.max(1, Math.floor(sampleRate * 0.025));
@@ -774,6 +775,37 @@ export class SendspinOutput implements ZoneOutput {
           return bs;
         } catch {
           return 0;
+        }
+      };
+      const extractCompleteFlacHeader = (
+        source: Buffer,
+      ): { header: Buffer<ArrayBufferLike> | null; remainder: Buffer<ArrayBufferLike> } => {
+        if (source.length < 4) {
+          return { header: null, remainder: source };
+        }
+        if (source.subarray(0, 4).toString('ascii') !== 'fLaC') {
+          return { header: null, remainder: source };
+        }
+        let offset = 4;
+        while (true) {
+          if (source.length < offset + 4) {
+            return { header: null, remainder: source };
+          }
+          const blockHeader = source[offset];
+          const isLast = (blockHeader & 0x80) !== 0;
+          const blockLength =
+            (source[offset + 1] << 16) | (source[offset + 2] << 8) | source[offset + 3];
+          const nextOffset = offset + 4 + blockLength;
+          if (source.length < nextOffset) {
+            return { header: null, remainder: source };
+          }
+          offset = nextOffset;
+          if (isLast) {
+            return {
+              header: source.subarray(0, offset),
+              remainder: source.subarray(offset),
+            };
+          }
         }
       };
       let encodedFrameDurationUs =
@@ -1097,20 +1129,40 @@ export class SendspinOutput implements ZoneOutput {
           this.lastChunkWallUs = nowUs;
           const durationUs:number = appliedDurationUs;
           if (!codecHeaderSent && payload.length) {
-            const codecHeader = payload.toString('base64');
-            this.activeCodecHeader = codecHeader;
             if (isFlac) {
-              const bs = parseFlacBlocksize(payload);
+              flacHeaderBuffer = flacHeaderBuffer.length
+                ? (Buffer.concat([flacHeaderBuffer, payload]) as Buffer<ArrayBufferLike>)
+                : payload;
+              const extracted = extractCompleteFlacHeader(flacHeaderBuffer);
+              if (!extracted.header) {
+                if (flacHeaderBuffer.length >= 4 && flacHeaderBuffer.subarray(0, 4).toString('ascii') !== 'fLaC') {
+                  // Unexpected FLAC stream framing; fallback to first packet behavior instead of stalling.
+                  const codecHeader = payload.toString('base64');
+                  this.activeCodecHeader = codecHeader;
+                  ensureStreamStart(codecHeader);
+                  codecHeaderSent = true;
+                }
+                return;
+              }
+              const codecHeader = extracted.header.toString('base64');
+              this.activeCodecHeader = codecHeader;
+              const bs = parseFlacBlocksize(extracted.header);
               if (bs > 0) {
                 flacBlocksizeSamples = bs;
                 encodedFrameDurationUs = Math.floor((flacBlocksizeSamples * 1_000_000) / sampleRate);
               }
-            }
-            ensureStreamStart(codecHeader);
-            codecHeaderSent = true;
-            // For FLAC, treat this first packet purely as header and skip sending it as audio.
-            if (isFlac) {
-              return;
+              ensureStreamStart(codecHeader);
+              codecHeaderSent = true;
+              flacHeaderBuffer = Buffer.alloc(0);
+              payload = extracted.remainder;
+              if (!payload.length) {
+                return;
+              }
+            } else {
+              const codecHeader = payload.toString('base64');
+              this.activeCodecHeader = codecHeader;
+              ensureStreamStart(codecHeader);
+              codecHeaderSent = true;
             }
           }
           await processFrame(payload, durationUs);
