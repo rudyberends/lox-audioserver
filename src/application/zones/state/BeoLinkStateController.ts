@@ -13,6 +13,8 @@ type BeoLinkControllerOptions = {
 
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 15_000;
+const IDLE_TIMEOUT_MS = 90_000;
+const IDLE_CHECK_INTERVAL_MS = 15_000;
 
 /**
  * Minimal BeoLink external state ingestion.
@@ -25,8 +27,9 @@ export class BeoLinkStateController implements ZoneStateController {
   private readonly notifyUrl: string | null;
   private readonly coverBaseOrigin: string | null;
   private stream: Readable | null = null;
-  private abortController: AbortController | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private idleWatchdogTimer: NodeJS.Timeout | null = null;
+  private lastActivityAt = 0;
   private consecutiveFailures = 0;
   private stopped = false;
   private reconnecting = false;
@@ -37,6 +40,9 @@ export class BeoLinkStateController implements ZoneStateController {
   private lastArtist = '';
   private lastAlbum = '';
   private lastFriendlySourceName = '';
+  private lastKnownAudiotype: number | null = null;
+  private lastKnownVolume: number | null = null;
+  private lastKnownVolumeMax = 100;
 
   constructor(options: BeoLinkControllerOptions) {
     this.zone = options.zone;
@@ -61,31 +67,17 @@ export class BeoLinkStateController implements ZoneStateController {
 
   public async stop(): Promise<void> {
     this.stopped = true;
+    this.stopIdleWatchdog();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (this.abortController) {
-      try {
-        this.abortController.abort();
-      } catch (err) {
-        this.log.debug('beolink abort during stop failed', {
-          zoneId: this.zone.id,
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-      this.abortController = null;
-    }
-    if (this.stream) {
-      this.stream.removeAllListeners();
-      this.stream.destroy();
-      this.stream = null;
-    }
+    this.teardownStream();
     this.log.info('stopped beolink state stream', { zoneId: this.zone.id });
   }
 
-  public handleCommand(command: string): boolean {
-    const intent = normalizeControlIntent(command);
+  public handleCommand(command: string, payload?: string): boolean {
+    const intent = normalizeControlIntent(command, payload);
     if (!intent) {
       return false;
     }
@@ -93,20 +85,26 @@ export class BeoLinkStateController implements ZoneStateController {
       this.log.warn('beolink command ignored; missing base origin', {
         zoneId: this.zone.id,
         command,
+        payload,
       });
       return true;
     }
-    void this.sendControlCommand(intent.command);
+    if (intent.kind === 'transport') {
+      void this.sendControlCommand(intent.command);
+      return true;
+    }
+    if (intent.kind === 'volume') {
+      void this.sendVolumeCommand(command, intent.level, intent.isRelative);
+      return true;
+    }
+    void this.sendActionCommand(command, intent.actionPath, intent.param);
     return true;
   }
 
   private async connect(): Promise<void> {
     if (this.stopped || !this.notifyUrl) return;
     try {
-      this.abortController = new AbortController();
-      const response = await fetch(this.notifyUrl, {
-        signal: this.abortController.signal,
-      });
+      const response = await fetch(this.notifyUrl);
       if (!response.ok) {
         throw new Error(`http ${response.status}`);
       }
@@ -118,12 +116,34 @@ export class BeoLinkStateController implements ZoneStateController {
         response.body as unknown as globalThis.ReadableStream<Uint8Array>,
       ).pipe(ndjson.parse());
       this.stream = parsed;
+      this.lastActivityAt = Date.now();
+      this.startIdleWatchdog();
       this.consecutiveFailures = 0;
       this.log.info('beolink state stream active', { zoneId: this.zone.id, url: this.notifyUrl });
 
       parsed.on('data', (message: unknown) => {
+        this.lastActivityAt = Date.now();
         const eventType = resolveNotificationType(message);
+        const rangeMax = findVolumeRangeMaximum(message);
+        if (typeof rangeMax === 'number' && Number.isFinite(rangeMax) && rangeMax > 0) {
+          this.lastKnownVolumeMax = Math.round(rangeMax);
+        }
         const patch = mapZonePatch(message, this.coverBaseOrigin);
+        if (eventType === 'SOURCE' && typeof patch.audiotype !== 'number') {
+          this.lastKnownAudiotype = null;
+        } else if (typeof patch.audiotype === 'number') {
+          this.lastKnownAudiotype = patch.audiotype;
+        }
+        if (typeof patch.volume === 'number' && Number.isFinite(patch.volume)) {
+          this.lastKnownVolume = patch.volume;
+        }
+        if (eventType === 'NOW_PLAYING_ENDED' && this.shouldIgnoreEndedEvent()) {
+          this.log.debug('beolink ended event ignored for external input', {
+            zoneId: this.zone.id,
+            audiotype: this.lastKnownAudiotype,
+          });
+          return;
+        }
         if (typeof patch.sourceName === 'string' && patch.sourceName.trim().length > 0) {
           this.lastFriendlySourceName = patch.sourceName.trim();
         } else if (
@@ -152,6 +172,7 @@ export class BeoLinkStateController implements ZoneStateController {
       });
       parsed.once('error', (err: unknown) => {
         if (this.stopped) return;
+        if (isAbortLikeError(err)) return;
         this.log.warn('beolink stream error; reconnecting', {
           zoneId: this.zone.id,
           url: this.notifyUrl,
@@ -166,6 +187,7 @@ export class BeoLinkStateController implements ZoneStateController {
       });
     } catch (err) {
       if (this.stopped) return;
+      if (isAbortLikeError(err)) return;
       this.log.warn('beolink connect failed; reconnecting', {
         zoneId: this.zone.id,
         url: this.notifyUrl,
@@ -178,28 +200,14 @@ export class BeoLinkStateController implements ZoneStateController {
   private async scheduleReconnect(): Promise<void> {
     if (this.stopped || this.reconnecting) return;
     this.reconnecting = true;
+    this.stopIdleWatchdog();
     this.consecutiveFailures += 1;
     const jitter = Math.floor(Math.random() * 250);
     const delay =
       Math.min(RECONNECT_MAX_MS, RECONNECT_MIN_MS * (2 ** Math.min(5, this.consecutiveFailures))) +
       jitter;
 
-    if (this.abortController) {
-      try {
-        this.abortController.abort();
-      } catch (err) {
-        this.log.debug('beolink abort during reconnect failed', {
-          zoneId: this.zone.id,
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-      this.abortController = null;
-    }
-    if (this.stream) {
-      this.stream.removeAllListeners();
-      this.stream.destroy();
-      this.stream = null;
-    }
+    this.teardownStream();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
     }
@@ -216,12 +224,140 @@ export class BeoLinkStateController implements ZoneStateController {
     }, delay);
   }
 
+  private teardownStream(): void {
+    if (!this.stream) {
+      return;
+    }
+    const stream = this.stream;
+    this.stream = null;
+    // Suppress expected error events that can be emitted while shutting down.
+    stream.once('error', () => undefined);
+    stream.removeAllListeners('data');
+    stream.removeAllListeners('close');
+    stream.destroy();
+    stream.removeAllListeners();
+  }
+
+  private startIdleWatchdog(): void {
+    this.stopIdleWatchdog();
+    this.idleWatchdogTimer = setInterval(() => {
+      if (this.stopped || this.reconnecting) {
+        return;
+      }
+      const idleMs = Date.now() - this.lastActivityAt;
+      if (idleMs < IDLE_TIMEOUT_MS) {
+        return;
+      }
+      this.log.warn('beolink stream idle timeout; reconnecting', {
+        zoneId: this.zone.id,
+        idleMs,
+        timeoutMs: IDLE_TIMEOUT_MS,
+      });
+      void this.scheduleReconnect();
+    }, IDLE_CHECK_INTERVAL_MS);
+  }
+
+  private stopIdleWatchdog(): void {
+    if (this.idleWatchdogTimer) {
+      clearInterval(this.idleWatchdogTimer);
+      this.idleWatchdogTimer = null;
+    }
+  }
+
   private async sendControlCommand(command: NormalizedControlCommand): Promise<void> {
     const spec = CONTROL_ENDPOINTS[command];
     if (!spec || !this.coverBaseOrigin) {
       return;
     }
     await this.sendSingleRequest(command, spec, undefined);
+  }
+
+  private async sendActionCommand(
+    command: string,
+    actionPath: string,
+    param?: string,
+  ): Promise<void> {
+    if (!this.coverBaseOrigin) {
+      return;
+    }
+    const request = resolveActionRequest(actionPath, param);
+    await this.sendSingleRequest(command, request, {
+      actionPath,
+      hasParam: typeof param === 'string' && param.trim().length > 0,
+    });
+  }
+
+  private async sendVolumeCommand(
+    command: string,
+    level: number,
+    isRelative: boolean,
+  ): Promise<void> {
+    const resolved = await this.resolveVolumeLevel(level, isRelative);
+    if (resolved == null) {
+      this.log.warn('beolink volume command skipped; unable to resolve current volume', {
+        zoneId: this.zone.id,
+        command,
+        requested: level,
+        isRelative,
+      });
+      return;
+    }
+    const request: ControlRequest = {
+      method: 'PUT',
+      path: '/BeoZone/Zone/Sound/Volume/Speaker/Level',
+      body: JSON.stringify({ level: resolved }),
+      contentType: 'application/json',
+    };
+    const ok = await this.sendSingleRequest(command, request, {
+      resolvedLevel: resolved,
+      isRelative,
+    });
+    if (ok) {
+      this.lastKnownVolume = resolved;
+    }
+  }
+
+  private async resolveVolumeLevel(level: number, isRelative: boolean): Promise<number | null> {
+    if (!isRelative) {
+      return clamp(Math.round(level), 0, this.lastKnownVolumeMax);
+    }
+    let base = this.lastKnownVolume;
+    if (base == null) {
+      base = await this.fetchCurrentVolumeLevel();
+    }
+    if (base == null) {
+      return null;
+    }
+    return clamp(Math.round(base + level), 0, this.lastKnownVolumeMax);
+  }
+
+  private async fetchCurrentVolumeLevel(): Promise<number | null> {
+    if (!this.coverBaseOrigin) {
+      return null;
+    }
+    const url = `${this.coverBaseOrigin}/BeoZone/Zone/Sound/Volume/Speaker/Level`;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        return null;
+      }
+      const payload = await response.json().catch(() => null);
+      const record = asRecord(payload);
+      const level = record ? findNumberValue(record, ['level']) : null;
+      if (typeof level !== 'number' || !Number.isFinite(level)) {
+        return null;
+      }
+      const range = asRecord(record?.range);
+      const max = range ? findNumberValue(range, ['maximum', 'max']) : null;
+      if (typeof max === 'number' && Number.isFinite(max) && max > 0) {
+        this.lastKnownVolumeMax = Math.round(max);
+      }
+      const normalized = clamp(Math.round(level), 0, this.lastKnownVolumeMax);
+      this.lastKnownVolume = normalized;
+      return normalized;
+    } catch {
+      return null;
+    }
   }
 
   private async sendSingleRequest(
@@ -359,15 +495,34 @@ export class BeoLinkStateController implements ZoneStateController {
     }
     patch.station = '';
   }
+
+  private shouldIgnoreEndedEvent(): boolean {
+    return (
+      this.lastKnownAudiotype === AudioType.LineIn ||
+      this.lastKnownAudiotype === AudioType.Bluetooth
+    );
+  }
 }
 
 type NormalizedControlCommand = 'play' | 'pause' | 'stop' | 'next' | 'previous';
-type ControlIntent = { command: NormalizedControlCommand };
+type ControlIntent =
+  | { kind: 'transport'; command: NormalizedControlCommand }
+  | { kind: 'volume'; level: number; isRelative: boolean }
+  | { kind: 'action'; actionPath: string; param?: string };
 type ControlRequest = {
   method: 'POST' | 'PUT';
   path: string;
   body?: string;
   contentType?: string;
+};
+
+const ACTION_COMMAND_MAP: Record<string, string> = {
+  groupjoin: 'Device/OneWayJoin',
+  groupjoinmany: 'Device/OneWayJoin',
+  groupleave: 'Device/OneWayLeave',
+  groupleavemany: 'Device/OneWayLeave',
+  repeat: 'List/Repeat',
+  shuffle: 'List/Shuffle',
 };
 
 const CONTROL_ENDPOINTS: Record<NormalizedControlCommand, ControlRequest> = {
@@ -401,15 +556,56 @@ function normalizeControlCommand(command: string): NormalizedControlCommand | nu
   return null;
 }
 
-function normalizeControlIntent(command: string): ControlIntent | null {
+function normalizeControlIntent(command: string, payload?: string): ControlIntent | null {
   const normalized = command.trim().toLowerCase();
   if (!normalized) return null;
 
   const transport = normalizeControlCommand(normalized);
   if (transport) {
-    return { command: transport };
+    return { kind: 'transport', command: transport };
+  }
+  if (normalized === 'volume') {
+    const parsed = Number(payload);
+    if (!Number.isFinite(parsed)) {
+      return null;
+    }
+    const raw = typeof payload === 'string' ? payload.trim() : '';
+    return { kind: 'volume', level: parsed, isRelative: raw.startsWith('+') || raw.startsWith('-') };
+  }
+  const actionPath = ACTION_COMMAND_MAP[normalized];
+  if (actionPath) {
+    const param = typeof payload === 'string' ? payload.trim() : '';
+    return { kind: 'action', actionPath, param: param || undefined };
   }
   return null;
+}
+
+function resolveActionRequest(actionPath: string, param?: string): ControlRequest {
+  const basePath = `/BeoZone/Zone/${actionPath}`;
+  const normalizedParam = typeof param === 'string' ? param.trim() : '';
+  if (!normalizedParam) {
+    return { method: 'POST', path: basePath };
+  }
+  const encodedParam = encodeURIComponent(normalizedParam);
+  return { method: 'POST', path: `${basePath}/${encodedParam}` };
+}
+
+function isAbortLikeError(err: unknown): boolean {
+  if (err instanceof DOMException) {
+    return err.name === 'AbortError';
+  }
+  if (err instanceof Error) {
+    return err.name === 'AbortError';
+  }
+  if (typeof err === 'object' && err !== null) {
+    const name = (err as { name?: unknown }).name;
+    return name === 'AbortError';
+  }
+  return false;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function resolveBeoLinkNotifyUrl(zone: ZoneConfig): string | null {
@@ -459,6 +655,20 @@ function resolveNotificationType(message: unknown): string {
   if (!root) return '';
   const notification = asRecord(root.notification);
   return pickString(notification?.type) ?? pickString(root.type) ?? '';
+}
+
+function findVolumeRangeMaximum(message: unknown): number | null {
+  const root = asRecord(message);
+  if (!root) return null;
+  const notification = asRecord(root.notification);
+  const data = asRecord(notification?.data ?? root.data ?? root);
+  const speaker = asRecord(data?.speaker);
+  const range = asRecord(speaker?.range);
+  const maximum = range ? findNumberValue(range, ['maximum', 'max']) : null;
+  if (typeof maximum !== 'number' || !Number.isFinite(maximum) || maximum <= 0) {
+    return null;
+  }
+  return maximum;
 }
 
 function mapZonePatch(message: unknown, coverBaseOrigin: string | null): Partial<LoxoneZoneState> {
@@ -548,6 +758,15 @@ function mapZonePatch(message: unknown, coverBaseOrigin: string | null): Partial
     patch.mode = 'stop';
     patch.power = 'on';
     patch.clientState = 'on';
+    return patch;
+  }
+
+  if (type === 'VOLUME') {
+    const speaker = asRecord(payload.speaker);
+    const level = speaker ? findNumberValue(speaker, ['level']) : null;
+    if (typeof level === 'number' && Number.isFinite(level) && level >= 0) {
+      patch.volume = level;
+    }
     return patch;
   }
 

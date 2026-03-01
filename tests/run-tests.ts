@@ -22,6 +22,7 @@ import './zonePlayerEndGuard.test';
 import './durationRegression.test';
 import './runtimeShutdown.test';
 import './sourceResolver.test';
+import './beolinkStateController.test';
 import './audioManager.playbackPreDelay.test';
 import './sendspinLineInService.test';
 import './powerManager.test';

@@ -36,7 +36,12 @@ import type {
 import { ZoneStateStore } from '@/application/zones/ZoneStateStore';
 import { ZoneRepository } from '@/application/zones/ZoneRepository';
 import { StateControllerManager } from '@/application/zones/state/StateControllerManager';
-import { resolveZoneStateControllerId } from '@/application/zones/state/types';
+import {
+  resolveZoneStateControllerId,
+  shouldUseStateControllerForCommand,
+  filterAuthoritativePatchWhileLocalSessionActive,
+  isVolumeOwnedByStateController,
+} from '@/application/zones/state/types';
 import type { AlertMediaResource } from '@/application/alerts/types';
 import { PowerManager } from '@/application/zones/services/powerManager';
 import {
@@ -367,7 +372,6 @@ export class ZoneManager {
   }
 
   public async replaceAll(zoneConfigs: ZoneConfig[], inputs?: InputConfig | null): Promise<void> {
-    await this.stateControllers.replaceAll(zoneConfigs);
     this.powerManager.clearAll();
     this.disposeAllOutputs();
     this.clearZoneContexts();
@@ -385,16 +389,22 @@ export class ZoneManager {
     contentPort.configureYtMusic();
     this.playbackCoordinator.refreshMusicAssistantProviderId();
     await inputsPort.syncMusicAssistantZones(zoneConfigs);
+    await this.stateControllers.replaceAll(zoneConfigs);
     const contexts = this.zoneRepo.list();
     this.log.info('zones registered', { count: contexts.length });
     // Broadcast initial states so clients get defaults (including volume).
     for (const ctx of contexts) {
-      const volume = getZoneDefaultVolume(ctx.config);
-      const patch = { ...ctx.state, volume };
+      const controllerId = resolveZoneStateControllerId(ctx.config);
+      const externalOwnsVolume = isVolumeOwnedByStateController(controllerId);
+      const patch = externalOwnsVolume
+        ? { ...ctx.state }
+        : { ...ctx.state, volume: getZoneDefaultVolume(ctx.config) };
       // Broadcast initial state using the same path as patches.
       this.applyPatch(ctx.id, patch, true);
-      // Push default volume to outputs so they start at the configured level.
-      this.outputRouter.dispatchVolume(ctx, ctx.outputs, volume);
+      if (!externalOwnsVolume) {
+        // Push default volume to outputs so they start at the configured level.
+        this.outputRouter.dispatchVolume(ctx, ctx.outputs, patch.volume ?? getZoneDefaultVolume(ctx.config));
+      }
     }
   }
 
@@ -434,10 +444,15 @@ export class ZoneManager {
       if (!ctx) {
         continue;
       }
-      const volume = getZoneDefaultVolume(ctx.config);
-      const patch = { ...ctx.state, volume };
+      const controllerId = resolveZoneStateControllerId(ctx.config);
+      const externalOwnsVolume = isVolumeOwnedByStateController(controllerId);
+      const patch = externalOwnsVolume
+        ? { ...ctx.state }
+        : { ...ctx.state, volume: getZoneDefaultVolume(ctx.config) };
       this.applyPatch(ctx.id, patch, true);
-      this.outputRouter.dispatchVolume(ctx, ctx.outputs, volume);
+      if (!externalOwnsVolume) {
+        this.outputRouter.dispatchVolume(ctx, ctx.outputs, patch.volume ?? getZoneDefaultVolume(ctx.config));
+      }
     }
   }
 
@@ -577,7 +592,11 @@ export class ZoneManager {
     if (ctx) {
       const controllerId = resolveZoneStateControllerId(ctx.config);
       const hasActiveLocalSession = this.audioManager.hasActiveLocalSession(zoneId);
-      const shouldUseExternalController = controllerId !== 'internal' && !hasActiveLocalSession;
+      const shouldUseExternalController = shouldUseStateControllerForCommand(
+        controllerId,
+        hasActiveLocalSession,
+        command,
+      );
       if (shouldUseExternalController && this.stateControllers.handleCommand(zoneId, command, payload)) {
         return;
       }
@@ -597,6 +616,11 @@ export class ZoneManager {
     }
     const hasActiveLocalSession = this.audioManager.hasActiveLocalSession(zoneId);
     if (hasActiveLocalSession) {
+      const authoritativePatch = filterAuthoritativePatchWhileLocalSessionActive(controllerId, patch);
+      if (authoritativePatch) {
+        this.applyPatch(zoneId, authoritativePatch);
+        return;
+      }
       this.log.debug('ignored external state patch while local session active', {
         zoneId,
         controller: controllerId,
