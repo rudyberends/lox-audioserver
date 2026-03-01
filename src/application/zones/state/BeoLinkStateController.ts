@@ -696,6 +696,10 @@ function mapZonePatch(message: unknown, coverBaseOrigin: string | null): Partial
     const sourceAudiotype = resolveSourceAudiotype(sourceContext, payload);
     if (typeof sourceAudiotype === 'number') {
       patch.audiotype = sourceAudiotype;
+      if (sourceAudiotype === AudioType.AirPlay) {
+        // Mark external AirPlay explicitly so downstream logic treats this as an AirPlay input state.
+        patch.audiopath = 'airplay://external';
+      }
     }
     const mode = mapToken(findStringValue(payload, ['state']) ?? '');
     if (mode) {
@@ -727,6 +731,9 @@ function mapZonePatch(message: unknown, coverBaseOrigin: string | null): Partial
     const queueAudiotype = resolveQueueAudiotype(queueItemId);
     if (typeof queueAudiotype === 'number') {
       patch.audiotype = queueAudiotype;
+      if (queueAudiotype === AudioType.AirPlay) {
+        patch.audiopath = 'airplay://external';
+      }
     }
     return patch;
   }
@@ -742,6 +749,9 @@ function mapZonePatch(message: unknown, coverBaseOrigin: string | null): Partial
     const queueAudiotype = resolveQueueAudiotype(queueItemId);
     if (typeof queueAudiotype === 'number') {
       patch.audiotype = queueAudiotype;
+      if (queueAudiotype === AudioType.AirPlay) {
+        patch.audiopath = 'airplay://external';
+      }
     }
     const duration = findNumberValue(payload, ['totalDuration', 'duration', 'length']);
     if (typeof duration === 'number' && Number.isFinite(duration) && duration >= 0) {
