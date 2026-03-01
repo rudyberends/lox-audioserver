@@ -334,8 +334,8 @@ export class SpotifyConnectInputController implements ZoneOutput {
     // Kick off validation/poll loop after a short delay to avoid reverting to stale metadata.
     setTimeout(() => {
       if (!this.pollingEnabled) return;
-      void this.validatePlayback(auth.token, auth.accountId, target.uri, true, true);
-      this.scheduleValidation(auth.token, auth.accountId, target.uri, true);
+      void this.validatePlayback(auth.accountId, target.uri, true, true, auth.token);
+      this.scheduleValidation(auth.accountId, target.uri, true);
     }, this.initialPollDelayMs);
     this.outputHandlers.onOutputState(this.zoneId, {
       status: 'playing',
@@ -436,8 +436,8 @@ export class SpotifyConnectInputController implements ZoneOutput {
             const uri = this.lastPlayUri ?? target?.uri ?? '';
             setTimeout(() => {
               if (!this.pollingEnabled) return;
-              void this.validatePlayback(auth.token, auth.accountId, uri, true, true);
-              this.scheduleValidation(auth.token, auth.accountId, uri, true);
+              void this.validatePlayback(auth.accountId, uri, true, true, auth.token);
+              this.scheduleValidation(auth.accountId, uri, true);
             }, this.initialPollDelayMs);
             this.outputHandlers.onOutputState(this.zoneId, { status: 'playing' });
             return;
@@ -476,8 +476,8 @@ export class SpotifyConnectInputController implements ZoneOutput {
         const uri = this.lastPlayUri ?? '';
         setTimeout(() => {
           if (!this.pollingEnabled) return;
-          void this.validatePlayback(auth.token, auth.accountId, uri, true, true);
-          this.scheduleValidation(auth.token, auth.accountId, uri, true);
+          void this.validatePlayback(auth.accountId, uri, true, true, auth.token);
+          this.scheduleValidation(auth.accountId, uri, true);
         }, this.initialPollDelayMs);
       } else {
         this.stopPolling();
@@ -686,7 +686,7 @@ export class SpotifyConnectInputController implements ZoneOutput {
     this.clearValidationTimer();
   }
 
-  private scheduleValidation(token: string, accountId: string, targetUri: string, suppressOutputError = false): void {
+  private scheduleValidation(accountId: string, targetUri: string, suppressOutputError = false): void {
     if (!this.pollingEnabled) {
       this.log.debug('spotify scheduleValidation skipped; polling disabled', { zoneId: this.zoneId });
       return;
@@ -694,7 +694,7 @@ export class SpotifyConnectInputController implements ZoneOutput {
     this.clearValidationTimer();
     this.validationTimer = setTimeout(() => {
       this.validationTimer = null;
-      void this.validatePlayback(token, accountId, targetUri, suppressOutputError, false);
+      void this.validatePlayback(accountId, targetUri, suppressOutputError, false);
     }, this.validationIntervalMs);
     this.log.debug('spotify scheduleValidation set', {
       zoneId: this.zoneId,
@@ -703,11 +703,11 @@ export class SpotifyConnectInputController implements ZoneOutput {
   }
 
   private async validatePlayback(
-    token: string,
     accountId: string,
     targetUri: string,
     suppressOutputError = false,
     force = false,
+    tokenHint?: string,
   ): Promise<void> {
     if (!this.pollingEnabled && !force) {
       return;
@@ -722,10 +722,16 @@ export class SpotifyConnectInputController implements ZoneOutput {
       force,
       suppressOutputError,
     });
+    const auth = tokenHint ? { accountId, token: tokenHint } : await this.resolveAuth(accountId);
+    if (!auth?.token) {
+      this.log.debug('spotify poll skipped; no valid token available', { zoneId: this.zoneId, accountId });
+      this.scheduleValidation(accountId, targetUri, suppressOutputError);
+      return;
+    }
     const snapshot = await this.apiRequest<any>(
       'GET',
       '',
-      token,
+      auth.token,
       undefined,
       undefined,
       {} as any,
@@ -733,14 +739,14 @@ export class SpotifyConnectInputController implements ZoneOutput {
     );
     if (!snapshot) {
       this.log.debug('spotify poll returned empty snapshot', { zoneId: this.zoneId });
-      this.scheduleValidation(token, accountId, targetUri, suppressOutputError);
+      this.scheduleValidation(accountId, targetUri, suppressOutputError);
       return;
     }
     const item = snapshot.item;
     const uri = typeof item?.uri === 'string' ? item.uri : null;
     if (!uri) {
       this.log.debug('spotify poll missing item/uri', { zoneId: this.zoneId });
-      this.scheduleValidation(token, accountId, targetUri, suppressOutputError);
+      this.scheduleValidation(accountId, targetUri, suppressOutputError);
       return;
     }
     const mapped =
@@ -769,9 +775,9 @@ export class SpotifyConnectInputController implements ZoneOutput {
       });
     }
     // Refresh queue periodically as well (low frequency).
-    void this.syncQueue(token, accountId, suppressOutputError);
+    void this.syncQueue(auth.token, accountId, suppressOutputError);
     // keep lightweight periodic updates running
-    this.scheduleValidation(token, accountId, targetUri, suppressOutputError);
+    this.scheduleValidation(accountId, targetUri, suppressOutputError);
   }
 
   private async resolveAuth(accountHint?: string | null): Promise<{
