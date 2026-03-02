@@ -128,7 +128,7 @@ function serializeConfig(config: AudioServerConfig): string {
 function defaultConfig(): AudioServerConfig {
   return {
     system: {
-      miniserver: { ip: '', serial: '' },
+      miniserver: { ip: '', serial: '', port: 80, protocol: 'http' },
       audioserver: {
         ip: defaultLocalIp(),
         name: 'Unconfigured',
@@ -249,6 +249,22 @@ function normalizeSystem(config: AudioServerConfig): boolean {
   if (!config.system) {
     config.system = defaultConfig().system;
     return true;
+  }
+  if (!config.system.miniserver) {
+    config.system.miniserver = defaultConfig().system.miniserver;
+    changed = true;
+  } else if (
+    typeof config.system.miniserver.port !== 'number' ||
+    !Number.isInteger(config.system.miniserver.port) ||
+    config.system.miniserver.port <= 0 ||
+    config.system.miniserver.port > 65535
+  ) {
+    config.system.miniserver.port = 80;
+    changed = true;
+  }
+  if (config.system.miniserver.protocol !== 'http' && config.system.miniserver.protocol !== 'https') {
+    config.system.miniserver.protocol = 'http';
+    changed = true;
   }
   if (!config.system.audioserver) {
     config.system.audioserver = defaultConfig().system.audioserver;

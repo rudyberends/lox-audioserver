@@ -225,3 +225,47 @@ test('readJsonBody supports route-specific max size override', async () => {
   assert.equal(res.writableEnded, true);
   assert.equal(JSON.parse(res.body).error, 'invalid-json');
 });
+
+test('readMiniserverBaseUrlFromConfig returns http url with non-default port', async () => {
+  const handler = createHandler();
+  const cfg = {
+    system: {
+      miniserver: { ip: '192.168.1.200', port: 8081, protocol: 'http' },
+    },
+  };
+  const baseUrl = (handler as any).readMiniserverBaseUrlFromConfig(cfg);
+  assert.equal(baseUrl, 'http://192.168.1.200:8081');
+});
+
+test('readMiniserverBaseUrlFromConfig omits default http port', async () => {
+  const handler = createHandler();
+  const cfg = {
+    system: {
+      miniserver: { ip: '192.168.1.200', port: 80, protocol: 'http' },
+    },
+  };
+  const baseUrl = (handler as any).readMiniserverBaseUrlFromConfig(cfg);
+  assert.equal(baseUrl, 'http://192.168.1.200');
+});
+
+test('readMiniserverBaseUrlFromConfig omits default https port 443', async () => {
+  const handler = createHandler();
+  const cfg = {
+    system: {
+      miniserver: { ip: '192.168.1.200', port: 443, protocol: 'https' },
+    },
+  };
+  const baseUrl = (handler as any).readMiniserverBaseUrlFromConfig(cfg);
+  assert.equal(baseUrl, 'https://192.168.1.200');
+});
+
+test('readMiniserverBaseUrlFromConfig keeps https with custom port', async () => {
+  const handler = createHandler();
+  const cfg = {
+    system: {
+      miniserver: { ip: '192.168.1.200', port: 8443, protocol: 'https' },
+    },
+  };
+  const baseUrl = (handler as any).readMiniserverBaseUrlFromConfig(cfg);
+  assert.equal(baseUrl, 'https://192.168.1.200:8443');
+});

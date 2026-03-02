@@ -18,6 +18,8 @@ export interface SystemConfig {
 export interface MiniserverConfig {
   ip: string;
   serial: string;
+  port?: number;
+  protocol?: 'http' | 'https';
 }
 
 export interface AudioserverConfig {

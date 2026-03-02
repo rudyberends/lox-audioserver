@@ -946,14 +946,14 @@ export class AdminApiHandler {
       this.sendJson(res, 409, { error: 'miniserver-auth-required' });
       return;
     }
-    const miniserverHost = cfg.system.miniserver.ip?.trim() ?? '';
-    if (!miniserverHost) {
+    const miniserverBaseUrl = this.readMiniserverBaseUrlFromConfig(cfg);
+    if (!miniserverBaseUrl) {
       this.sendJson(res, 409, { error: 'miniserver-not-configured' });
       return;
     }
 
     try {
-      const result = await this.verifyMiniserverAdminCredentials(miniserverHost, username, password);
+      const result = await this.verifyMiniserverAdminCredentials(miniserverBaseUrl, username, password);
       const session = this.createAdminSession(username);
       res.setHeader('Set-Cookie', this.buildAuthCookie(req, session));
       this.sendJson(res, 200, {
@@ -965,7 +965,7 @@ export class AdminApiHandler {
       });
     } catch (err) {
       if (err instanceof MiniserverAuthError) {
-        this.log.warn('miniserver auth failed', { code: err.code, message: err.message, username, miniserverHost });
+        this.log.warn('miniserver auth failed', { code: err.code, message: err.message, username, miniserverBaseUrl });
         if (err.code === 'invalid-credentials') {
           this.sendJson(res, 401, { error: err.code });
           return;
@@ -978,12 +978,12 @@ export class AdminApiHandler {
           this.sendJson(res, 409, { error: err.code });
           return;
         }
-        this.sendJson(res, 502, { error: err.code, miniserverHost, message: err.message });
+        this.sendJson(res, 502, { error: err.code, miniserverHost: miniserverBaseUrl, message: err.message });
         return;
       }
       const message = err instanceof Error ? err.message : String(err);
       this.log.warn('miniserver auth failed', { message, username });
-      this.sendJson(res, 502, { error: 'miniserver-unreachable', miniserverHost });
+      this.sendJson(res, 502, { error: 'miniserver-unreachable', miniserverHost: miniserverBaseUrl });
     }
   }
 
@@ -1003,11 +1003,10 @@ export class AdminApiHandler {
   }
 
   private async verifyMiniserverAdminCredentials(
-    hostOrUrl: string,
+    baseUrl: string,
     username: string,
     password: string,
   ): Promise<{ tokenRights: number | null }> {
-    const baseUrl = this.normalizeMiniserverBaseUrl(hostOrUrl);
     let salts: { oneTimeSalt: string; salt: string; hashAlg: HashAlgorithm };
     let authHash: string;
     let tokenRights: number | null;
@@ -1031,15 +1030,25 @@ export class AdminApiHandler {
     return { tokenRights };
   }
 
-  private normalizeMiniserverBaseUrl(hostOrUrl: string): string {
-    const trimmed = hostOrUrl.trim();
-    if (!trimmed) {
-      throw new MiniserverAuthError('miniserver-not-configured', 'miniserver host missing');
+  private readMiniserverBaseUrlFromConfig(cfg: AudioServerConfig): string {
+    const host = cfg.system?.miniserver?.ip?.trim() ?? '';
+    if (!host) {
+      return '';
     }
-    if (/^https?:\/\//i.test(trimmed)) {
-      return trimmed.replace(/\/+$/, '');
+    const port = cfg.system?.miniserver?.port;
+    if (typeof port !== 'number' || !Number.isInteger(port) || port <= 0 || port > 65535) {
+      return '';
     }
-    return `http://${trimmed}`;
+    const protocol = cfg.system?.miniserver?.protocol === 'https' ? 'https' : 'http';
+    return this.buildMiniserverBaseUrl(host, port, protocol);
+  }
+
+  private buildMiniserverBaseUrl(host: string, port: number, protocol: 'http' | 'https'): string {
+    const includePort = (protocol === 'https' && port !== 443) || (protocol === 'http' && port !== 80);
+    if (includePort) {
+      return `${protocol}://${host}:${port}`;
+    }
+    return `${protocol}://${host}`;
   }
 
   private async fetchMiniserverPublicKey(baseUrl: string): Promise<string> {
@@ -3839,6 +3848,7 @@ export class AdminApiHandler {
       const body = (await this.readJsonBody(req, res)) as
         | {
             audioserver?: { macId?: string; ip?: string };
+            miniserver?: { ip?: string; port?: number; protocol?: 'http' | 'https' };
           }
         | null;
       if (res.writableEnded) {
@@ -3848,16 +3858,29 @@ export class AdminApiHandler {
         this.sendJson(res, 400, { error: 'invalid-system-payload' });
         return;
       }
-      if (!body.audioserver || typeof body.audioserver !== 'object') {
-        this.sendJson(res, 400, { error: 'invalid-audioserver-payload' });
-        return;
-      }
-      const rawMac = body.audioserver.macId;
-      const rawIp = body.audioserver.ip;
-      if (typeof rawMac !== 'string' && typeof rawIp !== 'string') {
+      const hasAudioserver = body.audioserver && typeof body.audioserver === 'object';
+      const hasMiniserver = body.miniserver && typeof body.miniserver === 'object';
+      if (!hasAudioserver && !hasMiniserver) {
         this.sendJson(res, 400, { error: 'invalid-system-payload' });
         return;
       }
+
+      const rawMac = hasAudioserver ? body.audioserver!.macId : undefined;
+      const rawIp = hasAudioserver ? body.audioserver!.ip : undefined;
+      const rawMiniserverIp = hasMiniserver ? body.miniserver!.ip : undefined;
+      const rawMiniserverPort = hasMiniserver ? body.miniserver!.port : undefined;
+      const rawMiniserverProtocol = hasMiniserver ? body.miniserver!.protocol : undefined;
+      if (
+        typeof rawMac !== 'string' &&
+        typeof rawIp !== 'string' &&
+        typeof rawMiniserverIp !== 'string' &&
+        typeof rawMiniserverPort !== 'number' &&
+        typeof rawMiniserverProtocol !== 'string'
+      ) {
+        this.sendJson(res, 400, { error: 'invalid-system-payload' });
+        return;
+      }
+
       let normalizedMac: string | null = null;
       if (typeof rawMac === 'string') {
         const trimmed = rawMac.trim();
@@ -3881,16 +3904,58 @@ export class AdminApiHandler {
         }
         normalizedIp = trimmedIp;
       }
+      let normalizedMiniserverIp: string | null = null;
+      if (typeof rawMiniserverIp === 'string') {
+        const trimmedIp = rawMiniserverIp.trim();
+        if (!trimmedIp) {
+          this.sendJson(res, 400, { error: 'invalid-miniserver-ip' });
+          return;
+        }
+        normalizedMiniserverIp = trimmedIp;
+      }
+      let normalizedMiniserverPort: number | null = null;
+      if (typeof rawMiniserverPort === 'number') {
+        if (
+          !Number.isInteger(rawMiniserverPort) ||
+          rawMiniserverPort <= 0 ||
+          rawMiniserverPort > 65535
+        ) {
+          this.sendJson(res, 400, { error: 'invalid-miniserver-port' });
+          return;
+        }
+        normalizedMiniserverPort = rawMiniserverPort;
+      }
+      let normalizedMiniserverProtocol: 'http' | 'https' | null = null;
+      if (typeof rawMiniserverProtocol === 'string') {
+        const value = rawMiniserverProtocol.trim().toLowerCase();
+        if (value !== 'http' && value !== 'https') {
+          this.sendJson(res, 400, { error: 'invalid-miniserver-protocol' });
+          return;
+        }
+        normalizedMiniserverProtocol = value;
+      }
       await this.configPort.updateConfig((cfg) => {
         if (!cfg.system) cfg.system = this.defaultConfig().system;
         if (!cfg.system.audioserver) {
           cfg.system.audioserver = this.defaultConfig().system.audioserver;
+        }
+        if (!cfg.system.miniserver) {
+          cfg.system.miniserver = this.defaultConfig().system.miniserver;
         }
         if (normalizedMac) {
           cfg.system.audioserver.macId = normalizedMac;
         }
         if (normalizedIp) {
           cfg.system.audioserver.ip = normalizedIp;
+        }
+        if (normalizedMiniserverIp) {
+          cfg.system.miniserver.ip = normalizedMiniserverIp;
+        }
+        if (normalizedMiniserverPort !== null) {
+          cfg.system.miniserver.port = normalizedMiniserverPort;
+        }
+        if (normalizedMiniserverProtocol) {
+          cfg.system.miniserver.protocol = normalizedMiniserverProtocol;
         }
       });
       this.sendJson(res, 204, {});
@@ -4227,7 +4292,7 @@ export class AdminApiHandler {
   private defaultConfig(): AudioServerConfig {
     return {
       system: {
-        miniserver: { ip: '', serial: '' },
+        miniserver: { ip: '', serial: '', port: 80, protocol: 'http' },
         audioserver: {
           ip: defaultLocalIp(),
           name: 'Unconfigured',

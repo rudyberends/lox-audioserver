@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+import { connect as tlsConnect } from 'node:tls';
 import { asyncCrc32 } from '@/shared/utils/crc32';
 import { createLogger } from '@/shared/logging/logger';
 import type { AudioServerConfig } from '@/domain/config/types';
@@ -54,7 +56,7 @@ export class LoxoneConfigService {
 
     await this.config.updateConfig(async (cfg) => {
       crc32 = await this.persistRawConfig(cfg, payload);
-      this.applySystemMetadata(cfg, payload.raw);
+      await this.applySystemMetadata(cfg, payload.raw);
       this.extractZonesFromPayload(cfg, payload.raw);
       this.zones.replaceAll(cfg.zones, cfg.inputs);
       this.content.refreshFromConfig();
@@ -202,7 +204,7 @@ export class LoxoneConfigService {
     return asyncCrc32(rawString);
   }
 
-  private applySystemMetadata(cfg: AudioServerConfig, parsed: unknown): void {
+  private async applySystemMetadata(cfg: AudioServerConfig, parsed: unknown): Promise<void> {
     const macId = cfg.system.audioserver.macId?.trim().toUpperCase();
     if (!macId) {
       return;
@@ -216,6 +218,7 @@ export class LoxoneConfigService {
     const name = this.normalizeString(section.name);
     const uuid = this.normalizeString(section.uuid);
     const hostIp = this.normalizeString(section.ip);
+    const hostPort = this.normalizePort(section.port);
     const masterSerial = this.normalizeString(section.master);
 
     if (serverIp) {
@@ -269,6 +272,19 @@ export class LoxoneConfigService {
 
     if (hostIp) {
       cfg.system.miniserver.ip = hostIp;
+      const previousPort = cfg.system.miniserver.port;
+      if (hostPort !== undefined) {
+        cfg.system.miniserver.port = hostPort;
+      }
+      const shouldProbeProtocol =
+        typeof hostPort === 'number' &&
+        Number.isInteger(hostPort) &&
+        hostPort > 0 &&
+        hostPort <= 65535 &&
+        previousPort !== hostPort;
+      if (shouldProbeProtocol) {
+        cfg.system.miniserver.protocol = await this.detectProtocolViaTlsProbe(hostIp, hostPort);
+      }
     }
     if (masterSerial) {
       cfg.system.miniserver.serial = masterSerial;
@@ -316,4 +332,71 @@ export class LoxoneConfigService {
     const trimmed = value.trim();
     return trimmed || undefined;
   }
+
+  private normalizePort(value: unknown): number | undefined {
+    let parsed: number | undefined;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      parsed = value;
+    } else if (typeof value === 'string' && value.trim()) {
+      parsed = Number.parseInt(value.trim(), 10);
+    }
+
+    if (parsed === undefined) {
+      return undefined;
+    }
+    if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
+      return undefined;
+    }
+    return parsed;
+  }
+
+  private async detectProtocolViaTlsProbe(host: string, port: number): Promise<'http' | 'https'> {
+    const socketHost = this.normalizeSocketHost(host);
+    if (!socketHost) {
+      return 'http';
+    }
+
+    const isTls = await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (result: boolean): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(result);
+      };
+
+      const socket = tlsConnect(
+        {
+          host: socketHost,
+          port,
+          rejectUnauthorized: false,
+          servername: isIP(socketHost) ? undefined : socketHost,
+          timeout: 1500,
+        },
+        () => {
+          socket.end();
+          finish(true);
+        },
+      );
+
+      socket.once('error', () => finish(false));
+      socket.once('timeout', () => {
+        socket.destroy();
+        finish(false);
+      });
+      socket.once('close', () => finish(false));
+    });
+
+    return isTls ? 'https' : 'http';
+  }
+
+  private normalizeSocketHost(host: string): string {
+    const trimmed = host.trim();
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      return trimmed.slice(1, -1).trim();
+    }
+    return trimmed;
+  }
+
 }
