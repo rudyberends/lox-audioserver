@@ -6,7 +6,7 @@ export type { RadioParadiseStation };
 export const RADIO_PARADISE_STATIONS = RADIO_PARADISE_STATIONS_SHARED;
 
 export const RADIO_PARADISE_ICON_BASE_URL =
-  'https://raw.githubusercontent.com/music-assistant/music-assistant.io/main/docs/assets/icons';
+  '/assets/icons';
 
 export const RADIO_PARADISE_MENU_ENTRY: RadioMenuEntry = {
   cmd: 'radioparadise',
@@ -16,9 +16,9 @@ export const RADIO_PARADISE_MENU_ENTRY: RadioMenuEntry = {
   description: 'Human-curated, listener-supported radio streams.',
 };
 
-export function buildRadioParadiseIconUrl(icon: string): string {
+export function buildRadioParadiseIconUrl(icon: string, baseUrl = RADIO_PARADISE_ICON_BASE_URL): string {
   if (!icon) return '';
-  return `${RADIO_PARADISE_ICON_BASE_URL}/${icon}`;
+  return `${baseUrl.replace(/\/+$/, '')}/${icon}`;
 }
 
 export function normalizeRadioParadiseStreamUrl(value: string): string {

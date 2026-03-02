@@ -95,7 +95,7 @@ export class ContentManager {
     this.spotifyManagerProvider = spotifyManagerProvider;
     this.customRadioStore = customRadioStore;
     this.tunein = new TuneInProvider(this.customRadioStore, this.readTuneInConfig());
-    this.radioParadise = new RadioParadiseProvider();
+    this.radioParadise = new RadioParadiseProvider({ iconBaseUrl: this.readLocalIconBaseUrl() });
   }
 
   public setNotifier(notifier: NotifierPort): void {
@@ -135,7 +135,7 @@ export class ContentManager {
     this.metadataInflight.clear();
     this.spotify = this.spotifyManagerProvider.reload();
     this.tunein = new TuneInProvider(this.customRadioStore, this.readTuneInConfig());
-    this.radioParadise = new RadioParadiseProvider();
+    this.radioParadise = new RadioParadiseProvider({ iconBaseUrl: this.readLocalIconBaseUrl() });
   }
 
   public getAvailableServices() {
@@ -656,6 +656,16 @@ export class ContentManager {
       /* ignore */
     }
     return {};
+  }
+
+  private readLocalIconBaseUrl(): string {
+    try {
+      const cfg = this.getConfigPort().getConfig();
+      const host = cfg.system?.audioserver?.ip?.trim() || '127.0.0.1';
+      return `http://${host}:7090/assets/icons`;
+    } catch {
+      return 'http://127.0.0.1:7090/assets/icons';
+    }
   }
 
   private getConfigPort(): ConfigPort {
