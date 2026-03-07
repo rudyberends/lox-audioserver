@@ -90,6 +90,87 @@ test('power manager runs all configured action types', async () => {
   ]);
 });
 
+test('power manager forwards gpio backend details to executor', async () => {
+  const calls: Array<{ type: string; signal: 0 | 1; action: any }> = [];
+  const executor: PowerManagerExecutor = {
+    async execute(action: any, signal: 0 | 1): Promise<void> {
+      calls.push({ type: action.type, signal, action });
+    },
+  };
+  const pm = new PowerManager(noopLogger, executor);
+  const zoneConfig = {
+    id: 1,
+    name: 'Living',
+    sourceMac: '00:00:00:00:00:01',
+    volumes: {} as any,
+    powerManager: {
+      gpio: {
+        enabled: true,
+        pin: 22,
+        driver: 'gpioset',
+        chip: 'gpiochip4',
+        gpiosetPath: '/usr/bin/gpioset',
+      },
+    },
+  } as any;
+
+  pm.onStatePatch(1, zoneConfig, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(10);
+
+  assert.deepEqual(calls, [
+    {
+      type: 'gpio',
+      signal: 1,
+      action: {
+        type: 'gpio',
+        config: {
+          pin: 22,
+          activeHigh: true,
+          chip: 'gpiochip4',
+          gpiosetPath: '/usr/bin/gpioset',
+        },
+      },
+    },
+  ]);
+});
+
+test('power manager accepts crelay without serial', async () => {
+  const calls: Array<{ type: string; signal: 0 | 1; action: any }> = [];
+  const executor: PowerManagerExecutor = {
+    async execute(action: any, signal: 0 | 1): Promise<void> {
+      calls.push({ type: action.type, signal, action });
+    },
+  };
+  const pm = new PowerManager(noopLogger, executor);
+  const zoneConfig = {
+    id: 1,
+    name: 'Living',
+    sourceMac: '00:00:00:00:00:01',
+    volumes: {} as any,
+    powerManager: {
+      crelay: { enabled: true, relay: '1' },
+    },
+  } as any;
+
+  pm.onStatePatch(1, zoneConfig, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(10);
+
+  assert.deepEqual(calls, [
+    {
+      type: 'crelay',
+      signal: 1,
+      action: {
+        type: 'crelay',
+        config: {
+          serial: null,
+          relay: '1',
+          binaryPath: '/usr/local/bin/crelay',
+        },
+      },
+    },
+  ]);
+});
+
 test('power manager applies off delay and cancels pending off when play resumes', async () => {
   const executor = new FakeExecutor();
   const pm = new PowerManager(noopLogger, executor);

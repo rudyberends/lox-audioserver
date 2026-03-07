@@ -12,3 +12,10 @@ services:
     cap_add:
       - SYS_ADMIN
       - DAC_READ_SEARCH
+    # Power Manager note:
+    # - gpioset needs the relevant /dev/gpiochip* device inside the container.
+    # - USB HID relay boards via crelay need the matching /dev/hidraw* device.
+    # - Example for Raspberry Pi 4 header GPIOs and one HID relay:
+    # devices:
+    #   - /dev/gpiochip0:/dev/gpiochip0
+    #   - /dev/hidraw1:/dev/hidraw1

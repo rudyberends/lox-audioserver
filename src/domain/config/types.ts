@@ -166,7 +166,7 @@ export interface ZonePowerManagerConfig {
 export interface ZoneGpioPowerConfig {
   /** Enable GPIO power switching for this zone. */
   enabled?: boolean;
-  /** GPIO line/pin number to toggle for this zone. */
+  /** GPIO line offset within the selected gpiochip. */
   pin?: number;
   /** Delay before applying ON signal. */
   onDelayMs?: number;
@@ -174,10 +174,8 @@ export interface ZoneGpioPowerConfig {
   offDelayMs?: number;
   /** true => ON writes 1, false => ON writes 0. */
   activeHigh?: boolean;
-  /** GPIO driver backend. */
-  driver?: 'sysfs' | 'gpioset';
-  /** sysfs GPIO base path (default: /sys/class/gpio). */
-  basePath?: string;
+  /** GPIO line-based backend (libgpiod). */
+  driver?: 'gpioset';
   /** gpioset chip path or chip name (default: gpiochip0). */
   chip?: string;
   /** Optional custom gpioset binary path. */

@@ -2,7 +2,6 @@ import dgram from 'node:dgram';
 import { execFile } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { access, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import type {
   ZoneConfig,
@@ -16,6 +15,7 @@ import type { LoxoneZoneState } from '@/domain/loxone/types';
 import type { ComponentLogger } from '@/shared/logging/logger';
 
 const execFileAsync = promisify(execFile);
+const GPIOSET_BIN = 'gpioset';
 
 type PowerSignal = 0 | 1;
 type TimerHandle = ReturnType<typeof setTimeout>;
@@ -36,8 +36,6 @@ type NormalizedPowerAction =
 type NormalizedGpioConfig = {
   pin: number;
   activeHigh: boolean;
-  driver: 'sysfs' | 'gpioset';
-  basePath: string;
   chip: string;
   gpiosetPath: string;
 };
@@ -55,7 +53,7 @@ type NormalizedUdpConfig = {
 };
 
 type NormalizedCrelayConfig = {
-  serial: string;
+  serial: string | null;
   relay: string;
   binaryPath: string;
 };
@@ -283,8 +281,6 @@ export class PowerManager {
 }
 
 class SystemPowerManagerExecutor implements PowerManagerExecutor {
-  private readonly exportedPins = new Set<number>();
-
   public async execute(action: NormalizedPowerAction, signal: PowerSignal): Promise<void> {
     if (action.type === 'gpio') {
       await this.writeGpio(action.config, signal);
@@ -302,23 +298,9 @@ class SystemPowerManagerExecutor implements PowerManagerExecutor {
   }
 
   private async writeGpio(config: NormalizedGpioConfig, signal: PowerSignal): Promise<void> {
-    if (config.driver === 'gpioset') {
-      const value = resolvePhysicalValue(signal, config.activeHigh);
-      const chipRef = config.chip.includes('/') ? config.chip : `/dev/${config.chip}`;
-      await execFileAsync(config.gpiosetPath, [chipRef, `${config.pin}=${value}`]);
-      return;
-    }
-    const gpioDir = `${config.basePath}/gpio${config.pin}`;
-    if (!this.exportedPins.has(config.pin)) {
-      const exists = await pathExists(gpioDir);
-      if (!exists) {
-        await writeFile(`${config.basePath}/export`, String(config.pin));
-      }
-      await writeFile(`${gpioDir}/direction`, 'out');
-      this.exportedPins.add(config.pin);
-    }
     const value = resolvePhysicalValue(signal, config.activeHigh);
-    await writeFile(`${gpioDir}/value`, String(value));
+    const chipRef = config.chip.includes('/') ? config.chip : `/dev/${config.chip}`;
+    await execFileAsync(config.gpiosetPath, [chipRef, `${config.pin}=${value}`]);
   }
 
   private async callUrl(config: NormalizedUrlConfig, signal: PowerSignal): Promise<void> {
@@ -350,7 +332,8 @@ class SystemPowerManagerExecutor implements PowerManagerExecutor {
 
   private async callCrelay(config: NormalizedCrelayConfig, signal: PowerSignal): Promise<void> {
     const state = signal === 1 ? 'ON' : 'OFF';
-    await execFileAsync(config.binaryPath, ['-s', config.serial, config.relay, state]);
+    const args = config.serial ? ['-s', config.serial, config.relay, state] : [config.relay, state];
+    await execFileAsync(config.binaryPath, args);
   }
 }
 
@@ -413,10 +396,8 @@ function normalizeGpio(raw: ZoneGpioPowerConfig | null): NormalizedGpioConfig | 
   return {
     pin: raw.pin as number,
     activeHigh: raw.activeHigh !== false,
-    driver: raw.driver === 'gpioset' ? 'gpioset' : 'sysfs',
-    basePath: raw.basePath?.trim() || '/sys/class/gpio',
     chip: raw.chip?.trim() || 'gpiochip0',
-    gpiosetPath: raw.gpiosetPath?.trim() || 'gpioset',
+    gpiosetPath: raw.gpiosetPath?.trim() || GPIOSET_BIN,
   };
 }
 
@@ -510,9 +491,9 @@ function normalizeCrelay(raw: ZoneCrelayPowerConfig | null): NormalizedCrelayCon
   if (!raw || raw.enabled === false) {
     return null;
   }
-  const serial = raw.serial?.trim() || '';
+  const serial = raw.serial?.trim() || null;
   const relay = raw.relay?.trim() || '';
-  if (!serial || !relay) {
+  if (!relay) {
     return null;
   }
   return {
@@ -534,13 +515,4 @@ function resolvePhysicalValue(signal: PowerSignal, activeHigh: boolean): 0 | 1 {
     return activeHigh ? 1 : 0;
   }
   return activeHigh ? 0 : 1;
-}
-
-async function pathExists(target: string): Promise<boolean> {
-  try {
-    await access(target);
-    return true;
-  } catch {
-    return false;
-  }
 }

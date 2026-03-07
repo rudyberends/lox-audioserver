@@ -58,8 +58,9 @@ RUN apt-get update \
         nfs-common \
         curl \
         ffmpeg \
+        gpiod \
         libusb-1.0-0 \
-        libftdi1-2 \
+        libftdi1 \
         libhidapi-libusb0 \
         python3 \
     && rm -rf /var/lib/apt/lists/*
