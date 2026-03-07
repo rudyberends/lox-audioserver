@@ -26,6 +26,7 @@ import './beolinkStateController.test';
 import './audioManager.playbackPreDelay.test';
 import './sendspinLineInService.test';
 import './powerManager.test';
+import './sharedPowerGroupManager.test';
 import './zoneHandlers.serviceplay.test';
 import './alertHandlers.playeventfile.test';
 import './alertsCoordinator.test';

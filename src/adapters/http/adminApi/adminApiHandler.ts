@@ -3515,16 +3515,16 @@ export class AdminApiHandler {
   private async reloadZones(zoneIds?: number[]): Promise<void> {
     const cfg = this.configPort.getConfig();
     if (!zoneIds || zoneIds.length === 0) {
-      await this.zoneManager.replaceAll(cfg.zones ?? [], cfg.inputs ?? null);
+      await this.zoneManager.replaceAll(cfg.zones ?? [], cfg.inputs ?? null, cfg.groups ?? null);
       return;
     }
     const set = new Set(zoneIds);
     const targets = (cfg.zones ?? []).filter((z) => set.has(z.id));
     if (targets.length === 0) {
-      await this.zoneManager.replaceAll(cfg.zones ?? [], cfg.inputs ?? null);
+      await this.zoneManager.replaceAll(cfg.zones ?? [], cfg.inputs ?? null, cfg.groups ?? null);
       return;
     }
-    await this.zoneManager.replaceZones(targets, cfg.inputs ?? null);
+    await this.zoneManager.replaceZones(targets, cfg.inputs ?? null, cfg.groups ?? null);
   }
 
   private handleNotImplemented(
@@ -3966,6 +3966,11 @@ export class AdminApiHandler {
       const body = (await this.readJsonBody(req, res)) as
         | {
             mixedGroupEnabled?: boolean;
+            powerGroups?: AudioServerConfig['groups'] extends infer G
+              ? G extends { powerGroups?: infer P }
+                ? P
+                : never
+              : never;
           }
         | null;
       if (res.writableEnded) {
@@ -3975,13 +3980,18 @@ export class AdminApiHandler {
         this.sendJson(res, 400, { error: 'invalid-groups-payload' });
         return;
       }
-      if (!('mixedGroupEnabled' in body)) {
+      if (!('mixedGroupEnabled' in body) && !('powerGroups' in body)) {
         this.sendJson(res, 400, { error: 'invalid-groups-payload' });
         return;
       }
       await this.configPort.updateConfig((cfg) => {
         if (!cfg.groups) cfg.groups = {};
-        cfg.groups.mixedGroupEnabled = Boolean(body.mixedGroupEnabled);
+        if ('mixedGroupEnabled' in body) {
+          cfg.groups.mixedGroupEnabled = Boolean(body.mixedGroupEnabled);
+        }
+        if ('powerGroups' in body) {
+          cfg.groups.powerGroups = Array.isArray(body.powerGroups) ? body.powerGroups : [];
+        }
       });
       this.sendJson(res, 204, {});
       return;
@@ -4334,6 +4344,10 @@ export class AdminApiHandler {
         lineIn: {
           inputs: [],
         },
+      },
+      groups: {
+        mixedGroupEnabled: false,
+        powerGroups: [],
       },
       zones: [],
       rawAudioConfig: {

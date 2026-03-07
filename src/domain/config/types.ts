@@ -141,6 +141,8 @@ export interface ZoneConfig {
 export interface ZonePowerManagerConfig {
   /** Legacy master toggle. Power state tracking remains active even when this is false. */
   enabled?: boolean;
+  /** Optional shared power group id for aggregate amp/PSU switching across zones. */
+  powerGroupId?: string;
   /**
    * Zone modes that should keep power ON.
    * Defaults to ['play'] so paused/stopped states turn power OFF.
@@ -250,6 +252,17 @@ export interface InputConfig {
 export interface GroupConfig {
   /** Allow grouping zones across different output protocols (best effort). */
   mixedGroupEnabled?: boolean;
+  /** Optional shared power groups driven by aggregate zone activity. */
+  powerGroups?: PowerGroupConfig[];
+}
+
+export interface PowerGroupConfig {
+  /** Stable identifier referenced by zone.powerManager.powerGroupId. */
+  id: string;
+  /** Optional friendly name used for logs/admin visibility. */
+  name?: string;
+  /** Power switching behavior for the shared group output. */
+  powerManager?: ZonePowerManagerConfig | null;
 }
 
 export interface GlobalAirplayConfig {

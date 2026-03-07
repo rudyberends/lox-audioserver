@@ -70,6 +70,8 @@ If you want to use the Power Manager with `gpioset` or USB HID relay boards from
 
 For `gpioset`, configure the `chip` and the line offset within that chip. On a Raspberry Pi 4, header GPIO22 is typically line `22` on `/dev/gpiochip0`; the old sysfs-style global number like `534` is not the value `gpioset` expects.
 
+Shared amp or PSU switching is also supported through `groups.powerGroups[]`. Set a zone's `powerManager.powerGroupId` to the shared group id, then configure the group's own `powerManager.gpio` or `powerManager.crelay`. The shared output turns on while any member zone is active and turns off after the last member stops.
+
 ### Quick Docker run
 
 If you prefer `docker run`, host networking is recommended:
