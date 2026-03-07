@@ -8,7 +8,12 @@
     <script>
       'use strict';
       const urlParams = new URLSearchParams(window.location.search);
-      const redirectUrl = decodeURIComponent(urlParams.get('state') || '');
+      const stateFromQuery = urlParams.get('state') || '';
+      const callbackBase = '/lox-audioserver/spotify-callback/';
+      const pathAfterCallback = window.location.pathname.startsWith(callbackBase)
+        ? window.location.pathname.slice(callbackBase.length)
+        : '';
+      const redirectUrl = decodeURIComponent(stateFromQuery || pathAfterCallback || '');
       const code = encodeURIComponent(urlParams.get('code') || '');
 
       let finalUrl = '';
@@ -26,4 +31,3 @@
     </script>
   </body>
 </html>
-
