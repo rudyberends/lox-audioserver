@@ -300,49 +300,49 @@ export class ZoneManager {
       },
       updateMetadata: (zoneId, metadata) => {
         const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx || (ctx.activeInput && ctx.activeInput !== 'spotify')) {
+        if (!ctx || ctx.activeInput !== 'spotify') {
           return;
         }
         ctx.spotifyAdapter.updateMetadata(metadata);
       },
       updateCover: (zoneId, cover) => {
         const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx || (ctx.activeInput && ctx.activeInput !== 'spotify')) {
+        if (!ctx || ctx.activeInput !== 'spotify') {
           return;
         }
         return ctx.spotifyAdapter.updateCover(cover);
       },
       updateVolume: (zoneId, volume) => {
         const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx || (ctx.activeInput && ctx.activeInput !== 'spotify')) {
+        if (!ctx || ctx.activeInput !== 'spotify') {
           return;
         }
         ctx.spotifyAdapter.updateVolume(volume);
       },
       updateTiming: (zoneId, elapsed, duration) => {
         const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx || (ctx.activeInput && ctx.activeInput !== 'spotify')) {
+        if (!ctx || ctx.activeInput !== 'spotify') {
           return;
         }
         ctx.spotifyAdapter.updateTiming(elapsed, duration);
       },
       pausePlayback: (zoneId) => {
         const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx || (ctx.activeInput && ctx.activeInput !== 'spotify')) {
+        if (!ctx || ctx.activeInput !== 'spotify') {
           return;
         }
         ctx.spotifyAdapter.pause();
       },
       resumePlayback: (zoneId) => {
         const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx || (ctx.activeInput && ctx.activeInput !== 'spotify')) {
+        if (!ctx || ctx.activeInput !== 'spotify') {
           return;
         }
         ctx.spotifyAdapter.resume();
       },
       stopPlayback: (zoneId) => {
         const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx || (ctx.activeInput && ctx.activeInput !== 'spotify')) {
+        if (!ctx || ctx.activeInput !== 'spotify') {
           return;
         }
         ctx.spotifyAdapter.stop();

@@ -11,7 +11,12 @@ import { createZoneAudioHelpers } from '../src/application/zones/internal/zoneAu
 import type { ZoneConfig, AudioServerConfig, RawAudioConfig } from '../src/domain/config/types';
 import type { QueueItem } from '../src/ports/types/queueTypes';
 import type { ZoneContext, QueueAuthority } from '../src/application/zones/internal/zoneTypes';
-import type { InputsPort, InputStreamResult, LineInControlCommand } from '../src/ports/InputsPort';
+import type {
+  InputsPort,
+  InputStreamResult,
+  LineInControlCommand,
+  SpotifyConnectController,
+} from '../src/ports/InputsPort';
 import type { ContentPort } from '../src/ports/ContentPort';
 import type { NotifierPort } from '../src/ports/NotifierPort';
 import type { ConfigPort } from '../src/ports/ConfigPort';
@@ -87,6 +92,7 @@ class FakeInputsPort implements InputsPort {
   public readonly requestLineInStopCalls: string[] = [];
   public readonly requestLineInControlCalls: Array<{ inputId: string; command: LineInControlCommand }> = [];
   public readonly markSessionCalls: Array<{ zoneId: number; metadata?: PlaybackMetadata | null }> = [];
+  public spotifyController: SpotifyConnectController | null = null;
   public playbackSource: PlaybackSource | null = null;
   public streamResult: InputStreamResult = { playbackSource: null };
 
@@ -110,8 +116,8 @@ class FakeInputsPort implements InputsPort {
     /* noop */
   }
 
-  public configureSpotify(): void {
-    /* noop */
+  public configureSpotify(controller: SpotifyConnectController): void {
+    this.spotifyController = controller;
   }
 
   public syncSpotifyZones(): void {
@@ -703,6 +709,9 @@ test('input switching gates callbacks and stops prior sessions', async () => {
   coordinator.updateInputMetadata(ctx.id, { title: 'Stale update' });
   assert.equal(patches.length, 0);
 
+  inputsPort.spotifyController?.updateMetadata(ctx.id, { title: 'Still stale' });
+  assert.equal(patches.length, 0);
+
   coordinator.playInputSource(ctx.id, 'musicassistant', source, {
     title: 'MA Track',
     artist: 'MA',
@@ -713,6 +722,45 @@ test('input switching gates callbacks and stops prior sessions', async () => {
   handlers.updateMetadata?.(ctx.id, { title: 'Now Playing', artist: 'MA' });
   assert.equal(patches.length, 1);
   assert.equal(patches[0]?.patch.title, 'Now Playing');
+});
+
+test('duplicate end_of_track signals advance queue only once', async () => {
+  const { coordinator, ctx } = createHarness();
+  coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
+  ctx.queueController.setItems(
+    [
+      makeQueueItem({ title: 'One', audiopath: 'spotify:track:one', unique_id: 'id-1' }),
+      makeQueueItem({ title: 'Two', audiopath: 'spotify:track:two', unique_id: 'id-2' }),
+    ],
+    0,
+  );
+  ctx.queue.authority = 'local';
+  ctx.inputMode = 'queue';
+  ctx.activeInput = 'queue';
+
+  let startCount = 0;
+  (coordinator as any).startQueuePlayback = async () => {
+    startCount += 1;
+    return {
+      zoneId: ctx.id,
+      source: 'spotify:track:two',
+      metadata: { title: 'Two', artist: 'Artist', album: 'Album', audiopath: 'spotify:track:two' },
+      stream: { id: 'stream-2', url: 'http://example.com/stream-2', coverUrl: '', createdAt: Date.now() },
+      state: 'playing',
+      elapsed: 0,
+      duration: 0,
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      playbackSource: null,
+    } as PlaybackSession;
+  };
+
+  coordinator.handlePlaybackError(ctx.id, 'end_of_track', 'output');
+  (ctx.player as unknown as EventEmitter).emit('ended', null);
+  await flushAsync();
+
+  assert.equal(startCount, 1);
+  assert.equal(ctx.queueController.currentIndex(), 1);
 });
 
 test('queue next/prev advances qindex and qid', async () => {

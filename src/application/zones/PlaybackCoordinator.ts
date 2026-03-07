@@ -99,6 +99,7 @@ export class PlaybackCoordinator {
     number,
     { pending: number; running: boolean; timer?: NodeJS.Timeout }
   >();
+  private readonly endOfTrackAdvanceState = new Map<number, { key: string; at: number }>();
   private readonly queueStepCoalesceMs = 25;
   private readonly musicAssistantInputHandlers: MusicAssistantInputHandlers = {
     startPlayback: (zoneId: number, label: string, source: PlaybackSource, metadata?: PlaybackMetadata) => {
@@ -1347,6 +1348,17 @@ export class PlaybackCoordinator {
 
   private async handleEndOfTrack(ctx: ZoneContext): Promise<void> {
     const currentAudiopath = ctx.queueController.current()?.audiopath ?? ctx.state.audiopath ?? '';
+    const currentKey = `${ctx.queueController.currentIndex()}::${currentAudiopath}`;
+    const previous = this.endOfTrackAdvanceState.get(ctx.id);
+    const now = Date.now();
+    if (previous && previous.key === currentKey && now - previous.at < 1500) {
+      this.log.debug('ignoring duplicate end_of_track queue advance', {
+        zoneId: ctx.id,
+        key: currentKey,
+      });
+      return;
+    }
+    this.endOfTrackAdvanceState.set(ctx.id, { key: currentKey, at: now });
     if (this.radioParadise.isRadioParadiseAudiopath(currentAudiopath) && this.radioParadise.canSkip(ctx.id)) {
       const resolved = await this.radioParadise.resolveNextBlock(ctx.id);
       if (resolved) {
