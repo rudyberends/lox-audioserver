@@ -102,6 +102,7 @@ export class AlertsCoordinator {
 
     const clampedVolume = clampVolumeForZone(ctx.config, volume);
     ctx.player.setVolume(clampedVolume);
+    this.applyPatch(zoneId, { volume: clampedVolume });
 
 	    const metadata: PlaybackMetadata = {
 	      title,

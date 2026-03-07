@@ -28,6 +28,7 @@ import './sendspinLineInService.test';
 import './powerManager.test';
 import './zoneHandlers.serviceplay.test';
 import './alertHandlers.playeventfile.test';
+import './alertsCoordinator.test';
 import './zoneHandlers.roomfavs.test';
 import './favoritesManager.compat.test';
 import './recentsManager.compat.test';
