@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Redirecting...</title>
+  </head>
+  <body>
+    <script>
+      'use strict';
+      const callbackBase = '/lox-audioserver/spotify-callback/';
+      const { pathname, search } = window.location;
+
+      if (pathname.startsWith(callbackBase) && pathname.length > callbackBase.length) {
+        const encodedState = pathname.slice(callbackBase.length);
+        const target = `${callbackBase}?state=${encodedState}${search ? `&${search.slice(1)}` : ''}`;
+        window.location.replace(target);
+      } else {
+        document.write('<p>File not found.</p>');
+      }
+    </script>
+  </body>
+</html>
