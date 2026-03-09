@@ -70,11 +70,15 @@ export function handlePlaybackError(args: {
     title,
     artist: '',
     album: '',
+    coverurl: '',
+    audiopath: '',
     station: '',
     time: 0,
+    duration: 0,
     mode: 'stop',
     clientState: 'on',
     power: 'on',
+    sourceName: ctx.sourceMac,
   });
   if (ctx.player.getState().mode !== 'stopped') {
     ctx.player.stop();

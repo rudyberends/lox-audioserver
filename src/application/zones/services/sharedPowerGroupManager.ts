@@ -1,0 +1,172 @@
+import type { PowerGroupConfig, ZoneConfig } from '@/domain/config/types';
+import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ComponentLogger } from '@/shared/logging/logger';
+import {
+  type NormalizedPowerConfig,
+  type PowerManagerExecutor,
+  type PowerSignal,
+  SystemPowerManagerExecutor,
+  isPowerOnMode,
+  normalizePowerManagerConfig,
+} from '@/application/zones/services/powerManager';
+
+type GroupRuntime = {
+  id: string;
+  name: string;
+  config: NormalizedPowerConfig;
+  desiredSignal: PowerSignal;
+  currentSignal: PowerSignal | null;
+  inflight: Promise<void>;
+  activeZoneIds: Set<number>;
+};
+
+type ZoneGroupBinding = {
+  groupId: string;
+  activeModes: ReadonlySet<'play' | 'pause'>;
+};
+
+export class SharedPowerGroupManager {
+  private readonly groups = new Map<string, GroupRuntime>();
+  private readonly zoneBindings = new Map<number, ZoneGroupBinding>();
+
+  constructor(
+    private readonly log: ComponentLogger,
+    private readonly executor: PowerManagerExecutor = new SystemPowerManagerExecutor(),
+  ) {}
+
+  public configure(powerGroups: PowerGroupConfig[] | null | undefined, zones: ZoneConfig[]): void {
+    this.clearAll();
+
+    const configuredGroups = Array.isArray(powerGroups) ? powerGroups : [];
+    for (const group of configuredGroups) {
+      const id = group.id?.trim();
+      if (!id) {
+        continue;
+      }
+      const runtime: GroupRuntime = {
+        id,
+        name: group.name?.trim() || id,
+        config: normalizePowerManagerConfig(group.powerManager ?? null),
+        desiredSignal: 0,
+        currentSignal: null,
+        inflight: Promise.resolve(),
+        activeZoneIds: new Set<number>(),
+      };
+      this.groups.set(id, runtime);
+    }
+
+    for (const zone of zones) {
+      const groupId = zone.powerManager?.powerGroupId?.trim();
+      if (!groupId) {
+        continue;
+      }
+      const runtime = this.groups.get(groupId);
+      if (!runtime) {
+        this.log.warn('shared power group referenced by zone is missing', {
+          zoneId: zone.id,
+          zoneName: zone.name,
+          groupId,
+        });
+        continue;
+      }
+      this.zoneBindings.set(zone.id, {
+        groupId,
+        activeModes: normalizePowerManagerConfig(zone.powerManager ?? null).activeModes,
+      });
+    }
+  }
+
+  public onStatePatch(zoneId: number, patch: Partial<LoxoneZoneState>, nextState: LoxoneZoneState): void {
+    if (!('mode' in patch)) {
+      return;
+    }
+    const binding = this.zoneBindings.get(zoneId);
+    if (!binding) {
+      return;
+    }
+    const runtime = this.groups.get(binding.groupId);
+    if (!runtime) {
+      return;
+    }
+    const shouldBeActive = isPowerOnMode(binding.activeModes, nextState.mode);
+    if (shouldBeActive) {
+      runtime.activeZoneIds.add(zoneId);
+    } else {
+      runtime.activeZoneIds.delete(zoneId);
+    }
+    const desiredSignal: PowerSignal = runtime.activeZoneIds.size > 0 ? 1 : 0;
+    this.log.debug('shared power group state update', {
+      groupId: runtime.id,
+      groupName: runtime.name,
+      zoneId,
+      mode: nextState.mode,
+      desiredSignal,
+      activeZoneIds: Array.from(runtime.activeZoneIds),
+      actions: runtime.config.actions.map((action) => action.type),
+    });
+    this.setDesired(runtime, desiredSignal);
+  }
+
+  public clearAll(): void {
+    this.groups.clear();
+    this.zoneBindings.clear();
+  }
+
+  private setDesired(runtime: GroupRuntime, desiredSignal: PowerSignal): void {
+    const previousDesired = runtime.desiredSignal;
+    runtime.desiredSignal = desiredSignal;
+    if (previousDesired === desiredSignal) {
+      return;
+    }
+    this.log.debug('shared power group desired signal changed', {
+      groupId: runtime.id,
+      previousDesired,
+      desiredSignal,
+    });
+    if (runtime.currentSignal === desiredSignal) {
+      return;
+    }
+    this.applySignal(runtime, desiredSignal);
+  }
+
+  private applySignal(runtime: GroupRuntime, signal: PowerSignal): void {
+    runtime.inflight = runtime.inflight
+      .then(async () => {
+        const fresh = this.groups.get(runtime.id);
+        if (!fresh || fresh.desiredSignal !== signal || fresh.currentSignal === signal) {
+          return;
+        }
+        this.log.info('shared power group applying signal', {
+          groupId: fresh.id,
+          groupName: fresh.name,
+          signal,
+          actions: fresh.config.actions.map((action) => action.type),
+        });
+        for (const action of fresh.config.actions) {
+          try {
+            await this.executor.execute(action, signal);
+          } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.log.warn('shared power group action failed', {
+              groupId: fresh.id,
+              action: action.type,
+              signal,
+              message,
+            });
+          }
+        }
+        const active = this.groups.get(runtime.id);
+        if (active && active.desiredSignal === signal) {
+          active.currentSignal = signal;
+        }
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.warn('shared power group signal failed', {
+          groupId: runtime.id,
+          signal,
+          message,
+        });
+      });
+  }
+}

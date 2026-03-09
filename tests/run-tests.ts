@@ -26,6 +26,7 @@ import './beolinkStateController.test';
 import './audioManager.playbackPreDelay.test';
 import './sendspinLineInService.test';
 import './powerManager.test';
+import './sharedPowerGroupManager.test';
 import './zoneHandlers.serviceplay.test';
 import './alertHandlers.playeventfile.test';
 import './alertsCoordinator.test';
@@ -552,6 +553,76 @@ test('spotify pipe track change after pause restarts engine instead of continuin
     title: 'New Track',
     artist: 'Artist',
     album: 'Album',
+  });
+
+  assert.equal(startCalls, 2);
+  assert.equal(stopCalls.length, 2);
+  assert.equal(stopCalls[0]?.reason, 'switch');
+  assert.equal(stopCalls[1]?.reason, 'switch');
+});
+
+test('spotify explicit serviceplay restarts same pipe when request uri changed before start', () => {
+  const pipe = new PassThrough();
+  let hasSession = false;
+  let startCalls = 0;
+  const stopCalls: Array<{ zoneId: number; reason?: string }> = [];
+  const engine: EnginePort = {
+    start: () => {
+      hasSession = true;
+      startCalls += 1;
+    },
+    startWithHandoff: () => {},
+    stop: (zoneId, reason) => {
+      hasSession = false;
+      stopCalls.push({ zoneId, reason });
+    },
+    createStream: () => null,
+    createLocalSession: () => ({
+      start: () => {},
+      stop: () => {},
+      createSubscriber: () => null,
+    }),
+    waitForFirstChunk: async () => true,
+    hasSession: () => hasSession,
+    getSessionStats: () => [],
+    setSessionTerminationHandler: () => {},
+  };
+  const { AudioManager } = require('../src/application/playback/audioManager') as typeof import('../src/application/playback/audioManager');
+  const manager = new AudioManager(new PlaybackService(engine), {
+    notifyOutputError: () => {},
+    notifyOutputState: () => {},
+  });
+
+  const playbackSource = {
+    kind: 'pipe' as const,
+    path: 'spotify-pipe',
+    format: 's16le' as const,
+    sampleRate: 44100,
+    channels: 2 as const,
+    stream: pipe,
+  };
+
+  manager.markPlayRequest(1, { type: 'serviceplay', uri: 'spotify:track:old' });
+  manager.startExternalPlayback(1, 'spotify', playbackSource, {
+    title: 'Old Track',
+    artist: 'Artist',
+    album: 'Album',
+    audiopath: 'spotify:track:old',
+  });
+
+  manager.updateSessionMetadata(1, {
+    title: 'New Track',
+    artist: 'Artist',
+    album: 'Album',
+    audiopath: 'spotify:track:new',
+  });
+
+  manager.markPlayRequest(1, { type: 'serviceplay', uri: 'spotify:track:new' });
+  manager.startExternalPlayback(1, 'spotify', playbackSource, {
+    title: 'New Track',
+    artist: 'Artist',
+    album: 'Album',
+    audiopath: 'spotify:track:new',
   });
 
   assert.equal(startCalls, 2);

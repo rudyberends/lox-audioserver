@@ -117,6 +117,15 @@ type AdminUiUpdateResult = {
   error?: string;
 };
 
+function isCrossDeviceRenameError(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === 'object' &&
+    'code' in err &&
+    (err as NodeJS.ErrnoException).code === 'EXDEV'
+  );
+}
+
 type ComponentPackageUpdateRequest = {
   name?: string;
   version?: string;
@@ -1770,10 +1779,10 @@ export class AdminApiHandler {
 
       if (await this.pathExists(targetDir)) {
         await fs.rm(backupDir, { recursive: true, force: true });
-        await fs.rename(targetDir, backupDir);
+        await this.moveDir(targetDir, backupDir);
         backupCreated = true;
       }
-      await fs.rename(stagingDir, targetDir);
+      await this.moveDir(stagingDir, targetDir);
       if (backupCreated) {
         try {
           await fs.rm(backupDir, { recursive: true, force: true });
@@ -1807,7 +1816,7 @@ export class AdminApiHandler {
       if (backupCreated) {
         try {
           await fs.rm(targetDir, { recursive: true, force: true });
-          await fs.rename(backupDir, targetDir);
+          await this.moveDir(backupDir, targetDir);
         } catch (rollbackErr) {
           const rollbackMessage =
             rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
@@ -1848,6 +1857,21 @@ export class AdminApiHandler {
 
       request.on('error', reject);
     });
+  }
+
+  private async moveDir(sourceDir: string, targetDir: string): Promise<void> {
+    try {
+      await fs.rename(sourceDir, targetDir);
+      return;
+    } catch (err) {
+      if (!isCrossDeviceRenameError(err)) {
+        throw err;
+      }
+    }
+
+    await fs.rm(targetDir, { recursive: true, force: true });
+    await fs.cp(sourceDir, targetDir, { recursive: true });
+    await fs.rm(sourceDir, { recursive: true, force: true });
   }
 
   private async extractAdminUi(archive: string, dest: string): Promise<void> {
@@ -3515,16 +3539,16 @@ export class AdminApiHandler {
   private async reloadZones(zoneIds?: number[]): Promise<void> {
     const cfg = this.configPort.getConfig();
     if (!zoneIds || zoneIds.length === 0) {
-      await this.zoneManager.replaceAll(cfg.zones ?? [], cfg.inputs ?? null);
+      await this.zoneManager.replaceAll(cfg.zones ?? [], cfg.inputs ?? null, cfg.groups ?? null);
       return;
     }
     const set = new Set(zoneIds);
     const targets = (cfg.zones ?? []).filter((z) => set.has(z.id));
     if (targets.length === 0) {
-      await this.zoneManager.replaceAll(cfg.zones ?? [], cfg.inputs ?? null);
+      await this.zoneManager.replaceAll(cfg.zones ?? [], cfg.inputs ?? null, cfg.groups ?? null);
       return;
     }
-    await this.zoneManager.replaceZones(targets, cfg.inputs ?? null);
+    await this.zoneManager.replaceZones(targets, cfg.inputs ?? null, cfg.groups ?? null);
   }
 
   private handleNotImplemented(
@@ -3966,6 +3990,11 @@ export class AdminApiHandler {
       const body = (await this.readJsonBody(req, res)) as
         | {
             mixedGroupEnabled?: boolean;
+            powerGroups?: AudioServerConfig['groups'] extends infer G
+              ? G extends { powerGroups?: infer P }
+                ? P
+                : never
+              : never;
           }
         | null;
       if (res.writableEnded) {
@@ -3975,13 +4004,18 @@ export class AdminApiHandler {
         this.sendJson(res, 400, { error: 'invalid-groups-payload' });
         return;
       }
-      if (!('mixedGroupEnabled' in body)) {
+      if (!('mixedGroupEnabled' in body) && !('powerGroups' in body)) {
         this.sendJson(res, 400, { error: 'invalid-groups-payload' });
         return;
       }
       await this.configPort.updateConfig((cfg) => {
         if (!cfg.groups) cfg.groups = {};
-        cfg.groups.mixedGroupEnabled = Boolean(body.mixedGroupEnabled);
+        if ('mixedGroupEnabled' in body) {
+          cfg.groups.mixedGroupEnabled = Boolean(body.mixedGroupEnabled);
+        }
+        if ('powerGroups' in body) {
+          cfg.groups.powerGroups = Array.isArray(body.powerGroups) ? body.powerGroups : [];
+        }
       });
       this.sendJson(res, 204, {});
       return;
@@ -4334,6 +4368,10 @@ export class AdminApiHandler {
         lineIn: {
           inputs: [],
         },
+      },
+      groups: {
+        mixedGroupEnabled: false,
+        powerGroups: [],
       },
       zones: [],
       rawAudioConfig: {

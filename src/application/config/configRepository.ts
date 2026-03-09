@@ -173,6 +173,7 @@ function defaultConfig(): AudioServerConfig {
     },
     groups: {
       mixedGroupEnabled: false,
+      powerGroups: [],
     },
     zones: [],
     rawAudioConfig: {
@@ -316,10 +317,13 @@ function normalizeInputs(config: AudioServerConfig): void {
 
 function normalizeGroups(config: AudioServerConfig): void {
   if (!config.groups) {
-    config.groups = { mixedGroupEnabled: false };
+    config.groups = { mixedGroupEnabled: false, powerGroups: [] };
     return;
   }
   if (config.groups.mixedGroupEnabled !== true) {
     config.groups.mixedGroupEnabled = false;
+  }
+  if (!Array.isArray(config.groups.powerGroups)) {
+    config.groups.powerGroups = [];
   }
 }

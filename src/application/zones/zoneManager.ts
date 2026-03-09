@@ -1,6 +1,6 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
-import type { ZoneConfig, InputConfig } from '@/domain/config/types';
+import type { ZoneConfig, InputConfig, GroupConfig } from '@/domain/config/types';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ContentPort } from '@/ports/ContentPort';
@@ -44,6 +44,7 @@ import {
 } from '@/application/zones/state/types';
 import type { AlertMediaResource } from '@/application/alerts/types';
 import { PowerManager } from '@/application/zones/services/powerManager';
+import { SharedPowerGroupManager } from '@/application/zones/services/sharedPowerGroupManager';
 import {
   buildInitialState,
   getZoneDefaultVolume,
@@ -100,6 +101,7 @@ export class ZoneManager {
   private readonly configPort: ConfigPort;
   private readonly audioManager: AudioManager;
   private readonly powerManager: PowerManager;
+  private readonly sharedPowerGroupManager: SharedPowerGroupManager;
   private initialized = false;
   private inputsConfigured = false;
   private heartbeatTimer: NodeJS.Timeout | null = null;
@@ -162,6 +164,7 @@ export class ZoneManager {
       }
       this.applyPatch(zoneId, { powerState: 'on' });
     });
+    this.sharedPowerGroupManager = new SharedPowerGroupManager(this.log);
     this.audioManager.setZonePowerStateResolver((zoneId) => this.powerManager.isSignalOn(zoneId));
     this.audioHelpers = createZoneAudioHelpers(contentPort, configPort);
     const audioHelpers = this.audioHelpers;
@@ -193,6 +196,7 @@ export class ZoneManager {
         const ctx = this.zoneRepo.get(zoneId);
         if (ctx) {
           this.powerManager.onStatePatch(zoneId, ctx.config, patch, nextState);
+          this.sharedPowerGroupManager.onStatePatch(zoneId, patch, nextState);
         }
       },
       notifyOutputMetadata: (zoneId, ctx, patch) =>
@@ -365,18 +369,24 @@ export class ZoneManager {
     if (!this.initialized) {
       await this.configPort.load();
       const cfg = this.configPort.getConfig();
-      await this.replaceAll(cfg.zones, cfg.inputs);
+      await this.replaceAll(cfg.zones, cfg.inputs, cfg.groups ?? null);
       this.startHeartbeat();
       this.initialized = true;
     }
   }
 
-  public async replaceAll(zoneConfigs: ZoneConfig[], inputs?: InputConfig | null): Promise<void> {
+  public async replaceAll(
+    zoneConfigs: ZoneConfig[],
+    inputs?: InputConfig | null,
+    groups?: GroupConfig | null,
+  ): Promise<void> {
     this.powerManager.clearAll();
+    this.sharedPowerGroupManager.clearAll();
     this.disposeAllOutputs();
     this.clearZoneContexts();
     clearPlayers();
     zoneConfigs.forEach((cfg) => this.registerZone(cfg));
+    this.sharedPowerGroupManager.configure(groups?.powerGroups, zoneConfigs);
     this.configureInputs();
     const inputsPort = this.inputsPort;
     inputsPort.syncAirplayZones(zoneConfigs, inputs?.airplay ?? null);
@@ -408,7 +418,11 @@ export class ZoneManager {
     }
   }
 
-  public async replaceZones(zoneConfigs: ZoneConfig[], inputs?: InputConfig | null): Promise<void> {
+  public async replaceZones(
+    zoneConfigs: ZoneConfig[],
+    inputs?: InputConfig | null,
+    groups?: GroupConfig | null,
+  ): Promise<void> {
     if (!zoneConfigs || zoneConfigs.length === 0) {
       return;
     }
@@ -426,6 +440,7 @@ export class ZoneManager {
 
     // Refresh input services using the full current set.
     const allZones = this.zoneRepo.list().map((ctx) => ctx.config);
+    this.sharedPowerGroupManager.configure(groups?.powerGroups, allZones);
     this.configureInputs();
     const inputsPort = this.inputsPort;
     inputsPort.syncAirplayZones(allZones, inputs?.airplay ?? null);
@@ -477,6 +492,7 @@ export class ZoneManager {
   public async shutdown(): Promise<void> {
     await this.stateControllers.stopAll();
     this.powerManager.clearAll();
+    this.sharedPowerGroupManager.clearAll();
     await Promise.all(
       this.zoneRepo.list().map(async (ctx) => {
         const session = ctx.player.stop('shutdown');
@@ -618,6 +634,14 @@ export class ZoneManager {
     if (hasActiveLocalSession) {
       const authoritativePatch = filterAuthoritativePatchWhileLocalSessionActive(controllerId, patch);
       if (authoritativePatch) {
+        const keys = Object.keys(authoritativePatch);
+        if (keys.length === 1 && keys[0] === 'volume' && typeof authoritativePatch.volume === 'number') {
+          this.log.info('accepted external volume-only patch while local session active', {
+            zoneId,
+            controller: controllerId,
+            volume: authoritativePatch.volume,
+          });
+        }
         this.applyPatch(zoneId, authoritativePatch);
         return;
       }

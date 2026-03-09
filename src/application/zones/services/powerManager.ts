@@ -17,42 +17,42 @@ import type { ComponentLogger } from '@/shared/logging/logger';
 const execFileAsync = promisify(execFile);
 const GPIOSET_BIN = 'gpioset';
 
-type PowerSignal = 0 | 1;
+export type PowerSignal = 0 | 1;
 type TimerHandle = ReturnType<typeof setTimeout>;
 
-type NormalizedZonePowerConfig = {
+export type NormalizedPowerConfig = {
   activeModes: ReadonlySet<'play' | 'pause'>;
   onDelayMs: number;
   offDelayMs: number;
   actions: NormalizedPowerAction[];
 };
 
-type NormalizedPowerAction =
+export type NormalizedPowerAction =
   | { type: 'gpio'; config: NormalizedGpioConfig }
   | { type: 'url'; config: NormalizedUrlConfig }
   | { type: 'udp'; config: NormalizedUdpConfig }
   | { type: 'crelay'; config: NormalizedCrelayConfig };
 
-type NormalizedGpioConfig = {
+export type NormalizedGpioConfig = {
   pin: number;
   activeHigh: boolean;
   chip: string;
   gpiosetPath: string;
 };
 
-type NormalizedUrlConfig = {
+export type NormalizedUrlConfig = {
   onUrl: string;
   offUrl: string;
 };
 
-type NormalizedUdpConfig = {
+export type NormalizedUdpConfig = {
   host: string;
   port: number;
   onPayload: string;
   offPayload: string;
 };
 
-type NormalizedCrelayConfig = {
+export type NormalizedCrelayConfig = {
   serial: string | null;
   relay: string;
   binaryPath: string;
@@ -64,7 +64,7 @@ type ZoneRuntime = {
   onTimer: TimerHandle | null;
   offTimer: TimerHandle | null;
   inflight: Promise<void>;
-  config: NormalizedZonePowerConfig;
+  config: NormalizedPowerConfig;
 };
 
 export interface PowerManagerExecutor {
@@ -131,7 +131,7 @@ export class PowerManager {
 
   private setDesired(
     zoneId: number,
-    config: NormalizedZonePowerConfig,
+    config: NormalizedPowerConfig,
     desiredSignal: PowerSignal,
   ): void {
     const runtime = this.ensureRuntime(zoneId, config);
@@ -162,7 +162,7 @@ export class PowerManager {
     this.scheduleSignal(zoneId, runtime, 0, config.offDelayMs, 'offTimer');
   }
 
-  private ensureRuntime(zoneId: number, config: NormalizedZonePowerConfig): ZoneRuntime {
+  private ensureRuntime(zoneId: number, config: NormalizedPowerConfig): ZoneRuntime {
     const existing = this.zones.get(zoneId);
     if (existing) {
       return existing;
@@ -280,7 +280,7 @@ export class PowerManager {
   }
 }
 
-class SystemPowerManagerExecutor implements PowerManagerExecutor {
+export class SystemPowerManagerExecutor implements PowerManagerExecutor {
   public async execute(action: NormalizedPowerAction, signal: PowerSignal): Promise<void> {
     if (action.type === 'gpio') {
       await this.writeGpio(action.config, signal);
@@ -337,7 +337,7 @@ class SystemPowerManagerExecutor implements PowerManagerExecutor {
   }
 }
 
-function normalizePowerManagerConfig(raw: ZonePowerManagerConfig | null): NormalizedZonePowerConfig {
+export function normalizePowerManagerConfig(raw: ZonePowerManagerConfig | null): NormalizedPowerConfig {
   const config = raw ?? {};
   const actions: NormalizedPowerAction[] = [];
   const gpio = normalizeGpio(config.gpio ?? null);
@@ -379,7 +379,7 @@ function normalizeActiveModes(raw: ZonePowerManagerConfig['activeModes']): Reado
   return modes;
 }
 
-function isPowerOnMode(
+export function isPowerOnMode(
   activeModes: ReadonlySet<'play' | 'pause'>,
   mode: LoxoneZoneState['mode'],
 ): boolean {

@@ -258,7 +258,7 @@ export function createRuntime(): Runtime {
       log.info('light reinitialize requested');
       const cfg = await configPort.load();
       await contentManager.reinitialize();
-      await zoneManager.replaceAll(cfg.zones ?? [], cfg.inputs ?? null);
+      await zoneManager.replaceAll(cfg.zones ?? [], cfg.inputs ?? null, cfg.groups ?? null);
       log.info('light reinitialize complete');
       return true;
     } catch (error) {
