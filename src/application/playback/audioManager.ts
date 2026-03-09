@@ -124,6 +124,17 @@ export class AudioManager {
     this.playRequestTimes.delete(zoneId);
   }
 
+  private peekPlayRequest(zoneId: number): { requestedAt: number; uri?: string; type?: string } | null {
+    const entry = this.playRequestTimes.get(zoneId);
+    if (!entry) {
+      return null;
+    }
+    if (Date.now() - entry.requestedAt > this.playRequestMaxAgeMs) {
+      return null;
+    }
+    return entry;
+  }
+
   private claimPlayRequest(zoneId: number): { requestedAt: number; uri?: string; type?: string } | null {
     const entry = this.playRequestTimes.get(zoneId);
     if (!entry) {
@@ -716,10 +727,29 @@ export class AudioManager {
 
     const sameSource = Boolean(existing && this.isSamePlaybackSource(existing.playbackSource, effectiveSource));
     const isSpotifyPipe = sameSource && effectiveSource?.kind === 'pipe' && label.toLowerCase() === 'spotify';
+    const pendingPlayRequest = this.peekPlayRequest(zoneId);
+    const spotifyExplicitServicePlay = isSpotifyPipe && pendingPlayRequest?.type === 'serviceplay';
+    const spotifyExplicitTargetChanged =
+      spotifyExplicitServicePlay &&
+      typeof pendingPlayRequest.uri === 'string' &&
+      pendingPlayRequest.uri.length > 0 &&
+      pendingPlayRequest.uri !== existing?.playRequestUri;
     const forcePipeRestartOnTrackChange =
       sameSource &&
       effectiveSource?.kind === 'pipe' &&
-      (this.didTrackChange(existing?.metadata, metadata) || (isSpotifyPipe && existing?.state === 'paused'));
+      (
+        this.didTrackChange(existing?.metadata, metadata) ||
+        // An explicit Spotify serviceplay is a direct user track selection. Treat it as a
+        // hard track switch so we never keep streaming the old pipe under new metadata.
+        spotifyExplicitServicePlay ||
+        // A paused Spotify pipe must restart on an explicit new play request, otherwise
+        // the old pipe session can be resumed with only metadata updated.
+        (isSpotifyPipe && existing?.state !== 'playing') ||
+        // Zone state patches can update the session metadata before the actual start decision.
+        // Fall back to the pending request URI so an explicit serviceplay to a different track
+        // still restarts the engine even if metadata already looks "current".
+        spotifyExplicitTargetChanged
+      );
 
     // If we are already on the same source (e.g. track change on the same pipe),
     // keep the existing stream URLs and engine session running.
