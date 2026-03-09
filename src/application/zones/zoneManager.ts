@@ -634,6 +634,14 @@ export class ZoneManager {
     if (hasActiveLocalSession) {
       const authoritativePatch = filterAuthoritativePatchWhileLocalSessionActive(controllerId, patch);
       if (authoritativePatch) {
+        const keys = Object.keys(authoritativePatch);
+        if (keys.length === 1 && keys[0] === 'volume' && typeof authoritativePatch.volume === 'number') {
+          this.log.info('accepted external volume-only patch while local session active', {
+            zoneId,
+            controller: controllerId,
+            volume: authoritativePatch.volume,
+          });
+        }
         this.applyPatch(zoneId, authoritativePatch);
         return;
       }
