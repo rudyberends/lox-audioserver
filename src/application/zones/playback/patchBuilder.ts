@@ -254,6 +254,7 @@ export function buildQueueItemPlaybackPatch(
     qindex: index,
     qid: item.unique_id,
     type: audioHelpers.getStateFileType(),
+    duration: typeof item.duration === 'number' ? Math.max(0, Math.round(item.duration)) : 0,
   };
   if (stateAudiotype != null) {
     patch.audiotype = stateAudiotype;
@@ -281,6 +282,7 @@ export function buildMatchedOutputUriPatch(
     qindex: index,
     qid: item.unique_id,
     type: audioHelpers.getStateFileType(),
+    duration: typeof item.duration === 'number' ? Math.max(0, Math.round(item.duration)) : 0,
   };
   const stateAudiotype = audioHelpers.getStateAudiotype(ctx, item);
   if (stateAudiotype != null) {

@@ -500,19 +500,21 @@ export class AudioSession {
         this.maybeApplyOutputPacing();
         return;
       }
-      if (options.logFirstChunk !== false && !this.firstChunkLogged) {
+      if (!this.firstChunkLogged) {
         this.firstChunkLogged = true;
         if (this.firstChunkResolve) {
           this.firstChunkResolve(true);
           this.firstChunkResolve = null;
         }
-        const now = Date.now();
-        this.log.info('ffmpeg first chunk', {
-          zoneId: this.zoneId,
-          profile: this.profile,
-          bytes: aligned.length,
-          spawnToFirstChunkMs: this.startTs ? Math.max(0, now - this.startTs) : null,
-        });
+        if (options.logFirstChunk !== false) {
+          const now = Date.now();
+          this.log.info('ffmpeg first chunk', {
+            zoneId: this.zoneId,
+            profile: this.profile,
+            bytes: aligned.length,
+            spawnToFirstChunkMs: this.startTs ? Math.max(0, now - this.startTs) : null,
+          });
+        }
       }
       this.bufferChunk(aligned);
       this.recordBytes(chunk.length);

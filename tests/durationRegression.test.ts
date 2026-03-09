@@ -260,3 +260,112 @@ test('radio metadata clears duration when controllable and duration is unavailab
   store.patch(zoneId, { title: 'New', artist: 'New', duration: 0, audiotype: 1, type: 3 });
   assert.equal(store.getState(zoneId)?.duration, 0);
 });
+
+test('ZoneStateStore clears stale session metadata on audiopath boundary change', () => {
+  const zoneRepo = new ZoneRepository();
+  const zoneId = 1;
+  const metadataUpdates: any[] = [];
+  zoneRepo.set(zoneId, {
+    id: zoneId,
+    name: 'Zone',
+    sourceMac: '00:00:00:00:00:00',
+    config: {} as any,
+    state: {
+      playerid: zoneId,
+      name: 'Zone',
+      title: 'Old Title',
+      artist: 'Old Artist',
+      album: 'Old Album',
+      coverurl: 'http://example.invalid/old.jpg',
+      audiopath: 'spotify:track:old',
+      duration: 194,
+      time: 0,
+      qindex: 0,
+      queueAuthority: 'spotify',
+      plshuffle: 0,
+      plrepeat: 0,
+      volume: 50,
+      mode: 'play',
+      audiotype: 0,
+      sourceName: 'Spotify',
+      station: '',
+      parent: null,
+      type: 3,
+      clientState: 'on',
+      power: 'on',
+    },
+    queue: { items: [], shuffle: false, repeat: 0, currentIndex: 0, authority: 'spotify' },
+    queueController: {} as any,
+    inputAdapter: {} as any,
+    spotifyAdapter: {} as any,
+    metadata: {},
+    outputs: [],
+    player: {} as any,
+    outputTimingActive: false,
+    lastOutputTimingAt: 0,
+    lastZoneBroadcastAt: 0,
+    lastPositionUpdateAt: 0,
+    lastPositionValue: 0,
+    lastPlaybackErrorAt: 0,
+    activeOutputTypes: new Set(),
+    activeOutput: null,
+    activeInput: null,
+    lastMetadataDispatchAt: 0,
+    inputMode: null,
+  } as any);
+
+  const store = new ZoneStateStore(zoneRepo, {
+    isRadioAudiopath: () => false,
+    isLineInAudiopath: () => false,
+    syncGroupMembersPatch: () => {},
+    notifyOutputMetadata: () => {},
+    notifier: {
+      notifyZoneStateChanged: () => {},
+      notifyQueueUpdated: () => {},
+      notifyRoomFavoritesChanged: () => {},
+      notifyRecentlyPlayedChanged: () => {},
+      notifyRescan: () => {},
+      notifyReloadMusicApp: () => {},
+      notifyAudioSyncEvent: () => {},
+    },
+    audioManager: {
+      getSession: () => ({
+        metadata: {
+          title: 'Old Title',
+          artist: 'Old Artist',
+          album: 'Old Album',
+          coverurl: 'http://example.invalid/old.jpg',
+          audiopath: 'spotify:track:old',
+          duration: 194,
+        },
+        elapsed: 0,
+        duration: 194,
+      }),
+      updateSessionTiming: () => {},
+      updateSessionMetadata: (_zoneId: number, metadata: any) => {
+        metadataUpdates.push(metadata);
+      },
+    } as any,
+  });
+
+  store.patch(zoneId, {
+    title: 'New Title',
+    artist: 'New Artist',
+    audiopath: 'spotify:track:new',
+  });
+
+  assert.equal(metadataUpdates.length, 1);
+  assert.deepEqual(metadataUpdates[0], {
+    title: 'New Title',
+    artist: 'New Artist',
+    album: '',
+    coverurl: '',
+    duration: 0,
+    audiopath: 'spotify:track:new',
+    station: '',
+    trackId: undefined,
+    stationIndex: undefined,
+    queue: undefined,
+    queueIndex: undefined,
+  });
+});

@@ -156,6 +156,7 @@ export class ZoneStateStore {
       patch.album.trim().length > 0 &&
       patch.album.trim() !== (ctx.state.album ?? '').trim();
     const trackChanged = audiopathChanged || qidChanged || titleChanged || artistChanged || albumChanged;
+    const metadataBoundaryChanged = isStopping || audiopathChanged || qidChanged;
     // Prevent overwriting a valid duration with zero/invalid values.
     if ('duration' in patch) {
       const nextDuration = patch.duration;
@@ -217,17 +218,39 @@ export class ZoneStateStore {
         'audiopath' in patch;
       if (hasMetadataUpdate) {
         const base = session.metadata ?? { title: '', artist: '', album: '' };
+        const selectString = (
+          key: 'title' | 'artist' | 'album' | 'coverurl' | 'audiopath' | 'station',
+        ): string | undefined => {
+          if (key === 'station' && !('station' in patch)) {
+            return typeof ctx.state.station === 'string' ? ctx.state.station : '';
+          }
+          if (key in patch) {
+            const value = ctx.state[key];
+            return typeof value === 'string' ? value : '';
+          }
+          if (metadataBoundaryChanged && key !== 'station') {
+            return '';
+          }
+          const value = base[key];
+          return typeof value === 'string' ? value : undefined;
+        };
+        const selectDuration = (): number | undefined => {
+          if ('duration' in patch) {
+            return typeof ctx.state.duration === 'number' && ctx.state.duration > 0 ? ctx.state.duration : 0;
+          }
+          if (metadataBoundaryChanged) {
+            return 0;
+          }
+          return typeof base.duration === 'number' ? base.duration : undefined;
+        };
         const nextMetadata = {
-          title: ctx.state.title || base.title,
-          artist: ctx.state.artist || base.artist,
-          album: ctx.state.album || base.album,
-          coverurl: ctx.state.coverurl || base.coverurl,
-          duration:
-            typeof ctx.state.duration === 'number' && ctx.state.duration > 0
-              ? ctx.state.duration
-              : base.duration,
-          audiopath: ctx.state.audiopath || base.audiopath,
-          station: ctx.state.station || base.station,
+          title: selectString('title') ?? '',
+          artist: selectString('artist') ?? '',
+          album: selectString('album') ?? '',
+          coverurl: selectString('coverurl'),
+          duration: selectDuration(),
+          audiopath: selectString('audiopath'),
+          station: selectString('station'),
           trackId: base.trackId,
           stationIndex: base.stationIndex,
           queue: base.queue,
