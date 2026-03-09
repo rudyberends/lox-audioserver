@@ -106,7 +106,7 @@ test('shared power group respects member activeModes during pause', async () => 
   ]);
 });
 
-test('shared power group ignores group-level delays and switches immediately', async () => {
+test('shared power group applies offDelayMs only to the final OFF transition', async () => {
   const executor = new FakeExecutor();
   const manager = new SharedPowerGroupManager(noopLogger, executor);
   manager.configure(
@@ -115,7 +115,7 @@ test('shared power group ignores group-level delays and switches immediately', a
         id: 'amp-living',
         powerManager: {
           onDelayMs: 5_000,
-          offDelayMs: 5_000,
+          offDelayMs: 40,
           gpio: { enabled: true, pin: 22 },
         },
       },
@@ -133,8 +133,59 @@ test('shared power group ignores group-level delays and switches immediately', a
 
   manager.onStatePatch(1, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
   await wait(10);
+  assert.deepEqual(executor.calls, [{ type: 'gpio', signal: 1 }]);
+
   manager.onStatePatch(1, { mode: 'stop' } as any, { ...baseState, mode: 'stop' } as any);
   await wait(10);
+  assert.deepEqual(executor.calls, [{ type: 'gpio', signal: 1 }]);
+
+  await wait(50);
+
+  assert.deepEqual(executor.calls, [
+    { type: 'gpio', signal: 1 },
+    { type: 'gpio', signal: 0 },
+  ]);
+});
+
+test('shared power group cancels pending offDelayMs when another zone becomes active again', async () => {
+  const executor = new FakeExecutor();
+  const manager = new SharedPowerGroupManager(noopLogger, executor);
+  manager.configure(
+    [
+      {
+        id: 'amp-living',
+        powerManager: {
+          offDelayMs: 50,
+          gpio: { enabled: true, pin: 22 },
+        },
+      },
+    ],
+    [
+      {
+        id: 1,
+        name: 'Living',
+        sourceMac: '00:00:00:00:00:01',
+        volumes: {} as any,
+        powerManager: { powerGroupId: 'amp-living' },
+      } as any,
+      {
+        id: 2,
+        name: 'Kitchen',
+        sourceMac: '00:00:00:00:00:02',
+        volumes: {} as any,
+        powerManager: { powerGroupId: 'amp-living' },
+      } as any,
+    ],
+  );
+
+  manager.onStatePatch(1, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(10);
+  manager.onStatePatch(1, { mode: 'stop' } as any, { ...baseState, mode: 'stop' } as any);
+  await wait(20);
+  manager.onStatePatch(2, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(50);
+  manager.onStatePatch(2, { mode: 'stop' } as any, { ...baseState, mode: 'stop' } as any);
+  await wait(60);
 
   assert.deepEqual(executor.calls, [
     { type: 'gpio', signal: 1 },

@@ -16,6 +16,7 @@ type GroupRuntime = {
   config: NormalizedPowerConfig;
   desiredSignal: PowerSignal;
   currentSignal: PowerSignal | null;
+  offTimer: ReturnType<typeof setTimeout> | null;
   inflight: Promise<void>;
   activeZoneIds: Set<number>;
 };
@@ -49,6 +50,7 @@ export class SharedPowerGroupManager {
         config: normalizePowerManagerConfig(group.powerManager ?? null),
         desiredSignal: 0,
         currentSignal: null,
+        offTimer: null,
         inflight: Promise.resolve(),
         activeZoneIds: new Set<number>(),
       };
@@ -108,6 +110,12 @@ export class SharedPowerGroupManager {
   }
 
   public clearAll(): void {
+    for (const runtime of this.groups.values()) {
+      if (runtime.offTimer) {
+        clearTimeout(runtime.offTimer);
+        runtime.offTimer = null;
+      }
+    }
     this.groups.clear();
     this.zoneBindings.clear();
   }
@@ -123,10 +131,44 @@ export class SharedPowerGroupManager {
       previousDesired,
       desiredSignal,
     });
-    if (runtime.currentSignal === desiredSignal) {
+    if (desiredSignal === 1) {
+      if (runtime.offTimer) {
+        clearTimeout(runtime.offTimer);
+        runtime.offTimer = null;
+        this.log.spam('shared power group cancelled pending off timer', {
+          groupId: runtime.id,
+        });
+      }
+      if (runtime.currentSignal === 1) {
+        return;
+      }
+      this.applySignal(runtime, 1);
       return;
     }
-    this.applySignal(runtime, desiredSignal);
+    if (runtime.currentSignal === 0) {
+      return;
+    }
+    if (runtime.offTimer) {
+      clearTimeout(runtime.offTimer);
+      runtime.offTimer = null;
+    }
+    const delayMs = runtime.config.offDelayMs;
+    if (delayMs <= 0) {
+      this.applySignal(runtime, 0);
+      return;
+    }
+    this.log.debug('shared power group scheduled off signal', {
+      groupId: runtime.id,
+      delayMs,
+    });
+    runtime.offTimer = setTimeout(() => {
+      runtime.offTimer = null;
+      const fresh = this.groups.get(runtime.id);
+      if (!fresh || fresh.desiredSignal !== 0) {
+        return;
+      }
+      this.applySignal(fresh, 0);
+    }, delayMs);
   }
 
   private applySignal(runtime: GroupRuntime, signal: PowerSignal): void {
