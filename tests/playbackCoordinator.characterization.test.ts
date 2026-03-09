@@ -763,6 +763,70 @@ test('duplicate end_of_track signals advance queue only once', async () => {
   assert.equal(ctx.queueController.currentIndex(), 1);
 });
 
+test('end_of_track cooldown blocks a second queue advance after current item changes', async () => {
+  const { coordinator, ctx } = createHarness();
+  ctx.queueController.setItems(
+    [
+      makeQueueItem({ title: 'One', audiopath: 'spotify:track:one', unique_id: 'id-1' }),
+      makeQueueItem({ title: 'Two', audiopath: 'spotify:track:two', unique_id: 'id-2' }),
+      makeQueueItem({ title: 'Three', audiopath: 'spotify:track:three', unique_id: 'id-3' }),
+    ],
+    0,
+  );
+  ctx.queue.authority = 'local';
+  ctx.inputMode = 'queue';
+  ctx.activeInput = 'queue';
+
+  let startCount = 0;
+  (coordinator as any).startQueuePlayback = async (_ctx: ZoneContext, audiopath: string) => {
+    startCount += 1;
+    return {
+      zoneId: ctx.id,
+      source: audiopath,
+      metadata: { title: audiopath, artist: 'Artist', album: 'Album', audiopath },
+      stream: { id: `stream-${startCount}`, url: `http://example.com/stream-${startCount}`, coverUrl: '', createdAt: Date.now() },
+      state: 'playing',
+      elapsed: 0,
+      duration: 0,
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      playbackSource: null,
+    } as PlaybackSession;
+  };
+
+  await (coordinator as any).handleEndOfTrack(ctx);
+  assert.equal(startCount, 1);
+  assert.equal(ctx.queueController.currentIndex(), 1);
+
+  await (coordinator as any).handleEndOfTrack(ctx);
+  assert.equal(startCount, 1);
+  assert.equal(ctx.queueController.currentIndex(), 1);
+});
+
+test('playback error clears stale spotify metadata fields', () => {
+  const { coordinator, ctx } = createHarness();
+  ctx.state = {
+    ...ctx.state,
+    title: 'Spotify Track',
+    artist: 'Spotify Artist',
+    album: 'Spotify Album',
+    coverurl: 'http://example.com/cover.jpg',
+    audiopath: 'spotify:track:stale',
+    sourceName: 'Spotify',
+    mode: 'play',
+  };
+
+  coordinator.handlePlaybackError(ctx.id, 'spotify no pcm after 1500ms', 'output');
+
+  assert.equal(ctx.state.mode, 'stop');
+  assert.equal(ctx.state.coverurl, '');
+  assert.equal(ctx.state.audiopath, '');
+  assert.equal(ctx.state.artist, '');
+  assert.equal(ctx.state.album, '');
+  assert.equal(ctx.state.duration, 0);
+  assert.equal(ctx.state.sourceName, ctx.sourceMac);
+});
+
 test('queue next/prev advances qindex and qid', async () => {
   const { coordinator, ctx, patches, playbackQueue } = createHarness();
   const items = [

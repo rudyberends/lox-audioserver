@@ -99,7 +99,10 @@ export class PlaybackCoordinator {
     number,
     { pending: number; running: boolean; timer?: NodeJS.Timeout }
   >();
-  private readonly endOfTrackAdvanceState = new Map<number, { key: string; at: number }>();
+  private readonly endOfTrackAdvanceState = new Map<
+    number,
+    { key: string; at: number; cooldownUntil: number; inFlight: boolean }
+  >();
   private readonly queueStepCoalesceMs = 25;
   private readonly musicAssistantInputHandlers: MusicAssistantInputHandlers = {
     startPlayback: (zoneId: number, label: string, source: PlaybackSource, metadata?: PlaybackMetadata) => {
@@ -1351,6 +1354,21 @@ export class PlaybackCoordinator {
     const currentKey = `${ctx.queueController.currentIndex()}::${currentAudiopath}`;
     const previous = this.endOfTrackAdvanceState.get(ctx.id);
     const now = Date.now();
+    if (previous?.inFlight) {
+      this.log.debug('ignoring end_of_track while queue advance is in flight', {
+        zoneId: ctx.id,
+        key: previous.key,
+      });
+      return;
+    }
+    if (previous && now < previous.cooldownUntil) {
+      this.log.debug('ignoring end_of_track during queue advance cooldown', {
+        zoneId: ctx.id,
+        key: currentKey,
+        previousKey: previous.key,
+      });
+      return;
+    }
     if (previous && previous.key === currentKey && now - previous.at < 1500) {
       this.log.debug('ignoring duplicate end_of_track queue advance', {
         zoneId: ctx.id,
@@ -1358,39 +1376,54 @@ export class PlaybackCoordinator {
       });
       return;
     }
-    this.endOfTrackAdvanceState.set(ctx.id, { key: currentKey, at: now });
-    if (this.radioParadise.isRadioParadiseAudiopath(currentAudiopath) && this.radioParadise.canSkip(ctx.id)) {
-      const resolved = await this.radioParadise.resolveNextBlock(ctx.id);
-      if (resolved) {
-        const metadata = this.buildRadioParadiseMetadata(ctx, resolved);
-        const session = await this.startQueuePlayback(ctx, resolved.url, metadata, {
-          startAtSec: resolved.startAtSec,
-          skipExternalStop: true,
-        });
-      if (session && resolved.track) {
-        this.updateRadioMetadata(ctx.id, {
-          title: resolved.track.title,
-          artist: resolved.track.artist,
-          coverurl: resolved.track.coverurl,
-          duration: resolved.track.durationSec,
-          controllable: true,
-        });
+    this.endOfTrackAdvanceState.set(ctx.id, {
+      key: currentKey,
+      at: now,
+      cooldownUntil: now + 1500,
+      inFlight: true,
+    });
+    try {
+      if (this.radioParadise.isRadioParadiseAudiopath(currentAudiopath) && this.radioParadise.canSkip(ctx.id)) {
+        const resolved = await this.radioParadise.resolveNextBlock(ctx.id);
+        if (resolved) {
+          const metadata = this.buildRadioParadiseMetadata(ctx, resolved);
+          const session = await this.startQueuePlayback(ctx, resolved.url, metadata, {
+            startAtSec: resolved.startAtSec,
+            skipExternalStop: true,
+          });
+          if (session && resolved.track) {
+            this.updateRadioMetadata(ctx.id, {
+              title: resolved.track.title,
+              artist: resolved.track.artist,
+              coverurl: resolved.track.coverurl,
+              duration: resolved.track.durationSec,
+              controllable: true,
+            });
+          }
+          return;
+        }
       }
-        return;
+      await handleEndOfTrackTransition({
+        coordinator: {
+          getZone: (id) => this.zoneRepo.get(id),
+          isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
+          startQueuePlayback: this.startQueuePlayback.bind(this),
+          applyPatch: this.applyPatch,
+          dispatchOutputs: this.dispatchOutputs.bind(this),
+          recentsRecord: this.recentsManager.record.bind(this.recentsManager),
+          audioHelpers: this.audioHelpers,
+        },
+        ctx,
+      });
+    } finally {
+      const latest = this.endOfTrackAdvanceState.get(ctx.id);
+      if (latest) {
+        this.endOfTrackAdvanceState.set(ctx.id, {
+          ...latest,
+          inFlight: false,
+        });
       }
     }
-    await handleEndOfTrackTransition({
-      coordinator: {
-        getZone: (id) => this.zoneRepo.get(id),
-        isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
-        startQueuePlayback: this.startQueuePlayback.bind(this),
-        applyPatch: this.applyPatch,
-        dispatchOutputs: this.dispatchOutputs.bind(this),
-        recentsRecord: this.recentsManager.record.bind(this.recentsManager),
-        audioHelpers: this.audioHelpers,
-      },
-      ctx,
-    });
   }
 
   private async handleRadioParadiseSkip(ctx: ZoneContext, delta: 1 | -1): Promise<void> {
