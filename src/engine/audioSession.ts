@@ -442,7 +442,9 @@ export class AudioSession {
     });
     this.startTs = Date.now();
     const proc = this.spawnFfmpeg(args, {
-      restartOnFailure: this.source.kind === 'url' && this.source.restartOnFailure === true,
+      restartOnFailure:
+        (this.source.kind === 'url' && this.source.restartOnFailure === true) ||
+        this.source.kind === 'pipe',
       logFirstChunk: true,
     });
 
