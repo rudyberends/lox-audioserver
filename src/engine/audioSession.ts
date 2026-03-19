@@ -1160,15 +1160,22 @@ export class AudioSession {
     this.backpressureCount = 0;
     this.stdoutPaused = false;
     this.pacingPaused = false;
-    for (const subscriber of this.subscribers) {
-      if (subscriber.writableEnded) {
-        continue;
+    // When suppressTermination is true, ffmpeg is restarting internally (restartOnFailure).
+    // Keep subscribers alive so the sync stream and downstream clients (e.g. Squeezelite)
+    // stay connected and receive audio from the new ffmpeg process without interruption.
+    if (!suppressTermination) {
+      for (const subscriber of this.subscribers) {
+        if (subscriber.writableEnded) {
+          continue;
+        }
+        if (this.discardSubscribersOnStop) {
+          subscriber.destroy();
+        } else {
+          subscriber.end();
+        }
       }
-      if (this.discardSubscribersOnStop) {
-        subscriber.destroy();
-      } else {
-        subscriber.end();
-      }
+      this.subscribers.clear();
+      this.discardSubscribersOnStop = false;
     }
     if (this.debugTapStream) {
       try {
@@ -1178,8 +1185,6 @@ export class AudioSession {
       }
       this.debugTapStream = undefined;
     }
-    this.subscribers.clear();
-    this.discardSubscribersOnStop = false;
     if (!suppressTermination) {
       this.onTerminated();
     }
