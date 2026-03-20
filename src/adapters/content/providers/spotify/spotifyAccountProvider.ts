@@ -362,19 +362,19 @@ export class SpotifyAccountProvider {
     if (key === 'root' || key === 'start') {
       return { type: 'root' };
     }
-    if (key.startsWith('playlist:')) {
+    if (key.startsWith('playlist:') || key.startsWith('spotify:playlist:')) {
       return { type: 'playlistItem', id: tail };
     }
-    if (key.startsWith('album:')) {
+    if (key.startsWith('album:') || key.startsWith('spotify:album:')) {
       return { type: 'albumItem', id: tail };
     }
-    if (key.startsWith('artist:')) {
+    if (key.startsWith('artist:') || key.startsWith('spotify:artist:')) {
       return { type: 'artistItem', id: tail };
     }
-    if (key.startsWith('show:')) {
+    if (key.startsWith('show:') || key.startsWith('spotify:show:')) {
       return { type: 'showItem', id: tail };
     }
-    if (key.startsWith('category:')) {
+    if (key.startsWith('category:') || key.startsWith('spotify:category:')) {
       return { type: 'category', id: tail };
     }
     if (key === 'playlist' || key === 'playlists' || key === '3') {
