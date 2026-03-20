@@ -473,10 +473,9 @@ export class SpotifyAccountProvider {
     const items = Array.isArray(data?.items) ? data!.items : [];
     const visible = items.filter((pl) => {
       const playlistId = typeof pl?.id === 'string' ? pl.id.trim() : '';
-      if (!playlistId) return false;
-      return this.isOwnedPlaylist(pl);
+      return Boolean(playlistId);
     });
-    return { items: visible.map((pl) => this.mapPlaylist(pl)), total: visible.length };
+    return { items: visible.map((pl) => this.mapPlaylist(pl)), total: data?.total ?? visible.length };
   }
 
   private isOwnedPlaylist(playlist: any): boolean {
