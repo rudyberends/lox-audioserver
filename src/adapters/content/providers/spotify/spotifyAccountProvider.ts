@@ -386,7 +386,7 @@ export class SpotifyAccountProvider {
     if (key === 'artist' || key === 'artists' || key === '6') {
       return { type: 'artists' };
     }
-    if (key === 'liked' || key.includes('liked-songs') || key.includes('favorites') || key === '4') {
+    if (key === 'liked' || key.includes('liked-songs') || key.includes('favorites') || key === '4' || key === 'user:collection') {
       return { type: 'liked' };
     }
     if (key === 'podcasts' || key === 'podcast' || key.includes('shows') || key === '7') {
