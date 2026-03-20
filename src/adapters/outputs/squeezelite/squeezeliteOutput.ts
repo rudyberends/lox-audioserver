@@ -567,11 +567,12 @@ export class SqueezeliteOutput implements ZoneOutput {
       result = ensureQueryParam(result, 'sync', syncId);
       result = ensureQueryParam(result, 'expect', String(groupInfo.expectedCount));
     }
-    // Alerts are often very short (especially TTS). Squeezelite can require a sizable buffer before it becomes
-    // audible, particularly right after a server restart. Route alerts through the sync-stream handler with
-    // `expect=1` so node-slimproto uses lower buffering thresholds (64KB vs 200KB).
-    if (!groupInfo?.grouped && (session.metadata?.audiopath ?? '').startsWith('alerts://')) {
-      const syncId = `alert-${session.stream?.id ?? `${this.zoneId}-current`}`;
+    // Use `expect=1` for all non-grouped playback so node-slimproto uses a lower client-side input
+    // buffer threshold (32KB vs 200KB). This reduces startup silence from ~2-5s to ~0.5s on track
+    // changes (e.g. Spotify). The server ignores `expect` values < 2 (parseSyncParams returns null),
+    // so this only affects the SlimProto client's buffering threshold, not server sync coordination.
+    if (!groupInfo?.grouped) {
+      const syncId = `${this.zoneId}-${session.stream?.id ?? 'current'}`;
       result = ensureQueryParam(result, 'sync', syncId);
       result = ensureQueryParam(result, 'expect', '1');
     }
