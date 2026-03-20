@@ -56,6 +56,8 @@ class SpotifyConnectInstance {
   private nativeChannels = 2;
   private nativeStream: PassThrough | null = null;
   private nativeStreamStop?: () => void;
+  // Set during getDirectPlaybackSource() to protect against concurrent Connect stop events.
+  private directPlaybackPending = false;
   private nativeSession: LibrespotSession | null = null;
   private nativeSessionAccessToken: string | null = null;
   private nativeSessionClientId: string | null = null;
@@ -406,6 +408,8 @@ class SpotifyConnectInstance {
       !this.hasActiveSession &&
       !this.stopping &&
       !this.restarting &&
+      !this.nativeStreamStop &&
+      !this.directPlaybackPending &&
       shouldBootstrapSession
     ) {
       if (resolvedTrackId) {
@@ -573,6 +577,10 @@ class SpotifyConnectInstance {
     }
 
     this.stopNativeStream(false);
+    // Guard against Connect 'stopped' events that arrive while the new stream is being set up.
+    // These are usually caused by the native session and the Connect host sharing a device ID on
+    // Spotify's servers — when the native track starts, Spotify may stop the Connect host.
+    this.directPlaybackPending = true;
 
     const nativeStream = await getNativeLibrespotStream({
       uri: spotifyUri,
@@ -623,6 +631,7 @@ class SpotifyConnectInstance {
     });
 
     if (!nativeStream) {
+      this.directPlaybackPending = false;
       this.log.warn('native librespot stream unavailable', { zoneId: this.zoneId });
       if (this.nativeStream) {
         try {
@@ -645,6 +654,7 @@ class SpotifyConnectInstance {
         /* ignore */
       }
     };
+    this.directPlaybackPending = false;
     return {
       kind: 'pipe',
       path: this.pipeId,
@@ -775,6 +785,23 @@ class SpotifyConnectInstance {
 
   private teardownPlaybackSession(keepBlock = false): void {
     const shouldStop = this.hasActiveSession && (this.isActive || this.isPaused);
+    // When this is called from a Connect 'stopped' event (keepBlock=true) and a native (direct)
+    // stream is already in progress, the stop is almost certainly a Spotify device-conflict
+    // artifact: the native session and the Connect host share a device ID, so when the native
+    // track starts, Spotify stops the Connect host. Killing the audio session here would produce
+    // silence. Just update internal state and leave the stream/session running.
+    const hasDirectPlayback = Boolean(this.nativeStreamStop || this.directPlaybackPending);
+    if (keepBlock && hasDirectPlayback) {
+      this.log.debug('Connect stop event suppressed during native stream playback', {
+        zoneId: this.zoneId,
+        directPlaybackPending: this.directPlaybackPending,
+      });
+      this.hasActiveSession = false;
+      this.isPaused = false;
+      this.isActive = false;
+      this.currentMetadata = null;
+      return;
+    }
     if (shouldStop) {
       this.controller.stopPlayback(this.zoneId);
     }
