@@ -156,6 +156,17 @@ export class SpotifyConnectInputController implements ZoneOutput {
         zoneId: this.zoneId,
         uri: targetUri,
       });
+      if (target) {
+        this.publishLocalQueueState(target.uri, session);
+        this.lastSyncedQueueSignature = null;
+        const pipeAuth = await this.resolveAuth(target.accountId);
+        if (pipeAuth) {
+          this.lastAccountId = pipeAuth.accountId;
+          setTimeout(() => {
+            void this.syncQueue(pipeAuth.token, pipeAuth.accountId, true);
+          }, 2000);
+        }
+      }
       return;
     }
     const now = Date.now();
@@ -185,6 +196,7 @@ export class SpotifyConnectInputController implements ZoneOutput {
       return;
     }
     this.lastPlayAt = now;
+    this.lastSyncedQueueSignature = null;
     if (uri) {
       this.lastPlayUri = uri;
     }
