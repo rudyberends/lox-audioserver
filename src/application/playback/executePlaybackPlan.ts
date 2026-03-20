@@ -88,13 +88,12 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
     let playbackSource: PlaybackSource | null = null;
     if (!offloadEnabled) {
       const seekPositionMs = normalizedStartAt ? Math.max(0, Math.round(normalizedStartAt * 1000)) : 0;
-      playbackSource =
-        (await inputs.getPlaybackSourceForUri(
-          ctx.id,
-          normalizeSpotifyAudiopath(plan.audiopath),
-          seekPositionMs,
-          accountId,
-        )) ?? inputs.getPlaybackSource(ctx.id);
+      playbackSource = await inputs.getPlaybackSourceForUri(
+        ctx.id,
+        normalizeSpotifyAudiopath(plan.audiopath),
+        seekPositionMs,
+        accountId,
+      );
     }
     log.debug('startQueuePlayback spotify', {
       zoneId: ctx.id,
