@@ -73,6 +73,7 @@ export class AudioSession {
   private firstChunkLogged = false;
   private firstChunkPromise: Promise<boolean> | null = null;
   private firstChunkResolve: ((value: boolean) => void) | null = null;
+  private chainedFirstChunkResolve: ((value: boolean) => void) | null = null;
   private bytesSinceLog = 0;
   private lastLogTs = 0;
   private totalBytes = 0;
@@ -212,8 +213,17 @@ export class AudioSession {
     this.lastLogTs = 0;
     this.totalBytes = 0;
     this.firstChunkLogged = false;
+    const chainedResolve = this.chainedFirstChunkResolve;
+    this.chainedFirstChunkResolve = null;
     this.firstChunkPromise = new Promise((resolve) => {
-      this.firstChunkResolve = resolve;
+      if (chainedResolve) {
+        this.firstChunkResolve = (ok: boolean) => {
+          resolve(ok);
+          chainedResolve(ok);
+        };
+      } else {
+        this.firstChunkResolve = resolve;
+      }
     });
     this.log.info('audio session buffer config', {
       zoneId: this.zoneId,
@@ -1144,10 +1154,14 @@ export class AudioSession {
     this.clearPacingTimer();
     this.detachPipeSourceListeners();
     this.directPipeMode = false;
-    if (this.firstChunkResolve) {
+    if (suppressTermination && this.firstChunkResolve) {
+      // ffmpeg is restarting; chain existing waiters to the next promise so the position
+      // ticker does not start prematurely before the restarted process produces output.
+      this.chainedFirstChunkResolve = this.firstChunkResolve;
+    } else if (this.firstChunkResolve) {
       this.firstChunkResolve(false);
-      this.firstChunkResolve = null;
     }
+    this.firstChunkResolve = null;
     this.firstChunkPromise = null;
     if (this.process) {
       this.process.removeAllListeners();
