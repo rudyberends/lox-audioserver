@@ -193,11 +193,22 @@ export class SqueezeliteOutput implements ZoneOutput {
     await player.volumeSet(clamped);
   }
 
-  public getPreferredOutput(): { profile: 'flac'; sampleRate: number; channels: number; prebufferBytes: number } {
+  public getPreferredOutput(): { profile: 'flac' | 'mp3'; sampleRate: number; channels: number; prebufferBytes: number } {
     // Squeezelite can report sporadic underruns when the HTTP stream stalls briefly (WiFi jitter, GC, CPU spikes).
     // A larger rolling prebuffer reduces audible dropouts at the cost of a bit more startup latency/memory.
     // Prefer FLAC to avoid lossy re-encode and improve group sync stability.
-    return { profile: 'flac', sampleRate: 44100, channels: 2, prebufferBytes: 256 * 1024 };
+    // SlimProto identifies FLAC as 'flc' in the HELO supportedCodecs list. If the connected player
+    // does not advertise 'flc', fall back to MP3 which is universally supported.
+    const player = this.resolvePlayer();
+    const codecs = player?.supportedCodecs ?? [];
+    const supportsFlac = !player || codecs.includes('flc');
+    if (!supportsFlac) {
+      this.log.info('squeezelite player does not support flac; using mp3', {
+        zoneId: this.zoneId,
+        supportedCodecs: codecs,
+      });
+    }
+    return { profile: supportsFlac ? 'flac' : 'mp3', sampleRate: 44100, channels: 2, prebufferBytes: 256 * 1024 };
   }
 
   public getHttpPreferences(): HttpPreferences {
