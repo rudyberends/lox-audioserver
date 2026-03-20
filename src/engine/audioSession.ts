@@ -882,7 +882,7 @@ export class AudioSession {
         this.source.kind === 'pipe' ? this.source.channels ?? this.outputSettings.channels : null;
       const pipeSourceFormat = this.source.kind === 'pipe' ? this.source.format ?? 's16le' : null;
       const canBypassResampleForPipe =
-        this.profile === 'pcm' &&
+        (this.profile === 'pcm' || this.profile === 'flac') &&
         this.source.kind === 'pipe' &&
         pipeSourceFormat === 's16le' &&
         pipeSourceSampleRate === this.outputSettings.sampleRate &&
