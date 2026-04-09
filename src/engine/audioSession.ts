@@ -350,8 +350,12 @@ export class AudioSession {
       // When pacing is enabled, apply -re so ffmpeg throttles to real-time. Without it,
       // ffmpeg may read from the upstream pipe as fast as possible which makes the
       // Sendspin timestamps run ahead of wall clock and causes the client to speed up.
+      // buildLowLatencyArgs() includes -probesize 32k -analyzeduration 0 even though the
+      // format is explicitly specified via -f. This is intentional: even with an explicit
+      // format, ffmpeg still runs an analyze phase that buffers ~1.1 s of PCM before
+      // producing any output. Setting analyzeduration=0 reduces that to ~50 ms.
       const inputArgs = [
-        ...this.buildLowLatencyArgs({ includeProbe: false }),
+        ...this.buildLowLatencyArgs(),
         ...(paceInput ? ['-re'] : []),
         '-f',
         fmt,
@@ -408,6 +412,7 @@ export class AudioSession {
             format: fmt,
             sampleRate: sr,
             channels: ch,
+            spawnToFirstInputMs: this.startTs ? Math.max(0, Date.now() - this.startTs) : null,
           });
         }
         const now = Date.now();
@@ -606,12 +611,16 @@ export class AudioSession {
     return 'error';
   }
 
-  private buildLowLatencyArgs(options: { includeProbe?: boolean } = {}): string[] {
-    const args = ['-fflags', 'nobuffer'];
-    if (options.includeProbe !== false) {
-      args.push('-probesize', '32k', '-analyzeduration', '0');
-    }
-    return args;
+  // All three flags are required for truly low-latency pipe/stream sources:
+  //   -fflags nobuffer      – disable ffmpeg's input read-ahead buffer
+  //   -probesize 32k        – limit format probing to 32 KB (default 5 MB)
+  //   -analyzeduration 0    – skip the stream analysis phase entirely
+  // Even when the input format is explicitly specified with -f, ffmpeg still runs an
+  // analyze phase that reads ~200 KB (~1.1 s of 44.1 kHz stereo PCM) before producing
+  // any output. -fflags nobuffer alone does NOT suppress this — analyzeduration=0 is
+  // required to reduce the startup delay to ~50 ms.
+  private buildLowLatencyArgs(): string[] {
+    return ['-fflags', 'nobuffer', '-probesize', '32k', '-analyzeduration', '0'];
   }
 
   private buildBufferedArgs(): string[] {
@@ -837,7 +846,7 @@ export class AudioSession {
       const format = this.source.format ?? 's16le';
       const paceInput = this.source.realTime !== false;
       return [
-        ...this.buildLowLatencyArgs({ includeProbe: false }),
+        ...this.buildLowLatencyArgs(),
         ...(paceInput ? ['-re'] : []),
         '-f',
         format,
@@ -981,7 +990,9 @@ export class AudioSession {
           '-acodec',
           'flac',
           '-compression_level',
-          '5',
+          '0',
+          '-frame_size',
+          '512',
           '-ar',
           String(sampleRate),
           '-ac',

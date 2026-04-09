@@ -552,7 +552,11 @@ class SpotifyConnectInstance {
     seekPositionMs = 0,
   ): Promise<PlaybackSource | null> {
     const manager = this.spotifyManagers.get();
-    const accessToken = await manager?.getAccessTokenForAccount(this.accountId ?? undefined, true);
+    // Do not force-refresh the token on every track start. Forcing a refresh returns a new token
+    // value which causes ensureNativeSession() to close and recreate the librespot session,
+    // adding 1-3s of Spotify reconnect latency. The cached token is valid for ~1h; let it expire
+    // naturally. Access tokens are only needed when the session itself must be recreated.
+    const accessToken = await manager?.getAccessTokenForAccount(this.accountId ?? undefined);
     if (!accessToken) {
       this.log.warn('spotify stream aborted; missing access token', {
         zoneId: this.zoneId,
@@ -847,11 +851,16 @@ class SpotifyConnectInstance {
         ? crypto.createHash('sha1').update(credentialsJson).digest('hex')
         : null;
 
-    // Avoid churning sessions for consecutive tracks on the same token/credentials + device.
+    // Avoid churning sessions for consecutive tracks on the same credentials + device.
+    // When stored credentials (credentialsJson) are available, librespot authenticates via the
+    // credentials blob, not the OAuth access token. Token rotation should not invalidate the
+    // session; only a credentials change warrants a reconnect.
+    const authMatches = credHash !== null
+      ? this.nativeSessionCredentialsHash === credHash
+      : this.nativeSessionAccessToken === (accessToken ?? null);
     if (
       this.nativeSession &&
-      this.nativeSessionAccessToken === (accessToken ?? null) &&
-      this.nativeSessionCredentialsHash === credHash &&
+      authMatches &&
       this.nativeSessionClientId === (clientId ?? null) &&
       this.nativeSessionDeviceName === deviceName
     ) {
