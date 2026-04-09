@@ -246,6 +246,7 @@ export class ZoneManager {
       applyPatch: (zoneId, patch, force) => this.applyPatch(zoneId, patch, force),
       log: this.log,
       audioHelpers,
+      audioManager: this.audioManager,
     });
   }
 

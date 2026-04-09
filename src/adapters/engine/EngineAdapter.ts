@@ -168,6 +168,9 @@ export class EngineAdapter implements EnginePort {
       prebufferBytes: Number.isFinite(primary.prebufferBytes)
         ? primary.prebufferBytes
         : audioOutputSettings.prebufferBytes,
+      fixedGainDb: Number.isFinite(primary.fixedGainDb)
+        ? (primary.fixedGainDb as number)
+        : audioOutputSettings.fixedGainDb,
     };
     return { profiles, outputSettings };
   }

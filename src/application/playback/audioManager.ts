@@ -94,6 +94,7 @@ export class AudioManager {
   private readonly zoneProfileOverrides = new Map<number, OutputProfile>();
   private readonly zoneInputPreferences = new Map<number, { fileRealTime?: boolean; urlRealTime?: boolean }>();
   private readonly zonePlaybackPreDelayMs = new Map<number, number>();
+  private readonly zoneTransientGainDb = new Map<number, number>();
   private isZonePowerOnResolver: ((zoneId: number) => boolean) | null = null;
   private readonly zoneHttpPreferences = new Map<
     number,
@@ -645,6 +646,9 @@ export class AudioManager {
       channels: outputSettings.channels,
       pcmBitDepth: outputSettings.pcmBitDepth,
       prebufferBytes: outputSettings.prebufferBytes,
+      ...(Number.isFinite(outputSettings.fixedGainDb) && outputSettings.fixedGainDb !== 0
+        ? { fixedGainDb: outputSettings.fixedGainDb }
+        : {}),
     }));
   }
 
@@ -1151,13 +1155,28 @@ export class AudioManager {
     this.isZonePowerOnResolver = resolver;
   }
 
+  public setTransientGainDb(zoneId: number, gainDb: number | null): void {
+    if (gainDb === null) {
+      this.zoneTransientGainDb.delete(zoneId);
+    } else {
+      this.zoneTransientGainDb.set(zoneId, gainDb);
+    }
+  }
+
   public getEffectiveOutputSettings(zoneId: number): AudioOutputSettings {
     const outputOverride = this.zoneOutputOverrides.get(zoneId);
+    let result: AudioOutputSettings;
     if (outputOverride && Object.keys(outputOverride).length > 0) {
       const { profile: _ignoredProfile, ...rest } = outputOverride as any;
-      return { ...audioOutputSettings, ...(rest as Partial<AudioOutputSettings>) };
+      result = { ...audioOutputSettings, ...(rest as Partial<AudioOutputSettings>) };
+    } else {
+      result = audioOutputSettings;
     }
-    return audioOutputSettings;
+    const transientGain = this.zoneTransientGainDb.get(zoneId);
+    if (transientGain !== undefined) {
+      result = { ...result, fixedGainDb: (result.fixedGainDb ?? 0) + transientGain };
+    }
+    return result;
   }
 
   public setHttpPreferences(

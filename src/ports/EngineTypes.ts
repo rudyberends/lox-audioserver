@@ -87,6 +87,7 @@ export type EngineOutputSpec = {
   channels: number;
   pcmBitDepth?: 16 | 24 | 32;
   prebufferBytes: number;
+  fixedGainDb?: number;
   http?: { userAgent?: string; timeoutMs?: number; headers?: Record<string, string> } | null;
 };
 

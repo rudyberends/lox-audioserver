@@ -1,5 +1,5 @@
 import type { ComponentLogger } from '@/shared/logging/logger';
-import type { PlaybackMetadata } from '@/application/playback/audioManager';
+import type { AudioManager, PlaybackMetadata } from '@/application/playback/audioManager';
 import type { AlertMediaResource } from '@/application/alerts/types';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import type { AlertSnapshot, ZoneContext } from '@/application/zones/internal/zoneTypes';
@@ -10,6 +10,7 @@ import { PlaybackCoordinator } from '@/application/zones/PlaybackCoordinator';
 import { ZoneRepository } from '@/application/zones/ZoneRepository';
 
 const MIN_ALERT_DURATION_MS = 20000;
+const TTS_FIXED_GAIN_DB = 6;
 // Keep alerts playing long enough for slower outputs to actually become audible.
 // This is a safety net; we also try to reduce output buffering for alerts where possible.
 const MIN_ALERT_AUDIBLE_MS = 2500;
@@ -24,6 +25,7 @@ type AlertsCoordinatorDeps = {
   applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>, force?: boolean) => void;
   log: ComponentLogger;
   audioHelpers: ZoneAudioHelpers;
+  audioManager: AudioManager;
 };
 
 export class AlertsCoordinator {
@@ -36,6 +38,7 @@ export class AlertsCoordinator {
   ) => void;
   private readonly log: ComponentLogger;
   private readonly audioHelpers: ZoneAudioHelpers;
+  private readonly audioManager: AudioManager;
 
   constructor(deps: AlertsCoordinatorDeps) {
     this.zoneRepo = deps.zones;
@@ -43,6 +46,7 @@ export class AlertsCoordinator {
     this.applyPatch = deps.applyPatch;
     this.log = deps.log;
     this.audioHelpers = deps.audioHelpers;
+    this.audioManager = deps.audioManager;
   }
 
   public async startAlert(
@@ -116,6 +120,10 @@ export class AlertsCoordinator {
 	      station: '',
 	    };
 
+    if (/tts/i.test(type)) {
+      this.audioManager.setTransientGainDb(zoneId, TTS_FIXED_GAIN_DB);
+    }
+
     const session = ctx.player.playUri(playUrl, metadata);
     if (!session) {
       this.log.warn('alert playback skipped; no session', { zoneId, type });
@@ -165,6 +173,7 @@ export class AlertsCoordinator {
     if (activeAlert.stopTimer) {
       clearTimeout(activeAlert.stopTimer);
     }
+    this.audioManager.setTransientGainDb(zoneId, null);
     ctx.alert = undefined;
 
     try {
