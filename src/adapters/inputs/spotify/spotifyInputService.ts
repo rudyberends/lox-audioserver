@@ -423,11 +423,14 @@ class SpotifyConnectInstance {
 
     if (durationSec !== undefined || positionSec !== undefined) {
       const playerState = this.resolvePlayer(this.zoneId)?.getState?.();
-      const fallbackElapsed = playerState?.time ?? 0;
-      const fallbackDuration = playerState?.duration ?? this.currentMetadata?.duration ?? 0;
-      const nextElapsed = positionSec ?? fallbackElapsed;
-      const nextDuration = durationSec ?? fallbackDuration;
-      this.controller.updateTiming(this.zoneId, nextElapsed, nextDuration);
+      // Don't forward timing while paused — same reason as in getDirectPlaybackSource.
+      if (playerState?.mode !== 'paused') {
+        const fallbackElapsed = playerState?.time ?? 0;
+        const fallbackDuration = playerState?.duration ?? this.currentMetadata?.duration ?? 0;
+        const nextElapsed = positionSec ?? fallbackElapsed;
+        const nextDuration = durationSec ?? fallbackDuration;
+        this.controller.updateTiming(this.zoneId, nextElapsed, nextDuration);
+      }
     }
 
     if (!this.hasActiveSession) {
@@ -622,12 +625,22 @@ class SpotifyConnectInstance {
             ? Math.max(0, Math.round(ev.durationMs / 1000))
             : undefined;
         if (ev.type === 'error') {
-          const message =
-            typeof ev.errorMessage === 'string' && ev.errorMessage.length > 0
-              ? ev.errorMessage
-              : typeof ev.errorCode === 'string' && ev.errorCode.length > 0
-                ? ev.errorCode
-                : 'playback failed';
+          const errorCode = typeof ev.errorCode === 'string' ? ev.errorCode : '';
+          const errorMsg = typeof ev.errorMessage === 'string' ? ev.errorMessage : '';
+          const isEndOfTrack =
+            errorCode.includes('end_of_track') || errorMsg.includes('end_of_track');
+          // librespot fires "end_of_track before pcm" whenever the download finishes,
+          // because last_duration_ms is always None in the stream_track Rust path.
+          // This happens during pause (librespot keeps downloading at 1x while ffmpeg is
+          // blocked) and also immediately after resume (the remaining download completes).
+          // Never treat this as a queue-advance error — just clean up the handle and let
+          // the PassThrough buffer drain naturally. Track completion is signalled by the
+          // squeezelite output when ffmpeg reads the last byte and exits cleanly.
+          if (isEndOfTrack) {
+            this.stopNativeStream(false);
+            return;
+          }
+          const message = errorMsg.length > 0 ? errorMsg : errorCode.length > 0 ? errorCode : 'playback failed';
           this.notifyOutputError(this.zoneId, `spotify ${message}`);
           this.stopNativeStream(true);
           void this.closeNativeSession('stream_error');
@@ -635,6 +648,12 @@ class SpotifyConnectInstance {
         }
         if (posSec !== undefined || durSec !== undefined) {
           const playerState = this.resolvePlayer(this.zoneId)?.getState?.();
+          // Don't forward timing while paused. librespot downloads at 1× real-time speed
+          // even when the zone is paused. Without this guard, the Miniserver sees elapsed
+          // approaching duration and auto-resumes exactly when the remaining time runs out.
+          if (playerState?.mode === 'paused') {
+            return;
+          }
           const fallbackElapsed = playerState?.time ?? 0;
           const fallbackDuration = playerState?.duration ?? this.currentMetadata?.duration ?? 0;
           const nextElapsed = posSec ?? fallbackElapsed;

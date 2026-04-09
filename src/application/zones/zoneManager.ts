@@ -155,6 +155,15 @@ export class ZoneManager {
     this.audioManager = audioManager;
     this.powerManager = new PowerManager(this.log, undefined, (zoneId, signal) => {
       if (signal === 0) {
+        const ctx = this.zoneRepo.get(zoneId);
+        // For Spotify pipe playback, do not kill the audio engine on a pause transition.
+        // Killing it sends mode=stop to the Miniserver, which auto-resumes playback and
+        // resets the position to 0. Physical power actions (amp off etc.) still fire via
+        // the power manager's action loop independently of this callback.
+        if (ctx?.state?.mode === 'pause' && ctx?.inputMode === 'spotify') {
+          this.log.debug('zone power manager skipping engine stop for spotify pause', { zoneId });
+          return;
+        }
         this.log.info('zone power manager forcing playback stop on off transition', {
           zoneId,
         });
