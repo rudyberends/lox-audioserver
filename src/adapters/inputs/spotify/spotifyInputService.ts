@@ -429,7 +429,11 @@ class SpotifyConnectInstance {
         const fallbackDuration = playerState?.duration ?? this.currentMetadata?.duration ?? 0;
         const nextElapsed = positionSec ?? fallbackElapsed;
         const nextDuration = durationSec ?? fallbackDuration;
-        this.controller.updateTiming(this.zoneId, nextElapsed, nextDuration);
+        // Skip position=0 events — applyMetadataUpdate already resets the timer on track
+        // change. Forwarding zero here would hold the ticker at 0 after a skip.
+        if (nextElapsed > 0) {
+          this.controller.updateTiming(this.zoneId, nextElapsed, nextDuration);
+        }
       }
     }
 
@@ -658,7 +662,11 @@ class SpotifyConnectInstance {
           const fallbackDuration = playerState?.duration ?? this.currentMetadata?.duration ?? 0;
           const nextElapsed = posSec ?? fallbackElapsed;
           const nextDuration = durSec ?? fallbackDuration;
-          this.controller.updateTiming(this.zoneId, nextElapsed, nextDuration);
+          // Skip position=0 events — applyMetadataUpdate resets the timer on track change;
+          // forwarding zero would hold the ticker at 0 after a skip.
+          if (nextElapsed > 0) {
+            this.controller.updateTiming(this.zoneId, nextElapsed, nextDuration);
+          }
         }
       },
     });

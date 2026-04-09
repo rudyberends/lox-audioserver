@@ -26,9 +26,12 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
     if (!normalizedStartAt) {
       return undefined;
     }
-    if (!source || source.kind === 'pipe') {
+    if (!source) {
       return undefined;
     }
+    // For pipe sources (e.g. Spotify librespot), the ffmpeg seek is embedded in the stream via
+    // startPositionMs and audioManager ignores startAtSec for pipes. However, startAt is still
+    // needed so that zonePlayer initialises the ticker at the correct seek position instead of 0.
     return normalizedStartAt;
   };
 
