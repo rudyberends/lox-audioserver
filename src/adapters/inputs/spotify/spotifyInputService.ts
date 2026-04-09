@@ -580,7 +580,17 @@ class SpotifyConnectInstance {
       return null;
     }
 
-    this.stopNativeStream(false);
+    // Save the old handle's stop function. We defer calling it until the new track's
+    // HTTP streaming connection is established (~700ms), because calling stop() on
+    // a librespot handle disrupts the shared Tokio runtime, causing DispatchGone
+    // errors for any other handles (new stream_track, connect_host) whose HTTP requests
+    // are still in the dispatch phase. By 700ms the new handle is past dispatch and
+    // receiving audio data, so it won't be affected.
+    // We do NOT reuse the existing PassThrough (reuseStream) because the old handle
+    // would keep writing "old track" audio into it during the delay window.
+    const deferredOldStop = this.nativeStreamStop;
+    this.nativeStreamStop = undefined;
+    this.nativeStream = null; // force fresh PassThrough for the new track
     // Guard against Connect 'stopped' events that arrive while the new stream is being set up.
     // These are usually caused by the native session and the Connect host sharing a device ID on
     // Spotify's servers — when the native track starts, Spotify may stop the Connect host.
@@ -595,7 +605,7 @@ class SpotifyConnectInstance {
       deviceName,
       bitrate: 320,
       startPositionMs: seekPositionMs > 0 ? Math.round(seekPositionMs) : undefined,
-      reuseStream: this.nativeStream,
+      reuseStream: null, // fresh PassThrough so old handle writes don't corrupt new track
       reuseSession: session,
       endStreamOnStop: false,
       closeSessionOnStop: false,
@@ -635,17 +645,29 @@ class SpotifyConnectInstance {
     });
 
     if (!nativeStream) {
-      this.directPlaybackPending = false;
-      this.log.warn('native librespot stream unavailable', { zoneId: this.zoneId });
-      if (this.nativeStream) {
+      // New stream failed — stop old handle immediately (no new runtime to protect).
+      if (deferredOldStop) {
         try {
-          this.nativeStream.end();
+          deferredOldStop();
         } catch {
           /* ignore */
         }
-        this.nativeStream = null;
       }
+      this.directPlaybackPending = false;
+      this.log.warn('native librespot stream unavailable', { zoneId: this.zoneId });
       return null;
+    }
+
+    // Stop the old handle after a delay long enough for the new handle's HTTP
+    // streaming connection to move past the dispatch phase (~700ms).
+    if (deferredOldStop) {
+      setTimeout(() => {
+        try {
+          deferredOldStop();
+        } catch {
+          /* ignore */
+        }
+      }, 700);
     }
 
     this.nativeSampleRate = nativeStream.sampleRate || audioOutputSettings.sampleRate;
