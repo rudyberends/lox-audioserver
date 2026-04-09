@@ -770,7 +770,7 @@ export class AdminApiHandler {
 
     try {
       const cfg = this.configPort.getConfig();
-      if (cfg.system.audioserver.paired && !this.isPublicRoute(pathname, method)) {
+      if (cfg.system.audioserver.paired && cfg.system.audioserver.authEnabled !== false && !this.isPublicRoute(pathname, method)) {
         const session = this.getAdminSessionFromRequest(req);
         if (!session) {
           this.sendJson(res, 401, { error: 'auth-required' });
@@ -928,6 +928,7 @@ export class AdminApiHandler {
         zones: cfg.zones?.length ?? 0,
         activeAdapters: cfg.system.audioserver.extensions?.length ?? 0,
         paired: !!cfg.system.audioserver.paired,
+        authEnabled: cfg.system.audioserver.authEnabled !== false,
         packages,
         containerized: this.containerized,
       };
@@ -3871,7 +3872,7 @@ export class AdminApiHandler {
     if (req.method === 'POST' && isSystemUpdate) {
       const body = (await this.readJsonBody(req, res)) as
         | {
-            audioserver?: { macId?: string; ip?: string };
+            audioserver?: { macId?: string; ip?: string; authEnabled?: boolean };
             miniserver?: { ip?: string; port?: number; protocol?: 'http' | 'https' };
           }
         | null;
@@ -3891,12 +3892,14 @@ export class AdminApiHandler {
 
       const rawMac = hasAudioserver ? body.audioserver!.macId : undefined;
       const rawIp = hasAudioserver ? body.audioserver!.ip : undefined;
+      const rawAuthEnabled = hasAudioserver ? body.audioserver!.authEnabled : undefined;
       const rawMiniserverIp = hasMiniserver ? body.miniserver!.ip : undefined;
       const rawMiniserverPort = hasMiniserver ? body.miniserver!.port : undefined;
       const rawMiniserverProtocol = hasMiniserver ? body.miniserver!.protocol : undefined;
       if (
         typeof rawMac !== 'string' &&
         typeof rawIp !== 'string' &&
+        typeof rawAuthEnabled !== 'boolean' &&
         typeof rawMiniserverIp !== 'string' &&
         typeof rawMiniserverPort !== 'number' &&
         typeof rawMiniserverProtocol !== 'string'
@@ -3971,6 +3974,9 @@ export class AdminApiHandler {
         }
         if (normalizedIp) {
           cfg.system.audioserver.ip = normalizedIp;
+        }
+        if (typeof rawAuthEnabled === 'boolean') {
+          cfg.system.audioserver.authEnabled = rawAuthEnabled;
         }
         if (normalizedMiniserverIp) {
           cfg.system.miniserver.ip = normalizedMiniserverIp;

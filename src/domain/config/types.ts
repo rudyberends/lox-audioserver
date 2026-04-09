@@ -28,6 +28,8 @@ export interface AudioserverConfig {
   uuid: string;
   macId: string;
   paired: boolean;
+  /** When false, admin UI is accessible without authentication even if paired (default true). */
+  authEnabled?: boolean;
   extensions: AudioserverExtensionConfig[];
   /** Optional SlimProto control port (default 3483). */
   slimprotoPort?: number;

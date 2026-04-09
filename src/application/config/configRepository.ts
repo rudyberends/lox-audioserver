@@ -135,6 +135,7 @@ function defaultConfig(): AudioServerConfig {
         uuid: '',
         macId: defaultMacId(),
         paired: false,
+        authEnabled: true,
         extensions: [],
         slimprotoPort: 3483,
         slimprotoCliPort: 9090,
@@ -285,6 +286,10 @@ function normalizeSystem(config: AudioServerConfig): boolean {
   }
   if ('alertPreDelayMs' in config.system.audioserver) {
     delete (config.system.audioserver as any).alertPreDelayMs;
+    changed = true;
+  }
+  if (config.system.audioserver.authEnabled === undefined) {
+    config.system.audioserver.authEnabled = true;
     changed = true;
   }
   return changed;
