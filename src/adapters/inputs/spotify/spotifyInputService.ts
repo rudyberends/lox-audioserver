@@ -457,8 +457,19 @@ class SpotifyConnectInstance {
     if (typeRaw === 'playing' || typeRaw === 'started') {
       if (this.isPaused) {
         this.isPaused = false;
-        this.controller.resumePlayback(this.zoneId);
-        this.resolvePlayer(this.zoneId)?.resume();
+        // If the direct stream_track has already ended (nativeStreamStop cleared by
+        // stopNativeStream) but hasActiveSession was never reset, calling resumePlayback
+        // would target the exhausted old session and produce silence. When the connect_host
+        // stream is available instead, bootstrap a fresh session from it.
+        if (!this.nativeStreamStop && this.nativeConnectStream) {
+          this.hasActiveSession = false;
+          this.startControllerPlayback(
+            nextMeta ?? this.currentMetadata ?? this.buildFallbackMetadata(),
+          );
+        } else {
+          this.controller.resumePlayback(this.zoneId);
+          this.resolvePlayer(this.zoneId)?.resume();
+        }
       }
     } else if (typeRaw === 'paused') {
       this.isPaused = true;
