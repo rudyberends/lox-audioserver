@@ -359,6 +359,24 @@ class SpotifyConnectInstance {
       this.extractTrackIdFromUri(this.currentMetadata?.audiopath) ||
       this.currentTrackId;
 
+    if (typeRaw === 'credentials_changed') {
+      const newCreds = typeof ev.credentialsJson === 'string' && ev.credentialsJson.length > 0
+        ? ev.credentialsJson
+        : null;
+      if (newCreds) {
+        this.credentialsPayload = newCreds;
+        if (this.accountId) {
+          SpotifyConnectInstance.accountCredentials.set(this.accountId, newCreds);
+        }
+        this.log.info('spotify connect: new user connected via mDNS; restarting with new credentials', {
+          zoneId: this.zoneId,
+        });
+      }
+      this.stopConnectHost();
+      this.scheduleRestart({ minDelayMs: 500 });
+      return;
+    }
+
     if (typeRaw === 'error') {
       const message =
         typeof ev.errorMessage === 'string' && ev.errorMessage.length > 0
