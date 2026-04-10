@@ -310,7 +310,12 @@ export class QueueController {
     const bridgeProvider = this.deps.resolveBridgeProvider(rawPath);
     const forceSpotify = rawLower.startsWith('spotify@') && !bridgeProvider;
     const rawClean = stripRoutingSuffixLocal(rawPath);
-    const decoded = forceSpotify ? rawClean : decodeAudiopath(uri);
+    // When `uri` (the resolved target, e.g. a playlist URI) is itself a Spotify URI, prefer it
+    // over `rawClean` from the raw audiopath. rawClean strips routing suffixes like /parentpath/
+    // which can reduce a "track/parentpath/playlist" raw path to just the track URI — causing the
+    // queue builder to fetch a single track instead of the intended playlist.
+    const uriIsSpotify = uri.startsWith('spotify@') || uri.startsWith('spotify:');
+    const decoded = (forceSpotify && !uriIsSpotify) ? rawClean : decodeAudiopath(uri);
     if (!decoded) {
       return [];
     }

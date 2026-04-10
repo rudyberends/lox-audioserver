@@ -340,11 +340,25 @@ function handleQueueStep(
     return;
   }
   if (!isQueueDrivenInput(mode)) {
+    coordinator.log.debug('queue step ignored; mode not queue-driven', { zoneId, mode, delta });
     return;
   }
-  if (!coordinator.dispatchQueueStep(ctx, ctx.outputs, delta)) {
+  const dispatched = coordinator.dispatchQueueStep(ctx, ctx.outputs, delta);
+  coordinator.log.debug('queue step', {
+    zoneId,
+    delta,
+    mode,
+    authority: ctx.queue.authority,
+    queueSize: ctx.queue.items.length,
+    currentIndex: ctx.queue.items.length > 0 ? ctx.queueController.currentIndex() : -1,
+    dispatched,
+    outputTypes: ctx.outputs.map((o) => o.type),
+  });
+  if (!dispatched) {
     if (coordinator.isLocalQueueAuthority(ctx.queue.authority)) {
       coordinator.stepQueue(zoneId, delta);
+    } else {
+      coordinator.log.debug('queue step skipped; non-local authority and no dispatched output', { zoneId, authority: ctx.queue.authority });
     }
   }
 }

@@ -88,6 +88,49 @@ async function audioLibraryPlay(
   );
 }
 
+/**
+ * Maps a Loxone parentid folder reference to a Spotify audiopath with provider prefix.
+ * Loxone sends parentid/<folderId>/<trackIndex> when clicking a track from a browsed folder.
+ * folderId is either a numeric category (e.g. 4 = Liked Songs) or a full Spotify URI.
+ * Returns null if the folder has no single playable context (e.g. "all playlists" list).
+ */
+function folderIdToSpotifyAudiopath(folderId: string, providerPrefix: string): string | null {
+  const key = folderId.toLowerCase();
+  if (key === '4' || key === 'liked' || key.includes('liked-songs') || key === 'user:collection') {
+    return `${providerPrefix}:user:collection`;
+  }
+  if (key.startsWith('spotify:playlist:') || key.startsWith('playlist:')) {
+    return `${providerPrefix}:playlist:${folderId.split(':').pop()}`;
+  }
+  if (key.startsWith('spotify:album:') || key.startsWith('album:')) {
+    return `${providerPrefix}:album:${folderId.split(':').pop()}`;
+  }
+  if (key.startsWith('spotify:artist:') || key.startsWith('artist:')) {
+    return `${providerPrefix}:artist:${folderId.split(':').pop()}`;
+  }
+  if (key.startsWith('spotify:show:') || key.startsWith('show:')) {
+    return `${providerPrefix}:show:${folderId.split(':').pop()}`;
+  }
+  return null;
+}
+
+function resolveParentIdInCommand(command: string): string {
+  // /parentid/<folderId>/<trackIndex> — folderId may contain colons but not slashes
+  const match = /\/parentid\/([^/]+)\/(\d+)/.exec(command);
+  if (!match) return command;
+  const folderId = match[1];
+  const trackIndex = match[2];
+  // Derive provider prefix from command: audio/{zoneId}/serviceplay/{service}/{user}/...
+  const parts = command.split('/');
+  const service = parts[3] ?? 'spotify';
+  const rawUser = parts[4] ?? '';
+  const user = rawUser && rawUser !== 'nouser' ? rawUser : '';
+  const providerPrefix = user ? `${service}@${user}` : service;
+  const audiopath = folderIdToSpotifyAudiopath(folderId, providerPrefix);
+  if (!audiopath) return command;
+  return command.replace(match[0], `/parentpath/${audiopath}/${trackIndex}`);
+}
+
 async function audioServicePlay(
   zoneManager: ZoneManagerFacade,
   contentManager: ContentManager,
@@ -97,7 +140,8 @@ async function audioServicePlay(
   const zoneId = parseNumberPart(parts[1], 0);
   const hasNoShuffle = /\/noshuffle(?:\/|$)/i.test(command);
   zoneManager.setPendingShuffle(zoneId, !hasNoShuffle);
-  const response = await playToZone(zoneManager, contentManager, command, 'serviceplay', (parts) => {
+  const resolvedCommand = resolveParentIdInCommand(command);
+  const response = await playToZone(zoneManager, contentManager, resolvedCommand, 'serviceplay', (parts) => {
     const decoded = extractPayload(parts.slice(4));
     const withoutNouser = decoded.startsWith('nouser/')
       ? decoded.slice('nouser/'.length)
