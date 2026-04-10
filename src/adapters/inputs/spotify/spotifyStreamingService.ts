@@ -220,6 +220,12 @@ export async function getNativeLibrespotStream(params: {
     };
     const handleStreamLog = (event: NativeLogEvent): void => {
       handleNativeLog('stream_track')(event);
+      if (event?.level === 'error') {
+        const msg = event?.message ?? '';
+        if (msg.includes('Unable to read audio file')) {
+          emitErrorOnce('audio_key_error', 'audio stream unavailable');
+        }
+      }
     };
     const handleStreamEvent = (event: ConnectEvent): void => {
       if (!onEvent) {

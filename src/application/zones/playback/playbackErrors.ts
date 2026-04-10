@@ -26,6 +26,8 @@ const PLAYBACK_ERROR_ALIASES: Record<string, string> = {
   'airplay pcm not ready': 'AirPlay not ready',
   'airplay pcm stream unavailable': 'AirPlay stream unavailable',
   'airplay stream not ready': 'AirPlay stream not ready',
+  'spotify audio stream unavailable': 'Spotify audio stream unavailable',
+  'spotify audio_key_error': 'Spotify audio stream unavailable',
 };
 
 const MAX_ERROR_TITLE_LENGTH = 140;
