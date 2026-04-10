@@ -298,7 +298,7 @@ export function getStateAudiotype(ctx: ZoneContext, item?: QueueItem | null): nu
 }
 
 export function getStateFileType(): number {
-  return FileType.File;
+  return FileType.Playlist;
 }
 
 export function isRadioAudiopath(audiopath: string | undefined, audiotype?: number | null): boolean {

@@ -52,9 +52,6 @@ export function buildInputMetadataPatch(args: InputMetadataPatchArgs): Partial<L
   if (metadata.coverurl && typeof stateIcontype === 'number') {
     patch.icontype = undefined;
   }
-  if (metadata.coverurl) {
-    patch.audiotype = 1;
-  }
   if (typeof metadata.duration === 'number' && metadata.duration > 0) {
     patch.duration = Math.round(metadata.duration);
   } else if (
@@ -120,8 +117,15 @@ export function buildActiveItemPatch(
     queueAuthority: ctx.queue.authority,
   };
   if (audiotype !== null) {
-    patch.audiotype = audiotype;
+    // Resolve sourceName with the real audiotype (e.g. Spotify user name)
+    // before remapping, so the display name is still correct.
     const sourceName = audioHelpers.resolveSourceName(audiotype, ctx, current);
+    // The Loxone App treats AudioType.Spotify as a "live source" and hides
+    // shuffle/repeat controls for it. For Loxone-controlled playback (not
+    // Spotify Connect) report as Playlist so those controls are visible.
+    patch.audiotype = audiotype === AudioType.Spotify && ctx.queue.authority !== 'spotify'
+      ? AudioType.Playlist
+      : audiotype;
     if (sourceName) {
       patch.sourceName = sourceName;
     }
@@ -257,7 +261,9 @@ export function buildQueueItemPlaybackPatch(
     duration: typeof item.duration === 'number' ? Math.max(0, Math.round(item.duration)) : 0,
   };
   if (stateAudiotype != null) {
-    patch.audiotype = stateAudiotype;
+    patch.audiotype = stateAudiotype === AudioType.Spotify && ctx.queue.authority !== 'spotify'
+      ? AudioType.Playlist
+      : stateAudiotype;
   }
   if (sourceName) {
     patch.sourceName = sourceName;
@@ -286,7 +292,9 @@ export function buildMatchedOutputUriPatch(
   };
   const stateAudiotype = audioHelpers.getStateAudiotype(ctx, item);
   if (stateAudiotype != null) {
-    patch.audiotype = stateAudiotype;
+    patch.audiotype = stateAudiotype === AudioType.Spotify && ctx.queue.authority !== 'spotify'
+      ? AudioType.Playlist
+      : stateAudiotype;
   }
   return patch;
 }

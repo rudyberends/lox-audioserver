@@ -3,6 +3,7 @@ import type { ContentFolderItem } from '@/ports/ContentTypes';
 import type { ContentPort } from '@/ports/ContentPort';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import { decodeAudiopath, detectServiceFromAudiopath } from '@/domain/loxone/audiopath';
+import { AudioType } from '@/domain/loxone/enums';
 import {
   createQueueItem,
   mapFolderItemsToQueue,
@@ -272,7 +273,11 @@ export class QueueController {
       qid: current.unique_id,
       type: this.deps.getStateFileType(),
       ...(!keepExistingExternalAudiotype && displayAudiotype != null
-        ? { audiotype: displayAudiotype }
+        ? {
+            audiotype: displayAudiotype === AudioType.Spotify && ctx.queue.authority !== 'spotify'
+              ? AudioType.Playlist
+              : displayAudiotype,
+          }
         : {}),
       duration: duration > 0 ? duration : undefined,
       queueAuthority: ctx.queue.authority,

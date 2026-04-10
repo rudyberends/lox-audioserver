@@ -3,7 +3,7 @@ import { applyZonePatch } from '@/domain/loxone/reducer';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { AudioManager } from '@/application/playback/audioManager';
 import { normalizeSpotifyAudiopath } from '@/application/zones/helpers/queueHelpers';
-import { FileType } from '@/domain/loxone/enums';
+import { AudioType, FileType } from '@/domain/loxone/enums';
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 import { ZoneRepository } from '@/application/zones/ZoneRepository';
 
@@ -276,9 +276,16 @@ export class ZoneStateStore {
 
 }
 
-function resolveLoxoneType(_audiopath: string | undefined, audiotype?: number | null): number {
-  if (audiotype === 3) {
+function resolveLoxoneType(audiopath: string | undefined, audiotype?: number | null): number {
+  if (audiotype === AudioType.LineIn || audiotype === AudioType.AirPlay || audiotype === AudioType.Bluetooth) {
     return FileType.LineIn;
   }
-  return FileType.File;
+  if (audiotype === AudioType.Radio) {
+    return FileType.File;
+  }
+  const raw = (audiopath ?? '').trim().toLowerCase();
+  if (raw.startsWith('linein:') || raw.startsWith('linein://')) {
+    return FileType.LineIn;
+  }
+  return FileType.Playlist;
 }
