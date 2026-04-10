@@ -90,6 +90,9 @@ test('startAlert patches alert volume into zone state before play patch', async 
     audioHelpers: {
       resolveAlertEventType: () => 0,
     } as any,
+    audioManager: {
+      setTransientGainDb: () => {},
+    } as any,
   });
 
   await coordinator.startAlert(

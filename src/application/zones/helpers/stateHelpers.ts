@@ -1,6 +1,7 @@
 import type { ZoneConfig } from '@/domain/config/types';
 import type { QueueState } from '@/application/zones/zoneManager';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
+import { AudioType } from '@/domain/loxone/enums';
 
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -58,6 +59,19 @@ export function isUriLike(value: string | undefined): boolean {
   if (!value) return false;
   const lower = value.toLowerCase();
   return lower.startsWith('spotify:') || lower.startsWith('spotify@') || /^[A-Za-z0-9]{16,}$/.test(value.trim());
+}
+
+export function resolveDisplayAudiotype(
+  audiotype: number | null | undefined,
+  queueAuthority?: string | null,
+): number | undefined {
+  if (audiotype == null) {
+    return undefined;
+  }
+  if (audiotype === AudioType.Spotify && queueAuthority !== 'spotify') {
+    return AudioType.Playlist;
+  }
+  return audiotype;
 }
 
 export function buildInitialState(zone: ZoneConfig): LoxoneZoneState {

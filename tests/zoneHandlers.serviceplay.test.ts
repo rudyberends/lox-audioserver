@@ -34,6 +34,6 @@ test('audio serviceplay strips parentid suffix for metadata lookup', async () =>
   assert.equal(metadataTarget, 'spotify@Manu:track:6KhSk0XaifZje1L3n2zUUq');
   assert.equal(
     playedUri,
-    'spotify@Manu:track:6KhSk0XaifZje1L3n2zUUq/parentid/4/25',
+    'spotify@Manu:track:6KhSk0XaifZje1L3n2zUUq/parentpath/spotify@Manu:user:collection/25',
   );
 });

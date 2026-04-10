@@ -153,7 +153,7 @@ test('spotify account provider parses public playlist payload with direct items 
   }
 });
 
-test('spotify account provider filters out playlists not owned by the account', async () => {
+test('spotify account provider keeps followed and public playlists from /me/playlists', async () => {
   const originalFetch = global.fetch;
 
   global.fetch = (async (input: any) => {
@@ -206,9 +206,12 @@ test('spotify account provider filters out playlists not owned by the account', 
 
     const playlists = await provider.getFolder('playlists', 0, 20);
     assert.ok(playlists);
-    assert.equal(playlists?.items?.length, 1);
-    assert.equal(playlists?.totalitems, 1);
-    assert.equal(playlists?.items?.[0]?.name, 'Own Playlist');
+    assert.equal(playlists?.items?.length, 2);
+    assert.equal(playlists?.totalitems, 2);
+    assert.deepEqual(
+      playlists?.items?.map((item) => item.name),
+      ['Own Playlist', 'Public Playlist'],
+    );
   } finally {
     global.fetch = originalFetch;
   }

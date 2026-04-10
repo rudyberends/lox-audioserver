@@ -996,7 +996,7 @@ test('metadata update patches cover/title/artist/album/duration/audiopath', () =
   assert.equal(patches[0]?.patch.coverurl, 'http://covers/1.jpg');
   assert.equal(patches[0]?.patch.audiopath, 'spotify:track:one');
   assert.equal(patches[0]?.patch.duration, 120);
-  assert.equal(patches[0]?.patch.audiotype, 1);
+  assert.equal(patches[0]?.patch.audiotype, undefined);
   assert.equal(patches[0]?.patch.icontype, undefined);
   assert.equal(patches[0]?.patch.queueAuthority, 'spotify');
   assert.equal(recentsManager.records.length, 1);

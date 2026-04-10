@@ -3,14 +3,18 @@ import type { ContentFolderItem } from '@/ports/ContentTypes';
 import type { ContentPort } from '@/ports/ContentPort';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import { decodeAudiopath, detectServiceFromAudiopath } from '@/domain/loxone/audiopath';
-import { AudioType } from '@/domain/loxone/enums';
 import {
   createQueueItem,
   mapFolderItemsToQueue,
   normalizeSpotifyAudiopath,
   parseSpotifyUser,
 } from '@/application/zones/helpers/queueHelpers';
-import { clamp, fallbackTitle, sanitizeTitle } from '@/application/zones/helpers/stateHelpers';
+import {
+  clamp,
+  fallbackTitle,
+  resolveDisplayAudiotype,
+  sanitizeTitle,
+} from '@/application/zones/helpers/stateHelpers';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import type { QueueAuthority, QueueItem, ZoneContext } from '@/application/zones/internal/zoneTypes';
 import { ZoneRepository } from '@/application/zones/ZoneRepository';
@@ -273,11 +277,7 @@ export class QueueController {
       qid: current.unique_id,
       type: this.deps.getStateFileType(),
       ...(!keepExistingExternalAudiotype && displayAudiotype != null
-        ? {
-            audiotype: displayAudiotype === AudioType.Spotify && ctx.queue.authority !== 'spotify'
-              ? AudioType.Playlist
-              : displayAudiotype,
-          }
+        ? { audiotype: resolveDisplayAudiotype(displayAudiotype, ctx.queue.authority) }
         : {}),
       duration: duration > 0 ? duration : undefined,
       queueAuthority: ctx.queue.authority,

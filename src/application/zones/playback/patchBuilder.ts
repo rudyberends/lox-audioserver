@@ -2,7 +2,11 @@ import type { PlaybackMetadata, PlaybackSession } from '@/application/playback/a
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
 import type { QueueAuthority, ZoneContext } from '@/application/zones/internal/zoneTypes';
 import { normalizeSpotifyAudiopath } from '@/application/zones/helpers/queueHelpers';
-import { fallbackTitle, sanitizeTitle } from '@/application/zones/helpers/stateHelpers';
+import {
+  fallbackTitle,
+  resolveDisplayAudiotype,
+  sanitizeTitle,
+} from '@/application/zones/helpers/stateHelpers';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import { AudioType } from '@/domain/loxone/enums';
 import type { QueueItem } from '@/ports/types/queueTypes';
@@ -123,9 +127,7 @@ export function buildActiveItemPatch(
     // The Loxone App treats AudioType.Spotify as a "live source" and hides
     // shuffle/repeat controls for it. For Loxone-controlled playback (not
     // Spotify Connect) report as Playlist so those controls are visible.
-    patch.audiotype = audiotype === AudioType.Spotify && ctx.queue.authority !== 'spotify'
-      ? AudioType.Playlist
-      : audiotype;
+    patch.audiotype = resolveDisplayAudiotype(audiotype, ctx.queue.authority);
     if (sourceName) {
       patch.sourceName = sourceName;
     }
@@ -261,9 +263,7 @@ export function buildQueueItemPlaybackPatch(
     duration: typeof item.duration === 'number' ? Math.max(0, Math.round(item.duration)) : 0,
   };
   if (stateAudiotype != null) {
-    patch.audiotype = stateAudiotype === AudioType.Spotify && ctx.queue.authority !== 'spotify'
-      ? AudioType.Playlist
-      : stateAudiotype;
+    patch.audiotype = resolveDisplayAudiotype(stateAudiotype, ctx.queue.authority);
   }
   if (sourceName) {
     patch.sourceName = sourceName;
@@ -292,9 +292,7 @@ export function buildMatchedOutputUriPatch(
   };
   const stateAudiotype = audioHelpers.getStateAudiotype(ctx, item);
   if (stateAudiotype != null) {
-    patch.audiotype = stateAudiotype === AudioType.Spotify && ctx.queue.authority !== 'spotify'
-      ? AudioType.Playlist
-      : stateAudiotype;
+    patch.audiotype = resolveDisplayAudiotype(stateAudiotype, ctx.queue.authority);
   }
   return patch;
 }
