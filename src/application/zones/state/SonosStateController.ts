@@ -1,4 +1,5 @@
 import { EventType, SonosClient, type SonosGroup, type SonosPlayer } from '@lox-audioserver/node-sonos';
+
 import type { ZoneConfig } from '@/domain/config/types';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import { AudioType } from '@/domain/loxone/enums';
@@ -12,16 +13,29 @@ type SonosControllerOptions = {
 
 const TIME_TICK_MS = 1000;
 
+// --- PATCH: reconnect configuration ---
+const RECONNECT_INITIAL_DELAY_MS = 5_000;   // first retry after 5 s
+const RECONNECT_MAX_DELAY_MS     = 60_000;  // cap retries at 60 s
+const RECONNECT_BACKOFF_FACTOR   = 2;       // exponential back-off multiplier
+// --------------------------------------
+
 export class SonosStateController implements ZoneStateController {
   private readonly log = createLogger('Zones', 'StateController:Sonos');
   private readonly zone: ZoneConfig;
   private readonly onStatePatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
   private readonly host: string | null;
+
   private client: SonosClient | null = null;
   private startPromise: Promise<void> | null = null;
   private stopRequested = false;
   private unsubscribeEvent: (() => void) | null = null;
   private timeTicker: NodeJS.Timeout | null = null;
+
+  // --- PATCH: reconnect state ---
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectDelay = RECONNECT_INITIAL_DELAY_MS;
+  // ------------------------------
+
   private lastCoverRaw: string | null = null;
   private coverRevision = 0;
   private lastTrackSignature = '';
@@ -35,10 +49,22 @@ export class SonosStateController implements ZoneStateController {
 
   public async start(): Promise<void> {
     this.stopRequested = false;
+    this.reconnectDelay = RECONNECT_INITIAL_DELAY_MS; // reset back-off on fresh start
+    await this.connect();
+  }
+
+  // --- PATCH: extracted connect logic, called both on start and on reconnect ---
+  private async connect(): Promise<void> {
+    if (this.stopRequested) return;
+
     if (!this.host) {
       this.log.warn('state controller sonos enabled but zone output has no usable host/ip');
       return;
     }
+
+    // Clean up any pre-existing client before (re-)connecting
+    await this.destroyClient();
+
     this.client = new SonosClient(this.host, { logger: console });
 
     this.unsubscribeEvent = this.client.subscribe((event) => {
@@ -50,8 +76,11 @@ export class SonosStateController implements ZoneStateController {
       ) {
         this.emitSnapshotPatch();
       }
+
       if (event.eventType === EventType.DISCONNECTED) {
         this.log.warn('sonos websocket disconnected', { zoneId: this.zone.id, host: this.host });
+        // PATCH: schedule reconnect on unexpected disconnect
+        this.scheduleReconnect();
       }
     });
 
@@ -62,8 +91,13 @@ export class SonosStateController implements ZoneStateController {
         zoneName: this.zone.name,
         host: this.host,
       });
+
+      // PATCH: reset back-off on successful connect
+      this.reconnectDelay = RECONNECT_INITIAL_DELAY_MS;
+
       this.emitSnapshotPatch();
       this.startTicker();
+
       this.startPromise = this.client.start().catch((err) => {
         if (!this.stopRequested) {
           this.log.warn('sonos state stream stopped', {
@@ -71,6 +105,8 @@ export class SonosStateController implements ZoneStateController {
             host: this.host,
             message: err instanceof Error ? err.message : String(err),
           });
+          // PATCH: stream ended unexpectedly — reconnect
+          this.scheduleReconnect();
         }
       });
     } catch (err) {
@@ -79,31 +115,76 @@ export class SonosStateController implements ZoneStateController {
         host: this.host,
         message: err instanceof Error ? err.message : String(err),
       });
+      // PATCH: connect failed — schedule a retry instead of giving up
+      this.scheduleReconnect();
     }
   }
+
+  // --- PATCH: schedule a reconnect attempt with exponential back-off ---
+  private scheduleReconnect(): void {
+    if (this.stopRequested) return;
+    if (this.reconnectTimer) return; // already scheduled
+
+    this.log.info('sonos reconnect scheduled', {
+      zoneId: this.zone.id,
+      host: this.host,
+      delayMs: this.reconnectDelay,
+    });
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.stopRequested) {
+        void this.connect();
+      }
+    }, this.reconnectDelay);
+
+    // Exponential back-off, capped at max
+    this.reconnectDelay = Math.min(
+      this.reconnectDelay * RECONNECT_BACKOFF_FACTOR,
+      RECONNECT_MAX_DELAY_MS,
+    );
+  }
+  // -----------------------------------------------------------------------
 
   public async stop(): Promise<void> {
     this.stopRequested = true;
     this.stopTicker();
-    if (this.unsubscribeEvent) {
-      this.unsubscribeEvent();
-      this.unsubscribeEvent = null;
+
+    // PATCH: cancel any pending reconnect timer
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
-    const client = this.client;
-    this.client = null;
-    if (client) {
-      try {
-        await client.disconnect();
-      } catch {
-        // ignore disconnect failures on shutdown
-      }
-    }
+
+    await this.destroyClient();
+
     if (this.startPromise) {
       await this.startPromise.catch(() => undefined);
       this.startPromise = null;
     }
+
     this.log.info('stopped sonos state controller', { zoneId: this.zone.id });
   }
+
+  // --- PATCH: helper to cleanly tear down the current client ---
+  private async destroyClient(): Promise<void> {
+    if (this.unsubscribeEvent) {
+      this.unsubscribeEvent();
+      this.unsubscribeEvent = null;
+    }
+
+    const client = this.client;
+    this.client = null;
+
+    if (client) {
+      try {
+        await client.disconnect();
+      } catch {
+        // ignore disconnect failures
+      }
+    }
+  }
+  // --------------------------------------------------------------
 
   public handleCommand(command: string): boolean {
     const action = normalizeCommand(command);
@@ -148,6 +229,7 @@ export class SonosStateController implements ZoneStateController {
     if (!patch || Object.keys(patch).length === 0) {
       return;
     }
+
     const snapshotSignature = [
       String(patch.mode ?? ''),
       String(patch.audiotype ?? ''),
@@ -157,6 +239,7 @@ export class SonosStateController implements ZoneStateController {
       String(patch.album ?? ''),
       String(patch.station ?? ''),
     ].join('|');
+
     if (snapshotSignature !== this.lastLoggedSnapshotSignature) {
       this.lastLoggedSnapshotSignature = snapshotSignature;
       this.log.debug('sonos state update', {
@@ -171,12 +254,14 @@ export class SonosStateController implements ZoneStateController {
         keys: Object.keys(patch),
       });
     }
+
     this.onStatePatch(this.zone.id, patch);
   }
 
   private buildSnapshotPatch(): Partial<LoxoneZoneState> | null {
     const player = this.client?.player;
     const group = player?.group;
+
     if (!player || !group) {
       return null;
     }
@@ -188,7 +273,6 @@ export class SonosStateController implements ZoneStateController {
     const mode = mapPlaybackState(group.playbackState);
     const audiotype = resolveAudiotype(group, track?.mediaUrl ?? '', container?.type ?? '');
     const sourceName = resolveSourceName(audiotype, container?.name ?? '', group.name, this.zone.name);
-
     const title = cleanString(track?.name) || cleanString(container?.name) || sourceName;
     const artist = cleanString(track?.artist?.name) || cleanString(metadata?.streamInfo) || '';
     const album = cleanString(track?.album?.name) || '';
@@ -197,22 +281,28 @@ export class SonosStateController implements ZoneStateController {
       typeof track?.durationMillis === 'number' && Number.isFinite(track.durationMillis)
         ? Math.max(0, Math.round(track.durationMillis / 1000))
         : null;
+
     const time = Math.max(0, Math.floor(group.positionSeconds));
 
     const rawCover =
       normalizeCoverUrl(firstImage(track?.images), this.host) ||
       normalizeCoverUrl(firstImage(container?.images), this.host);
+
     const signature = `${title}|${artist}|${album}`;
+
     let coverurl = '';
     if (rawCover) {
       const coverChanged = this.lastCoverRaw !== rawCover;
       const trackChanged = this.lastTrackSignature !== signature;
+
       if (coverChanged || trackChanged) {
         this.coverRevision += 1;
         this.lastCoverRaw = rawCover;
       }
+
       coverurl = withCacheBust(rawCover, this.coverRevision);
     }
+
     this.lastTrackSignature = signature;
 
     const patch: Partial<LoxoneZoneState> = {
@@ -231,9 +321,11 @@ export class SonosStateController implements ZoneStateController {
     if (typeof trackDurationSec === 'number') {
       patch.duration = trackDurationSec;
     }
+
     if (coverurl) {
       patch.coverurl = coverurl;
     }
+
     if ((audiotype === AudioType.LineIn || audiotype === AudioType.Bluetooth) && !artist && !album) {
       patch.station = '';
       patch.title = sourceName;
@@ -248,12 +340,14 @@ export class SonosStateController implements ZoneStateController {
       this.log.warn('sonos command ignored; no active group', { zoneId: this.zone.id, action });
       return;
     }
+
     try {
       if (action === 'play') await group.play();
       else if (action === 'pause') await group.pause();
       else if (action === 'stop') await group.stop();
       else if (action === 'next') await group.skipToNextTrack();
       else await group.skipToPreviousTrack();
+
       this.log.info('sonos command sent', { zoneId: this.zone.id, action });
     } catch (err) {
       this.log.warn('sonos command failed', {
@@ -339,6 +433,7 @@ function resolveAudiotype(group: SonosGroup, mediaUrl: string, containerType: st
   const media = mediaUrl.toLowerCase();
   const type = containerType.toLowerCase();
   const service = String(group.activeService ?? '').toLowerCase();
+
   if (type.includes('linein') || media.startsWith('x-rincon-stream:') || media.startsWith('x-sonos-htastream:')) {
     return AudioType.LineIn;
   }
