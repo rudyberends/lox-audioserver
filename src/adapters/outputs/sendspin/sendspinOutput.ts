@@ -212,6 +212,9 @@ export class SendspinOutput implements ZoneOutput {
         this.lastLoggedMuted = null;
         this.clientState = null;
         this.externalSourceActive = false;
+        // Invalidate stream signature so the next startStream() rebuilds the
+        // pipeline from scratch instead of reusing a stale consumeStream loop.
+        this.lastStreamSignature = null;
         this.ports.sendspinConnector.markInboundDisconnected(this.activeClientId());
         this.log.info('Sendspin client disconnected', { zoneId: this.zoneId, clientId: this.clientId });
       },
