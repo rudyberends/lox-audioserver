@@ -115,6 +115,9 @@ export class AudioSession {
   // which results in loud noise (misaligned sample boundaries).
   private readonly pcmFrameBytes: number | null;
   private pcmRemainder: Buffer | null = null;
+  // For codec streams (FLAC, etc.), store the initial header so new subscribers
+  // joining mid-stream can initialize their decoders correctly.
+  private codecHeader: Buffer | null = null;
 
   constructor(
     private readonly zoneId: number,
@@ -208,6 +211,7 @@ export class AudioSession {
     this.bufferQueue.length = 0;
     this.bufferBytes = 0;
     this.pcmRemainder = null;
+    this.codecHeader = null;
     this.bytesSinceLog = 0;
     this.lastLogTs = 0;
     this.totalBytes = 0;
@@ -513,6 +517,11 @@ export class AudioSession {
           bytes: aligned.length,
           spawnToFirstChunkMs: this.startTs ? Math.max(0, now - this.startTs) : null,
         });
+        // Capture codec header from FLAC streams so new subscribers joining
+        // mid-stream can initialize their decoders correctly.
+        if (this.profile === 'flac' && aligned.length >= 4 && aligned.subarray(0, 4).toString('ascii') === 'fLaC') {
+          this.codecHeader = Buffer.from(aligned);
+        }
       }
       this.bufferChunk(aligned);
       this.recordBytes(chunk.length);
@@ -1037,6 +1046,12 @@ export class AudioSession {
     }
     const stream = new PassThrough({ highWaterMark: 1024 * 512 });
     let primedBytes = 0;
+    // For codec streams (FLAC), prepend the saved header so the subscriber's
+    // decoder can initialize correctly even when joining mid-stream.
+    if (this.codecHeader) {
+      stream.write(this.codecHeader);
+      primedBytes += this.codecHeader.length;
+    }
     // Prime the subscriber with buffered audio to prevent initial starvation unless disabled.
     if (options.primeWithBuffer !== false && this.bufferQueue.length) {
       for (const chunk of this.bufferQueue) {
