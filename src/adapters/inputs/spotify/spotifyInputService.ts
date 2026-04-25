@@ -21,6 +21,7 @@ import {
   getNativeLibrespotStream,
   startNativeConnectHost,
 } from '@/adapters/inputs/spotify/spotifyStreamingService';
+import { SpotifyUnavailableLoopGuard } from '@/adapters/inputs/spotify/spotifyRecoveryPolicy';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { LibrespotSession } from '@lox-audioserver/node-librespot';
@@ -77,6 +78,7 @@ class SpotifyConnectInstance {
   private restartStreak = { count: 0, firstAt: 0 };
   private readonly restartCooldownMs = 5 * 60 * 1000; // 5 minutes
   private readonly restartStreakWindowMs = 30 * 1000; // 30 seconds
+  private readonly unavailableLoopGuard = new SpotifyUnavailableLoopGuard();
   static accountCredentials = new Map<string, string>();
   private readonly pipeId: string;
 
@@ -401,6 +403,27 @@ class SpotifyConnectInstance {
       this.scheduleRestart({
         rateLimited,
       });
+      return;
+    }
+
+    this.unavailableLoopGuard.markHealthyProgress(typeRaw, positionSec);
+
+    if (typeRaw === 'unavailable') {
+      const result = this.unavailableLoopGuard.recordUnavailable({
+        trackId: resolvedTrackId,
+        uri: trackUri,
+      });
+      if (result.detected) {
+        this.log.error('rapid Spotify unavailable loop detected; restarting connect host', {
+          zoneId: this.zoneId,
+          events: result.count,
+          distinctTracks: result.distinctTracks,
+          windowMs: result.windowMs,
+        });
+        this.notifyOutputError(this.zoneId, 'spotify unavailable loop detected');
+        this.stopConnectHost();
+        this.scheduleRestart({ minDelayMs: 500 });
+      }
       return;
     }
 
