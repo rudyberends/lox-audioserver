@@ -1,5 +1,4 @@
 import { EventType, SonosClient, type SonosGroup, type SonosPlayer } from '@lox-audioserver/node-sonos';
-
 import type { ZoneConfig } from '@/domain/config/types';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import { AudioType } from '@/domain/loxone/enums';
@@ -12,12 +11,9 @@ type SonosControllerOptions = {
 };
 
 const TIME_TICK_MS = 1000;
-
-// --- PATCH: reconnect configuration ---
-const RECONNECT_INITIAL_DELAY_MS = 5_000;   // first retry after 5 s
-const RECONNECT_MAX_DELAY_MS     = 60_000;  // cap retries at 60 s
-const RECONNECT_BACKOFF_FACTOR   = 2;       // exponential back-off multiplier
-// --------------------------------------
+const RECONNECT_INITIAL_DELAY_MS = 5_000;
+const RECONNECT_MAX_DELAY_MS = 60_000;
+const RECONNECT_BACKOFF_FACTOR = 2;
 
 export class SonosStateController implements ZoneStateController {
   private readonly log = createLogger('Zones', 'StateController:Sonos');
@@ -30,12 +26,9 @@ export class SonosStateController implements ZoneStateController {
   private stopRequested = false;
   private unsubscribeEvent: (() => void) | null = null;
   private timeTicker: NodeJS.Timeout | null = null;
-
-  // --- PATCH: reconnect state ---
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectDelay = RECONNECT_INITIAL_DELAY_MS;
-  // ------------------------------
-
+  private connectionGeneration = 0;
   private lastCoverRaw: string | null = null;
   private coverRevision = 0;
   private lastTrackSignature = '';
@@ -49,25 +42,30 @@ export class SonosStateController implements ZoneStateController {
 
   public async start(): Promise<void> {
     this.stopRequested = false;
-    this.reconnectDelay = RECONNECT_INITIAL_DELAY_MS; // reset back-off on fresh start
+    this.reconnectDelay = RECONNECT_INITIAL_DELAY_MS;
     await this.connect();
   }
 
-  // --- PATCH: extracted connect logic, called both on start and on reconnect ---
   private async connect(): Promise<void> {
-    if (this.stopRequested) return;
+    if (this.stopRequested) {
+      return;
+    }
 
     if (!this.host) {
       this.log.warn('state controller sonos enabled but zone output has no usable host/ip');
       return;
     }
 
-    // Clean up any pre-existing client before (re-)connecting
     await this.destroyClient();
+    const generation = ++this.connectionGeneration;
+    const client = new SonosClient(this.host, { logger: console });
 
-    this.client = new SonosClient(this.host, { logger: console });
+    this.client = client;
 
-    this.unsubscribeEvent = this.client.subscribe((event) => {
+    this.unsubscribeEvent = client.subscribe((event) => {
+      if (this.connectionGeneration !== generation || this.client !== client) {
+        return;
+      }
       if (
         event.eventType === EventType.CONNECTED ||
         event.eventType === EventType.GROUP_UPDATED ||
@@ -79,51 +77,50 @@ export class SonosStateController implements ZoneStateController {
 
       if (event.eventType === EventType.DISCONNECTED) {
         this.log.warn('sonos websocket disconnected', { zoneId: this.zone.id, host: this.host });
-        // PATCH: schedule reconnect on unexpected disconnect
         this.scheduleReconnect();
       }
     });
 
     try {
-      await this.client.connect();
+      await client.connect();
       this.log.info('sonos state controller connected', {
         zoneId: this.zone.id,
         zoneName: this.zone.name,
         host: this.host,
       });
 
-      // PATCH: reset back-off on successful connect
       this.reconnectDelay = RECONNECT_INITIAL_DELAY_MS;
 
       this.emitSnapshotPatch();
       this.startTicker();
 
-      this.startPromise = this.client.start().catch((err) => {
-        if (!this.stopRequested) {
+      this.startPromise = client.start().catch((err) => {
+        if (!this.stopRequested && this.connectionGeneration === generation && this.client === client) {
           this.log.warn('sonos state stream stopped', {
             zoneId: this.zone.id,
             host: this.host,
             message: err instanceof Error ? err.message : String(err),
           });
-          // PATCH: stream ended unexpectedly — reconnect
           this.scheduleReconnect();
         }
       });
     } catch (err) {
+      if (this.connectionGeneration !== generation || this.client !== client) {
+        return;
+      }
       this.log.warn('sonos state controller failed to start', {
         zoneId: this.zone.id,
         host: this.host,
         message: err instanceof Error ? err.message : String(err),
       });
-      // PATCH: connect failed — schedule a retry instead of giving up
       this.scheduleReconnect();
     }
   }
 
-  // --- PATCH: schedule a reconnect attempt with exponential back-off ---
   private scheduleReconnect(): void {
-    if (this.stopRequested) return;
-    if (this.reconnectTimer) return; // already scheduled
+    if (this.stopRequested || this.reconnectTimer) {
+      return;
+    }
 
     this.log.info('sonos reconnect scheduled', {
       zoneId: this.zone.id,
@@ -138,19 +135,16 @@ export class SonosStateController implements ZoneStateController {
       }
     }, this.reconnectDelay);
 
-    // Exponential back-off, capped at max
     this.reconnectDelay = Math.min(
       this.reconnectDelay * RECONNECT_BACKOFF_FACTOR,
       RECONNECT_MAX_DELAY_MS,
     );
   }
-  // -----------------------------------------------------------------------
 
   public async stop(): Promise<void> {
     this.stopRequested = true;
     this.stopTicker();
 
-    // PATCH: cancel any pending reconnect timer
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -158,23 +152,20 @@ export class SonosStateController implements ZoneStateController {
 
     await this.destroyClient();
 
-    if (this.startPromise) {
-      await this.startPromise.catch(() => undefined);
-      this.startPromise = null;
-    }
-
     this.log.info('stopped sonos state controller', { zoneId: this.zone.id });
   }
 
-  // --- PATCH: helper to cleanly tear down the current client ---
   private async destroyClient(): Promise<void> {
+    this.connectionGeneration += 1;
     if (this.unsubscribeEvent) {
       this.unsubscribeEvent();
       this.unsubscribeEvent = null;
     }
 
     const client = this.client;
+    const startPromise = this.startPromise;
     this.client = null;
+    this.startPromise = null;
 
     if (client) {
       try {
@@ -183,8 +174,10 @@ export class SonosStateController implements ZoneStateController {
         // ignore disconnect failures
       }
     }
+    if (startPromise) {
+      await startPromise.catch(() => undefined);
+    }
   }
-  // --------------------------------------------------------------
 
   public handleCommand(command: string): boolean {
     const action = normalizeCommand(command);

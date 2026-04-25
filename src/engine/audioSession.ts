@@ -55,6 +55,7 @@ export type PlaybackSource =
 export type OutputProfile = 'mp3' | 'aac' | 'pcm' | 'opus' | 'flac';
 
 const DEFAULT_KILL_TIMEOUT_MS = 2000;
+const FLAC_SIGNATURE = Buffer.from('fLaC', 'ascii');
 
 export class AudioSession {
   private readonly log = createLogger('Audio', 'Session');
@@ -203,6 +204,19 @@ export class AudioSession {
     const remLen = combined.length - alignedLen;
     this.pcmRemainder = remLen > 0 ? Buffer.from(combined.subarray(alignedLen)) : null;
     return out;
+  }
+
+  private isCodecHeaderChunk(chunk: Buffer): boolean {
+    return (
+      this.profile === 'flac' &&
+      chunk.length >= FLAC_SIGNATURE.length &&
+      chunk.subarray(0, FLAC_SIGNATURE.length).equals(FLAC_SIGNATURE)
+    );
+  }
+
+  private bufferedChunkStartsWithCodecHeader(): boolean {
+    const firstBufferedChunk = this.bufferQueue[0];
+    return Boolean(firstBufferedChunk && this.isCodecHeaderChunk(firstBufferedChunk));
   }
 
   public start(): void {
@@ -538,7 +552,7 @@ export class AudioSession {
         }
         // Capture codec header from FLAC streams so new subscribers joining
         // mid-stream can initialize their decoders correctly.
-        if (this.profile === 'flac' && aligned.length >= 4 && aligned.subarray(0, 4).toString('ascii') === 'fLaC') {
+        if (this.isCodecHeaderChunk(aligned)) {
           this.codecHeader = Buffer.from(aligned);
         }
       }
@@ -1071,14 +1085,16 @@ export class AudioSession {
     }
     const stream = new PassThrough({ highWaterMark: 1024 * 512 });
     let primedBytes = 0;
+    const primeWithBuffer = options.primeWithBuffer !== false;
+    const codecHeader = this.codecHeader;
     // For codec streams (FLAC), prepend the saved header so the subscriber's
     // decoder can initialize correctly even when joining mid-stream.
-    if (this.codecHeader) {
-      stream.write(this.codecHeader);
-      primedBytes += this.codecHeader.length;
+    if (codecHeader && (!primeWithBuffer || !this.bufferedChunkStartsWithCodecHeader())) {
+      stream.write(codecHeader);
+      primedBytes += codecHeader.length;
     }
     // Prime the subscriber with buffered audio to prevent initial starvation unless disabled.
-    if (options.primeWithBuffer !== false && this.bufferQueue.length) {
+    if (primeWithBuffer && this.bufferQueue.length) {
       for (const chunk of this.bufferQueue) {
         stream.write(chunk);
         primedBytes += chunk.length;
@@ -1094,7 +1110,7 @@ export class AudioSession {
       zoneId: this.zoneId,
       profile: this.profile,
       label,
-      primeWithBuffer: options.primeWithBuffer !== false,
+      primeWithBuffer,
       primedBytes,
       primedMs:
         this.profile === 'pcm' &&
