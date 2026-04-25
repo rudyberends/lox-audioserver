@@ -75,6 +75,9 @@ class SpotifyConnectInstance {
   private restartStreak = { count: 0, firstAt: 0 };
   private readonly restartCooldownMs = 5 * 60 * 1000; // 5 minutes
   private readonly restartStreakWindowMs = 30 * 1000; // 30 seconds
+  private trackChangeTimestamps: number[] = [];
+  private readonly trackChangeWindowMs = 10_000; // 10 seconds
+  private readonly trackChangeMaxCount = 4;
   static accountCredentials = new Map<string, string>();
   private readonly pipeId: string;
 
@@ -487,6 +490,26 @@ class SpotifyConnectInstance {
     if (metadata.duration !== undefined && trackChanged) {
       this.controller.updateTiming(this.zoneId, 0, metadata.duration);
       player?.updateTiming(0, metadata.duration);
+
+      // Detect rapid track change loops (e.g. context unavailable, audio key errors)
+      const now = Date.now();
+      this.trackChangeTimestamps.push(now);
+      this.trackChangeTimestamps = this.trackChangeTimestamps.filter(
+        (ts) => now - ts <= this.trackChangeWindowMs,
+      );
+      if (this.trackChangeTimestamps.length >= this.trackChangeMaxCount) {
+        this.log.error('rapid track change loop detected; restarting connect host', {
+          zoneId: this.zoneId,
+          changes: this.trackChangeTimestamps.length,
+          windowMs: this.trackChangeWindowMs,
+        });
+        this.trackChangeTimestamps = [];
+        this.restartStreak = { count: 10, firstAt: Date.now() };
+        this.notifyOutputError(this.zoneId, 'spotify skip loop detected (session unhealthy)');
+        this.stopConnectHost();
+        this.scheduleRestart({});
+        return;
+      }
     }
   }
 
