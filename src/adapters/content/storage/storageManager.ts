@@ -210,6 +210,17 @@ async function checkMount(dir: string): Promise<boolean> {
   );
 }
 
+async function probeMount(dir: string): Promise<boolean> {
+  // fsp.access on a stale CIFS mount throws ESTALE immediately; timeout guards against hangs.
+  return bestEffort(
+    async () => {
+      await withTimeout(fsp.access(dir), NAS_CHECK_TIMEOUT_MS, 'probe nas mount');
+      return true;
+    },
+    { fallback: false, onError: 'debug', log, label: 'mount probe failed', context: { dir } },
+  );
+}
+
 export async function listStorages(): Promise<StorageConfig[]> {
   const file = await loadStorageFile();
   return file.storages;
@@ -299,11 +310,23 @@ export async function ensureNasMounts(baseDir: string): Promise<void> {
 
     const mounted = await checkMount(mountRoot);
     if (mounted) {
-      log.info('storage already mounted', { id: storage.id, name: storage.name });
-      continue;
+      const healthy = await probeMount(mountRoot);
+      if (healthy) {
+        log.info('storage already mounted', { id: storage.id, name: storage.name });
+        continue;
+      }
+      log.warn('stale NAS mount detected; remounting', { id: storage.id, name: storage.name });
+      await bestEffort(() => execFileAsync('umount', ['-l', mountRoot], { timeout: NAS_CHECK_TIMEOUT_MS }), {
+        fallback: undefined,
+        onError: 'debug',
+        log,
+        label: 'lazy umount failed',
+        context: { mountRoot },
+      });
+    } else {
+      log.warn('mounting NAS storage', { id: storage.id, name: storage.name });
     }
 
-    log.warn('mounting NAS storage', { id: storage.id, name: storage.name });
     try {
       await mountStorage(storage, mountRoot);
       log.info('mounted NAS storage', { id: storage.id, name: storage.name, mountRoot });
