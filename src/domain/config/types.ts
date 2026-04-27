@@ -313,6 +313,14 @@ export interface GroupConfig {
   mixedGroupEnabled?: boolean;
   /** Optional shared power groups driven by aggregate zone activity. */
   powerGroups?: PowerGroupConfig[];
+  /** Persisted user-created audio sync groups (restored on startup). */
+  audioGroups?: PersistedAudioGroup[];
+}
+
+export interface PersistedAudioGroup {
+  leader: number;
+  members: number[];
+  externalId: string;
 }
 
 export interface PowerGroupConfig {

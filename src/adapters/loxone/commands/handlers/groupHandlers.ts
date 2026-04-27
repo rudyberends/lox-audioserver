@@ -6,6 +6,9 @@ import {
   getGroupByZone,
   removeGroupByLeader,
 } from '@/application/groups/groupTracker';
+
+// grp-{leaderId}-{protocol}-{base36timestamp}
+const GROUP_ID_LEADER_RE = /^grp-(\d+)-/;
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import { createLogger } from '@/shared/logging/logger';
@@ -63,9 +66,27 @@ async function audioCfgDynamicGroup(
   const zoneListRaw = match[2];
 
   if (!zoneListRaw) {
-    const existing = getGroupByExternalId(groupIdRaw);
+    let existing = getGroupByExternalId(groupIdRaw);
+    if (!existing) {
+      // After a server restart the leaderByExternalId map is empty but the group
+      // may still be tracked under its leader zone. Parse the leader from the ID.
+      const leaderMatch = groupIdRaw.match(GROUP_ID_LEADER_RE);
+      if (leaderMatch) {
+        const leaderId = Number(leaderMatch[1]);
+        existing = getGroupByLeader(leaderId);
+        if (existing) {
+          createLogger('Groups', 'Handlers').debug('dgroup unsync: resolved group by leader (externalId not found)', {
+            groupIdRaw,
+            leaderId,
+            externalId: existing.externalId,
+          });
+        }
+      }
+    }
     if (existing) {
-      groupManager.removeGroup(groupIdRaw);
+      groupManager.removeGroup(existing.externalId ?? existing.leader);
+    } else {
+      createLogger('Groups', 'Handlers').debug('dgroup unsync: no group found', { groupIdRaw });
     }
     return buildResponse(command, 'dgroup_update', { id: groupIdRaw });
   }

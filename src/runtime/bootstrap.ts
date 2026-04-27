@@ -178,7 +178,7 @@ export function createRuntime(): Runtime {
     tidal: tidalStreamResolver,
     ytmusic: ytmusicStreamResolver,
   });
-  const groupManager = createGroupManager({ notifier: ports.notifier, airplayGroup: airplayGroupController });
+  const groupManager = createGroupManager({ notifier: ports.notifier, airplayGroup: airplayGroupController, configPort });
   const mixedGroupController = createMixedGroupController(configPort, audioManager);
   const favoritesManager = createFavoritesManager({ notifier: ports.notifier, contentPort: contentAdapter });
   const recentsManager = createRecentsManager({ notifier: ports.notifier, contentPort: contentAdapter });
@@ -311,6 +311,18 @@ export function createRuntime(): Runtime {
 
     await zoneManager.initialize();
     await contentManager.reinitialize();
+
+    // Restore manual audio groups that were persisted before the last shutdown.
+    const persistedGroups = storedConfig.groups?.audioGroups ?? [];
+    for (const g of persistedGroups) {
+      if (g.externalId && g.leader > 0 && g.members.length > 0) {
+        groupManager.upsert({ leader: g.leader, members: g.members, externalId: g.externalId, backend: 'Unknown', source: 'manual' });
+      }
+    }
+    if (persistedGroups.length) {
+      log.info('restored persisted audio groups', { count: persistedGroups.length });
+    }
+
     lineInMetadataService.start();
     sendspinLineInService.start();
     await squeezeliteCore.start();
