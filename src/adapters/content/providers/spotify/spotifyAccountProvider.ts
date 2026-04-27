@@ -293,6 +293,19 @@ export class SpotifyAccountProvider {
   }
 
   private buildRootFolder(offset: number): ContentFolder {
+    const hasToken = !!(this.account.refreshToken?.trim() || (this.account as any).refresh_token?.toString().trim());
+    if (!hasToken) {
+      return {
+        id: 'root',
+        name: this.displayLabel,
+        service: 'spotify',
+        start: offset,
+        totalitems: 1,
+        items: [
+          this.folderLink('error', 'Please remove and re-add this account'),
+        ],
+      };
+    }
     return {
       id: 'root',
       name: this.displayLabel,
@@ -1277,6 +1290,13 @@ export class SpotifyAccountProvider {
             body: text.slice(0, 200),
             attempt,
           });
+          let parsedError: Record<string, unknown> = {};
+          try { parsedError = JSON.parse(text); } catch { /* ignore */ }
+          if (res.status === 400 && parsedError['error'] === 'invalid_grant') {
+            await this.persistAccountPatch({ refreshToken: '' });
+            this.log.error('spotify refresh token revoked; remove the account in the admin UI and re-add it to restore access');
+            break;
+          }
           if (attempt < maxAttempts && res.status >= 500) {
             await new Promise((resolve) => setTimeout(resolve, delayMs));
             delayMs *= 2;
