@@ -2,6 +2,8 @@ import { createLogger } from '@/shared/logging/logger';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { AirplayGroupCoordinator } from '@/application/outputs/airplayGroupController';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
+import type { ConfigPort } from '@/ports/ConfigPort';
+import type { AudioServerConfig } from '@/domain/config/types';
 import {
   getAllGroups,
   getGroupByLeader,
@@ -30,10 +32,12 @@ export class GroupManager {
   private notifier: NotifierPort;
   private zoneManager: ZoneManagerFacade | null = null;
   private readonly airplayGroup: AirplayGroupCoordinator;
+  private readonly configPort: ConfigPort;
 
-  constructor(notifier: NotifierPort, airplayGroup: AirplayGroupCoordinator) {
+  constructor(notifier: NotifierPort, airplayGroup: AirplayGroupCoordinator, configPort: ConfigPort) {
     this.notifier = notifier;
     this.airplayGroup = airplayGroup;
+    this.configPort = configPort;
     onGroupChanged((event: GroupChangeEvent, leader: number, record?: GroupRecord): void => {
       const context = { leader, externalId: record?.externalId };
       switch (event) {
@@ -304,12 +308,18 @@ export class GroupManager {
       this.log.warn('failed to remove group', { identifier });
       return;
     }
+    if (record.source === 'manual') {
+      void this.unpersistGroup(record.leader);
+    }
   }
 
   public upsert(record: Omit<GroupRecord, 'updatedAt'>): void {
     const previous = getGroupByLeader(record.leader);
     const { changed } = upsertGroup(record);
     if (changed) {
+      if (record.source === 'manual' && record.externalId) {
+        void this.persistGroup(record.leader, record.members, record.externalId);
+      }
       // Stop members that were removed compared to previous state; keep leader playing.
       if (previous) {
         const prevMembers = new Set<number>(previous.members);
@@ -333,6 +343,27 @@ export class GroupManager {
   public getAllGroups(): ReadonlyArray<GroupRecord> {
     return getAllGroups();
   }
+
+  private persistGroup(leader: number, members: number[], externalId: string): Promise<AudioServerConfig> {
+    return this.configPort.updateConfig((cfg) => {
+      if (!cfg.groups) cfg.groups = { mixedGroupEnabled: false, powerGroups: [], audioGroups: [] };
+      if (!Array.isArray(cfg.groups.audioGroups)) cfg.groups.audioGroups = [];
+      const idx = cfg.groups.audioGroups.findIndex((g) => g.externalId === externalId || g.leader === leader);
+      const entry = { leader, members, externalId };
+      if (idx >= 0) {
+        cfg.groups.audioGroups[idx] = entry;
+      } else {
+        cfg.groups.audioGroups.push(entry);
+      }
+    });
+  }
+
+  private unpersistGroup(leader: number): Promise<AudioServerConfig> {
+    return this.configPort.updateConfig((cfg) => {
+      if (!Array.isArray(cfg.groups?.audioGroups)) return;
+      cfg.groups!.audioGroups = cfg.groups!.audioGroups.filter((g) => g.leader !== leader);
+    });
+  }
 }
 
 export type GroupManagerReadPort = Pick<GroupManager, 'getAllGroups'>;
@@ -340,8 +371,9 @@ export type GroupManagerReadPort = Pick<GroupManager, 'getAllGroups'>;
 type GroupManagerDeps = {
   notifier: NotifierPort;
   airplayGroup: AirplayGroupCoordinator;
+  configPort: ConfigPort;
 };
 
 export function createGroupManager(deps: GroupManagerDeps): GroupManager {
-  return new GroupManager(deps.notifier, deps.airplayGroup);
+  return new GroupManager(deps.notifier, deps.airplayGroup, deps.configPort);
 }

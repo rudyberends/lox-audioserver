@@ -408,7 +408,7 @@ function normalizeInputs(config: AudioServerConfig): void {
 
 function normalizeGroups(config: AudioServerConfig): void {
   if (!config.groups) {
-    config.groups = { mixedGroupEnabled: false, powerGroups: [] };
+    config.groups = { mixedGroupEnabled: false, powerGroups: [], audioGroups: [] };
     return;
   }
   if (config.groups.mixedGroupEnabled !== true) {
@@ -416,5 +416,8 @@ function normalizeGroups(config: AudioServerConfig): void {
   }
   if (!Array.isArray(config.groups.powerGroups)) {
     config.groups.powerGroups = [];
+  }
+  if (!Array.isArray(config.groups.audioGroups)) {
+    config.groups.audioGroups = [];
   }
 }
