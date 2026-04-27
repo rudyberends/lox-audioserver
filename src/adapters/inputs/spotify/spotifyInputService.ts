@@ -286,13 +286,15 @@ class SpotifyConnectInstance {
       });
       setTimeout(() => {
         this.restartStreak = { count: 0, firstAt: Date.now() };
+        this.restartBackoffIndex = 0;
         if (!this.stopping) {
           this.start().catch((error) => {
             const message = error instanceof Error ? error.message : String(error);
-            this.log.warn('spotify connect restart after cooldown failed', {
+            this.log.warn('spotify connect restart after cooldown failed; scheduling retry', {
               zoneId: this.zoneId,
               message,
             });
+            this.scheduleRestart({});
           });
         }
       }, this.restartCooldownMs);
