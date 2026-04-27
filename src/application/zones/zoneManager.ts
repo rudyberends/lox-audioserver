@@ -47,7 +47,9 @@ import { SharedPowerGroupManager } from '@/application/zones/services/sharedPowe
 import {
   buildInitialState,
   getZoneDefaultVolume,
+  clampVolumeForZone,
 } from '@/application/zones/helpers/stateHelpers';
+import { buildVolumePatch } from '@/application/zones/playback/patchBuilder';
 import {
   formatEqualizerSettings,
   normalizeEqualizerBands,
@@ -321,9 +323,28 @@ export class ZoneManager {
         if (!ctx) {
           return;
         }
-        // Ignore spotify input callbacks when another input is active (e.g. AirPlay).
-        if (ctx.activeInput && ctx.activeInput !== 'spotify') {
+        // Spotify Connect may take over from any input except AirPlay (which has
+        // its own exclusivity). Regular Spotify callbacks only proceed when spotify
+        // is already the active input (prevents Connect stealing an AirPlay session).
+        if (label === 'spotify-connect') {
+          if (ctx.activeInput === 'airplay') {
+            return;
+          }
+        } else if (ctx.activeInput && ctx.activeInput !== 'spotify') {
           return;
+        }
+        // Spotify Connect sessions use a dedicated label. Mark the zone as Connect-
+        // controlled so resolveSourceName returns 'Spotify Connect' and
+        // buildActiveItemPatch preserves the live-source audiotype (no shuffle/repeat).
+        // Also set activeInput/inputMode so subsequent metadata callbacks are not
+        // blocked by the ctx.activeInput !== 'spotify' guards.
+        if (label === 'spotify-connect') {
+          ctx.queue.authority = 'spotify';
+          this.playbackCoordinator.setInputMode(ctx, 'spotify');
+          // Sync zone volume to the Connect device immediately so it does not
+          // start at librespot's default (100%).
+          const initialVolume = ctx.state.volume ?? getZoneDefaultVolume(ctx.config);
+          this.outputRouter.dispatchVolume(ctx, ctx.outputs, initialVolume);
         }
         ctx.spotifyAdapter.start(label, source, metadata);
       },
@@ -335,18 +356,26 @@ export class ZoneManager {
         ctx.spotifyAdapter.updateMetadata(metadata);
       },
       updateCover: (zoneId, cover) => {
-        const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx || ctx.activeInput !== 'spotify') {
-          return;
-        }
-        return ctx.spotifyAdapter.updateCover(cover);
+        // Route through updateInputCover so current.coverurl in the queue item
+        // is also updated. Without this, the next updateQueueFromOutput call
+        // from Squeezelite would overwrite the coverurl with the stale empty
+        // value from the queue item, wiping the cover immediately after it loads.
+        return this.updateInputCover(zoneId, cover);
       },
       updateVolume: (zoneId, volume) => {
         const ctx = this.zoneRepo.get(zoneId);
         if (!ctx || ctx.activeInput !== 'spotify') {
           return;
         }
-        ctx.spotifyAdapter.updateVolume(volume);
+        const level = clampVolumeForZone(ctx.config, volume);
+        // Patch zone state so the Loxone UI reflects the change.
+        // Do NOT route through player.setVolume: that triggers onPlayerVolume
+        // → dispatchVolume → SpotifyConnectInputController → Spotify API, which
+        // causes librespot to echo a volume event back → infinite loop.
+        this.stateStore.applyPatch(zoneId, buildVolumePatch(level));
+        // Sync squeezelite hardware volume only; skip spotify-input to avoid the loop.
+        const nonInputOutputs = ctx.outputs.filter(o => o.type !== 'spotify-input');
+        this.outputRouter.dispatchVolume(ctx, nonInputOutputs, level);
       },
       updateTiming: (zoneId, elapsed, duration) => {
         const ctx = this.zoneRepo.get(zoneId);
@@ -374,6 +403,11 @@ export class ZoneManager {
         if (!ctx || ctx.activeInput !== 'spotify') {
           return;
         }
+        // Clear track metadata before the player stops so the zone resets cleanly
+        // instead of showing the last track's title/artist/cover in stopped state.
+        this.applyPatch(zoneId, { title: '', artist: '', album: '', coverurl: '' });
+        ctx.queue.authority = 'local';
+        this.playbackCoordinator.setInputMode(ctx, null);
         ctx.spotifyAdapter.stop();
       },
     });
