@@ -32,6 +32,8 @@ export type SqueezeliteGroupCoordinator = {
   orchestrateGroupStop: (zoneId: number) => Promise<boolean>;
   notifyBufferReady: (zoneId: number) => void;
   notifyPlaybackTick: (zoneId: number) => void;
+  /** True while a resync pause-and-unpause is in flight for the given zone. */
+  isZoneResyncing: (zoneId: number) => boolean;
 };
 
 type PendingGroup = {
@@ -55,6 +57,7 @@ class SqueezeliteGroupController {
   private readonly syncPlaypoints = new Map<string, SyncPlaypoint[]>();
   private readonly doNotResyncBefore = new Map<string, number>();
   private readonly lastTickAt = new Map<string, number>();
+  private readonly resyncingZones = new Set<number>();
   private readonly minReqPlaypoints = 8;
   private readonly minDeviationAdjustMs = 8;
   private readonly deviationJumpIgnoreMs = 500;
@@ -315,6 +318,13 @@ class SqueezeliteGroupController {
         continue;
       }
       const diff = Math.round(leaderElapsed - memberElapsed);
+      this.log.spam('squeezelite group sync tick', {
+        leaderZoneId,
+        memberId,
+        leaderElapsedMs: Math.round(leaderElapsed),
+        memberElapsedMs: Math.round(memberElapsed),
+        diffMs: diff,
+      });
 
       const points = this.syncPlaypoints.get(key) ?? [];
       if (points.length > 0 && now - points[points.length - 1]!.ts > 10_000) {
@@ -353,7 +363,7 @@ class SqueezeliteGroupController {
 
       if (avg > this.maxSkipAheadMs) {
         // member lags badly; slow down the leader a bit.
-        void this.pauseAndUnpause(leader, delta);
+        void this.pauseAndUnpause(leaderZoneId, leader, delta);
         this.log.debug('squeezelite group resync (pause leader)', {
           leaderZoneId,
           memberId,
@@ -369,7 +379,7 @@ class SqueezeliteGroupController {
         });
       } else {
         // member is ahead; pause briefly.
-        void this.pauseAndUnpause(member, delta);
+        void this.pauseAndUnpause(memberId, member, delta);
         this.log.debug('squeezelite group resync (pause member)', {
           leaderZoneId,
           memberId,
@@ -379,14 +389,23 @@ class SqueezeliteGroupController {
     }
   }
 
-  private async pauseAndUnpause(player: SlimClient, pauseDurationMs: number): Promise<void> {
+  private async pauseAndUnpause(zoneId: number, player: SlimClient, pauseDurationMs: number): Promise<void> {
+    this.resyncingZones.add(zoneId);
     try {
-      await player.pause();
-    } catch {
-      // ignore
+      try {
+        await player.pause();
+      } catch {
+        // ignore
+      }
+      const ts = (player.jiffies || 0) + Math.max(0, Math.round(pauseDurationMs));
+      await player.unpauseAt(ts);
+    } finally {
+      this.resyncingZones.delete(zoneId);
     }
-    const ts = (player.jiffies || 0) + Math.max(0, Math.round(pauseDurationMs));
-    await player.unpauseAt(ts);
+  }
+
+  public isZoneResyncing(zoneId: number): boolean {
+    return this.resyncingZones.has(zoneId);
   }
 
   private async startGroup(
@@ -421,6 +440,17 @@ class SqueezeliteGroupController {
     for (const entry of entries) {
       const startAtMs = audibleAtMs - entry.latencyMs;
       const target = entry.player.estimateJiffiesAt(startAtMs);
+      const cs = entry.player.clockSync;
+      this.log.debug('squeezelite group start unpauseAt', {
+        zoneId: entry.zoneId,
+        target,
+        startAtMs,
+        clockBaseJiffies: cs?.jiffies ?? null,
+        clockBaseServerTimeMs: cs?.serverTimeMs ?? null,
+        clockBaseRttMs: cs?.rttMs ?? null,
+        clockBaseAgeMs: cs ? Math.round(Date.now() - cs.serverTimeMs) : null,
+        playerJiffies: entry.player.jiffies ?? null,
+      });
       void entry.player.unpauseAt(target);
     }
     this.log.debug('squeezelite group start', {

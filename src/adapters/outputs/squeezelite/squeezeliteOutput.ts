@@ -487,6 +487,13 @@ export class SqueezeliteOutput implements ZoneOutput {
   private emitState(player: SlimClient): void {
     const status = mapPlayerState(player.state);
     if (!status) return;
+    // A resync pause-and-unpause is a brief internal SlimProto operation (~100-300ms).
+    // Propagating it as 'paused' causes the zone power manager to fire a forced stop
+    // if activeModes=['play'], tearing down the group mid-sync.
+    if (status === 'paused' && this.ports.squeezeliteGroup.isZoneResyncing(this.zoneId)) {
+      this.log.spam('squeezelite state suppressed during group resync', { zoneId: this.zoneId });
+      return;
+    }
     if (this.lastStatus === status) return;
     this.lastStatus = status;
     this.ports.outputHandlers.onOutputState(this.zoneId, {
