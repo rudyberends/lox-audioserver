@@ -253,7 +253,10 @@ export class QueueController {
       return;
     }
     const authority = this.resolveQueueAuthorityFromItems(applyItems);
-    if (authority) {
+    // Only let Squeezelite-reported items update authority when a zone input
+    // is active. If activeInput is null the zone is idle/stopped and we must
+    // not revert the authority that stopPlayback already reset to 'local'.
+    if (authority && ctx.activeInput) {
       ctx.queue.authority = authority;
     }
     if (!signatureUnchanged) {
@@ -266,8 +269,12 @@ export class QueueController {
         authority: ctx.queue.authority,
       });
     }
+    // Only trust item duration when a zone input is active. In stopped/idle
+    // state the item still carries its last-known duration (e.g. 156 s from
+    // the last Spotify track) which would re-show the progress bar after
+    // stopPlayback already cleared it.
     const duration =
-      typeof current.duration === 'number' && current.duration > 0
+      ctx.activeInput && typeof current.duration === 'number' && current.duration > 0
         ? current.duration
         : typeof ctx.state.duration === 'number'
           ? ctx.state.duration
@@ -325,7 +332,10 @@ export class QueueController {
       queueAuthority: ctx.queue.authority,
       ...(!keepExistingExternalSourceName && sourceName ? { sourceName } : {}),
     });
-    if (duration <= 0) {
+    // Only resolve duration when a zone input is active. After stopPlayback the
+    // zone becomes idle (activeInput = null) and we must not let an async Spotify
+    // API response re-apply the last track's duration over the reset value of 0.
+    if (duration <= 0 && ctx.activeInput) {
       void this.resolveTrackDuration(current.audiopath).then((dur) => {
         if (dur > 0) {
           this.deps.applyPatch(zoneId, { duration: dur });

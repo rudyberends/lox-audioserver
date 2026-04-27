@@ -32,10 +32,11 @@ export class InputAdapter {
     if (metadataWithAudiopath && !metadataWithAudiopath.audiopath) {
       metadataWithAudiopath.audiopath = resolvedUri;
     }
+    const isSpotifyConnect = label === 'spotify-connect';
     const audioType =
       label === 'airplay'
         ? 4
-        : label === 'spotify' || resolvedUri.startsWith('spotify:')
+        : label === 'spotify' || isSpotifyConnect || resolvedUri.startsWith('spotify:')
           ? 5
           : label === 'linein'
             ? 3
@@ -66,11 +67,11 @@ export class InputAdapter {
         ...(label === 'linein' ? { type: 6 } : {}),
         sourceName:
           audioType === 5
-            ? 'musicassistant'
+            ? (isSpotifyConnect ? 'Spotify Connect' : 'musicassistant')
             : audioType === 4
               ? this.deps.zoneName
               : this.deps.sourceMac,
-        queueAuthority: audioType === 4 ? 'airplay' : audioType === 5 ? 'musicassistant' : 'local',
+        queueAuthority: audioType === 4 ? 'airplay' : audioType === 5 ? (isSpotifyConnect ? 'spotify' : 'musicassistant') : 'local',
       });
     }
     this.deps.player.playExternal(resolvedUri, playbackSource, metadataWithAudiopath);

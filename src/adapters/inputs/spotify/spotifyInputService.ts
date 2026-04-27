@@ -12,7 +12,7 @@ import type {
 } from '@/domain/config/types';
 import type { SpotifyDeviceRegistry } from '@/adapters/outputs/spotify/deviceRegistry';
 import { audioOutputSettings } from '@/ports/types/audioFormat';
-import type { PlaybackMetadata, PlaybackSource } from '@/application/playback/audioManager';
+import type { PlaybackMetadata, PlaybackSource, CoverArtPayload } from '@/application/playback/audioManager';
 import type { SpotifyConnectController } from '@/ports/InputsPort';
 import { PassThrough } from 'node:stream';
 import { getPlayer } from '@/application/playback/playerRegistry';
@@ -105,6 +105,11 @@ class SpotifyConnectInstance {
   public async start(): Promise<void> {
     if (this.config.offload) {
       this.isReady = false;
+      return;
+    }
+    if (this.isReady) {
+      // Connect host is already running. Avoid restarting it unless explicitly
+      // stopped first (e.g. via stopConnectHost() in scheduleRestart / credential change).
       return;
     }
     const credPath = this.credentialsPath;
@@ -408,30 +413,24 @@ class SpotifyConnectInstance {
 
     const eventMeta = this.buildMetadataFromNativeEvent(ev, resolvedTrackId, trackUri);
 
-    const shouldBootstrapSession =
-      typeRaw !== 'stopped' &&
-      typeRaw !== 'error' &&
-      (typeRaw === 'playing' ||
-        typeRaw === 'started' ||
-        typeRaw === 'loading' ||
-        typeRaw === 'track_changed' ||
-        typeRaw === 'paused' ||
-        typeRaw === 'position_correction' ||
-        Boolean(eventMeta) ||
-        Boolean(trackUri) ||
-        Boolean(resolvedTrackId) ||
-        positionSec !== undefined ||
-        durationSec !== undefined);
+    // Only bootstrap a new session when the connect host explicitly signals that audio
+    // is starting. 'playing'/'started' accompany sink start (PCM is actually flowing).
+    // Intermediate events like 'track_changed' or 'loading' fire even as librespot is
+    // stopping (pre-fetching the next track context) and must not re-open a session.
+    const shouldBootstrapSession = typeRaw === 'playing' || typeRaw === 'started';
 
     if (
       this.nativeConnectStream &&
       !this.hasActiveSession &&
       !this.stopping &&
       !this.restarting &&
-      !this.nativeStreamStop &&
       !this.directPlaybackPending &&
       shouldBootstrapSession
     ) {
+      // Stop any active Loxone direct stream before handing control to Connect.
+      if (this.nativeStreamStop) {
+        this.stopNativeStream(false);
+      }
       if (resolvedTrackId) {
         this.currentTrackId = resolvedTrackId;
       }
@@ -477,11 +476,17 @@ class SpotifyConnectInstance {
     if (typeRaw === 'playing' || typeRaw === 'started') {
       if (this.isPaused) {
         this.isPaused = false;
-        // If the direct stream_track has already ended (nativeStreamStop cleared by
-        // stopNativeStream) but hasActiveSession was never reset, calling resumePlayback
-        // would target the exhausted old session and produce silence. When the connect_host
-        // stream is available instead, bootstrap a fresh session from it.
-        if (!this.nativeStreamStop && this.nativeConnectStream) {
+        // When the connect host is providing audio (sink started), take over from any
+        // active direct (Loxone) streamTrack and bootstrap from the connect stream.
+        // This covers:
+        // 1. Direct stream ended naturally (nativeStreamStop cleared) — bootstrap prevents
+        //    resumePlayback from targeting the exhausted old session.
+        // 2. Loxone was playing (nativeStreamStop set) and user switched back to Connect —
+        //    stop the Loxone stream and hand control back to Connect.
+        if (this.nativeConnectStream) {
+          if (this.nativeStreamStop) {
+            this.stopNativeStream(false);
+          }
           this.hasActiveSession = false;
           this.startControllerPlayback(
             nextMeta ?? this.currentMetadata ?? this.buildFallbackMetadata(),
@@ -492,12 +497,33 @@ class SpotifyConnectInstance {
           // to another source.
           this.controller.resumePlayback(this.zoneId);
         }
+      } else if (this.nativeStreamStop && this.nativeConnectStream) {
+        // Connect fired 'playing' while Loxone direct stream was active (not paused).
+        // Stop the Loxone stream and take over with the Connect stream.
+        this.stopNativeStream(false);
+        this.hasActiveSession = false;
+        this.startControllerPlayback(
+          nextMeta ?? this.currentMetadata ?? this.buildFallbackMetadata(),
+        );
       }
     } else if (typeRaw === 'paused') {
       this.isPaused = true;
-      this.controller.pausePlayback(this.zoneId);
+      // Don't pause the zone when Loxone is doing direct streamTrack playback.
+      // The connect host pausing in that scenario is a device-conflict side effect
+      // (shared Spotify device ID) and should not affect the Loxone stream.
+      if (!this.nativeStreamStop) {
+        this.controller.pausePlayback(this.zoneId);
+      }
     } else if (typeRaw === 'stopped') {
       this.handleStopped();
+    } else if (typeRaw === 'volume') {
+      // librespot reports volume on a 0-65535 scale. Convert to 0-100 and
+      // update the zone so the Loxone UI reflects changes made in the Spotify app.
+      const rawVolume = typeof ev.volume === 'number' ? ev.volume : -1;
+      if (rawVolume >= 0 && this.hasActiveSession) {
+        const volumePercent = Math.round((rawVolume / 65535) * 100);
+        this.controller.updateVolume(this.zoneId, volumePercent);
+      }
     }
   }
 
@@ -533,6 +559,31 @@ class SpotifyConnectInstance {
     if (metadata.duration !== undefined && trackChanged) {
       this.controller.updateTiming(this.zoneId, 0, metadata.duration);
     }
+    // Fetch album art asynchronously — ConnectEvent has no image field.
+    if (trackChanged && nextTrackId) {
+      this.fetchAndApplyCoverUrl(nextTrackId);
+    }
+  }
+
+  private fetchAndApplyCoverUrl(trackId: string): void {
+    const zoneId = this.zoneId;
+    const doFetch = async (): Promise<void> => {
+      const track = await this.spotifyManagers
+        .get()
+        .getTrack('spotify', this.accountId ?? '', trackId);
+      if (!this.isActive || this.currentTrackId !== trackId) return;
+      const imageUrl: string = track?.coverurl ?? '';
+      if (!imageUrl) return;
+      const response = await fetch(imageUrl);
+      if (!response.ok || !this.isActive || this.currentTrackId !== trackId) return;
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const mime = response.headers.get('content-type') ?? 'image/jpeg';
+      const cover: CoverArtPayload = { data: buffer, mime };
+      this.controller.updateCover(zoneId, cover);
+    };
+    void doFetch().catch(() => {
+      /* ignore — cover art is best-effort */
+    });
   }
 
   private extractTrackIdFromUri(trackUri?: string): string | undefined {
@@ -861,7 +912,7 @@ class SpotifyConnectInstance {
       /* ignore */
     }
     const playbackSource = this.getPlaybackSource();
-    this.controller.startPlayback(this.zoneId, 'spotify', playbackSource, metadata);
+    this.controller.startPlayback(this.zoneId, 'spotify-connect', playbackSource, metadata);
     this.hasActiveSession = true;
     this.isPaused = false;
     this.currentMetadata = metadata;

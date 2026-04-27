@@ -72,7 +72,15 @@ export function updateOutputState(args: {
       Object.assign(patch, buildMatchedOutputUriPatch(ctx, current, matchedIndex, coordinator.audioHelpers));
     }
   }
-  if (ctx.metadata.radioControllable !== true && typeof state.duration === 'number' && state.duration > 0) {
+  // Only apply output-reported duration when the output is actively playing or paused.
+  // When it reports 'stopped', its duration value reflects the last-played track and
+  // must not override the 0 that buildStoppedPatch already wrote to the zone state.
+  if (
+    state.status !== 'stopped' &&
+    ctx.metadata.radioControllable !== true &&
+    typeof state.duration === 'number' &&
+    state.duration > 0
+  ) {
     patch.duration = Math.round(state.duration);
   }
   // Ignore output-provided position ticks; the player already drives timing,
