@@ -571,6 +571,16 @@ export class ZoneManager {
     return this.stateStore.getState(zoneId);
   }
 
+  public getAllZoneStates(): LoxoneZoneState[] {
+    const states: LoxoneZoneState[] = [];
+    for (const ctx of this.zoneRepo.list()) {
+      if (ctx.state) {
+        states.push(ctx.state);
+      }
+    }
+    return states;
+  }
+
   public getQueue(zoneId: number, start: number, limit: number) {
     return this.queueController.getQueue(zoneId, start, limit);
   }

@@ -16,6 +16,7 @@ export type ZoneManagerFacade = Pick<
   | 'replaceAll'
   | 'replaceZones'
   | 'getState'
+  | 'getAllZoneStates'
   | 'getZoneState'
   | 'getQueue'
   | 'getMetadata'
