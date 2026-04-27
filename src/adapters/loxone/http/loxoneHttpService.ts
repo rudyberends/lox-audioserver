@@ -205,6 +205,15 @@ export class LoxoneHttpService {
       this.options.serverHeartbeat.emit(this.options.configPort);
     }
 
+    for (const state of this.options.zoneManager.getAllZoneStates()) {
+      try {
+        connection.sendUTF(JSON.stringify({ audio_event: [state] }));
+      } catch {
+        // connection will be cleaned up via the error/close event
+        break;
+      }
+    }
+
     connection.on('message', (message) =>
       this.handleWebSocketMessage(message, connection, definition),
     );
