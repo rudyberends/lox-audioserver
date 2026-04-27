@@ -1028,10 +1028,11 @@ export class LocalLibraryProvider {
         return;
       }
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'EHOSTDOWN' || code === 'ENOTCONN' || code === 'EIO') {
+      const errno = (err as NodeJS.ErrnoException).errno;
+      if (code === 'EHOSTDOWN' || code === 'ENOTCONN' || code === 'EIO' || code === 'ESTALE' || errno === -116) {
         this.log.warn('nas path unavailable; skipping directory creation', {
           dir,
-          code,
+          code: code ?? `errno:${errno}`,
           ...meta,
         });
         return;
