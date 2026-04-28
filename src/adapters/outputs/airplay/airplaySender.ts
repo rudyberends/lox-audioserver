@@ -19,6 +19,7 @@ export interface AirplaySenderConfig {
   disableDiscovery?: boolean;
   debug?: boolean;
   config?: AirplaySenderOverrides;
+  onSessionEnded?: (event: { reason: string; key?: string; message?: string }) => void;
 }
 
 export class AirplaySender {
@@ -192,6 +193,25 @@ export class AirplaySender {
         this.log.debug('airplay sender metrics', {
           ...basePayload,
           detail: evt?.detail,
+        });
+        return;
+      }
+      if (evt?.event === 'session-ended') {
+        const reason =
+          typeof evt?.detail?.reason === 'string'
+            ? evt.detail.reason
+            : typeof evt?.message === 'string'
+              ? evt.message
+              : 'unknown';
+        this.log.info('airplay sender session ended', {
+          ...basePayload,
+          reason,
+          detail: evt?.detail,
+        });
+        this.config.onSessionEnded?.({
+          reason,
+          key: typeof evt?.detail?.key === 'string' ? evt.detail.key : undefined,
+          message: typeof evt?.message === 'string' ? evt.message : undefined,
         });
         return;
       }

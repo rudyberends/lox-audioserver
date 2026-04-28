@@ -96,6 +96,7 @@ export class AirPlayOutput implements ZoneOutput {
   private resumeInFlight = false;
   private fastStartNext = false;
   private noBacklogNext = false;
+  private suppressSessionEndedUntil = 0;
 
   constructor(
     private readonly zoneId: number,
@@ -122,6 +123,7 @@ export class AirPlayOutput implements ZoneOutput {
         forceAp2,
         debug: config.debug === true,
         config: configOverrides,
+        onSessionEnded: ({ reason }) => this.handleSenderSessionEnded(reason),
       },
       { zoneId, zoneName },
     );
@@ -192,6 +194,7 @@ export class AirPlayOutput implements ZoneOutput {
           zoneId: this.zoneId,
           zoneName: this.zoneName,
         });
+        this.suppressSessionEnded(2000);
         await this.flowSession.stopAll();
         this.lastInputUrl = null;
         this.running = false;
@@ -288,6 +291,7 @@ export class AirPlayOutput implements ZoneOutput {
     }
     this.paused = true;
     this.fastStartNext = true;
+    this.suppressSessionEnded(2000);
     await this.flowSession.pauseClients();
     this.lastStopAt = Date.now();
     this.running = false;
@@ -341,6 +345,7 @@ export class AirPlayOutput implements ZoneOutput {
       clientId: this.clientId,
       running: this.running,
     });
+    this.suppressSessionEnded(2000);
     await this.flowSession.stopAll();
     this.lastInputUrl = null;
     this.running = false;
@@ -513,7 +518,41 @@ export class AirPlayOutput implements ZoneOutput {
   }
 
   public async stopClient(clientId: string): Promise<void> {
+    this.suppressSessionEnded(2000);
     await this.flowSession.stopClientSafe(clientId);
+  }
+
+  private suppressSessionEnded(durationMs: number): void {
+    this.suppressSessionEndedUntil = Math.max(this.suppressSessionEndedUntil, Date.now() + durationMs);
+  }
+
+  private handleSenderSessionEnded(reason: string): void {
+    const active = this.running || this.starting || this.clientStarted;
+    if (Date.now() < this.suppressSessionEndedUntil) {
+      this.log.debug('AirPlay sender session end ignored after local action', {
+        zoneId: this.zoneId,
+        zoneName: this.zoneName,
+        reason,
+      });
+      return;
+    }
+    if (!active) {
+      this.log.debug('AirPlay sender session end ignored while inactive', {
+        zoneId: this.zoneId,
+        zoneName: this.zoneName,
+        reason,
+      });
+      return;
+    }
+    this.log.info('AirPlay sender session ended unexpectedly; stopping zone', {
+      zoneId: this.zoneId,
+      zoneName: this.zoneName,
+      reason,
+    });
+    this.running = false;
+    this.starting = false;
+    this.clientStarted = false;
+    this.ports.zoneManager.handleCommand(this.zoneId, 'stop');
   }
 
   private scheduleRetry(): void {
