@@ -11,5 +11,5 @@ runtime
     const log = createLogger('Server');
     const message = error instanceof Error ? error.message : String(error);
     log.error('fatal bootstrap error', { message });
-    process.exit(1);
+    process.exitCode = 1;
   });
