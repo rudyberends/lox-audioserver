@@ -173,6 +173,17 @@ export function buildStartedPatch(args: {
     delete activePatch.album;
     delete activePatch.coverurl;
   }
+  // The session metadata is authoritative for the track that is actually starting now.
+  // Queue-item metadata can be stale due to a background-fill race or a cache entry
+  // that hasn't been enriched yet. When the session provides valid title/artist,
+  // restore them so the stale queue-item values don't win via the spread-last rule.
+  const sessionTitle = sanitizeTitle(meta.title, '');
+  if (sessionTitle) {
+    (activePatch as any).title = sessionTitle;
+  }
+  if (typeof meta.artist === 'string' && meta.artist.trim()) {
+    (activePatch as any).artist = meta.artist;
+  }
   return { ...basePatch, ...activePatch };
 }
 
