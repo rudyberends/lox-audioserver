@@ -428,6 +428,7 @@ async function requestUrl(rawTarget: string, redirects = 0): Promise<void> {
   }
   const isHttps = target.protocol === 'https:';
   const client = isHttps ? httpsRequest : httpRequest;
+  const authorization = basicAuthHeader(target);
   await new Promise<void>((resolve, reject) => {
     const req = client(
       {
@@ -441,6 +442,7 @@ async function requestUrl(rawTarget: string, redirects = 0): Promise<void> {
         headers: {
           accept: '*/*',
           'user-agent': 'lox-audioserver-power-manager',
+          ...(authorization ? { authorization } : {}),
         },
       },
       (res) => {
@@ -452,7 +454,7 @@ async function requestUrl(rawTarget: string, redirects = 0): Promise<void> {
           return;
         }
         res.resume();
-        if (code >= 200 && code < 500) {
+        if (code >= 200 && code < 400) {
           resolve();
           return;
         }
@@ -463,6 +465,23 @@ async function requestUrl(rawTarget: string, redirects = 0): Promise<void> {
     req.on('error', reject);
     req.end();
   });
+}
+
+function basicAuthHeader(target: URL): string | null {
+  if (!target.username && !target.password) {
+    return null;
+  }
+  const username = decodeUrlCredential(target.username);
+  const password = decodeUrlCredential(target.password);
+  return `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
+}
+
+function decodeUrlCredential(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function normalizeUdp(raw: ZoneUdpPowerConfig | null): NormalizedUdpConfig | null {

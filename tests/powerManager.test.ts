@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { test } from './testHarness';
-import { PowerManager, type PowerManagerExecutor } from '../src/application/zones/services/powerManager';
+import {
+  PowerManager,
+  SystemPowerManagerExecutor,
+  type PowerManagerExecutor,
+} from '../src/application/zones/services/powerManager';
 
 type Call = { type: string; signal: 0 | 1 };
 
@@ -23,6 +28,23 @@ const noopLogger = {
 
 const baseState = { mode: 'stop' } as any;
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function withHttpServer(
+  handler: (req: IncomingMessage, res: ServerResponse) => void,
+  fn: (baseUrl: string) => Promise<void>,
+): Promise<void> {
+  const server = createServer(handler);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    await fn(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
 
 test('power manager stays active for state tracking when no config exists', async () => {
   const executor = new FakeExecutor();
@@ -169,6 +191,47 @@ test('power manager accepts crelay without serial', async () => {
       },
     },
   ]);
+});
+
+test('system power manager sends Basic Auth for URL credentials', async () => {
+  const executor = new SystemPowerManagerExecutor();
+  let authorization: string | undefined;
+  await withHttpServer(
+    (req, res) => {
+      authorization = req.headers.authorization;
+      res.writeHead(200);
+      res.end('ok');
+    },
+    async (baseUrl) => {
+      const target = baseUrl.replace('://', '://user:p%40ss@');
+      await executor.execute(
+        { type: 'url', config: { onUrl: `${target}/dev/sps/io/Amp/Ein`, offUrl: '' } },
+        1,
+      );
+    },
+  );
+
+  assert.equal(authorization, `Basic ${Buffer.from('user:p@ss').toString('base64')}`);
+});
+
+test('system power manager reports URL client errors as failures', async () => {
+  const executor = new SystemPowerManagerExecutor();
+  await withHttpServer(
+    (_req, res) => {
+      res.writeHead(401);
+      res.end('unauthorized');
+    },
+    async (baseUrl) => {
+      await assert.rejects(
+        () =>
+          executor.execute(
+            { type: 'url', config: { onUrl: `${baseUrl}/dev/sps/io/Amp/Ein`, offUrl: '' } },
+            1,
+          ),
+        /http 401/,
+      );
+    },
+  );
 });
 
 test('power manager applies off delay and cancels pending off when play resumes', async () => {
