@@ -84,7 +84,6 @@ export function buildZoneOutputs(
   const outputs: ZoneOutput[] = [];
   const primaryOutput = getPrimaryOutputConfig(zone);
   const entries = primaryOutput ? [primaryOutput] : [];
-  let hasAirplayOutput = false;
   let hasSpotifyController = false;
 
   for (const entry of entries) {
@@ -96,10 +95,9 @@ export function buildZoneOutputs(
       }
     }
     if (id === 'airplay') {
-      const output = createAirplayOutput(zone, ports);
+      const output = createAirplayOutput(entry, zone, ports);
       if (output) {
         outputs.push(output);
-        hasAirplayOutput = true;
       }
     }
     if (id === 'snapcast') {
@@ -160,14 +158,6 @@ export function buildZoneOutputs(
     if (output) {
       outputs.push(output);
       hasSpotifyController = true;
-    }
-  }
-
-  if (!hasAirplayOutput && isAirplayInputEnabled(zone)) {
-    const output = createAirplayOutput(zone, ports);
-    if (output) {
-      outputs.push(output);
-      hasAirplayOutput = true;
     }
   }
 
@@ -273,28 +263,16 @@ function isSpotifyInputEnabled(zone: ZoneConfig): boolean {
   return cfg ? cfg.enabled !== false : true;
 }
 
-function isAirplayInputEnabled(zone: ZoneConfig): boolean {
-  const cfg = zone.inputs?.airplay;
-  return cfg ? cfg.enabled !== false : true;
-}
-
 function createAirplayOutput(
+  config: ZoneTransportConfig,
   zone: ZoneConfig,
   ports: OutputPorts,
 ): ZoneOutput | null {
-  const primaryOutput = getPrimaryOutputConfig(zone);
-  const rawEntry =
-    primaryOutput && primaryOutput.id?.toLowerCase() === 'airplay' ? primaryOutput : null;
-  const inputAirplay = (zone.inputs as any)?.airplay;
-  const inputHost = typeof inputAirplay?.host === 'string' ? inputAirplay.host : undefined;
-  const host =
-    (rawEntry as unknown as AirPlayOutputConfig | undefined)?.host ||
-    inputHost;
-  const rawPort =
-    (rawEntry as unknown as AirPlayOutputConfig | undefined)?.port ||
-    (inputHost ? inputAirplay?.port : undefined);
-  if (!host || !isAirplayInputEnabled(zone)) {
-    log.debug('AirPlay output skipped; airplay input disabled', { zoneId: zone.id });
+  const rawEntry = config as unknown as AirPlayOutputConfig;
+  const host = rawEntry.host;
+  const rawPort = rawEntry.port;
+  if (!host) {
+    log.warn('AirPlay output skipped; missing host', { zoneId: zone.id });
     return null;
   }
   const name = (rawEntry as any)?.name;
