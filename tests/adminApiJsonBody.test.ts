@@ -3,7 +3,10 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { test } from './testHarness';
-import { AdminApiHandler } from '../src/adapters/http/adminApi/adminApiHandler';
+import {
+  AdminApiHandler,
+  buildSqueezeliteAdminPlayerSnapshot,
+} from '../src/adapters/http/adminApi/adminApiHandler';
 import type { ZoneManagerFacade } from '../src/application/zones/createZoneManager';
 import type { ConfigPort } from '../src/ports/ConfigPort';
 import type { ContentPort } from '../src/ports/ContentPort';
@@ -177,6 +180,45 @@ test('readJsonBody parses valid json under limit', async () => {
   assert.deepEqual(body, { ok: true });
   assert.equal(res.writableEnded, false);
   assert.equal(res.statusCode, null);
+});
+
+test('buildSqueezeliteAdminPlayerSnapshot matches configured player MAC', () => {
+  const snapshot = buildSqueezeliteAdminPlayerSnapshot(
+    { id: 'squeezelite', playerId: '02:8c:54:a9:dc:ac' },
+    [{ playerId: '028c54a9dcac', name: 'Test1' }],
+  );
+
+  assert.deepEqual(snapshot, {
+    mac: '02:8C:54:A9:DC:AC',
+    name: 'Test1',
+    connected: true,
+  });
+});
+
+test('buildSqueezeliteAdminPlayerSnapshot uses single connected player without configured target', () => {
+  const snapshot = buildSqueezeliteAdminPlayerSnapshot(
+    { id: 'squeezelite' },
+    [{ playerId: 'aa:bb:cc:dd:ee:ff', name: 'Living Room' }],
+  );
+
+  assert.deepEqual(snapshot, {
+    mac: 'AA:BB:CC:DD:EE:FF',
+    name: 'Living Room',
+    connected: true,
+  });
+});
+
+test('buildSqueezeliteAdminPlayerSnapshot exposes disconnected configured target', () => {
+  const snapshot = buildSqueezeliteAdminPlayerSnapshot(
+    { id: 'squeezelite', playerId: '02:8c:54:a9:dc:ac', playerName: 'Test1' },
+    [],
+  );
+
+  assert.deepEqual(snapshot, {
+    mac: '02:8C:54:A9:DC:AC',
+    name: 'Test1',
+    connected: false,
+  });
 });
 
 test('readJsonBody rejects invalid json with 400', async () => {

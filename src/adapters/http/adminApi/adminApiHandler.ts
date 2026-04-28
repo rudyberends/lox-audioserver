@@ -117,6 +117,69 @@ type AdminUiUpdateResult = {
   error?: string;
 };
 
+export type AdminSqueezelitePlayerSnapshot = {
+  mac: string | null;
+  name: string | null;
+  connected: boolean;
+};
+
+type SqueezelitePlayerLike = {
+  playerId?: string | null;
+  name?: string | null;
+};
+
+export function buildSqueezeliteAdminPlayerSnapshot(
+  output: ZoneTransportConfig | null | undefined,
+  players: SqueezelitePlayerLike[],
+): AdminSqueezelitePlayerSnapshot | undefined {
+  const outputId = stringValue(output?.id).toLowerCase();
+  if (outputId !== 'squeezelite') {
+    return undefined;
+  }
+  const configuredPlayerId = stringValue((output as { playerId?: unknown }).playerId);
+  const configuredPlayerName = stringValue((output as { playerName?: unknown }).playerName);
+  const normalizedPlayerId = normalizeSqueezelitePlayerId(configuredPlayerId);
+  const normalizedPlayerName = normalizeSqueezelitePlayerName(configuredPlayerName);
+  const player =
+    players.find((entry) => {
+      if (normalizedPlayerId) {
+        return normalizeSqueezelitePlayerId(entry.playerId) === normalizedPlayerId;
+      }
+      if (normalizedPlayerName) {
+        return normalizeSqueezelitePlayerName(entry.name) === normalizedPlayerName;
+      }
+      return false;
+    }) ?? (!normalizedPlayerId && !normalizedPlayerName && players.length === 1 ? players[0] : null);
+  return {
+    mac: formatSqueezeliteMac(player?.playerId) ?? formatSqueezeliteMac(configuredPlayerId),
+    name: stringValue(player?.name) || configuredPlayerName || null,
+    connected: Boolean(player),
+  };
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeSqueezelitePlayerId(value: unknown): string {
+  return stringValue(value).replace(/[^a-f0-9]/gi, '').toLowerCase();
+}
+
+function normalizeSqueezelitePlayerName(value: unknown): string {
+  return stringValue(value).toLowerCase();
+}
+
+function formatSqueezeliteMac(value: unknown): string | null {
+  const normalized = normalizeSqueezelitePlayerId(value);
+  if (normalized.length !== 12) {
+    return null;
+  }
+  return normalized
+    .match(/.{2}/g)!
+    .join(':')
+    .toUpperCase();
+}
+
 function isCrossDeviceRenameError(err: unknown): boolean {
   return (
     !!err &&
@@ -1992,6 +2055,10 @@ export class AdminApiHandler {
           sendspinClientId != null ? sendspinCore.getPlayerBufferCapacity(sendspinClientId) : null;
         const sendspinLead =
           sendspinClientId != null ? sendspinCore.getLeadStats(sendspinClientId) : null;
+        const squeezelitePlayer = buildSqueezeliteAdminPlayerSnapshot(
+          primaryOutput,
+          this.squeezeliteCore.players,
+        );
         const groupProtocol =
           techSnapshot?.transports && techSnapshot.transports.some((t) => t === 'sendspin') ? 'sendspin' : null;
         const streams = session
@@ -2002,7 +2069,7 @@ export class AdminApiHandler {
           : undefined;
         const streamStats = this.audioManager.getStreamStats(zone.id);
         const tech =
-          session || playbackSource
+          session || playbackSource || squeezelitePlayer
             ? {
                 input: playbackSource
                   ? {
@@ -2035,6 +2102,7 @@ export class AdminApiHandler {
                 outputTarget: techSnapshot?.activeOutput ?? null,
                 outputs: techSnapshot?.outputs ?? [],
                 transports: techSnapshot?.transports ?? [],
+                player: squeezelitePlayer,
                 session: session
                   ? {
                       state: session.state,
