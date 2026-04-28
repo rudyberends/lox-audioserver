@@ -678,7 +678,7 @@
 
       const loadSendspin = async () => {
         if (sendspinModule) return sendspinModule;
-        sendspinModule = await import('https://unpkg.com/@music-assistant/sendspin-js@2.0.0/dist/index.js');
+        sendspinModule = await import('https://unpkg.com/@sendspin/sendspin-js@3.1.0/dist/index.js');
         return sendspinModule;
       };
 
@@ -706,6 +706,21 @@
       const computeWsBase = (proto = currentProtocol) => {
         const base = normalizeWsUrl(location.origin.replace(/^http/i, 'ws'));
         return ensurePathForProtocol(base, proto === 'sendspin' ? 'sendspin' : 'snapcast');
+      };
+
+      const computeSendspinBaseUrl = () => {
+        const base = computeWsBase('sendspin');
+        if (!base) return null;
+        try {
+          const u = new URL(base);
+          u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
+          u.pathname = u.pathname.replace(/\/sendspin\/?$/i, '') || '/';
+          u.search = '';
+          u.hash = '';
+          return u.toString();
+        } catch {
+          return null;
+        }
       };
 
       const normalizeStreamUrl = () => {
@@ -1235,8 +1250,7 @@
       };
 
       const connectSendspin = async () => {
-        const baseNorm = computeWsBase('sendspin');
-        const base = baseNorm ? ensurePathForProtocol(baseNorm, 'sendspin') : null;
+        const base = computeSendspinBaseUrl();
         if (!base) {
           setStatus('Error: invalid server URL', false, true);
           return;
@@ -1295,6 +1309,24 @@
 
       const zonesEl = document.getElementById('zoneSelect');
 
+      const normalizeTransports = (zone) => {
+        const raw =
+          Array.isArray(zone?.transports) && zone.transports.length > 0
+            ? zone.transports
+            : Array.isArray(zone?.tech?.transports) && zone.tech.transports.length > 0
+              ? zone.tech.transports
+              : zone?.transport
+                ? [zone.transport]
+                : [];
+        return raw
+          .map((t) => {
+            if (typeof t === 'string') return { id: t };
+            if (t && typeof t === 'object') return t;
+            return null;
+          })
+          .filter(Boolean);
+      };
+
       function selectProtocolForZone(zoneId) {
         const z = zones.find((zone) => String(zone.id) === String(zoneId));
         if (!z) {
@@ -1330,22 +1362,19 @@
           if (!res.ok) throw new Error(`zones fetch ${res.status}`);
           const data = await res.json();
           const list = Array.isArray(data?.zones) ? data.zones : Array.isArray(data) ? data : [];
-        const supportsWs = (z) =>
-          Array.isArray(z?.transports) &&
-          z.transports.some(
-            (t) => {
+          const supportsWs = (z) =>
+            normalizeTransports(z).some((t) => {
               if (!t || typeof t.id !== 'string') return false;
-                const id = t.id.toLowerCase();
-                if (/(snapcast|sendspin)/i.test(id)) return true;
-                if (id === 'googlecast' && (t.useSendspin || t.useSnapcast)) return true;
-                return false;
-              },
-            );
+              const id = t.id.toLowerCase();
+              if (/(snapcast|sendspin)/i.test(id)) return true;
+              if (id === 'googlecast' && (t.useSendspin || t.useSnapcast)) return true;
+              return false;
+            });
           const withWs = list.filter((z) => supportsWs(z));
           zones = (withWs.length > 0 ? withWs : list).map((z) => ({
             id: z.id,
             name: z.name,
-            transports: z.transports,
+            transports: normalizeTransports(z),
           }));
           zonesEl.innerHTML =
             zones.length === 0

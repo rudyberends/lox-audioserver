@@ -2055,6 +2055,12 @@ export class AdminApiHandler {
           sendspinClientId != null ? sendspinCore.getPlayerBufferCapacity(sendspinClientId) : null;
         const sendspinLead =
           sendspinClientId != null ? sendspinCore.getLeadStats(sendspinClientId) : null;
+        const configuredTransports =
+          Array.isArray(zone.transports) && zone.transports.length > 0
+            ? zone.transports
+            : primaryOutput
+              ? [primaryOutput]
+              : [];
         const squeezelitePlayer = buildSqueezeliteAdminPlayerSnapshot(
           primaryOutput,
           this.squeezeliteCore.players,
@@ -2143,6 +2149,8 @@ export class AdminApiHandler {
           powerState: state?.powerState ?? 'off',
           coverurl: state?.coverurl ?? '',
           coverUrl: state?.coverurl ?? '',
+          transport: configuredTransports[0] ?? null,
+          transports: configuredTransports,
           tech,
           updatedAt: Date.now(),
         };
