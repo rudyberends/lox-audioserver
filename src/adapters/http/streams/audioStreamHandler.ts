@@ -72,14 +72,15 @@ export class AudioStreamHandler {
       this.notFound(res);
       return;
     }
-    const activeIds = [session.stream.id, session.pcmStream?.id].filter(Boolean) as string[];
     const requestedMatches =
-      streamId === 'current' ? true : activeIds.includes(streamId);
+      streamId === 'current'
+        ? true
+        : this.audioManager.isStreamIdActive(zoneId, streamId);
     if (!requestedMatches) {
       this.log.debug('stream id mismatch', {
         zoneId,
         requested: streamId,
-        active: activeIds,
+        active: [session.stream.id, session.pcmStream?.id].filter(Boolean),
       });
       this.notFound(res);
       return;
@@ -178,9 +179,19 @@ export class AudioStreamHandler {
       audioStream.pipe(res);
     }
 
+    let unregisterHandle: (() => void) | undefined;
     const dispose = () => {
       audioStream.destroy();
+      // End the HTTP response so squeezelite/etc see a clean EOF on this stream id.
+      // Important for URL rotation: closeSubscribersForStreamId() relies on this to
+      // make the OLD URL terminate after the NEW URL has had time to pre-buffer.
+      try {
+        if (!res.writableEnded) res.end();
+      } catch { /* ignore */ }
+      unregisterHandle?.();
+      unregisterHandle = undefined;
     };
+    unregisterHandle = this.audioManager.registerSubscriberHandle(zoneId, streamId, dispose);
 
     req.on('close', dispose);
     req.on('aborted', dispose);

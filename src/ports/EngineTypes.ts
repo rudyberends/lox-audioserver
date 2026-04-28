@@ -36,7 +36,8 @@ export type PlaybackSource =
       realTime?: boolean;
       /** Optional shared readable stream to feed directly (bypasses URL). */
       stream?: NodeJS.ReadableStream;
-    };
+    }
+;
 
 export type OutputProfile = 'mp3' | 'aac' | 'pcm' | 'opus' | 'flac';
 

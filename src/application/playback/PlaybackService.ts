@@ -64,6 +64,12 @@ export class PlaybackService {
     return this.engine.waitForFirstChunk(...args);
   }
 
+  public inlineCrossfade(
+    ...args: Parameters<EnginePort['inlineCrossfade']>
+  ): ReturnType<EnginePort['inlineCrossfade']> {
+    return this.engine.inlineCrossfade(...args);
+  }
+
   public hasSession(
     ...args: Parameters<EnginePort['hasSession']>
   ): ReturnType<EnginePort['hasSession']> {

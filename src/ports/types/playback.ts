@@ -54,4 +54,12 @@ export interface PlaybackSession {
   playRequestType?: string;
   playbackStartedAt?: number;
   firstAudioReadyAt?: number;
+  /** Wall-clock timestamp (ms) when the last inline crossfade blend completed. Set by inlineCrossfadePlayback. */
+  crossfadedAt?: number;
+  /**
+   * Stream IDs that were `session.stream.id` until rotated by `rotateStreamId()`.
+   * The HTTP handler accepts requests for any non-expired entry so existing subscriber
+   * connections (and brief reconnects) keep working during the gapless URL handover.
+   */
+  recentStreamIds?: { id: string; expiresAt: number }[];
 }

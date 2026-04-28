@@ -59,6 +59,20 @@ class SpotifyConnectInstance {
   private nativeSessionClientId: string | null = null;
   private nativeSessionDeviceName: string | null = null;
   private nativeSessionCredentialsHash: string | null = null;
+  private crossfadeSession: LibrespotSession | null = null;
+  private crossfadeSessionDeviceName: string | null = null;
+  private crossfadeStreamStop?: () => void;
+  private crossfadeStreamReleased = false;
+  /** True while a crossfade blend is in progress or the crossfade stream owns the audio. */
+  private crossfadeInProgress = false;
+  /**
+   * After a successful crossfade the audio session is playing the NEW track via the
+   * crossfade librespot session. The Connect host (separate session) is still showing
+   * the OLD track and will keep firing periodic metadata events for it. While this
+   * flag is true we ignore those events so they do not overwrite the audio session's
+   * metadata back to the old track. Cleared when a new direct playback starts.
+   */
+  private audioSessionOwnsTrack = false;
   private credentialsPayload: string | null = null;
   private currentMetadata: PlaybackMetadata | null = null;
   private currentTrackId: string | null = null;
@@ -440,6 +454,15 @@ class SpotifyConnectInstance {
       this.startControllerPlayback(seedMeta);
     }
 
+    // After a successful crossfade the audio session is playing a NEW track via the
+    // crossfade librespot session. The Connect host (this handler) is still on the
+    // OLD track and will keep firing periodic timing/metadata events. Forwarding
+    // those would either set the audio session's metadata back to the old title or
+    // mis-update its elapsed clock. Suppress both here.
+    if (this.audioSessionOwnsTrack) {
+      return;
+    }
+
     if (durationSec !== undefined || positionSec !== undefined) {
       const playerState = this.resolvePlayer(this.zoneId)?.getState?.();
       // Don't forward timing while paused — same reason as in getDirectPlaybackSource.
@@ -687,6 +710,9 @@ class SpotifyConnectInstance {
     // These are usually caused by the native session and the Connect host sharing a device ID on
     // Spotify's servers — when the native track starts, Spotify may stop the Connect host.
     this.directPlaybackPending = true;
+    // A fresh direct playback supersedes any prior crossfade-driven track ownership;
+    // re-enable Connect-host event processing so its metadata/timing flow normally again.
+    this.audioSessionOwnsTrack = false;
 
     const nativeStream = await getNativeLibrespotStream({
       uri: spotifyUri,
@@ -802,6 +828,149 @@ class SpotifyConnectInstance {
       // Librespot already outputs in real time; disabling ffmpeg -re removes startup lag.
       realTime: false,
       stream: this.nativeStream,
+    };
+  }
+
+  public stopCrossfadeStream(): void {
+    if (this.crossfadeStreamStop) {
+      try { this.crossfadeStreamStop(); } catch { /* ignore */ }
+      this.crossfadeStreamStop = undefined;
+    }
+    this.crossfadeInProgress = false;
+  }
+
+  /** The audio session has taken ownership of the stream — clear ref without stopping. */
+  public releaseCrossfadeStreamRef(metadata?: PlaybackMetadata): void {
+    // Set the flag so doEnd (which reads this.crossfadeStreamReleased via its `this`
+    // closure) becomes a no-op. This prevents a future error event or silence-timer
+    // from calling stream.end() after the audio session is already managing the stream.
+    this.crossfadeStreamReleased = true;
+    this.crossfadeStreamStop = undefined;
+    this.crossfadeInProgress = false;
+    // Take ownership of the audio session's metadata. The Connect host (separate
+    // librespot session) is still on the old track and will keep firing events with
+    // stale metadata; from now on we suppress those metadata writes until a fresh
+    // direct playback (getDirectPlaybackSource) is started.
+    this.audioSessionOwnsTrack = true;
+    if (metadata) {
+      this.currentMetadata = metadata;
+      const newTrackId =
+        metadata.trackId ??
+        this.extractTrackIdFromUri(metadata.audiopath) ??
+        null;
+      if (newTrackId) {
+        this.currentTrackId = newTrackId;
+      }
+    }
+  }
+
+  public async startCrossfadeStream(uri: string): Promise<{
+    stream: PassThrough;
+    sampleRate: number;
+    channels: number;
+    stop: () => void;
+  } | null> {
+    const manager = this.spotifyManagers.get();
+    const accessToken = await manager?.getAccessTokenForAccount(this.accountId ?? undefined);
+    const credentialsJson = this.credentialsPayload;
+    if (!accessToken && !credentialsJson) {
+      this.log.warn('spotify crossfade stream: missing access token and credentials', { zoneId: this.zoneId });
+      return null;
+    }
+    const deviceName = `${this.deviceId || `lox-zone-${this.zoneId}`}-xf`;
+
+    if (!this.crossfadeSession || this.crossfadeSessionDeviceName !== deviceName) {
+      if (this.crossfadeSession) {
+        await this.crossfadeSession.close().catch(() => {});
+        this.crossfadeSession = null;
+      }
+      const session = await createNativeLibrespotSession({
+        accessToken: accessToken ?? null,
+        credentialsJson: credentialsJson ?? null,
+        clientId: null,
+        deviceName,
+      });
+      if (!session) {
+        this.log.warn('spotify crossfade session unavailable', { zoneId: this.zoneId });
+        return null;
+      }
+      this.crossfadeSession = session;
+      this.crossfadeSessionDeviceName = deviceName;
+    }
+
+    this.stopCrossfadeStream(); // also clears crossfadeInProgress
+    this.crossfadeStreamReleased = false; // reset for this new stream
+
+    // librespot fires end_of_track when the *download* finishes, which can be well
+    // before PCM output is complete (realtime-paced). Calling stop() immediately
+    // would cut off the tail of the track. Instead we use endStreamOnStop:false and
+    // watch for 300 ms of silence after end_of_track before ending the stream.
+    let rawStop: (() => void) | undefined;
+    let streamRef: PassThrough | undefined;
+    let eotReceived = false;
+    let silenceTimer: NodeJS.Timeout | undefined;
+
+    const doEnd = () => {
+      if (this.crossfadeStreamReleased) return; // audio session owns the stream now
+      clearTimeout(silenceTimer);
+      silenceTimer = undefined;
+      if (streamRef && !streamRef.writableEnded) {
+        try { streamRef.end(); } catch { /* ignore */ }
+      }
+      rawStop?.();
+    };
+
+    const resetSilenceTimer = () => {
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(doEnd, 300);
+    };
+
+    const nativeStream = await getNativeLibrespotStream({
+      uri,
+      accessToken,
+      credentialsJson,
+      clientId: undefined,
+      deviceName,
+      bitrate: 320,
+      reuseSession: this.crossfadeSession,
+      endStreamOnStop: false, // we manage stream end manually via doEnd
+      closeSessionOnStop: false,
+      onEvent: (ev) => {
+        if (ev.type === 'error') {
+          const code = typeof ev.errorCode === 'string' ? ev.errorCode : '';
+          const msg = typeof ev.errorMessage === 'string' ? ev.errorMessage : '';
+          if (code.includes('end_of_track') || msg.includes('end_of_track')) {
+            // PCM is still flowing; start silence detection (300 ms after last chunk).
+            eotReceived = true;
+            resetSilenceTimer();
+          } else {
+            this.log.warn('spotify crossfade stream error', { zoneId: this.zoneId, code, msg });
+            doEnd();
+          }
+        }
+      },
+    });
+
+    if (!nativeStream) {
+      this.log.warn('spotify crossfade native stream unavailable', { zoneId: this.zoneId });
+      return null;
+    }
+
+    rawStop = nativeStream.stop;
+    streamRef = nativeStream.stream as PassThrough;
+    this.crossfadeStreamStop = doEnd;
+    this.crossfadeInProgress = true;
+
+    // Reset silence timer on each PCM chunk that arrives after end_of_track.
+    const onData = () => { if (eotReceived) resetSilenceTimer(); };
+    streamRef.on('data', onData);
+    streamRef.once('end', () => streamRef?.removeListener('data', onData));
+
+    return {
+      stream: streamRef,
+      sampleRate: nativeStream.sampleRate,
+      channels: nativeStream.channels,
+      stop: doEnd,
     };
   }
 
@@ -924,20 +1093,26 @@ class SpotifyConnectInstance {
   private teardownPlaybackSession(keepBlock = false): void {
     const shouldStop = this.hasActiveSession && (this.isActive || this.isPaused);
     // When this is called from a Connect 'stopped' event (keepBlock=true) and a native (direct)
-    // stream is already in progress, the stop is almost certainly a Spotify device-conflict
-    // artifact: the native session and the Connect host share a device ID, so when the native
-    // track starts, Spotify stops the Connect host. Killing the audio session here would produce
-    // silence. Just update internal state and leave the stream/session running.
-    const hasDirectPlayback = Boolean(this.nativeStreamStop || this.directPlaybackPending);
+    // stream or crossfade is already in progress, the stop is almost certainly a Spotify
+    // device-conflict artifact: the native session and the Connect host share a device ID,
+    // so when the native track starts, Spotify stops the Connect host. Killing the audio session
+    // here would produce silence. Just update internal state and leave the stream/session running.
+    const hasDirectPlayback = Boolean(this.nativeStreamStop || this.directPlaybackPending || this.crossfadeInProgress);
     if (keepBlock && hasDirectPlayback) {
-      this.log.debug('Connect stop event suppressed during native stream playback', {
+      this.log.debug('Connect stop event suppressed during native stream / crossfade playback', {
         zoneId: this.zoneId,
         directPlaybackPending: this.directPlaybackPending,
+        crossfadeInProgress: this.crossfadeInProgress,
       });
-      this.hasActiveSession = false;
-      this.isPaused = false;
-      this.isActive = false;
-      this.currentMetadata = null;
+      if (!this.crossfadeInProgress) {
+        // Direct playback: update internal state but keep audio running.
+        this.hasActiveSession = false;
+        this.isPaused = false;
+        this.isActive = false;
+        this.currentMetadata = null;
+      }
+      // During crossfade: keep ALL session state intact so the connect host does not
+      // re-bootstrap a new session when it fires 'playing' for the next track.
       return;
     }
     if (shouldStop) {
@@ -1428,6 +1603,21 @@ export class SpotifyInputService {
   public markSessionActive(zoneId: number, metadata?: PlaybackMetadata | null): void {
     const instance = this.instances.get(zoneId);
     instance?.markSessionActive(metadata);
+  }
+
+  public async startCrossfadeStream(
+    zoneId: number,
+    uri: string,
+  ): Promise<{ stream: PassThrough; sampleRate: number; channels: number; stop: () => void } | null> {
+    return this.instances.get(zoneId)?.startCrossfadeStream(uri) ?? null;
+  }
+
+  public stopCrossfadeStream(zoneId: number): void {
+    this.instances.get(zoneId)?.stopCrossfadeStream();
+  }
+
+  public releaseCrossfadeStream(zoneId: number, metadata?: PlaybackMetadata): void {
+    this.instances.get(zoneId)?.releaseCrossfadeStreamRef(metadata);
   }
 
   public async getPlaybackSourceForUri(

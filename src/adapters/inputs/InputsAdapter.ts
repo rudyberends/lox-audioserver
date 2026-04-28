@@ -120,6 +120,18 @@ export class InputsAdapter implements InputsPort {
   public requestLineInControl(...args: Parameters<InputsPort['requestLineInControl']>): void {
     this.deps.sendspinLineIn.requestControl(...args);
   }
+
+  public startCrossfadeStream(...args: Parameters<InputsPort['startCrossfadeStream']>): ReturnType<InputsPort['startCrossfadeStream']> {
+    return this.deps.spotify.startCrossfadeStream(...args);
+  }
+
+  public stopCrossfadeStream(...args: Parameters<InputsPort['stopCrossfadeStream']>): void {
+    this.deps.spotify.stopCrossfadeStream(...args);
+  }
+
+  public releaseCrossfadeStream(...args: Parameters<InputsPort['releaseCrossfadeStream']>): void {
+    this.deps.spotify.releaseCrossfadeStream(...args);
+  }
 }
 
 export function createInputsAdapter(deps: InputsAdapterDeps): InputsAdapter {

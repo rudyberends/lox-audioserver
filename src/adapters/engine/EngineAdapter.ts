@@ -94,6 +94,10 @@ export class EngineAdapter implements EnginePort {
     return this.engine.waitForFirstChunk(...args);
   }
 
+  public inlineCrossfade(...args: Parameters<EnginePort['inlineCrossfade']>): ReturnType<EnginePort['inlineCrossfade']> {
+    return this.engine.inlineCrossfade(...args);
+  }
+
   public hasSession(...args: Parameters<EnginePort['hasSession']>): boolean {
     return this.engine.hasSession(...args);
   }

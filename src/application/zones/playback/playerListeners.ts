@@ -34,6 +34,7 @@ type PlayerListenerCoordinator = {
     source: 'player',
     extra: { zone: string; sourceMac: string },
   ) => void;
+  onCrossfadePosition?: (zoneId: number, time: number, duration: number) => void;
 };
 
 export function attachPlayerListeners(args: {
@@ -215,6 +216,8 @@ function onPlayerPosition(
   } else {
     coordinator.applyPatch(zoneId, buildPositionPatch({ time: safeTime, duration: safeDuration }));
   }
+  coordinator.onCrossfadePosition?.(zoneId, safeTime, safeDuration);
+
   if (ctx.outputTimingActive && now - ctx.lastOutputTimingAt < 8000) {
     return;
   }

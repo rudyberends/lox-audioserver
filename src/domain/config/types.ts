@@ -37,6 +37,8 @@ export interface AudioserverConfig {
   slimprotoCliPort?: number;
   /** Optional LMS-compatible JSON-RPC port (default 9000). */
   slimprotoJsonPort?: number;
+  /** Global crossfade duration in seconds between songs (0 or absent = disabled). */
+  crossfadeSec?: number;
 }
 
 export interface AudioserverExtensionConfig {
