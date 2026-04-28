@@ -1,3 +1,4 @@
+import type { PassThrough } from 'node:stream';
 import type { PlaybackSource } from '@/ports/EngineTypes';
 import type { PlaybackMetadata, CoverArtPayload } from '@/ports/types/playback';
 import type { ZoneConfig, GlobalAirplayConfig, GlobalSpotifyConfig } from '@/domain/config/types';
@@ -117,4 +118,12 @@ export interface InputsPort {
   playerCommand(zoneId: number, command: string, args?: Record<string, unknown>): Promise<boolean>;
   requestLineInStop(inputId: string): void;
   requestLineInControl(inputId: string, command: LineInControlCommand): void;
+  startCrossfadeStream(
+    zoneId: number,
+    uri: string,
+  ): Promise<{ stream: PassThrough; sampleRate: number; channels: number; stop: () => void } | null>;
+  stopCrossfadeStream(zoneId: number): void;
+  /** After a successful crossfade the stream is owned by the audio session; clear the ref without stopping.
+   *  Pass the new track's metadata so the input service can suppress stale Connect-host events. */
+  releaseCrossfadeStream(zoneId: number, metadata?: PlaybackMetadata): void;
 }

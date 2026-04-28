@@ -161,6 +161,37 @@ export class ZonePlayer {
     return relative;
   }
 
+  /** Updates player state for an inline crossfade without sending PLAY to outputs.
+   *  The HTTP stream stays on the same URL — no Squeezelite reconnect, no gap. */
+  public updateStateForCrossfade(session: PlaybackSession): void {
+    this.endedEmitted = false;
+    this.endGuardSec = 0;
+    this.startTickerWhenReady(session, 0);
+    this.state = {
+      mode: 'playing',
+      time: 0,
+      duration: session.duration ?? session.metadata?.duration ?? 0,
+      metadata: session.metadata,
+      sourceLabel: session.source,
+      playbackSource: session.playbackSource,
+    };
+  }
+
+  public notifyCrossfadeStarted(session: PlaybackSession): void {
+    this.endedEmitted = false;
+    this.endGuardSec = 0;
+    this.startTickerWhenReady(session, 0);
+    this.state = {
+      mode: 'playing',
+      time: 0,
+      duration: session.duration ?? session.metadata?.duration ?? 0,
+      metadata: session.metadata,
+      sourceLabel: session.source,
+      playbackSource: session.playbackSource,
+    };
+    this.emit('started', session);
+  }
+
   public setVolume(level: number): void {
     this.emit('volume', level);
   }

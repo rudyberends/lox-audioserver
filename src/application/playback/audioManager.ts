@@ -55,6 +55,13 @@ export class AudioManager {
   private readonly playbackService: PlaybackService;
   private readonly outputNotifier: OutputNotifier;
   private readonly prefs: ZoneAudioPreferences;
+  /**
+   * HTTP responses currently serving a given streamId. Each entry registers a
+   * dispose() callback; calling closeSubscribersForStreamId() ends them all so
+   * the squeezelite client gets a clean EOF on the OLD URL after a URL rotation.
+   * Keyed by `${zoneId}:${streamId}`.
+   */
+  private readonly subscriberHandles = new Map<string, Set<() => void>>();
 
   constructor(
     playbackService: PlaybackService,
@@ -357,6 +364,102 @@ export class AudioManager {
 
   public getSession(zoneId: number): PlaybackSession | null {
     return this.sessions.get(zoneId) ?? null;
+  }
+
+  /**
+   * Returns true iff `streamId` is currently the active stream id for the zone, or it
+   * is a recently-rotated id whose grace window has not yet expired. Used by the HTTP
+   * stream handler to keep old URL connections valid during a URL handover.
+   */
+  public isStreamIdActive(zoneId: number, streamId: string): boolean {
+    const session = this.sessions.get(zoneId);
+    if (!session) return false;
+    if (session.stream.id === streamId) return true;
+    if (session.pcmStream?.id === streamId) return true;
+    const recent = session.recentStreamIds;
+    if (!recent || recent.length === 0) return false;
+    const now = Date.now();
+    return recent.some((entry) => entry.id === streamId && entry.expiresAt > now);
+  }
+
+  /**
+   * Allocate a fresh stream id for the zone's audio session and move the previous
+   * id into `recentStreamIds` (with `graceMs` TTL). The PCM pipeline is untouched —
+   * only the URL identity changes. Returns the previous id and the new URL, or null
+   * if there is no active session.
+   */
+  public rotateStreamId(
+    zoneId: number,
+    graceMs = 30_000,
+  ): { oldId: string; newId: string; newUrl: string } | null {
+    const session = this.sessions.get(zoneId);
+    if (!session) return null;
+    const oldStream = session.stream;
+    const newComposite = `${zoneId}-${randomUUID()}`;
+    const newUrl = oldStream.url.replace(oldStream.id, newComposite);
+    const newCoverUrl = oldStream.coverUrl.replace(oldStream.id, newComposite);
+    session.stream = {
+      ...oldStream,
+      id: newComposite,
+      url: newUrl,
+      coverUrl: newCoverUrl,
+      createdAt: Date.now(),
+    };
+    const now = Date.now();
+    const recent = (session.recentStreamIds ?? []).filter((entry) => entry.expiresAt > now);
+    recent.push({ id: oldStream.id, expiresAt: now + graceMs });
+    session.recentStreamIds = recent;
+    this.log.debug('stream id rotated', {
+      zoneId,
+      oldId: oldStream.id,
+      newId: newComposite,
+      newUrl,
+    });
+    return { oldId: oldStream.id, newId: newComposite, newUrl };
+  }
+
+  /**
+   * Register an HTTP response that is serving `streamId` for `zoneId`. The returned
+   * function deregisters the entry; callers must invoke it when the response closes.
+   * `closeSubscribersForStreamId` invokes every registered `dispose` for the streamId,
+   * which is how the URL handover signals EOF to the OLD squeezelite connection.
+   */
+  public registerSubscriberHandle(
+    zoneId: number,
+    streamId: string,
+    dispose: () => void,
+  ): () => void {
+    const key = `${zoneId}:${streamId}`;
+    let bucket = this.subscriberHandles.get(key);
+    if (!bucket) {
+      bucket = new Set();
+      this.subscriberHandles.set(key, bucket);
+    }
+    bucket.add(dispose);
+    return () => {
+      const current = this.subscriberHandles.get(key);
+      if (!current) return;
+      current.delete(dispose);
+      if (current.size === 0) this.subscriberHandles.delete(key);
+    };
+  }
+
+  /**
+   * Forcibly end every HTTP response currently serving `streamId`. Used by the URL
+   * handover after the new subscriber has had time to pre-buffer, so that
+   * squeezelite gets a clean EOF on the OLD URL and transitions to the enqueued one.
+   */
+  public closeSubscribersForStreamId(zoneId: number, streamId: string): number {
+    const key = `${zoneId}:${streamId}`;
+    const bucket = this.subscriberHandles.get(key);
+    if (!bucket || bucket.size === 0) return 0;
+    const count = bucket.size;
+    for (const dispose of Array.from(bucket)) {
+      try { dispose(); } catch { /* ignore */ }
+    }
+    this.subscriberHandles.delete(key);
+    this.log.debug('closed subscribers for stream id', { zoneId, streamId, count });
+    return count;
   }
 
   /**
@@ -1118,6 +1221,54 @@ export class AudioManager {
     const bands = this.prefs.getEqualizerResolver()?.(zoneId) ?? null;
     this.log.info('restarting audio engine to apply equalizer change', { zoneId });
     this.playbackService.restartZoneForEqualizer(zoneId, bands);
+  }
+
+  public async inlineCrossfadePlayback(
+    zoneId: number,
+    fadeIn:
+      | { kind: 'file'; path: string }
+      | { kind: 'url'; url: string; headers?: Record<string, string>; decryptionKey?: string }
+      | { kind: 'pipe'; stream: NodeJS.ReadableStream; sampleRate: number; channels: number },
+    durationSec: number,
+    nextPlaybackSource: PlaybackSource,
+    metadata?: PlaybackMetadata,
+  ): Promise<PlaybackSession | null> {
+    // Update title/artist/album/cover/duration AT FADE-IN START so the UI immediately
+    // shows the new track. We deliberately do NOT reset the wall-clock anchors here:
+    // the new track's audio doesn't actually start being audible until the blend
+    // completes, so anchoring `crossfadedAt` to the blend start would make
+    // `onCrossfadePosition` think the new track is `crossfadeSec` seconds further
+    // along than it really is — the next crossfade would fire `crossfadeSec` early
+    // and the user sees the metadata jump *crossfadeSec* before the song actually ends.
+    const session = this.sessions.get(zoneId);
+    if (session) {
+      session.metadata = metadata ?? session.metadata;
+      session.source = metadata?.audiopath ?? metadata?.title ?? 'crossfade';
+      session.duration = metadata?.duration ?? 0;
+      session.playbackSource = nextPlaybackSource;
+      session.updatedAt = Date.now();
+    }
+    this.log.info('inline crossfade started', {
+      zoneId,
+      durationSec,
+      title: metadata?.title,
+    });
+
+    const success = await this.playbackService.inlineCrossfade(zoneId, fadeIn, durationSec);
+    if (!success) return null;
+
+    // Reset wall-clock anchors AFTER the blend completes — at this moment the new
+    // track's audio is fully audible, so `crossfadedAt = now` correctly represents
+    // "elapsed=0 of the new track" for `onCrossfadePosition`'s next-trigger math.
+    const nowAfterBlend = Date.now();
+    if (session) {
+      session.elapsed = 0;
+      session.startedAt = nowAfterBlend;
+      session.crossfadedAt = nowAfterBlend;
+      session.updatedAt = nowAfterBlend;
+    }
+
+    return session ?? null;
   }
 
   public getStreamStats(

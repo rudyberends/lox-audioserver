@@ -71,6 +71,14 @@ export interface EnginePort {
     onTerminated: () => void,
   ): EngineLocalSession;
   waitForFirstChunk(zoneId: number, profile?: OutputProfile, timeoutMs?: number): Promise<boolean>;
+  inlineCrossfade(
+    zoneId: number,
+    fadeIn:
+      | { kind: 'file'; path: string }
+      | { kind: 'url'; url: string; headers?: Record<string, string>; decryptionKey?: string }
+      | { kind: 'pipe'; stream: NodeJS.ReadableStream; sampleRate: number; channels: number },
+    durationSec: number,
+  ): Promise<boolean>;
   hasSession(zoneId: number): boolean;
   getSessionStats(zoneId: number): EngineSessionStats[];
   setSessionTerminationHandler(handler: EngineSessionTerminationHandler): void;

@@ -5,6 +5,7 @@ import {
   audioOutputSettings,
   type AudioOutputSettings,
 } from '@/engine/audioFormat';
+import type { EnginePort } from '@/ports/EnginePort';
 
 export class AudioStreamEngine {
   private readonly log = createLogger('Audio', 'Engine');
@@ -241,6 +242,18 @@ export class AudioStreamEngine {
       return false;
     }
     return session.waitForFirstChunk(timeoutMs);
+  }
+
+  public async inlineCrossfade(
+    zoneId: number,
+    fadeIn: Parameters<EnginePort['inlineCrossfade']>[1],
+    durationSec: number,
+  ): Promise<boolean> {
+    const profileMap = this.sessions.get(zoneId);
+    if (!profileMap) return false;
+    const session = [...profileMap.values()][0];
+    if (!session) return false;
+    return session.inlineCrossfade(fadeIn, durationSec);
   }
 
   public hasSession(zoneId: number): boolean {

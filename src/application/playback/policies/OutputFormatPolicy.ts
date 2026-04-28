@@ -66,7 +66,7 @@ export function computePreferredPlaybackSettings(args: ComputeArgs): PreferredPl
       if (pref.profile) {
         override.profile = pref.profile;
       }
-      if (typeof pref.prebufferBytes === 'number' && pref.prebufferBytes > 0) {
+      if (typeof pref.prebufferBytes === 'number' && pref.prebufferBytes >= 0) {
         override.prebufferBytes = pref.prebufferBytes;
       }
     }

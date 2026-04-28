@@ -50,7 +50,8 @@ export type PlaybackSource =
       realTime?: boolean;
       /** Optional shared readable stream to feed directly (bypasses URL). */
       stream?: NodeJS.ReadableStream;
-    };
+    }
+;
 
 export type OutputProfile = 'mp3' | 'aac' | 'pcm' | 'opus' | 'flac';
 
@@ -100,7 +101,13 @@ export class AudioSession {
   private pipeSourceStream?: NodeJS.ReadableStream;
   private pipeSourceDataListener?: (chunk: Buffer) => void;
   private pipeSourceErrorListener?: (err: unknown) => void;
+  private pipeSourceEndListener?: () => void;
   private directPipeMode = false;
+  // Two-stage PCM pipeline (decoder → pcmPipe → encoderInput → encoder)
+  private decoderProc?: ChildProcessWithoutNullStreams;
+  private pcmPipe?: PassThrough;
+  private encoderInput?: PassThrough; // permanent bridge to encoder stdin
+  private crossfadeActive = false;
   private killTimer?: NodeJS.Timeout;
   private readonly killTimeoutMs = DEFAULT_KILL_TIMEOUT_MS;
   private discardSubscribersOnStop = false;
@@ -134,7 +141,10 @@ export class AudioSession {
     const hardMin = 1024 * 8; // keep a small guard when enabled
     this.sourcePadTailSec =
       this.source.kind === 'file' && !this.source.loop ? this.source.padTailSec : undefined;
-    this.sourcePreDelayMs = typeof this.source.preDelayMs === 'number' ? this.source.preDelayMs : undefined;
+    this.sourcePreDelayMs =
+      'preDelayMs' in this.source && typeof this.source.preDelayMs === 'number'
+        ? this.source.preDelayMs
+        : undefined;
     // Fixed lead to reduce startup latency across outputs.
     this.targetLeadMs = 1000;
     const alertPrebufferMs = 6000;
@@ -208,6 +218,17 @@ export class AudioSession {
       chunk.length >= FLAC_SIGNATURE.length &&
       chunk.subarray(0, FLAC_SIGNATURE.length).equals(FLAC_SIGNATURE)
     );
+  }
+
+  private extractFlacMetadataLength(data: Buffer): number {
+    // Return only the STREAMINFO block (always the first block, always 34 bytes of data).
+    // STREAMINFO is the only block VLC needs to initialize the decoder.
+    // Optional blocks (PADDING, SEEKTABLE, VORBIS_COMMENT) can be very large
+    // and are not needed for decoding — sending them as a burst inflates VLC's
+    // network-cache estimate.
+    if (data.length < 8) return data.length;
+    const firstBlockDataLen = (data[5]! << 16) | (data[6]! << 8) | data[7]!;
+    return Math.min(4 + 4 + firstBlockDataLen, data.length); // fLaC + block-header + STREAMINFO
   }
 
   private bufferedChunkStartsWithCodecHeader(): boolean {
@@ -394,19 +415,52 @@ export class AudioSession {
         outputBitDepth: this.outputSettings.pcmBitDepth,
         profile: this.profile,
       });
+      // Insert PassThrough chain so crossfade can blend PCM before the encoder.
+      // pipeSource.stream → pcmPipe → encoderInput → FFmpeg.stdin
+      const pcmBridge = new PassThrough();
+      const encInput = new PassThrough();
+      this.pcmPipe = pcmBridge;
+      this.encoderInput = encInput;
+      this.pipeSourceStream = pipeSource.stream;
+      pipeSource.stream.pipe(pcmBridge, { end: false });
+      pcmBridge.pipe(encInput, { end: false });
+
+      const onSourceEnd = () => {
+        try { pipeSource.stream.unpipe(pcmBridge); } catch { /* ignore */ }
+        if (!this.crossfadeActive && !this.ending) encInput.end();
+      };
+      pipeSource.stream.once('end', onSourceEnd);
+      pipeSource.stream.once('close', onSourceEnd);
+      this.pipeSourceEndListener = onSourceEnd;
+
+      this.pipeSourceErrorListener = (err: unknown) => {
+        this.log.warn('pipe source error', {
+          zoneId: this.zoneId,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        encInput.destroy();
+      };
+      pipeSource.stream.on('error', this.pipeSourceErrorListener);
+
       this.startTs = Date.now();
       let proc: ChildProcessWithoutNullStreams;
       proc = this.spawnFfmpeg(args, {
-        restartOnFailure: true,
+        restartOnFailure: false,
         logFirstChunk: false,
-        stdinStream: pipeSource.stream,
         onExit: () => {
-          try {
-            pipeSource.stream.unpipe(proc.stdin);
-          } catch {
-            /* ignore */
-          }
+          try { encInput.unpipe(proc.stdin); } catch { /* ignore */ }
         },
+      });
+      encInput.pipe(proc.stdin);
+      proc.stdin.on('error', (err: NodeJS.ErrnoException) => {
+        if (err?.code === 'EPIPE') {
+          this.log.debug('ffmpeg stdin closed (EPIPE)', { zoneId: this.zoneId });
+        } else {
+          this.log.warn('ffmpeg stdin error', {
+            zoneId: this.zoneId,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
       });
 
       // Monitor incoming source stream for pacing visibility.
@@ -452,6 +506,13 @@ export class AudioSession {
       return;
     }
 
+    // File and URL sources use the two-stage PCM pipeline so crossfade can be
+    // performed by blending raw PCM without switching the HTTP stream.
+    if (this.source.kind === 'file' || this.source.kind === 'url') {
+      this.startTwoStage();
+      return;
+    }
+
     const args = [
       '-hide_banner',
       '-loglevel',
@@ -471,9 +532,8 @@ export class AudioSession {
     });
     this.startTs = Date.now();
     const proc = this.spawnFfmpeg(args, {
-      restartOnFailure:
-        (this.source.kind === 'url' && this.source.restartOnFailure === true) ||
-        this.source.kind === 'pipe',
+      // After the file/url guard above, only pipe/crossfade sources reach here.
+      restartOnFailure: this.source.kind === 'pipe',
       logFirstChunk: true,
     });
 
@@ -508,7 +568,7 @@ export class AudioSession {
         proc.stdin.destroy();
       };
       options.stdinStream.on('error', this.pipeSourceErrorListener);
-      proc.stdin.on('error', (err: unknown) => {
+      proc.stdin.on('error', (err: NodeJS.ErrnoException) => {
         const e = err as { code?: string; message?: string } | null;
         if (e?.code === 'EPIPE') {
           this.log.debug('ffmpeg stdin closed (EPIPE)', { zoneId: this.zoneId });
@@ -547,10 +607,18 @@ export class AudioSession {
             spawnToFirstChunkMs: this.startTs ? Math.max(0, now - this.startTs) : null,
           });
         }
-        // Capture codec header from FLAC streams so new subscribers joining
-        // mid-stream can initialize their decoders correctly.
+        // Capture only the FLAC STREAMINFO block as the codec header.
+        // Sending the full first chunk (64 KB) as a burst causes VLC's adaptive
+        // network-cache to inflate its buffer to 30+ seconds before playback starts.
+        // STREAMINFO alone (42 bytes) is sufficient for the decoder to initialise.
         if (this.isCodecHeaderChunk(aligned)) {
-          this.codecHeader = Buffer.from(aligned);
+          const metaLen = this.extractFlacMetadataLength(aligned);
+          const header = Buffer.from(aligned.subarray(0, metaLen));
+          // Set is_last on the STREAMINFO block so VLC knows audio frames follow immediately.
+          if (header.length >= 5) {
+            header[4] = (header[4]! & 0x7f) | 0x80;
+          }
+          this.codecHeader = header;
         }
       }
       this.bufferChunk(aligned);
@@ -630,6 +698,508 @@ export class AudioSession {
     return proc;
   }
 
+  /**
+   * PCM crossfade — works for any source that uses the two-stage pipeline.
+   *
+   * The running decoder (old track) continues naturally; a new decoder is spawned
+   * for the fade-in source. Both PCM streams are blended frame-by-frame in Node.js
+   * with a linear volume ramp and written directly to encoderInput (which stays
+   * connected to the encoder FFmpeg throughout). Squeezelite never reconnects.
+   */
+  public async inlineCrossfade(
+    fadeIn:
+      | { kind: 'file'; path: string }
+      | { kind: 'url'; url: string; headers?: Record<string, string>; decryptionKey?: string }
+      | { kind: 'pipe'; stream: NodeJS.ReadableStream; sampleRate: number; channels: number },
+    durationSec: number,
+  ): Promise<boolean> {
+    if (this.directPipeMode && this.pipeSourceStream) {
+      return this.inlineCrossfadeFromDirectPipe(fadeIn, durationSec);
+    }
+    if (this.pipeSourceStream && this.pcmPipe && this.encoderInput && !this.decoderProc) {
+      return this.inlineCrossfadeFromPipeFFmpeg(fadeIn, durationSec);
+    }
+    if (!this.pcmPipe || !this.encoderInput || !this.decoderProc) return false;
+    if (fadeIn.kind === 'pipe') return false; // pipe fade-in requires pipe fade-out path
+
+    const { sampleRate } = this.outputSettings;
+    const totalFrames = Math.round(durationSec * sampleRate);
+
+    // Spawn new decoder for the incoming track.
+    const newDecoderArgs = this.buildPcmDecoderArgsForSource(fadeIn);
+    const newDecoder = spawn(this.ffmpegPath, newDecoderArgs, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }) as ChildProcessWithoutNullStreams;
+    newDecoder.stderr?.on('data', (c: Buffer) => {
+      const msg = c.toString().trim();
+      if (msg) this.log.debug('new decoder stderr', { zoneId: this.zoneId, message: msg });
+    });
+
+    this.crossfadeActive = true;
+    const oldDecoder = this.decoderProc as ChildProcessWithoutNullStreams;
+
+    this.log.info('PCM crossfade blend starting', {
+      zoneId: this.zoneId,
+      durationSec,
+      totalFrames,
+    });
+    // If the encoder's stdout was paused (subscriber count dropped to 0 mid-song),
+    // resume it now so the blend loop can write PCM without hitting backpressure.
+    if (this.stdoutPaused) {
+      this.resumeStdout();
+    }
+
+    // Keep decoder→pcmPipe intact (avoids OS-pipe stall from unpipe+resume).
+    // Only disconnect pcmPipe→encoderInput so we can write blended PCM directly.
+    this.pcmPipe!.unpipe(this.encoderInput);
+
+    // Collect old PCM from pcmPipe (decoder still writes to it as normal).
+    // Collect new PCM from the freshly-spawned decoder's stdout.
+    const oldChunks: Buffer[] = [];
+    const newChunks: Buffer[] = [];
+    let oldEnded = false;
+    let newEnded = false;
+
+    this.pcmPipe!.on('data', (c: Buffer) => oldChunks.push(c));
+    // decoder→pcmPipe uses { end: false }, so pcmPipe never emits 'end' when the
+    // decoder exits. Watch the decoder process exit directly instead.
+    const onOldDecoderExit = () => { oldEnded = true; };
+    oldDecoder.once('exit', onOldDecoderExit);
+    // Explicitly resume the backpressure chain: unpiping from encoderInput may have
+    // left pcmPipe and decoder.stdout in a paused state. Resume both to restart flow.
+    this.pcmPipe!.resume();
+    oldDecoder.stdout.resume();
+    newDecoder.stdout.on('data', (c: Buffer) => newChunks.push(c));
+    newDecoder.stdout.on('end', () => { newEnded = true; });
+
+    // Use a fixed-interval timer rather than a recursive setTimeout/drain chain.
+    // The drain-based approach silently stalls when the encoder's stdout is paused
+    // (e.g., subscriber briefly disconnected). setInterval always fires regardless
+    // of downstream backpressure; we intentionally ignore write backpressure here
+    // since the PCM trickles in at real-time rate (~1.76 KB per 10 ms tick).
+    const { framesProcessed, newRem } = await this.runPcmBlend(
+      oldChunks, newChunks, totalFrames,
+      () => oldEnded, () => newEnded,
+      (blended) => { this.encoderInput?.write(blended); },
+    );
+
+    // Crossfade complete — transition to new decoder only.
+    this.crossfadeActive = false;
+    // Remove all exit/error listeners before killing so the old decoder's exit does
+    // NOT call encoderInput.end() (which would prematurely terminate the encoder).
+    oldDecoder.off('exit', onOldDecoderExit);
+    oldDecoder.removeAllListeners('exit');
+    oldDecoder.removeAllListeners('error');
+    this.pcmPipe!.removeAllListeners('data');
+    // Disconnect old decoder from old pcmPipe, then kill it.
+    oldDecoder.stdout.unpipe(this.pcmPipe!);
+    oldDecoder.kill('SIGTERM');
+
+    // Write any leftover new-decoder PCM buffered during blend.
+    if (newRem.length) this.encoderInput!.write(newRem);
+    newDecoder.stdout.removeAllListeners('data');
+    newDecoder.stdout.removeAllListeners('end');
+
+    // Reconnect: newDecoder → fresh pcmPipe → encoderInput.
+    const newPcmPipe = new PassThrough();
+    this.pcmPipe = newPcmPipe;
+    this.decoderProc = newDecoder;
+
+    newDecoder.stdout.pipe(newPcmPipe, { end: false });
+    newPcmPipe.pipe(this.encoderInput!, { end: false });
+
+    newDecoder.on('exit', (code, signal) => {
+      this.log.debug('new decoder exited (after crossfade)', { zoneId: this.zoneId, code, signal });
+      if (!this.crossfadeActive) this.encoderInput?.end();
+    });
+    newDecoder.on('error', (err: NodeJS.ErrnoException) => {
+      this.log.warn('new decoder error', { zoneId: this.zoneId, message: err.message });
+    });
+
+    this.log.info('PCM crossfade complete', {
+      zoneId: this.zoneId, framesProcessed, totalFrames, durationSec,
+    });
+    return true;
+  }
+
+  /**
+   * Shared PCM blend loop — collects PCM from oldChunks/newChunks arrays (filled by
+   * concurrent data-event listeners) and calls onBlendedFrame every 10 ms with the
+   * linearly cross-faded result. Returns framesProcessed and any leftover new PCM.
+   *
+   * Stall handling: a Spotify pipe-source PassThrough never fires `'end'` when the
+   * track ends — librespot just stops writing. If we waited for `*Ended` we would
+   * spin forever (which previously caused the blend to hang for minutes and
+   * orphan the whole audio session). When one source has been silent longer than
+   * STALL_MS *after producing at least one chunk* we treat its samples as silence
+   * so the linear ramp keeps running and the blend completes within `totalFrames`.
+   *
+   * Sources that have never produced data get a separate STARTUP_TIMEOUT_MS budget
+   * (librespot needs ~600 ms before its first PCM chunk arrives). Without this we
+   * would bail at framesProcessed=0 whenever the OLD librespot was already stalled
+   * before the trigger fired (e.g., a 4 s pcm_stall right before song-end).
+   */
+  private async runPcmBlend(
+    oldChunks: Buffer[],
+    newChunks: Buffer[],
+    totalFrames: number,
+    getOldEnded: () => boolean,
+    getNewEnded: () => boolean,
+    onBlendedFrame: (blended: Buffer) => void,
+  ): Promise<{ framesProcessed: number; newRem: Buffer }> {
+    const { channels } = this.outputSettings;
+    const frameBytes = channels * 2;
+    let framesProcessed = 0;
+    let oldRem = Buffer.alloc(0);
+    let newRem = Buffer.alloc(0);
+    const STALL_MS = 300;
+    const STARTUP_TIMEOUT_MS = 1500;
+    const startTs = Date.now();
+    let oldLastDataAt = startTs;
+    let newLastDataAt = startTs;
+    let oldHasProduced = false;
+    let newHasProduced = false;
+    let oldStallLogged = false;
+    let newStallLogged = false;
+
+    await new Promise<void>((resolve) => {
+      const timer = setInterval(() => {
+        const now = Date.now();
+        if (oldChunks.length) {
+          oldRem = Buffer.concat([oldRem, ...oldChunks.splice(0)]);
+          oldLastDataAt = now;
+          oldHasProduced = true;
+        }
+        if (newChunks.length) {
+          newRem = Buffer.concat([newRem, ...newChunks.splice(0)]);
+          newLastDataAt = now;
+          newHasProduced = true;
+        }
+
+        const elapsedMs = now - startTs;
+        const oldStalledAfterProducing =
+          oldHasProduced && oldRem.length < frameBytes && now - oldLastDataAt > STALL_MS;
+        const oldNeverStarted = !oldHasProduced && elapsedMs > STARTUP_TIMEOUT_MS;
+        const oldEffectivelyDone = getOldEnded() || oldStalledAfterProducing || oldNeverStarted;
+
+        const newStalledAfterProducing =
+          newHasProduced && newRem.length < frameBytes && now - newLastDataAt > STALL_MS;
+        const newNeverStarted = !newHasProduced && elapsedMs > STARTUP_TIMEOUT_MS;
+        const newEffectivelyDone = getNewEnded() || newStalledAfterProducing || newNeverStarted;
+
+        if (oldEffectivelyDone && !oldStallLogged) {
+          oldStallLogged = true;
+          this.log.debug('PCM crossfade old source stalled — using silence for remaining blend', {
+            zoneId: this.zoneId, framesProcessed, totalFrames,
+            oldEnded: getOldEnded(), oldHasProduced, elapsedMs,
+          });
+        }
+        if (newEffectivelyDone && !newStallLogged) {
+          newStallLogged = true;
+          this.log.debug('PCM crossfade new source stalled — using silence for remaining blend', {
+            zoneId: this.zoneId, framesProcessed, totalFrames,
+            newEnded: getNewEnded(), newHasProduced, elapsedMs,
+          });
+        }
+
+        if (oldEffectivelyDone && newEffectivelyDone) {
+          this.log.warn('PCM crossfade blend ended early', {
+            zoneId: this.zoneId, framesProcessed, totalFrames,
+            oldEnded: getOldEnded(), newEnded: getNewEnded(),
+            oldHasProduced, newHasProduced, elapsedMs,
+          });
+          clearInterval(timer);
+          resolve();
+          return;
+        }
+
+        // Bound how many frames to process this tick so we never write a multi-second
+        // burst to the encoder when one side stalls and the other has buffered ahead.
+        const remainingFrames = totalFrames - framesProcessed;
+        const oldAvailFrames = oldEffectivelyDone ? remainingFrames : Math.floor(oldRem.length / frameBytes);
+        const newAvailFrames = newEffectivelyDone ? remainingFrames : Math.floor(newRem.length / frameBytes);
+        const framesThisTick = Math.min(oldAvailFrames, newAvailFrames, remainingFrames);
+        if (framesThisTick <= 0) {
+          return;
+        }
+
+        const blended = Buffer.alloc(framesThisTick * frameBytes);
+        let oldOff = 0;
+        let newOff = 0;
+        for (let f = 0; f < framesThisTick; f++) {
+          const t = Math.min(1, framesProcessed / totalFrames);
+          const dstOff = f * frameBytes;
+          for (let ch = 0; ch < channels; ch++) {
+            const co = ch * 2;
+            const a = oldEffectivelyDone ? 0 : oldRem.readInt16LE(oldOff + co);
+            const b = newEffectivelyDone ? 0 : newRem.readInt16LE(newOff + co);
+            blended.writeInt16LE(
+              Math.max(-32768, Math.min(32767, Math.round(a * (1 - t) + b * t))),
+              dstOff + co,
+            );
+          }
+          if (!oldEffectivelyDone) oldOff += frameBytes;
+          if (!newEffectivelyDone) newOff += frameBytes;
+          framesProcessed++;
+        }
+        if (!oldEffectivelyDone) oldRem = oldRem.subarray(oldOff);
+        if (!newEffectivelyDone) newRem = newRem.subarray(newOff);
+        onBlendedFrame(blended);
+
+        if (framesProcessed >= totalFrames) {
+          clearInterval(timer);
+          resolve();
+        }
+      }, 10);
+    });
+
+    return { framesProcessed, newRem };
+  }
+
+  /**
+   * PCM crossfade for pipe sources in FFmpeg mode (pipeSource → pcmPipe → encoderInput → FFmpeg).
+   * Supports file/URL (spawns a decoder) and pipe (uses stream directly) as fade-in.
+   */
+  private async inlineCrossfadeFromPipeFFmpeg(
+    fadeIn:
+      | { kind: 'file'; path: string }
+      | { kind: 'url'; url: string; headers?: Record<string, string>; decryptionKey?: string }
+      | { kind: 'pipe'; stream: NodeJS.ReadableStream; sampleRate: number; channels: number },
+    durationSec: number,
+  ): Promise<boolean> {
+    if (!this.pcmPipe || !this.encoderInput || !this.pipeSourceStream) return false;
+
+    const { sampleRate } = this.outputSettings;
+    const totalFrames = Math.round(durationSec * sampleRate);
+
+    // New source: either a decoder process (file/url) or a live pipe stream (Spotify-to-Spotify).
+    let newSourceStream: NodeJS.ReadableStream;
+    let newDecoder: ChildProcessWithoutNullStreams | undefined;
+    if (fadeIn.kind === 'pipe') {
+      newSourceStream = fadeIn.stream;
+    } else {
+      newDecoder = spawn(this.ffmpegPath, this.buildPcmDecoderArgsForSource(fadeIn), {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }) as ChildProcessWithoutNullStreams;
+      newDecoder.stderr?.on('data', (c: Buffer) => {
+        const msg = c.toString().trim();
+        if (msg) this.log.debug('new decoder stderr', { zoneId: this.zoneId, message: msg });
+      });
+      newSourceStream = newDecoder.stdout;
+    }
+
+    this.crossfadeActive = true;
+
+    this.log.info('PCM crossfade blend starting (pipe-ffmpeg)', {
+      zoneId: this.zoneId, durationSec, totalFrames, fadeInKind: fadeIn.kind,
+    });
+    if (this.stdoutPaused) this.resumeStdout();
+
+    this.pcmPipe.unpipe(this.encoderInput);
+
+    const oldChunks: Buffer[] = [];
+    const newChunks: Buffer[] = [];
+    let oldEnded = false;
+    let newEnded = false;
+
+    this.pcmPipe.on('data', (c: Buffer) => oldChunks.push(c));
+    const onOldEnd = () => { oldEnded = true; };
+    this.pipeSourceStream.once('end', onOldEnd);
+    this.pcmPipe.resume();
+
+    newSourceStream.on('data', (c: Buffer) => newChunks.push(c));
+    newSourceStream.once('end', () => { newEnded = true; });
+
+    const { framesProcessed, newRem } = await this.runPcmBlend(
+      oldChunks, newChunks, totalFrames,
+      () => oldEnded, () => newEnded,
+      (blended) => this.encoderInput?.write(blended),
+    );
+
+    this.crossfadeActive = false;
+
+    this.pipeSourceStream.off('end', onOldEnd);
+    this.pcmPipe.removeAllListeners('data');
+    try { this.pipeSourceStream.unpipe(this.pcmPipe); } catch { /* ignore */ }
+    this.detachPipeSourceListeners();
+
+    if (newRem.length) this.encoderInput!.write(newRem);
+    newSourceStream.removeAllListeners('data');
+    newSourceStream.removeAllListeners('end');
+
+    const newPcmPipe = new PassThrough();
+    this.pcmPipe = newPcmPipe;
+
+    if (fadeIn.kind === 'pipe') {
+      // Pipe fade-in: wire the new Spotify stream as the new pcmPipe source.
+      this.pipeSourceStream = fadeIn.stream;
+      fadeIn.stream.pipe(newPcmPipe, { end: false });
+      newPcmPipe.pipe(this.encoderInput!, { end: false });
+      const onEnd = () => {
+        if (!this.crossfadeActive && !this.ending) this.encoderInput?.end();
+      };
+      fadeIn.stream.once('end', onEnd);
+      fadeIn.stream.once('close', onEnd);
+      this.pipeSourceEndListener = onEnd;
+      this.pipeSourceErrorListener = (err: unknown) => {
+        this.log.warn('crossfade pipe stream error', { zoneId: this.zoneId, message: err instanceof Error ? err.message : String(err) });
+        if (!this.crossfadeActive && !this.ending) this.encoderInput?.end();
+      };
+      fadeIn.stream.on('error', this.pipeSourceErrorListener);
+    } else {
+      // Decoder fade-in: wire the decoder as the new decoderProc.
+      this.decoderProc = newDecoder!;
+      newDecoder!.stdout.pipe(newPcmPipe, { end: false });
+      newPcmPipe.pipe(this.encoderInput!, { end: false });
+      newDecoder!.on('exit', (code, signal) => {
+        this.log.debug('new decoder exited (after pipe-ffmpeg crossfade)', { zoneId: this.zoneId, code, signal });
+        if (!this.crossfadeActive) this.encoderInput?.end();
+      });
+      newDecoder!.on('error', (err: NodeJS.ErrnoException) => {
+        this.log.warn('new decoder error', { zoneId: this.zoneId, message: err.message });
+      });
+    }
+
+    this.log.info('PCM crossfade complete (pipe-ffmpeg)', {
+      zoneId: this.zoneId, framesProcessed, totalFrames, durationSec,
+    });
+    return true;
+  }
+
+  /**
+   * PCM crossfade for pipe sources in direct-passthrough mode (profile=pcm, no FFmpeg).
+   * Supports file/URL (spawns a decoder) and pipe (Spotify stream) as fade-in.
+   * Blended PCM is written directly to subscribers. Afterwards a pseudo-two-stage pipeline
+   * is wired so future crossfades on the new track work normally.
+   */
+  private async inlineCrossfadeFromDirectPipe(
+    fadeIn:
+      | { kind: 'file'; path: string }
+      | { kind: 'url'; url: string; headers?: Record<string, string>; decryptionKey?: string }
+      | { kind: 'pipe'; stream: NodeJS.ReadableStream; sampleRate: number; channels: number },
+    durationSec: number,
+  ): Promise<boolean> {
+    if (!this.directPipeMode || !this.pipeSourceStream) return false;
+
+    const { sampleRate } = this.outputSettings;
+    const totalFrames = Math.round(durationSec * sampleRate);
+
+    let newSourceStream: NodeJS.ReadableStream;
+    let newDecoder: ChildProcessWithoutNullStreams | undefined;
+    if (fadeIn.kind === 'pipe') {
+      newSourceStream = fadeIn.stream;
+    } else {
+      newDecoder = spawn(this.ffmpegPath, this.buildPcmDecoderArgsForSource(fadeIn), {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }) as ChildProcessWithoutNullStreams;
+      newDecoder.stderr?.on('data', (c: Buffer) => {
+        const msg = c.toString().trim();
+        if (msg) this.log.debug('new decoder stderr', { zoneId: this.zoneId, message: msg });
+      });
+      newSourceStream = newDecoder.stdout;
+    }
+
+    this.crossfadeActive = true;
+    const oldStream = this.pipeSourceStream;
+
+    this.log.info('PCM crossfade blend starting (direct-pipe)', {
+      zoneId: this.zoneId, durationSec, totalFrames, fadeInKind: fadeIn.kind,
+    });
+    if (this.stdoutPaused) this.resumeStdout();
+
+    if (this.pipeSourceDataListener) {
+      oldStream.off('data', this.pipeSourceDataListener);
+      this.pipeSourceDataListener = undefined;
+    }
+
+    const oldChunks: Buffer[] = [];
+    const newChunks: Buffer[] = [];
+    let oldEnded = false;
+    let newEnded = false;
+
+    const onOldData = (c: Buffer) => oldChunks.push(c);
+    const onOldEnd = () => { oldEnded = true; };
+    oldStream.on('data', onOldData);
+    oldStream.once('end', onOldEnd);
+    oldStream.resume();
+
+    newSourceStream.on('data', (c: Buffer) => newChunks.push(c));
+    newSourceStream.once('end', () => { newEnded = true; });
+
+    const { framesProcessed, newRem } = await this.runPcmBlend(
+      oldChunks, newChunks, totalFrames,
+      () => oldEnded, () => newEnded,
+      (blended) => {
+        this.bufferChunk(blended);
+        this.writeToSubscribers(blended);
+      },
+    );
+
+    this.crossfadeActive = false;
+    this.directPipeMode = false;
+
+    oldStream.off('data', onOldData);
+    oldStream.off('end', onOldEnd);
+    this.pipeSourceStream = undefined;
+
+    if (newRem.length) {
+      this.bufferChunk(newRem);
+      this.writeToSubscribers(newRem);
+    }
+    newSourceStream.removeAllListeners('data');
+    newSourceStream.removeAllListeners('end');
+
+    // Wire a pseudo-two-stage pipeline so future inlineCrossfade calls work on the new track.
+    const newPcmPipe = new PassThrough();
+    const newEncoderInput = new PassThrough();
+    this.pcmPipe = newPcmPipe;
+    this.encoderInput = newEncoderInput;
+
+    newEncoderInput.on('data', (chunk: Buffer) => {
+      const aligned = this.alignPcmChunk(chunk);
+      if (aligned?.length) {
+        this.bufferChunk(aligned);
+        this.writeToSubscribers(aligned);
+      }
+    });
+    newEncoderInput.on('end', () => {
+      if (!this.crossfadeActive && !this.ending) this.cleanup();
+    });
+
+    if (fadeIn.kind === 'pipe') {
+      this.pipeSourceStream = fadeIn.stream;
+      fadeIn.stream.pipe(newPcmPipe, { end: false });
+      newPcmPipe.pipe(newEncoderInput, { end: false });
+      const onEnd = () => {
+        if (!this.crossfadeActive && !this.ending) newEncoderInput.end();
+      };
+      fadeIn.stream.once('end', onEnd);
+      fadeIn.stream.once('close', onEnd);
+      this.pipeSourceEndListener = onEnd;
+      this.pipeSourceErrorListener = (err: unknown) => {
+        this.log.warn('crossfade pipe stream error', { zoneId: this.zoneId, message: err instanceof Error ? err.message : String(err) });
+        if (!this.crossfadeActive && !this.ending) newEncoderInput.end();
+      };
+      fadeIn.stream.on('error', this.pipeSourceErrorListener);
+    } else {
+      this.decoderProc = newDecoder!;
+      newDecoder!.stdout.pipe(newPcmPipe, { end: false });
+      newPcmPipe.pipe(newEncoderInput, { end: false });
+      newDecoder!.on('exit', (code, signal) => {
+        this.log.debug('new decoder exited (after direct-pipe crossfade)', { zoneId: this.zoneId, code, signal });
+        if (!this.crossfadeActive) newEncoderInput.end();
+      });
+      newDecoder!.on('error', (err: NodeJS.ErrnoException) => {
+        this.log.warn('new decoder error', { zoneId: this.zoneId, message: err.message });
+      });
+    }
+
+    this.log.info('PCM crossfade complete (direct-pipe)', {
+      zoneId: this.zoneId, framesProcessed, totalFrames, durationSec,
+    });
+    return true;
+  }
+
   private getLogLevel(): string {
     if (this.source.kind === 'url' && this.source.logLevel) {
       return this.source.logLevel;
@@ -654,6 +1224,11 @@ export class AudioSession {
   }
 
   private pauseStdout(): void {
+    // Never pause the encoder during an active PCM crossfade blend — the blend loop
+    // writes directly to encoderInput and must not be blocked by subscriber backpressure.
+    if (this.crossfadeActive) {
+      return;
+    }
     if (this.stdoutPaused) {
       return;
     }
@@ -828,6 +1403,175 @@ export class AudioSession {
       this.bufferBytes -= removed.length;
     }
   }
+
+  // ─── Two-stage PCM pipeline ────────────────────────────────────────────────
+
+  /** Args for decoder FFmpeg: source → PCM s16le at target sample-rate/channels. */
+  private buildPcmDecoderArgs(): string[] {
+    const { sampleRate, channels } = this.outputSettings;
+    const pcmOut = [
+      '-vn', '-acodec', 'pcm_s16le',
+      '-ar', String(sampleRate), '-ac', String(channels),
+      '-f', 's16le', 'pipe:1',
+    ];
+    const log = ['-hide_banner', '-loglevel', this.getLogLevel()];
+
+    if (this.source.kind === 'file') {
+      const loopArgs = this.source.loop ? ['-stream_loop', '-1'] : [];
+      const latencyArgs = this.isAlertSource ? this.buildBufferedArgs() : this.buildLowLatencyArgs();
+      const realTimeArgs = this.source.realTime !== false ? ['-re'] : [];
+      const seekArgs = this.buildSeekArgs(this.source.startAtSec);
+      return [...log, ...latencyArgs, ...loopArgs, ...realTimeArgs, ...seekArgs, '-i', this.source.path, ...pcmOut];
+    }
+
+    if (this.source.kind === 'url') {
+      const lowLatency = this.source.lowLatency !== false;
+      const headerLines = this.source.headers ? this.formatHeaders(this.source.headers) : '';
+      const headerArgs = headerLines ? ['-headers', headerLines] : [];
+      const decryptionArgs = this.source.decryptionKey ? ['-decryption_key', this.source.decryptionKey] : [];
+      const needsTls = Boolean(this.source.tlsVerifyHost && /^https:/i.test(this.source.url));
+      const tlsArgs = needsTls ? ['-tls_verify', '0', '-verifyhost', this.source.tlsVerifyHost!] : [];
+      const inputFormatArgs = this.source.inputFormat ? ['-f', this.source.inputFormat] : [];
+      const realTimeArgs = this.source.realTime !== false ? ['-re'] : [];
+      const seekArgs = this.buildSeekArgs(this.source.startAtSec);
+      return [
+        ...log,
+        ...(lowLatency ? this.buildLowLatencyArgs() : this.buildBufferedArgs()),
+        '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
+        ...tlsArgs, ...decryptionArgs, ...headerArgs, ...inputFormatArgs,
+        ...realTimeArgs, ...seekArgs, '-i', this.source.url,
+        ...pcmOut,
+      ];
+    }
+
+    return [];
+  }
+
+  /** Args for decoder FFmpeg for an arbitrary fade-in source (used during crossfade). */
+  private buildPcmDecoderArgsForSource(
+    source: { kind: 'file'; path: string } | { kind: 'url'; url: string; headers?: Record<string, string>; decryptionKey?: string },
+  ): string[] {
+    const { sampleRate, channels } = this.outputSettings;
+    const pcmOut = ['-vn', '-acodec', 'pcm_s16le', '-ar', String(sampleRate), '-ac', String(channels), '-f', 's16le', 'pipe:1'];
+    const log = ['-hide_banner', '-loglevel', this.getLogLevel()];
+
+    if (source.kind === 'file') {
+      return [...log, ...this.buildLowLatencyArgs(), '-re', '-i', source.path, ...pcmOut];
+    }
+
+    const headerLines = source.headers ? this.formatHeaders(source.headers) : '';
+    const headerArgs = headerLines ? ['-headers', headerLines] : [];
+    const decryptionArgs = source.decryptionKey ? ['-decryption_key', source.decryptionKey] : [];
+    return [
+      ...log, ...this.buildLowLatencyArgs(),
+      '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
+      ...decryptionArgs, ...headerArgs, '-re', '-i', source.url,
+      ...pcmOut,
+    ];
+  }
+
+  /** Args for encoder FFmpeg: PCM s16le from stdin → output profile. */
+  private buildPcmEncoderArgs(): string[] {
+    const { sampleRate, channels, pcmBitDepth, mp3Bitrate, fixedGainDb } = this.outputSettings;
+    // -fflags nobuffer / -analyzeduration 0: without these, FFmpeg buffers ~5 s of raw
+    // PCM from pipe:0 before producing its first output frame (probing raw input).
+    // Since we fully specify the format, probing is unnecessary and wastes startup time.
+    const pcmIn = [
+      '-fflags', 'nobuffer', '-probesize', '32', '-analyzeduration', '0',
+      '-f', 's16le', '-ar', String(sampleRate), '-ac', String(channels), '-i', 'pipe:0',
+    ];
+
+    const filters: string[] = [];
+    if (this.sourcePreDelayMs && this.sourcePreDelayMs > 0) {
+      filters.push(`adelay=delays=${this.sourcePreDelayMs}:all=1`);
+    }
+    if (Number.isFinite(fixedGainDb) && fixedGainDb !== 0) {
+      filters.push(`volume=${fixedGainDb}dB`);
+    }
+    const filterArgs = filters.length ? ['-af', filters.join(',')] : [];
+    const log = ['-hide_banner', '-loglevel', this.getLogLevel()];
+    const base = [...log, ...pcmIn, ...filterArgs];
+
+    switch (this.profile) {
+      case 'flac':
+        return [...base, '-acodec', 'flac', '-compression_level', '0', '-frame_size', '512',
+          '-ar', String(sampleRate), '-ac', String(channels), '-f', 'flac', 'pipe:1'];
+      case 'aac': {
+        const br = mp3Bitrate || '160k';
+        return [...base, '-acodec', 'aac', '-ar', String(sampleRate), '-ac', String(channels), '-b:a', br, '-f', 'adts', 'pipe:1'];
+      }
+      case 'pcm': {
+        const codec = pcmCodecFromBitDepth(pcmBitDepth);
+        const fmt = pcmFormatFromBitDepth(pcmBitDepth);
+        return [...base, '-acodec', codec, '-ar', String(sampleRate), '-ac', String(channels), '-f', fmt, 'pipe:1'];
+      }
+      case 'opus': {
+        const br = mp3Bitrate || '160k';
+        return [...base, '-acodec', 'libopus', '-application', 'audio', '-b:a', br,
+          '-ar', String(sampleRate), '-ac', String(channels), '-f', 'opus', 'pipe:1'];
+      }
+      case 'mp3':
+      default: {
+        const br = mp3Bitrate || '320k';
+        return [...base, '-acodec', 'libmp3lame', '-ar', String(sampleRate), '-ac', String(channels), '-b:a', br, '-f', 'mp3', 'pipe:1'];
+      }
+    }
+  }
+
+  /**
+   * Starts the session as a two-stage PCM pipeline:
+   *   Decoder FFmpeg (source → s16le PCM) → pcmPipe → encoderInput → Encoder FFmpeg (PCM → output)
+   *
+   * The encoderInput PassThrough is a stable bridge to the encoder stdin. Replacing pcmPipe
+   * (during crossfade) does not disconnect the encoder, so Squeezelite never reconnects.
+   */
+  private startTwoStage(): void {
+    this.encoderInput = new PassThrough();
+    this.pcmPipe = new PassThrough();
+    this.startTs = Date.now();
+
+    // ── Decoder ──────────────────────────────────────────────────────────────
+    const decoderArgs = this.buildPcmDecoderArgs();
+    this.log.debug('spawning ffmpeg (decoder)', { zoneId: this.zoneId, args: decoderArgs, profile: this.profile });
+
+    const decoderProc = spawn(this.ffmpegPath, decoderArgs, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }) as ChildProcessWithoutNullStreams;
+    this.decoderProc = decoderProc;
+
+    decoderProc.stdout.pipe(this.pcmPipe, { end: false });
+    this.pcmPipe.pipe(this.encoderInput, { end: false });
+
+    decoderProc.stderr?.on('data', (c: Buffer) => {
+      const msg = c.toString().trim();
+      if (msg) this.log.debug('decoder stderr', { zoneId: this.zoneId, message: msg });
+    });
+
+    decoderProc.on('exit', (code, signal) => {
+      this.log.debug('decoder exited', { zoneId: this.zoneId, code, signal });
+      if (!this.crossfadeActive) {
+        this.encoderInput?.end();
+      }
+    });
+
+    decoderProc.on('error', (err: NodeJS.ErrnoException) => {
+      this.log.warn('decoder error', { zoneId: this.zoneId, message: err.message });
+      if (!this.crossfadeActive) this.encoderInput?.end();
+    });
+
+    // ── Encoder ──────────────────────────────────────────────────────────────
+    const encoderArgs = this.buildPcmEncoderArgs();
+    this.log.debug('spawning ffmpeg (encoder)', { zoneId: this.zoneId, args: encoderArgs, profile: this.profile });
+
+    const encoderProc = this.spawnFfmpeg(encoderArgs, {
+      logFirstChunk: true,
+      stdinStream: this.encoderInput,
+    });
+    this.process = encoderProc;
+    this.restartAttempts = 0;
+  }
+
+  // ─── (end two-stage) ───────────────────────────────────────────────────────
 
   private buildInputArgs(): string[] {
     if (this.source.kind === 'url') {
@@ -1059,6 +1803,12 @@ export class AudioSession {
     }
     this.ending = true;
     this.discardSubscribersOnStop = discardSubscribers;
+    // In two-stage mode also kill the decoder; the encoder (this.process) is killed below.
+    if (this.decoderProc) {
+      this.decoderProc.stdout.removeAllListeners();
+      this.decoderProc.kill('SIGTERM');
+      this.decoderProc = undefined;
+    }
     if (this.process) {
       this.process.kill('SIGTERM');
       this.armKillTimer();
@@ -1365,8 +2115,13 @@ export class AudioSession {
     if (this.pipeSourceStream && this.pipeSourceErrorListener) {
       this.pipeSourceStream.off('error', this.pipeSourceErrorListener);
     }
+    if (this.pipeSourceStream && this.pipeSourceEndListener) {
+      this.pipeSourceStream.off('end', this.pipeSourceEndListener);
+      this.pipeSourceStream.off('close', this.pipeSourceEndListener);
+    }
     this.pipeSourceStream = undefined;
     this.pipeSourceDataListener = undefined;
     this.pipeSourceErrorListener = undefined;
+    this.pipeSourceEndListener = undefined;
   }
 }

@@ -6,7 +6,7 @@ import { getGroupByZone, onGroupChanged, clearJoinedLeader } from '@/application
 import type { HttpPreferences, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import type { SlimClient, SlimEvent } from '@lox-audioserver/node-slimproto';
-import { EventType, PlayerState } from '@lox-audioserver/node-slimproto';
+import { EventType, PlayerState, TransitionType } from '@lox-audioserver/node-slimproto';
 
 export interface SqueezeliteOutputConfig {
   playerId?: string;
@@ -146,6 +146,47 @@ export class SqueezeliteOutput implements ZoneOutput {
     );
   }
 
+  /**
+   * Gapless URL handover for inline crossfade. Tells squeezelite to enqueue the
+   * (rotated) stream URL as the next track WITHOUT flushing the current one. The
+   * audio session keeps emitting the same continuous PCM, so when squeezelite
+   * exhausts the OLD URL's buffer (after we close that URL's HTTP response), it
+   * transitions to the NEW URL — which is already pre-buffered — with no gap.
+   * Returns false when the player isn't ready or grouped playback would prevent
+   * a clean handover (caller should fall back to a normal `play()` instead).
+   */
+  public async enqueueRotation(session: PlaybackSession): Promise<boolean> {
+    if (!session.playbackSource) return false;
+    const player = await this.ensurePlayer();
+    if (!player) return false;
+    const groupInfo = this.ports.squeezeliteGroup.preparePlayback(this.zoneId);
+    // Group playback uses the multi-client sync stream which has its own coordination;
+    // skip the URL-rotation gapless trick for grouped zones for now (Phase 1 scope).
+    if (groupInfo.grouped && groupInfo.expectedCount > 1) return false;
+    const streamUrl = this.buildStreamUrl(session, groupInfo);
+    if (!streamUrl) return false;
+    const meta = this.buildMetadata(session, streamUrl);
+    const mime = resolveMimeType(streamUrl);
+    // playUrl signature:
+    //   (url, mime, meta, transition=NONE, transitionDuration=0,
+    //    enqueue=false, autostart=true, sendFlush=true)
+    // CROSSFADE with a short transitionDuration tells squeezelite to client-side
+    // overlap the OLD URL's tail with the NEW URL's head. Both URLs serve the same
+    // continuous audio from the same encoder; the fade lets squeezelite mask any
+    // intrinsic transition latency (decoder underrun → next-track switch) and any
+    // small phase offset between the two TCP connections, so the user hears a
+    // smooth handover instead of a stutter. Server-side blend already happened in
+    // the previous 10 s, so this 1 s client fade is purely cosmetic.
+    await player.playUrl(streamUrl, mime, meta, TransitionType.CROSSFADE, 1, true, true, false);
+    this.log.debug('squeezelite enqueueRotation', {
+      zoneId: this.zoneId,
+      streamUrl,
+      streamId: session.stream?.id,
+      title: meta.title,
+    });
+    return true;
+  }
+
   public async pause(_session: PlaybackSession | null): Promise<void> {
     this.clearPendingAutostart();
     const group = getGroupByZone(this.zoneId);
@@ -208,7 +249,11 @@ export class SqueezeliteOutput implements ZoneOutput {
         supportedCodecs: codecs,
       });
     }
-    return { profile: supportsFlac ? 'flac' : 'mp3', sampleRate: 44100, channels: 2, prebufferBytes: 256 * 1024 };
+    // prebufferBytes=0: no burst prime sent to the client. VLC/squeezeplay receives data at
+    // real-time rate, which keeps its adaptive network-cache estimate small (~2 s startup).
+    // A large prime burst (e.g. 256 KB) causes VLC to infer a very high incoming bitrate and
+    // inflate its buffer to 60+ seconds, making every song start inaudible for over a minute.
+    return { profile: supportsFlac ? 'flac' : 'mp3', sampleRate: 44100, channels: 2, prebufferBytes: 0 };
   }
 
   public getHttpPreferences(): HttpPreferences {

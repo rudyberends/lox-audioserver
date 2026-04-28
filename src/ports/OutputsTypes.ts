@@ -28,6 +28,15 @@ export interface ZoneOutput {
   stepQueue?(delta: number): Promise<void> | void;
   /** Optional hook to push metadata/cover updates without restarting playback. */
   updateMetadata?(session: PlaybackSession | null): Promise<void> | void;
+  /**
+   * Optional gapless URL-rotation hook for inline crossfade. After the server-side
+   * blend completes and the audio session has rotated its stream id, the coordinator
+   * calls this so the output can register the NEW URL as a queued next track. The
+   * output is expected to accept the new URL/metadata without flushing the current
+   * stream; the coordinator will close the OLD URL's HTTP response after a short
+   * pre-buffer window so the output transitions naturally. Returns true on success.
+   */
+  enqueueRotation?(session: PlaybackSession): Promise<boolean> | boolean;
   /** Optional preferred output format for this output (used to drive resampling/profile). */
   getPreferredOutput?(): PreferredOutput | null;
   /** Optional estimated output latency/buffer in milliseconds. */
