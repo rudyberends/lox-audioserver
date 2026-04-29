@@ -69,6 +69,7 @@ interface LocalTrack {
   title: string;
   album: string;
   artist: string;
+  albumArtist?: string;
   audiopath: string;
   cover?: string | null;
   duration?: number;
@@ -78,12 +79,15 @@ interface SafeTags {
   title: string;
   album: string;
   artist: string;
+  albumArtist: string;
+  compilation: boolean;
   picture?: mm.IPicture;
   duration?: number;
 }
 
 type AlbumIdPayload = { storageId: string; artist: string; album: string };
 type ArtistIdPayload = { storageId: string; artist: string };
+type FolderIdPayload = { storageId: string; relPath: string };
 
 /**
  * Local-library implementation backed by a lightweight on-disk database.
@@ -420,7 +424,7 @@ export class LocalLibraryProvider {
       );
     }
 
-    if (normalized.startsWith('library-nas-') && !/-albums$|-artists$|-tracks$/.test(normalized)) {
+    if (normalized.startsWith('library-nas-') && !/-albums$|-artists$|-tracks$|-folders$/.test(normalized)) {
       const storageId = normalized.replace('library-nas-', '');
       return this.buildStorageFolder(storageId, await this.getStorageLabel(storageId), offset, limit);
     }
@@ -440,6 +444,14 @@ export class LocalLibraryProvider {
       return this.buildTrackFolder(storageId, offset, limit);
     }
 
+    if (normalized.endsWith('-folders')) {
+      const storageId = this.extractStorageId(normalized, '-folders');
+      if (!storageId) {
+        return null;
+      }
+      return this.buildDriveFolder(storageId, '', offset, limit);
+    }
+
     if (normalized.startsWith('library:album:')) {
       const key = normalized.slice('library:album:'.length);
       return this.buildAlbumTracks(key, offset, limit);
@@ -448,6 +460,15 @@ export class LocalLibraryProvider {
     if (normalized.startsWith('library:artist:')) {
       const key = normalized.slice('library:artist:'.length);
       return this.buildArtistTracks(key, offset, limit);
+    }
+
+    if (normalized.startsWith('library:folder:')) {
+      const key = normalized.slice('library:folder:'.length);
+      const payload = decodeFolderKey(key);
+      if (!payload) {
+        return null;
+      }
+      return this.buildDriveFolder(payload.storageId, payload.relPath, offset, limit);
     }
 
     return null;
@@ -486,6 +507,7 @@ export class LocalLibraryProvider {
   ): Promise<ContentFolder> {
     const prefix = storageId === 'local' ? 'library-local' : `library-nas-${storageId}`;
     const items: ContentFolderItem[] = [
+      this.categoryItem(prefix, 'Folders', 'folders', storageId, { tag: 'nas', nas: true }),
       this.categoryItem(prefix, 'Albums', 'albums', storageId, { tag: 'nas', nas: true }),
       this.categoryItem(prefix, 'Artists', 'artists', storageId, { tag: 'nas', nas: true }),
       this.categoryItem(prefix, 'Tracks', 'tracks', storageId, { tag: 'nas', nas: true }),
@@ -542,6 +564,42 @@ export class LocalLibraryProvider {
     const id =
       storageId === 'local' ? 'library-local-tracks' : `library-nas-${storageId}-tracks`;
     return this.buildFolder(id, name, folderItems, offset, limit, total, true);
+  }
+
+  private async buildDriveFolder(
+    storageId: string,
+    relPath: string,
+    offset: number,
+    limit: number,
+  ): Promise<ContentFolder | null> {
+    const storageRoot = this.getStorageRootRelativePath(storageId);
+    const safeRelPath = sanitizeFolderRelPath(relPath);
+    const relativeDir = safeRelPath ? path.join(storageRoot, safeRelPath) : storageRoot;
+    const absoluteDir = this.resolveSafeLibraryPath(relativeDir);
+
+    let entries: Dirent[];
+    try {
+      entries = await fsp.readdir(absoluteDir, { withFileTypes: true });
+    } catch {
+      return null;
+    }
+
+    const folders = entries
+      .filter((entry) => entry.isDirectory())
+      .sort(compareDirentNames)
+      .map((entry) => this.driveFolderItem(storageId, safeRelPath, entry.name));
+    const files = entries
+      .filter((entry) => entry.isFile() && isAudioFile(entry.name))
+      .sort(compareDirentNames)
+      .map((entry) => this.driveTrackItem(storageId, storageRoot, safeRelPath, entry.name));
+    const items = [...folders, ...files];
+    const folderName = safeRelPath ? path.basename(safeRelPath) : 'Folders';
+    const id = safeRelPath
+      ? buildFolderId(storageId, safeRelPath)
+      : storageId === 'local'
+        ? 'library-local-folders'
+        : `library-nas-${storageId}-folders`;
+    return this.buildFolder(id, folderName, items, offset, limit);
   }
 
   private async buildAlbumTracks(
@@ -646,7 +704,7 @@ export class LocalLibraryProvider {
       id,
       name: label,
       type: FILE_TYPE_FOLDER,
-      items: 3,
+      items: 4,
       provider: 'library',
       title: label,
       audiopath,
@@ -672,7 +730,7 @@ export class LocalLibraryProvider {
   private categoryItem(
     prefix: string,
     label: string,
-    suffix: 'albums' | 'artists' | 'tracks',
+    suffix: 'albums' | 'artists' | 'tracks' | 'folders',
     storageId: string,
     options?: { tag?: string; nas?: boolean },
   ) {
@@ -721,6 +779,50 @@ export class LocalLibraryProvider {
     };
   }
 
+  private driveFolderItem(storageId: string, parentRelPath: string, name: string): ContentFolderItem {
+    const relPath = parentRelPath ? path.join(parentRelPath, name) : name;
+    const id = buildFolderId(storageId, relPath);
+    return {
+      id,
+      name,
+      type: FILE_TYPE_FOLDER,
+      provider: 'library',
+      title: name,
+      audiopath: id,
+      nas: storageId !== 'local',
+      origin: storageId,
+      tag: storageId === 'local' ? 'sd' : 'nas',
+    };
+  }
+
+  private driveTrackItem(
+    storageId: string,
+    storageRoot: string,
+    parentRelPath: string,
+    fileName: string,
+  ): ContentFolderItem {
+    const relPath = path.join(storageRoot, parentRelPath, fileName);
+    const stored = bestEffortSync(
+      () => this.store.findByStoragePath(storageId, relPath),
+      { fallback: null, onError: 'debug', log: this.log, label: 'folder track lookup failed' },
+    );
+    if (stored) {
+      return this.trackItem(this.normalizeTrack(stored));
+    }
+    const baseInfo = createTrackFromPath(relPath);
+    const track: LocalTrack = {
+      id: relPath,
+      relPath,
+      storageId,
+      title: baseInfo.title,
+      album: baseInfo.album,
+      artist: baseInfo.artist,
+      audiopath: '',
+    };
+    track.audiopath = this.buildAudiopath(track);
+    return this.trackItem(track);
+  }
+
   private alertFileItem(relativePath: string, name: string, duration?: number): ContentFolderItem {
     const uri = `alerts://${encodePath(relativePath)}`;
     return {
@@ -765,6 +867,10 @@ export class LocalLibraryProvider {
     );
     return mapped
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  }
+
+  private getStorageRootRelativePath(storageId: string): string {
+    return storageId === 'local' ? 'local' : path.join('nas', storageId);
   }
 
   private albumItem(album: AlbumRow): ContentFolderItem {
@@ -825,6 +931,7 @@ export class LocalLibraryProvider {
       title: track.title,
       album: track.album,
       artist: track.artist,
+      albumArtist: track.album_artist,
       audiopath: track.audiopath,
       cover: track.cover ?? undefined,
       duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
@@ -971,6 +1078,7 @@ export class LocalLibraryProvider {
 
     const metadata = await this.readMetadata(fullPath);
     const baseInfo = createTrackFromPath(relPath);
+    const artist = metadata.artist || baseInfo.artist;
 
     const track: LocalTrack = {
       id: relPath,
@@ -978,7 +1086,8 @@ export class LocalLibraryProvider {
       storageId,
       title: metadata.title || baseInfo.title,
       album: metadata.album || baseInfo.album,
-      artist: metadata.artist || baseInfo.artist,
+      artist,
+      albumArtist: resolveAlbumArtist(metadata, baseInfo, artist),
       audiopath: '',
       duration: metadata.duration,
     };
@@ -992,6 +1101,7 @@ export class LocalLibraryProvider {
       title: track.title,
       album: track.album,
       artist: track.artist,
+      albumArtist: track.albumArtist,
       audiopath: track.audiopath,
       cover: track.cover ?? undefined,
       mtime: fileStat?.mtimeMs ? Math.floor(fileStat.mtimeMs) : undefined,
@@ -1021,11 +1131,13 @@ export class LocalLibraryProvider {
         title: metadata.common.title ?? '',
         album: metadata.common.album ?? '',
         artist: metadata.common.artist ?? '',
+        albumArtist: metadata.common.albumartist || metadata.common.albumartists?.join(', ') || '',
+        compilation: metadata.common.compilation === true,
         picture: metadata.common.picture?.[0],
         duration: metadata.format.duration ? Math.round(metadata.format.duration) : undefined,
       };
     } catch {
-      return { title: '', album: '', artist: '' };
+      return { title: '', album: '', artist: '', albumArtist: '', compilation: false };
     }
   }
 
@@ -1287,6 +1399,11 @@ function buildArtistId(storageId: string, artist: string): string {
   return `library:artist:${key}`;
 }
 
+function buildFolderId(storageId: string, relPath: string): string {
+  const key = encodeFolderKey({ storageId, relPath });
+  return `library:folder:${key}`;
+}
+
 function encodePath(relative: string): string {
   return relative
     .split(path.sep)
@@ -1318,6 +1435,37 @@ function createTrackFromPath(relPath: string): Pick<LocalTrack, 'title' | 'album
     artist: 'Unknown Artist',
     album: 'Unknown Album',
   };
+}
+
+function sanitizeFolderRelPath(value: string): string {
+  return String(value || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((segment) => segment && segment !== '.' && segment !== '..')
+    .join('/');
+}
+
+function compareDirentNames(a: Dirent, b: Dirent): number {
+  return a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+}
+
+function resolveAlbumArtist(
+  metadata: SafeTags,
+  baseInfo: Pick<LocalTrack, 'artist'>,
+  trackArtist: string,
+): string {
+  const explicit = metadata.albumArtist.trim();
+  if (explicit) {
+    return explicit;
+  }
+  if (metadata.compilation) {
+    return 'Various Artists';
+  }
+  const pathArtist = baseInfo.artist.trim();
+  if (pathArtist && !/^unknown\b/i.test(pathArtist)) {
+    return pathArtist;
+  }
+  return trackArtist;
 }
 
 function sanitizeFilename(name: string): string {
@@ -1406,6 +1554,22 @@ function decodeArtistKey(raw: string): ArtistIdPayload | null {
     const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as ArtistIdPayload;
     if (parsed.storageId && parsed.artist !== undefined) {
       return parsed;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+function encodeFolderKey(payload: FolderIdPayload): string {
+  return Buffer.from(JSON.stringify(payload)).toString('base64url');
+}
+
+function decodeFolderKey(raw: string): FolderIdPayload | null {
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as FolderIdPayload;
+    if (parsed.storageId && parsed.relPath !== undefined) {
+      return { storageId: parsed.storageId, relPath: sanitizeFolderRelPath(parsed.relPath) };
     }
   } catch {
     /* ignore */

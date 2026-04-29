@@ -46,3 +46,59 @@ test('local library store: search finds tracks/albums/artists', async () => {
   const artists = store.searchArtists('daft', 10);
   assert.ok(artists.some((a) => a.name === 'Daft Punk'));
 });
+
+test('local library store: groups albums by album artist', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lox-audioserver-libstore-album-artist-'));
+  const dbPath = path.join(tempDir, 'library.db');
+
+  const store = new LocalLibraryStore({ dbPath });
+  await store.init();
+
+  try {
+    store.insertTrack({
+      storageId: 'local',
+      relPath: 'music/Various Artists/Studio Brussel/01 - Artist A.mp3',
+      title: 'Track A',
+      album: 'Studio Brussel',
+      artist: 'Artist A',
+      albumArtist: 'Various Artists',
+      audiopath: 'library:local:track:a',
+      cover: undefined,
+      mtime: undefined,
+      size: undefined,
+      duration: undefined,
+    });
+    store.insertTrack({
+      storageId: 'local',
+      relPath: 'music/Various Artists/Studio Brussel/02 - Artist B.mp3',
+      title: 'Track B',
+      album: 'Studio Brussel',
+      artist: 'Artist B',
+      albumArtist: 'Various Artists',
+      audiopath: 'library:local:track:b',
+      cover: undefined,
+      mtime: undefined,
+      size: undefined,
+      duration: undefined,
+    });
+
+    const stats = store.getStats();
+    assert.equal(stats.albums, 1);
+    assert.equal(stats.artists, 2);
+
+    const albums = store.getAlbums('local', 0, 10);
+    assert.equal(albums.total, 1);
+    assert.equal(albums.items[0]?.artist, 'Various Artists');
+    assert.equal(albums.items[0]?.track_count, 2);
+
+    const tracks = store.getTracksForAlbum('local', 'Various Artists', 'Studio Brussel', 0, 10);
+    assert.equal(tracks.total, 2);
+    assert.deepEqual(tracks.items.map((track) => track.artist).sort(), ['Artist A', 'Artist B']);
+
+    const searchAlbums = store.searchAlbums('various', 10);
+    assert.equal(searchAlbums.length, 1);
+    assert.equal(searchAlbums[0]?.track_count, 2);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});

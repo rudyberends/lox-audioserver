@@ -20,6 +20,7 @@ import './spotifyAccountProvider.playlists.test';
 import './spotifyRecoveryPolicy.test';
 import './localLibraryStore.search.test';
 import './localLibraryStore.delete.test';
+import './localLibraryProvider.folders.test';
 import './zonePlayerEndGuard.test';
 import './durationRegression.test';
 import './runtimeShutdown.test';
