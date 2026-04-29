@@ -113,7 +113,7 @@ export class AirPlayOutput implements ZoneOutput {
       control_sync_jitter_ms: 3,
     };
     const port = typeof config.port === 'number' ? config.port : undefined;
-    const forceAp2 = typeof config.forceAp2 === 'boolean' ? config.forceAp2 : port === 7000 ? true : undefined;
+    const forceAp2 = typeof config.forceAp2 === 'boolean' ? config.forceAp2 : undefined;
     this.sender = new AirplaySender(
       {
         host: config.host.trim(),

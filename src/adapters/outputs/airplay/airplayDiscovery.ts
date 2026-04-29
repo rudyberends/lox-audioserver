@@ -42,20 +42,30 @@ export async function discoverAirplayDevices(timeoutMs = 5000): Promise<AirplayD
       resolve(entries);
     };
 
-    const handleService = (service: any, protocol: 'airplay' | 'raop'): void => {
+    const handleService = (service: any, advertisedProtocol: 'airplay' | 'raop'): void => {
       const txt = service.txt as Record<string, unknown> | undefined;
       const model = typeof txt?.model === 'string' ? txt.model.toLowerCase() : '';
       if (model === 'loxaudioairplay') {
         return;
       }
+      const protocol =
+        advertisedProtocol === 'airplay' && !airplayTxtSuggestsAirPlay2(txt)
+          ? 'raop'
+          : advertisedProtocol;
       const addresses = Array.isArray(service.addresses)
         ? (service.addresses as string[])
         : [];
       const ipv4 = addresses.find((addr) => addr && addr.includes('.')) ?? addresses[0];
       const hostFromName = typeof service.host === 'string' && service.host ? service.host : service.name;
       const host = hostFromName || ipv4 || service.fqdn || '';
-      const port = typeof service.port === 'number' && service.port > 0 ? service.port : protocol === 'airplay' ? 7000 : 5000;
-      const key = (ipv4 || host || service.name || '').toLowerCase();
+      const port =
+        typeof service.port === 'number' && service.port > 0
+          ? service.port
+          : advertisedProtocol === 'airplay'
+            ? 7000
+            : 5000;
+      const keyBase = (ipv4 || host || service.name || '').toLowerCase();
+      const key = keyBase ? `${protocol}:${keyBase}` : '';
       const descriptor: AirplayDeviceDescriptor = {
         id: `${protocol}-${host ?? 'unknown'}-${port}`,
         name: service.name || host || `AirPlay (${protocol})`,
@@ -73,9 +83,6 @@ export async function discoverAirplayDevices(timeoutMs = 5000): Promise<AirplayD
           services.set(descriptor.id, descriptor);
         }
         return;
-      }
-      if (existing.protocol === 'raop' && descriptor.protocol === 'airplay') {
-        services.set(key, descriptor);
       }
     };
 
@@ -99,4 +106,12 @@ export async function discoverAirplayDevices(timeoutMs = 5000): Promise<AirplayD
 
     const timer = setTimeout(finish, Math.max(2000, timeoutMs));
   });
+}
+
+export function airplayTxtSuggestsAirPlay2(txt: Record<string, unknown> | undefined): boolean {
+  if (!txt) {
+    return false;
+  }
+  const keys = new Set(Object.keys(txt).map((key) => key.toLowerCase()));
+  return ['pi', 'psi', 'gid', 'gcgl', 'pk'].some((key) => keys.has(key));
 }

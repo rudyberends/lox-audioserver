@@ -3,7 +3,8 @@ import { networkInterfaces } from 'node:os';
 import { createLogger } from '@/shared/logging/logger';
 import { LoxAirplaySender } from '@lox-audioserver/node-airplay-sender';
 export type AirplaySenderOverrides = Record<string, unknown>;
-import { discoverAirplayDevices } from '@/adapters/outputs/airplay/airplayDiscovery';
+import { airplayTxtSuggestsAirPlay2, discoverAirplayDevices } from '@/adapters/outputs/airplay/airplayDiscovery';
+import type { AirplayDeviceDescriptor } from '@/adapters/outputs/airplay/airplayDiscovery';
 import { ntpToUnixMs } from '@/shared/airplayNtp';
 
 export interface AirplaySenderConfig {
@@ -22,6 +23,8 @@ export interface AirplaySenderConfig {
   onSessionEnded?: (event: { reason: string; key?: string; message?: string }) => void;
 }
 
+type ResolvedAirplayConfig = { port?: number | null; forceAp2?: boolean; txt?: string[] };
+
 export class AirplaySender {
   private readonly log = createLogger('Output', 'AirPlaySender');
   private currentVolume = 30;
@@ -30,7 +33,7 @@ export class AirplaySender {
   private readonly flowBuffers = new Set<FlowBuffer>();
   private sender: LoxAirplaySender | null = null;
   private senderAbort?: AbortController;
-  private resolvedConfig?: { port?: number; forceAp2?: boolean; txt?: string[] };
+  private resolvedConfig?: ResolvedAirplayConfig;
 
   constructor(
     private readonly config: AirplaySenderConfig,
@@ -56,12 +59,7 @@ export class AirplaySender {
     return false;
   }
 
-  public async start(
-    inputUrl: string | null,
-    volume?: number,
-    sourceStream?: Readable | null,
-    ntpStart?: bigint,
-  ): Promise<void> {
+  public async start(inputUrl: string | null, volume?: number, sourceStream?: Readable | null, ntpStart?: bigint): Promise<void> {
     this.currentVolume = Math.min(100, Math.max(0, Math.round(volume ?? this.currentVolume)));
     this.sourceStream = sourceStream ?? null;
     const startTimeMs = ntpStart ? ntpToUnixMs(ntpStart) : undefined;
@@ -121,11 +119,7 @@ export class AirplaySender {
 
   // --- Sender helpers ------------------------------------------------------
 
-  private async startSender(
-    inputUrl: string | null,
-    sourceStream?: Readable | null,
-    startTimeMs?: number,
-  ): Promise<boolean> {
+  private async startSender(inputUrl: string | null, sourceStream?: Readable | null, startTimeMs?: number): Promise<boolean> {
     this.stopSender();
     if (!inputUrl && !sourceStream) {
       this.log.warn('airplay sender skipped; no input');
@@ -134,15 +128,13 @@ export class AirplaySender {
 
     const resolved = await this.resolveDeviceConfig();
     const sender = new LoxAirplaySender();
-    const fallbackTxt = Array.isArray(this.config.txt)
-      ? this.config.txt
-      : this.config.txt
-        ? [this.config.txt]
-        : [];
-    const airplay2 = (resolved.forceAp2 ?? this.config.forceAp2) === true || (resolved.port ?? this.config.port) === 7000;
+    const fallbackTxt = Array.isArray(this.config.txt) ? this.config.txt : this.config.txt ? [this.config.txt] : [];
+    const resolvedForceAp2 = resolved.forceAp2 ?? this.config.forceAp2;
+    const resolvedPort = resolved.port === null ? undefined : (resolved.port ?? this.config.port);
+    const airplay2 = typeof resolvedForceAp2 === 'boolean' ? resolvedForceAp2 : false;
     const opts = {
       host: this.config.host,
-      port: resolved.port ?? this.config.port,
+      port: resolvedPort,
       name: this.config.name,
       password: this.config.password,
       volume: this.currentVolume,
@@ -151,7 +143,7 @@ export class AirplaySender {
       startTimeMs,
       debug: this.config.debug ?? false,
       metrics: true,
-    config: this.config.config,
+      config: this.config.config,
       log: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: unknown) => {
         // AirPlay targets can be chatty (e.g. per-second SETPROGRESS). Logging those at high volume
         // can easily add enough overhead to cause audible stutter. Only surface request-level chatter
@@ -170,13 +162,7 @@ export class AirplaySender {
           payload.data = data;
         }
         const logFn =
-          level === 'error'
-            ? this.log.error
-            : level === 'warn'
-              ? this.log.warn
-              : level === 'info'
-                ? this.log.info
-                : this.log.debug;
+          level === 'error' ? this.log.error : level === 'warn' ? this.log.warn : level === 'info' ? this.log.info : this.log.debug;
         logFn.call(this.log, message, payload);
       },
     };
@@ -198,11 +184,7 @@ export class AirplaySender {
       }
       if (evt?.event === 'session-ended') {
         const reason =
-          typeof evt?.detail?.reason === 'string'
-            ? evt.detail.reason
-            : typeof evt?.message === 'string'
-              ? evt.message
-              : 'unknown';
+          typeof evt?.detail?.reason === 'string' ? evt.detail.reason : typeof evt?.message === 'string' ? evt.message : 'unknown';
         this.log.info('airplay sender session ended', {
           ...basePayload,
           reason,
@@ -214,6 +196,9 @@ export class AirplaySender {
           message: typeof evt?.message === 'string' ? evt.message : undefined,
         });
         return;
+      }
+      if (evt?.event === 'device' && evt?.message === 'pair_failed') {
+        this.clearAutoResolvedConfig('pair_failed');
       }
       this.log.debug('airplay sender event', basePayload);
     });
@@ -315,10 +300,38 @@ export class AirplaySender {
 
   // --- Utilities -----------------------------------------------------------
 
-  private async resolveDeviceConfig(): Promise<{ port?: number; forceAp2?: boolean; txt?: string[] }> {
+  private async resolveDeviceConfig(): Promise<ResolvedAirplayConfig> {
     if (this.resolvedConfig) {
       return this.resolvedConfig;
     }
+
+    if (this.config.forceAp2 === true && !this.config.disableDiscovery) {
+      const target = this.config.host.trim().toLowerCase();
+      try {
+        const devices = await discoverAirplayDevices(2000);
+        const matches = devices.filter((device) => {
+          return [device.host, device.address, device.name]
+            .filter((value): value is string => Boolean(value))
+            .some((value) => value.toLowerCase() === target);
+        });
+        const validated = resolveConfiguredAirplayConfig({ port: this.config.port, forceAp2: this.config.forceAp2 }, matches);
+        if (validated) {
+          this.resolvedConfig = validated;
+          this.log.info('airplay discovery validated configured AP2 mode', {
+            host: this.config.host,
+            resolvedPort: this.resolvedConfig.port,
+            forceAp2: this.resolvedConfig.forceAp2,
+          });
+          return this.resolvedConfig;
+        }
+      } catch (err) {
+        this.log.warn('airplay discovery failed', {
+          host: this.config.host,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     if (this.config.disableDiscovery || this.config.port || this.config.forceAp2 !== undefined) {
       this.resolvedConfig = {
         port: this.config.port,
@@ -336,27 +349,8 @@ export class AirplaySender {
           .some((value) => value.toLowerCase() === target);
       });
       if (matches.length > 0) {
-        const preferAp2 = this.config.forceAp2 === true;
-        const preferred =
-          matches.find((device) => device.protocol === (preferAp2 ? 'airplay' : 'raop')) ??
-          matches.find((device) => device.protocol === 'airplay') ??
-          matches[0];
-        const txt = preferred.txt
-          ? Object.entries(preferred.txt)
-              .map(([key, value]) => {
-                if (value === true || value === null || value === undefined) {
-                  return key;
-                }
-                return `${key}=${String(value)}`;
-              })
-              .filter((entry) => entry.length > 0)
-          : undefined;
-        const hasRaop = matches.some((device) => device.protocol === 'raop');
-        this.resolvedConfig = {
-          port: preferred.port,
-          forceAp2: preferAp2 || (preferred.protocol === 'airplay' && !hasRaop),
-          txt,
-        };
+        const preferred = resolveDiscoveredAirplayConfig(matches);
+        this.resolvedConfig = preferred;
         this.log.info('airplay discovery resolved device', {
           host: this.config.host,
           resolvedPort: this.resolvedConfig.port,
@@ -364,8 +358,7 @@ export class AirplaySender {
         });
         this.log.debug('airplay discovery txt', {
           host: this.config.host,
-          protocol: preferred.protocol,
-          txt,
+          txt: preferred.txt,
         });
         return this.resolvedConfig;
       }
@@ -383,11 +376,26 @@ export class AirplaySender {
     return this.resolvedConfig;
   }
 
+  private clearAutoResolvedConfig(reason: string): void {
+    if (this.config.disableDiscovery || this.config.port || this.config.forceAp2 !== undefined) {
+      return;
+    }
+    if (!this.resolvedConfig) {
+      return;
+    }
+    this.log.info('clearing cached airplay discovery result', {
+      host: this.config.host,
+      reason,
+      resolvedPort: this.resolvedConfig.port,
+      forceAp2: this.resolvedConfig.forceAp2,
+    });
+    this.resolvedConfig = undefined;
+  }
+
   private resolveUrl(url: string): string {
     const fallbackHost = this.pickLocalAddress();
     const fallbackPort = 7090;
-    const isLoopback = (h?: string) =>
-      !h || h === 'localhost' || h === '::1' || h.startsWith('127.');
+    const isLoopback = (h?: string) => !h || h === 'localhost' || h === '::1' || h.startsWith('127.');
 
     try {
       const resolved = url.startsWith('http')
@@ -424,6 +432,81 @@ export class AirplaySender {
       flow.flush();
     }
   }
+}
+
+export function resolveDiscoveredAirplayConfig(matches: AirplayDeviceDescriptor[]): ResolvedAirplayConfig {
+  const raop = matches.find((device) => device.protocol === 'raop');
+  if (raop) {
+    return {
+      port: raop.port,
+      forceAp2: false,
+      txt: txtRecordToArray(raop.txt),
+    };
+  }
+
+  const airplay = matches.find((device) => device.protocol === 'airplay') ?? matches[0];
+  if (!airplay) {
+    return {};
+  }
+  const txt = txtRecordToArray(airplay.txt);
+  const airplay2 = airplayTxtSuggestsAirPlay2(airplay.txt);
+  return {
+    port: airplay2 ? airplay.port : undefined,
+    forceAp2: airplay2,
+    txt,
+  };
+}
+
+export function resolveConfiguredAirplayConfig(
+  config: { port?: number; forceAp2?: boolean },
+  matches: AirplayDeviceDescriptor[],
+): ResolvedAirplayConfig | undefined {
+  if (config.forceAp2 !== true || matches.length === 0) {
+    return undefined;
+  }
+
+  const airplay2 = matches.find((device) => device.protocol === 'airplay' && airplayTxtSuggestsAirPlay2(device.txt));
+  if (airplay2) {
+    return {
+      port: config.port ?? airplay2.port,
+      forceAp2: true,
+      txt: txtRecordToArray(airplay2.txt),
+    };
+  }
+
+  const raop = matches.find((device) => device.protocol === 'raop');
+  if (raop) {
+    return {
+      port: raop.port,
+      forceAp2: false,
+      txt: txtRecordToArray(raop.txt),
+    };
+  }
+
+  const airplay = matches.find((device) => device.protocol === 'airplay');
+  if (airplay) {
+    return {
+      port: null,
+      forceAp2: false,
+      txt: txtRecordToArray(airplay.txt),
+    };
+  }
+
+  return undefined;
+}
+
+function txtRecordToArray(txt: Record<string, unknown> | undefined): string[] | undefined {
+  if (!txt) {
+    return undefined;
+  }
+  return Object.entries(txt)
+    .map(([key, value]) => {
+      if (value === true || value === null || value === undefined) {
+        return key;
+      }
+      return `${key}=${String(value)}`;
+    })
+    .filter((entry) => entry.length > 0);
 }
 
 class FlowBuffer {
