@@ -6,7 +6,7 @@ on:
       - published
   push:
     branches:
-      - testing
+      - dev
 
 permissions:
   contents: write
@@ -88,8 +88,8 @@ jobs:
           build-args: |
             BUILD_VERSION=${{ steps.release_meta.outputs.version }}
 
-  testing:
-    if: ${{ github.ref_name == 'testing' }}
+  dev:
+    if: ${{ github.ref_name == 'dev' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -133,22 +133,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Define testing build metadata
-        id: testing_meta
+      - name: Define dev build metadata
+        id: dev_meta
         shell: bash
         run: |
           VERSION=$(node -p "require('./package.json').version")
           BUILD_TS=$(date -u +%Y%m%d%H%M%S)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "build_ts=$BUILD_TS" >> "$GITHUB_OUTPUT"
+          echo "build_id=dev-$BUILD_TS" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push Docker image (testing)
+      - name: Build and push Docker image (dev)
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:testing,ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:testing-latest,ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:testing-${{ steps.testing_meta.outputs.build_ts }}
+          tags: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:dev,ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:dev-latest
           build-args: |
-            BUILD_VERSION=${{ steps.testing_meta.outputs.version }}
-            BUILD_TIMESTAMP=${{ steps.testing_meta.outputs.build_ts }}
+            BUILD_VERSION=${{ steps.dev_meta.outputs.version }}
+            BUILD_TIMESTAMP=${{ steps.dev_meta.outputs.build_id }}
