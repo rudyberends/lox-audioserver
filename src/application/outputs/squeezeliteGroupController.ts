@@ -400,7 +400,13 @@ class SqueezeliteGroupController {
       const ts = (player.jiffies || 0) + Math.max(0, Math.round(pauseDurationMs));
       await player.unpauseAt(ts);
     } finally {
-      this.resyncingZones.delete(zoneId);
+      // Keep the resyncing flag active until the player has had time to actually resume.
+      // unpauseAt() returns as soon as the command is sent, but the player may still be
+      // paused (waiting for its jiffies target). Any 'paused' STAT arriving before the
+      // player resumes must be suppressed, otherwise the zone power manager sees a
+      // pause→stop transition and kills the group member.
+      const clearDelay = Math.max(200, Math.round(pauseDurationMs) + 150);
+      setTimeout(() => this.resyncingZones.delete(zoneId), clearDelay).unref?.();
     }
   }
 
