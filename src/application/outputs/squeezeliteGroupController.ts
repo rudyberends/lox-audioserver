@@ -1,7 +1,7 @@
 import { createLogger } from '@/shared/logging/logger';
 import { getGroupByZone } from '@/application/groups/groupTracker';
 import type { SlimClient } from '@lox-audioserver/node-slimproto';
-import { PlayerState } from '@lox-audioserver/node-slimproto';
+import { PlayerState, TransitionType } from '@lox-audioserver/node-slimproto';
 
 export type SqueezeliteGroupParticipant = {
   zoneId: number;
@@ -26,6 +26,19 @@ export type SqueezeliteGroupCoordinator = {
     url: string,
     mimeType: string,
     metadata: Record<string, string | number>,
+  ) => Promise<boolean>;
+  /**
+   * Enqueue a new URL on all active group players using a native crossfade transition.
+   * Unlike orchestrateGroupPlayback, this does NOT wait for BUFFER_READY — the players
+   * are assumed to be already playing. They will crossfade client-side when their current
+   * stream buffer drains.
+   */
+  orchestrateGroupEnqueue: (
+    leaderZoneId: number,
+    url: string,
+    mimeType: string,
+    metadata: Record<string, string | number>,
+    crossfadeTenths: number,
   ) => Promise<boolean>;
   orchestrateGroupPause: (zoneId: number) => Promise<boolean>;
   orchestrateGroupResume: (zoneId: number) => Promise<boolean>;
@@ -58,10 +71,26 @@ class SqueezeliteGroupController {
   private readonly doNotResyncBefore = new Map<string, number>();
   private readonly lastTickAt = new Map<string, number>();
   private readonly resyncingZones = new Set<number>();
+  // Per-pair elapsed baseline: when a member joins with a different elapsed counter
+  // (e.g. 0ms while the leader is at 133 000ms due to CROSSFADE carry-over), we
+  // record the initial offset so corrections are applied relative to that baseline
+  // rather than against the raw — and artificially huge — counter difference.
+  private readonly elapsedBaselines = new Map<string, number>();
   private readonly minReqPlaypoints = 8;
-  private readonly minDeviationAdjustMs = 8;
+  // Raised from 8 → 20 ms: constant hardware-buffer offsets of ~6–16 ms were
+  // triggering corrections every ~13 s (5 s cooldown + 8 s to refill playpoints)
+  // without ever settling, causing continuous pause-and-unpause churn on zones
+  // that are already perceptually in sync.  20 ms matches the threshold used by
+  // Music Assistant's own squeezelite provider.
+  private readonly minDeviationAdjustMs = 20;
   private readonly deviationJumpIgnoreMs = 500;
   private readonly maxSkipAheadMs = 800;
+  // If the measured average drift exceeds this value, skip/pause corrections
+  // are not attempted — the offset is too large to recover via timing nudges
+  // and a large pauseAndUnpause on the leader would stall the whole group.
+  // A member this far out of sync (e.g. due to a broken elapsedMs report)
+  // must be left to resync naturally on the next track change.
+  private readonly maxResyncDeltaMs = 2000;
 
   constructor() {}
 
@@ -97,6 +126,9 @@ class SqueezeliteGroupController {
     const existing = this.pendingGroups.get(leaderZoneId);
     if (existing) {
       existing.expectedZones = activeZones;
+      // Refresh startedAt so checkPendingGroupReady doesn't skip this round
+      // with "timeout handler will start the group" when called for a new play.
+      existing.startedAt = Date.now();
     } else {
       this.pendingGroups.set(leaderZoneId, {
         expectedZones: activeZones,
@@ -224,12 +256,51 @@ class SqueezeliteGroupController {
 
     // Equivalent to MA/aioslimproto behavior: issue play_url to all clients (autostart=0),
     // let them buffer until BUFFER_READY; unpause is coordinated by the controller.
+    // sendFlush=false: a direct strm-s (enqueue=false) already implies stop+clear,
+    // so we avoid the separate strm-f that would trigger STMf → stale _nextMedia
+    // dispatch on paused players that had a prior orchestrateGroupEnqueue pending.
     await Promise.all(
       entries.map(async ({ player }) => {
         try {
-          await player.playUrl(url, mimeType, metadata, undefined, 0, false, false, true);
+          await player.playUrl(url, mimeType, metadata, undefined, 0, false, false, false);
         } catch {
           // ignore per-client failures; group will degrade to fewer members
+        }
+      }),
+    );
+    // Kick a poll in case BUFFER_READY events are missed/racy.
+    this.schedulePendingCheck(leaderZoneId);
+    return true;
+  }
+
+  public async orchestrateGroupEnqueue(
+    leaderZoneId: number,
+    url: string,
+    mimeType: string,
+    metadata: Record<string, string | number>,
+    crossfadeTenths: number,
+  ): Promise<boolean> {
+    const entries = this.getActiveGroupPlayersFor(leaderZoneId);
+    if (entries.length < 2) return false;
+
+    // Register pending group tracking before sending playUrl so BUFFER_READY
+    // events don't race with the entry creation.
+    this.preparePlayback(leaderZoneId);
+
+    await Promise.all(
+      entries.map(async ({ player }) => {
+        try {
+          // enqueue=false (immediate switch), autostart=false (group coordinator
+          // synchronizes start via unpauseAt), sendFlush=false.
+          // Using enqueue=false avoids the STMd/_nextMedia race: squeezelite
+          // switches to the new URL the moment it receives this command — it does
+          // not need to wait for the old HTTP stream to close first.
+          // TransitionType.CROSSFADE tells squeezelite to blend old buffer audio
+          // with the incoming new-URL audio at transition time.
+          await player.playUrl(url, mimeType, metadata, TransitionType.CROSSFADE,
+            crossfadeTenths, false, false, false);
+        } catch {
+          // ignore per-client failures
         }
       }),
     );
@@ -317,7 +388,30 @@ class SqueezeliteGroupController {
       if (!Number.isFinite(leaderElapsed) || !Number.isFinite(memberElapsed)) {
         continue;
       }
-      const diff = Math.round(leaderElapsed - memberElapsed);
+      const rawDiff = Math.round(leaderElapsed - memberElapsed);
+
+      // When a member joins or restarts while the leader carries over a large
+      // elapsed counter (e.g. after a CROSSFADE transition the leader reports
+      // ~133 000 ms while the fresh member reports 0 ms), record the initial
+      // offset as a baseline and correct relative to it instead of the raw diff.
+      const pairKey = `${leaderZoneId}:${memberId}`;
+      if (
+        Math.abs(rawDiff) > this.maxResyncDeltaMs &&
+        memberElapsed < this.maxResyncDeltaMs * 2
+      ) {
+        if (!this.elapsedBaselines.has(pairKey)) {
+          this.elapsedBaselines.set(pairKey, rawDiff);
+          this.log.debug('squeezelite elapsed baseline set', {
+            leaderZoneId, memberId, baselineMs: rawDiff,
+          });
+        }
+      } else if (this.elapsedBaselines.has(pairKey) && Math.abs(rawDiff) < this.maxResyncDeltaMs) {
+        // Member has caught up; the baseline is no longer needed.
+        this.elapsedBaselines.delete(pairKey);
+      }
+
+      const baseline = this.elapsedBaselines.get(pairKey) ?? 0;
+      const diff = baseline !== 0 ? Math.round(rawDiff - baseline) : rawDiff;
       this.log.spam('squeezelite group sync tick', {
         leaderZoneId,
         memberId,
@@ -356,10 +450,21 @@ class SqueezeliteGroupController {
       if (delta < this.minDeviationAdjustMs) {
         continue;
       }
+      // Skip corrections when the drift is too large to recover via timing nudges.
+      // A pauseAndUnpause with a multi-second delta would stall the entire group
+      // (leader) or jump the member forward by an unusable amount.  Members this
+      // far out of sync are left to resync naturally on the next track change.
+      if (delta > this.maxResyncDeltaMs) {
+        continue;
+      }
 
       // Apply correction and debounce. Similar strategy as Music Assistant's squeezelite provider.
+      // Cooldown raised from 5 s → 15 s: need enough time to observe whether the
+      // correction settled before allowing another one.  At 1 tick/s and 8 required
+      // playpoints the minimum re-fire interval was 5+8 = 13 s; raising to 15 s
+      // gives a full second-per-tick observation window after the cooldown lifts.
       this.syncPlaypoints.set(key, []);
-      this.doNotResyncBefore.set(key, now + 5000);
+      this.doNotResyncBefore.set(key, now + 15_000);
 
       if (avg > this.maxSkipAheadMs) {
         // member lags badly; slow down the leader a bit.
@@ -466,6 +571,13 @@ class SqueezeliteGroupController {
       members: entries.map((entry) => entry.zoneId),
       latencyMs: Object.fromEntries(entries.map((entry) => [entry.zoneId, entry.latencyMs])),
     });
+    // After a synchronized group start all members resume from the same point,
+    // so any previously recorded elapsed baselines are stale.
+    for (const key of [...this.elapsedBaselines.keys()]) {
+      if (key.startsWith(`${leaderZoneId}:`)) {
+        this.elapsedBaselines.delete(key);
+      }
+    }
     return true;
   }
 }

@@ -37,6 +37,18 @@ export interface ZoneOutput {
    * pre-buffer window so the output transitions naturally. Returns true on success.
    */
   enqueueRotation?(session: PlaybackSession): Promise<boolean> | boolean;
+  /**
+   * Returns true when this output supports client-side native crossfade (e.g.
+   * squeezelite via SlimProto TransitionType.CROSSFADE). When ALL outputs in a zone
+   * return true, the coordinator skips the server-side PCM blend and instead issues
+   * a native crossfade via the next play() call.
+   */
+  supportsCrossfade?(): boolean;
+  /**
+   * Signal that the NEXT play() call should use native crossfade with the given
+   * duration (seconds). The output stores this hint and consumes it on the next play.
+   */
+  setCrossfadeHint?(durationSec: number): void;
   /** Optional preferred output format for this output (used to drive resampling/profile). */
   getPreferredOutput?(): PreferredOutput | null;
   /** Optional estimated output latency/buffer in milliseconds. */

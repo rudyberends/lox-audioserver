@@ -358,6 +358,24 @@ export class AudioManager {
     return session;
   }
 
+  /**
+   * Gracefully stop the current audio session for a zone without forcibly
+   * destroying its HTTP subscriber connections. The ffmpeg process receives
+   * SIGTERM and flushes remaining encoded audio; each HTTP subscriber
+   * receives a clean stream `end()` so that squeezelite clients see a proper
+   * EOF and fire their `STMd` (decoder-ready) event. This is required for
+   * native-crossfade transitions where squeezelite's `STMd` event triggers the
+   * enqueued next-track `strm` command.
+   */
+  public softStopPlayback(zoneId: number): void {
+    this.playbackService.stop(zoneId, 'crossfade-native', { discardSubscribers: false });
+    // Note: sessions.delete() is intentionally NOT called here — the session
+    // object is retained so that startWithResolvedSource can inspect it and
+    // start the new engine cleanly. The subsequent startPlayback call will
+    // call playbackService.stop() again which is a no-op (sessions map already
+    // cleaned by the engine), and then create a fresh session entry.
+  }
+
   public getStreamHandle(zoneId: number): AudioStreamHandle | null {
     return this.sessions.get(zoneId)?.stream ?? null;
   }
