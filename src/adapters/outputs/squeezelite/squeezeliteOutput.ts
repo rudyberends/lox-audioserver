@@ -52,6 +52,7 @@ export class SqueezeliteOutput implements ZoneOutput {
   private readonly unsubscribe: () => void;
   private readonly unsubscribeGroups: () => void;
   private lastStatus: 'playing' | 'paused' | 'stopped' | null = null;
+  private pendingCrossfadeSec = 0;
   private pendingAutostart = false;
   private autostartTimer?: NodeJS.Timeout;
   private lastJoinAt = 0;
@@ -89,6 +90,22 @@ export class SqueezeliteOutput implements ZoneOutput {
     return Boolean(this.resolvePlayer());
   }
 
+  public supportsCrossfade(): boolean {
+    // Native (client-side) crossfade only when this zone is part of a sync group.
+    // For sync groups the server-side inline blend can't rotate URLs on all members
+    // simultaneously, so squeezelite's built-in crossfade is the correct path.
+    // For single players the inline (server-side FFmpeg) crossfade is more reliable:
+    // the native path calls softStopPlayback before dispatching play(), so the old
+    // HTTP stream ends before squeezelite receives the CROSSFADE command — leaving
+    // nothing in the buffer to blend with.
+    const group = getGroupByZone(this.zoneId);
+    return Boolean(group && group.members.length >= 2);
+  }
+
+  public setCrossfadeHint(durationSec: number): void {
+    this.pendingCrossfadeSec = durationSec;
+  }
+
   public async play(session: PlaybackSession): Promise<void> {
     if (!session.playbackSource) {
       this.log.warn('Squeezelite output skipped; no playback source', { zoneId: this.zoneId });
@@ -100,6 +117,10 @@ export class SqueezeliteOutput implements ZoneOutput {
       this.ports.outputHandlers.onOutputError(this.zoneId, 'squeezelite no player');
       return;
     }
+    // Consume the crossfade hint set by setCrossfadeHint() before this call.
+    const crossfadeSec = this.pendingCrossfadeSec;
+    this.pendingCrossfadeSec = 0;
+
     const groupInfo = this.ports.squeezeliteGroup.preparePlayback(this.zoneId);
     const streamUrl = this.buildStreamUrl(session, groupInfo);
     if (!streamUrl) {
@@ -117,6 +138,24 @@ export class SqueezeliteOutput implements ZoneOutput {
       }
       const meta = this.buildMetadata(session, streamUrl);
       const mime = resolveMimeType(streamUrl);
+      if (crossfadeSec > 0) {
+        // Native crossfade: enqueue the new URL on all group players so they
+        // blend client-side when their current stream buffer drains. Players in a
+        // sync group all have identical buffers, so the transition is simultaneous.
+        const crossfadeTenths = Math.max(1, Math.round(crossfadeSec * 10));
+        const ok = await this.ports.squeezeliteGroup.orchestrateGroupEnqueue(
+          groupInfo.leaderZoneId, streamUrl, mime, meta, crossfadeTenths,
+        );
+        if (!ok) {
+          this.ports.outputHandlers.onOutputError(this.zoneId, 'squeezelite group enqueue failed');
+        }
+        this.log.debug('squeezelite group native crossfade enqueued', {
+          zoneId: this.zoneId,
+          crossfadeSec,
+          streamUrl,
+        });
+        return;
+      }
       const ok = await this.ports.squeezeliteGroup.orchestrateGroupPlayback(
         groupInfo.leaderZoneId,
         streamUrl,
@@ -132,18 +171,32 @@ export class SqueezeliteOutput implements ZoneOutput {
     const shouldAutostart = !groupInfo.grouped || groupInfo.expectedCount <= 1;
     const meta = this.buildMetadata(session, streamUrl);
     const mime = resolveMimeType(streamUrl);
-    await player.playUrl(
-      streamUrl,
-      mime,
-      meta,
-      undefined,
-      0,
-      false,
-      // For non-sync playback, allow the player to autostart as soon as it has enough buffer.
-      // This avoids relying on clock/jiffies being initialized (which can be missing right after a server restart).
-      shouldAutostart,
-      true,
-    );
+    if (crossfadeSec > 0) {
+      const crossfadeTenths = Math.max(1, Math.round(crossfadeSec * 10));
+      await player.playUrl(
+        streamUrl, mime, meta,
+        TransitionType.CROSSFADE, crossfadeTenths,
+        false, shouldAutostart, false,
+      );
+      this.log.debug('squeezelite native crossfade enqueued', {
+        zoneId: this.zoneId,
+        crossfadeSec,
+        streamUrl,
+      });
+    } else {
+      await player.playUrl(
+        streamUrl,
+        mime,
+        meta,
+        undefined,
+        0,
+        false,
+        // For non-sync playback, allow the player to autostart as soon as it has enough buffer.
+        // This avoids relying on clock/jiffies being initialized (which can be missing right after a server restart).
+        shouldAutostart,
+        true,
+      );
+    }
   }
 
   /**
@@ -202,6 +255,21 @@ export class SqueezeliteOutput implements ZoneOutput {
   public async resume(session: PlaybackSession | null): Promise<void> {
     const group = getGroupByZone(this.zoneId);
     if (group && group.members.length >= 2) {
+      const ownPlayer = this.resolvePlayer();
+      if (ownPlayer?.state === PlayerState.STOPPED) {
+        // Player was stopped (e.g. by a local TTS override on this zone). A bare
+        // orchestrateGroupResume (unpause-only) silently fails on stopped players.
+        // Members rejoin via the leader's current stream; the leader re-orchestrates
+        // the whole group from its current session.
+        if (this.zoneId !== group.leader) {
+          await this.maybeJoinLeader('player_connected');
+          return;
+        }
+        if (session) {
+          await this.play(session);
+        }
+        return;
+      }
       await this.ports.squeezeliteGroup.orchestrateGroupResume(group.leader);
       return;
     }
@@ -219,7 +287,15 @@ export class SqueezeliteOutput implements ZoneOutput {
     this.clearPendingAutostart();
     const group = getGroupByZone(this.zoneId);
     if (group && group.members.length >= 2) {
-      await this.ports.squeezeliteGroup.orchestrateGroupStop(group.leader);
+      if (this.zoneId === group.leader) {
+        // Leader stops the whole group.
+        await this.ports.squeezeliteGroup.orchestrateGroupStop(group.leader);
+      } else {
+        // Member stops only itself. Orchestrating a full group stop would silence
+        // all zones, which is wrong for local overrides like TTS on a single zone.
+        const player = this.resolvePlayer();
+        if (player) await player.stop().catch(() => undefined);
+      }
       return;
     }
     const player = this.resolvePlayer();

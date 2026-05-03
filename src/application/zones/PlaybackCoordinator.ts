@@ -1502,6 +1502,19 @@ export class PlaybackCoordinator {
     state.triggered = true;
     state.triggeredAt = Date.now();
 
+    // Use squeezelite-native client-side crossfade when ALL outputs support it.
+    // Spotify (isSpotifyFadeIn) is now included: triggerNativeCrossfade calls
+    // startCrossfadeStream / releaseCrossfadeStream so Connect-host ownership is
+    // transferred correctly before the old engine stops.
+    const allNativeCrossfade =
+      ctx.outputs.length > 0 &&
+      ctx.outputs.every((o) => typeof o.supportsCrossfade === 'function' && o.supportsCrossfade());
+
+    if (allNativeCrossfade) {
+      await this.triggerNativeCrossfade(ctx, crossfadeSec, state);
+      return;
+    }
+
     const newSource = state.resolvedSource;
 
     type FadeIn =
@@ -1619,6 +1632,119 @@ export class PlaybackCoordinator {
   }
 
   /**
+   * Native crossfade for outputs like squeezelite that have built-in client-side
+   * crossfade support. Instead of a server-side PCM blend we:
+   *  1. Set a crossfade hint on each output so the upcoming play() call uses enqueue
+   *     + TransitionType.CROSSFADE instead of replacing the current stream.
+   *  2. Advance the queue and start the new audio session normally. The old engine
+   *     stops, sending EOF to the sync stream. Players drain their local audio buffer
+   *     (typically 5–15 s) then fade in the new URL — simultaneously for sync groups
+   *     because all players share the same byte stream.
+   */
+  private async triggerNativeCrossfade(
+    ctx: ZoneContext,
+    crossfadeSec: number,
+    state: NonNullable<ReturnType<typeof this.crossfadeState.get>>,
+  ): Promise<void> {
+    const zoneId = ctx.id;
+
+    // For Spotify: start the next track's librespot stream now so the pipe is
+    // ready when the new session starts, then release Connect-host ownership so
+    // the Spotify input service stops reacting to events for the old track.
+    // This mirrors what the server-side blend did but without waiting for the blend.
+    if (state.isSpotifyFadeIn) {
+      const xfStream = await this.inputsPort.startCrossfadeStream(zoneId, state.nextAudiopath);
+      if (!xfStream) {
+        state.triggered = false;
+        this.crossfadeState.delete(zoneId);
+        return;
+      }
+      // Override the resolved source with the live librespot pipe.
+      state.resolvedSource = {
+        kind: 'pipe',
+        path: `librespot-native-${zoneId}`,
+        format: 's16le',
+        sampleRate: xfStream.sampleRate,
+        channels: xfStream.channels,
+        realTime: false,
+        stream: xfStream.stream,
+      };
+      // Transfer Connect ownership to the new track immediately so periodic
+      // Connect events don't revert metadata back to the old track.
+      this.inputsPort.releaseCrossfadeStream(zoneId, state.resolvedMetadata ?? undefined);
+    }
+
+    // Signal all outputs to use native crossfade on the next play() call.
+    for (const output of ctx.outputs) {
+      output.setCrossfadeHint?.(crossfadeSec);
+    }
+
+    // Update early metadata so the UI shows the new track title immediately.
+    const earlySession = this.audioManager.getSession(zoneId);
+    if (earlySession && state.resolvedMetadata) {
+      earlySession.metadata = state.resolvedMetadata;
+      earlySession.source = state.nextAudiopath ?? state.resolvedMetadata.title ?? 'crossfade';
+      earlySession.duration = state.resolvedMetadata.duration ?? 0;
+      earlySession.playbackSource = state.resolvedSource!;
+      earlySession.updatedAt = Date.now();
+    }
+
+    ctx.queueController.setCurrentIndex(state.nextQueueIndex);
+    if (earlySession) {
+      ctx.player.updateStateForCrossfade(earlySession);
+    }
+    const nextItem = ctx.queue.items[state.nextQueueIndex];
+    if (nextItem) {
+      const patch = buildQueueItemPlaybackPatch(ctx, nextItem, state.nextQueueIndex, this.audioHelpers);
+      this.applyPatch(zoneId, {
+        ...patch,
+        mode: 'play',
+        clientState: 'on',
+        power: 'on',
+        time: 0,
+        duration: typeof nextItem.duration === 'number' ? Math.max(0, Math.round(nextItem.duration)) : undefined,
+      });
+      void this.recentsManager.record(zoneId, nextItem);
+    }
+
+    // Gracefully stop the old engine so squeezelite clients receive a clean HTTP
+    // EOF (stream `end()`) rather than an abrupt destroy(). With a clean EOF,
+    // squeezelite's decoder drains its remaining audio buffer and then fires
+    // `STMd` (decoder ready). The node-slimproto client processes `STMd` by
+    // calling the actual `strm`-enqueue command for whatever is stored in
+    // `_nextMedia` — which is set by `orchestrateGroupEnqueue()` (called inside
+    // `play()` below). Without the clean EOF, squeezelite fires `STMu` (stream
+    // underrun) instead, which clears `_nextMedia` and the enqueue is lost.
+    this.audioManager.softStopPlayback(zoneId);
+
+    // Start the new audio session. The old engine was already stopped above; the
+    // playbackService.stop() inside startWithResolvedSource is a no-op. play()
+    // is dispatched on all outputs — with the crossfade hint set above, squeezelite
+    // calls orchestrateGroupEnqueue() so `_nextMedia` is set. Players receive the
+    // actual `strm` command when squeezelite's `STMd` event fires after the old
+    // stream ends cleanly.
+    const nativeSession = await this.startQueuePlayback(
+      ctx,
+      state.nextAudiopath,
+      state.resolvedMetadata ?? undefined,
+      { skipExternalStop: true },
+    );
+
+    this.crossfadeState.delete(zoneId);
+
+    if (!nativeSession) {
+      // Hints were already consumed by play(); nothing more to do.
+      return;
+    }
+
+    this.log.info('crossfade triggered (native)', {
+      zoneId,
+      crossfadeSec,
+      next: state.nextAudiopath,
+    });
+  }
+
+  /**
    * Phase-1 URL handover: rotates the audio session's stream id, asks each capable
    * output to enqueue the new URL as the next track, then closes the OLD URL's HTTP
    * response after a short pre-buffer window so the output transitions naturally.
@@ -1646,8 +1772,22 @@ export class PlaybackCoordinator {
       }
     }
     if (!enqueuedAtLeastOne) {
-      // No output accepted the handover (e.g., grouped playback). The OLD URL stays
-      // open and the recentStreamIds entry just expires harmlessly.
+      // No output accepted the handover. This can happen in two cases:
+      // 1. Grouped playback (enqueueRotation returns false for sync groups) AND players
+      //    are still connected — old URL continues serving them, nothing to do.
+      // 2. All players disconnected before the crossfade completed (e.g. squeezelite
+      //    closed the connection when elapsed >= duration) — in this case we must
+      //    dispatch a fresh play to restart the group on the new rotated stream URL.
+      const currentSession = this.audioManager.getSession(ctx.id);
+      if (currentSession && currentSession.state === 'playing') {
+        const streamStats = this.audioManager.getStreamStats(ctx.id);
+        const hasSubscribers = streamStats.some((s) => s.subscribers > 0);
+        if (!hasSubscribers) {
+          this.log.debug('url handover skipped — no subscribers; dispatching play to restart group', { zoneId: ctx.id });
+          this.dispatchOutputs(ctx, ctx.outputs, 'play', currentSession);
+          return;
+        }
+      }
       this.log.debug('url handover skipped — no output accepted enqueue', { zoneId: ctx.id });
       return;
     }
