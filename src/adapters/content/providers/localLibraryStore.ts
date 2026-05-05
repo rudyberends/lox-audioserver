@@ -577,7 +577,6 @@ export class LocalLibraryStore {
       );
       CREATE INDEX IF NOT EXISTS idx_tracks_storage ON tracks(storage_id);
       CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(storage_id, album);
-      CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(storage_id, album_artist, album);
       CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(storage_id, artist);
       CREATE INDEX IF NOT EXISTS idx_tracks_audiopath ON tracks(audiopath);
     `;
@@ -585,6 +584,7 @@ export class LocalLibraryStore {
 
     const userVersion = Number(db.pragma('user_version', { simple: true }) ?? 0);
     this.ensureAlbumArtistColumn(db);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(storage_id, album_artist, album);');
     db.exec(`UPDATE tracks SET album_artist = artist WHERE NULLIF(TRIM(album_artist), '') IS NULL;`);
 
     // Add FTS-backed searching for large libraries. If FTS5 is unavailable, we keep the LIKE fallback.

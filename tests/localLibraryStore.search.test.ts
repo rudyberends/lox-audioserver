@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import Database from 'better-sqlite3';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -98,6 +99,46 @@ test('local library store: groups albums by album artist', async () => {
     const searchAlbums = store.searchAlbums('various', 10);
     assert.equal(searchAlbums.length, 1);
     assert.equal(searchAlbums[0]?.track_count, 2);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('local library store: migrates legacy database before creating album artist index', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lox-audioserver-libstore-legacy-'));
+  const dbPath = path.join(tempDir, 'library.db');
+
+  try {
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE tracks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        storage_id TEXT NOT NULL,
+        rel_path TEXT NOT NULL,
+        title TEXT NOT NULL,
+        album TEXT NOT NULL,
+        artist TEXT NOT NULL,
+        audiopath TEXT NOT NULL,
+        cover TEXT,
+        mtime INTEGER,
+        size INTEGER,
+        duration REAL,
+        UNIQUE(storage_id, rel_path)
+      );
+      INSERT INTO tracks (storage_id, rel_path, title, album, artist, audiopath)
+      VALUES ('local', 'local/Artist/Album/01.mp3', 'Track', 'Album', 'Artist', 'library:local:track:legacy');
+      PRAGMA user_version = 2;
+    `);
+    legacy.close();
+
+    const store = new LocalLibraryStore({ dbPath });
+    await store.init();
+
+    const stats = store.getStats();
+    assert.equal(stats.tracks, 1);
+    assert.equal(stats.albums, 1);
+    const tracks = store.getTracks('local', 0, 10);
+    assert.equal(tracks.items[0]?.album_artist, 'Artist');
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
