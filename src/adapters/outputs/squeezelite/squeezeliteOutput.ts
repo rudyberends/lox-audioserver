@@ -11,6 +11,8 @@ import { EventType, PlayerState } from '@lox-audioserver/node-slimproto';
 export interface SqueezeliteOutputConfig {
   playerId?: string;
   playerName?: string;
+  /** Optional plugin endpoint that receives Loxone App EQ writes for this zone. */
+  eqCallbackUrl?: string;
   /** Optional fixed output latency (ms) used for sync-group alignment. */
   latencyMs?: number;
 }
@@ -40,6 +42,13 @@ export const SQUEEZELITE_OUTPUT_DEFINITION: OutputConfigDefinition = {
       type: 'text',
       placeholder: '0',
       description: 'Optional fixed output latency for sync-groups. Higher = sound is later.',
+    },
+    {
+      id: 'eqCallbackUrl',
+      label: 'EQ callback URL',
+      type: 'text',
+      placeholder: 'http://loxberry/plugins/squeezelite_mr/api.php?op=loxone_eq_set',
+      description: 'Optional endpoint that receives 10-band EQ changes from the Loxone App.',
     },
   ],
 };

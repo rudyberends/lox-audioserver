@@ -68,6 +68,7 @@ export function registerRoutes(
     dependencies.recentsManager,
     dependencies.favoritesManager,
     dependencies.contentManager,
+    dependencies.configPort,
   );
   const groupHandlers = createGroupHandlers(
     dependencies.zoneManager,
@@ -123,7 +124,9 @@ export function registerRoutes(
   router.registerPrefix('audio', 'audio/cfg/playeropts', placeholder('playeropts'));
   router.registerPrefix('audio', 'audio/cfg/playername', configHandlers.playerName);
   router.registerPrefix('audio', 'audio/cfg/identify', configHandlers.identify);
-  router.registerPrefix('audio', 'audio/cfg/geteq', configHandlers.getEq);
+  router.registerRegex('audio', /^audio\/cfg\/geteq\/\d+\/?$/, zoneHandlers.audioCfgGetEq);
+  router.registerRegex('audio', /^audio\/cfg\/equalizer\/\d+(?:\/[^/]+)?\/?$/, zoneHandlers.audioCfgEqualizer);
+  router.registerRegex('audio', /^audio\/cfg\/seteq\/\d+\/.+$/, zoneHandlers.audioCfgSetEq);
   router.registerPrefix('audio', 'audio/cfg/restart', configHandlers.restart);
   router.registerPrefix('audio', 'audio/cfg/speakertype', placeholder('speakertype'));
   router.registerPrefix('audio', 'audio/cfg/groupopts', placeholder('groupopts'));
@@ -152,6 +155,7 @@ export function registerRoutes(
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/roomfav\/play\//, zoneHandlers.audioFavoritePlay);
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/roomfav\/plus$/, zoneHandlers.audioRoomFavPlus);
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/playurl\/.+$/, zoneHandlers.audioPlayUrl);
+  router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/equalizersettings\/[^/]+\/?$/, zoneHandlers.audioEqualizerSettings);
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/linein(?:\/.*)?$/, inputHandlers.audioLineIn);
 
   router.registerRegex('audio', /^audio\/grouped\/(pause|play|resume|stop)\//, groupHandlers.audioGroupedPlayback);

@@ -22,6 +22,7 @@ export type ZoneManagerFacade = Pick<
   | 'getZoneVolumes'
   | 'getOutputHandlers'
   | 'applyPatch'
+  | 'setEqualizerBands'
   | 'handleCommand'
   | 'setRepeatMode'
   | 'setShuffle'

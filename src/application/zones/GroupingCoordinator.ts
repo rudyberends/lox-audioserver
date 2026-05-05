@@ -50,7 +50,13 @@ export class GroupingCoordinator {
   private stripGroupStateFields(
     patch: Partial<LoxoneZoneState>,
   ): Partial<LoxoneZoneState> {
-    const { playerid: _playerid, name: _name, volume: _volume, ...rest } = patch;
+    const {
+      playerid: _playerid,
+      name: _name,
+      volume: _volume,
+      equalizerSettings: _equalizerSettings,
+      ...rest
+    } = patch;
     return rest;
   }
 }

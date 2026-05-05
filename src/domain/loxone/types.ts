@@ -9,6 +9,8 @@ export interface LoxoneZoneState {
   clientState: 'on' | 'off';
   coverurl: string;
   duration: number;
+  /** Comma-separated 10-band EQ values for Loxone App AudioZone controls. */
+  equalizerSettings: string;
   icontype?: number;
   mode: 'play' | 'pause' | 'stop';
   name: string;

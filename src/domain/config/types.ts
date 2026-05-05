@@ -167,10 +167,16 @@ export interface ZoneConfig {
   sourceMac: string;
   output?: ZoneOutputConfig | null;
   transports?: ZoneTransportConfig[];
+  equalizer?: ZoneEqualizerConfig | null;
   powerManager?: ZonePowerManagerConfig | null;
   state?: ZoneStateConfig;
   volumes: ZoneVolumesConfig;
   inputs?: ZoneInputConfig;
+}
+
+export interface ZoneEqualizerConfig {
+  /** Loxone App 10-band EQ values in dB, one integer per band (-6..+6). */
+  bands?: number[];
 }
 
 export interface ZonePowerManagerConfig {

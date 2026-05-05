@@ -69,6 +69,11 @@ import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezelite
 import { invalidateWidevineArtifactsCache, loadWidevineArtifacts, WidevineArtifactsError } from '@/adapters/content/providers/applemusic/widevine';
 import { ensureDir, resolveDataDir } from '@/shared/utils/file';
 import type { MdnsPort, MdnsServiceRecord } from '@/ports/MdnsPort';
+import {
+  getZoneEqualizerBands,
+  normalizeEqualizerBands,
+  formatEqualizerSettings,
+} from '@/application/zones/equalizer';
 
 type AdminApiOptions = {
   onReinitialize?: () => Promise<boolean>;
@@ -458,6 +463,20 @@ export class AdminApiHandler {
       { method: 'GET', pattern: /^\/zones\/states$/, handler: async (_req, res) => this.handleZoneStates(res) },
       {
         method: 'GET',
+        pattern: /^\/zones\/(\d+)\/equalizer$/,
+        handler: async (_req, res, match) => {
+          await this.handleZoneEqualizerGet(Number(match[1]), res);
+        },
+      },
+      {
+        method: 'PUT',
+        pattern: /^\/zones\/(\d+)\/equalizer$/,
+        handler: async (req, res, match) => {
+          await this.handleZoneEqualizerPut(Number(match[1]), req, res);
+        },
+      },
+      {
+        method: 'GET',
         pattern: /^\/zones\/state-controllers$/,
         handler: async (_req, res) => this.handleZoneStateControllerDefinitions(res),
       },
@@ -730,6 +749,7 @@ export class AdminApiHandler {
     if (pathname === '/auth/me' && method === 'GET') return true;
     if (/^\/spotify\/auth\/callback/.test(pathname)) return true;
     if (/^\/spotify\/librespot\/credentials/.test(pathname)) return true;
+    if (/^\/zones\/\d+\/equalizer$/.test(pathname) && (method === 'GET' || method === 'PUT')) return true;
     return false;
   }
 
@@ -2167,6 +2187,58 @@ export class AdminApiHandler {
       this.log.warn('zone state fetch failed', { err });
       this.sendJson(res, 500, { error: 'zone-states-failed' });
     }
+  }
+
+  private async handleZoneEqualizerGet(zoneId: number, res: ServerResponse): Promise<void> {
+    const zone = this.configPort.getConfig().zones.find((entry) => entry.id === zoneId);
+    if (!zone) {
+      this.sendJson(res, 404, { error: 'zone-not-found' });
+      return;
+    }
+
+    const bands = getZoneEqualizerBands(zone);
+    this.sendJson(res, 200, {
+      ok: true,
+      zoneId,
+      bands,
+      equalizerSettings: formatEqualizerSettings(bands),
+    });
+  }
+
+  private async handleZoneEqualizerPut(
+    zoneId: number,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const body = (await this.readJsonBody(req, res)) as { bands?: unknown } | unknown[] | null;
+    if (res.writableEnded) {
+      return;
+    }
+
+    const bands = normalizeEqualizerBands(Array.isArray(body) ? body : body?.bands);
+    if (!bands) {
+      this.sendJson(res, 400, { error: 'invalid-equalizer-bands' });
+      return;
+    }
+
+    const zone = this.configPort.getConfig().zones.find((entry) => entry.id === zoneId);
+    if (!zone) {
+      this.sendJson(res, 404, { error: 'zone-not-found' });
+      return;
+    }
+
+    const updated = await this.zoneManager.setEqualizerBands(zoneId, bands);
+    if (!updated) {
+      this.sendJson(res, 404, { error: 'zone-not-found' });
+      return;
+    }
+
+    this.sendJson(res, 200, {
+      ok: true,
+      zoneId,
+      bands: updated.bands,
+      equalizerSettings: updated.equalizerSettings,
+    });
   }
 
   private async handleAirplayDiscovery(res: ServerResponse): Promise<void> {

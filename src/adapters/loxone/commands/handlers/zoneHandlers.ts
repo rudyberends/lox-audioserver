@@ -11,12 +11,24 @@ import type { FavoritesManager } from '@/application/zones/favorites/favoritesMa
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import { fadeController } from '@/application/zones/fadeController';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
+import type { ConfigPort } from '@/ports/ConfigPort';
+import { createLogger } from '@/shared/logging/logger';
+import {
+  DEFAULT_EQUALIZER_BANDS,
+  formatEqualizerSettings,
+  getZoneEqualizerBands,
+  parseEqualizerSettings,
+  resolveSqueezeliteEqCallbackUrl,
+} from '@/application/zones/equalizer';
+
+const log = createLogger('Loxone', 'ZoneHandlers');
 
 export function createZoneHandlers(
   zoneManager: ZoneManagerFacade,
   recentsManager: RecentsManager,
   favoritesManager: FavoritesManager,
   contentManager: ContentManager,
+  configPort?: ConfigPort,
 ) {
   return {
     audioGetStatus: (command: string) => audioGetStatus(zoneManager, command),
@@ -26,6 +38,10 @@ export function createZoneHandlers(
     audioLibraryPlay: (command: string) => audioLibraryPlay(zoneManager, contentManager, command),
     audioServicePlay: (command: string) => audioServicePlay(zoneManager, contentManager, command),
     audioPlayUrl: (command: string) => audioPlayUrl(zoneManager, contentManager, command),
+    audioCfgGetEq: (command: string) => audioCfgGetEq(configPort, command),
+    audioCfgEqualizer: (command: string) => audioCfgEqualizer(zoneManager, configPort, command),
+    audioCfgSetEq: (command: string) => audioCfgSetEq(zoneManager, configPort, command),
+    audioEqualizerSettings: (command: string) => audioEqualizerSettings(zoneManager, configPort, command),
     audioDynamicCommand: (command: string) => audioDynamicCommand(zoneManager, command),
     audioCfgGetRoomFavs: (command: string) => audioCfgGetRoomFavs(favoritesManager, command),
     audioCfgRoomFavs: (command: string) => audioCfgRoomFavs(favoritesManager, command),
@@ -177,6 +193,121 @@ async function audioPlayUrl(
   return playToZone(zoneManager, contentManager, command, 'playurl', (parts) =>
     extractPayload(parts.slice(3)),
   );
+}
+
+async function audioEqualizerSettings(
+  zoneManager: ZoneManagerFacade,
+  configPort: ConfigPort | undefined,
+  command: string,
+) {
+  const parts = splitCommand(command);
+  const zoneId = parseNumberPart(parts[1], 0);
+  const rawSettings = decodeSegment(parts.slice(3).join('/'));
+  const bands = parseEqualizerSettings(rawSettings);
+
+  if (!bands) {
+    return buildResponse(command, 'equalizersettings', {
+      success: false,
+      error: 'invalid-equalizer-settings',
+    });
+  }
+
+  const updated = await zoneManager.setEqualizerBands(zoneId, bands);
+  if (!updated) {
+    return buildResponse(command, 'equalizersettings', {
+      success: false,
+      error: 'zone-not-found',
+    });
+  }
+
+  const callbackUrl = resolveEqCallbackUrl(configPort, zoneId);
+  if (callbackUrl) {
+    await forwardEqualizerSettings(callbackUrl, zoneId, updated.bands);
+  }
+
+  return buildResponse(command, 'equalizersettings', {
+    success: true,
+    bands: updated.bands,
+    equalizerSettings: updated.equalizerSettings,
+  });
+}
+
+function audioCfgGetEq(configPort: ConfigPort | undefined, command: string) {
+  const parts = splitCommand(command);
+  const zoneId = parseNumberPart(parts[3], 0);
+  const bands = resolveZoneEqualizerBands(configPort, zoneId);
+  if (!bands) {
+    return buildResponse(command, 'geteq', []);
+  }
+  return buildResponse(command, 'geteq', buildGetEqPayload(bands));
+}
+
+async function audioCfgEqualizer(
+  zoneManager: ZoneManagerFacade,
+  configPort: ConfigPort | undefined,
+  command: string,
+) {
+  const parts = splitCommand(command);
+  const zoneId = parseNumberPart(parts[3], 0);
+  const rawSettings = decodeSegment(parts.slice(4).join('/'));
+
+  if (!rawSettings) {
+    const bands = resolveZoneEqualizerBands(configPort, zoneId) ?? [...DEFAULT_EQUALIZER_BANDS];
+    return {
+      command,
+      name: 'equalizer',
+      raw: true,
+      payload: buildEqualizerRawResponse(command, zoneId, bands),
+    };
+  }
+
+  const updated = await updateEqualizerBands(zoneManager, configPort, zoneId, rawSettings);
+  if (!updated) {
+    return buildResponse(command, 'equalizer', {
+      success: false,
+      error: 'invalid-equalizer-settings',
+    });
+  }
+
+  return {
+    command,
+    name: 'equalizer',
+    raw: true,
+    payload: buildEqualizerRawResponse(command, zoneId, updated.bands),
+  };
+}
+
+async function audioCfgSetEq(
+  zoneManager: ZoneManagerFacade,
+  configPort: ConfigPort | undefined,
+  command: string,
+) {
+  const parts = splitCommand(command);
+  const zoneId = parseNumberPart(parts[3], 0);
+  const bandId = parts[4];
+  const value = parts[5];
+  let rawSettings: string | null = null;
+
+  if (value !== undefined) {
+    const bands = resolveZoneEqualizerBands(configPort, zoneId);
+    const index = Number(bandId);
+    const nextValue = Number(value);
+    if (!bands || !Number.isInteger(index) || index < 0 || index >= bands.length || !Number.isFinite(nextValue)) {
+      return buildEmptyResponse(command);
+    }
+    const next = [...bands];
+    next[index] = nextValue;
+    rawSettings = formatEqualizerSettings(next);
+  } else if (bandId) {
+    rawSettings = decodeSegment(parts.slice(4).join('/'));
+  }
+
+  if (!rawSettings) {
+    return buildEmptyResponse(command);
+  }
+
+  await updateEqualizerBands(zoneManager, configPort, zoneId, rawSettings);
+  return buildEmptyResponse(command);
 }
 
 function audioDynamicCommand(zoneManager: ZoneManagerFacade, command: string) {
@@ -372,4 +503,118 @@ function sanitizeMetadataTarget(uri: string): string {
     .replace(/\/\?q&[A-Za-z0-9+/=]+$/i, '')
     .replace(/\/+$/, '');
   return decodeAudiopath(cleaned);
+}
+
+function resolveEqCallbackUrl(configPort: ConfigPort | undefined, zoneId: number): string | null {
+  if (!configPort) {
+    return null;
+  }
+  try {
+    const zone = configPort.getConfig().zones.find((entry) => entry.id === zoneId);
+    return resolveSqueezeliteEqCallbackUrl(zone);
+  } catch (error) {
+    log.warn('equalizer callback lookup failed', {
+      zoneId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+function resolveZoneEqualizerBands(configPort: ConfigPort | undefined, zoneId: number): number[] | null {
+  if (zoneId <= 0) {
+    return [...DEFAULT_EQUALIZER_BANDS];
+  }
+  if (!configPort) {
+    return null;
+  }
+  try {
+    const zone = configPort.getConfig().zones.find((entry) => entry.id === zoneId);
+    return zone ? [...getZoneEqualizerBands(zone)] : null;
+  } catch (error) {
+    log.warn('equalizer state lookup failed', {
+      zoneId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+async function updateEqualizerBands(
+  zoneManager: ZoneManagerFacade,
+  configPort: ConfigPort | undefined,
+  zoneId: number,
+  rawSettings: string,
+) {
+  const bands = parseEqualizerSettings(rawSettings.replace(/^!/, ''));
+  if (!bands) {
+    return null;
+  }
+
+  const updated = await zoneManager.setEqualizerBands(zoneId, bands);
+  if (!updated) {
+    return null;
+  }
+
+  const callbackUrl = resolveEqCallbackUrl(configPort, zoneId);
+  if (callbackUrl) {
+    await forwardEqualizerSettings(callbackUrl, zoneId, updated.bands);
+  }
+
+  return updated;
+}
+
+function buildGetEqPayload(bands: ReadonlyArray<number>): Array<Record<string, number | string>> {
+  const names = ['31 Hz', '63 Hz', '125 Hz', '250 Hz', '500 Hz', '1 kHz', '2 kHz', '4 kHz', '8 kHz', '16 kHz'];
+  return bands.map((value, id) => ({
+    id,
+    high: 10,
+    low: -10,
+    step: 0.5,
+    value,
+    name: names[id] ?? `B${id}`,
+  }));
+}
+
+function buildEqualizerRawResponse(command: string, zoneId: number, bands: ReadonlyArray<number>): string {
+  const entries = bands.map((band, index) => `"B${index}": ${Number(band).toFixed(1)}`).join(',');
+  return `{
+  "equalizer_result": [
+    {
+      "playerid": ${Number(zoneId)},
+      "equalizer": {
+        ${entries}
+      }
+    }
+  ],
+  "command": "${command}"
+}`;
+}
+
+async function forwardEqualizerSettings(
+  callbackUrl: string,
+  zoneId: number,
+  bands: ReadonlyArray<number>,
+): Promise<void> {
+  try {
+    const response = await fetch(callbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ zoneId, bands }),
+      signal: AbortSignal.timeout(2500),
+    });
+    if (!response.ok) {
+      log.warn('equalizer callback failed', {
+        zoneId,
+        callbackUrl,
+        status: response.status,
+      });
+    }
+  } catch (error) {
+    log.warn('equalizer callback failed', {
+      zoneId,
+      callbackUrl,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }

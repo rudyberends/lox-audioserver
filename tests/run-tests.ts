@@ -31,6 +31,7 @@ import './audioManager.playbackPreDelay.test';
 import './sendspinLineInService.test';
 import './powerManager.test';
 import './sharedPowerGroupManager.test';
+import './equalizer.test';
 import './zoneHandlers.serviceplay.test';
 import './alertHandlers.playeventfile.test';
 import './alertsCoordinator.test';
@@ -645,6 +646,7 @@ test('applyZonePatch merges fields', () => {
     clientState: 'on',
     coverurl: '',
     duration: 120,
+    equalizerSettings: '0,0,0,0,0,0,0,0,0,0',
     mode: 'play',
     name: 'Living',
     parent: null,
@@ -676,6 +678,7 @@ test('applyZonePatch does not mutate inputs', () => {
     clientState: 'on',
     coverurl: '',
     duration: 0,
+    equalizerSettings: '0,0,0,0,0,0,0,0,0,0',
     mode: 'stop',
     name: 'Zone',
     parent: null,

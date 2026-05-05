@@ -2,6 +2,7 @@ import type { ZoneConfig } from '@/domain/config/types';
 import type { QueueState } from '@/application/zones/zoneManager';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import { AudioType } from '@/domain/loxone/enums';
+import { formatEqualizerSettings, getZoneEqualizerBands } from '@/application/zones/equalizer';
 
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -85,6 +86,7 @@ export function buildInitialState(zone: ZoneConfig): LoxoneZoneState {
     coverurl: '',
     audiopath: '',
     duration: 0,
+    equalizerSettings: formatEqualizerSettings(getZoneEqualizerBands(zone)),
     time: 0,
     qindex: 0,
     queueAuthority: 'local',

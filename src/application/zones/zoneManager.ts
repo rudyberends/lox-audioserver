@@ -50,6 +50,11 @@ import {
   getZoneDefaultVolume,
 } from '@/application/zones/helpers/stateHelpers';
 import {
+  formatEqualizerSettings,
+  normalizeEqualizerBands,
+  type EqualizerBands,
+} from '@/application/zones/equalizer';
+import {
   createZoneAudioHelpers,
   type ZoneAudioHelpers,
 } from '@/application/zones/internal/zoneAudioHelpers';
@@ -80,6 +85,12 @@ type OutputHandlers = {
   onQueueUpdate: QueueUpdateHandler;
   onOutputError: OutputErrorHandler;
   onOutputState: OutputStateHandler;
+};
+
+export type EqualizerUpdateResult = {
+  zoneId: number;
+  bands: EqualizerBands;
+  equalizerSettings: string;
 };
 
 export class ZoneManager {
@@ -688,6 +699,40 @@ export class ZoneManager {
 
   public applyPatch(zoneId: number, patch: Partial<LoxoneZoneState>, force = false): void {
     this.stateStore.patch(zoneId, patch, force);
+  }
+
+  public async setEqualizerBands(zoneId: number, bands: unknown): Promise<EqualizerUpdateResult | null> {
+    const normalized = normalizeEqualizerBands(bands);
+    if (!normalized) {
+      return null;
+    }
+
+    let found = false;
+    await this.configPort.updateConfig((cfg) => {
+      const zone = cfg.zones.find((entry) => entry.id === zoneId);
+      if (!zone) {
+        return;
+      }
+      found = true;
+      zone.equalizer = { bands: [...normalized] };
+    });
+
+    if (!found) {
+      return null;
+    }
+
+    const equalizerSettings = formatEqualizerSettings(normalized);
+    const ctx = this.zoneRepo.get(zoneId);
+    if (ctx) {
+      ctx.config.equalizer = { bands: [...normalized] };
+    }
+    this.applyPatch(zoneId, { equalizerSettings }, true);
+
+    return {
+      zoneId,
+      bands: [...normalized] as EqualizerBands,
+      equalizerSettings,
+    };
   }
 
   private resetZoneStateToInitial(zoneId: number, powerState: 'on' | 'off'): void {
