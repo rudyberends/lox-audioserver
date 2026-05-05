@@ -102,6 +102,10 @@ export class SonosOutput implements ZoneOutput {
   private s2Client: SonosClient | null = null;
   private s2ClientPromise?: Promise<SonosClient | null>;
   private s2RetryAfter = 0;
+  private pendingVolume: number | null = null;
+  private volumeRetryTimer: NodeJS.Timeout | null = null;
+  private volumeRetryCount = 0;
+  private volumeApplyInFlight = false;
 
   constructor(
     private readonly zoneId: number,
@@ -190,6 +194,7 @@ export class SonosOutput implements ZoneOutput {
     const httpStreamUri = this.withPrimeToken(this.normalizeStreamUri(uri), session);
     const s2Played = await this.playViaS2(httpStreamUri, session);
     if (s2Played) {
+      void this.applyPendingVolume('play-s2');
       return;
     }
     if (!(await this.ensureEndpoints())) {
@@ -197,6 +202,7 @@ export class SonosOutput implements ZoneOutput {
     }
     await this.ports.sonosGroup.syncGroupMembers(this);
     await this.sendPlaybackWithSoap(httpStreamUri, session);
+    void this.applyPendingVolume('play-soap');
   }
 
   public async pause(session: PlaybackSession | null): Promise<void> {
@@ -246,27 +252,93 @@ export class SonosOutput implements ZoneOutput {
   }
 
   public async setVolume(level: number): Promise<void> {
-    const s2 = await this.ensureS2Client();
-    if (s2?.player) {
-      await s2.player.setVolume(Math.max(0, Math.min(100, Math.round(level))));
+    this.pendingVolume = clampSonosVolume(level);
+    await this.applyPendingVolume('setVolume');
+  }
+
+  private async applyPendingVolume(reason: string): Promise<void> {
+    if (this.volumeApplyInFlight || this.pendingVolume === null) {
       return;
     }
+    this.volumeApplyInFlight = true;
+    try {
+      while (this.pendingVolume !== null) {
+        const level: number = this.pendingVolume;
+        const applied = await this.tryApplyVolume(level);
+        if (!applied) {
+          this.scheduleVolumeRetry(reason);
+          return;
+        }
+        if (this.pendingVolume === level) {
+          this.pendingVolume = null;
+        }
+        this.clearVolumeRetry();
+        this.volumeRetryCount = 0;
+      }
+    } finally {
+      this.volumeApplyInFlight = false;
+    }
+  }
+
+  private async tryApplyVolume(level: number): Promise<boolean> {
+    const s2 = await this.ensureS2Client();
+    if (s2?.player) {
+      try {
+        await s2.player.setVolume(level);
+        this.log.info('Sonos volume set', { zoneId: this.zoneId, volume: level, path: 's2' });
+        return true;
+      } catch (err) {
+        this.log.debug('sonos s2 volume failed', {
+          zoneId: this.zoneId,
+          volume: level,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
     if (!(await this.ensureEndpoints())) {
-      return;
+      return false;
     }
     const url = this.renderingControlUrl;
     if (!url) {
       this.log.debug('rendering control URL missing; skipping volume update', { zoneId: this.zoneId });
-      return;
+      return false;
     }
-    const clamped = Math.max(0, Math.min(100, Math.round(level)));
     if (
-      await this.invokeRenderingAction('SetVolume', this.buildSetVolumeBody(clamped), {
+      await this.invokeRenderingAction('SetVolume', this.buildSetVolumeBody(level), {
         optional: true,
       })
     ) {
-      this.log.info('Sonos volume set', { zoneId: this.zoneId, volume: clamped });
+      this.log.info('Sonos volume set', { zoneId: this.zoneId, volume: level, path: 'soap' });
+      return true;
     }
+    return false;
+  }
+
+  private scheduleVolumeRetry(reason: string): void {
+    if (this.pendingVolume === null || this.volumeRetryTimer) {
+      return;
+    }
+    const delayMs = Math.min(30_000, 1_000 * 2 ** Math.min(this.volumeRetryCount, 5));
+    this.volumeRetryCount += 1;
+    this.log.debug('Sonos volume retry scheduled', {
+      zoneId: this.zoneId,
+      volume: this.pendingVolume,
+      delayMs,
+      reason,
+    });
+    this.volumeRetryTimer = setTimeout(() => {
+      this.volumeRetryTimer = null;
+      void this.applyPendingVolume('retry');
+    }, delayMs);
+    this.volumeRetryTimer.unref?.();
+  }
+
+  private clearVolumeRetry(): void {
+    if (!this.volumeRetryTimer) {
+      return;
+    }
+    clearTimeout(this.volumeRetryTimer);
+    this.volumeRetryTimer = null;
   }
 
   public async joinToLeader(leaderUdn: string): Promise<boolean> {
@@ -321,6 +393,7 @@ export class SonosOutput implements ZoneOutput {
 
   public dispose(): void {
     this.ports.sonosGroup.unregister(this.zoneId);
+    this.clearVolumeRetry();
     if (this.s2Client) {
       void this.s2Client.disconnect();
       this.s2Client = null;
@@ -1130,6 +1203,11 @@ function parseBoolDefaultFalse(value: unknown): boolean {
     return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on';
   }
   return false;
+}
+
+function clampSonosVolume(level: number): number {
+  const numeric = Number(level);
+  return Number.isFinite(numeric) ? Math.max(0, Math.min(100, Math.round(numeric))) : 0;
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
