@@ -16,6 +16,7 @@ import type { ComponentLogger } from '@/shared/logging/logger';
 
 const execFileAsync = promisify(execFile);
 const GPIOSET_BIN = 'gpioset';
+const DEFAULT_OFF_DELAY_MS = 300_000;
 
 export type PowerSignal = 0 | 1;
 type TimerHandle = ReturnType<typeof setTimeout>;
@@ -221,6 +222,7 @@ export class PowerManager {
       runtime[timerKey] = null;
       this.applySignal(zoneId, signal);
     }, delayMs);
+    runtime[timerKey]?.unref?.();
   }
 
   private applySignal(zoneId: number, signal: PowerSignal): void {
@@ -359,7 +361,8 @@ export function normalizePowerManagerConfig(raw: ZonePowerManagerConfig | null):
   return {
     activeModes: normalizeActiveModes(config.activeModes),
     onDelayMs: toDelay(config.onDelayMs),
-    offDelayMs: config.offDelayEnabled === false ? 0 : toDelay(config.offDelayMs),
+    offDelayMs:
+      config.offDelayEnabled === false ? 0 : toDelay(config.offDelayMs, DEFAULT_OFF_DELAY_MS),
     actions,
   };
 }
@@ -522,9 +525,9 @@ function normalizeCrelay(raw: ZoneCrelayPowerConfig | null): NormalizedCrelayCon
   };
 }
 
-function toDelay(value: number | undefined): number {
+function toDelay(value: number | undefined, fallback = 0): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return 0;
+    return fallback;
   }
   return Math.max(0, Math.round(value));
 }

@@ -198,7 +198,7 @@ export interface ZonePowerManagerConfig {
   onDelayMs?: number;
   /** Enable delayed OFF behavior; when false, OFF is immediate. */
   offDelayEnabled?: boolean;
-  /** Delay before applying OFF actions (zone exits play mode). */
+  /** Delay before applying OFF actions (zone exits play mode). Defaults to 300000 ms. */
   offDelayMs?: number;
   gpio?: ZoneGpioPowerConfig | null;
   url?: ZoneUrlPowerConfig | null;

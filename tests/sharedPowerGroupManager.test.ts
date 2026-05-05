@@ -33,6 +33,7 @@ test('shared power group turns on while any member zone is active', async () => 
       {
         id: 'amp-living',
         powerManager: {
+          offDelayMs: 0,
           gpio: { enabled: true, pin: 22 },
         },
       },
@@ -78,6 +79,7 @@ test('shared power group respects member activeModes during pause', async () => 
       {
         id: 'amp-living',
         powerManager: {
+          offDelayMs: 0,
           gpio: { enabled: true, pin: 22 },
         },
       },

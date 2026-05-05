@@ -169,6 +169,7 @@ export class SharedPowerGroupManager {
       }
       this.applySignal(fresh, 0);
     }, delayMs);
+    runtime.offTimer.unref?.();
   }
 
   private applySignal(runtime: GroupRuntime, signal: PowerSignal): void {
