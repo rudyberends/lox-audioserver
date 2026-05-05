@@ -34,6 +34,7 @@ import './sharedPowerGroupManager.test';
 import './zoneHandlers.serviceplay.test';
 import './alertHandlers.playeventfile.test';
 import './alertsCoordinator.test';
+import './loxberryTtsProvider.test';
 import './zoneHandlers.roomfavs.test';
 import './favoritesManager.compat.test';
 import './recentsManager.compat.test';
@@ -918,6 +919,7 @@ test('config loads defaults and ignores env overrides', async () => {
       assert.equal(cfg.zones.length, 0);
       assert.equal(cfg.system.adminHttp.enabled, true);
       assert.equal(cfg.inputs?.airplay?.enabled, true);
+      assert.deepEqual(cfg.content.tts?.provider, { type: 'internal' });
       assert.notEqual(cfg.system.audioserver.ip, '203.0.113.123');
       assert.equal('alertPreDelayMs' in cfg.system.audioserver, false);
 

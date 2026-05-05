@@ -2,7 +2,13 @@ import path from 'node:path';
 import type { StoragePort } from '@/ports/StoragePort';
 import { defaultMacId } from '@/shared/utils/mac';
 import { defaultLocalIp } from '@/shared/utils/net';
-import type { AudioServerConfig, RawAudioConfig, ZoneConfig } from '@/domain/config/types';
+import type {
+  AudioServerConfig,
+  LoxBerryTtsProviderConfig,
+  RawAudioConfig,
+  TtsProviderConfig,
+  ZoneConfig,
+} from '@/domain/config/types';
 
 const CONFIG_PATH = path.resolve(process.cwd(), 'data', 'config.json');
 
@@ -27,10 +33,11 @@ export class ConfigRepository {
       await this.storage.writeJson(CONFIG_PATH, fallback);
     }
     const systemMigrated = normalizeSystem(this.config);
+    const contentMigrated = normalizeContent(this.config);
     normalizeInputs(this.config);
     normalizeGroups(this.config);
     const outputMigrated = normalizeZones(this.config);
-    if (systemMigrated || outputMigrated) {
+    if (systemMigrated || contentMigrated || outputMigrated) {
       await this.storage.writeJson(CONFIG_PATH, this.config);
     }
     return this.config;
@@ -75,6 +82,7 @@ export class ConfigRepository {
 
       await mutator(this.config!);
       normalizeSystem(this.config!);
+      normalizeContent(this.config!);
       normalizeInputs(this.config!);
       normalizeGroups(this.config!);
       normalizeZones(this.config!);
@@ -90,6 +98,7 @@ export class ConfigRepository {
       const before = serializeConfig(cfg);
       await mutator(cfg);
       normalizeSystem(cfg);
+      normalizeContent(cfg);
       normalizeInputs(cfg);
       normalizeGroups(cfg);
       normalizeZones(cfg);
@@ -156,6 +165,10 @@ function defaultConfig(): AudioServerConfig {
         accounts: [],
         bridges: [],
       },
+      tts: {
+        provider: { type: 'internal' },
+        fallbackToInternal: true,
+      },
     },
     inputs: {
       airplay: {
@@ -183,6 +196,78 @@ function defaultConfig(): AudioServerConfig {
       crc32: null,
     },
     updatedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeContent(config: AudioServerConfig): boolean {
+  let changed = false;
+  const defaults = defaultConfig().content;
+  if (!config.content) {
+    config.content = defaults;
+    return true;
+  }
+  if (!config.content.radio) {
+    config.content.radio = defaults.radio;
+    changed = true;
+  }
+  if (!config.content.spotify) {
+    config.content.spotify = defaults.spotify;
+    changed = true;
+  } else {
+    if (!Array.isArray(config.content.spotify.accounts)) {
+      config.content.spotify.accounts = [];
+      changed = true;
+    }
+    if (!Array.isArray(config.content.spotify.bridges)) {
+      config.content.spotify.bridges = [];
+      changed = true;
+    }
+  }
+  if (!config.content.tts) {
+    config.content.tts = defaults.tts;
+    return true;
+  }
+  const tts = config.content.tts;
+  const normalizedProvider = normalizeTtsProvider(tts.provider);
+  if (JSON.stringify(tts.provider) !== JSON.stringify(normalizedProvider)) {
+    tts.provider = normalizedProvider;
+    changed = true;
+  }
+  if (tts.fallbackToInternal === undefined) {
+    tts.fallbackToInternal = true;
+    changed = true;
+  }
+  return changed;
+}
+
+function normalizeTtsProvider(provider: unknown): TtsProviderConfig {
+  if (typeof provider === 'string') {
+    return { type: provider === 'loxberry-tts' ? 'loxberry-tts' : 'internal' } as TtsProviderConfig;
+  }
+  if (!provider || typeof provider !== 'object') {
+    return { type: 'internal' };
+  }
+  const { port: legacyPort, ...raw } = provider as Partial<LoxBerryTtsProviderConfig> & { type?: string; port?: number };
+  if (raw.type !== 'loxberry-tts') {
+    return { type: 'internal' };
+  }
+  const mqttPort =
+    typeof raw.mqttPort === 'number' && Number.isInteger(raw.mqttPort) && raw.mqttPort > 0 && raw.mqttPort <= 65535
+      ? raw.mqttPort
+      : typeof legacyPort === 'number' && Number.isInteger(legacyPort) && legacyPort > 0 && legacyPort <= 65535
+        ? legacyPort
+        : undefined;
+  const timeoutMs =
+    typeof raw.timeoutMs === 'number' && Number.isFinite(raw.timeoutMs) && raw.timeoutMs > 0
+      ? Math.round(raw.timeoutMs)
+      : undefined;
+  return {
+    ...raw,
+    type: 'loxberry-tts',
+    enabled: raw.enabled !== false,
+    protocol: raw.protocol === 'mqtts' ? 'mqtts' : 'mqtt',
+    mqttPort,
+    timeoutMs,
   };
 }
 

@@ -57,6 +57,7 @@ export interface ContentConfig {
   radio: RadioContentConfig;
   spotify: SpotifyContentConfig;
   library?: LibraryContentConfig | null;
+  tts?: TtsContentConfig;
 }
 
 export interface RadioContentConfig {
@@ -72,6 +73,38 @@ export interface SpotifyContentConfig {
 export interface LibraryContentConfig {
   enabled?: boolean;
   autoScan?: boolean;
+}
+
+export interface TtsContentConfig {
+  provider?: TtsProviderConfig;
+  /** When true, fall back to the internal provider if an external provider cannot create audio. */
+  fallbackToInternal?: boolean;
+}
+
+export type TtsProviderConfig = InternalTtsProviderConfig | LoxBerryTtsProviderConfig;
+
+export interface InternalTtsProviderConfig {
+  type: 'internal';
+}
+
+export interface LoxBerryTtsProviderConfig {
+  type: 'loxberry-tts';
+  enabled?: boolean;
+  host?: string;
+  mqttPort?: number;
+  protocol?: 'mqtt' | 'mqtts';
+  username?: string;
+  password?: string;
+  clientId?: string;
+  requestTopicPrefix?: string;
+  responseTopicPrefix?: string;
+  timeoutMs?: number;
+  /** Optional HTTP base URL used when LoxBerry returns hostless URLs like http:///plugins/... */
+  httpBaseUrl?: string;
+  nocache?: boolean;
+  logging?: boolean;
+  mp3files?: boolean;
+  function?: string;
 }
 
 export interface SpotifyAccountConfig {

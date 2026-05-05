@@ -3,11 +3,12 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseFile } from 'music-metadata';
 import type { AlertMediaResource } from '@/application/alerts/types';
+import type { TtsProvider } from '@/application/alerts/ttsProvider';
 import { createLogger } from '@/shared/logging/logger';
 
 const CACHE_DIR = path.resolve(process.cwd(), 'public', 'alerts', 'cache');
 
-export class GoogleTtsProvider {
+export class GoogleTtsProvider implements TtsProvider {
   private readonly log = createLogger('Alerts', 'GoogleTts');
   private readonly durationCache = new Map<string, number>();
 

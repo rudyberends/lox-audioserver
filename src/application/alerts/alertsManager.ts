@@ -2,9 +2,11 @@ import { createLogger } from '@/shared/logging/logger';
 import path from 'node:path';
 import { FileAlertProvider } from '@/application/alerts/fileAlertProvider';
 import { GoogleTtsProvider } from '@/application/alerts/googleTtsProvider';
+import { LoxBerryTtsProvider } from '@/application/alerts/loxberryTtsProvider';
 import type { AlertAction, AlertActionResult, AlertMediaResource } from '@/application/alerts/types';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
-import type { ZoneVolumesConfig } from '@/domain/config/types';
+import type { LoxBerryTtsProviderConfig, ZoneVolumesConfig } from '@/domain/config/types';
+import type { ConfigPort } from '@/ports/ConfigPort';
 
 const DEFAULT_ALERT_VOLUME = 30;
 const MIN_VOLUME = 0;
@@ -14,10 +16,12 @@ const CUSTOM_URL_PREFIX = 'custom_url/';
 export class AlertsManager {
   private readonly log = createLogger('Alerts', 'Manager');
   private readonly fileProvider = new FileAlertProvider();
-  private readonly ttsProvider = new GoogleTtsProvider();
+  private readonly internalTtsProvider = new GoogleTtsProvider();
+  private readonly externalProviders = new Map<string, LoxBerryTtsProvider>();
   private zoneManager: ZoneManagerFacade | null = null;
+  private configPort: ConfigPort | null = null;
 
-  public initOnce(deps: { zoneManager: ZoneManagerFacade }): void {
+  public initOnce(deps: { zoneManager: ZoneManagerFacade; configPort?: ConfigPort }): void {
     if (this.zoneManager) {
       throw new Error('alerts manager already initialized');
     }
@@ -25,6 +29,7 @@ export class AlertsManager {
       throw new Error('alerts manager missing zone manager');
     }
     this.zoneManager = deps.zoneManager;
+    this.configPort = deps.configPort ?? null;
   }
 
   private get zones(): ZoneManagerFacade {
@@ -144,9 +149,38 @@ export class AlertsManager {
       if (!ttsText) {
         return undefined;
       }
-      return this.ttsProvider.generate(ttsText, ttsLang ?? 'en');
+      return this.resolveTtsMedia(ttsText, ttsLang ?? 'en');
     }
     return this.fileProvider.resolve(type);
+  }
+
+  private async resolveTtsMedia(text: string, language: string): Promise<AlertMediaResource | undefined> {
+    const ttsConfig = this.configPort?.getConfig().content?.tts;
+    const provider = ttsConfig?.provider;
+    const fallbackToInternal = ttsConfig?.fallbackToInternal !== false;
+    if (provider?.type === 'loxberry-tts') {
+      if (provider.enabled !== false) {
+        const media = await this.getExternalProvider(provider).generate(text, language);
+        if (media || !fallbackToInternal) {
+          return media;
+        }
+        this.log.warn('falling back to internal TTS provider', { provider: provider.type });
+      } else if (!fallbackToInternal) {
+        return undefined;
+      }
+    }
+    return this.internalTtsProvider.generate(text, language);
+  }
+
+  private getExternalProvider(providerConfig: LoxBerryTtsProviderConfig): LoxBerryTtsProvider {
+    const cacheKey = JSON.stringify(providerConfig);
+    const existing = this.externalProviders.get(cacheKey);
+    if (existing) {
+      return existing;
+    }
+    const provider = new LoxBerryTtsProvider(providerConfig);
+    this.externalProviders.set(cacheKey, provider);
+    return provider;
   }
 
   private resolveAlertVolume(zoneId: number, type: string, override?: number): number {

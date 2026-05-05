@@ -4109,6 +4109,7 @@ export class AdminApiHandler {
             radio?: { tuneInUsername?: string | null };
             spotify?: { clientId?: string | null };
             library?: { enabled?: boolean; autoScan?: boolean };
+            tts?: AudioServerConfig['content']['tts'];
           }
         | null;
       if (res.writableEnded) {
@@ -4145,6 +4146,12 @@ export class AdminApiHandler {
           cfg.content.library = {
             ...(cfg.content.library ?? {}),
             ...body.library,
+          };
+        }
+        if (body.tts) {
+          cfg.content.tts = {
+            ...(cfg.content.tts ?? { provider: { type: 'internal' }, fallbackToInternal: true }),
+            ...body.tts,
           };
         }
       });
