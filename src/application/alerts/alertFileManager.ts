@@ -13,6 +13,8 @@ export const ALERT_FILE_MAP: Record<string, string> = {
   firealarm: 'firealarm.mp3',
   bell: 'bell.mp3',
   buzzer: 'buzzer.mp3',
+  wecker: 'buzzer.mp3',
+  clock: 'buzzer.mp3',
 };
 
 const ALERTS_DIR = resolve(process.cwd(), 'public', 'alerts');

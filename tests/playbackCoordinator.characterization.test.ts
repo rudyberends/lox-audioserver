@@ -1244,7 +1244,7 @@ test('playContent ignores MA serviceplay when already playing target', async () 
 
 test('player started dispatches outputs, volume, and patch in order', () => {
   const trace: string[] = [];
-  const { coordinator, ctx, patches } = createHarness({ trace });
+  const { coordinator, ctx, patches, outputRouter } = createHarness({ trace });
   coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
   ctx.state.volume = 42;
   ctx.queueController.setItems([makeQueueItem({ title: 'Track', audiopath: 'library://one', unique_id: 'id-1' })], 0);
@@ -1257,8 +1257,23 @@ test('player started dispatches outputs, volume, and patch in order', () => {
 
   assert.deepEqual(trace, ['dispatchOutputs:play', 'dispatchVolume', 'applyPatch']);
   assert.equal(patches.length, 1);
+  assert.equal(outputRouter.volumeCalls[0]?.volume, 30);
   assert.equal((patches[0]?.patch as any).mode, 'play');
+  assert.equal((patches[0]?.patch as any).volume, 30);
   assert.equal((patches[0]?.patch as any).queueAuthority, 'local');
+});
+
+test('player started keeps current volume when already active', () => {
+  const { coordinator, ctx, patches, outputRouter } = createHarness();
+  coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
+  ctx.state.mode = 'pause';
+  ctx.state.volume = 42;
+
+  const player = ctx.player as unknown as EventEmitter;
+  player.emit('started', null);
+
+  assert.equal(outputRouter.volumeCalls[0]?.volume, 42);
+  assert.equal((patches[0]?.patch as any).volume, 42);
 });
 
 test('player resumed dispatches outputs before patch', () => {

@@ -180,14 +180,14 @@ export function createConfigHandlers(config: LoxoneHttpConfig, options: ConfigHa
       const volume = Number(value);
 
       if (!Number.isFinite(zoneId) || !Number.isFinite(volume)) {
-        return buildResponse(command, 'setdefaultvolume', {
+        return buildResponse(command, 'defaultvolume', {
           success: false,
           error: 'invalid-parameters',
         });
       }
 
       await configService.applyDefaultVolume(zoneId, volume);
-      return buildResponse(command, 'setdefaultvolume', {
+      return buildResponse(command, 'defaultvolume', {
         success: true,
         value: volume,
       });
@@ -198,14 +198,14 @@ export function createConfigHandlers(config: LoxoneHttpConfig, options: ConfigHa
       const volume = Number(value);
 
       if (!Number.isFinite(zoneId) || !Number.isFinite(volume)) {
-        return buildResponse(command, 'setmaxvolume', {
+        return buildResponse(command, 'maxvolume', {
           success: false,
           error: 'invalid-parameters',
         });
       }
 
       await configService.applyMaxVolume(zoneId, volume);
-      return buildResponse(command, 'setmaxvolume', {
+      return buildResponse(command, 'maxvolume', {
         success: true,
         value: volume,
       });
@@ -213,7 +213,7 @@ export function createConfigHandlers(config: LoxoneHttpConfig, options: ConfigHa
     setEventVolumes: handler(async (command) => {
       const encoded = getSegment(command, 3);
       if (!encoded) {
-        return buildResponse(command, 'seteventvolumes', {
+        return buildResponse(command, 'eventvolumes', {
           success: false,
           error: 'missing-payload',
         });
@@ -223,14 +223,14 @@ export function createConfigHandlers(config: LoxoneHttpConfig, options: ConfigHa
       const parsed = safeJsonParse<Record<string, number>>(decoded);
 
       if (!parsed) {
-        return buildResponse(command, 'seteventvolumes', {
+        return buildResponse(command, 'eventvolumes', {
           success: false,
           error: 'invalid-event-payload',
         });
       }
 
       await configService.applyEventVolumes(parsed);
-      return buildResponse(command, 'seteventvolumes', { success: true });
+      return buildResponse(command, 'eventvolumes', { success: true });
     }),
     getEq: handler((command) => buildResponse(command, 'geteq', [])),
     playerName: handler(async (command) => {

@@ -214,6 +214,10 @@ function mapAlertTypeToVolumeKey(type: string): keyof ZoneVolumesConfig | 'defau
     case 'bell':
       return 'bell';
     case 'buzzer':
+    case 'wecker':
+    case 'clock':
+    case 'alarmclock':
+    case 'alarm-clock':
       return 'buzzer';
     case 'tts':
       return 'tts';

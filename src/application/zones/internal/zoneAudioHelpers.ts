@@ -361,6 +361,10 @@ export function resolveAlertEventType(type: string): AudioEventType {
     case 'bell':
       return AudioEventType.Bell;
     case 'buzzer':
+    case 'wecker':
+    case 'clock':
+    case 'alarmclock':
+    case 'alarm-clock':
       return AudioEventType.Buzzer;
     case 'tts':
       return AudioEventType.TTS;

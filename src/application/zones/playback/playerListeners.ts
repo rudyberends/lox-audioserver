@@ -1,7 +1,7 @@
 import type { PlaybackMetadata, PlaybackSession } from '@/application/playback/audioManager';
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
-import { clampVolumeForZone } from '@/application/zones/helpers/stateHelpers';
+import { clampVolumeForZone, getZoneDefaultVolume } from '@/application/zones/helpers/stateHelpers';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import {
@@ -87,8 +87,15 @@ function onPlayerStarted(
   }
   const ctx = coordinator.getZone(zoneId);
   if (ctx) {
-    coordinator.dispatchVolume(ctx, outputs, ctx.state.volume);
-    const patch = buildStartedPatch({ ctx, session, audioHelpers: coordinator.audioHelpers });
+    const volume =
+      ctx.state.mode === 'stop'
+        ? getZoneDefaultVolume(ctx.config)
+        : clampVolumeForZone(ctx.config, ctx.state.volume);
+    coordinator.dispatchVolume(ctx, outputs, volume);
+    const patch = {
+      ...buildStartedPatch({ ctx, session, audioHelpers: coordinator.audioHelpers }),
+      volume,
+    };
     coordinator.applyPatch(zoneId, patch);
   }
 }
