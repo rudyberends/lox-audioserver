@@ -11,16 +11,16 @@ import { serializeResult } from '../src/adapters/loxone/commands/responses';
 
 test('equalizer helpers normalize 10 Loxone bands', () => {
   assert.deepEqual(
-    normalizeEqualizerBands([9, 6, 3, 1, 0, -1, -3, -6, -9, '2']),
-    [6, 6, 3, 1, 0, -1, -3, -6, -6, 2],
+    normalizeEqualizerBands([9, 6, 3.5, 1, 0, -1, -3.5, -6, -9, '2.5']),
+    [6, 6, 3.5, 1, 0, -1, -3.5, -6, -6, 2.5],
   );
   assert.deepEqual(
-    parseEqualizerSettings('3,3,2,1,0,0,-1,-2,-2,-3'),
-    [3, 3, 2, 1, 0, 0, -1, -2, -2, -3],
+    parseEqualizerSettings('3.5,3,2,1,0,0,-1,-2.5,-2,-3'),
+    [3.5, 3, 2, 1, 0, 0, -1, -2.5, -2, -3],
   );
   assert.equal(
-    formatEqualizerSettings([3, 3, 2, 1, 0, 0, -1, -2, -2, -3]),
-    '3,3,2,1,0,0,-1,-2,-2,-3',
+    formatEqualizerSettings([3.5, 3, 2, 1, 0, 0, -1, -2.5, -2, -3]),
+    '3.5,3,2,1,0,0,-1,-2.5,-2,-3',
   );
   assert.equal(parseEqualizerSettings('1,2,3'), null);
 });
@@ -151,6 +151,12 @@ test('audio cfg geteq returns MSG-compatible band descriptors', () => {
 
 test('audio cfg seteq updates one band through the equalizer pipeline', async () => {
   let updatedBands: unknown = null;
+  const previousFetch = globalThis.fetch;
+  const forwarded: Array<{ url: string; init: RequestInit }> = [];
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    forwarded.push({ url: String(url), init: init ?? {} });
+    return { ok: true, status: 200 } as Response;
+  }) as typeof fetch;
   const handlers = createZoneHandlers(
     {
       setEqualizerBands: async (_zoneId: number, bands: unknown) => {
@@ -173,6 +179,10 @@ test('audio cfg seteq updates one band through the equalizer pipeline', async ()
             name: 'Kitchen',
             sourceMac: '00:00:00:00:00:01',
             equalizer: { bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+            output: {
+              id: 'squeezelite',
+              eqCallbackUrl: 'http://loxberry/plugins/squeezelite_mr/api.php?op=loxone_eq_set',
+            },
             volumes: baseVolumes(),
           },
         ],
@@ -180,9 +190,57 @@ test('audio cfg seteq updates one band through the equalizer pipeline', async ()
     } as any,
   );
 
-  await handlers.audioCfgSetEq('audio/cfg/seteq/14/2/3');
+  let result;
+  try {
+    result = await handlers.audioCfgSetEq('audio/cfg/seteq/14/2/3.5');
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 
-  assert.deepEqual(updatedBands, [0, 0, 3, 0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(updatedBands, [0, 0, 3.5, 0, 0, 0, 0, 0, 0, 0]);
+  assert.match(serializeResult(result), /"seteq_result"/);
+  assert.equal(forwarded.length, 1);
+  assert.equal(
+    forwarded[0]?.init.body,
+    JSON.stringify({ zoneId: 14, bands: [0, 0, 3.5, 0, 0, 0, 0, 0, 0, 0] }),
+  );
+});
+
+test('audio cfg seteq accepts Loxone App bulk float payload', async () => {
+  let updatedBands: unknown = null;
+  const handlers = createZoneHandlers(
+    {
+      setEqualizerBands: async (_zoneId: number, bands: unknown) => {
+        updatedBands = bands;
+        return {
+          zoneId: 21,
+          bands: bands as any,
+          equalizerSettings: formatEqualizerSettings(bands as number[]),
+        };
+      },
+    } as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    {
+      getConfig: () => ({
+        zones: [
+          {
+            id: 21,
+            name: 'Kitchen',
+            sourceMac: '00:00:00:00:00:01',
+            equalizer: { bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+            volumes: baseVolumes(),
+          },
+        ],
+      }),
+    } as any,
+  );
+
+  const result = await handlers.audioCfgSetEq('audio/cfg/seteq/21/3.5,3,3,6,4,0,-1,-1,0,0');
+
+  assert.deepEqual(updatedBands, [3.5, 3, 3, 6, 4, 0, -1, -1, 0, 0]);
+  assert.match(serializeResult(result), /"seteq_result"/);
 });
 
 function baseVolumes() {

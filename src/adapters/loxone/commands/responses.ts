@@ -53,9 +53,11 @@ export function serializeResult(result: CommandResult): string {
 
 function inferResultName(command: string): string {
   const parts = (command ?? '').split('/').filter(Boolean);
-  const candidate = parts.pop();
-  if (candidate && /^[a-z]/i.test(candidate)) {
-    return candidate;
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const candidate = parts[i];
+    if (candidate && /^[a-z]/i.test(candidate)) {
+      return candidate;
+    }
   }
   return 'response';
 }

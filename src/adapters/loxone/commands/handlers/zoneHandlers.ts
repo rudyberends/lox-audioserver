@@ -223,6 +223,8 @@ async function audioEqualizerSettings(
   const callbackUrl = resolveEqCallbackUrl(configPort, zoneId);
   if (callbackUrl) {
     await forwardEqualizerSettings(callbackUrl, zoneId, updated.bands);
+  } else {
+    log.debug('equalizer callback not configured; skipping forward', { zoneId });
   }
 
   return buildResponse(command, 'equalizersettings', {
@@ -559,6 +561,8 @@ async function updateEqualizerBands(
   const callbackUrl = resolveEqCallbackUrl(configPort, zoneId);
   if (callbackUrl) {
     await forwardEqualizerSettings(callbackUrl, zoneId, updated.bands);
+  } else {
+    log.debug('equalizer callback not configured; skipping forward', { zoneId });
   }
 
   return updated;
@@ -597,6 +601,7 @@ async function forwardEqualizerSettings(
   bands: ReadonlyArray<number>,
 ): Promise<void> {
   try {
+    log.debug('forwarding equalizer settings', { zoneId, callbackUrl, bands: [...bands] });
     const response = await fetch(callbackUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

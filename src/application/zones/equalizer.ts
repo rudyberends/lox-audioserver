@@ -30,7 +30,7 @@ export function normalizeEqualizerBands(value: unknown): EqualizerBands | null {
     if (!Number.isFinite(num)) {
       return null;
     }
-    return clampEqualizerBand(Math.round(num));
+    return clampEqualizerBand(num);
   });
 
   if (bands.some((entry) => entry === null)) {
