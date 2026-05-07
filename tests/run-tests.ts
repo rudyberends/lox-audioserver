@@ -771,6 +771,93 @@ test('zone queue transitions update state and notify', async () => {
   setNotifier(noopNotifier);
 });
 
+test('queue update with foreign audiopath is rejected while another source plays', async () => {
+  const harness = await getZoneHarness();
+  const { zoneManager, updateQueueFromOutput, setNotifier, noopNotifier } = harness;
+
+  await zoneManager.replaceAll([createZoneConfig(2, 'Living')], {
+    airplay: { enabled: false },
+    spotify: { enabled: false },
+  });
+
+  // Establish a radio stream as the active state.
+  const radioItem = makeQueueItem({
+    audiopath: 'tunein:station:abc',
+    title: '',
+    artist: '',
+    qindex: 0,
+  });
+  updateQueueFromOutput(2, [radioItem], 0);
+  zoneManager.applyPatch(2, { title: 'Bayern 1: Cloud Number Nine', artist: 'BAYERN 1' });
+
+  const titleBefore = zoneManager.getState(2)?.title;
+  const audiopathBefore = zoneManager.getState(2)?.audiopath;
+  assert.equal(titleBefore, 'Bayern 1: Cloud Number Nine');
+  assert.equal(audiopathBefore, 'tunein:station:abc');
+
+  // A stale Spotify Connect poll arrives with a track unrelated to the
+  // tunein audiopath and not present in the current queue.
+  const stalePoll = [
+    makeQueueItem({
+      audiopath: 'spotify:track:stalefromspotify',
+      title: 'High Hopes',
+      artist: 'Pink Floyd',
+      qindex: 0,
+    }),
+  ];
+  updateQueueFromOutput(2, stalePoll, 0);
+
+  assert.equal(zoneManager.getState(2)?.title, titleBefore);
+  assert.equal(zoneManager.getState(2)?.audiopath, audiopathBefore);
+
+  setNotifier(noopNotifier);
+});
+
+test('queue refresh of current item does not wipe live metadata', async () => {
+  const harness = await getZoneHarness();
+  const { zoneManager, updateQueueFromOutput, setNotifier, noopNotifier } = harness;
+
+  await zoneManager.replaceAll([createZoneConfig(3, 'Living')], {
+    airplay: { enabled: false },
+    spotify: { enabled: false },
+  });
+
+  // Initial queue with full metadata.
+  const initial = makeQueueItem({
+    audiopath: 'tunein:station:def',
+    title: '',
+    artist: '',
+    qindex: 0,
+  });
+  updateQueueFromOutput(3, [initial], 0);
+  // ICY-like live metadata applied externally.
+  zoneManager.applyPatch(3, {
+    title: 'Live Track',
+    artist: 'Live Artist',
+    coverurl: 'http://cdn/live.jpg',
+    station: 'Live Station',
+  });
+
+  // A refresh poll re-asserts the same audiopath but with empty metadata.
+  const refresh = makeQueueItem({
+    audiopath: 'tunein:station:def',
+    title: '',
+    artist: '',
+    coverurl: '',
+    station: '',
+    qindex: 0,
+  });
+  updateQueueFromOutput(3, [refresh], 0);
+
+  const state = zoneManager.getState(3);
+  assert.equal(state?.title, 'Live Track');
+  assert.equal(state?.artist, 'Live Artist');
+  assert.equal(state?.coverurl, 'http://cdn/live.jpg');
+  assert.equal(state?.station, 'Live Station');
+
+  setNotifier(noopNotifier);
+});
+
 test('group join/leave emits audio sync payloads', async () => {
   const harness = await getZoneHarness();
   const {

@@ -510,8 +510,10 @@ class SpotifyConnectInstance {
             nextMeta ?? this.currentMetadata ?? this.buildFallbackMetadata(),
           );
         } else {
+          // Gated through ZoneManager; direct player.resume() would bypass
+          // the activeInput check and revive Spotify on a zone that switched
+          // to another source.
           this.controller.resumePlayback(this.zoneId);
-          this.resolvePlayer(this.zoneId)?.resume();
         }
       }
     } else if (typeRaw === 'paused') {
@@ -546,12 +548,13 @@ class SpotifyConnectInstance {
       (prevKey && nextKey && prevKey !== nextKey);
     this.currentMetadata = metadata;
     this.ensurePlaybackSession(metadata);
+    // Route updates exclusively through the controller callback so the
+    // ZoneManager gate (activeInput === 'spotify') can suppress them when
+    // another source has taken over. Direct player.updateMetadata calls would
+    // bypass that gate and overwrite the live state of a different input.
     this.controller.updateMetadata(this.zoneId, metadata);
-    const player = this.resolvePlayer(this.zoneId);
-    player?.updateMetadata(metadata);
     if (metadata.duration !== undefined && trackChanged) {
       this.controller.updateTiming(this.zoneId, 0, metadata.duration);
-      player?.updateTiming(0, metadata.duration);
     }
   }
 

@@ -183,9 +183,33 @@ export class QueueController {
       // Ignore empty snapshots from outputs so we don't wipe the local queue on transient polls.
       return;
     }
+    const existingItems = ctx.queue.items ?? [];
+
+    // Reject queue updates whose audiopaths relate to neither the currently playing
+    // track nor the existing queue. This stops a stale Spotify Connect / Music Assistant
+    // poll from clobbering the live state while another source (e.g. radio) is playing.
+    const stateAudiopath = ctx.state.audiopath ?? '';
+    const stateNorm = normalizeSpotifyAudiopath(stateAudiopath);
+    const incomingNorms = items
+      .map((item) => normalizeSpotifyAudiopath(item.audiopath ?? ''))
+      .filter((value): value is string => Boolean(value));
+    if (stateAudiopath && stateNorm && incomingNorms.length > 0) {
+      const overlapsCurrent = incomingNorms.includes(stateNorm);
+      const overlapsExistingQueue = existingItems.some((item) =>
+        incomingNorms.includes(normalizeSpotifyAudiopath(item.audiopath ?? '')),
+      );
+      if (!overlapsCurrent && !overlapsExistingQueue) {
+        this.log.debug('queue update rejected; foreign audiopath while another source plays', {
+          zoneId,
+          stateAudiopath,
+          incoming: incomingNorms[0],
+        });
+        return;
+      }
+    }
+
     let applyItems = items;
     let applyIndex = currentIndex;
-    const existingItems = ctx.queue.items ?? [];
 
     // If the output only returns the current item, merge it into the existing queue
     // instead of wiping the full queue that the user built.
@@ -266,13 +290,31 @@ export class QueueController {
       typeof ctx.state.sourceName === 'string' &&
       ctx.state.sourceName.trim().length > 0 &&
       ctx.state.sourceName !== ctx.sourceMac;
+    // When the incoming item refreshes the currently-playing audiopath, only
+    // overwrite metadata fields that carry a non-empty value. Otherwise a
+    // periodic poll from an output without per-track metadata (e.g. raw HTTP
+    // radio reported by squeezelite, or a Spotify status snapshot) would wipe
+    // the live ICY/track metadata we already have.
+    const isRefreshOfCurrent =
+      Boolean(stateNorm) &&
+      normalizeSpotifyAudiopath(current.audiopath ?? '') === stateNorm;
+    const metadataPatch = isRefreshOfCurrent
+      ? {
+          ...(current.artist ? { artist: current.artist } : {}),
+          ...(current.album ? { album: current.album } : {}),
+          ...(current.coverurl ? { coverurl: current.coverurl } : {}),
+          ...(current.station ? { station: current.station } : {}),
+        }
+      : {
+          artist: current.artist,
+          album: current.album,
+          coverurl: current.coverurl,
+          station: current.station,
+        };
     this.deps.applyPatch(zoneId, {
       ...(useTitle ? { title: nextTitle } : {}),
-      artist: current.artist,
-      album: current.album,
-      coverurl: current.coverurl,
+      ...metadataPatch,
       audiopath: current.audiopath,
-      station: current.station,
       qindex: ctx.queueController.currentIndex(),
       qid: current.unique_id,
       type: this.deps.getStateFileType(),

@@ -455,7 +455,13 @@ export function resolveSourceName(
         const parsed = parseSpotifyUser(normalizeSpotifyAudiopath(raw));
         return parsed && parsed !== 'nouser' ? parsed : undefined;
       })();
-    return user ?? 'nouser';
+    if (user) {
+      return user;
+    }
+    // No Spotify user could be derived. Returning undefined preserves the
+    // existing sourceName instead of overwriting it with the literal 'nouser',
+    // which surfaces in the Loxone app during transitions away from Spotify.
+    return undefined;
   }
   return ctx.sourceMac;
 }
