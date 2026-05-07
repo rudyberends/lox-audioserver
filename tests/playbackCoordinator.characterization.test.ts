@@ -1267,6 +1267,7 @@ test('player started keeps current volume when already active', () => {
   const { coordinator, ctx, patches, outputRouter } = createHarness();
   coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
   ctx.state.mode = 'pause';
+  ctx.state.powerState = 'on';
   ctx.state.volume = 42;
 
   const player = ctx.player as unknown as EventEmitter;
@@ -1274,6 +1275,41 @@ test('player started keeps current volume when already active', () => {
 
   assert.equal(outputRouter.volumeCalls[0]?.volume, 42);
   assert.equal((patches[0]?.patch as any).volume, 42);
+});
+
+test('player started preserves alert volume even when zone was stopped', () => {
+  const { coordinator, ctx, patches, outputRouter } = createHarness();
+  coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
+  // AlertsCoordinator sets state.volume to the per-event slider value before playUri starts.
+  ctx.state.mode = 'stop';
+  ctx.state.volume = 66;
+  ctx.alert = {
+    type: 'tts',
+    title: 'tts',
+    url: 'http://localhost/tts.mp3',
+    snapshot: { queue: { currentIndex: 0 } } as any,
+  } as any;
+
+  const player = ctx.player as unknown as EventEmitter;
+  player.emit('started', null);
+
+  assert.equal(outputRouter.volumeCalls[0]?.volume, 66);
+  assert.equal((patches[0]?.patch as any).volume, 66);
+});
+
+test('player started applies default volume on power-on transition', () => {
+  const { coordinator, ctx, patches, outputRouter } = createHarness();
+  coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
+  // Zone was paused but is being powered on (powerState still 'off').
+  ctx.state.mode = 'pause';
+  ctx.state.powerState = 'off';
+  ctx.state.volume = 80;
+
+  const player = ctx.player as unknown as EventEmitter;
+  player.emit('started', null);
+
+  assert.equal(outputRouter.volumeCalls[0]?.volume, 30);
+  assert.equal((patches[0]?.patch as any).volume, 30);
 });
 
 test('player resumed dispatches outputs before patch', () => {

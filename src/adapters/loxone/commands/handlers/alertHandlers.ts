@@ -100,6 +100,74 @@ export async function audioPlayUploadedAlert(command: string) {
   return buildResponse(command, 'groupalert', [result]);
 }
 
+/**
+ * Handles `audio/<zoneId>/(alarm|firealarm|bell|wecker)[/<volume>]` —
+ * the per-zone alert path the Miniserver uses for direct alarm/clock events.
+ */
+export async function audioZoneAlert(command: string) {
+  const parts = splitCommand(command);
+  const zoneId = Number(parts[1]);
+  const type = (parts[2] ?? '').toLowerCase();
+  const volumeRaw = parts[3];
+  const volume = volumeRaw !== undefined && volumeRaw !== '' ? Number(volumeRaw) : undefined;
+
+  if (!Number.isFinite(zoneId) || zoneId <= 0 || !type) {
+    return buildResponse(command, 'groupalert', [
+      { success: false, type, action: 'on', reason: 'invalid-url' },
+    ]);
+  }
+
+  const result = await alertsManager.handleGroupedAlert(
+    zoneId,
+    type,
+    'on',
+    [zoneId],
+    undefined,
+    undefined,
+    Number.isFinite(volume) ? (volume as number) : undefined,
+  );
+  return buildResponse(command, 'groupalert', [result]);
+}
+
+/**
+ * Handles `audio/<zoneId>/tts/<language>|<text>/<volume>` — the per-zone TTS path
+ * the Miniserver uses for room-targeted announcements.
+ */
+export async function audioZoneTts(command: string) {
+  const parts = splitCommand(command);
+  const zoneId = Number(parts[1]);
+  const volumeRaw = parts[parts.length - 1];
+  const volume = Number(volumeRaw);
+  const payload = decodeSegment(parts.slice(3, parts.length - 1).join('/')).replace(/\+/g, ' ');
+
+  if (!Number.isFinite(zoneId) || zoneId <= 0 || !payload) {
+    return buildResponse(command, 'groupalert', [
+      { success: false, type: 'tts', action: 'on', reason: 'invalid-url' },
+    ]);
+  }
+
+  let ttsLang: string | undefined;
+  let ttsText: string;
+  const [first, ...rest] = payload.split('|');
+  if (rest.length > 0) {
+    ttsLang = first.trim().toLowerCase();
+    ttsText = rest.join('|').trim();
+  } else {
+    ttsText = first.trim();
+  }
+
+  const result = await alertsManager.handleGroupedAlert(
+    zoneId,
+    'tts',
+    'on',
+    [zoneId],
+    ttsText,
+    ttsLang,
+    Number.isFinite(volume) ? volume : undefined,
+  );
+  return buildResponse(command, 'groupalert', [result]);
+}
+
 export async function audioPlayEventFile(command: string) {
   const parts = splitCommand(command);
   const zoneTargets = parseZoneTargets(parts[3] ?? '');

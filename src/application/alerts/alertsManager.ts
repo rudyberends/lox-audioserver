@@ -46,6 +46,7 @@ export class AlertsManager {
     targetZones?: number[],
     ttsText?: string,
     ttsLang?: string,
+    volumeOverride?: number,
   ): Promise<AlertActionResult> {
     const zones = targetZones?.length ? targetZones : leaderId ? [leaderId] : [];
     const normalizedType = type.toLowerCase();
@@ -68,7 +69,7 @@ export class AlertsManager {
     }
     await Promise.all(
       zones.map(async (zoneId) => {
-        const volume = this.resolveAlertVolume(zoneId, normalizedType);
+        const volume = this.resolveAlertVolume(zoneId, normalizedType, volumeOverride);
         await this.zones.startAlert(zoneId, normalizedType, media, volume);
       }),
     );

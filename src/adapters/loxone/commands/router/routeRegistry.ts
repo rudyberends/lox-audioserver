@@ -13,6 +13,8 @@ import {
   audioCfgUploadAudiouploadAdd,
   audioPlayEventFile,
   audioPlayUploadedAlert,
+  audioZoneAlert,
+  audioZoneTts,
 } from '@/adapters/loxone/commands/handlers/alertHandlers';
 import { createInputHandlers } from '@/adapters/loxone/commands/handlers/inputHandlers';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
@@ -157,6 +159,13 @@ export function registerRoutes(
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/playurl\/.+$/, zoneHandlers.audioPlayUrl);
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/equalizersettings\/[^/]+\/?$/, zoneHandlers.audioEqualizerSettings);
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/linein(?:\/.*)?$/, inputHandlers.audioLineIn);
+
+  router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/tts\/.+\/\d+\/?$/, audioZoneTts);
+  router.registerRegex(
+    'audio',
+    /^audio\/(?:cfg\/)?\d+\/(?:alarm|firealarm|bell|wecker|buzzer|clock|alarmclock)(?:\/\d+)?\/?$/,
+    audioZoneAlert,
+  );
 
   router.registerRegex('audio', /^audio\/grouped\/(pause|play|resume|stop)\//, groupHandlers.audioGroupedPlayback);
   router.registerRegex('audio', /^audio\/grouped\/volume\//, groupHandlers.audioGroupedVolume);

@@ -220,17 +220,19 @@ export function createConfigHandlers(config: LoxoneHttpConfig, options: ConfigHa
       }
 
       const decoded = decodeBase64Segment(decodeURIComponent(encoded));
-      const parsed = safeJsonParse<Record<string, number>>(decoded);
+      const parsed = safeJsonParse<Record<string, unknown>>(decoded);
+      const zoneId = parsed && typeof parsed.playerid === 'number' ? parsed.playerid : NaN;
 
-      if (!parsed) {
+      if (!parsed || !Number.isFinite(zoneId)) {
         return buildResponse(command, 'eventvolumes', {
           success: false,
           error: 'invalid-event-payload',
         });
       }
 
-      await configService.applyEventVolumes(parsed);
-      return buildResponse(command, 'eventvolumes', { success: true });
+      const { playerid: _ignored, ...volumeUpdates } = parsed;
+      await configService.applyEventVolumes(zoneId, volumeUpdates);
+      return buildResponse(command, 'eventvolumes', { success: true, zone: zoneId });
     }),
     getEq: handler((command) => buildResponse(command, 'geteq', [])),
     playerName: handler(async (command) => {

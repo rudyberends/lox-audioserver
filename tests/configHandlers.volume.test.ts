@@ -17,13 +17,13 @@ test('volume config commands return Loxone-compatible result names', async () =>
       applyMaxVolume: async (zoneId: number, value: number) => {
         calls.push(`max:${zoneId}:${value}`);
       },
-      applyEventVolumes: async (volumes: Record<string, number>) => {
-        calls.push(`event:${volumes.tts}`);
+      applyEventVolumes: async (zoneId: number, volumes: Record<string, number>) => {
+        calls.push(`event:${zoneId}:${volumes.tts}`);
       },
     } as any,
   });
 
-  const encoded = Buffer.from(JSON.stringify({ tts: 44 })).toString('base64');
+  const encoded = Buffer.from(JSON.stringify({ playerid: 7, tts: 44 })).toString('base64');
   const defaultResult = await handlers.setDefaultVolume('audio/cfg/defaultvolume/7/31');
   const maxResult = await handlers.setMaxVolume('audio/cfg/maxvolume/7/88');
   const eventResult = await handlers.setEventVolumes(`audio/cfg/eventvolumes/${encoded}`);
@@ -34,5 +34,5 @@ test('volume config commands return Loxone-compatible result names', async () =>
   assert.match(serializeResult(defaultResult), /"defaultvolume_result"/);
   assert.match(serializeResult(maxResult), /"maxvolume_result"/);
   assert.match(serializeResult(eventResult), /"eventvolumes_result"/);
-  assert.deepEqual(calls, ['default:7:31', 'max:7:88', 'event:44']);
+  assert.deepEqual(calls, ['default:7:31', 'max:7:88', 'event:7:44']);
 });

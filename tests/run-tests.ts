@@ -35,6 +35,7 @@ import './configHandlers.volume.test';
 import './equalizer.test';
 import './zoneHandlers.serviceplay.test';
 import './alertHandlers.playeventfile.test';
+import './alertHandlers.zoneRoutes.test';
 import './alertsCoordinator.test';
 import './alertsManager.volume.test';
 import './loxberryTtsProvider.test';

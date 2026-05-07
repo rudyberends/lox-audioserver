@@ -87,10 +87,13 @@ function onPlayerStarted(
   }
   const ctx = coordinator.getZone(zoneId);
   if (ctx) {
-    const volume =
-      ctx.state.mode === 'stop'
-        ? getZoneDefaultVolume(ctx.config)
-        : clampVolumeForZone(ctx.config, ctx.state.volume);
+    // During an alert, the alert flow has already set state.volume to the
+    // per-event volume (e.g. the TTS slider value). Don't replace it.
+    const isFreshStart =
+      !ctx.alert && (ctx.state.mode === 'stop' || ctx.state.powerState === 'off');
+    const volume = isFreshStart
+      ? getZoneDefaultVolume(ctx.config)
+      : clampVolumeForZone(ctx.config, ctx.state.volume);
     coordinator.dispatchVolume(ctx, outputs, volume);
     const patch = {
       ...buildStartedPatch({ ctx, session, audioHelpers: coordinator.audioHelpers }),

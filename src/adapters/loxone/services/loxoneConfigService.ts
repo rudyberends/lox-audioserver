@@ -118,18 +118,25 @@ export class LoxoneConfigService {
   }
 
   public async applyEventVolumes(
-    updater: Record<string, number>,
-  ): Promise<void> {
+    zoneId: number,
+    updater: Record<string, unknown>,
+  ): Promise<boolean> {
+    let applied = false;
     await this.config.updateConfig((cfg) => {
-      cfg.zones.forEach((zone) => {
-        const volumes = zone.volumes as unknown as Record<string, number>;
-        for (const [key, value] of Object.entries(updater)) {
-          if (typeof value === 'number' && key in volumes) {
-            volumes[key] = value;
-          }
+      const zone = cfg.zones.find((z) => z.id === zoneId);
+      if (!zone) {
+        this.log.warn('zone not found for event volumes update', { zoneId });
+        return;
+      }
+      const volumes = zone.volumes as unknown as Record<string, number>;
+      for (const [key, value] of Object.entries(updater)) {
+        if (typeof value === 'number' && Number.isFinite(value) && key in volumes) {
+          volumes[key] = value;
+          applied = true;
         }
-      });
+      }
     });
+    return applied;
   }
 
   public async applyPlayerNames(
