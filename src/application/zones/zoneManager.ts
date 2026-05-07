@@ -186,6 +186,7 @@ export class ZoneManager {
     });
     this.sharedPowerGroupManager = new SharedPowerGroupManager(this.log);
     this.audioManager.setZonePowerStateResolver((zoneId) => this.powerManager.isSignalOn(zoneId));
+    this.audioManager.setZoneEqualizerResolver((zoneId) => this.resolveBuiltinEqualizerBands(zoneId));
     this.audioHelpers = createZoneAudioHelpers(contentPort, configPort);
     const audioHelpers = this.audioHelpers;
     const notifierProxy: NotifierPort = {
@@ -714,7 +715,7 @@ export class ZoneManager {
         return;
       }
       found = true;
-      zone.equalizer = { bands: [...normalized] };
+      zone.equalizer = { ...(zone.equalizer ?? {}), bands: [...normalized] };
     });
 
     if (!found) {
@@ -724,15 +725,32 @@ export class ZoneManager {
     const equalizerSettings = formatEqualizerSettings(normalized);
     const ctx = this.zoneRepo.get(zoneId);
     if (ctx) {
-      ctx.config.equalizer = { bands: [...normalized] };
+      ctx.config.equalizer = { ...(ctx.config.equalizer ?? {}), bands: [...normalized] };
     }
     this.applyPatch(zoneId, { equalizerSettings }, true);
+
+    if (ctx?.config.equalizer?.provider === 'builtin') {
+      this.audioManager.scheduleEqualizerRestart(zoneId);
+    }
 
     return {
       zoneId,
       bands: [...normalized] as EqualizerBands,
       equalizerSettings,
     };
+  }
+
+  /**
+   * Returns the EQ bands to bake into the ffmpeg pipeline for this zone, or null when EQ
+   * handling is off or delegated to a forwarder.
+   */
+  private resolveBuiltinEqualizerBands(zoneId: number): ReadonlyArray<number> | null {
+    const ctx = this.zoneRepo.get(zoneId);
+    const eq = ctx?.config.equalizer;
+    if (!eq || eq.provider !== 'builtin' || !Array.isArray(eq.bands)) {
+      return null;
+    }
+    return eq.bands;
   }
 
   private resetZoneStateToInitial(zoneId: number, powerState: 'on' | 'off'): void {

@@ -177,7 +177,18 @@ export interface ZoneConfig {
 export interface ZoneEqualizerConfig {
   /** Loxone App 10-band EQ values in dB, one integer per band (-6..+6). */
   bands?: number[];
+  /**
+   * How App-originated EQ writes are handled.
+   * - 'off' (default): writes are stored only; no equalizer is applied.
+   * - 'builtin': bands are applied locally inside the audioserver's ffmpeg pipeline.
+   * - 'squeezelite-mr': bands are forwarded to the LoxBerry Squeezelite Multi-Room plugin.
+   */
+  provider?: ZoneEqualizerProvider;
+  /** Provider-specific callback URL. Used by 'squeezelite-mr'. */
+  callbackUrl?: string;
 }
+
+export type ZoneEqualizerProvider = 'off' | 'builtin' | 'squeezelite-mr';
 
 export interface ZonePowerManagerConfig {
   /** Legacy master toggle. Power state tracking remains active even when this is false. */

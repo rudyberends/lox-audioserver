@@ -59,23 +59,19 @@ export function getZoneEqualizerBands(zone: ZoneConfig): EqualizerBands {
   return stored ?? ([...DEFAULT_EQUALIZER_BANDS] as EqualizerBands);
 }
 
-export function resolveSqueezeliteEqCallbackUrl(
-  zone: ZoneConfig | undefined | null,
-): string | null {
-  const output = zone?.output;
-  if (!output || String(output.id ?? '').toLowerCase() !== 'squeezelite') {
+/**
+ * Resolves the EQ-forward URL for a zone based on its configured equalizer provider.
+ * Returns null when no provider is configured, the provider is 'off', or the URL is invalid.
+ */
+export function resolveEqForwardUrl(zone: ZoneConfig | undefined | null): string | null {
+  const eq = zone?.equalizer;
+  if (!eq || eq.provider !== 'squeezelite-mr') {
     return null;
   }
-
-  const raw =
-    readStringField(output, 'eqCallbackUrl') ??
-    readStringField(output, 'equalizerCallbackUrl') ??
-    readStringField(output, 'loxoneEqCallbackUrl');
-
+  const raw = typeof eq.callbackUrl === 'string' ? eq.callbackUrl.trim() : '';
   if (!raw) {
     return null;
   }
-
   try {
     const url = new URL(raw);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
@@ -91,11 +87,45 @@ function clampEqualizerBand(value: number): number {
   return Math.max(EQUALIZER_MIN_DB, Math.min(EQUALIZER_MAX_DB, value));
 }
 
-function readStringField(source: Record<string, unknown>, key: string): string | null {
-  const raw = source[key];
-  if (typeof raw !== 'string') {
+/**
+ * ISO 10-band centre frequencies (Hz) used by the Loxone App's EQ grid.
+ * Index matches the band index exposed via `audio/cfg/geteq` and `seteq`.
+ */
+export const EQUALIZER_BAND_FREQUENCIES = Object.freeze([
+  31, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000,
+]) as ReadonlyArray<number>;
+
+/** Q factor used for each band; ~1 octave wide so adjacent bands overlap smoothly. */
+const EQUALIZER_BAND_Q = 1.0;
+
+/**
+ * Builds an ffmpeg `-af` filter chain for the given EQ band gains. Returns null when no
+ * audible band is set (all gains effectively zero) so the caller can omit the filter
+ * entirely.
+ */
+export function buildEqualizerFilterChain(
+  bands: ReadonlyArray<number> | null | undefined,
+): string | null {
+  if (!bands || bands.length === 0) {
     return null;
   }
-  const trimmed = raw.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  const filters: string[] = [];
+  for (let i = 0; i < EQUALIZER_BAND_FREQUENCIES.length; i++) {
+    const gain = Number(bands[i] ?? 0);
+    if (!Number.isFinite(gain) || Math.abs(gain) < 0.05) {
+      continue;
+    }
+    const freq = EQUALIZER_BAND_FREQUENCIES[i];
+    const gainStr = formatGain(gain);
+    filters.push(`equalizer=f=${freq}:t=q:w=${EQUALIZER_BAND_Q}:g=${gainStr}`);
+  }
+  return filters.length ? filters.join(',') : null;
+}
+
+function formatGain(value: number): string {
+  // ffmpeg accepts integers and decimals; trim trailing zeroes for readability.
+  if (Number.isInteger(value)) {
+    return String(value);
+  }
+  return value.toFixed(2).replace(/\.?0+$/, '');
 }

@@ -31,10 +31,11 @@ export class EngineAdapter implements EnginePort {
       this.engine.start(zoneIdOrOptions, source as PlaybackSource, profiles, outputSettings);
       return;
     }
-    const { zoneId, input, outputs } = zoneIdOrOptions;
+    const { zoneId, input, outputs, equalizer } = zoneIdOrOptions;
     const playbackSource = this.toPlaybackSource(input);
     const { profiles: resolvedProfiles, outputSettings: resolvedSettings } = this.resolveOutputSpecs(outputs);
-    this.engine.start(zoneId, playbackSource, resolvedProfiles, resolvedSettings);
+    const eqBands = equalizer?.bands ?? null;
+    this.engine.start(zoneId, playbackSource, resolvedProfiles, resolvedSettings, eqBands);
   }
 
   public startWithHandoff(options: EngineStartOptions): void;
@@ -62,15 +63,17 @@ export class EngineAdapter implements EnginePort {
       );
       return;
     }
-    const { zoneId, input, outputs, handoff } = zoneIdOrOptions;
+    const { zoneId, input, outputs, handoff, equalizer } = zoneIdOrOptions;
     const playbackSource = this.toPlaybackSource(input);
     const { profiles: resolvedProfiles, outputSettings: resolvedSettings } = this.resolveOutputSpecs(outputs);
+    const eqBands = equalizer?.bands ?? null;
     this.engine.startWithHandoff(
       zoneId,
       playbackSource,
       resolvedProfiles,
       resolvedSettings,
       handoff ?? undefined,
+      eqBands,
     );
   }
 

@@ -36,6 +36,7 @@ import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInput
 import type {
   AudioServerConfig,
   SpotifyBridgeConfig,
+  ZoneEqualizerConfig,
   ZoneTransportConfig,
   ZoneStateConfig,
 } from '@/domain/config/types';
@@ -3923,6 +3924,9 @@ export class AdminApiHandler {
             if (incoming.powerManager !== undefined) {
               target.powerManager = incoming.powerManager as any;
             }
+            if (incoming.equalizer !== undefined) {
+              target.equalizer = this.normalizeEqualizerPayload(target.equalizer, incoming.equalizer);
+            }
             if (incoming.state !== undefined) {
               target.state = this.normalizeZoneStatePayload(incoming.state);
             }
@@ -3953,6 +3957,9 @@ export class AdminApiHandler {
             }
             if (incoming.powerManager !== undefined) {
               nextZone.powerManager = incoming.powerManager as any;
+            }
+            if (incoming.equalizer !== undefined) {
+              nextZone.equalizer = this.normalizeEqualizerPayload(undefined, incoming.equalizer);
             }
             cfg.zones!.push(nextZone as any);
           }
@@ -4292,6 +4299,53 @@ export class AdminApiHandler {
       return payload.transports[0] ?? null;
     }
     return null;
+  }
+
+  private normalizeEqualizerPayload(
+    current: ZoneEqualizerConfig | null | undefined,
+    payload: unknown,
+  ): ZoneEqualizerConfig | null {
+    if (payload === null) {
+      // Explicit null: drop provider/callback but preserve any stored bands.
+      const bands = current?.bands;
+      return bands && Array.isArray(bands) && bands.length > 0 ? { bands: [...bands] } : null;
+    }
+    if (!payload || typeof payload !== 'object') {
+      return current ?? null;
+    }
+    const record = payload as Record<string, unknown>;
+    const next: ZoneEqualizerConfig = {};
+    if (Array.isArray(current?.bands)) {
+      next.bands = [...current!.bands!];
+    }
+    if (Array.isArray(record.bands)) {
+      next.bands = record.bands.map((entry) => Number(entry)).filter((entry) => Number.isFinite(entry));
+    }
+    if (record.provider !== undefined) {
+      const provider = String(record.provider).trim().toLowerCase();
+      if (provider === 'squeezelite-mr') {
+        next.provider = 'squeezelite-mr';
+      } else if (provider === 'builtin') {
+        next.provider = 'builtin';
+      } else if (provider === 'off' || provider === '') {
+        // 'off' is the default; omit to keep persisted config compact.
+      } else {
+        // Unknown value: fall back to default off (omit field).
+      }
+    } else if (current?.provider) {
+      next.provider = current.provider;
+    }
+    if (record.callbackUrl !== undefined) {
+      const raw = typeof record.callbackUrl === 'string' ? record.callbackUrl.trim() : '';
+      if (raw) next.callbackUrl = raw;
+    } else if (current?.callbackUrl) {
+      next.callbackUrl = current.callbackUrl;
+    }
+    // callbackUrl only makes sense for the squeezelite-mr forwarder.
+    if (next.provider !== 'squeezelite-mr') {
+      delete next.callbackUrl;
+    }
+    return Object.keys(next).length > 0 ? next : null;
   }
 
   private normalizeZoneStatePayload(payload: unknown): ZoneStateConfig {

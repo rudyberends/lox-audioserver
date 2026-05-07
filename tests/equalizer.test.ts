@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from './testHarness';
 import {
+  buildEqualizerFilterChain,
+  EQUALIZER_BAND_FREQUENCIES,
   formatEqualizerSettings,
   normalizeEqualizerBands,
   parseEqualizerSettings,
-  resolveSqueezeliteEqCallbackUrl,
+  resolveEqForwardUrl,
 } from '../src/application/zones/equalizer';
 import { createZoneHandlers } from '../src/adapters/loxone/commands/handlers/zoneHandlers';
 import { serializeResult } from '../src/adapters/loxone/commands/responses';
@@ -25,26 +27,58 @@ test('equalizer helpers normalize 10 Loxone bands', () => {
   assert.equal(parseEqualizerSettings('1,2,3'), null);
 });
 
-test('squeezelite equalizer callback resolves only valid http URLs', () => {
+test('built-in equalizer filter chain emits one ffmpeg equalizer= entry per non-zero band', () => {
+  assert.equal(buildEqualizerFilterChain(null), null);
+  assert.equal(buildEqualizerFilterChain([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), null);
+  const chain = buildEqualizerFilterChain([3, 0, 0, 0, 0, 0, 0, 0, 0, -2.5]);
   assert.equal(
-    resolveSqueezeliteEqCallbackUrl({
+    chain,
+    `equalizer=f=${EQUALIZER_BAND_FREQUENCIES[0]}:t=q:w=1:g=3,equalizer=f=${EQUALIZER_BAND_FREQUENCIES[9]}:t=q:w=1:g=-2.5`,
+  );
+  // Sub-audible bands (|g| < 0.05) are skipped to keep the chain tight.
+  assert.equal(buildEqualizerFilterChain([0.04, 0, 0, 0, 0, 0, 0, 0, 0, 0]), null);
+});
+
+test('eq forward URL resolves only when provider is squeezelite-mr with a valid http URL', () => {
+  assert.equal(
+    resolveEqForwardUrl({
       id: 24,
       name: 'Kitchen',
       sourceMac: '00:00:00:00:00:01',
-      output: {
-        id: 'squeezelite',
-        eqCallbackUrl: 'http://loxberry/plugins/squeezelite_mr/api.php?op=loxone_eq_set',
+      equalizer: {
+        provider: 'squeezelite-mr',
+        callbackUrl: 'http://loxberry/plugins/squeezelite_mr/api.php?op=loxone_eq_set',
       },
       volumes: baseVolumes(),
     }),
     'http://loxberry/plugins/squeezelite_mr/api.php?op=loxone_eq_set',
   );
   assert.equal(
-    resolveSqueezeliteEqCallbackUrl({
+    resolveEqForwardUrl({
       id: 24,
       name: 'Kitchen',
       sourceMac: '00:00:00:00:00:01',
-      output: { id: 'squeezelite', eqCallbackUrl: 'file:///tmp/eq' },
+      equalizer: { provider: 'squeezelite-mr', callbackUrl: 'file:///tmp/eq' },
+      volumes: baseVolumes(),
+    }),
+    null,
+  );
+  assert.equal(
+    resolveEqForwardUrl({
+      id: 24,
+      name: 'Kitchen',
+      sourceMac: '00:00:00:00:00:01',
+      equalizer: { provider: 'off', callbackUrl: 'http://loxberry/x' },
+      volumes: baseVolumes(),
+    }),
+    null,
+  );
+  assert.equal(
+    resolveEqForwardUrl({
+      id: 24,
+      name: 'Kitchen',
+      sourceMac: '00:00:00:00:00:01',
+      equalizer: { provider: 'squeezelite-mr' },
       volumes: baseVolumes(),
     }),
     null,
@@ -81,9 +115,10 @@ test('audio equalizersettings updates state and forwards squeezelite callback', 
             id: 24,
             name: 'Kitchen',
             sourceMac: '00:00:00:00:00:01',
-            output: {
-              id: 'squeezelite',
-              eqCallbackUrl: 'http://loxberry/plugins/squeezelite_mr/api.php?op=loxone_eq_set',
+            output: { id: 'squeezelite' },
+            equalizer: {
+              provider: 'squeezelite-mr',
+              callbackUrl: 'http://loxberry/plugins/squeezelite_mr/api.php?op=loxone_eq_set',
             },
             volumes: baseVolumes(),
           },
@@ -178,11 +213,12 @@ test('audio cfg seteq updates one band through the equalizer pipeline', async ()
             id: 14,
             name: 'Kitchen',
             sourceMac: '00:00:00:00:00:01',
-            equalizer: { bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
-            output: {
-              id: 'squeezelite',
-              eqCallbackUrl: 'http://loxberry/plugins/squeezelite_mr/api.php?op=loxone_eq_set',
+            equalizer: {
+              bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+              provider: 'squeezelite-mr',
+              callbackUrl: 'http://loxberry/plugins/squeezelite_mr/api.php?op=loxone_eq_set',
             },
+            output: { id: 'squeezelite' },
             volumes: baseVolumes(),
           },
         ],

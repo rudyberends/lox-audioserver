@@ -96,9 +96,16 @@ export type EngineHandoffSpec = {
   timeoutMs?: number;
 };
 
+export type EngineEqualizerSpec = {
+  /** 10 dB values aligned with ISO bands (31 Hz .. 16 kHz). */
+  bands: ReadonlyArray<number>;
+};
+
 export type EngineStartOptions = {
   zoneId: number;
   input: EngineInputSpec;
   outputs: EngineOutputSpec[];
   handoff?: EngineHandoffSpec | null;
+  /** Apply built-in 10-band EQ to all outputs in this start call. */
+  equalizer?: EngineEqualizerSpec | null;
 };

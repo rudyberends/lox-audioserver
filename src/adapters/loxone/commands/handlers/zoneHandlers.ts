@@ -18,7 +18,7 @@ import {
   formatEqualizerSettings,
   getZoneEqualizerBands,
   parseEqualizerSettings,
-  resolveSqueezeliteEqCallbackUrl,
+  resolveEqForwardUrl,
 } from '@/application/zones/equalizer';
 
 const log = createLogger('Loxone', 'ZoneHandlers');
@@ -513,7 +513,7 @@ function resolveEqCallbackUrl(configPort: ConfigPort | undefined, zoneId: number
   }
   try {
     const zone = configPort.getConfig().zones.find((entry) => entry.id === zoneId);
-    return resolveSqueezeliteEqCallbackUrl(zone);
+    return resolveEqForwardUrl(zone);
   } catch (error) {
     log.warn('equalizer callback lookup failed', {
       zoneId,

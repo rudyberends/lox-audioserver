@@ -11,6 +11,7 @@ import {
   pcmFormatFromBitDepth,
   type AudioOutputSettings,
 } from '@/engine/audioFormat';
+import { buildEqualizerFilterChain } from '@/application/zones/equalizer';
 
 export type PlaybackSource =
   | {
@@ -127,6 +128,7 @@ export class AudioSession {
     private readonly profile: OutputProfile,
     private readonly onTerminated: () => void,
     private readonly outputSettings: AudioOutputSettings,
+    private readonly equalizerBands: ReadonlyArray<number> | null = null,
   ) {
     const candidate = outputSettings.prebufferBytes;
     const hardMax = 1024 * 1024 * 4;
@@ -948,6 +950,12 @@ export class AudioSession {
         filters.push(
           `aresample=resampler=soxr:precision=${audioResampler.precision}:cutoff=${audioResampler.cutoff}${asyncPart}`,
         );
+      }
+
+      // Apply built-in 10-band EQ at the output sample rate, after resampling.
+      const eqChain = buildEqualizerFilterChain(this.equalizerBands);
+      if (eqChain) {
+        filters.push(eqChain);
       }
 
       return { filterArgs: filters.length ? ['-af', filters.join(',')] : [] };

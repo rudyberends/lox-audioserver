@@ -67,6 +67,7 @@ export class AudioStreamEngine {
     source: PlaybackSource,
     profiles: OutputProfile[] = ['mp3'],
     outputSettings?: AudioOutputSettings,
+    equalizerBands: ReadonlyArray<number> | null = null,
   ): void {
     this.stop(zoneId, 'replace', { discardSubscribers: true });
     const profileMap = new Map<OutputProfile, AudioSession>();
@@ -85,7 +86,7 @@ export class AudioStreamEngine {
           this.sessions.delete(zoneId);
           this.onSessionTerminated?.(zoneId, stats, stopReason);
         }
-      }, effectiveOutput);
+      }, effectiveOutput, equalizerBands);
       profileMap.set(profile, session);
       session.start();
       this.log.info('audio session started', { zoneId, source: source.kind, profile });
@@ -101,6 +102,7 @@ export class AudioStreamEngine {
     profiles: OutputProfile[] = ['mp3'],
     outputSettings?: AudioOutputSettings,
     options: { waitProfile?: OutputProfile; timeoutMs?: number } = {},
+    equalizerBands: ReadonlyArray<number> | null = null,
   ): void {
     const existing = this.sessions.get(zoneId) ?? null;
     const handoffToken = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -121,7 +123,7 @@ export class AudioStreamEngine {
           this.sessions.delete(zoneId);
           this.onSessionTerminated?.(zoneId, stats, stopReason);
         }
-      }, effectiveOutput);
+      }, effectiveOutput, equalizerBands);
       profileMap.set(profile, session);
       session.start();
       this.log.info('audio session started (handoff)', { zoneId, source: source.kind, profile });

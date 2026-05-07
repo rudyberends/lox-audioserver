@@ -96,6 +96,10 @@ export class AudioManager {
   private readonly zonePlaybackPreDelayMs = new Map<number, number>();
   private readonly zoneTransientGainDb = new Map<number, number>();
   private isZonePowerOnResolver: ((zoneId: number) => boolean) | null = null;
+  /** Returns the band gains to bake into the ffmpeg pipeline, or null when EQ is off/forwarded. */
+  private zoneEqualizerResolver: ((zoneId: number) => ReadonlyArray<number> | null) | null = null;
+  private readonly equalizerRestartTimers = new Map<number, NodeJS.Timeout>();
+  private static readonly EQUALIZER_RESTART_DEBOUNCE_MS = 350;
   private readonly zoneHttpPreferences = new Map<
     number,
     { httpProfile?: HttpProfile; icyEnabled?: boolean; icyInterval?: number; icyName?: string }
@@ -667,6 +671,10 @@ export class AudioManager {
     if (typeof handoff !== 'undefined') {
       options.handoff = handoff;
     }
+    const eqBands = this.zoneEqualizerResolver?.(zoneId) ?? null;
+    if (eqBands && eqBands.length > 0) {
+      options.equalizer = { bands: eqBands };
+    }
     return options;
   }
 
@@ -1153,6 +1161,57 @@ export class AudioManager {
 
   public setZonePowerStateResolver(resolver: ((zoneId: number) => boolean) | null): void {
     this.isZonePowerOnResolver = resolver;
+  }
+
+  /**
+   * Registers a per-zone resolver that returns the EQ band gains to apply inside the ffmpeg
+   * pipeline. Return null (or an empty array) when EQ should not be baked in (provider is
+   * 'off' or a forwarder).
+   */
+  public setZoneEqualizerResolver(
+    resolver: ((zoneId: number) => ReadonlyArray<number> | null) | null,
+  ): void {
+    this.zoneEqualizerResolver = resolver;
+  }
+
+  /**
+   * Restarts a zone's audio engine to pick up new EQ band values. Debounced so rapid
+   * Loxone App slider drags coalesce into a single restart.
+   */
+  public scheduleEqualizerRestart(zoneId: number): void {
+    const existing = this.equalizerRestartTimers.get(zoneId);
+    if (existing) {
+      clearTimeout(existing);
+    }
+    const timer = setTimeout(() => {
+      this.equalizerRestartTimers.delete(zoneId);
+      this.applyEqualizerRestart(zoneId);
+    }, AudioManager.EQUALIZER_RESTART_DEBOUNCE_MS);
+    timer.unref?.();
+    this.equalizerRestartTimers.set(zoneId, timer);
+  }
+
+  private applyEqualizerRestart(zoneId: number): void {
+    const session = this.sessions.get(zoneId);
+    if (!session || !session.playbackSource) {
+      return;
+    }
+    if (!this.playbackService.hasSession(zoneId)) {
+      return;
+    }
+    if (session.state !== 'playing') {
+      return;
+    }
+    const profiles = session.profiles ?? this.computeProfiles(session.playbackSource, true);
+    const effectiveOutput = this.getEffectiveOutputSettings(zoneId);
+    const startOptions = this.buildEngineStartOptions(
+      zoneId,
+      session.playbackSource,
+      profiles,
+      effectiveOutput,
+    );
+    this.log.info('restarting audio engine to apply equalizer change', { zoneId, profiles });
+    this.playbackService.start(startOptions);
   }
 
   public setTransientGainDb(zoneId: number, gainDb: number | null): void {
