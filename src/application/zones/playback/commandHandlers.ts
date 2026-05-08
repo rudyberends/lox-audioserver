@@ -38,7 +38,6 @@ type CommandCoordinator = {
   remoteVolume: (zoneId: number, volume: number) => void;
   playerCommand: (zoneId: number, command: string, args?: Record<string, unknown>) => Promise<boolean>;
   requestLineInControl: (inputId: string, command: LineInControlCommand) => void;
-  getVolumeOrigin: () => string;
 };
 
 export function handleZoneCommand(args: {
@@ -299,16 +298,12 @@ function handleVolume(
       target = clamp(Math.round(target / step) * step, 0, maxVol);
     }
   }
-  const logContext: Record<string, unknown> = {
+  coordinator.log.spam('zone volume command', {
     zoneId,
     command: volume.command,
     payload: volume.rawPayload,
     target,
-  };
-  if (coordinator.log.isEnabled('spam')) {
-    logContext.origin = coordinator.getVolumeOrigin();
-  }
-  coordinator.log.spam('zone volume command', logContext);
+  });
   if (mode === 'airplay') {
     coordinator.remoteVolume(zoneId, target);
   }

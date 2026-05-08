@@ -179,20 +179,6 @@ export class PlaybackCoordinator {
     }
   }
 
-  private getVolumeOrigin(): string {
-    const stack = new Error().stack;
-    if (!stack) {
-      return 'unknown';
-    }
-    // Keep the first few frames so we can pinpoint which caller drives a volume_set.
-    const lines = stack
-      .split('\n')
-      .slice(1, 6)
-      .map((l) => l.trim().replace(/^at\s+/, ''))
-      .filter(Boolean);
-    return lines.join(' | ') || 'unknown';
-  }
-
   private buildInputCoordinator() {
     return {
       getZone: (id: number) => this.zoneRepo.get(id),
@@ -1063,7 +1049,6 @@ export class PlaybackCoordinator {
         remoteVolume: (id, volume) => this.inputsPort.remoteVolume(id, volume),
         playerCommand: (id, cmd, args) => this.inputsPort.playerCommand(id, cmd, args),
         requestLineInControl: (inputId, cmd) => this.inputsPort.requestLineInControl(inputId, cmd),
-        getVolumeOrigin: this.getVolumeOrigin.bind(this),
       },
       ctx,
       zoneId,
