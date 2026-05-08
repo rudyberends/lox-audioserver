@@ -659,7 +659,7 @@ function createHarness(options?: {
     audioManager: audioManager as unknown as AudioManager,
   });
   // Speed up queue stepping for tests (otherwise waits 150ms).
-  (coordinator as any).queueStepCoalesceMs = 0;
+  (coordinator as any).queueStepDispatcher.queueStepCoalesceMs = 0;
 
   return {
     coordinator,
@@ -794,11 +794,11 @@ test('end_of_track cooldown blocks a second queue advance after current item cha
     } as PlaybackSession;
   };
 
-  await (coordinator as any).handleEndOfTrack(ctx);
+  await (coordinator as any).queueStepDispatcher.handleEndOfTrack(ctx);
   assert.equal(startCount, 1);
   assert.equal(ctx.queueController.currentIndex(), 1);
 
-  await (coordinator as any).handleEndOfTrack(ctx);
+  await (coordinator as any).queueStepDispatcher.handleEndOfTrack(ctx);
   assert.equal(startCount, 1);
   assert.equal(ctx.queueController.currentIndex(), 1);
 });
@@ -1042,7 +1042,7 @@ test('queueplus fallback only steps queue when output does not handle it', () =>
   ctx.inputMode = 'queue';
   ctx.queue.authority = 'local';
   let stepCalled = false;
-  (coordinator as any).stepQueue = () => {
+  (coordinator as any).queueStepDispatcher.stepQueue = () => {
     stepCalled = true;
   };
 
@@ -1060,7 +1060,7 @@ test('next/previous commands map to queue stepping fallback', () => {
   ctx.inputMode = 'queue';
   ctx.queue.authority = 'local';
   const deltas: number[] = [];
-  (coordinator as any).stepQueue = (_zoneId: number, delta: number) => {
+  (coordinator as any).queueStepDispatcher.stepQueue = (_zoneId: number, delta: number) => {
     deltas.push(delta);
   };
 
@@ -1394,7 +1394,7 @@ test('handleEndOfTrack stops when queue ends', async () => {
   ctx.queue.repeat = 0;
   ctx.queue.shuffle = false;
 
-  await (coordinator as any).handleEndOfTrack(ctx);
+  await (coordinator as any).queueStepDispatcher.handleEndOfTrack(ctx);
 
   const player = ctx.player as unknown as FakePlayer;
   assert.equal(player.stopReasons.includes('queue_end'), true);
@@ -1414,7 +1414,7 @@ test('handleEndOfTrack stops on invalid next item', async () => {
   ctx.queue.authority = 'local';
   (ctx.queueController as any).current = () => null;
 
-  await (coordinator as any).handleEndOfTrack(ctx);
+  await (coordinator as any).queueStepDispatcher.handleEndOfTrack(ctx);
 
   const player = ctx.player as unknown as FakePlayer;
   assert.equal(player.stopReasons.includes('queue_invalid_next'), true);
@@ -1434,7 +1434,7 @@ test('handleEndOfTrack stops when next track fails to start', async () => {
   ctx.queue.authority = 'local';
   (coordinator as any).startQueuePlayback = async () => null;
 
-  await (coordinator as any).handleEndOfTrack(ctx);
+  await (coordinator as any).queueStepDispatcher.handleEndOfTrack(ctx);
 
   const player = ctx.player as unknown as FakePlayer;
   assert.equal(player.stopReasons.includes('queue_next_failed'), true);

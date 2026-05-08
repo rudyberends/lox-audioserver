@@ -39,10 +39,8 @@ import { isSameAudiopath } from '@/application/zones/playback/targetResolution';
 import { attachPlayerListeners } from '@/application/zones/playback/playerListeners';
 import { buildQueueItemPlaybackPatch } from '@/application/zones/playback/patchBuilder';
 import { handleZoneCommand } from '@/application/zones/playback/commandHandlers';
-import {
-  handleEndOfTrack as handleEndOfTrackTransition,
-  stepQueueAsync as stepQueueAsyncTransition,
-} from '@/application/zones/playback/queueTransitions';
+import { handleEndOfTrack as handleEndOfTrackTransition } from '@/application/zones/playback/queueTransitions';
+import { QueueStepDispatcher } from '@/application/zones/playback/QueueStepDispatcher';
 import {
   pauseInputSource as handlePauseInputSource,
   playInputSource as handlePlayInputSource,
@@ -93,17 +91,9 @@ export class PlaybackCoordinator {
   private readonly recentsManager: RecentsManager;
   private readonly audioManager: AudioManager;
   private readonly radioParadise: RadioParadiseBlockService;
+  private readonly queueStepDispatcher: QueueStepDispatcher;
   private readonly zonesMissingOutput = new Set<number>();
   private readonly queueBuildTokens = new Map<number, string>();
-  private readonly queueStepState = new Map<
-    number,
-    { pending: number; running: boolean; timer?: NodeJS.Timeout }
-  >();
-  private readonly endOfTrackAdvanceState = new Map<
-    number,
-    { key: string; at: number; cooldownUntil: number; inFlight: boolean }
-  >();
-  private readonly queueStepCoalesceMs = 25;
   private readonly musicAssistantInputHandlers: MusicAssistantInputHandlers = {
     startPlayback: (zoneId: number, label: string, source: PlaybackSource, metadata?: PlaybackMetadata) => {
       const ctx = this.zoneRepo.get(zoneId);
@@ -159,6 +149,19 @@ export class PlaybackCoordinator {
     this.radioParadise = new RadioParadiseBlockService({
       getZone: (zoneId) => this.zoneRepo.get(zoneId),
       updateRadioMetadata: (zoneId, metadata) => this.updateRadioMetadata(zoneId, metadata),
+    });
+    this.queueStepDispatcher = new QueueStepDispatcher({
+      zoneRepo: this.zoneRepo,
+      audioManager: this.audioManager,
+      audioHelpers: this.audioHelpers,
+      recentsManager: this.recentsManager,
+      log: this.log,
+      applyPatch: this.applyPatch,
+      dispatchOutputs: this.dispatchOutputs.bind(this),
+      isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
+      startQueuePlayback: this.startQueuePlayback.bind(this),
+      prefetchPlaybackSource: this.prefetchPlaybackSource.bind(this),
+      advanceTrack: this.advanceTrack.bind(this),
     });
   }
 
@@ -1052,7 +1055,7 @@ export class PlaybackCoordinator {
         dispatchQueueStep: this.dispatchQueueStep.bind(this),
         setInputMode: this.setInputMode.bind(this),
         setShuffle: this.queueController.setShuffle.bind(this.queueController),
-        stepQueue: this.stepQueue.bind(this),
+        stepQueue: this.queueStepDispatcher.stepQueue.bind(this.queueStepDispatcher),
         isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
         startQueuePlayback: this.startQueuePlayback.bind(this),
         audioHelpers: this.audioHelpers,
@@ -1103,7 +1106,7 @@ export class PlaybackCoordinator {
         reason,
         source,
       });
-      void this.handleEndOfTrack(ctx);
+      void this.queueStepDispatcher.handleEndOfTrack(ctx);
       return;
     }
     if (ctx) {
@@ -1145,7 +1148,7 @@ export class PlaybackCoordinator {
         buildAbsoluteCoverUrl: this.buildAbsoluteCoverUrl.bind(this),
         audioHelpers: this.audioHelpers,
         stopAlert: this.stopAlert,
-        handleEndOfTrack: this.handleEndOfTrack.bind(this),
+        handleEndOfTrack: this.queueStepDispatcher.handleEndOfTrack.bind(this.queueStepDispatcher),
         handlePlaybackError: this.handlePlaybackError.bind(this),
       },
       player,
@@ -1249,10 +1252,6 @@ export class PlaybackCoordinator {
     return this.outputRouter.selectPlayOutputs(outputs, _session);
   }
 
-  private stepQueue(zoneId: number, delta: number): void {
-    void this.enqueueQueueStep(zoneId, delta);
-  }
-
   private prefetchPlaybackSource(ctx: ZoneContext, audiopath: string): void {
     if (this.audioHelpers.isRadioAudiopath(audiopath)) {
       return;
@@ -1281,149 +1280,40 @@ export class PlaybackCoordinator {
     });
   }
 
-  private async enqueueQueueStep(zoneId: number, delta: number): Promise<void> {
-    const state = this.queueStepState.get(zoneId) ?? { pending: 0, running: false };
-    state.pending += delta;
-    this.queueStepState.set(zoneId, state);
-    if (state.running) {
-      return;
-    }
-    // Execute the first queue step immediately for snappy skip behavior.
-    if (!state.timer && Math.abs(state.pending) === 1) {
-      void this.runQueuedSteps(zoneId);
-      return;
-    }
-    if (state.timer) {
-      clearTimeout(state.timer);
-    }
-    state.timer = setTimeout(() => {
-      void this.runQueuedSteps(zoneId);
-    }, this.queueStepCoalesceMs);
-  }
-
-  private async runQueuedSteps(zoneId: number): Promise<void> {
-    const state = this.queueStepState.get(zoneId);
-    if (!state || state.running) {
-      return;
-    }
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = undefined;
-    }
-    state.running = true;
-    try {
-      while (state.pending !== 0) {
-        const step = state.pending > 0 ? 1 : -1;
-        state.pending -= step;
-        await stepQueueAsyncTransition({
-          coordinator: {
-            getZone: (id) => this.zoneRepo.get(id),
-            isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
-            startQueuePlayback: this.startQueuePlayback.bind(this),
-            prefetchPlaybackSource: this.prefetchPlaybackSource.bind(this),
-            applyPatch: this.applyPatch,
-            dispatchOutputs: this.dispatchOutputs.bind(this),
-            recentsRecord: this.recentsManager.record.bind(this.recentsManager),
-            audioHelpers: this.audioHelpers,
-          },
-          zoneId,
-          delta: step as 1 | -1,
-        });
-        const ready = await this.audioManager.waitForFirstChunk(zoneId, 'pcm', 1500);
-        if (!ready) {
-          break;
-        }
-      }
-    } finally {
-      state.running = false;
-      if (state.pending === 0) {
-        this.queueStepState.delete(zoneId);
-      } else {
-        this.queueStepState.set(zoneId, state);
-        if (!state.timer) {
-          state.timer = setTimeout(() => {
-            void this.runQueuedSteps(zoneId);
-          }, this.queueStepCoalesceMs);
-        }
-      }
-    }
-  }
-
-  private async handleEndOfTrack(ctx: ZoneContext): Promise<void> {
+  private async advanceTrack(ctx: ZoneContext): Promise<void> {
     const currentAudiopath = ctx.queueController.current()?.audiopath ?? ctx.state.audiopath ?? '';
-    const currentKey = `${ctx.queueController.currentIndex()}::${currentAudiopath}`;
-    const previous = this.endOfTrackAdvanceState.get(ctx.id);
-    const now = Date.now();
-    if (previous?.inFlight) {
-      this.log.debug('ignoring end_of_track while queue advance is in flight', {
-        zoneId: ctx.id,
-        key: previous.key,
-      });
-      return;
-    }
-    if (previous && now < previous.cooldownUntil) {
-      this.log.debug('ignoring end_of_track during queue advance cooldown', {
-        zoneId: ctx.id,
-        key: currentKey,
-        previousKey: previous.key,
-      });
-      return;
-    }
-    if (previous && previous.key === currentKey && now - previous.at < 1500) {
-      this.log.debug('ignoring duplicate end_of_track queue advance', {
-        zoneId: ctx.id,
-        key: currentKey,
-      });
-      return;
-    }
-    this.endOfTrackAdvanceState.set(ctx.id, {
-      key: currentKey,
-      at: now,
-      cooldownUntil: now + 1500,
-      inFlight: true,
-    });
-    try {
-      if (this.radioParadise.isRadioParadiseAudiopath(currentAudiopath) && this.radioParadise.canSkip(ctx.id)) {
-        const resolved = await this.radioParadise.resolveNextBlock(ctx.id);
-        if (resolved) {
-          const metadata = this.buildRadioParadiseMetadata(ctx, resolved);
-          const session = await this.startQueuePlayback(ctx, resolved.url, metadata, {
-            startAtSec: resolved.startAtSec,
-            skipExternalStop: true,
-          });
-          if (session && resolved.track) {
-            this.updateRadioMetadata(ctx.id, {
-              title: resolved.track.title,
-              artist: resolved.track.artist,
-              coverurl: resolved.track.coverurl,
-              duration: resolved.track.durationSec,
-              controllable: true,
-            });
-          }
-          return;
-        }
-      }
-      await handleEndOfTrackTransition({
-        coordinator: {
-          getZone: (id) => this.zoneRepo.get(id),
-          isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
-          startQueuePlayback: this.startQueuePlayback.bind(this),
-          applyPatch: this.applyPatch,
-          dispatchOutputs: this.dispatchOutputs.bind(this),
-          recentsRecord: this.recentsManager.record.bind(this.recentsManager),
-          audioHelpers: this.audioHelpers,
-        },
-        ctx,
-      });
-    } finally {
-      const latest = this.endOfTrackAdvanceState.get(ctx.id);
-      if (latest) {
-        this.endOfTrackAdvanceState.set(ctx.id, {
-          ...latest,
-          inFlight: false,
+    if (this.radioParadise.isRadioParadiseAudiopath(currentAudiopath) && this.radioParadise.canSkip(ctx.id)) {
+      const resolved = await this.radioParadise.resolveNextBlock(ctx.id);
+      if (resolved) {
+        const metadata = this.buildRadioParadiseMetadata(ctx, resolved);
+        const session = await this.startQueuePlayback(ctx, resolved.url, metadata, {
+          startAtSec: resolved.startAtSec,
+          skipExternalStop: true,
         });
+        if (session && resolved.track) {
+          this.updateRadioMetadata(ctx.id, {
+            title: resolved.track.title,
+            artist: resolved.track.artist,
+            coverurl: resolved.track.coverurl,
+            duration: resolved.track.durationSec,
+            controllable: true,
+          });
+        }
+        return;
       }
     }
+    await handleEndOfTrackTransition({
+      coordinator: {
+        getZone: (id) => this.zoneRepo.get(id),
+        isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
+        startQueuePlayback: this.startQueuePlayback.bind(this),
+        applyPatch: this.applyPatch,
+        dispatchOutputs: this.dispatchOutputs.bind(this),
+        recentsRecord: this.recentsManager.record.bind(this.recentsManager),
+        audioHelpers: this.audioHelpers,
+      },
+      ctx,
+    });
   }
 
   private async handleRadioParadiseSkip(ctx: ZoneContext, delta: 1 | -1): Promise<void> {
