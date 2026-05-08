@@ -39,6 +39,12 @@ export class AlertsCoordinator {
   private readonly log: ComponentLogger;
   private readonly audioHelpers: ZoneAudioHelpers;
   private readonly audioManager: AudioManager;
+  // Per-zone serialization. Concurrent start/stop calls used to corrupt the
+  // restore snapshot — caller B could capture state mid-flight from caller A
+  // and on stopAlert restore to A's alert metadata instead of the original
+  // queue. Public methods chain through this so each zone runs at most one
+  // alert op at a time.
+  private readonly opChain = new Map<number, Promise<void>>();
 
   constructor(deps: AlertsCoordinatorDeps) {
     this.zoneRepo = deps.zones;
@@ -49,7 +55,35 @@ export class AlertsCoordinator {
     this.audioManager = deps.audioManager;
   }
 
-  public async startAlert(
+  public startAlert(
+    zoneId: number,
+    type: string,
+    media: AlertMediaResource,
+    volume: number,
+  ): Promise<void> {
+    return this.runSerialized(zoneId, () => this.startAlertLocked(zoneId, type, media, volume));
+  }
+
+  public stopAlert(zoneId: number): Promise<void> {
+    return this.runSerialized(zoneId, () => this.stopAlertLocked(zoneId));
+  }
+
+  private runSerialized(zoneId: number, fn: () => Promise<void>): Promise<void> {
+    const previous = this.opChain.get(zoneId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(fn);
+    // Stash the swallow-error variant so the next caller is not affected by
+    // an earlier rejection but still waits for completion.
+    const tracker = next.catch(() => undefined);
+    this.opChain.set(zoneId, tracker);
+    void tracker.then(() => {
+      if (this.opChain.get(zoneId) === tracker) {
+        this.opChain.delete(zoneId);
+      }
+    });
+    return next;
+  }
+
+  private async startAlertLocked(
     zoneId: number,
     type: string,
     media: AlertMediaResource,
@@ -60,7 +94,7 @@ export class AlertsCoordinator {
       return;
     }
 
-    await this.stopAlert(zoneId);
+    await this.stopAlertLocked(zoneId);
 
     await this.waitForOutputReady(ctx);
 
@@ -127,13 +161,15 @@ export class AlertsCoordinator {
     const session = ctx.player.playUri(playUrl, metadata);
     if (!session) {
       this.log.warn('alert playback skipped; no session', { zoneId, type });
-      await this.stopAlert(zoneId);
+      await this.stopAlertLocked(zoneId);
       return;
     }
 
     if (durationMs && durationMs > 0) {
       const clampedMs = Math.min(durationMs + 150, 2147483647);
       ctx.alert.stopTimer = setTimeout(() => {
+        // Timer fires after we release the lock, so go through the public
+        // path so a concurrent caller cannot race the auto-stop.
         void this.stopAlert(zoneId);
       }, clampedMs);
     }
@@ -164,7 +200,7 @@ export class AlertsCoordinator {
         );
       }
 
-  public async stopAlert(zoneId: number): Promise<void> {
+  private async stopAlertLocked(zoneId: number): Promise<void> {
     const ctx = this.zoneRepo.get(zoneId);
     const activeAlert = ctx?.alert;
     if (!ctx || !activeAlert) {
