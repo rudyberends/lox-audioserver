@@ -263,19 +263,19 @@ export class AppleMusicProvider {
     const result: SearchResult = {};
     if (data?.results?.songs?.data) {
       const max = limits.track ?? limits.tracks ?? limit;
-      result.tracks = (data.results.songs.data as any[]).slice(0, max).map((t) => this.mapTrack(t));
+      result.tracks = data.results.songs.data.slice(0, max).map((t: unknown) => this.mapTrack(t));
     }
     if (data?.results?.albums?.data) {
       const max = limits.album ?? limits.albums ?? limit;
-      result.albums = (data.results.albums.data as any[]).slice(0, max).map((a) => this.mapAlbum(a));
+      result.albums = data.results.albums.data.slice(0, max).map((a: unknown) => this.mapAlbum(a));
     }
     if (data?.results?.artists?.data) {
       const max = limits.artist ?? limits.artists ?? limit;
-      result.artists = (data.results.artists.data as any[]).slice(0, max).map((a) => this.mapArtist(a));
+      result.artists = data.results.artists.data.slice(0, max).map((a: unknown) => this.mapArtist(a));
     }
     if (data?.results?.playlists?.data) {
       const max = limits.playlist ?? limits.playlists ?? limit;
-      result.playlists = (data.results.playlists.data as any[]).slice(0, max).map((p) => this.mapPlaylist(p));
+      result.playlists = data.results.playlists.data.slice(0, max).map((p: unknown) => this.mapPlaylist(p));
     }
     return { result, providerId: this.providerId, user: 'applemusic' };
   }

@@ -72,7 +72,7 @@ export class SqueezeliteOutput implements ZoneOutput {
   ) {
     this.normalizedPlayerId = normalizePlayerId(config.playerId);
     this.normalizedPlayerName = normalizeName(config.playerName);
-    this.latencyMs = normalizeLatencyMs((config as any).latencyMs);
+    this.latencyMs = normalizeLatencyMs((config as { latencyMs?: number }).latencyMs);
     this.unsubscribe = this.ports.squeezeliteCore.subscribe((event) => this.handleEvent(event));
     this.syncGroupState();
     this.unsubscribeGroups = onGroupChanged(() => {

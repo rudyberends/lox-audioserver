@@ -294,7 +294,7 @@ export class AirplaySender {
     if (!response.ok || !response.body) {
       throw new Error(`fetch failed status:${response.status}`);
     }
-    const readable = Readable.fromWeb(response.body as any);
+    const readable = Readable.fromWeb(response.body as unknown as Parameters<typeof Readable.fromWeb>[0]);
     this.pipeSenderStream(readable, token);
   }
 

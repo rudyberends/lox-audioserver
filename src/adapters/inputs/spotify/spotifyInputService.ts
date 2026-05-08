@@ -1086,7 +1086,7 @@ export class SpotifyInputService {
               acc.spotifyId === accountId,
           );
           if (target) {
-            (target as any).librespotCredentials = (() => {
+            (target as { librespotCredentials?: unknown }).librespotCredentials = (() => {
               try {
                 return typeof credentials === 'string' ? JSON.parse(credentials) : credentials;
               } catch {
@@ -1160,12 +1160,13 @@ export class SpotifyInputService {
     accounts.forEach((acc) => {
       if (acc.id) {
         this.accountIndex.set(acc.id, acc);
-        if ((acc as any).librespotCredentials) {
+        const lc = (acc as { librespotCredentials?: unknown }).librespotCredentials;
+        if (lc) {
           try {
             const raw =
-              typeof (acc as any).librespotCredentials === 'string'
-                ? (acc as any).librespotCredentials
-                : JSON.stringify((acc as any).librespotCredentials, null, 2);
+              typeof lc === 'string'
+                ? lc
+                : JSON.stringify(lc, null, 2);
             SpotifyConnectInstance.accountCredentials.set(acc.id, raw);
           } catch {
             /* ignore */
@@ -1414,7 +1415,7 @@ export class SpotifyInputService {
       if (!target.inputs.spotify) {
         target.inputs.spotify = { enabled: true };
       }
-      (target.inputs.spotify as any).deviceId = generated;
+      target.inputs.spotify.deviceId = generated;
     }).catch((error) => {
       this.log.debug('failed to persist generated spotify device id', {
         zoneId: zone.id,

@@ -205,8 +205,8 @@ export class SqueezeliteCore {
     // leave stale metadata visible. Prefer buffering/next media when available.
     const media =
       player.currentMedia ??
-      ((player as any)._bufferingMedia as typeof player.currentMedia | undefined | null) ??
-      ((player as any)._nextMedia as typeof player.currentMedia | undefined | null);
+      (player as unknown as { _bufferingMedia?: typeof player.currentMedia | null })._bufferingMedia ??
+      (player as unknown as { _nextMedia?: typeof player.currentMedia | null })._nextMedia;
     snapshot.url = media?.url ?? snapshot.url;
     snapshot.mimeType = media?.mimeType ?? snapshot.mimeType;
     snapshot.itemId = media?.metadata?.item_id ?? snapshot.itemId;

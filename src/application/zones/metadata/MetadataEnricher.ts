@@ -28,7 +28,7 @@ export async function enrichMetadata(args: {
     parentContext?.parent || incoming
       ? {
         ...(incoming ?? { title: '', artist: '', album: '' }),
-        station: stationValue ?? (incoming as any)?.station,
+        station: stationValue ?? (incoming as { station?: string } | undefined)?.station,
       }
       : incoming;
 
@@ -49,7 +49,7 @@ export async function enrichMetadata(args: {
       const current = typeof merged[key] === 'string' ? merged[key].trim() : '';
       const candidate = typeof incomingMeta[key] === 'string' ? incomingMeta[key].trim() : '';
       if (!current && candidate) {
-        merged[key] = candidate as any;
+        merged[key] = candidate;
       }
     };
     assignText('title');

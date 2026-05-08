@@ -656,8 +656,8 @@ export class AudioSession {
     if (this.stdoutPaused) {
       return;
     }
-    if (this.directPipeMode && this.pipeSourceStream && typeof (this.pipeSourceStream as any).pause === 'function') {
-      (this.pipeSourceStream as any).pause();
+    if (this.directPipeMode && this.pipeSourceStream && typeof this.pipeSourceStream.pause === 'function') {
+      this.pipeSourceStream.pause();
       this.stdoutPaused = true;
       return;
     }
@@ -672,8 +672,8 @@ export class AudioSession {
     if (!this.stdoutPaused || this.backpressureCount > 0) {
       return;
     }
-    if (this.directPipeMode && this.pipeSourceStream && typeof (this.pipeSourceStream as any).resume === 'function') {
-      (this.pipeSourceStream as any).resume();
+    if (this.directPipeMode && this.pipeSourceStream && typeof this.pipeSourceStream.resume === 'function') {
+      this.pipeSourceStream.resume();
       this.stdoutPaused = false;
       return;
     }
@@ -1297,7 +1297,7 @@ export class AudioSession {
       }
       const ok = subscriber.write(chunk);
       if (!ok) {
-        const pending = (subscriber as any)?._writableState?.length ?? 0;
+        const pending = (subscriber as { _writableState?: { length?: number } })?._writableState?.length ?? 0;
         this.addBackpressure(subscriber);
         if (pending > this.maxSubscriberLagBytes) {
           subscriber.destroy();

@@ -179,7 +179,7 @@ export class TidalStreamService {
         this.log.warn('tidal playback info failed', { status: res.status, trackId: request.trackId });
         return null;
       }
-      return (await res.json()) as any;
+      return await res.json();
     } catch (err) {
       this.log.warn('tidal playback info failed', { trackId: request.trackId, message: err instanceof Error ? err.message : String(err) });
       return null;
@@ -248,7 +248,7 @@ function extractDirectUrlFromManifest(manifest: string): string | null {
   if (!trimmed) return null;
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
     try {
-      const parsed = JSON.parse(trimmed) as any;
+      const parsed = JSON.parse(trimmed) as { urls?: unknown; url?: unknown };
       const urls = parsed?.urls;
       if (Array.isArray(urls) && typeof urls[0] === 'string') {
         return urls[0];

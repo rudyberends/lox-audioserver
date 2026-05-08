@@ -668,8 +668,8 @@ export class SendspinOutput implements ZoneOutput {
       // If a stream already exists and is healthy, reuse it and just re-announce to the client.
       if (
         this.currentStream &&
-        !(this.currentStream as any).destroyed &&
-        !(this.currentStream as any).readableEnded &&
+        !(this.currentStream as { destroyed?: boolean }).destroyed &&
+        !(this.currentStream as { readableEnded?: boolean }).readableEnded &&
         this.lastStreamSignature === streamSignature &&
         this.activeOutputFormat &&
         this.activeOutputFormat.codec === chosenFormat.codec &&
@@ -1261,8 +1261,9 @@ export class SendspinOutput implements ZoneOutput {
     }
     if (this.currentStream) {
       this.currentStream.removeAllListeners();
-      if ('destroy' in this.currentStream && typeof (this.currentStream as any).destroy === 'function') {
-        (this.currentStream as any).destroy();
+      const destroyable = this.currentStream as { destroy?: () => void };
+      if (typeof destroyable.destroy === 'function') {
+        destroyable.destroy();
       }
       this.currentStream = null;
     }
@@ -1538,7 +1539,7 @@ export class SendspinOutput implements ZoneOutput {
     const meta = session?.metadata;
     const title = meta?.title ?? zoneState?.title ?? this.zoneName ?? 'Sendspin';
     const artist = meta?.artist ?? zoneState?.artist ?? null;
-    const albumArtist = (meta as any)?.album_artist ?? null;
+    const albumArtist = (meta as { album_artist?: string | null } | undefined)?.album_artist ?? null;
     const album = meta?.album ?? zoneState?.album ?? null;
     const cover = meta?.coverurl ?? session?.stream?.coverUrl ?? zoneState?.coverurl ?? null;
     const durationMs =
@@ -1571,7 +1572,7 @@ export class SendspinOutput implements ZoneOutput {
       artwork_url: cover,
       track: trackNumber,
       album_artist: albumArtist,
-      year: typeof (meta as any)?.year === 'number' ? (meta as any).year : null,
+      year: typeof (meta as { year?: number } | undefined)?.year === 'number' ? (meta as { year?: number }).year! : null,
       shuffle: shuffleMode,
       repeat: repeatMode,
       progress: {
@@ -1601,11 +1602,11 @@ export class SendspinOutput implements ZoneOutput {
     const source = session.playbackSource;
     const base =
       source?.kind === 'pipe'
-        ? `pipe:${(source as any).path ?? ''}`
+        ? `pipe:${(source as { path?: string }).path ?? ''}`
         : source?.kind === 'file'
-          ? `file:${(source as any).path ?? ''}`
+          ? `file:${(source as { path?: string }).path ?? ''}`
           : source?.kind === 'url'
-            ? `url:${(source as any).url ?? ''}`
+            ? `url:${(source as { url?: string }).url ?? ''}`
             : session.source ?? 'unknown';
     const streamId = session.stream?.id ?? '';
     const pcmId = session.pcmStream?.id ?? '';

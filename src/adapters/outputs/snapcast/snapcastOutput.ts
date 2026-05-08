@@ -62,7 +62,7 @@ export class SnapcastOutput implements ZoneOutput {
             .map((c: string) => c.trim())
             .filter(Boolean)
         : [];
-    this.configuredLatencyMs = normalizeLatencyMs((config as any).latencyMs);
+    this.configuredLatencyMs = normalizeLatencyMs((config as { latencyMs?: number }).latencyMs);
     this.effectiveStreamId = this.baseStreamId;
     this.effectiveClientIds = [...this.baseClientIds];
 
@@ -203,8 +203,9 @@ export class SnapcastOutput implements ZoneOutput {
   private stopStream(): void {
     this.ports.snapcastCore.clearStream(this.zoneId);
     if (this.currentStream) {
-      if (typeof (this.currentStream as any).destroy === 'function') {
-        (this.currentStream as any).destroy();
+      const destroyable = this.currentStream as { destroy?: () => void };
+      if (typeof destroyable.destroy === 'function') {
+        destroyable.destroy();
       }
       this.currentStream = null;
     }

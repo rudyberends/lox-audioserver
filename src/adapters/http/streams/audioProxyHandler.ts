@@ -89,7 +89,7 @@ export class AudioProxyHandler {
     if (icyMetaInt) headers['icy-metaint'] = icyMetaInt;
 
     res.writeHead(upstream.status || 200, headers);
-    const stream = Readable.fromWeb(upstream.body as any);
+    const stream = Readable.fromWeb(upstream.body as unknown as Parameters<typeof Readable.fromWeb>[0]);
     if (zoneId && icyMetaInt) {
       const metaInt = Number(icyMetaInt);
       if (Number.isFinite(metaInt) && metaInt > 0) {

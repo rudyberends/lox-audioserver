@@ -436,7 +436,7 @@ export class QueueController {
           break;
         }
         allItems.push(...items);
-        total = Number.isFinite(folder?.totalitems) ? (folder as any).totalitems : Number.MAX_SAFE_INTEGER;
+        total = Number.isFinite(folder?.totalitems) ? folder!.totalitems : Number.MAX_SAFE_INTEGER;
         offset += items.length;
         if (items.length < pageSize) {
           break;
@@ -491,7 +491,7 @@ export class QueueController {
           break;
         }
         allItems.push(...items);
-        total = Number.isFinite(folder?.totalitems) ? (folder as any).totalitems : Number.MAX_SAFE_INTEGER;
+        total = Number.isFinite(folder?.totalitems) ? folder!.totalitems : Number.MAX_SAFE_INTEGER;
         offset += items.length;
         if (items.length < pageSize) {
           break;
@@ -542,7 +542,7 @@ export class QueueController {
           break;
         }
         allItems.push(...items);
-        total = Number.isFinite(folder?.totalitems) ? (folder as any).totalitems : Number.MAX_SAFE_INTEGER;
+        total = Number.isFinite(folder?.totalitems) ? folder!.totalitems : Number.MAX_SAFE_INTEGER;
         offset += items.length;
         if (items.length < pageSize) {
           break;
@@ -593,7 +593,7 @@ export class QueueController {
           break;
         }
         allItems.push(...items);
-        total = Number.isFinite(folder?.totalitems) ? (folder as any).totalitems : Number.MAX_SAFE_INTEGER;
+        total = Number.isFinite(folder?.totalitems) ? folder!.totalitems : Number.MAX_SAFE_INTEGER;
         offset += items.length;
         if (items.length < pageSize) {
           break;
@@ -644,7 +644,7 @@ export class QueueController {
           break;
         }
         allItems.push(...items);
-        total = Number.isFinite(folder?.totalitems) ? (folder as any).totalitems : Number.MAX_SAFE_INTEGER;
+        total = Number.isFinite(folder?.totalitems) ? folder!.totalitems : Number.MAX_SAFE_INTEGER;
         offset += items.length;
         if (items.length < pageSize) {
           break;
@@ -691,7 +691,7 @@ export class QueueController {
           break;
         }
         allItems.push(...items);
-        total = Number.isFinite(folder?.totalitems) ? (folder as any).totalitems : Number.MAX_SAFE_INTEGER;
+        total = Number.isFinite(folder?.totalitems) ? folder!.totalitems : Number.MAX_SAFE_INTEGER;
         offset += items.length;
         if (items.length < pageSize) {
           break;
@@ -769,8 +769,8 @@ export class QueueController {
     const user = (match.length === 3 ? match[1] : '') ?? '';
     const trackId = (match.length === 3 ? match[2] : match[1]) ?? '';
     const track = await this.contentPort.getServiceTrack('spotify', user, trackId);
-    if (track && typeof (track as any).duration === 'number') {
-      const d = Math.round((track as any).duration);
+    if (track && typeof track.duration === 'number') {
+      const d = Math.round(track.duration);
       return d > 0 ? d : 0;
     }
     return 0;

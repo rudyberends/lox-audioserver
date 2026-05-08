@@ -9,6 +9,7 @@ import type { ConfigPort } from '@/ports/ConfigPort';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
 import type {
   AudioServerConfig,
+  ZoneConfig,
   ZoneEqualizerConfig,
   ZoneTransportConfig,
   ZoneStateConfig,
@@ -253,9 +254,12 @@ export class AdminApiHandler {
         recentsManager: this.recentsManager,
         squeezeliteCore: this.squeezeliteCore,
         getClockOffsetMs: () => this.getClockOffsetMs(),
-        getZoneOutputConfig: (zone) => this.getZoneOutputConfig(zone as any) as any,
+        getZoneOutputConfig: (zone) => this.getZoneOutputConfig(zone as {
+          output?: ZoneTransportConfig | null;
+          transports?: ZoneTransportConfig[];
+        }) ?? undefined,
         buildSqueezeliteAdminPlayerSnapshot: (primaryOutput, players) =>
-          buildSqueezeliteAdminPlayerSnapshot(primaryOutput as any, players),
+          buildSqueezeliteAdminPlayerSnapshot(primaryOutput as ZoneTransportConfig | undefined, players),
         readJsonBody: (req, res, max) => this.readJsonBody(req, res, max),
         sendJson: (res, status, payload) => this.sendJson(res, status, payload),
       }),
@@ -603,10 +607,10 @@ export class AdminApiHandler {
           const target = cfg.zones!.find((z) => z.id === incoming.id);
           if (target) {
             if (incoming.inputs !== undefined) {
-              target.inputs = incoming.inputs as any;
+              target.inputs = incoming.inputs as ZoneConfig['inputs'];
             }
             if (incoming.powerManager !== undefined) {
-              target.powerManager = incoming.powerManager as any;
+              target.powerManager = incoming.powerManager as ZoneConfig['powerManager'];
             }
             if (incoming.equalizer !== undefined) {
               target.equalizer = this.normalizeEqualizerPayload(target.equalizer, incoming.equalizer);
@@ -623,10 +627,10 @@ export class AdminApiHandler {
               incoming.transports !== undefined
             ) {
               target.output = this.normalizeOutputPayload(incoming);
-              delete (target as any).transports;
+              delete target.transports;
             }
           } else {
-            const nextZone = { ...(incoming as any) };
+            const nextZone = { ...incoming };
             if (
               incoming.output !== undefined ||
               incoming.transport !== undefined ||
@@ -640,12 +644,12 @@ export class AdminApiHandler {
               nextZone.state = this.normalizeZoneStatePayload(incoming.state);
             }
             if (incoming.powerManager !== undefined) {
-              nextZone.powerManager = incoming.powerManager as any;
+              nextZone.powerManager = incoming.powerManager as ZoneConfig['powerManager'];
             }
             if (incoming.equalizer !== undefined) {
               nextZone.equalizer = this.normalizeEqualizerPayload(undefined, incoming.equalizer);
             }
-            cfg.zones!.push(nextZone as any);
+            cfg.zones!.push(nextZone as ZoneConfig);
           }
         });
       });
@@ -950,7 +954,7 @@ export class AdminApiHandler {
       const primaryOutput = this.getZoneOutputConfig(zone);
       const transports = primaryOutput ? [primaryOutput] : [];
       const state = this.normalizeZoneStatePayload((zone as { state?: unknown }).state);
-      const { output: _output, transports: _transports, ...rest } = zone as any;
+      const { output: _output, transports: _transports, ...rest } = zone as ZoneConfig & Record<string, unknown>;
       return { ...rest, transports, state };
     });
     return { ...config, zones };

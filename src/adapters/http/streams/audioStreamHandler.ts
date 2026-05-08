@@ -114,7 +114,7 @@ export class AudioStreamHandler {
     if (!audioStream && session.playbackSource) {
       // Start the engine with the requested profile (plus PCM for local consumers).
       const profiles = Array.from(new Set<OutputProfile>([outputProfile, 'pcm']));
-      this.engine.start(zoneId, session.playbackSource, profiles as any);
+      this.engine.start(zoneId, session.playbackSource, profiles);
       audioStream = this.engine.createStream(zoneId, outputProfile, {
         label: clientLabel,
         primeWithBuffer,
@@ -244,7 +244,7 @@ export class AudioStreamHandler {
         'Content-Type': contentType,
         'Cache-Control': 'no-cache',
       });
-      const stream = Readable.fromWeb(response.body as any);
+      const stream = Readable.fromWeb(response.body as unknown as Parameters<typeof Readable.fromWeb>[0]);
       stream.on('error', (error) => {
         this.log.warn('cover proxy stream failed', {
           message: error instanceof Error ? error.message : String(error),
@@ -626,7 +626,7 @@ export class AudioStreamHandler {
       primeWithBuffer: false,
     });
     if (!audioStream && session.playbackSource) {
-      this.engine.start(zoneId, session.playbackSource, Array.from(new Set<OutputProfile>([outputProfile, 'pcm'])) as any);
+      this.engine.start(zoneId, session.playbackSource, Array.from(new Set<OutputProfile>([outputProfile, 'pcm'])));
       audioStream = this.engine.createStream(zoneId, outputProfile, {
         label: clientLabel,
         primeWithBuffer: false,
@@ -686,14 +686,14 @@ export class AudioStreamHandler {
           continue;
         }
         client.passThrough.write(buf);
-        const backlog = (client.passThrough as any).writableLength as number | undefined;
+        const backlog = client.passThrough.writableLength;
         if (typeof backlog === 'number' && backlog > this.syncClientMaxBacklogBytes) {
           this.removeSyncClient(entry.id, clientId);
         }
       }
     };
     entry.onData = onData;
-    (entry.stream as any).on?.('data', onData);
+    entry.stream.on?.('data', onData);
     audioStream.on('error', (error) => {
       this.log.warn('sync stream error', {
         syncId,
@@ -728,7 +728,7 @@ export class AudioStreamHandler {
             continue;
           }
           client.passThrough.write(buf);
-          const backlog = (client.passThrough as any).writableLength as number | undefined;
+          const backlog = client.passThrough.writableLength;
           if (typeof backlog === 'number' && backlog > this.syncClientMaxBacklogBytes) {
             this.removeSyncClient(entry.id, clientId);
           }
@@ -752,7 +752,7 @@ export class AudioStreamHandler {
     // Best-effort: write what we have so the client can catch up to the same byte stream.
     for (const buf of entry.postStartHistory) {
       client.passThrough.write(buf);
-      const backlog = (client.passThrough as any).writableLength as number | undefined;
+      const backlog = client.passThrough.writableLength;
       if (typeof backlog === 'number' && backlog > this.syncClientMaxBacklogBytes) {
         // Too slow to catch up; drop.
         client.passThrough.end();
@@ -821,7 +821,7 @@ export class AudioStreamHandler {
       this.syncStreams.delete(entry.id);
     }
     if (entry.onData) {
-      (entry.stream as any).off?.('data', entry.onData);
+      (entry.stream as NodeJS.EventEmitter).off?.('data', entry.onData);
       entry.onData = undefined;
     }
     entry.preStartBuffer = [];
@@ -835,8 +835,9 @@ export class AudioStreamHandler {
       }
     });
     entry.clients.clear();
-    if (typeof (entry.stream as any).destroy === 'function') {
-      (entry.stream as any).destroy();
+    const destroyable = entry.stream as { destroy?: () => void };
+    if (typeof destroyable.destroy === 'function') {
+      destroyable.destroy();
     }
   }
 }

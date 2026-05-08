@@ -42,7 +42,7 @@ export function buildInputMetadataPatch(args: InputMetadataPatchArgs): Partial<L
     if (!trimmed) {
       return;
     }
-    patch[key] = trimmed as any;
+    patch[key] = trimmed;
   };
 
   assignPatch(
@@ -168,10 +168,10 @@ export function buildStartedPatch(args: {
   }
   const activePatch = buildActiveItemPatch(ctx, audioHelpers);
   if (radioControllable) {
-    delete (activePatch as any).title;
-    delete (activePatch as any).artist;
-    delete (activePatch as any).album;
-    delete (activePatch as any).coverurl;
+    delete activePatch.title;
+    delete activePatch.artist;
+    delete activePatch.album;
+    delete activePatch.coverurl;
   }
   return { ...basePatch, ...activePatch };
 }
@@ -184,10 +184,10 @@ export function buildResumedPatch(args: {
   const radioControllable = ctx.metadata.radioControllable === true;
   const activePatch = buildActiveItemPatch(ctx, audioHelpers);
   if (radioControllable) {
-    delete (activePatch as any).title;
-    delete (activePatch as any).artist;
-    delete (activePatch as any).album;
-    delete (activePatch as any).coverurl;
+    delete activePatch.title;
+    delete activePatch.artist;
+    delete activePatch.album;
+    delete activePatch.coverurl;
   }
   return {
     mode: 'play',

@@ -250,7 +250,7 @@ export class TuneInProvider {
     state.inFlight = (async () => {
       try {
         const outlines = await this.api.tune(id);
-        const match = outlines.find((entry) => entry && typeof (entry as any).url === 'string') as
+        const match = outlines.find((entry) => entry && typeof (entry as { url?: unknown }).url === 'string') as
           | { url?: string }
           | undefined;
         const resolved = match?.url ?? null;

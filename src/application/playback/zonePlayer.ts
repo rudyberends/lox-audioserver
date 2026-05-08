@@ -188,7 +188,7 @@ export class ZonePlayer {
     if (!listeners?.size) return;
     listeners.forEach((fn) => {
       try {
-        (fn as any)(...args);
+        (fn as (...a: Parameters<PlayerEventMap[E]>) => void)(...args);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.log.warn('player listener error', { zoneId: this.zoneId, event, message });

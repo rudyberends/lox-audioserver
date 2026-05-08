@@ -319,7 +319,7 @@ export class AlertsCoordinator {
     const start = Date.now();
     const ready = (): boolean =>
       outputs.some((t) => {
-        const maybe = (t as any).isReady;
+        const maybe = (t as { isReady?: () => boolean }).isReady;
         if (typeof maybe === 'function') {
           try {
             return maybe.call(t) === true;

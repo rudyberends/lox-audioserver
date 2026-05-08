@@ -171,7 +171,7 @@ export class ZoneStateStore {
           // where the API may not provide duration for every "now playing" update.
           !(ctx.metadata.radioControllable === true && trackChanged && nextDuration === 0))
       ) {
-        delete (patch as any).duration;
+        delete patch.duration;
       } else if (
         !isRadioState &&
         !isLineInState &&
@@ -180,13 +180,13 @@ export class ZoneStateStore {
         currentDuration > 0
       ) {
         // keep the larger of the known durations
-        (patch as any).duration = Math.max(nextDuration, currentDuration);
+        patch.duration = Math.max(nextDuration, currentDuration);
       }
     }
 
     const entries = Object.entries(patch);
     // Skip if nothing actually changes.
-    if (!force && !entries.some(([key, value]) => (ctx.state as any)[key] !== value)) {
+    if (!force && !entries.some(([key, value]) => (ctx.state as unknown as Record<string, unknown>)[key] !== value)) {
       return;
     }
 

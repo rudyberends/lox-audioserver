@@ -80,7 +80,7 @@ export class AirplayStreamSession {
 
   private ensureSource(): void {
     if (!this.stream || this.stream.destroyed) return;
-    if (this.source && !this.source.destroyed && !(this.source as any).readableEnded) {
+    if (this.source && !this.source.destroyed && !this.source.readableEnded) {
       return;
     }
     const next = this.createSourceStream();

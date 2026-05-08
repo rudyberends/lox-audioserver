@@ -228,9 +228,9 @@ export class AirplayInstance {
           title: event.title,
           artist: event.artist,
           album: event.album,
-          durationMs: (event as any).durationMs,
-          duration: (event as any).duration,
-          elapsedMs: (event as any).elapsedMs,
+          durationMs: (event as { durationMs?: number }).durationMs,
+          duration: (event as { duration?: number }).duration,
+          elapsedMs: (event as { elapsedMs?: number }).elapsedMs,
         });
         break;
       case 'artwork':
@@ -238,9 +238,9 @@ export class AirplayInstance {
           title: event.title,
           artist: event.artist,
           album: event.album,
-          durationMs: (event as any).durationMs,
-          duration: (event as any).duration,
-          elapsedMs: (event as any).elapsedMs,
+          durationMs: (event as { durationMs?: number }).durationMs,
+          duration: (event as { duration?: number }).duration,
+          elapsedMs: (event as { elapsedMs?: number }).elapsedMs,
           artwork: event.data,
         });
         break;
@@ -535,11 +535,12 @@ export class AirplayInstance {
       this.currentMetadata.album = album;
     }
 
+    const meta = metadata as Record<string, unknown> & { artwork?: { data?: unknown } | unknown };
     const artwork =
-      (metadata as any).artworkData ??
-      (metadata as any).artwork?.data ??
-      (metadata as any)['artwork-data'] ??
-      (metadata as any).artwork;
+      meta.artworkData ??
+      (meta.artwork as { data?: unknown } | undefined)?.data ??
+      meta['artwork-data'] ??
+      meta.artwork;
     const artworkMime =
       readString(['artworkMIMETYPE', 'artworkMime', 'artworkType']) ?? (this.coverArt?.mime ?? undefined);
     if (artwork) {

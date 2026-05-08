@@ -88,7 +88,7 @@ export class SpotifyServiceManager {
     bridges: SpotifyBridgeConfig[] = [],
   ): void {
     for (const provider of this.providers.values()) {
-      (provider as any)?.dispose?.();
+      (provider as { dispose?: () => void })?.dispose?.();
     }
     this.providers.clear();
     this.clientId = resolveSpotifyClientId({ clientId });
@@ -96,7 +96,7 @@ export class SpotifyServiceManager {
     this.accounts = (accounts ?? []).map((acc, idx) => ({
       ...acc,
       // normalize alternative refresh_token key if present
-      refreshToken: acc.refreshToken ?? (acc as any).refresh_token,
+      refreshToken: acc.refreshToken ?? (acc as { refresh_token?: string }).refresh_token,
       id: acc.id || acc.user || acc.email || `user${idx + 1}`,
     }));
 
@@ -350,7 +350,7 @@ export class SpotifyServiceManager {
         limits,
         maxLimit,
       );
-      return { result: result as any, user: bridgeUser, providerId };
+      return { result: result as unknown as Record<string, ContentFolderItem[]> & { _totals?: Record<string, number> }, user: bridgeUser, providerId };
     }
 
     const accessToken = await provider.fetchAccessToken();
@@ -387,7 +387,7 @@ export class SpotifyServiceManager {
     if (!res.ok) {
       return { result: {}, user: provider.accountId, providerId: provider.providerId };
     }
-    const data = (await res.json()) as any;
+    const data = (await res.json()) as Record<string, any> | null;
     const result: Record<string, ContentFolderItem[]> & { _totals?: Record<string, number> } = {};
     const totals: Record<string, number> = {};
     const providerPrefix = provider.providerId;
@@ -961,7 +961,7 @@ export class SpotifyServiceManager {
       if (type === 'episode') {
         return { type: 'show', id }; // episodes follow show subscriptions
       }
-      return { type: type as any, id };
+      return { type: type as 'track' | 'album' | 'artist' | 'playlist' | 'show', id };
     }
     const plain = cleaned.match(/^(track|album|artist|playlist|show):(.+)/i);
     if (plain) {
@@ -970,7 +970,7 @@ export class SpotifyServiceManager {
       if (type === 'episode') {
         return { type: 'show', id };
       }
-      return { type: type as any, id };
+      return { type: type as 'track' | 'album' | 'artist' | 'playlist' | 'show', id };
     }
     return null;
   }

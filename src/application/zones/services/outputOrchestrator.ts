@@ -8,7 +8,7 @@ export function selectPlayOutputs(
   outputs: ZoneOutput[],
 ): ZoneOutput[] {
   const ready = (output: ZoneOutput): boolean => {
-    const maybe = (output as any).isReady;
+    const maybe = (output as { isReady?: () => boolean }).isReady;
     if (typeof maybe === 'function') {
       try {
         return maybe.call(output) === true;
@@ -51,7 +51,7 @@ export function dispatchQueueStep(
         void result.catch((error) => {
           const message = error instanceof Error ? error.message : String(error);
           log.warn('output queue step failed', {
-            zoneId: (output as any).zoneId,
+            zoneId: (output as { zoneId?: number }).zoneId,
             message,
           });
         });
@@ -59,7 +59,7 @@ export function dispatchQueueStep(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log.warn('output queue step failed', {
-        zoneId: (output as any).zoneId,
+        zoneId: (output as { zoneId?: number }).zoneId,
         message,
       });
     }
@@ -75,7 +75,7 @@ export function dispatchVolume(
 ): void {
   const isActiveInput = (output: ZoneOutput): boolean => {
     if (!ctx.activeInput) return false;
-    const type = (output as any).type as string | undefined;
+    const type = output.type;
     if (!type) return false;
     if (type.endsWith('-input')) {
       const inputName = type.slice(0, -'-input'.length);
@@ -148,7 +148,7 @@ export function dispatchOutputs(
       : true;
   const outputCandidates = outputs.filter((t) => t.type !== 'spotify-input');
   const isReady = (output: ZoneOutput): boolean => {
-    const maybe = (output as any).isReady;
+    const maybe = (output as { isReady?: () => boolean }).isReady;
     if (typeof maybe === 'function') {
       try {
         return maybe.call(output) === true;
@@ -229,7 +229,7 @@ export function dispatchOutputs(
         void result.catch((error) => {
           const message = error instanceof Error ? error.message : String(error);
           const zoneIdPayload =
-            payload && typeof payload === 'object' ? (payload as any).zoneId : undefined;
+            payload && typeof payload === 'object' ? (payload as { zoneId?: number }).zoneId : undefined;
           log.warn('output action failed', {
             zoneId: zoneIdPayload,
             action,
@@ -243,7 +243,7 @@ export function dispatchOutputs(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const zoneIdPayload =
-        payload && typeof payload === 'object' ? (payload as any).zoneId : undefined;
+        payload && typeof payload === 'object' ? (payload as { zoneId?: number }).zoneId : undefined;
       log.warn('output action failed', {
         zoneId: zoneIdPayload,
         action,

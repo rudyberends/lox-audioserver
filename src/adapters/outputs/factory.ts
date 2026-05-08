@@ -275,10 +275,11 @@ function createAirplayOutput(
     log.warn('AirPlay output skipped; missing host', { zoneId: zone.id });
     return null;
   }
-  const name = (rawEntry as any)?.name;
-  const password = (rawEntry as any)?.password;
-  const debug = (rawEntry as any)?.debug;
-  const forceAp2 = (rawEntry as any)?.forceAp2;
+  const extras = rawEntry as unknown as Record<string, unknown>;
+  const name = extras?.name as string | undefined;
+  const password = extras?.password as string | undefined;
+  const debug = extras?.debug;
+  const forceAp2 = extras?.forceAp2;
   const port = Number(rawPort);
   const initialVolume = clampVolume(zone.volumes?.default);
   return new AirPlayOutput(
@@ -386,26 +387,27 @@ function createGoogleCastOutput(
   zone: ZoneConfig,
   ports: OutputPorts,
 ): ZoneOutput | null {
-  const host = typeof (config as any).host === 'string' ? (config as any).host.trim() : '';
+  const cfg = config as Record<string, unknown>;
+  const host = typeof cfg.host === 'string' ? cfg.host.trim() : '';
   if (!host) {
     log.warn('Google Cast output skipped; missing host', { zoneId: zone.id });
     return null;
   }
-  const name = typeof (config as any).name === 'string' ? (config as any).name : undefined;
-  const rawUseSendspin = (config as any).useSendspin;
+  const name = typeof cfg.name === 'string' ? cfg.name : undefined;
+  const rawUseSendspin = cfg.useSendspin;
   const useSendspin =
     rawUseSendspin === true ||
     (typeof rawUseSendspin === 'string' && rawUseSendspin.trim().toLowerCase() === 'true');
   if (useSendspin) {
     const namespace =
-      typeof (config as any).sendspinNamespace === 'string'
-        ? (config as any).sendspinNamespace
+      typeof cfg.sendspinNamespace === 'string'
+        ? cfg.sendspinNamespace
         : undefined;
     const playerId =
-      typeof (config as any).sendspinPlayerId === 'string'
-        ? (config as any).sendspinPlayerId
+      typeof cfg.sendspinPlayerId === 'string'
+        ? cfg.sendspinPlayerId
         : undefined;
-    const syncDelayRaw = (config as any).sendspinSyncDelayMs;
+    const syncDelayRaw = cfg.sendspinSyncDelayMs;
     const syncDelayMs = Number(syncDelayRaw);
     const sendspinCastConfig: SendspinCastOutputConfig = {
       host,
@@ -427,17 +429,18 @@ function createSendspinCastOutput(
   zone: ZoneConfig,
   ports: OutputPorts,
 ): ZoneOutput | null {
-  const host = typeof (config as any).host === 'string' ? (config as any).host.trim() : '';
+  const cfg = config as Record<string, unknown>;
+  const host = typeof cfg.host === 'string' ? cfg.host.trim() : '';
   if (!host) {
     log.warn('Sendspin Cast output skipped; missing host', { zoneId: zone.id });
     return null;
   }
-  const name = typeof (config as any).name === 'string' ? (config as any).name : undefined;
+  const name = typeof cfg.name === 'string' ? cfg.name : undefined;
   const namespace =
-    typeof (config as any).namespace === 'string' ? (config as any).namespace : undefined;
+    typeof cfg.namespace === 'string' ? cfg.namespace : undefined;
   const playerId =
-    typeof (config as any).playerId === 'string' ? (config as any).playerId : undefined;
-  const syncDelayRaw = (config as any).syncDelayMs;
+    typeof cfg.playerId === 'string' ? cfg.playerId : undefined;
+  const syncDelayRaw = cfg.syncDelayMs;
   const syncDelayMs = Number(syncDelayRaw);
   const sendspinCastConfig: SendspinCastOutputConfig = {
     host,
@@ -455,19 +458,20 @@ function createSnapcastCastOutput(
   zone: ZoneConfig,
   ports: OutputPorts,
 ): ZoneOutput | null {
-  const host = typeof (config as any).host === 'string' ? (config as any).host.trim() : '';
+  const cfg = config as Record<string, unknown>;
+  const host = typeof cfg.host === 'string' ? cfg.host.trim() : '';
   if (!host) {
     log.warn('Snapcast Cast output skipped; missing cast host', { zoneId: zone.id });
     return null;
   }
-  const name = typeof (config as any).name === 'string' ? (config as any).name : undefined;
+  const name = typeof cfg.name === 'string' ? cfg.name : undefined;
   const streamId =
-    typeof (config as any).streamId === 'string' ? (config as any).streamId : undefined;
+    typeof cfg.streamId === 'string' ? cfg.streamId : undefined;
   const clientId =
-    typeof (config as any).clientId === 'string' ? (config as any).clientId : undefined;
+    typeof cfg.clientId === 'string' ? cfg.clientId : undefined;
   const serverHost =
-    typeof (config as any).serverHost === 'string'
-      ? (config as any).serverHost
+    typeof cfg.serverHost === 'string'
+      ? cfg.serverHost
       : ports.config.getSystemConfig()?.audioserver?.ip;
   const snapcastCastConfig: SnapcastCastOutputConfig = {
     host,

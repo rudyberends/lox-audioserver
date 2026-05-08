@@ -372,9 +372,14 @@ export class AirplayFlowSession {
     stream.once('close', onEnd);
     stream.once('error', onError);
     // Track listeners to remove later.
-    (stream as any)._lox_onData = onData;
-    (stream as any)._lox_onEnd = onEnd;
-    (stream as any)._lox_onError = onError;
+    const tagged = stream as NodeJS.ReadableStream & {
+      _lox_onData?: (chunk: Buffer) => void;
+      _lox_onEnd?: () => void;
+      _lox_onError?: (err: Error) => void;
+    };
+    tagged._lox_onData = onData;
+    tagged._lox_onEnd = onEnd;
+    tagged._lox_onError = onError;
     this.sourceAttached = true;
   }
 
@@ -502,7 +507,7 @@ export class AirplayFlowSession {
         }
       }
 
-      if (!this.sourcePausedByBackpressure && this.sharedStream && typeof (this.sharedStream as any).pause === 'function') {
+      if (!this.sourcePausedByBackpressure && this.sharedStream && typeof this.sharedStream.pause === 'function') {
         this.sourcePausedByBackpressure = true;
         try {
           this.sharedStream.pause();
@@ -561,7 +566,7 @@ export class AirplayFlowSession {
       this.pendingChunks.length === 0 &&
       this.sharedStream &&
       this.chunkQueueBytes <= resumeThreshold &&
-      typeof (this.sharedStream as any).resume === 'function'
+      typeof this.sharedStream.resume === 'function'
     ) {
       this.sourcePausedByBackpressure = false;
       try {
@@ -653,7 +658,7 @@ export class AirplayFlowSession {
         id: client.id,
         ready: client.ready,
         bufferBytes: client.buffer?.getBufferedBytes() ?? 0,
-        feedBytes: (client.feed as any)?.readableLength ?? 0,
+        feedBytes: client.feed?.readableLength ?? 0,
       };
     });
     this.log.spam('airplay flow metrics', {

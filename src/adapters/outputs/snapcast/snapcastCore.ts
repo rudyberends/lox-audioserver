@@ -77,7 +77,7 @@ export class SnapcastCore {
   }
 
   public handleUpgrade(request: IncomingMessage, socket: any, head: Buffer): boolean {
-    return this.core.handleUpgrade(request, socket as any, head);
+    return this.core.handleUpgrade(request, socket, head);
   }
 
   public handleTcpConnection(socket: net.Socket): void {
@@ -146,7 +146,10 @@ export class SnapcastCore {
   }
 
   private primeStreamClock(streamId: string, output: AudioOutputSettings): void {
-    const core = this.core as any;
+    const core = this.core as unknown as {
+      streams?: { get?: (id: string) => unknown };
+      nowUs?: () => number;
+    };
     const streams: any = core?.streams;
     const nowUsFn: any = core?.nowUs;
     if (!streams || typeof streams.get !== 'function' || typeof nowUsFn !== 'function') {

@@ -195,7 +195,7 @@ export class AlertsManager {
       return DEFAULT_ALERT_VOLUME;
     }
     const key = mapAlertTypeToVolumeKey(type);
-    const requested = (volumes as any)[key] ?? volumes.default ?? DEFAULT_ALERT_VOLUME;
+    const requested = (volumes as unknown as Record<string, number | undefined>)[key] ?? volumes.default ?? DEFAULT_ALERT_VOLUME;
     const clamped = Math.min(
       Math.max(Number(requested) || DEFAULT_ALERT_VOLUME, MIN_VOLUME),
       maxVolume,

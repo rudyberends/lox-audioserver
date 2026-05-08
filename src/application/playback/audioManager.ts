@@ -673,7 +673,7 @@ export class AudioManager {
       zoneId,
       label,
       sourceKind: effectiveSource?.kind ?? null,
-      hasStream: effectiveSource ? 'stream' in effectiveSource && !!(effectiveSource as any).stream : false,
+      hasStream: effectiveSource ? 'stream' in effectiveSource && !!(effectiveSource as { stream?: unknown }).stream : false,
     });
     const existing = this.sessions.get(zoneId);
     const startAtSec = this.getStartAtSec(effectiveSource);
@@ -1184,7 +1184,7 @@ export class AudioManager {
     const outputOverride = this.zoneOutputOverrides.get(zoneId);
     let result: AudioOutputSettings;
     if (outputOverride && Object.keys(outputOverride).length > 0) {
-      const { profile: _ignoredProfile, ...rest } = outputOverride as any;
+      const { profile: _ignoredProfile, ...rest } = outputOverride as Partial<AudioOutputSettings> & { profile?: unknown };
       result = { ...audioOutputSettings, ...(rest as Partial<AudioOutputSettings>) };
     } else {
       result = audioOutputSettings;

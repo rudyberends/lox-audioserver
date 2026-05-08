@@ -313,7 +313,7 @@ export class AppleMusicStreamService {
         return null;
       }
 
-      const data = (await res.json()) as any;
+      const data = (await res.json()) as Record<string, any> | null;
       const song = data?.songList?.[0];
       if (!song) {
         const keys = data && typeof data === 'object' ? Object.keys(data) : undefined;
@@ -1248,7 +1248,7 @@ export class AppleMusicStreamService {
         contentLength: response.headers.get('content-length') ?? undefined,
       });
       res.writeHead(200, { 'Content-Type': contentType });
-      const stream = Readable.fromWeb(response.body as any);
+      const stream = Readable.fromWeb(response.body as unknown as Parameters<typeof Readable.fromWeb>[0]);
       // TTFB guard: abort if the upstream body never yields any bytes.
       ttfbTimer = setTimeout(() => controller.abort(), 30_000);
       ttfbTimer.unref();
@@ -1257,7 +1257,7 @@ export class AppleMusicStreamService {
       stream.on('close', cleanup);
       stream.on('error', (error) => {
         const message = error instanceof Error ? error.message : String(error);
-        const name = error && typeof error === 'object' && 'name' in error ? String((error as any).name) : '';
+        const name = error && typeof error === 'object' && 'name' in error ? String((error as { name?: unknown }).name) : '';
         const aborted = controller.signal.aborted || name === 'AbortError' || message.toLowerCase().includes('aborted');
         if (aborted) {
           this.log.debug('Apple Music proxy stream aborted', {
@@ -1387,7 +1387,7 @@ export class AppleMusicStreamService {
         res.end();
         return false;
       }
-      const stream = Readable.fromWeb(response.body as any);
+      const stream = Readable.fromWeb(response.body as unknown as Parameters<typeof Readable.fromWeb>[0]);
       await new Promise<void>((resolve, reject) => {
         stream.on('error', reject);
         stream.on('end', () => resolve());

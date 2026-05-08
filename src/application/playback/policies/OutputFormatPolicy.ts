@@ -1,6 +1,6 @@
 import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 import type { OutputProfile } from '@/ports/EngineTypes';
-import type { HttpPreferences, PreferredOutput, ZoneOutput } from '@/ports/OutputsTypes';
+import type { HttpPreferences, ZoneOutput } from '@/ports/OutputsTypes';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import { selectPlayOutputs } from '@/application/zones/services/outputOrchestrator';
 
@@ -50,8 +50,8 @@ export function computePreferredPlaybackSettings(args: ComputeArgs): PreferredPl
       ? args.outputs.find((output) => output.type === args.activeOutputType)
       : null) ?? selectPlayOutputs(args.outputs)[0] ?? null;
   let override: (Partial<AudioOutputSettings> & { profile?: OutputProfile }) | null = null;
-  if (primaryOutput && typeof (primaryOutput as any).getPreferredOutput === 'function') {
-    const pref = (primaryOutput as { getPreferredOutput?: () => PreferredOutput | null }).getPreferredOutput?.();
+  if (primaryOutput && typeof primaryOutput.getPreferredOutput === 'function') {
+    const pref = primaryOutput.getPreferredOutput();
     if (pref) {
       override = {};
       if (typeof pref.sampleRate === 'number') {
@@ -85,8 +85,8 @@ export function computePreferredPlaybackSettings(args: ComputeArgs): PreferredPl
   }
 
   let httpPrefs: HttpPreferences | null | undefined;
-  if (primaryOutput && typeof (primaryOutput as any).getHttpPreferences === 'function') {
-    const prefs = (primaryOutput as { getHttpPreferences?: () => HttpPreferences | null }).getHttpPreferences?.();
+  if (primaryOutput && typeof primaryOutput.getHttpPreferences === 'function') {
+    const prefs = primaryOutput.getHttpPreferences();
     if (prefs) {
       httpPrefs = prefs;
     }

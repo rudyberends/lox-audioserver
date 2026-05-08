@@ -1219,7 +1219,7 @@ export class SpotifyAccountProvider {
 
     const refreshToken =
       this.account.refreshToken?.trim() ||
-      (this.account as any).refresh_token?.toString().trim();
+      (this.account as { refresh_token?: string }).refresh_token?.toString().trim();
     if (!refreshToken) {
       this.log.warn('no refresh token configured for spotify account');
       return null;
@@ -1285,7 +1285,7 @@ export class SpotifyAccountProvider {
           break;
         }
 
-        const payload = (await res.json()) as any;
+        const payload = (await res.json()) as { access_token?: string; expires_in?: number; refresh_token?: string; scope?: string } | null;
         const accessToken = typeof payload?.access_token === 'string' ? payload.access_token : '';
         const expiresIn = Number(payload?.expires_in ?? 3600);
         const rotatedRefreshToken =

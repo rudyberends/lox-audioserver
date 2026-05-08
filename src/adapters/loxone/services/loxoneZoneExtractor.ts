@@ -140,7 +140,7 @@ export function buildZoneConfigs(descriptors: ZoneDescriptor[]): ZoneConfig[] {
         enabled: true,
         port: undefined,
         model: 'generic',
-      } as any,
+      },
     },
     volumes: defaultVolumes(),
   }));

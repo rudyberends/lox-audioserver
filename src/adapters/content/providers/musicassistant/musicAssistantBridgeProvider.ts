@@ -218,16 +218,16 @@ export class MusicAssistantBridgeProvider extends SpotifyAccountProvider {
         .filter(Boolean) as ContentFolderItem[];
 
     if (raw.tracks) {
-      result.tracks = mapLimited(raw.tracks, (t) => this.mapMaTrack(t as any), limits.track ?? limit);
+      result.tracks = mapLimited(raw.tracks, (t) => this.mapMaTrack(t), limits.track ?? limit);
     }
     if (raw.albums) {
-      result.albums = mapLimited(raw.albums, (a) => this.mapMaAlbum(a as any), limits.album ?? limit);
+      result.albums = mapLimited(raw.albums, (a) => this.mapMaAlbum(a), limits.album ?? limit);
     }
     if (raw.artists) {
-      result.artists = mapLimited(raw.artists, (a) => this.mapMaArtist(a as any), limits.artist ?? limit);
+      result.artists = mapLimited(raw.artists, (a) => this.mapMaArtist(a), limits.artist ?? limit);
     }
     if (raw.playlists) {
-      result.playlists = mapLimited(raw.playlists, (p) => this.mapMaPlaylist(p as any), limits.playlist ?? limit);
+      result.playlists = mapLimited(raw.playlists, (p) => this.mapMaPlaylist(p), limits.playlist ?? limit);
     }
 
     return { result, providerId: this.providerId, user: this.accountId };

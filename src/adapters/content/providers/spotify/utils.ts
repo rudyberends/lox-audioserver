@@ -15,11 +15,12 @@ type ClientIdSource =
  */
 export function resolveSpotifyClientId(source?: ClientIdSource): string {
   if (source) {
+    const src = source as { clientId?: string | null; client_id?: string | null };
     const raw =
-      typeof (source as any).clientId === 'string'
-        ? (source as any).clientId
-        : typeof (source as any).client_id === 'string'
-          ? (source as any).client_id
+      typeof src.clientId === 'string'
+        ? src.clientId
+        : typeof src.client_id === 'string'
+          ? src.client_id
           : undefined;
 
     if (raw && raw.trim()) {

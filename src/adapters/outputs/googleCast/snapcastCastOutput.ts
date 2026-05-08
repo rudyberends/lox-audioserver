@@ -273,7 +273,7 @@ export class SnapcastCastOutput implements ZoneOutput {
     this.ports.snapcastCore.clearStream(this.zoneId);
     if (this.currentStream) {
       try {
-        (this.currentStream as any).destroy?.();
+        (this.currentStream as { destroy?: () => void }).destroy?.();
       } catch {
         /* ignore */
       }
@@ -364,15 +364,16 @@ export function createSnapcastCastOutput(
   zone: ZoneConfig,
   ports: OutputPorts,
 ): SnapcastCastOutput | null {
-  const host = typeof (config as any).host === 'string' ? (config as any).host.trim() : '';
+  const cfg = config as Record<string, unknown>;
+  const host = typeof cfg.host === 'string' ? cfg.host.trim() : '';
   if (!host) {
     return null;
   }
-  const name = typeof (config as any).name === 'string' ? (config as any).name : zone.name;
+  const name = typeof cfg.name === 'string' ? cfg.name : zone.name;
   const streamId =
-    typeof (config as any).streamId === 'string' ? (config as any).streamId : undefined;
+    typeof cfg.streamId === 'string' ? cfg.streamId : undefined;
   const clientId =
-    typeof (config as any).clientId === 'string' ? (config as any).clientId : undefined;
+    typeof cfg.clientId === 'string' ? cfg.clientId : undefined;
   const snapcastConfig: SnapcastCastOutputConfig = {
     host,
     name,

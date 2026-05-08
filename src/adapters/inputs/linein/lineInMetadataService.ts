@@ -319,7 +319,7 @@ export class LineInMetadataService {
           });
           throw new Error(`shazam lookup failed (${response.status}): ${text}`);
         }
-        const json = (await response.json()) as any;
+        const json = (await response.json()) as { matches?: unknown[]; track?: any } | null;
         lastMatches = Array.isArray(json?.matches) ? json.matches.length : 0;
         if (!lastMatches) {
           continue;

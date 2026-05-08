@@ -277,9 +277,10 @@ export class SpotifyConnectInputController implements ZoneOutput {
     let body = contextPlay ?? this.buildPlayPayload(target.uri);
 
     // If no context, but we have an explicit queue, send it with an offset.
-    if (!contextPlay && Array.isArray((session.metadata as any)?.queue) && (session.metadata as any).queue.length > 1) {
-      const rawQueue = (session.metadata as any).queue as string[];
-      const queueIndex = Number((session.metadata as any).queueIndex ?? 0) || 0;
+    const metaWithQueue = session.metadata as { queue?: string[]; queueIndex?: number } | undefined;
+    if (!contextPlay && Array.isArray(metaWithQueue?.queue) && metaWithQueue!.queue.length > 1) {
+      const rawQueue = metaWithQueue!.queue;
+      const queueIndex = Number(metaWithQueue?.queueIndex ?? 0) || 0;
       const uris = rawQueue.map((u) => this.normalizeUri(u)).filter(Boolean);
       if (uris.length > 1) {
         body = { uris, offset: { position: Math.min(queueIndex, uris.length - 1) } };
@@ -745,7 +746,7 @@ export class SpotifyConnectInputController implements ZoneOutput {
       auth.token,
       undefined,
       undefined,
-      {} as any,
+      {},
       suppressOutputError,
     );
     if (!snapshot) {

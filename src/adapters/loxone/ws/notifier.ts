@@ -182,7 +182,7 @@ export class LoxoneWsNotifier {
 
     const userId = result.user ?? 'nouser';
     const query = result.query ?? '';
-    const totals = (result as any)?._totals;
+    const totals = (result as { _totals?: Record<string, number> })?._totals;
 
     const payload = {
       globalsearch_result: {

@@ -300,12 +300,13 @@ export async function handleSpotifyLibrespotExport(
 
   // Prefer credentials stored in config, else read from cache dir.
   let credentials: string | null = null;
-  if ((account as any).librespotCredentials) {
+  const librespotCreds = (account as { librespotCredentials?: unknown }).librespotCredentials;
+  if (librespotCreds) {
     try {
       credentials =
-        typeof (account as any).librespotCredentials === 'string'
-          ? (account as any).librespotCredentials
-          : JSON.stringify((account as any).librespotCredentials, null, 2);
+        typeof librespotCreds === 'string'
+          ? librespotCreds
+          : JSON.stringify(librespotCreds, null, 2);
     } catch {
       credentials = null;
     }
@@ -509,8 +510,9 @@ function reinitializeSpotifyInputs(
           acc.email === accountId ||
           acc.spotifyId === accountId,
       );
-      if ((account as any)?.librespotCredentials) {
-        pushLibrespotCredentials(spotifyInputService, accountId, (account as any).librespotCredentials).catch(
+      const accountCreds = (account as { librespotCredentials?: unknown } | undefined)?.librespotCredentials;
+      if (accountCreds) {
+        pushLibrespotCredentials(spotifyInputService, accountId, accountCreds as string | Record<string, unknown>).catch(
           (error) => {
             const message = error instanceof Error ? error.message : String(error);
             log.warn('spotify librespot credential push failed during reinit', {

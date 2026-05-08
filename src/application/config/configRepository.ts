@@ -279,7 +279,7 @@ function normalizeZoneInputs(zone: ZoneConfig): void {
     zone.inputs.airplay = { enabled: true };
   } else if ('model' in zone.inputs.airplay!) {
     // Do not persist model in config
-    delete (zone.inputs.airplay as any).model;
+    delete (zone.inputs.airplay as unknown as Record<string, unknown>).model;
   }
   if (!zone.inputs.spotify) {
     zone.inputs.spotify = {
@@ -287,11 +287,12 @@ function normalizeZoneInputs(zone: ZoneConfig): void {
       offload: false,
     };
   } else {
-    const connectVal = (zone.inputs.spotify as any).connectEnabled ?? (zone.inputs.spotify as any).offload;
+    const sp = zone.inputs.spotify as unknown as Record<string, unknown>;
+    const connectVal = sp.connectEnabled ?? sp.offload;
     zone.inputs.spotify.offload = connectVal === true;
     // Drop legacy native flag if present.
     if ('native' in zone.inputs.spotify!) {
-      delete (zone.inputs.spotify as any).native;
+      delete (zone.inputs.spotify as unknown as Record<string, unknown>).native;
     }
   }
   if (!zone.inputs.musicassistant) {
@@ -313,7 +314,7 @@ function normalizeZoneOutput(zone: ZoneConfig): boolean {
     changed = true;
   }
   if (legacyTransports) {
-    delete (zone as any).transports;
+    delete zone.transports;
     changed = true;
   }
   return changed;
@@ -370,7 +371,7 @@ function normalizeSystem(config: AudioServerConfig): boolean {
     changed = true;
   }
   if ('alertPreDelayMs' in config.system.audioserver) {
-    delete (config.system.audioserver as any).alertPreDelayMs;
+    delete (config.system.audioserver as Record<string, unknown>).alertPreDelayMs;
     changed = true;
   }
   if (config.system.audioserver.authEnabled === undefined) {
@@ -397,7 +398,7 @@ function normalizeInputs(config: AudioServerConfig): void {
     config.inputs.lineIn = { inputs: [] };
   } else {
     if ('source' in config.inputs.lineIn) {
-      delete (config.inputs.lineIn as any).source;
+      delete (config.inputs.lineIn as Record<string, unknown>).source;
     }
     if (!Array.isArray(config.inputs.lineIn.inputs)) {
       config.inputs.lineIn.inputs = [];

@@ -415,7 +415,7 @@ export class DeezerStreamService {
         this.log.warn('deezer gw user data failed', { status: res.status, body: body.slice(0, 200) });
         return null;
       }
-      const data = (await res.json()) as any;
+      const data = (await res.json()) as Record<string, any>;
       if (hasGwError(data?.error)) {
         this.log.warn('deezer gw user data error', { error: data.error });
       }
@@ -459,7 +459,7 @@ export class DeezerStreamService {
         this.log.warn('deezer gw song data failed', { status: res.status, body: body.slice(0, 200) });
         return null;
       }
-      const data = (await res.json()) as any;
+      const data = (await res.json()) as Record<string, any>;
       const results = data?.results ?? null;
       if (hasGwError(data?.error)) {
         this.log.warn('deezer gw song data error', { error: data.error });
@@ -540,7 +540,7 @@ export class DeezerStreamService {
         this.log.warn('deezer gw get_url failed', { status: res.status, body: body.slice(0, 200) });
         return null;
       }
-      const data = (await res.json()) as any;
+      const data = (await res.json()) as Record<string, any>;
       if (hasGwError(data?.data?.[0]?.errors)) {
         this.log.warn('deezer gw get_url error', { error: data.data[0].errors });
       }
@@ -577,7 +577,7 @@ export class DeezerStreamService {
     try {
       const res = await fetch(`${DEEZER_API_BASE}/track/${encodeURIComponent(trackId)}`);
       if (!res.ok) return null;
-      const data = (await res.json()) as any;
+      const data = (await res.json()) as Record<string, any>;
       return data as DeezerSongData;
     } catch {
       return null;
@@ -666,7 +666,7 @@ export class DeezerStreamService {
 }
 
 function extractCookiesFromResponse(response: Response, arl: string): string {
-  const headerAny = response.headers as any;
+  const headerAny = response.headers as Headers & { getSetCookie?: () => string[] };
   const cookieParts: string[] = [];
   const arlValue = arl.trim();
   if (arlValue) {
@@ -885,7 +885,7 @@ function createRetryStream(
             continue;
           }
           fetched = true;
-          const body = Readable.fromWeb(res.body as any);
+          const body = Readable.fromWeb(res.body as unknown as Parameters<typeof Readable.fromWeb>[0]);
           let idleTimer: NodeJS.Timeout | null = null;
           const resetIdleTimer = (): void => {
             if (idleTimer) clearTimeout(idleTimer);

@@ -1333,7 +1333,8 @@ export class MusicAssistantStreamService {
       if (metadata && this.inputHandlers?.updateMetadata) {
         this.inputHandlers.updateMetadata(zoneId, metadata);
       }
-      const mediaId = (evt?.data as any)?.media_id || (evt?.data as any)?.uri || (evt?.data as any)?.url;
+      const evtData = evt?.data as { media_id?: string; uri?: string; url?: string } | undefined;
+      const mediaId = evtData?.media_id || evtData?.uri || evtData?.url;
       if (mediaId) {
         void this.enrichMetadataFromApi(zoneId, mediaId);
       }

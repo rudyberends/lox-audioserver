@@ -17,6 +17,13 @@ type NativeAddon = typeof import('@lox-audioserver/node-librespot') & {
     accessToken: string,
     deviceName?: string,
   ) => Promise<CredentialsResult>;
+  setLogLevel?: (level: string) => void;
+  createSessionWithCredentials?: (
+    credentialsJson: string,
+    deviceName: string | null,
+  ) => Promise<LibrespotSession | null>;
+  startConnectDeviceWithCredentials?: (...args: unknown[]) => Promise<ConnectHandle>;
+  startConnectDeviceWithToken?: (...args: unknown[]) => Promise<ConnectHandle>;
 };
 type NativeStreamHandle = Pick<StreamHandle, 'stop' | 'sampleRate' | 'channels'>;
 
@@ -24,8 +31,8 @@ type NativeStreamHandle = Pick<StreamHandle, 'stop' | 'sampleRate' | 'channels'>
 const addon: NativeAddon = require('@lox-audioserver/node-librespot') as NativeAddon;
 // Default to quieter native logging; only warnings/errors by default.
 try {
-  if (typeof (addon as any).setLogLevel === 'function') {
-    (addon as any).setLogLevel('warn');
+  if (typeof addon.setLogLevel === 'function') {
+    addon.setLogLevel('warn');
   }
 } catch {
   /* ignore */
@@ -66,9 +73,9 @@ async function getSession(
   opts: CreateSessionOpts & { accessToken?: string; clientId?: string; credentialsJson?: string },
 ): Promise<LibrespotSession | null> {
   try {
-    const credentialsJson = (opts as any).credentialsJson;
-    if (credentialsJson && typeof (addon as any).createSessionWithCredentials === 'function') {
-      return await (addon as any).createSessionWithCredentials(credentialsJson, opts.deviceName ?? null);
+    const credentialsJson = opts.credentialsJson;
+    if (credentialsJson && typeof addon.createSessionWithCredentials === 'function') {
+      return await addon.createSessionWithCredentials(credentialsJson, opts.deviceName ?? null);
     }
     // Intentionally omit clientId unless explicitly needed; overriding can break playback.
     const safeOpts: any = { ...opts };
@@ -200,7 +207,7 @@ export async function getNativeLibrespotStream(params: {
     let errorEmitted = false;
     let sessionClosed = false;
     const safeWrite = (chunk: Buffer) => {
-      const state = pass as any;
+      const state = pass as { destroyed?: boolean; writableEnded?: boolean };
       if (ended || state.destroyed || state.writableEnded) {
         return;
       }
@@ -297,7 +304,7 @@ export async function getNativeLibrespotStream(params: {
       sampleRate: handle.sampleRate || audioOutputSettings.sampleRate,
       channels: handle.channels || 2,
       stop,
-    } as any;
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.warn('native librespot stream failed', { uri, message });
@@ -339,8 +346,7 @@ export async function startNativeConnectHost(params: {
   const pass = new PassThrough();
   let ended = false;
   const safeWrite = (chunk: Buffer) => {
-    const state = pass as any;
-    if (ended || state.destroyed || state.writableEnded) {
+    if (ended || pass.destroyed || pass.writableEnded) {
       return;
     }
     pass.write(chunk);
@@ -360,8 +366,8 @@ export async function startNativeConnectHost(params: {
 
     // Prefer direct credentials when available; avoids relying on token->credential exchange.
     const handle: ConnectHandle =
-      hasCredentialsPayload && typeof (addon as any).startConnectDeviceWithCredentials === 'function'
-        ? await (addon as any).startConnectDeviceWithCredentials(
+      hasCredentialsPayload && typeof addon.startConnectDeviceWithCredentials === 'function'
+        ? await addon.startConnectDeviceWithCredentials(
             credentialsPath,
             publishName,
             deviceName,
@@ -369,7 +375,7 @@ export async function startNativeConnectHost(params: {
             onEvt,
             handleNativeLog('connect_host'),
           )
-        : await (addon as any).startConnectDeviceWithToken(
+        : await addon.startConnectDeviceWithToken!(
             accessToken,
             clientId,
             publishName,
@@ -403,7 +409,7 @@ export async function startNativeConnectHost(params: {
       prev: handle.prev,
     };
   } catch (error) {
-    if ((error as any)?.message === 'missing_credentials_payload') {
+    if ((error as Error | undefined)?.message === 'missing_credentials_payload') {
       log.warn('native connect skipped; missing credentials payload', { credentialsPath });
       return null;
     }

@@ -567,13 +567,14 @@ export class GoogleCastOutput implements ZoneOutput {
       artist?: string;
       subtitle?: string;
       album?: string;
+      duration?: number;
     };
-    const durationSec = session.duration || (meta as any).duration || 0;
+    const durationSec = session.duration || meta.duration || 0;
     return JSON.stringify({
       streamUrl,
       title: meta?.title,
-      artist: meta?.artist ?? (meta as any)?.subtitle,
-      album: (meta as any)?.album,
+      artist: meta?.artist ?? meta?.subtitle,
+      album: meta?.album,
       coverUrl,
       durationSec,
     });
@@ -666,7 +667,7 @@ export class GoogleCastOutput implements ZoneOutput {
   }
 
   private resolveBaseUrl(): string {
-    const sys = this.ports.config.getSystemConfig() as any;
+    const sys = this.ports.config.getSystemConfig();
     return buildBaseUrl({
       host: sys?.audioserver?.ip?.trim(),
       fallbackHost: this.pickLocalAddress(),

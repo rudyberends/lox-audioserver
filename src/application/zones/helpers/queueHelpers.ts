@@ -89,8 +89,8 @@ export function createQueueItem(
         : inferAudiotype(normalizedUri);
   const providedTitle = (metadata?.title ?? '').trim();
   const title = providedTitle && !isUriLike(providedTitle) ? providedTitle : zoneName;
-  const metaUser = (metadata as any)?.user as string | undefined;
-  const metaUnique = (metadata as any)?.unique_id as string | undefined;
+  const metaUser = (metadata as { user?: string } | undefined)?.user;
+  const metaUnique = (metadata as { unique_id?: string } | undefined)?.unique_id;
   const normalizedUnique = metaUnique ? normalizeSpotifyAudiopath(metaUnique) : undefined;
   const userFromUri =
     uri.startsWith('spotify@')
@@ -144,8 +144,8 @@ export async function mapFolderItemsToQueue(
     audiotype: audioType,
     coverurl: item.coverurl ?? item.thumbnail ?? '',
     duration: Math.round(
-      (Number((item as any).duration ?? 0) ?? 0) > 0
-        ? Number((item as any).duration ?? 0)
+      (Number(item.duration ?? 0) ?? 0) > 0
+        ? Number(item.duration ?? 0)
         : audioType === 1
           ? 0
           : 120,

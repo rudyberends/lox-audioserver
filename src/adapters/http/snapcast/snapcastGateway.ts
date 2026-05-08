@@ -14,7 +14,7 @@ export class SnapcastGateway {
     head: Buffer,
   ): boolean {
     // Allow snapclient URIs with or without explicit /snapcast path.
-    return this.core.handleUpgrade(request, socket as any, head);
+    return this.core.handleUpgrade(request, socket, head);
   }
 
   public close(): void {

@@ -454,10 +454,11 @@ function handleSqueezeliteDiscovery(res: ServerResponse, deps: TransportsHandler
       const output = zone.output;
       if (!output || typeof output !== 'object') return;
       if (output.id !== 'squeezelite') return;
-      const rawPlayerId = typeof (output as any).playerId === 'string' ? (output as any).playerId : '';
+      const out = output as { playerId?: unknown; latencyMs?: unknown };
+      const rawPlayerId = typeof out.playerId === 'string' ? out.playerId : '';
       const normalized = normalizeSqueezelitePlayerId(rawPlayerId);
       if (!normalized) return;
-      const rawLatency = (output as any).latencyMs;
+      const rawLatency = out.latencyMs;
       const parsedLatency =
         typeof rawLatency === 'number'
           ? rawLatency
