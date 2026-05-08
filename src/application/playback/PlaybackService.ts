@@ -40,6 +40,12 @@ export class PlaybackService {
     return this.engine.stop(...args);
   }
 
+  public restartZoneForEqualizer(
+    ...args: Parameters<EnginePort['restartZoneForEqualizer']>
+  ): ReturnType<EnginePort['restartZoneForEqualizer']> {
+    return this.engine.restartZoneForEqualizer(...args);
+  }
+
   public createStream(
     ...args: Parameters<EnginePort['createStream']>
   ): ReturnType<EnginePort['createStream']> {

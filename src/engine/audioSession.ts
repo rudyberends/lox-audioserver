@@ -106,6 +106,7 @@ export class AudioSession {
   private killTimer?: NodeJS.Timeout;
   private readonly killTimeoutMs = DEFAULT_KILL_TIMEOUT_MS;
   private discardSubscribersOnStop = false;
+  private restartingForEq = false;
   private stdoutPaused = false;
   private backpressureCount = 0;
   private readonly backpressureListeners = new Map<PassThrough, () => void>();
@@ -128,7 +129,7 @@ export class AudioSession {
     private readonly profile: OutputProfile,
     private readonly onTerminated: () => void,
     private readonly outputSettings: AudioOutputSettings,
-    private readonly equalizerBands: ReadonlyArray<number> | null = null,
+    private equalizerBands: ReadonlyArray<number> | null = null,
   ) {
     const candidate = outputSettings.prebufferBytes;
     const hardMax = 1024 * 1024 * 4;
@@ -602,9 +603,15 @@ export class AudioSession {
         earlyExit,
       });
       options.onExit?.();
+      const shouldRestartForEq = this.restartingForEq && !this.ending;
       const shouldRestart =
-        options.restartOnFailure === true && !this.ending && code !== 0;
-      this.cleanup({ suppressTermination: shouldRestart });
+        !shouldRestartForEq && options.restartOnFailure === true && !this.ending && code !== 0;
+      this.cleanup({ suppressTermination: shouldRestart || shouldRestartForEq });
+      if (shouldRestartForEq) {
+        this.restartingForEq = false;
+        setTimeout(() => this.start(), 0);
+        return;
+      }
       if (shouldRestart) {
         this.restartAttempts += 1;
         setTimeout(() => this.start(), Math.min(500, 100 * this.restartAttempts));
@@ -1064,6 +1071,35 @@ export class AudioSession {
     } else {
       this.cleanup();
     }
+  }
+
+  /**
+   * Replace the EQ bands and respawn ffmpeg without tearing down subscribers.
+   *
+   * The standard restart path (PlaybackService.start) does
+   * stop({ discardSubscribers: true }), which destroys the output adapters'
+   * PassThrough streams and stops audible playback until the user re-presses
+   * Play. For an EQ change we want to keep those subscribers attached and
+   * just swap the running ffmpeg process — there's an expected brief audio
+   * hikje, but playback auto-resumes.
+   *
+   * Mechanism mirrors the existing internal restartOnFailure path: SIGTERM
+   * the process, then in the exit handler call cleanup with
+   * suppressTermination=true (preserves subscribers) and call start() again,
+   * which spawns a fresh ffmpeg using the now-updated equalizerBands.
+   */
+  public restartForEqualizer(bands: ReadonlyArray<number> | null): void {
+    this.equalizerBands = bands;
+    if (!this.process) {
+      // No ffmpeg running yet; the next start() will pick up the new bands.
+      return;
+    }
+    if (this.ending || this.restartingForEq) {
+      return;
+    }
+    this.restartingForEq = true;
+    this.process.kill('SIGTERM');
+    this.armKillTimer();
   }
 
   public async waitForFirstChunk(timeoutMs = 2000): Promise<boolean> {

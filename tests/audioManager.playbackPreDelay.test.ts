@@ -47,6 +47,10 @@ class EngineSpy implements EnginePort {
   }
 
   public setSessionTerminationHandler(): void {}
+
+  public restartZoneForEqualizer(): boolean {
+    return false;
+  }
 }
 
 const outputNotifier = {

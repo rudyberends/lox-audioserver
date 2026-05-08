@@ -51,6 +51,7 @@ const noopEnginePort: EnginePort = {
   setSessionTerminationHandler: () => {
     /* noop */
   },
+  restartZoneForEqualizer: () => false,
 };
 
 export const noopAirplayGroupController: AirplayGroupCoordinator = {

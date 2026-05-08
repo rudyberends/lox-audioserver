@@ -27,6 +27,7 @@ const noopEnginePort: EnginePort = {
   setSessionTerminationHandler: () => {
     /* noop */
   },
+  restartZoneForEqualizer: () => false,
 };
 
 export function makePlaybackServiceFake(): PlaybackService {

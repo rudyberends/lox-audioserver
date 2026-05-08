@@ -477,6 +477,7 @@ test('audio manager active local session detection ignores stale no-subscriber s
     hasSession: () => hasEngineSession,
     getSessionStats: () => stats,
     setSessionTerminationHandler: () => {},
+    restartZoneForEqualizer: () => false,
   };
   const { AudioManager } = require('../src/application/playback/audioManager') as typeof import('../src/application/playback/audioManager');
   const manager = new AudioManager(new PlaybackService(engine), {
@@ -536,6 +537,7 @@ test('spotify pipe track change after pause restarts engine instead of continuin
     hasSession: () => hasSession,
     getSessionStats: () => [],
     setSessionTerminationHandler: () => {},
+    restartZoneForEqualizer: () => false,
   };
   const { AudioManager } = require('../src/application/playback/audioManager') as typeof import('../src/application/playback/audioManager');
   const manager = new AudioManager(new PlaybackService(engine), {
@@ -595,6 +597,7 @@ test('spotify explicit serviceplay restarts same pipe when request uri changed b
     hasSession: () => hasSession,
     getSessionStats: () => [],
     setSessionTerminationHandler: () => {},
+    restartZoneForEqualizer: () => false,
   };
   const { AudioManager } = require('../src/application/playback/audioManager') as typeof import('../src/application/playback/audioManager');
   const manager = new AudioManager(new PlaybackService(engine), {

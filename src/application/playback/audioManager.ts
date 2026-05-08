@@ -1202,16 +1202,13 @@ export class AudioManager {
     if (session.state !== 'playing') {
       return;
     }
-    const profiles = session.profiles ?? this.computeProfiles(session.playbackSource, true);
-    const effectiveOutput = this.getEffectiveOutputSettings(zoneId);
-    const startOptions = this.buildEngineStartOptions(
-      zoneId,
-      session.playbackSource,
-      profiles,
-      effectiveOutput,
-    );
-    this.log.info('restarting audio engine to apply equalizer change', { zoneId, profiles });
-    this.playbackService.start(startOptions);
+    // Swap ffmpeg in-place so output subscribers (Squeezelite, Snapcast,
+    // Cast, ...) stay attached. The standard PlaybackService.start path
+    // calls stop({ discardSubscribers: true }) which destroys their
+    // PassThrough streams and forces the user to press Play again.
+    const bands = this.zoneEqualizerResolver?.(zoneId) ?? null;
+    this.log.info('restarting audio engine to apply equalizer change', { zoneId });
+    this.playbackService.restartZoneForEqualizer(zoneId, bands);
   }
 
   public setTransientGainDb(zoneId: number, gainDb: number | null): void {

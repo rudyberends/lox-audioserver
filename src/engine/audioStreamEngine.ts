@@ -203,6 +203,26 @@ export class AudioStreamEngine {
     this.log.info('audio session stopped', { zoneId });
   }
 
+  /**
+   * Swap EQ bands and respawn ffmpeg without dropping output subscribers.
+   * Returns true if at least one running session was restarted.
+   */
+  public restartZoneForEqualizer(
+    zoneId: number,
+    bands: ReadonlyArray<number> | null,
+  ): boolean {
+    const existing = this.sessions.get(zoneId);
+    if (!existing || existing.size === 0) {
+      return false;
+    }
+    existing.forEach((session) => session.restartForEqualizer(bands));
+    this.log.info('audio session restarting for equalizer change', {
+      zoneId,
+      profiles: Array.from(existing.keys()),
+    });
+    return true;
+  }
+
   public createStream(
     zoneId: number,
     profile: OutputProfile = 'mp3',

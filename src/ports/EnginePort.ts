@@ -61,6 +61,7 @@ export interface EnginePort {
     options?: EngineHandoffOptions,
   ): void;
   stop(zoneId: number, reason?: string, options?: EngineStopOptions): void;
+  restartZoneForEqualizer(zoneId: number, bands: ReadonlyArray<number> | null): boolean;
   createStream(zoneId: number, profile?: OutputProfile, options?: EngineStreamOptions): PassThrough | null;
   createLocalSession(
     zoneId: number,

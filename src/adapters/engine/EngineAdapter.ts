@@ -81,6 +81,12 @@ export class EngineAdapter implements EnginePort {
     this.engine.stop(...args);
   }
 
+  public restartZoneForEqualizer(
+    ...args: Parameters<EnginePort['restartZoneForEqualizer']>
+  ): boolean {
+    return this.engine.restartZoneForEqualizer(...args);
+  }
+
   public createStream(...args: Parameters<EnginePort['createStream']>): ReturnType<EnginePort['createStream']> {
     return this.engine.createStream(...args);
   }
