@@ -7,6 +7,7 @@ import {
   AdminApiHandler,
   buildSqueezeliteAdminPlayerSnapshot,
 } from '../src/adapters/http/adminApi/adminApiHandler';
+import { readMiniserverBaseUrlFromConfig } from '../src/adapters/http/adminApi/auth/miniserverAuthClient';
 import type { ZoneManagerFacade } from '../src/application/zones/createZoneManager';
 import type { ConfigPort } from '../src/ports/ConfigPort';
 import type { ContentPort } from '../src/ports/ContentPort';
@@ -275,7 +276,8 @@ test('readMiniserverBaseUrlFromConfig returns http url with non-default port', a
       miniserver: { ip: '192.168.1.200', port: 8081, protocol: 'http' },
     },
   };
-  const baseUrl = (handler as any).readMiniserverBaseUrlFromConfig(cfg);
+  void handler;
+  const baseUrl = readMiniserverBaseUrlFromConfig(cfg as any);
   assert.equal(baseUrl, 'http://192.168.1.200:8081');
 });
 
@@ -286,7 +288,8 @@ test('readMiniserverBaseUrlFromConfig omits default http port', async () => {
       miniserver: { ip: '192.168.1.200', port: 80, protocol: 'http' },
     },
   };
-  const baseUrl = (handler as any).readMiniserverBaseUrlFromConfig(cfg);
+  void handler;
+  const baseUrl = readMiniserverBaseUrlFromConfig(cfg as any);
   assert.equal(baseUrl, 'http://192.168.1.200');
 });
 
@@ -297,7 +300,8 @@ test('readMiniserverBaseUrlFromConfig omits default https port 443', async () =>
       miniserver: { ip: '192.168.1.200', port: 443, protocol: 'https' },
     },
   };
-  const baseUrl = (handler as any).readMiniserverBaseUrlFromConfig(cfg);
+  void handler;
+  const baseUrl = readMiniserverBaseUrlFromConfig(cfg as any);
   assert.equal(baseUrl, 'https://192.168.1.200');
 });
 
@@ -308,6 +312,7 @@ test('readMiniserverBaseUrlFromConfig keeps https with custom port', async () =>
       miniserver: { ip: '192.168.1.200', port: 8443, protocol: 'https' },
     },
   };
-  const baseUrl = (handler as any).readMiniserverBaseUrlFromConfig(cfg);
+  void handler;
+  const baseUrl = readMiniserverBaseUrlFromConfig(cfg as any);
   assert.equal(baseUrl, 'https://192.168.1.200:8443');
 });
