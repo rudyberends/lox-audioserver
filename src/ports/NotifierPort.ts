@@ -1,4 +1,4 @@
-import type { AudioSyncGroupPayload } from '@/application/groups/types/AudioSyncGroupPayload';
+import type { AudioSyncGroupPayload } from '@/ports/types/groups';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 
 export interface NotifierPort {

@@ -3,7 +3,7 @@ import { bestEffort, bestEffortSync } from '@/shared/bestEffort';
 import type { ZoneConfig, GlobalAirplayConfig } from '@/domain/config/types';
 import type { AirplayController } from '@/ports/InputsPort';
 import { AirplayInstance } from '@/adapters/inputs/airplay/airplayInstance';
-import type { ZonePlayer } from '@/application/playback/zonePlayer';
+import type { ZonePlayer } from '@/ports/types/zonePlayer';
 
 type SpotifySessionStopper = (zoneId: number, reason?: string) => void;
 

@@ -1,5 +1,1 @@
-export interface AudioSyncEventPlayer {
-  id: string;
-  playerid: number;
-  name: string;
-}
+export type { AudioSyncEventPlayer } from '@/ports/types/groups';

@@ -18,6 +18,12 @@ module.exports = {
       from: { path: '^src/application' },
       to: { path: '^src/(adapters|runtime)' },
     },
+    {
+      name: 'ports-no-application',
+      severity: 'error',
+      from: { path: '^src/ports' },
+      to: { path: '^src/application' },
+    },
   ],
   options: {
     doNotFollow: { path: 'node_modules' },

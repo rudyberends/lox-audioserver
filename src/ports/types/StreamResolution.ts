@@ -1,4 +1,4 @@
-import type { PlaybackMetadata } from '@/application/playback/audioManager';
+import type { PlaybackMetadata } from '@/ports/types/playback';
 import type { PlaybackSource } from '@/ports/EngineTypes';
 
 export type PlaybackSourceResolveArgs = {

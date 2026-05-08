@@ -1,4 +1,4 @@
-import type { PlaybackSession } from '@/application/playback/audioManager';
+import type { PlaybackSession } from '@/ports/types/playback';
 import type { PcmBitDepth, HttpProfile } from '@/ports/types/audioFormat';
 
 export type PreferredOutput = {

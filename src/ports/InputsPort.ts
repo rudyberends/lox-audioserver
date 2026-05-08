@@ -1,7 +1,7 @@
 import type { PlaybackSource } from '@/ports/EngineTypes';
-import type { PlaybackMetadata, CoverArtPayload } from '@/application/playback/audioManager';
+import type { PlaybackMetadata, CoverArtPayload } from '@/ports/types/playback';
 import type { ZoneConfig, GlobalAirplayConfig, GlobalSpotifyConfig } from '@/domain/config/types';
-import type { ZonePlayer } from '@/application/playback/zonePlayer';
+import type { ZonePlayer } from '@/ports/types/zonePlayer';
 
 export type InputStreamOptions = {
   flow?: boolean;
