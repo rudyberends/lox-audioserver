@@ -157,9 +157,13 @@ function handlePlayResume(
         }
       })();
     }
-  } else {
-    coordinator.dispatchOutputs(ctx, ctx.outputs, 'resume', session ?? ctx.player.getSession());
+    // Don't synchronously set mode='play' here: onPlayerStarted relies on
+    // ctx.state.mode === 'stop' to detect a fresh start and apply the
+    // configured default volume. The 'started' event from startQueuePlayback
+    // runs buildStartedPatch which sets mode='play' itself.
+    return;
   }
+  coordinator.dispatchOutputs(ctx, ctx.outputs, 'resume', session ?? ctx.player.getSession());
   coordinator.applyPatch(zoneId, { mode: 'play', clientState: 'on', power: 'on' });
 }
 
