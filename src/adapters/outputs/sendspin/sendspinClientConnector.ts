@@ -572,15 +572,6 @@ export class SendspinClientConnector {
     return values.some((val) => val === id || val.startsWith(id) || id.startsWith(val));
   }
 
-  private resolveReasonForService(service: MdnsServiceRecord): 'discovery' | 'playback' {
-    for (const id of this.desiredClientIds) {
-      if (this.serviceMatches(service, id) && this.desiredReasons.get(id) === 'playback') {
-        return 'playback';
-      }
-    }
-    return 'discovery';
-  }
-
   private serviceKey(service: MdnsServiceRecord): string {
     return `${service.name || service.host || 'unknown'}:${service.port}`;
   }

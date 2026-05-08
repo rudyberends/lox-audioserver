@@ -15,7 +15,6 @@ import { Readable } from 'node:stream';
 
 const APPLE_MUSIC_API_BASE = 'https://amp-api.music.apple.com/v1';
 const WEBPLAYBACK_URL = 'https://play.music.apple.com/WebObjects/MZPlay.woa/wa/webPlayback';
-const WVN_LICENSE_URL = 'https://play.music.apple.com/WebObjects/MZPlay.woa/wa/acquireWebPlaybackLicense';
 
 const BEARER_TOKEN_TTL_MS = 30 * 60 * 1000;
 
@@ -36,11 +35,6 @@ type BearerState = {
   token?: string;
   fetchedAt: number;
   inFlight?: Promise<string | null>;
-};
-
-type StorefrontState = {
-  value: string;
-  inFlight?: Promise<string>;
 };
 
 type AppleMusicProxySession = {
@@ -102,7 +96,6 @@ export class AppleMusicStreamService {
   private readonly bridgesByProvider = new Map<string, SpotifyBridgeConfig>();
   private readonly bridgesById = new Map<string, SpotifyBridgeConfig>();
   private readonly bearerTokens = new Map<string, BearerState>();
-  private readonly storefronts = new Map<string, StorefrontState>();
   private readonly proxySessions = new Map<string, AppleMusicProxySession>();
   private readonly drmKeyCache = new Map<string, AppleMusicDrmKeyCacheEntry>();
   private proxyServer?: ReturnType<typeof createServer>;
@@ -847,13 +840,6 @@ export class AppleMusicStreamService {
     return this.findPsshKeyUri(playlist);
   }
 
-  private extractLibraryAssetUrl(webPlayback: any): string | null {
-    const assets = webPlayback?.assets;
-    if (!Array.isArray(assets)) return null;
-    const url = assets?.[0]?.URL;
-    return typeof url === 'string' && url.length > 0 ? url : null;
-  }
-
   private buildStreamHeaders(headers: Record<string, string>): Record<string, string> | undefined {
     const allowlist = new Set([
       'authorization',
@@ -994,7 +980,7 @@ export class AppleMusicStreamService {
   private async logInputDetails(
     kind: 'direct' | 'proxy',
     streamUrl: string,
-    headers: Record<string, string> | undefined,
+    _headers: Record<string, string> | undefined,
     inputFormat?: string,
     sessionId?: string,
   ): Promise<void> {
@@ -1004,25 +990,6 @@ export class AppleMusicStreamService {
       inputFormat,
       sessionId,
     });
-  }
-
-  private async fetchStreamInfo(
-    streamUrl: string,
-    headers: Record<string, string> | undefined,
-  ): Promise<{ contentType?: string; contentLength?: string } | null> {
-    try {
-      const response = await fetch(streamUrl, {
-        method: 'HEAD',
-        headers,
-      });
-      if (!response.ok) return null;
-      return {
-        contentType: response.headers.get('content-type') ?? undefined,
-        contentLength: response.headers.get('content-length') ?? undefined,
-      };
-    } catch {
-      return null;
-    }
   }
 
   private async ensureProxySession(
@@ -1618,31 +1585,4 @@ export class AppleMusicStreamService {
     return state.inFlight;
   }
 
-  private async ensureStorefront(headers: Record<string, string>, bridge: SpotifyBridgeConfig): Promise<string> {
-    const key = bridge.id;
-    const cached = this.storefronts.get(key);
-    if (cached?.value) return cached.value;
-    if (cached?.inFlight) return cached.inFlight;
-
-    const fallback = 'us';
-    const state: StorefrontState = cached ?? { value: fallback };
-
-    state.inFlight = (async () => {
-      if (!bridge.userToken) {
-        state.value = fallback;
-        return fallback;
-      }
-      const account = await this.fetchJson<any>(`${APPLE_MUSIC_API_BASE}/me/account?meta=subscription`, headers);
-      const storefront = account?.meta?.subscription?.storefront;
-      state.value = storefront ? String(storefront).toLowerCase() : fallback;
-      return state.value;
-    })();
-
-    this.storefronts.set(key, state);
-    try {
-      return await state.inFlight;
-    } finally {
-      state.inFlight = undefined;
-    }
-  }
 }

@@ -4,7 +4,7 @@ import { safeReadText } from '@/shared/bestEffort';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { HttpPreferences, PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
-import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
+import { isHttpUrl } from '@/shared/coverArt';
 import { buildBaseUrl, normalizeStreamUrl, resolveAbsoluteUrl } from '@/shared/streamUrl';
 import { resolveDlnaEndpoints } from '@/adapters/outputs/dlna/dlnaDiscovery';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
@@ -452,43 +452,6 @@ export class DlnaOutput implements ZoneOutput {
 </s:Envelope>`;
   }
 
-  private buildDidlMetadata(uri: string, session: PlaybackSession): string {
-    const cover = this.resolveCoverArt(session);
-    const title = session.metadata?.title || this.zoneName;
-    const album = session.metadata?.album || '';
-    const artist = session.metadata?.artist || '';
-    const duration = this.formatDlnaDuration(session.duration);
-    const isStream = !duration;
-    const protocolInfo = this.buildProtocolInfo(uri, isStream);
-    const mediaClass = isStream
-      ? 'object.item.audioItem.audioBroadcast'
-      : 'object.item.audioItem.musicTrack';
-    const durationAttr = duration ? ` duration="${duration}"` : '';
-    return `<?xml version="1.0"?>
-<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"
-           xmlns:dc="http://purl.org/dc/elements/1.1/"
-           xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">
-  <item id="0" parentID="0" restricted="1">
-    <dc:title>${escapeXmlMetadata(title)}</dc:title>
-    <dc:creator>${escapeXmlMetadata(artist)}</dc:creator>
-    <upnp:artist>${escapeXmlMetadata(artist)}</upnp:artist>
-    <upnp:album>${escapeXmlMetadata(album)}</upnp:album>
-    <upnp:albumArtURI>${escapeXmlMetadata(cover)}</upnp:albumArtURI>
-    <upnp:class>${mediaClass}</upnp:class>
-    <res${durationAttr} protocolInfo="${protocolInfo}">${escapeXmlMetadata(uri)}</res>
-  </item>
-</DIDL-Lite>`;
-  }
-
-  private resolveCoverArt(session: PlaybackSession): string {
-    const coverSource = resolveSessionCover(session);
-    if (!coverSource) {
-      return '';
-    }
-    const proxied = resolveAbsoluteUrl(this.buildBaseUrl(), session.stream.coverUrl);
-    return proxied ?? coverSource;
-  }
-
   private resolveStreamUri(session: PlaybackSession): string | null {
     const streamUrl = session.stream.url;
     if (streamUrl) {
@@ -504,7 +467,7 @@ export class DlnaOutput implements ZoneOutput {
     return null;
   }
 
-  private normalizeDlnaStreamUri(uri: string, session: PlaybackSession): string {
+  private normalizeDlnaStreamUri(uri: string, _session: PlaybackSession): string {
     return normalizeStreamUrl(uri, this.buildBaseUrl(), ['mp3']);
   }
 
@@ -514,46 +477,6 @@ export class DlnaOutput implements ZoneOutput {
       host: sys.audioserver.ip?.trim(),
       fallbackHost: '127.0.0.1',
     });
-  }
-
-  private buildProtocolInfo(uri: string, isStream: boolean): string {
-    const mime = this.resolveMimeType(uri);
-    const flags = isStream
-      ? 'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000'
-      : 'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01500000000000000000000000000000';
-    return `http-get:*:${mime}:${flags}`;
-  }
-
-  private resolveMimeType(uri: string): string {
-    const ext = uri.split('?')[0]?.split('.').pop()?.toLowerCase();
-    switch (ext) {
-      case 'wav':
-        return 'audio/wav';
-      case 'flac':
-        return 'audio/flac';
-      case 'aac':
-        return 'audio/aac';
-      case 'm4a':
-      case 'mp4':
-        return 'audio/mp4';
-      case 'mp3':
-      case 'mpeg':
-      default:
-        return 'audio/mpeg';
-    }
-  }
-
-  private formatDlnaDuration(durationSeconds: number): string {
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-      return '';
-    }
-    const total = Math.floor(durationSeconds);
-    const hours = Math.floor(total / 3600);
-    const minutes = Math.floor((total % 3600) / 60);
-    const seconds = total % 60;
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(
-      seconds,
-    ).padStart(2, '0')}`;
   }
 
   private deriveRenderingUrl(avTransportUrl: string): string | undefined {
@@ -605,23 +528,3 @@ function escapeXml(value: string): string {
     .replace(/'/g, '&apos;');
 }
 
-function escapeXmlInner(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function escapeXmlMetadata(value: string): string {
-  const escaped = escapeXmlInner(value);
-  let result = '';
-  for (const char of escaped) {
-    const code = char.codePointAt(0);
-    if (code && code > 127) {
-      result += `&#${code};`;
-    } else {
-      result += char;
-    }
-  }
-  return result;
-}

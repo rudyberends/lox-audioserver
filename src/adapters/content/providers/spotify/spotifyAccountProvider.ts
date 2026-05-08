@@ -81,7 +81,6 @@ export class SpotifyAccountProvider {
   private readonly log: ComponentLogger;
   private readonly persistAccountState: PersistAccountCallback;
   private readonly clientId: string;
-  private readonly persistLibrespotCredentials?: CredentialLoginCallback;
 
   private account: SpotifyAccountState;
   private accessToken?: string;
@@ -93,7 +92,6 @@ export class SpotifyAccountProvider {
     this.providerId = options.providerId;
     this.account = { ...options.account };
     this.persistAccountState = options.persistAccount;
-    this.persistLibrespotCredentials = options.persistLibrespotCredentials;
     this.clientId = resolveSpotifyClientId({ clientId: this.account.clientId ?? options.clientId });
     this.log = createLogger('Content', `Spotify:${this.account.id}`);
   }
@@ -476,22 +474,6 @@ export class SpotifyAccountProvider {
       return Boolean(playlistId);
     });
     return { items: visible.map((pl) => this.mapPlaylist(pl)), total: data?.total ?? visible.length };
-  }
-
-  private isOwnedPlaylist(playlist: any): boolean {
-    const ownerId = typeof playlist?.owner?.id === 'string' ? playlist.owner.id.trim().toLowerCase() : '';
-    if (!ownerId) return false;
-    const accountIds = new Set<string>();
-    const add = (value: unknown): void => {
-      if (typeof value !== 'string') return;
-      const cleaned = value.trim().toLowerCase();
-      if (!cleaned) return;
-      accountIds.add(cleaned);
-    };
-    add(this.account.spotifyId);
-    add(this.account.user);
-    add(this.account.id);
-    return accountIds.has(ownerId);
   }
 
   private async fetchPlaylistTracks(

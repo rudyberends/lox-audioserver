@@ -2,7 +2,6 @@ import { createLogger } from '@/shared/logging/logger';
 import {
   PlaybackStateType,
   sendspinCore,
-  serverNowUs,
   type PlayerFormat,
 } from '@lox-audioserver/node-sendspin';
 import type { SendspinSession } from '@lox-audioserver/node-sendspin';
@@ -55,7 +54,7 @@ class SendspinGroupController {
   private zoneManager: ZoneManagerFacade | null = null;
 
   constructor() {
-    onGroupChanged((event, leader, record) => {
+    onGroupChanged((event, _leader, record) => {
       if (event === 'remove' && record) {
         this.handleGroupRemoved(record);
         return;

@@ -50,7 +50,6 @@ export class SendspinCastOutput implements ZoneOutput {
   private namespaceController: JsonNamespaceController | null = null;
   private connected = false;
   private castMessageHandler: ((message: Record<string, unknown>) => void) | null = null;
-  private lastKnownVolume = 50;
   private lastCastVolumeLogged: number | null = null;
   private lastCastMuteLogged: boolean | null = null;
   private lastCastLogMs = 0;
@@ -276,7 +275,6 @@ export class SendspinCastOutput implements ZoneOutput {
           : Math.round(Math.min(100, Math.max(0, status.volume)))
         : null;
     if (vol !== null) {
-      this.lastKnownVolume = vol;
       const changed = this.lastCastVolumeLogged === null || vol !== this.lastCastVolumeLogged;
       if (shouldLog(changed)) {
         this.lastCastVolumeLogged = vol;

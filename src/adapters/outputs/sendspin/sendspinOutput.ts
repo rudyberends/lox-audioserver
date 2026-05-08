@@ -89,7 +89,6 @@ export class SendspinOutput implements ZoneOutput {
   private readonly unwatchClient: (() => void) | null;
   private readonly unwatchResolvedClient: (() => void) | null;
   private currentStream: NodeJS.ReadableStream | null = null;
-  private progressTimer: NodeJS.Timeout | null = null;
   private currentCoverUrl: string | null = null;
   private lastProgressPayload: SendspinMetadataProgress | null = null;
   private playbackState: 'playing' | 'paused' | 'stopped' = 'stopped';
@@ -107,10 +106,8 @@ export class SendspinOutput implements ZoneOutput {
   private restartTimer: NodeJS.Timeout | null = null;
   private bufferedChunks: Array<{ data: Buffer; timestampUs: number }> = [];
   private bufferedBytes = 0;
-  private sentInitialBuffer = false;
   /** Rolling buffer size to retain for late join / smoothing (bytes). */
   private maxBufferedBytes = audioOutputSettings.prebufferBytes;
-  private lastLeadUs: number | null = null;
   /** Anchor for the Sendspin playback timeline (play_start_time_us). */
   private playStartUs: number | null = null;
   /** When the first chunk was observed (server clock). */
@@ -748,7 +745,6 @@ export class SendspinOutput implements ZoneOutput {
       this.lastChunkWallUs = null;
       this.bufferedChunks = [];
       this.bufferedBytes = 0;
-      this.sentInitialBuffer = true; // streaming live; timestamps provide the lead buffer
       this.activeCodecHeader = null;
 
       let chunkCount = 0;
@@ -818,7 +814,6 @@ export class SendspinOutput implements ZoneOutput {
             ? Math.floor((4096 * 1_000_000) / sampleRate)
             : 0;
       const overbufferMarginUs = 100_000; // keep lead tight around target
-      let streamingStarted = true;
       const prepareBufferMarginUs = Math.max(500_000, Math.min(2_500_000, this.targetLeadUs));
       const sendTransmissionMarginUs = 100_000; // align with MA send margin (network + client processing)
       const targetBufferUs = this.targetLeadUs;
@@ -954,7 +949,6 @@ export class SendspinOutput implements ZoneOutput {
         lastSendWallUs = serverNowUs();
         const targetLeadUs = this.targetLeadUs;
         const lead = frameTsUs - serverNowUs();
-        this.lastLeadUs = lead;
         if (canSendToClient) {
           sendspinCore.setLeadStats(this.activeClientId(), {
             leadUs: lead,
@@ -1254,7 +1248,6 @@ export class SendspinOutput implements ZoneOutput {
     }
     this.bufferedChunks = [];
     this.bufferedBytes = 0;
-    this.sentInitialBuffer = false;
     this.maxBufferedBytes = audioOutputSettings.prebufferBytes;
     this.activeOutputFormat = null;
     this.activeCodecHeader = null;
@@ -1286,14 +1279,6 @@ export class SendspinOutput implements ZoneOutput {
       sendspinCore.sendStreamClear(this.activeClientId(), [STREAM_PLAYER_ROLE]);
       this.ports.sendspinGroup.notifyStreamEnd(this.zoneId);
       this.lastStreamSignature = null;
-    }
-  }
-
-  private async restartStreamFresh(): Promise<void> {
-    this.teardown({ preserveAnchor: true });
-    const session = this.ports.audioManager.getSession(this.zoneId);
-    if (session?.playbackSource && this.playbackState === 'playing') {
-      await this.startStream({ preserveAnchor: true });
     }
   }
 

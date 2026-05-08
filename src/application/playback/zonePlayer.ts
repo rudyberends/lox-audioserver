@@ -6,7 +6,7 @@ import {
   type PlaybackSession,
   type PlaybackSource,
 } from '@/application/playback/audioManager';
-import type { PlayerEvent, PlayerEventMap, PlayerMode, PlayerState } from '@/application/playback/types';
+import type { PlayerEvent, PlayerEventMap, PlayerState } from '@/application/playback/types';
 
 type Listener<T> = (payload: T) => void;
 
@@ -24,8 +24,8 @@ export class ZonePlayer {
   constructor(
     private readonly audioManager: AudioManager,
     private readonly zoneId: number,
-    private readonly zoneName: string,
-    private readonly sourceMac: string,
+    _zoneName: string,
+    _sourceMac: string,
     private readonly requiresPcm: boolean,
   ) {}
 

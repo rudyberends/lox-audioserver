@@ -54,7 +54,7 @@ export class HttpService {
 
   constructor(
     private readonly config: HttpServerConfig,
-    private readonly options: {
+    options: {
       onReinitialize?: () => Promise<boolean>;
       notifier: NotifierPort;
       loxoneNotifier: LoxoneWsNotifier;

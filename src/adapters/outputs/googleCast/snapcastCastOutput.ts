@@ -145,7 +145,7 @@ export class SnapcastCastOutput implements ZoneOutput {
   }
 
   private refreshGrouping(): void {
-    const plan = this.recomputePlan();
+    this.recomputePlan();
     if (this.baseClientId) {
       this.ports.snapcastCore.setClientStream(this.baseClientId, this.effectiveStreamId);
     }

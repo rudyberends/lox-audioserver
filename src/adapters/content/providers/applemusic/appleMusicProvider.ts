@@ -666,22 +666,6 @@ export class AppleMusicProvider {
     return '';
   }
 
-  private extractCatalogArtistId(attrs: any): string {
-    const url = typeof attrs?.url === 'string' ? attrs.url : '';
-    const match = url.match(/\/artist\/[^/]+\/(\d+)/i);
-    if (match) {
-      return match[1];
-    }
-    return '';
-  }
-
-  private extractCatalogIdFromPlayParams(playParams: any): string {
-    if (playParams && typeof playParams.catalogId === 'string') {
-      return playParams.catalogId;
-    }
-    return '';
-  }
-
   /* ------------------------------------------------------------------------ */
   /* Apple Music fetch helpers                                                */
   /* ------------------------------------------------------------------------ */

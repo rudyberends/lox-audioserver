@@ -13,7 +13,6 @@ import type {
   ZoneTransportConfig,
   ZoneStateConfig,
 } from '@/domain/config/types';
-import { sendspinCore } from '@lox-audioserver/node-sendspin';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
 import type { ContentManager } from '@/adapters/content/contentManager';

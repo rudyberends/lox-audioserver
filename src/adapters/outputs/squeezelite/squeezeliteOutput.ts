@@ -515,18 +515,6 @@ export class SqueezeliteOutput implements ZoneOutput {
     });
   }
 
-  private scheduleAutostartFallback(player: SlimClient): void {
-    if (this.autostartTimer) {
-      clearTimeout(this.autostartTimer);
-      this.autostartTimer = undefined;
-    }
-    this.autostartTimer = setTimeout(() => {
-      this.autostartTimer = undefined;
-      this.triggerAutostart(player, 'timeout');
-    }, 1500);
-    this.autostartTimer.unref?.();
-  }
-
   private clearPendingAutostart(): void {
     this.pendingAutostart = false;
     if (this.autostartTimer) {

@@ -37,7 +37,7 @@ export class ContentAdapter implements ContentPort {
   public async resolvePlaybackSource(
     args: PlaybackSourceResolveArgs,
   ): Promise<StreamResolution> {
-    const { audiopath, zoneId, zoneName } = args;
+    const { audiopath, zoneId } = args;
     const cacheKey = `${zoneId}:${audiopath}`;
     const now = Date.now();
     const cached = this.resolveCache.get(cacheKey);

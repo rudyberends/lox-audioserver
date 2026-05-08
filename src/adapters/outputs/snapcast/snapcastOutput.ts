@@ -49,7 +49,7 @@ export class SnapcastOutput implements ZoneOutput {
 
   constructor(
     private readonly zoneId: number,
-    private readonly zoneName: string,
+    _zoneName: string,
     config: SnapcastOutputConfig,
     private readonly ports: OutputPorts,
   ) {

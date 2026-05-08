@@ -1,7 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
 import { PassThrough } from 'node:stream';
-import os from 'node:os';
 import ffmpegStatic from 'ffmpeg-static';
 import { createLogger } from '@/shared/logging/logger';
 import {
@@ -98,7 +97,6 @@ export class AudioSession {
   private readonly keepInitialBuffer: boolean;
   private readonly isAlertSource: boolean;
   private debugTapStream?: fs.WriteStream;
-  private readonly debugTapEnabled: boolean;
   private pipeSourceStream?: NodeJS.ReadableStream;
   private pipeSourceDataListener?: (chunk: Buffer) => void;
   private pipeSourceErrorListener?: (err: any) => void;
@@ -137,11 +135,6 @@ export class AudioSession {
     this.sourcePadTailSec =
       this.source.kind === 'file' && !this.source.loop ? this.source.padTailSec : undefined;
     this.sourcePreDelayMs = typeof this.source.preDelayMs === 'number' ? this.source.preDelayMs : undefined;
-    this.debugTapEnabled =
-      this.profile === 'pcm' &&
-      this.source.kind === 'file' &&
-      typeof this.source.path === 'string' &&
-      this.source.path.includes('/alerts/');
     // Fixed lead to reduce startup latency across outputs.
     this.targetLeadMs = 1000;
     const alertPrebufferMs = 6000;

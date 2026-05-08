@@ -1468,11 +1468,6 @@ function resolveAlbumArtist(
   return trackArtist;
 }
 
-function sanitizeFilename(name: string): string {
-  const base = path.basename(name);
-  return base.replace(/[^A-Za-z0-9._-]/g, '_');
-}
-
 function sanitizeRelativePath(value: string): string {
   const normalized = value.replace(/\\/g, '/').replace(/^\/+/, '');
   const parts = normalized

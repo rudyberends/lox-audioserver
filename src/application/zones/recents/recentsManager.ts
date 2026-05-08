@@ -234,7 +234,7 @@ export class RecentsManager {
 
   public resolveService(
     audiopath: string,
-    user?: string,
+    _user?: string,
   ): { service: string; serviceType: number; type: number } {
     const lower = (audiopath || '').toLowerCase();
     if (lower.includes('musicassistant')) {

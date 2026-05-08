@@ -27,9 +27,7 @@ import type { OutputsPort } from '@/ports/OutputsPort';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import type { InputsPort } from '@/ports/InputsPort';
 import type {
-  AlertSnapshot,
   QueueItem,
-  QueueAuthority,
   QueueState,
   ZoneContext,
 } from '@/application/zones/internal/zoneTypes';

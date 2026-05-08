@@ -291,12 +291,6 @@ class AirplayGroupController {
     return this.baseStartOffsetMs + this.perClientOffsetMs * memberCount;
   }
 
-  private getElapsedSeconds(leaderZoneId: number): number {
-    const startMs = this.leaderStartMs.get(leaderZoneId);
-    if (!startMs) return 0;
-    return Math.max(0, (Date.now() - startMs) / 1000);
-  }
-
   private getLeaderSeconds(leaderZoneId: number): number {
     const session = this.audioManager.getSession(leaderZoneId);
     if (session && Number.isFinite(session.elapsed) && session.elapsed > 0) {

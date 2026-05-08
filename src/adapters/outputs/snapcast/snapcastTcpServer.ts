@@ -7,7 +7,6 @@ const DEFAULT_TCP_PORT = 1704;
 export class SnapcastTcpServer {
   private readonly log = createLogger('Http', 'SnapcastTcp');
   private server?: net.Server;
-  private host: string | null = null;
   private port: number | null = null;
 
   constructor(private readonly core: SnapcastCore) {}
@@ -23,7 +22,6 @@ export class SnapcastTcpServer {
       this.server!
         .listen(port, host, () => {
           this.log.info('snapcast tcp listening', { host, port });
-          this.host = host;
           this.port = port;
           resolve();
         })
@@ -37,7 +35,6 @@ export class SnapcastTcpServer {
     }
     const server = this.server;
     this.server = undefined;
-    this.host = null;
     this.port = null;
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

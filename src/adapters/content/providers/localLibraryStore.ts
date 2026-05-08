@@ -71,7 +71,6 @@ export class LocalLibraryStore {
   private readonly dbPath: string;
 
   // Schema versions for `PRAGMA user_version`.
-  private static readonly SCHEMA_V1 = 1; // base tracks table + indexes
   private static readonly SCHEMA_V2 = 2; // adds FTS5 search table + triggers
   private static readonly SCHEMA_V3 = 3; // adds album artist for album grouping
 

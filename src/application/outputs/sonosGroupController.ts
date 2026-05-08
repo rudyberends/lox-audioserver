@@ -25,7 +25,7 @@ class SonosGroupController {
   private readonly lastMembersByLeader = new Map<number, Set<number>>();
 
   constructor() {
-    onGroupChanged((event, leader, record) => {
+    onGroupChanged((event, _leader, record) => {
       if (event === 'remove' && record) {
         void this.handleGroupRemoved(record);
         return;

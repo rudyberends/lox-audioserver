@@ -1,4 +1,4 @@
-import { EventType, SonosClient, type SonosGroup, type SonosPlayer } from '@lox-audioserver/node-sonos';
+import { EventType, SonosClient, type SonosGroup } from '@lox-audioserver/node-sonos';
 import type { ZoneConfig } from '@/domain/config/types';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import { AudioType } from '@/domain/loxone/enums';

@@ -9,7 +9,7 @@ export class NetworkService {
   private started = false;
 
   constructor(
-    private readonly options: {
+    options: {
       lineInRegistry: LineInIngestRegistry;
       snapcastCore: SnapcastCore;
     },

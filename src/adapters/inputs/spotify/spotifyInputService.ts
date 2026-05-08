@@ -42,17 +42,12 @@ class SpotifyConnectInstance {
   private readonly log = createLogger('Input', `Spotify][${this.zoneName}`);
   private readonly cacheDir: string;
   public accountId: string | undefined;
-  private readonly configPort: ConfigPort;
   private readonly spotifyManagers: SpotifyServiceManagerProvider;
   private readonly deviceRegistry: SpotifyDeviceRegistry;
   private readonly stopAirplaySession: AirplaySessionStopper;
   private readonly notifyOutputError: OutputErrorHandler;
   private nativeConnectStream: PassThrough | null = null;
   private nativeConnectStop?: () => void;
-  private nativeConnectControls:
-    | { play: () => void; pause: () => void; next: () => void; prev: () => void }
-    | null = null;
-
   private nativeSampleRate = audioOutputSettings.sampleRate;
   private nativeChannels = 2;
   private nativeStream: PassThrough | null = null;
@@ -91,7 +86,7 @@ class SpotifyConnectInstance {
     accountId: string | undefined,
     private deviceId: string,
     private credentialsPath: string,
-    configPort: ConfigPort,
+    _configPort: ConfigPort,
     spotifyManagers: SpotifyServiceManagerProvider,
     deviceRegistry: SpotifyDeviceRegistry,
     stopAirplaySession: AirplaySessionStopper,
@@ -101,7 +96,6 @@ class SpotifyConnectInstance {
     this.cacheDir = cacheDirOverride ?? path.join(cacheRoot, String(zoneId), 'cache');
     this.accountId = accountId;
     this.pipeId = `librespot-native-${zoneId}`;
-    this.configPort = configPort;
     this.spotifyManagers = spotifyManagers;
     this.deviceRegistry = deviceRegistry;
     this.stopAirplaySession = stopAirplaySession;
@@ -159,12 +153,6 @@ class SpotifyConnectInstance {
     this.nativeChannels = native.channels || 2;
     this.nativeConnectStream = native.stream as PassThrough;
     this.nativeConnectStop = native.stop;
-    this.nativeConnectControls = {
-      play: native.play,
-      pause: native.pause,
-      next: native.next,
-      prev: native.prev,
-    };
     this.isReady = true;
     this.restartBackoffIndex = 0;
   }
@@ -197,7 +185,7 @@ class SpotifyConnectInstance {
     this.zoneName = name;
   }
 
-  public updateCredentialPath(cacheDir: string, credPath: string): void {
+  public updateCredentialPath(_cacheDir: string, credPath: string): void {
     this.credentialsPath = credPath;
   }
 
@@ -219,16 +207,6 @@ class SpotifyConnectInstance {
 
   public setCredentialsPayload(payload: string): void {
     this.credentialsPayload = payload;
-  }
-
-  private resolveClientId(accountId?: string): string | null {
-    const cfg = this.configPort.getConfig()?.content?.spotify;
-    const accId = accountId ?? this.accountId;
-    const account = cfg?.accounts?.find(
-      (acc) =>
-        acc.id === accId || acc.spotifyId === accId || acc.user === accId || acc.email === accId,
-    );
-    return account?.clientId ?? cfg?.clientId ?? null;
   }
 
   public getZoneId(): number {
@@ -337,7 +315,6 @@ class SpotifyConnectInstance {
       this.nativeConnectStop = undefined;
     }
     this.nativeConnectStream = null;
-    this.nativeConnectControls = null;
     this.isReady = false;
   }
 
@@ -1316,19 +1293,6 @@ export class SpotifyInputService {
       });
     });
     this.instances.delete(zoneId);
-  }
-
-  private disableAllInstances(): void {
-    this.clearQueuedStarts();
-    for (const [zoneId, instance] of this.instances.entries()) {
-      instance.stop().catch((error) => {
-        this.log.warn('failed to stop spotify connect', {
-          zoneId,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      });
-    }
-    this.instances.clear();
   }
 
   private buildDefaultZoneConfig(zone: ZoneConfig): ZoneSpotifyConfig {

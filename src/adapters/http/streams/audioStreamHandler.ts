@@ -389,7 +389,7 @@ export class AudioStreamHandler {
     audioStream: NodeJS.ReadableStream & { destroy?: (error?: Error) => void },
     session: PlaybackSession,
     intervalOverride?: number,
-    nameOverride?: string,
+    _nameOverride?: string,
   ): void {
     const interval = Math.max(
       1024,

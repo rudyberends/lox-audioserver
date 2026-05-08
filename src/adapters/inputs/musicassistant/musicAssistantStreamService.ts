@@ -61,7 +61,6 @@ class SendspinClient {
   private firstChunkLogged = false;
   private bytesSinceLog = 0;
   private lastLogTs = 0;
-  private lastStreamEndedAt = 0;
   private timeSyncTimer: NodeJS.Timeout | null = null;
   private stateTimer: NodeJS.Timeout | null = null;
   private volume = 100;
@@ -465,7 +464,6 @@ class SendspinClient {
         channels: fmt.channels,
         bitDepth: fmt.bitDepth,
       });
-      this.lastStreamEndedAt = 0;
       const toResolve = [...this.pendingStreamResolvers];
       this.pendingStreamResolvers = [];
       toResolve.forEach((resolver) => resolver({ stream: this.stream!, format: fmt }));
@@ -476,7 +474,6 @@ class SendspinClient {
       // Reset stream state but keep the PassThrough alive so downstream consumers stay attached.
       this.resetStreamState();
       this.streamFormat = null;
-      this.lastStreamEndedAt = Date.now();
       this.log.info('sendspin stream cleared', { playerId: this.playerId, type: msg.type });
       // Do not stop on stream/end; rely on MA state/STOP for session teardown.
       return;
@@ -1744,11 +1741,6 @@ export class MusicAssistantStreamService {
 
   private markPaused(zoneId: number): void {
     this.lastPauseAt.set(zoneId, Date.now());
-  }
-
-  private recentlyPaused(zoneId: number, ms = 5000): boolean {
-    const ts = this.lastPauseAt.get(zoneId);
-    return typeof ts === 'number' && Date.now() - ts < ms;
   }
 
   private toLoxoneAudiopath(mediaId: string | undefined, typeHint = 'track'): string | undefined {

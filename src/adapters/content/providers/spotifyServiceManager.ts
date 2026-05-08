@@ -12,7 +12,6 @@ import {
   SpotifyAccountProvider,
   type PersistAccountCallback,
   type SpotifyAccountState,
-  type SpotifyConnectDevice,
 } from '@/adapters/content/providers/spotify/spotifyAccountProvider';
 import { FakeSpotifyAccountProvider } from '@/adapters/content/providers/spotify/fakeSpotifyAccountProvider';
 import { AppleMusicProvider } from '@/adapters/content/providers/applemusic/appleMusicProvider';
@@ -927,17 +926,6 @@ export class SpotifyServiceManager {
       });
     }
     return this.accounts[0] ?? null;
-  }
-
-  private findBridgeByProviderId(providerId: string): SpotifyBridgeConfig | null {
-    const normalized = providerId.trim().toLowerCase();
-    return (
-      this.bridges.find(
-        (bridge) =>
-          bridge &&
-          this.bridgeProviderId(bridge).trim().toLowerCase() === normalized,
-      ) ?? null
-    );
   }
 
   private resolveProviderIcon(provider: string): string {

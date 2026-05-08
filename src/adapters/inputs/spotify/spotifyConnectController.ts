@@ -63,7 +63,6 @@ export class SpotifyConnectInputController implements ZoneOutput {
   public readonly type = 'spotify-input';
 
   private readonly log = createLogger('Input', 'SpotifyConnect');
-  private readonly metaLog = createLogger('Input', 'SpotifyConnectMeta');
   private readonly deviceName: string;
   private readonly preferredDeviceId?: string;
   private readonly publishName: string;
@@ -621,7 +620,7 @@ export class SpotifyConnectInputController implements ZoneOutput {
     );
   }
 
-  public async setPosition(seconds: number): Promise<void> {
+  public async setPosition(_seconds: number): Promise<void> {
     // Loxone position events fire automatically; avoid issuing Spotify /seek from these to prevent unintended pauses.
     return;
   }
@@ -966,31 +965,6 @@ export class SpotifyConnectInputController implements ZoneOutput {
     return /^spotify:(track|album|playlist|artist|show|episode):[A-Za-z0-9]/i.test(normalized);
   }
 
-  private parseUriToId(uri: string): { type: 'track' | 'episode'; id: string } | null {
-    const normalized = this.normalizeUri(uri);
-    const match = normalized.match(/^spotify:(track|episode):([A-Za-z0-9]+)/i);
-    if (match?.[1] && match[2]) {
-      const type = match[1].toLowerCase() as 'track' | 'episode';
-      return { type, id: match[2] };
-    }
-    return null;
-  }
-
-  private async fetchAndPublishMetadata(
-    token: string,
-    uri: string,
-    suppressOutputError = false,
-  ): Promise<void> {
-    /* deprecated: replaced by validatePlayback */
-  }
-
-  private async fetchPlaybackSnapshot(
-    token: string,
-    suppressOutputError = false,
-  ): Promise<void> {
-    /* deprecated: replaced by validatePlayback */
-  }
-
   private mapApiItemToQueueItem(
     item: any,
     type: 'track' | 'episode',
@@ -1132,7 +1106,7 @@ export class SpotifyConnectInputController implements ZoneOutput {
   }
 
   private async resolveDeviceId(
-    accountId: string,
+    _accountId: string,
     token: string,
     allowOverride = true,
   ): Promise<string | undefined> {
@@ -1305,11 +1279,6 @@ export class SpotifyConnectInputController implements ZoneOutput {
     };
   }
 
-
-  private isDeviceIdCandidate(value: string): boolean {
-    const trimmed = value.trim();
-    return /^[0-9a-f]{32,64}$/i.test(trimmed);
-  }
 
   private async apiRequest<T>(
     method: 'GET' | 'PUT' | 'POST' | 'DELETE',

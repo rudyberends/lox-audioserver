@@ -11,8 +11,6 @@ export class AirplayInputService {
   private readonly log = createLogger('Audio', 'AirPlayService');
   private readonly instances = new Map<number, AirplayInstance>();
   private controller: AirplayController | null = null;
-  private globalEnabled = false;
-  private resolvePlayer: ((zoneId: number) => ZonePlayer | null) | null = null;
   constructor(private readonly spotifySessionStopper: SpotifySessionStopper) {
     for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       process.on(signal, () => this.markAllInstancesStopping());
@@ -23,13 +21,12 @@ export class AirplayInputService {
     this.controller = controller;
   }
 
-  public setPlayerResolver(resolver: (zoneId: number) => ZonePlayer | null): void {
-    this.resolvePlayer = resolver;
+  public setPlayerResolver(_resolver: (zoneId: number) => ZonePlayer | null): void {
+    // resolver currently unused; retained for compatibility with bootstrap wiring.
   }
 
   public syncZones(zones: ZoneConfig[], airplayConfig?: GlobalAirplayConfig | null): void {
     const enabled = airplayConfig?.enabled ?? false;
-    this.globalEnabled = enabled;
     if (!enabled) {
       this.log.debug('global airplay disabled; shutting down instances');
       this.disableAllInstances();
@@ -81,7 +78,6 @@ export class AirplayInputService {
   }
 
   public async shutdown(): Promise<void> {
-    this.globalEnabled = false;
     await Promise.all(
       Array.from(this.instances.values()).map((instance) =>
         // Best-effort stop; shutdown should continue even if a receiver fails to stop.
