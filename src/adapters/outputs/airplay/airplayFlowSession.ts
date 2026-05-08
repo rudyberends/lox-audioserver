@@ -624,7 +624,7 @@ export class AirplayFlowSession {
     let remaining = targetBytes;
     const parts: Buffer[] = [];
     while (remaining > 0 && this.chunkQueue.length > 0) {
-      const head = this.chunkQueue[0];
+      const head = this.chunkQueue[0]!;
       if (head.length <= remaining) {
         parts.push(head);
         remaining -= head.length;
@@ -637,7 +637,7 @@ export class AirplayFlowSession {
         remaining = 0;
       }
     }
-    return parts.length === 1 ? parts[0] : Buffer.concat(parts);
+    return parts.length === 1 ? (parts[0] ?? null) : Buffer.concat(parts);
   }
 
   private maybeLogMetrics(): void {

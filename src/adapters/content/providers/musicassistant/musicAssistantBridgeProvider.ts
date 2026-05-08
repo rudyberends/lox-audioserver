@@ -462,15 +462,15 @@ export class MusicAssistantBridgeProvider extends SpotifyAccountProvider {
     if (lower === 'radios' || lower === 'radio') return 'radios';
     if (lower === 'recommendations' || lower === 'rec') return 'recommendationRoot';
     const recMatch = key.match(/^recommendation:(.+)$/i);
-    if (recMatch) return { type: 'recommendation', id: recMatch[1] };
+    if (recMatch) return { type: 'recommendation', id: recMatch[1] ?? '' };
     if (/^\d+$/.test(lower)) return { type: 'recommendation', id: key };
 
     const playlistMatch = key.match(/^playlist:(.+)$/i);
-    if (playlistMatch) return { type: 'playlistItem', id: this.decodeMaId(playlistMatch[1]) };
+    if (playlistMatch) return { type: 'playlistItem', id: this.decodeMaId(playlistMatch[1] ?? '') };
     const albumMatch = key.match(/^album:(.+)$/i);
-    if (albumMatch) return { type: 'albumItem', id: this.decodeMaId(albumMatch[1]) };
+    if (albumMatch) return { type: 'albumItem', id: this.decodeMaId(albumMatch[1] ?? '') };
     const artistMatch = key.match(/^artist:(.+)$/i);
-    if (artistMatch) return { type: 'artistItem', id: this.decodeMaId(artistMatch[1]) };
+    if (artistMatch) return { type: 'artistItem', id: this.decodeMaId(artistMatch[1] ?? '') };
     return { type: 'unknown' };
   }
 

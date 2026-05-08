@@ -302,7 +302,7 @@ class SpotifyConnectInstance {
     }
     this.restarting = true;
     const baseDelay =
-      this.restartBackoffMs[Math.min(this.restartBackoffIndex, this.restartBackoffMs.length - 1)];
+      this.restartBackoffMs[Math.min(this.restartBackoffIndex, this.restartBackoffMs.length - 1)] ?? 0;
     this.restartBackoffIndex = Math.min(
       this.restartBackoffIndex + 1,
       this.restartBackoffMs.length - 1,

@@ -215,7 +215,7 @@ export class AudioProxyHandler {
       if (!match) {
         return line;
       }
-      const url = match[2].trim();
+      const url = (match[2] ?? '').trim();
       const wrapped = this.wrapProxyUrl(url, baseUrl, headers);
       return `File${match[1]}=${wrapped}`;
     });

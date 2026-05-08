@@ -47,7 +47,8 @@ export class CustomRadioStore {
     if (idx === -1) {
       return undefined;
     }
-    this.entries[idx] = { ...this.entries[idx], ...changes };
+    const existing = this.entries[idx]!;
+    this.entries[idx] = { ...existing, ...changes };
     await this.persist();
     return this.entries[idx];
   }

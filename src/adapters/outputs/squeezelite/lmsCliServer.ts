@@ -138,7 +138,7 @@ export class LmsCliServer {
     let playerId = '';
     let command = '';
     let args: Array<string | number> = [];
-    if (isPlayerId(parts[0])) {
+    if (isPlayerId(parts[0] ?? '')) {
       playerId = parts.shift() ?? '';
     }
     command = parts.shift() ?? '';

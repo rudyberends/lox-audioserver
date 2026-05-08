@@ -659,7 +659,7 @@ export class LocalLibraryProvider {
     }
     const getLimit = (key: string, fallback = 10) => {
       const value = limits[key];
-      return Number.isFinite(value) && value > 0 ? Math.min(Number(value), 50) : fallback;
+      return value !== undefined && Number.isFinite(value) && value > 0 ? Math.min(Number(value), 50) : fallback;
     };
 
     const tracks = this.store.searchTracks(safeQuery, getLimit('track'));
@@ -1425,8 +1425,8 @@ function createTrackFromPath(relPath: string): Pick<LocalTrack, 'title' | 'album
   if (segments.length >= 2) {
     return {
       title: baseName,
-      artist: segments[segments.length - 2],
-      album: segments[segments.length - 1],
+      artist: segments[segments.length - 2] ?? 'Unknown Artist',
+      album: segments[segments.length - 1] ?? 'Unknown Album',
     };
   }
 

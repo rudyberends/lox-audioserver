@@ -70,7 +70,7 @@ class DeezerDecryptStream extends Transform {
     this.blowfish = new Blowfish(this.key, mode, padding);
   }
 
-  public _transform(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+  public override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     while (this.buffer.length >= BLOCK_SIZE) {
       const block: Buffer = this.buffer.subarray(0, BLOCK_SIZE);
@@ -85,7 +85,7 @@ class DeezerDecryptStream extends Transform {
     callback();
   }
 
-  public _flush(callback: (error?: Error | null) => void): void {
+  public override _flush(callback: (error?: Error | null) => void): void {
     if (this.buffer.length > 0) {
       this.push(this.buffer);
       this.buffer = Buffer.alloc(0);
@@ -108,7 +108,7 @@ class DeezerJitterBuffer extends Transform {
     super();
   }
 
-  public _transform(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+  public override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
     if (!this.released) {
       this.bufferedChunks.push(chunk);
       this.bufferedBytes += chunk.length;
@@ -126,7 +126,7 @@ class DeezerJitterBuffer extends Transform {
     callback();
   }
 
-  public _flush(callback: (error?: Error | null) => void): void {
+  public override _flush(callback: (error?: Error | null) => void): void {
     if (!this.released) {
       for (const buffered of this.bufferedChunks) {
         this.push(buffered);
@@ -635,7 +635,7 @@ export class DeezerStreamService {
       res.end();
       return;
     }
-    const sessionId = match[1];
+    const sessionId = match[1] ?? '';
     const session = this.proxySessions.get(sessionId);
     if (!session) {
       res.writeHead(404);
@@ -751,7 +751,8 @@ function calcBlowfishKey(songId: string): Buffer {
   const songMd5 = md5hex(Buffer.from(songId, 'utf8'));
   const out = Buffer.alloc(16);
   for (let i = 0; i < 16; i += 1) {
-    out[i] = songMd5[i] ^ songMd5[i + 16] ^ DEEZER_BF_KEY[i];
+    // 32-byte md5hex buffer; DEEZER_BF_KEY length matches loop bound
+    out[i] = songMd5[i]! ^ songMd5[i + 16]! ^ DEEZER_BF_KEY[i]!;
   }
   return out;
 }

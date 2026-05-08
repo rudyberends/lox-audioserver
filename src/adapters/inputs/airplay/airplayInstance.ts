@@ -826,7 +826,7 @@ function deriveHardwareAddress(sourceMac: string, zoneId: number): string {
     const value = Number.parseInt(slice, 16);
     bytes.push(Number.isFinite(value) ? value : 0);
   }
-  bytes[5] = (bytes[5] + (zoneId & 0xff)) & 0xff;
+  bytes[5] = ((bytes[5] ?? 0) + (zoneId & 0xff)) & 0xff;
   return bytes.map((byte) => byte.toString(16).padStart(2, '0')).join(':');
 }
 

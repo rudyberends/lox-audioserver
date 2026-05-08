@@ -794,10 +794,10 @@ export class SendspinOutput implements ZoneOutput {
           if (source.length < offset + 4) {
             return { header: null, remainder: source };
           }
-          const blockHeader = source[offset];
+          const blockHeader = source[offset]!;
           const isLast = (blockHeader & 0x80) !== 0;
           const blockLength =
-            (source[offset + 1] << 16) | (source[offset + 2] << 8) | source[offset + 3];
+            (source[offset + 1]! << 16) | (source[offset + 2]! << 8) | source[offset + 3]!;
           const nextOffset = offset + 4 + blockLength;
           if (source.length < nextOffset) {
             return { header: null, remainder: source };
@@ -828,7 +828,7 @@ export class SendspinOutput implements ZoneOutput {
       let bufferedCapacityBytes = 0;
 
       const pruneCapacity = (nowUs: number): void => {
-        while (bufferedForCapacity.length && bufferedForCapacity[0].endUs <= nowUs) {
+        while (bufferedForCapacity.length && bufferedForCapacity[0]!.endUs <= nowUs) {
           const removed = bufferedForCapacity.shift();
           if (removed) {
             bufferedCapacityBytes -= removed.byteCount;
@@ -892,9 +892,10 @@ export class SendspinOutput implements ZoneOutput {
           timestampUs: f.timestampUs + deltaUs,
         }));
         for (let i = 0; i < bufferedForCapacity.length; i += 1) {
+          const entry = bufferedForCapacity[i]!;
           bufferedForCapacity[i] = {
-            endUs: bufferedForCapacity[i].endUs + deltaUs,
-            byteCount: bufferedForCapacity[i].byteCount,
+            endUs: entry.endUs + deltaUs,
+            byteCount: entry.byteCount,
           };
         }
       };

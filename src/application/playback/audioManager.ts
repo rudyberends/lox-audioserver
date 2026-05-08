@@ -913,8 +913,11 @@ export class AudioManager {
     leftKeys.sort();
     rightKeys.sort();
     for (let i = 0; i < leftKeys.length; i += 1) {
-      if (leftKeys[i] !== rightKeys[i]) return false;
-      if (left[leftKeys[i]] !== right[rightKeys[i]]) return false;
+      const lk = leftKeys[i];
+      const rk = rightKeys[i];
+      if (lk !== rk) return false;
+      if (lk === undefined || rk === undefined) return false;
+      if (left[lk] !== right[rk]) return false;
     }
     return true;
   }

@@ -59,7 +59,7 @@ async function audioCfgDynamicGroup(
     return buildResponse(command, 'dgroup_update', { success: false, error: 'invalid-url' });
   }
 
-  const groupIdRaw = match[1];
+  const groupIdRaw = match[1] ?? '';
   const zoneListRaw = match[2];
 
   if (!zoneListRaw) {
@@ -79,7 +79,7 @@ async function audioCfgDynamicGroup(
     return buildResponse(command, 'dgroup_update', { success: false, error: 'no-zones' });
   }
 
-  const [leader, ...members] = zoneIds;
+  const [leader, ...members] = zoneIds as [number, ...number[]];
   const leaderState = zoneManager.getState(leader);
   if (!leaderState) {
     return buildResponse(command, 'dgroup_update', { success: false, error: 'leader-missing' });
@@ -163,8 +163,8 @@ async function audioGroupedVolume(
     return buildResponse(command, 'grouped_volume', { success: false, error: 'invalid-url' });
   }
 
-  const valueToken = decodeURIComponent(match[1]);
-  const zonesToken = decodeURIComponent(match[2]);
+  const valueToken = decodeURIComponent(match[1] ?? '');
+  const zonesToken = decodeURIComponent(match[2] ?? '');
   const zoneIds = zonesToken
     .split(',')
     .map(Number)
@@ -222,8 +222,8 @@ async function audioGroupedPlayback(zoneManager: ZoneManagerFacade, command: str
     return buildResponse(command, 'grouped_playback', { success: false, error: 'invalid-url' });
   }
 
-  const action = match[1];
-  const targets = decodeURIComponent(match[2])
+  const action = match[1] ?? '';
+  const targets = decodeURIComponent(match[2] ?? '')
     .split(',')
     .map(Number)
     .filter((id) => id > 0);
@@ -236,6 +236,9 @@ async function audioGroupedPlayback(zoneManager: ZoneManagerFacade, command: str
   };
 
   const mapped = cmdMap[action];
+  if (!mapped) {
+    return buildResponse(command, 'grouped_playback', { success: false, error: 'invalid-action' });
+  }
 
   const updated: number[] = [];
   const skipped: Array<{ zoneId: number; reason: string }> = [];

@@ -553,7 +553,7 @@ export class RadioParadiseBlockService {
     if (!block.tracks.length) return null;
     let idx = 0;
     for (let i = 0; i < block.tracks.length; i += 1) {
-      if (timeSec + 0.5 >= block.tracks[i].startSec) {
+      if (timeSec + 0.5 >= block.tracks[i]!.startSec) {
         idx = i;
       }
     }
@@ -564,7 +564,7 @@ export class RadioParadiseBlockService {
     if (!tracks.length) return 0;
     let idx = 0;
     for (let i = 0; i < tracks.length; i += 1) {
-      if (timeSec + 0.5 >= tracks[i].startSec) {
+      if (timeSec + 0.5 >= tracks[i]!.startSec) {
         idx = i;
       }
     }
@@ -835,7 +835,7 @@ export class RadioParadiseBlockService {
     tracks.sort((a, b) => a.startSec - b.startSec);
     if (tracks.length) {
       for (let i = 0; i < tracks.length; i += 1) {
-        const current = tracks[i];
+        const current = tracks[i]!;
         if (current.durationSec > 0) continue;
         const next = tracks[i + 1];
         if (next) {
@@ -850,7 +850,7 @@ export class RadioParadiseBlockService {
 
   private deriveBlockLength(tracks: RadioParadiseTrack[]): number {
     if (!tracks.length) return 0;
-    const last = tracks[tracks.length - 1];
+    const last = tracks[tracks.length - 1]!;
     return Math.max(0, last.startSec + (last.durationSec || 0));
   }
 

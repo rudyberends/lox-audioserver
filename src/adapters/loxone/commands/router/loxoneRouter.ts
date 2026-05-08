@@ -32,7 +32,7 @@ export class LoxoneRouter {
       return buildEmptyResponse('');
     }
 
-    const [segment] = normalized.split('/');
+    const [segment = ''] = normalized.split('/');
     const bucket = this.buckets.get(segment);
 
     if (bucket?.length) {

@@ -288,7 +288,7 @@ export class SqueezeliteOutput implements ZoneOutput {
     const match = players.find((player) => this.matchesPlayer(player));
     if (match) return match;
     if (!this.normalizedPlayerId && !this.normalizedPlayerName && players.length === 1) {
-      return players[0];
+      return players[0] ?? null;
     }
     return null;
   }

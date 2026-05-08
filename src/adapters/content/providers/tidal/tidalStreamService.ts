@@ -222,7 +222,7 @@ export class TidalStreamService {
       res.end();
       return;
     }
-    const sessionId = match[1];
+    const sessionId = match[1] ?? '';
     const session = this.proxySessions.get(sessionId);
     if (!session) {
       res.writeHead(404);

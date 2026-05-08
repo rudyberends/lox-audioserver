@@ -230,7 +230,7 @@ function matchesHost(
 }
 
 function normalizeHost(value: string): string {
-  return value.trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
+  return value.trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0] ?? '';
 }
 
 function buildSearchRequest(mx: number, target: string): Buffer {
@@ -313,7 +313,7 @@ function extractServices(xml: string): ServiceEntry[] {
   const serviceRegex = /<(?:\w+:)?service>([\s\S]*?)<\/(?:\w+:)?service>/gi;
   let match: RegExpExecArray | null;
   while ((match = serviceRegex.exec(xml)) !== null) {
-    const block = match[1];
+    const block = match[1] ?? '';
     const type = extractTag(block, 'serviceType');
     const control = extractTag(block, 'controlURL');
     if (type && control) {

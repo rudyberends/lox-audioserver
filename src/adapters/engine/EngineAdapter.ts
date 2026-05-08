@@ -168,7 +168,7 @@ export class EngineAdapter implements EnginePort {
       return { profiles: undefined, outputSettings: undefined };
     }
     const profiles = outputs.map((output) => output.profile);
-    const primary = outputs[0];
+    const primary = outputs[0]!;
     const outputSettings: AudioOutputSettings = {
       ...audioOutputSettings,
       sampleRate: Number.isFinite(primary.sampleRate) ? primary.sampleRate : audioOutputSettings.sampleRate,

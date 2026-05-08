@@ -134,8 +134,8 @@ function resolveParentIdInCommand(command: string): string {
   // /parentid/<folderId>/<trackIndex> — folderId may contain colons but not slashes
   const match = /\/parentid\/([^/]+)\/(\d+)/.exec(command);
   if (!match) return command;
-  const folderId = match[1];
-  const trackIndex = match[2];
+  const folderId = match[1] ?? '';
+  const trackIndex = match[2] ?? '';
   // Derive provider prefix from command: audio/{zoneId}/serviceplay/{service}/{user}/...
   const parts = command.split('/');
   const service = parts[3] ?? 'spotify';

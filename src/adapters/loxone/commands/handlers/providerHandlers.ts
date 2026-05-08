@@ -42,7 +42,7 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
     },
     audioCfgGetPlaylists: async (command: string) => {
       const parts = splitCommand(command);
-      const service = parts[3];
+      const service = parts[3] ?? '';
       const user = parts[4] ?? 'nouser';
       const start = parseNumberPart(parts[5], 0);
       const limit = parseNumberPart(parts[6], 50);
@@ -51,7 +51,7 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
     },
     audioCfgGetServiceFolder: async (command: string) => {
       const parts = splitCommand(command);
-      const service = parts[3];
+      const service = parts[3] ?? '';
       const user = parts[4] ?? 'nouser';
       const folderId = decodeSegment(parts.slice(5, -2).join('/') || 'root');
       const start = parseNumberPart(parts[parts.length - 2], 0);

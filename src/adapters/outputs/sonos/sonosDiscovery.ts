@@ -230,7 +230,7 @@ function parseXmlAttrs(fragment: string): Record<string, string> {
   const re = /([A-Za-z0-9:_-]+)\s*=\s*"([^"]*)"/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(fragment))) {
-    out[match[1]] = match[2];
+    out[match[1]!] = match[2] ?? '';
   }
   return out;
 }
@@ -354,7 +354,7 @@ async function scanNetworkForSonos(
   let index = 0;
   const worker = async (): Promise<void> => {
     while (index < hosts.length) {
-      const host = hosts[index];
+      const host = hosts[index]!;
       index += 1;
       try {
         const status = await fetchStatus(host, householdId);
@@ -460,7 +460,7 @@ function extractHost(location: string): string {
 }
 
 function normalizeHost(value: string): string {
-  return value.trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
+  return value.trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0] ?? '';
 }
 
 function buildLocalScanHosts(): string[] {

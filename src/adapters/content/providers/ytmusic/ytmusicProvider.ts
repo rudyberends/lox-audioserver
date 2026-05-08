@@ -522,16 +522,16 @@ export class YtMusicProvider {
     if (lower.startsWith('genre:')) return { type: 'genre', q: lower.slice('genre:'.length) };
 
     const trackMatch = key.match(/^track:(.+)$/i);
-    if (trackMatch) return { type: 'track', id: trackMatch[1] };
+    if (trackMatch) return { type: 'track', id: trackMatch[1] ?? '' };
 
     const artistMatch = key.match(/^artist:(.+)$/i);
-    if (artistMatch) return { type: 'artist', id: artistMatch[1] };
+    if (artistMatch) return { type: 'artist', id: artistMatch[1] ?? '' };
 
     const albumMatch = key.match(/^album:(.+)$/i);
-    if (albumMatch) return { type: 'album', id: albumMatch[1] };
+    if (albumMatch) return { type: 'album', id: albumMatch[1] ?? '' };
 
     const playlistMatch = key.match(/^playlist:(.+)$/i);
-    if (playlistMatch) return { type: 'playlist', id: playlistMatch[1] };
+    if (playlistMatch) return { type: 'playlist', id: playlistMatch[1] ?? '' };
 
     // YouTube channel IDs (artists) usually start with UC.
     if (/^UC[a-zA-Z0-9_-]{10,}$/.test(key)) return { type: 'artist', id: key };

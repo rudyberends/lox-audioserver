@@ -237,7 +237,7 @@ export class GroupManager {
       });
 
       players.forEach((p, idx) => {
-        p.volume = nextVolumes[idx];
+        p.volume = nextVolumes[idx] ?? 0;
       });
 
       if (Math.abs(lostDelta) < 0.0001 || !unclamped.length) {

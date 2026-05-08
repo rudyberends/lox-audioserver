@@ -367,9 +367,9 @@ export class ContentManager {
     source: string,
     query: string,
   ): Promise<{ result: Record<string, ContentFolderItem[]>; user: string; providerId: string }> {
-    const [providerPart, filterPart = ''] = source.split(':');
+    const [providerPart = '', filterPart = ''] = source.split(':');
     const { limits } = parseSearchLimits(filterPart);
-    const [providerIdRaw, userRaw = ''] = providerPart.split('@');
+    const [providerIdRaw = '', userRaw = ''] = providerPart.split('@');
     const providerCandidate = providerPart || providerIdRaw || '';
 
     // Local library search
@@ -607,9 +607,9 @@ export class ContentManager {
     const normalized = audiopath.trim();
     const trackMatch = normalized.match(/^([^:]+):track:(.+)$/i);
     if (trackMatch) {
-      const providerSegment = trackMatch[1];
-      const trackId = trackMatch[2];
-      const [provider, user = ''] = providerSegment.split('@');
+      const providerSegment = trackMatch[1] ?? '';
+      const trackId = trackMatch[2] ?? '';
+      const [provider = '', user = ''] = providerSegment.split('@');
       const spotify = this.requireSpotify();
       const serviceId = spotify.hasProvider(providerSegment)
         ? providerSegment

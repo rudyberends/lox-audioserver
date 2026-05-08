@@ -766,8 +766,8 @@ export class QueueController {
     if (!match) {
       return 0;
     }
-    const user = match.length === 3 ? match[1] : '';
-    const trackId = match.length === 3 ? match[2] : match[1];
+    const user = (match.length === 3 ? match[1] : '') ?? '';
+    const trackId = (match.length === 3 ? match[2] : match[1]) ?? '';
     const track = await this.contentPort.getServiceTrack('spotify', user, trackId);
     if (track && typeof (track as any).duration === 'number') {
       const d = Math.round((track as any).duration);
@@ -843,7 +843,7 @@ export class QueueController {
           const tail = reordered.slice(currentIndex + 1);
           for (let i = tail.length - 1; i > 0; i -= 1) {
             const j = Math.floor(Math.random() * (i + 1));
-            [tail[i], tail[j]] = [tail[j], tail[i]];
+            [tail[i], tail[j]] = [tail[j]!, tail[i]!];
           }
           reordered = head.concat(tail);
         } else {
@@ -851,11 +851,11 @@ export class QueueController {
           if (!current) {
             return;
           }
-          const currentItem = reordered[currentIndex];
+          const currentItem = reordered[currentIndex]!;
           const rest = reordered.filter((_, idx) => idx !== currentIndex);
           for (let i = rest.length - 1; i > 0; i -= 1) {
             const j = Math.floor(Math.random() * (i + 1));
-            [rest[i], rest[j]] = [rest[j], rest[i]];
+            [rest[i], rest[j]] = [rest[j]!, rest[i]!];
           }
           const insertAt = clamp(currentIndex, 0, rest.length);
           rest.splice(insertAt, 0, currentItem);
@@ -863,10 +863,10 @@ export class QueueController {
         }
       } else {
         const pickIndex = Math.floor(Math.random() * reordered.length);
-        const picked = reordered.splice(pickIndex, 1)[0];
+        const picked = reordered.splice(pickIndex, 1)[0]!;
         for (let i = reordered.length - 1; i > 0; i -= 1) {
           const j = Math.floor(Math.random() * (i + 1));
-          [reordered[i], reordered[j]] = [reordered[j], reordered[i]];
+          [reordered[i], reordered[j]] = [reordered[j]!, reordered[i]!];
         }
         reordered = [picked, ...reordered];
       }

@@ -93,7 +93,7 @@ export function mp3BitrateToBps(bitrate: string): number {
   if (!match) {
     return 0;
   }
-  const value = Number.parseInt(match[1], 10);
+  const value = Number.parseInt(match[1] ?? '0', 10);
   const isK = match[2]?.toLowerCase() === 'k';
   return isK ? value * 1000 : value;
 }

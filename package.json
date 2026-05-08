@@ -18,7 +18,7 @@
     "fetch:admin": "node scripts/fetch-admin-dist.mjs",
     "build": "rimraf ./dist && tsc && tsc-alias -p tsconfig.json && npm run fetch:admin",
     "start": "node dist/server.js",
-    "test": "ts-node tests/run-tests.ts",
+    "test": "ts-node --transpile-only tests/run-tests.ts",
     "release": "semantic-release",
     "prepare": "husky .husky"
   },

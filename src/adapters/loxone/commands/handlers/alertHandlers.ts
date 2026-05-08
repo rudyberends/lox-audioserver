@@ -34,7 +34,7 @@ export async function audioGroupedAlert(command: string) {
 
   if (type === 'tts' && parts.length > zonesIndex + 1) {
     const rawTts = decodeSegment(parts.slice(zonesIndex + 1).join('/')).replace(/\+/g, ' ');
-    const [langCandidate, ...textParts] = rawTts.split('|');
+    const [langCandidate = '', ...textParts] = rawTts.split('|');
     if (textParts.length > 0) {
       ttsLang = langCandidate.trim().toLowerCase();
       ttsText = textParts.join('|').trim();
@@ -44,7 +44,7 @@ export async function audioGroupedAlert(command: string) {
   }
 
   const result = await alertsManager.handleGroupedAlert(
-    zones[0],
+    zones[0]!,
     type,
     action,
     zones,
@@ -148,7 +148,7 @@ export async function audioZoneTts(command: string) {
 
   let ttsLang: string | undefined;
   let ttsText: string;
-  const [first, ...rest] = payload.split('|');
+  const [first = '', ...rest] = payload.split('|');
   if (rest.length > 0) {
     ttsLang = first.trim().toLowerCase();
     ttsText = rest.join('|').trim();

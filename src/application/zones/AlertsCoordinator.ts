@@ -349,7 +349,7 @@ function appendAlertPadTail(url: string, padTailSec: number): string {
   if (!/^alerts(?:-loop)?:\/\//i.test(url)) {
     return url;
   }
-  const [base, rawQuery = ''] = url.split('?', 2);
+  const [base = '', rawQuery = ''] = url.split('?', 2);
   const params = new URLSearchParams(rawQuery);
   params.set('padTailSec', String(Math.max(0, Math.round(padTailSec))));
   const query = params.toString();

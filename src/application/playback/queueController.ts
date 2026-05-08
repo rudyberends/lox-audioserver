@@ -52,7 +52,7 @@ export class QueueController {
     }
     if (shuffle && size > 1) {
       const candidates = this.queue.items.map((_, idx) => idx).filter((idx) => idx !== currentIndex);
-      return candidates[Math.floor(Math.random() * candidates.length)];
+      return candidates[Math.floor(Math.random() * candidates.length)] ?? -1;
     }
     const incremented = currentIndex + 1;
     if (incremented < size) {

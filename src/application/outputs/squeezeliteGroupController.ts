@@ -317,7 +317,7 @@ class SqueezeliteGroupController {
       const diff = Math.round(leaderElapsed - memberElapsed);
 
       const points = this.syncPlaypoints.get(key) ?? [];
-      if (points.length > 0 && now - points[points.length - 1].ts > 10_000) {
+      if (points.length > 0 && now - points[points.length - 1]!.ts > 10_000) {
         points.length = 0;
       }
       points.push({ ts: now, diffMs: diff });

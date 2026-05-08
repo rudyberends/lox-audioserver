@@ -26,7 +26,7 @@ export function createGlobalSearchHandlers(contentManager: ContentManager, notif
       (async () => {
         try {
           const { result, user, providerId } = await contentManager.globalSearch(source, query);
-          const provider = (providerId || source.split('@')[0] || 'spotify').split('@')[0];
+          const provider = (providerId || source.split('@')[0] || 'spotify').split('@')[0] ?? 'spotify';
           notifier.notifyGlobalSearchResult(
             {
               ...result,

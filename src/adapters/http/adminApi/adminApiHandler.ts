@@ -414,7 +414,7 @@ export class AdminApiHandler {
           reject(new Error(`clock offset providers unavailable: ${errors.join('; ')}`));
           return;
         }
-        const provider = providers[index];
+        const provider = providers[index]!;
         const req = https.get(
           provider.url,
           {

@@ -79,7 +79,7 @@ export function parseSingleJson(stdout: string): any | null {
   const lines = trimmed.split('\n').map((l) => l.trim()).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     try {
-      return JSON.parse(lines[i]);
+      return JSON.parse(lines[i] ?? '');
     } catch {
       /* continue */
     }

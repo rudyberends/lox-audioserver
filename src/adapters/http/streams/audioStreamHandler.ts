@@ -229,7 +229,7 @@ export class AudioStreamHandler {
       'Content-Type': mime || 'image/jpeg',
       'Cache-Control': 'no-cache',
     });
-    res.end(Buffer.from(payload, 'base64'));
+    res.end(Buffer.from(payload ?? '', 'base64'));
   }
 
   private async proxyCoverFromHttp(res: ServerResponse, source: string): Promise<void> {

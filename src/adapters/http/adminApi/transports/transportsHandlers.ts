@@ -541,7 +541,7 @@ function mapSendspinMdnsService(
   const pickAddress = (): string | null => {
     const ipv4 = addresses.find((addr) => addr.includes('.'));
     if (ipv4) return ipv4;
-    if (addresses.length) return addresses[0];
+    if (addresses.length) return addresses[0] ?? null;
     if (typeof service.host === 'string' && service.host.trim()) return service.host.trim();
     return null;
   };

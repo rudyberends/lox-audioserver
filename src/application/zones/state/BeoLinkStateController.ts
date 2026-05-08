@@ -1067,8 +1067,8 @@ function stripCacheBust(url: string): string {
     parsed.searchParams.delete('album');
     return parsed.toString();
   } catch {
-    const [base] = trimmed.split('#', 1);
-    const [path, query] = base.split('?', 2);
+    const [base = ''] = trimmed.split('#', 1);
+    const [path = '', query] = base.split('?', 2);
     if (!query) return trimmed;
     const kept = query
       .split('&')

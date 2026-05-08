@@ -1244,7 +1244,7 @@ export class SpotifyConnectInputController implements ZoneOutput {
     // Avoid duplicating current track if Spotify already returns it at head of queue.
     const queueHeadMatchesCurrent =
       mappedCurrent && mappedQueue.length > 0
-        ? normalized(mappedCurrent.audiopath) === normalized(mappedQueue[0].audiopath)
+        ? normalized(mappedCurrent.audiopath) === normalized(mappedQueue[0]?.audiopath)
         : false;
 
     const sourceItems = queueHeadMatchesCurrent ? mappedQueue : [mappedCurrent, ...mappedQueue].filter(Boolean);

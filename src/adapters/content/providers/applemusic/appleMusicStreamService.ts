@@ -352,7 +352,7 @@ export class AppleMusicStreamService {
   private normalizeSalableAdamId(trackId: string): string {
     const trimmed = trackId.trim();
     const match = trimmed.match(/^[a-z]\.(\d+)$/i);
-    if (match) {
+    if (match && match[1]) {
       return match[1];
     }
     return trimmed;
@@ -1081,8 +1081,9 @@ export class AppleMusicStreamService {
       return;
     }
 
-    const sessionId = parts[1];
-    const resource = parts[2];
+    // parts.length >= 3 verified above
+    const sessionId = parts[1]!;
+    const resource = parts[2]!;
     const session = this.proxySessions.get(sessionId);
     if (!session) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });

@@ -566,7 +566,7 @@ export class LineInApiHandler {
       const bridges = cfg.inputs.lineIn.bridges;
       const idx = bridges.findIndex((b) => b.bridge_id === bridgeId);
       const current: LineInBridgeConfig =
-        idx >= 0 ? bridges[idx] : { bridge_id: bridgeId };
+        idx >= 0 ? bridges[idx]! : { bridge_id: bridgeId };
       const next: LineInBridgeConfig = {
         bridge_id: bridgeId,
         hostname: updateDevicesOnly ? current.hostname : ('hostname' in payload ? payload.hostname : current.hostname),

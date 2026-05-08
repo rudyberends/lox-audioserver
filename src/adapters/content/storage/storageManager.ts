@@ -252,7 +252,7 @@ export async function deleteStorage(id: string): Promise<void> {
     return;
   }
 
-  const storage = file.storages[idx];
+  const storage = file.storages[idx]!;
   const mountPoint = getStorageMountPath(storage.id);
 
   try {

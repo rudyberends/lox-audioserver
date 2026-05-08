@@ -193,7 +193,7 @@ export class ZoneStateStore {
     const nextState = applyZonePatch(ctx.state, patch);
     ctx.state = nextState;
 
-    const isTimeOnlyUpdate = entries.length === 1 && entries[0][0] === 'time';
+    const isTimeOnlyUpdate = entries.length === 1 && entries[0]![0] === 'time';
     const now = Date.now();
     // Avoid blasting Loxone clients with time-only ticks faster than ~1 Hz.
     if (force || !(isTimeOnlyUpdate && now - ctx.lastZoneBroadcastAt < 1000)) {

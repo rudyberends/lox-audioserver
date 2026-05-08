@@ -297,9 +297,9 @@ export class SpotifyServiceManager {
     user: string;
     providerId: string;
   }> {
-    const [providerPart, filterPart = ''] = source.split(':');
+    const [providerPart = '', filterPart = ''] = source.split(':');
     const { limits, maxLimit } = parseSearchLimits(filterPart);
-    const [service, user = ''] = providerPart.split('@');
+    const [service = '', user = ''] = providerPart.split('@');
     const provider = this.resolveProvider(service, user);
     if (!provider) {
       return {
@@ -926,7 +926,7 @@ export class SpotifyServiceManager {
         accountId: bridge.accountId,
       });
     }
-    return this.accounts[0];
+    return this.accounts[0] ?? null;
   }
 
   private findBridgeByProviderId(providerId: string): SpotifyBridgeConfig | null {
@@ -942,7 +942,7 @@ export class SpotifyServiceManager {
 
   private resolveProviderIcon(provider: string): string {
     const key = (provider || '').toLowerCase();
-    return PROVIDER_ICONS[key] || PROVIDER_ICONS.spotify;
+    return PROVIDER_ICONS[key] || PROVIDER_ICONS.spotify || '';
   }
 
   private resolveProviderName(provider: string): string {
@@ -968,8 +968,8 @@ export class SpotifyServiceManager {
     }
     const match = cleaned.match(/spotify@[^:]+:(track|album|artist|playlist|show|episode):(.+)/i);
     if (match) {
-      const type = match[1].toLowerCase();
-      const id = match[2];
+      const type = (match[1] ?? '').toLowerCase();
+      const id = match[2] ?? '';
       if (type === 'episode') {
         return { type: 'show', id }; // episodes follow show subscriptions
       }
@@ -977,8 +977,8 @@ export class SpotifyServiceManager {
     }
     const plain = cleaned.match(/^(track|album|artist|playlist|show):(.+)/i);
     if (plain) {
-      const type = plain[1].toLowerCase();
-      const id = plain[2];
+      const type = (plain[1] ?? '').toLowerCase();
+      const id = plain[2] ?? '';
       if (type === 'episode') {
         return { type: 'show', id };
       }

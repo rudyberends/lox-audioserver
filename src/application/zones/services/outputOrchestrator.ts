@@ -26,7 +26,7 @@ export function selectPlayOutputs(
   if (airplayOut) return [airplayOut];
   const dlna = candidates.find((t) => t.type === 'dlna');
   if (dlna) return [dlna];
-  if (candidates.length) return [candidates[0]];
+  if (candidates.length) return [candidates[0]!];
   return [];
 }
 
@@ -173,7 +173,7 @@ export function dispatchOutputs(
     action === 'play' && payload && typeof payload === 'object'
       ? hasPlaybackSource
         ? preferredTargets.length
-          ? [preferredTargets[0]]
+          ? [preferredTargets[0]!]
           : selectPlayOutputs(outputCandidates)
         : []
       : ctx.activeOutput

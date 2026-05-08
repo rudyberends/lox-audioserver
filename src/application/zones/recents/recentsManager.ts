@@ -82,10 +82,10 @@ export class RecentsManager {
     const canonical = decoded || value;
     const match = CANONICAL_RE.exec(canonical);
     if (match) {
-      const [, provider, type, rest] = match;
+      const [, provider = '', type = '', rest = ''] = match;
       const restMatch = CANONICAL_RE.exec(rest);
       if (restMatch) {
-        const [, innerProvider, innerType, innerRest] = restMatch;
+        const [, innerProvider = '', innerType = '', innerRest = ''] = restMatch;
         // Nested provider (e.g., spotify@bridge...:track:library://track/1234) — use inner for canonical key
         return `${innerProvider}:${innerType}:${innerRest}`;
       }

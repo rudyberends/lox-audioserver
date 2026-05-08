@@ -205,7 +205,7 @@ export class TidalProvider {
   ): { id: string } {
     const raw = this.stripProviderPrefix(value || '').trim();
     const match = raw.match(new RegExp(`(?:^|:)${kind}:(.+)$`, 'i'));
-    const id = match ? match[1] : raw;
+    const id = match ? (match[1] ?? raw) : raw;
     return { id };
   }
 
@@ -224,15 +224,15 @@ export class TidalProvider {
     }
     const albumMatch = raw.match(/(?:^|:)album:(.+)$/i);
     if (albumMatch) {
-      return { type: 'albumItem', id: albumMatch[1] };
+      return { type: 'albumItem', id: albumMatch[1] ?? '' };
     }
     const artistMatch = raw.match(/(?:^|:)artist:(.+)$/i);
     if (artistMatch) {
-      return { type: 'artistItem', id: artistMatch[1] };
+      return { type: 'artistItem', id: artistMatch[1] ?? '' };
     }
     const playlistMatch = raw.match(/(?:^|:)playlist:(.+)$/i);
     if (playlistMatch) {
-      return { type: 'playlistItem', id: playlistMatch[1] };
+      return { type: 'playlistItem', id: playlistMatch[1] ?? '' };
     }
     return { type: 'unknown' };
   }

@@ -341,10 +341,10 @@ export class AppleMusicProvider {
     const raw = this.stripProviderPrefix(value || '').trim();
     const libraryMatch = raw.match(new RegExp(`(?:^|:)library-${kind}:(.+)$`, 'i'));
     if (libraryMatch) {
-      return { id: this.decodeId(libraryMatch[1]), source: 'library' };
+      return { id: this.decodeId(libraryMatch[1] ?? ''), source: 'library' };
     }
     const match = raw.match(new RegExp(`(?:^|:)${kind}:(.+)$`, 'i'));
-    const id = match ? match[1] : raw;
+    const id = match ? (match[1] ?? '') : raw;
     return { id: this.decodeId(id), source: 'catalog' };
   }
 
@@ -394,28 +394,28 @@ export class AppleMusicProvider {
 
     const libraryAlbumMatch = raw.match(/(?:^|:)library-album:(.+)$/i);
     if (libraryAlbumMatch) {
-      return { type: 'albumItem', id: this.decodeId(libraryAlbumMatch[1]), source: 'library' };
+      return { type: 'albumItem', id: this.decodeId(libraryAlbumMatch[1] ?? ''), source: 'library' };
     }
     const libraryArtistMatch = raw.match(/(?:^|:)library-artist:(.+)$/i);
     if (libraryArtistMatch) {
-      return { type: 'artistItem', id: this.decodeId(libraryArtistMatch[1]), source: 'library' };
+      return { type: 'artistItem', id: this.decodeId(libraryArtistMatch[1] ?? ''), source: 'library' };
     }
     const libraryPlaylistMatch = raw.match(/(?:^|:)library-playlist:(.+)$/i);
     if (libraryPlaylistMatch) {
-      return { type: 'playlistItem', id: this.decodeId(libraryPlaylistMatch[1]), source: 'library' };
+      return { type: 'playlistItem', id: this.decodeId(libraryPlaylistMatch[1] ?? ''), source: 'library' };
     }
 
     const albumMatch = raw.match(/(?:^|:)album:(.+)$/i);
     if (albumMatch) {
-      return { type: 'albumItem', id: this.decodeId(albumMatch[1]), source: 'catalog' };
+      return { type: 'albumItem', id: this.decodeId(albumMatch[1] ?? ''), source: 'catalog' };
     }
     const artistMatch = raw.match(/(?:^|:)artist:(.+)$/i);
     if (artistMatch) {
-      return { type: 'artistItem', id: this.decodeId(artistMatch[1]), source: 'catalog' };
+      return { type: 'artistItem', id: this.decodeId(artistMatch[1] ?? ''), source: 'catalog' };
     }
     const playlistMatch = raw.match(/(?:^|:)playlist:(.+)$/i);
     if (playlistMatch) {
-      return { type: 'playlistItem', id: this.decodeId(playlistMatch[1]), source: 'catalog' };
+      return { type: 'playlistItem', id: this.decodeId(playlistMatch[1] ?? ''), source: 'catalog' };
     }
     return { type: 'unknown' };
   }
