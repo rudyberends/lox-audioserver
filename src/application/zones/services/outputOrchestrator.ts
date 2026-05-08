@@ -1,6 +1,7 @@
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import type { ZoneContext } from '@/application/zones/zoneManager';
+import type { ComponentLogger } from '@/shared/logging/logger';
 
 type OutputAction = 'play' | 'pause' | 'resume' | 'stop';
 
@@ -34,7 +35,7 @@ export function dispatchQueueStep(
   ctx: ZoneContext,
   outputs: ZoneOutput[],
   delta: number,
-  log: any,
+  log: ComponentLogger,
 ): boolean {
   let handled = false;
   outputs.forEach((output) => {
@@ -71,7 +72,7 @@ export function dispatchVolume(
   ctx: ZoneContext,
   outputs: ZoneOutput[],
   volume: number,
-  log: any,
+  log: ComponentLogger,
 ): void {
   const isActiveInput = (output: ZoneOutput): boolean => {
     if (!ctx.activeInput) return false;
@@ -119,7 +120,7 @@ export function dispatchOutputs(
   outputs: ZoneOutput[],
   action: OutputAction,
   payload: PlaybackSession | null | undefined,
-  log: any,
+  log: ComponentLogger,
   notifyOutputError: (zoneId: number, reason?: string) => void,
 ): void {
   log.debug('dispatchOutputs', {

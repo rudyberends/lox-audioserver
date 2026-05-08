@@ -352,12 +352,26 @@ class SendspinClient {
     if (!raw) {
       return;
     }
-    let msg: any;
+    let parsed: unknown;
     try {
-      msg = JSON.parse(raw);
+      parsed = JSON.parse(raw);
     } catch {
       return;
     }
+    const msg = parsed as {
+      type?: string;
+      payload?: {
+        player?: {
+          command?: unknown;
+          volume?: unknown;
+          mute?: unknown;
+          codec?: StreamFormat['codec'];
+          sample_rate?: StreamFormat['sampleRate'];
+          channels?: StreamFormat['channels'];
+          bit_depth?: StreamFormat['bitDepth'];
+        } & Record<string, unknown>;
+      } & Record<string, unknown>;
+    } & Record<string, unknown>;
     if (msg.type === 'server/hello') {
       this.log.info('sendspin server/hello', { playerId: this.playerId });
     }
@@ -443,9 +457,9 @@ class SendspinClient {
     }
     if (msg.type === 'stream/start' && msg.payload?.player) {
       const fmt: StreamFormat = {
-        codec: msg.payload.player.codec,
-        sampleRate: msg.payload.player.sample_rate,
-        channels: msg.payload.player.channels,
+        codec: msg.payload.player.codec as string,
+        sampleRate: msg.payload.player.sample_rate as number,
+        channels: msg.payload.player.channels as number,
         bitDepth: msg.payload.player.bit_depth,
       };
       this.streamFormat = fmt;
@@ -1502,7 +1516,7 @@ export class MusicAssistantStreamService {
     const title = media?.name || item.name || '';
     const artist =
       media?.artist ||
-      (Array.isArray(media?.artists) ? media.artists.map((a: any) => a?.name || '').filter(Boolean).join(', ') : '') ||
+      (Array.isArray(media?.artists) ? media.artists.map((a: { name?: string } | null) => a?.name || '').filter(Boolean).join(', ') : '') ||
       '';
     const album = media?.album?.name || media?.album || '';
     const cover = this.extractCover(media ?? item);

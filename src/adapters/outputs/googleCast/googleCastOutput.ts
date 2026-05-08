@@ -119,8 +119,8 @@ export class GoogleCastOutput implements ZoneOutput {
     }
     const seconds = Math.max(0, positionMs / 1000);
     this.log.debug('Google Cast seek', { zoneId: this.zoneId, seconds });
-    await this.castDevice.media.seekCurrent(seconds).catch((err: any) => {
-      this.log.debug('Google Cast seek failed', { zoneId: this.zoneId, message: err?.message });
+    await this.castDevice.media.seekCurrent(seconds).catch((err: unknown) => {
+      this.log.debug('Google Cast seek failed', { zoneId: this.zoneId, message: (err as { message?: string } | null)?.message });
     });
   }
 
@@ -133,10 +133,10 @@ export class GoogleCastOutput implements ZoneOutput {
     if (!this.castDevice) return;
     const volume = Math.max(0, Math.min(1, level / 100));
     this.markOutboundVolume(level);
-    await this.castDevice.volume.setVolume(volume).catch((err: any) => {
+    await this.castDevice.volume.setVolume(volume).catch((err: unknown) => {
       this.log.debug('Google Cast setVolume failed', {
         zoneId: this.zoneId,
-        message: err?.message,
+        message: (err as { message?: string } | null)?.message,
       });
     });
   }
@@ -394,8 +394,8 @@ export class GoogleCastOutput implements ZoneOutput {
       await this.receiverPromise;
       const durationMs = Math.max(0, Date.now() - startedAt);
       this.log.debug('Google Cast receiver ready', { zoneId: this.zoneId, durationMs });
-    } catch (err: any) {
-      this.log.warn('Google Cast launch error', { zoneId: this.zoneId, message: err?.message });
+    } catch (err: unknown) {
+      this.log.warn('Google Cast launch error', { zoneId: this.zoneId, message: (err as { message?: string } | null)?.message });
       throw err;
     }
   }
@@ -628,8 +628,8 @@ export class GoogleCastOutput implements ZoneOutput {
         durationMs: Math.max(0, Date.now() - startedAt),
       });
       return true;
-    } catch (loadErr: any) {
-      const message = loadErr?.message ?? '';
+    } catch (loadErr: unknown) {
+      const message = (loadErr as { message?: string } | null)?.message ?? '';
       if (typeof message === 'string' && message.toLowerCase().includes('request timed out')) {
         this.lastLoadTimeoutAt = Date.now();
       }
@@ -658,10 +658,10 @@ export class GoogleCastOutput implements ZoneOutput {
       if (status.playerState === 'PAUSED') {
         await this.castDevice.media.playCurrent();
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       this.log.debug('Google Cast play after load failed', {
         zoneId: this.zoneId,
-        message: err?.message,
+        message: (err as { message?: string } | null)?.message,
       });
     }
   }

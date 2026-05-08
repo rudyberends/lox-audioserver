@@ -8,7 +8,7 @@ interface PendingEntry {
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
   accumulate?: boolean;
-  buffer?: any[];
+  buffer?: unknown[];
 }
 
 /**
@@ -197,12 +197,24 @@ export class MusicAssistantClient {
   }
 
   private handleMessage(buf: WebSocket.RawData): void {
-    let msg: any;
+    let parsed: unknown;
     try {
-      msg = JSON.parse(buf.toString());
+      parsed = JSON.parse(buf.toString());
     } catch {
       return;
     }
+    const msg = parsed as Record<string, unknown> & {
+      event?: string;
+      message_id?: string | number;
+      error_code?: unknown;
+      error_message?: unknown;
+      message?: unknown;
+      error?: unknown;
+      reason?: unknown;
+      details?: unknown;
+      partial?: boolean;
+      result?: unknown;
+    };
     if (msg?.event === 'auth_required') {
       this.authenticated = false;
     }
@@ -233,13 +245,13 @@ export class MusicAssistantClient {
       // partial result handling
       if (entry.accumulate && msg?.partial) {
         if (!entry.buffer) entry.buffer = [];
-        entry.buffer.push(...(msg.result ?? []));
+        entry.buffer.push(...((msg.result as unknown[] | undefined) ?? []));
         return;
       }
 
       this.pending.delete(key);
       if (entry.buffer && entry.buffer.length) {
-        entry.resolve([...entry.buffer, ...(msg.result ?? [])]);
+        entry.resolve([...entry.buffer, ...((msg.result as unknown[] | undefined) ?? [])]);
       } else {
         entry.resolve(msg.result ?? msg);
       }

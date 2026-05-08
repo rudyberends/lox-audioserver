@@ -99,7 +99,7 @@ export class AudioSession {
   private debugTapStream?: fs.WriteStream;
   private pipeSourceStream?: NodeJS.ReadableStream;
   private pipeSourceDataListener?: (chunk: Buffer) => void;
-  private pipeSourceErrorListener?: (err: any) => void;
+  private pipeSourceErrorListener?: (err: unknown) => void;
   private directPipeMode = false;
   private killTimer?: NodeJS.Timeout;
   private readonly killTimeoutMs = DEFAULT_KILL_TIMEOUT_MS;
@@ -333,10 +333,10 @@ export class AudioSession {
           this.recordBytes(chunk.length);
           this.writeToSubscribers(aligned);
         };
-        this.pipeSourceErrorListener = (err: any) => {
+        this.pipeSourceErrorListener = (err: unknown) => {
           this.log.warn('pipe source error', {
             zoneId: this.zoneId,
-            message: err?.message || String(err),
+            message: (err as { message?: string } | null)?.message || String(err),
           });
           if (!this.ending) {
             this.cleanup();
@@ -500,21 +500,22 @@ export class AudioSession {
         this.pipeSourceStream.off('error', this.pipeSourceErrorListener);
       }
       this.pipeSourceStream = options.stdinStream;
-      this.pipeSourceErrorListener = (err: any) => {
+      this.pipeSourceErrorListener = (err: unknown) => {
         this.log.warn('pipe source error', {
           zoneId: this.zoneId,
-          message: err?.message || String(err),
+          message: (err as { message?: string } | null)?.message || String(err),
         });
         proc.stdin.destroy();
       };
       options.stdinStream.on('error', this.pipeSourceErrorListener);
-      proc.stdin.on('error', (err: any) => {
-        if (err?.code === 'EPIPE') {
+      proc.stdin.on('error', (err: unknown) => {
+        const e = err as { code?: string; message?: string } | null;
+        if (e?.code === 'EPIPE') {
           this.log.debug('ffmpeg stdin closed (EPIPE)', { zoneId: this.zoneId });
         } else {
           this.log.warn('ffmpeg stdin error', {
             zoneId: this.zoneId,
-            message: err?.message || String(err),
+            message: e?.message || String(err),
           });
         }
       });

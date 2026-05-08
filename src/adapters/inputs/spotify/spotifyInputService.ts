@@ -1079,7 +1079,7 @@ export class SpotifyInputService {
             return;
           }
           const target = accounts.find(
-            (acc: any) =>
+            (acc: { id?: string; user?: string; email?: string; spotifyId?: string }) =>
               acc.id === accountId ||
               acc.user === accountId ||
               acc.email === accountId ||
@@ -1400,7 +1400,7 @@ export class SpotifyInputService {
     if (existing && isValidSpotifyDeviceId(existing)) {
       return existing;
     }
-    const cfg: any = this.configPort.getConfig();
+    const cfg = this.configPort.getConfig() as { system?: { audioserver?: { uuid?: string; macId?: string } } };
     const aud = cfg?.system?.audioserver ?? {};
     const serverSeed = (aud?.uuid || aud?.macId || 'lox-audioserver').toString();
     const generated = stableSpotifyDeviceId(`${serverSeed}:spotify:zone:${zone.id}`);

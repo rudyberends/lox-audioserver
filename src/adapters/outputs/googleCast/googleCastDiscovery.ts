@@ -162,7 +162,15 @@ export async function discoverGoogleCastDevices(
       resolve(finish());
     }, effectiveTimeout);
 
-    const handle = (service: any): void => {
+    const handle = (service: {
+      addresses?: unknown;
+      referer?: { address?: string };
+      txt?: Record<string, unknown>;
+      port?: number;
+      host?: string;
+      fqdn?: string;
+      name?: string;
+    }): void => {
       const addresses: string[] = Array.isArray(service.addresses)
         ? (service.addresses as string[])
         : [];

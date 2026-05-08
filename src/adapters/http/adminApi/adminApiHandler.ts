@@ -596,7 +596,7 @@ export class AdminApiHandler {
       const updatedIds = Array.from(
         new Set(
           body.zones
-            .map((z: any) => Number(z?.id))
+            .map((z) => Number(z?.id))
             .filter((id) => Number.isFinite(id) && id > 0),
         ),
       );
@@ -973,18 +973,19 @@ export class AdminApiHandler {
     return null;
   }
 
-  private normalizeOutputPayload(payload: any): ZoneTransportConfig | null {
-    if (payload?.output === null || payload?.transport === null) {
+  private normalizeOutputPayload(payload: unknown): ZoneTransportConfig | null {
+    const p = payload as { output?: unknown; transport?: unknown; transports?: unknown } | null;
+    if (p?.output === null || p?.transport === null) {
       return null;
     }
-    if (payload?.output && typeof payload.output === 'object') {
-      return payload.output as ZoneTransportConfig;
+    if (p?.output && typeof p.output === 'object') {
+      return p.output as ZoneTransportConfig;
     }
-    if (payload?.transport && typeof payload.transport === 'object') {
-      return payload.transport as ZoneTransportConfig;
+    if (p?.transport && typeof p.transport === 'object') {
+      return p.transport as ZoneTransportConfig;
     }
-    if (Array.isArray(payload?.transports)) {
-      return payload.transports[0] ?? null;
+    if (Array.isArray(p?.transports)) {
+      return (p.transports[0] as ZoneTransportConfig | undefined) ?? null;
     }
     return null;
   }

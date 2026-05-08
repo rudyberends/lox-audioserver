@@ -949,7 +949,7 @@ export class SpotifyAccountProvider {
     const cover = this.extractImage(album?.images);
     const owner =
       Array.isArray(album?.artists) && album.artists.length > 0
-        ? album.artists.map((a: any) => a?.name).filter(Boolean).join(', ')
+        ? album.artists.map((a: { name?: string } | null) => a?.name).filter(Boolean).join(', ')
         : '';
     return {
       id: this.makeUri('album', id),
@@ -1047,7 +1047,7 @@ export class SpotifyAccountProvider {
     const id = String(track?.id ?? track?.uri ?? '');
     const artists = Array.isArray(track?.artists)
       ? track.artists
-        .map((a: any) => (typeof a?.name === 'string' ? a.name : ''))
+        .map((a: { name?: unknown } | null) => (typeof a?.name === 'string' ? a.name : ''))
         .filter(Boolean)
         .join(', ')
       : '';

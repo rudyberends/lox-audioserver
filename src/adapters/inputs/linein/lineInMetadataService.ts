@@ -319,7 +319,7 @@ export class LineInMetadataService {
           });
           throw new Error(`shazam lookup failed (${response.status}): ${text}`);
         }
-        const json = (await response.json()) as { matches?: unknown[]; track?: any } | null;
+        const json = (await response.json()) as { matches?: unknown[]; track?: { title?: string; subtitle?: string } } | null;
         lastMatches = Array.isArray(json?.matches) ? json.matches.length : 0;
         if (!lastMatches) {
           continue;
@@ -405,8 +405,9 @@ export class LineInMetadataService {
     return agents[Math.floor(Math.random() * agents.length)] ?? agents[0]!;
   }
 
-  private extractShazamAlbum(track: any): string | undefined {
-    const sections = Array.isArray(track?.sections) ? track.sections : [];
+  private extractShazamAlbum(track: unknown): string | undefined {
+    const t = track as { sections?: unknown } | null;
+    const sections = Array.isArray(t?.sections) ? t.sections : [];
     for (const section of sections) {
       if (section?.type !== 'SONG') {
         continue;
@@ -420,8 +421,8 @@ export class LineInMetadataService {
     return undefined;
   }
 
-  private extractShazamCover(track: any): string | undefined {
-    const images = track?.images;
+  private extractShazamCover(track: unknown): string | undefined {
+    const images = (track as { images?: { coverarthq?: string; coverart?: string } } | null)?.images;
     if (images?.coverarthq) {
       return images.coverarthq;
     }

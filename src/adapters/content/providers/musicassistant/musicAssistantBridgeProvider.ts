@@ -314,7 +314,7 @@ export class MusicAssistantBridgeProvider extends SpotifyAccountProvider {
     const uri = this.makeMaUri('track', rawId, item);
     const album = typeof item.album === 'string' ? item.album : item.album?.name;
     const artists = Array.isArray(item.artists)
-      ? item.artists.map((a: any) => a?.name).filter(Boolean).join(', ')
+      ? item.artists.map((a: { name?: string } | null) => a?.name).filter(Boolean).join(', ')
       : item.artist || '';
     const cover = this.extractMaCover(item);
     return {
@@ -340,7 +340,7 @@ export class MusicAssistantBridgeProvider extends SpotifyAccountProvider {
     const uri = this.makeMaUri('album', rawId, item);
     const cover = this.extractMaCover(item);
     const artist = Array.isArray(item.artists)
-      ? item.artists.map((a: any) => a?.name).filter(Boolean).join(', ')
+      ? item.artists.map((a: { name?: string } | null) => a?.name).filter(Boolean).join(', ')
       : item.artist || '';
     return {
       id: uri,

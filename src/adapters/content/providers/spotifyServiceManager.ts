@@ -398,7 +398,7 @@ export class SpotifyServiceManager {
       const name = String(track?.name ?? id);
       const artists = Array.isArray(track?.artists)
         ? track.artists
-            .map((a: any) => (a && typeof a.name === 'string' ? a.name : ''))
+            .map((a: { name?: unknown } | null) => (a && typeof a.name === 'string' ? a.name : ''))
             .filter(Boolean)
             .join(', ')
         : '';
@@ -429,7 +429,7 @@ export class SpotifyServiceManager {
       const cover = (Array.isArray(album?.images) && album.images[0]?.url) || '';
       const artists = Array.isArray(album?.artists)
         ? album.artists
-            .map((a: any) => (a && typeof a.name === 'string' ? a.name : ''))
+            .map((a: { name?: unknown } | null) => (a && typeof a.name === 'string' ? a.name : ''))
             .filter(Boolean)
             .join(', ')
         : '';

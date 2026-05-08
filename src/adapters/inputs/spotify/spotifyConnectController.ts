@@ -975,7 +975,7 @@ export class SpotifyConnectInputController implements ZoneOutput {
     const artist =
       type === 'track'
         ? Array.isArray(item.artists)
-          ? item.artists.map((a: any) => a?.name).filter(Boolean).join(', ')
+          ? item.artists.map((a: { name?: string } | null) => a?.name).filter(Boolean).join(', ')
           : ''
         : item.show?.publisher || '';
     const album = type === 'track' ? item.album?.name || '' : item.show?.name || '';
@@ -1255,7 +1255,7 @@ export class SpotifyConnectInputController implements ZoneOutput {
     }
     const title = track.name ?? '';
     const artist = Array.isArray(track.artists)
-      ? track.artists.map((a: any) => a?.name).filter(Boolean).join(', ')
+      ? track.artists.map((a: { name?: string } | null) => a?.name).filter(Boolean).join(', ')
       : '';
     const album = track.album?.name ?? '';
     const coverurl = track.album?.images?.[0]?.url ?? '';
@@ -1398,8 +1398,8 @@ export class SpotifyConnectInputController implements ZoneOutput {
 
   private async lookupDeviceByName(token: string): Promise<string | undefined> {
     const names = [this.publishName, this.deviceName].filter(Boolean) as string[];
-    const result = await this.apiRequest<any>('GET', '/devices', token);
-    const devices: any[] = Array.isArray(result?.devices) ? result.devices : [];
+    const result = await this.apiRequest<{ devices?: Array<{ id: string; name?: string; type?: string }> }>('GET', '/devices', token);
+    const devices: Array<{ id: string; name?: string; type?: string }> = Array.isArray(result?.devices) ? result.devices : [];
     const match = this.rankDevicesByName(devices, names)[0];
     if (match?.id) {
       this.log.debug('spotify device id resolved by name', { zoneId: this.zoneId, name: match.name });

@@ -201,8 +201,8 @@ export class SendspinCastOutput implements ZoneOutput {
       await controller.sendMessage(payload);
       this.log.info('Sendspin Cast payload sent', { zoneId: this.zoneId, payload });
       void this.sendMetadataToReceiver();
-    } catch (sendErr: any) {
-      this.log.warn('Sendspin Cast payload failed', { zoneId: this.zoneId, message: sendErr?.message });
+    } catch (sendErr: unknown) {
+      this.log.warn('Sendspin Cast payload failed', { zoneId: this.zoneId, message: (sendErr as { message?: string } | null)?.message });
     }
   }
 

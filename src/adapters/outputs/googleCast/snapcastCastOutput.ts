@@ -239,12 +239,12 @@ export class SnapcastCastOutput implements ZoneOutput {
         appId: DEFAULT_SNAPCAST_APP_ID,
         namespace,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       this.log.warn('Snapcast Cast launch failed', {
         host: this.config.host,
         appId: DEFAULT_SNAPCAST_APP_ID,
         namespace,
-        message: err?.message ?? String(err),
+        message: (err as { message?: string } | null)?.message ?? String(err),
       });
       throw err;
     }

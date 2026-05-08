@@ -792,7 +792,7 @@ export class RadioParadiseBlockService {
     const list = Array.isArray(payload)
       ? payload
       : payload && typeof payload === 'object'
-        ? Object.values(payload as Record<string, any>)
+        ? Object.values(payload as Record<string, unknown>)
         : [];
     const tracks = list
       .map((item) => {

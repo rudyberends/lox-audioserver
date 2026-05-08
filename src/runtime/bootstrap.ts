@@ -470,7 +470,7 @@ async function notifyMiniserverStartup(config: AudioServerConfig): Promise<void>
   }
 }
 
-function findServerSection(raw: unknown, macId: string): Record<string, any> | undefined {
+function findServerSection(raw: unknown, macId: string): Record<string, unknown> | undefined {
   if (!raw || !macId) {
     return undefined;
   }
@@ -502,7 +502,7 @@ function findServerSection(raw: unknown, macId: string): Record<string, any> | u
       (key) => key.trim().toUpperCase() === normalizedMacId,
     );
     if (matchKey) {
-      return (entry as Record<string, any>)[matchKey] as Record<string, any>;
+      return (entry as Record<string, unknown>)[matchKey] as Record<string, unknown>;
     }
   }
 

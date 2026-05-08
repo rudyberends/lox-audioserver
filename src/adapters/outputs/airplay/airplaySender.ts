@@ -49,10 +49,10 @@ export class AirplaySender {
       try {
         this.sender.setVolume(this.currentVolume);
         return true;
-      } catch (err: any) {
+      } catch (err: unknown) {
         this.log.warn('airplay sender volume failed', {
           host: this.config.host,
-          message: err?.message || String(err),
+          message: (err as { message?: string } | null)?.message || String(err),
         });
       }
     }

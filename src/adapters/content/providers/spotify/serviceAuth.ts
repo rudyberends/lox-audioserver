@@ -153,7 +153,7 @@ export async function handleSpotifyOAuthCallback(
           deviceName: accountId,
         });
         if (creds?.credentials) {
-          let parsed: any = creds.credentials;
+          let parsed: string | Record<string, unknown> = creds.credentials;
           try {
             parsed = JSON.parse(creds.credentials);
           } catch {
@@ -202,7 +202,7 @@ export async function handleSpotifyLibrespotOAuth(
     return;
   }
 
-  const body = await readJsonBody(req);
+  const body = (await readJsonBody(req)) as { accountId?: string; deviceName?: string } | null;
   const accountId = (body?.accountId || '').trim();
   const deviceName = (body?.deviceName || '').trim() || accountId || 'lox-spotify';
 
@@ -244,7 +244,7 @@ export async function handleSpotifyLibrespotOAuth(
       res.end(JSON.stringify({ error: 'oauth_login_failed' }));
       return;
     }
-    let parsed: any = result.credentials;
+    let parsed: string | Record<string, unknown> = result.credentials;
     try {
       parsed = JSON.parse(result.credentials);
     } catch {
@@ -333,7 +333,7 @@ export async function handleSpotifyLibrespotExport(
   res.end(JSON.stringify({ ok: true, username: account.user || account.id, credentials }));
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<any> {
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));

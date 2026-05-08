@@ -47,9 +47,10 @@ export async function runYtDlp(
       env: { ...process.env, ...(options?.env ?? {}) },
     });
     return { stdout: String(res.stdout ?? ''), stderr: String(res.stderr ?? '') };
-  } catch (err: any) {
-    const stderr = String(err?.stderr ?? '');
-    const code = typeof err?.code === 'number' ? err.code : null;
+  } catch (err: unknown) {
+    const e = err as { stderr?: unknown; code?: unknown } | null;
+    const stderr = String(e?.stderr ?? '');
+    const code = typeof e?.code === 'number' ? e.code : null;
 
     const message = `yt-dlp failed${code !== null ? ` (code ${code})` : ''}`;
     throw new YtDlpError(message, { exitCode: code, stderr });

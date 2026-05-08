@@ -13,14 +13,14 @@ export interface ZoneDescriptor {
  * Extracts AudioServer zone definitions from the parsed Loxone config payload.
  */
 export function extractZonesFromLoxoneConfig(
-  parsedConfig: any,
+  parsedConfig: unknown,
   macId: string,
 ): ZoneDescriptor[] {
   if (!Array.isArray(parsedConfig)) {
     return [];
   }
 
-  let server: any | undefined;
+  let server: Record<string, unknown> | undefined;
 
   for (const item of parsedConfig) {
     if (item && typeof item === 'object') {
@@ -28,7 +28,7 @@ export function extractZonesFromLoxoneConfig(
         (key) => key.trim().toUpperCase() === macId,
       );
       if (matchKey) {
-        server = item[matchKey];
+        server = item[matchKey] as Record<string, unknown>;
         break;
       }
     }
@@ -47,7 +47,7 @@ export function extractZonesFromLoxoneConfig(
 
   const extensionMap = new Map<string, { label: string }>();
 
-  extensions.forEach((ext: any, index: number) => {
+  extensions.forEach((ext: Record<string, unknown> | null | undefined, index: number) => {
     if (!ext || typeof ext !== 'object') {
       return;
     }
@@ -71,7 +71,7 @@ export function extractZonesFromLoxoneConfig(
       ? server.name.trim()
       : 'AudioServer';
 
-  const resolvePlayerSource = (player: any) => {
+  const resolvePlayerSource = (player: Record<string, unknown>) => {
     const outputs = Array.isArray(player.outputs) ? player.outputs : [];
     let serial = '';
 
@@ -108,7 +108,7 @@ export function extractZonesFromLoxoneConfig(
     return { serial, label };
   };
 
-  return players.map((player: any, index: number) => {
+  return players.map((player: Record<string, unknown>, index: number) => {
     const id = Number(player.playerid ?? player.id ?? 0);
     const resolved = resolvePlayerSource(player);
 
