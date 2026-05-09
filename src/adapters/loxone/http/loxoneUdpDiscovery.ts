@@ -102,7 +102,7 @@ export class LoxoneUdpDiscovery {
       tv,
       n: friendlyName,
       s: this.formatMacAddress(macId || config.macAddress),
-      v: '16.1.10.01',
+      v: config.firmwareVersionNumber,
       p: String(this.resolveUdpPort(config)),
       hn: hostname,
       di,

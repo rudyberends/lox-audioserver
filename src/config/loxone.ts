@@ -23,6 +23,7 @@ export interface LoxoneMdnsConfig {
 
 export interface LoxoneHttpConfig {
   firmwareVersion: string;
+  firmwareVersionNumber: string;
   apiVersion: string;
   sessionToken: string;
   macAddress: string;
@@ -30,14 +31,20 @@ export interface LoxoneHttpConfig {
   mdns: LoxoneMdnsConfig;
 }
 
-const DEFAULT_FIRMWARE_VERSION = 'LWSS V 16.1.10.01';
+// Single source of truth for the emulated Audioserver version strings.
+// The two formats are not interchangeable: FIRMWARE_VERSION_NUMBER is the
+// LWSS / UDP discovery firmware string, MDNS_VERSION is the (zero-padded)
+// version advertised over Bonjour.
+const FIRMWARE_VERSION_NUMBER = '17.1.05.05';
+const MDNS_VERSION = '16.00.09.16';
+
+const DEFAULT_FIRMWARE_VERSION = `LWSS V ${FIRMWARE_VERSION_NUMBER}`;
 const DEFAULT_API_VERSION = '~API:1.6~';
 const DEFAULT_SESSION = '8WahwAfULwEQce9Yu0qIE9L7QMkXFHbi0M9ch9vKcgYArPPojXHpSiNcq0fT3lqL';
 const DEFAULT_MDNS_NAME = 'audioserver';
 const DEFAULT_MDNS_HOSTNAME = 'audioserver';
 const DEFAULT_MDNS_TYPE = 'http';
 const DEFAULT_MDNS_DEVICE_TYPE = 'Audioserver';
-const DEFAULT_MDNS_VERSION = '16.00.09.16';
 const DEFAULT_MDNS_TXT_VERSION = '2';
 const DEFAULT_MDNS_DEVICE_INSTANCE = '2';
 
@@ -55,6 +62,7 @@ export function buildLoxoneHttpConfig(
 
   return {
     firmwareVersion,
+    firmwareVersionNumber: FIRMWARE_VERSION_NUMBER,
     apiVersion,
     sessionToken,
     macAddress: resolvedMacAddress,
@@ -93,7 +101,7 @@ function buildLoxoneMdnsConfig(env: EnvironmentConfig): LoxoneMdnsConfig {
     host: env.hostname,
     hostname: DEFAULT_MDNS_HOSTNAME,
     deviceType: DEFAULT_MDNS_DEVICE_TYPE,
-    version: DEFAULT_MDNS_VERSION,
+    version: MDNS_VERSION,
     txtVersion: DEFAULT_MDNS_TXT_VERSION,
     deviceInstance: DEFAULT_MDNS_DEVICE_INSTANCE,
     port: env.loxoneAppPort,
