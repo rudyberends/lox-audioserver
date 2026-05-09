@@ -3,6 +3,9 @@ dist
 
 # Ignore Config files
 data
+
+# Claude Code per-project state (settings, agent worktrees)
+.claude
 # ------------- Defaults ------------- #
 
 # Logs
