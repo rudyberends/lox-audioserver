@@ -58,6 +58,7 @@ export function registerRoutes(
   const configHandlers = createConfigHandlers(dependencies.config, {
     onRestart: dependencies.onRestart,
     notifier: dependencies.notifier,
+    loxoneNotifier: dependencies.loxoneNotifier,
     configService: dependencies.configService,
     configPort: dependencies.configPort,
     contentManager: dependencies.contentManager,

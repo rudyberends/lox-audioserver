@@ -101,6 +101,51 @@ export class LoxoneWsNotifier {
   }
 
   /**
+   * Signals that the streaming-services configuration changed.
+   * Client refetches services when `action === 'serviceschanged'`.
+   */
+  public notifyServiceChanged(action: string = 'serviceschanged'): void {
+    this.emit({ service_changed_event: [{ action }] }, 'service_changed_event', { action });
+  }
+
+  /**
+   * Signals an upcoming process restart (server stays reachable).
+   * v17 client distinguishes this from a hard reboot.
+   */
+  public notifyRestart(): void {
+    this.emit({ restart_event: [] }, 'restart_event');
+  }
+
+  /**
+   * Signals an upcoming hard reboot (sockets will drop).
+   * Client transitions to the `rebooting` health state.
+   */
+  public notifyReboot(): void {
+    this.emit({ reboot_event: [] }, 'reboot_event');
+  }
+
+  /**
+   * Signals that USB / external storage state changed.
+   */
+  public notifyUsbChanged(): void {
+    this.emit({ usbchanged_event: [] }, 'usbchanged_event');
+  }
+
+  /**
+   * Signals that local playlists were created, edited, or removed.
+   */
+  public notifyPlaylistChanged(): void {
+    this.emit({ playlistchanged_event: [] }, 'playlistchanged_event');
+  }
+
+  /**
+   * Signals that custom URL inputs were added, renamed, or removed.
+   */
+  public notifyCustomUrlChanged(): void {
+    this.emit({ customurl_changed_event: [] }, 'customurl_changed_event');
+  }
+
+  /**
    * Emits a Loxone-compatible `rescan_event` for local library progress.
    */
   public notifyRescan(status: 0 | 1 | 2, folders?: number, files?: number): void {

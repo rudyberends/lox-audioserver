@@ -13,6 +13,7 @@ import type { ConfigPort } from '@/ports/ConfigPort';
 import type { GroupManagerReadPort } from '@/application/groups/groupManager';
 import type { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
+import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import { defaultConfig } from '@/adapters/http/adminApi/config/configHandlers';
 
 const ADDON_PACKAGE_PREFIX = '@lox-audioserver/node-';
@@ -55,6 +56,7 @@ export type MiscHandlerDeps = {
   snapcastCore: SnapcastCore;
   runtimeConfig: RuntimeConfigSlice;
   onReinitialize?: () => Promise<boolean>;
+  loxoneNotifier?: LoxoneWsNotifier;
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
 };
@@ -229,6 +231,7 @@ async function handleReinitialize(res: ServerResponse, deps: MiscHandlerDeps): P
       deps.sendJson(res, 500, { error: 'reinitialize-failed' });
       return;
     }
+    deps.loxoneNotifier?.notifyRestart();
     deps.sendJson(res, 200, { ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

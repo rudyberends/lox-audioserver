@@ -234,6 +234,7 @@ export class AdminApiHandler {
         snapcastCore: this.snapcastCore,
         runtimeConfig: this.runtimeConfig,
         onReinitialize: this.onReinitialize,
+        loxoneNotifier: this.loxoneNotifier,
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),

@@ -15,6 +15,7 @@ import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { ContentManager } from '@/adapters/content/contentManager';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
+import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 
 type KeyMaterial = {
   modulusHex: string;
@@ -34,6 +35,7 @@ let cachedPublicPemSpki: string | null = null;
 type ConfigHandlerOptions = {
   onRestart?: () => Promise<boolean>;
   notifier: NotifierPort;
+  loxoneNotifier?: LoxoneWsNotifier;
   configService: LoxoneConfigService;
   configPort: ConfigPort;
   contentManager: ContentManager;
@@ -57,6 +59,7 @@ export function createConfigHandlers(config: LoxoneHttpConfig, options: ConfigHa
   const configPort = options.configPort;
   const contentManager = options.contentManager;
   const spotifyInputService = options.spotifyInputService;
+  const loxoneNotifier = options.loxoneNotifier;
 
   return {
     ready: handler((command) =>
@@ -89,6 +92,7 @@ export function createConfigHandlers(config: LoxoneHttpConfig, options: ConfigHa
       buildEmptyResponseWithPayload(command, Date.now()),
     ),
     restart: handler(async (command) => {
+      loxoneNotifier?.notifyRestart();
       if (!options.onRestart) {
         return buildEmptyResponseWithPayload(command, true);
       }
@@ -294,6 +298,8 @@ export function createConfigHandlers(config: LoxoneHttpConfig, options: ConfigHa
         // notify frontend to refresh service state
         configService.notifyReloadMusicApp('userdel', 'spotify', userId);
       }
+
+      loxoneNotifier?.notifyServiceChanged();
 
       return buildResponse(command, 'servicecfg', { action: 'deleted', error: 0 });
     }),
