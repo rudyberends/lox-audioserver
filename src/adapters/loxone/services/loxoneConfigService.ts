@@ -58,7 +58,7 @@ export class LoxoneConfigService {
       crc32 = await this.persistRawConfig(cfg, payload);
       await this.applySystemMetadata(cfg, payload.raw);
       this.extractZonesFromPayload(cfg, payload.raw);
-      this.zones.replaceAll(cfg.zones, cfg.inputs, cfg.groups ?? null);
+      await this.zones.replaceAll(cfg.zones, cfg.inputs, cfg.groups ?? null);
       this.content.refreshFromConfig();
     });
 
