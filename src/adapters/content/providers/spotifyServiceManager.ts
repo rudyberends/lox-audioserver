@@ -677,9 +677,10 @@ export class SpotifyServiceManager {
       }
       if (type === 'album') {
         await this.doRequest(
-          `${SPOTIFY_API_BASE}/me/albums?ids=${encodeURIComponent(id)}`,
+          `${SPOTIFY_API_BASE}/me/library`,
           token,
           method,
+          { uris: [`spotify:album:${id}`] },
         );
       }
     } catch {
