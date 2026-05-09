@@ -371,14 +371,32 @@ function createSendspinOutput(
 ): ZoneOutput | null {
   const rawClientId = (config as Record<string, unknown>).clientId;
   const rawEndpointUrl = (config as Record<string, unknown>).endpointUrl;
+  const rawLatency = (config as Record<string, unknown>).latencyMs;
   const clientId = typeof rawClientId === 'string' ? rawClientId.trim() : '';
   const endpointUrl = typeof rawEndpointUrl === 'string' ? rawEndpointUrl.trim() : '';
+  const parsedLatency =
+    typeof rawLatency === 'number'
+      ? rawLatency
+      : typeof rawLatency === 'string' && rawLatency.trim() !== ''
+        ? Number(rawLatency)
+        : undefined;
   if (!clientId) {
     log.warn('Sendspin output skipped; missing clientId', { zoneId: zone.id });
     return null;
   }
-  const sendspinConfig: SendspinOutputConfig = { clientId, ...(endpointUrl ? { endpointUrl } : {}) };
-  log.info('Sendspin output registered', { zoneId: zone.id, clientId, endpointUrl: endpointUrl || undefined });
+  const sendspinConfig: SendspinOutputConfig = {
+    clientId,
+    ...(endpointUrl ? { endpointUrl } : {}),
+    ...(typeof parsedLatency === 'number' && Number.isFinite(parsedLatency)
+      ? { latencyMs: parsedLatency }
+      : {}),
+  };
+  log.info('Sendspin output registered', {
+    zoneId: zone.id,
+    clientId,
+    endpointUrl: endpointUrl || undefined,
+    latencyMs: sendspinConfig.latencyMs,
+  });
   return new SendspinOutput(zone.id, zone.name, sendspinConfig, undefined, ports);
 }
 

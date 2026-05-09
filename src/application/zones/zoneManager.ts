@@ -599,6 +599,34 @@ export class ZoneManager {
     this.playbackCoordinator.updateInputTiming(zoneId, elapsed, duration);
   }
 
+  /**
+   * Hot-update the configured output latency for a zone. Calls `setLatencyMs` on each
+   * live output that supports it. Returns true if at least one output applied the value.
+   */
+  public setOutputLatency(zoneId: number, latencyMs: number): boolean {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx) {
+      return false;
+    }
+    let applied = false;
+    for (const output of ctx.outputs) {
+      if (typeof output.setLatencyMs === 'function') {
+        try {
+          void output.setLatencyMs(latencyMs);
+          applied = true;
+        } catch (err) {
+          // Keep going; one output failing shouldn't prevent the others.
+          this.log.warn('setOutputLatency failed for output', {
+            zoneId,
+            outputType: output.type,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+    return applied;
+  }
+
   public renameZone(zoneId: number, name: string): void {
     const ctx = this.zoneRepo.get(zoneId);
     if (!ctx) {

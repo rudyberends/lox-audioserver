@@ -109,7 +109,57 @@ export function buildZonesRoutes(deps: ZonesHandlerDeps): Route[] {
       pattern: /^\/zones\/recents\/purge$/,
       handler: async (_req, res) => handleRecentsPurge(res, deps),
     },
+    {
+      method: 'POST',
+      pattern: /^\/zones\/(\d+)\/output-latency$/,
+      handler: async (req, res, match) => {
+        const zoneId = Number(match[1]);
+        if (!Number.isFinite(zoneId) || zoneId <= 0) {
+          deps.sendJson(res, 400, { error: 'invalid-zone-id' });
+          return;
+        }
+        await handleZoneOutputLatency(zoneId, req, res, deps);
+      },
+    },
   ];
+}
+
+async function handleZoneOutputLatency(
+  zoneId: number,
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: ZonesHandlerDeps,
+): Promise<void> {
+  const body = (await deps.readJsonBody(req, res)) as { latencyMs?: unknown } | null;
+  if (!body) return;
+  const raw = body.latencyMs;
+  const num = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+  if (!Number.isFinite(num)) {
+    deps.sendJson(res, 400, { error: 'invalid-latency' });
+    return;
+  }
+  const clamped = Math.max(0, Math.min(10_000, Math.round(num)));
+
+  // Persist to zone-config without triggering replaceZones.
+  await deps.configPort.updateConfig((cfg) => {
+    const zone = cfg.zones?.find((z) => z.id === zoneId);
+    if (!zone) return;
+    const primary = getZoneOutputConfig(zone) as Record<string, unknown> | null;
+    if (!primary) return;
+    primary.latencyMs = clamped;
+    if (Array.isArray((zone as { transports?: unknown[] }).transports)) {
+      const transports = (zone as { transports?: Record<string, unknown>[] }).transports;
+      if (transports && transports[0]) {
+        transports[0].latencyMs = clamped;
+      }
+    }
+    if ((zone as { output?: Record<string, unknown> }).output) {
+      (zone as { output?: Record<string, unknown> }).output!.latencyMs = clamped;
+    }
+  });
+
+  const applied = deps.zoneManager.setOutputLatency(zoneId, clamped);
+  deps.sendJson(res, 200, { latencyMs: clamped, applied });
 }
 
 function handleZoneStateControllerDefinitions(

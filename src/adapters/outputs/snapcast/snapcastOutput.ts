@@ -43,7 +43,7 @@ export class SnapcastOutput implements ZoneOutput {
   private activeOutputSettings = audioOutputSettings;
   private readonly baseStreamId: string;
   private readonly baseClientIds: string[];
-  private readonly configuredLatencyMs: number | null;
+  private configuredLatencyMs: number | null;
   private effectiveStreamId: string;
   private effectiveClientIds: string[];
 
@@ -135,6 +135,17 @@ export class SnapcastOutput implements ZoneOutput {
   public async dispose(): Promise<void> {
     this.stopStream();
     this.ports.snapcastGroup.unregister(this.zoneId);
+  }
+
+  /** Hot-update the snapclient latency; pushes the new value to the configured clients. */
+  public setLatencyMs(ms: number): void {
+    const normalized = normalizeLatencyMs(ms);
+    if (normalized === this.configuredLatencyMs) {
+      return;
+    }
+    this.configuredLatencyMs = normalized;
+    const clientIds = this.baseClientIds.length > 0 ? this.baseClientIds : this.effectiveClientIds;
+    this.applyConfiguredLatency(clientIds);
   }
 
   private async startStream(session: PlaybackSession | null): Promise<void> {

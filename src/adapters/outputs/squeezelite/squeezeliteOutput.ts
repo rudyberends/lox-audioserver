@@ -62,7 +62,7 @@ export class SqueezeliteOutput implements ZoneOutput {
   private lastGroupLeaderId: number | null = null;
   private lastGrouped = false;
   private stoppingAfterDrop = false;
-  private readonly latencyMs: number;
+  private latencyMs: number;
 
   constructor(
     private readonly zoneId: number,
@@ -217,6 +217,11 @@ export class SqueezeliteOutput implements ZoneOutput {
 
   public getLatencyMs(): number | null {
     return this.latencyMs || null;
+  }
+
+  /** Hot-update the squeezelite static latency used for sync-group alignment. */
+  public setLatencyMs(ms: number): void {
+    this.latencyMs = normalizeLatencyMs(ms);
   }
 
   public dispose(): void {

@@ -34,6 +34,7 @@ export type ZoneManagerFacade = Pick<
   | 'updateInputMetadata'
   | 'updateRadioMetadata'
   | 'renameZone'
+  | 'setOutputLatency'
   | 'startAlert'
   | 'stopAlert'
   | 'syncGroupMembersToLeader'

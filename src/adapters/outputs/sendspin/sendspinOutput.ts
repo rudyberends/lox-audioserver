@@ -40,6 +40,20 @@ const STREAM_PLAYER_ROLE = 'player';
 export interface SendspinOutputConfig {
   clientId: string;
   endpointUrl?: string;
+  /**
+   * Optional client-side static playback delay (ms). Mapped to the Sendspin protocol's
+   * `set_static_delay` PlayerCommand. Clamped to 0-5000 ms by the protocol.
+   */
+  latencyMs?: number;
+}
+
+const SENDSPIN_MAX_STATIC_DELAY_MS = 5000;
+
+function normalizeSendspinLatencyMs(value: unknown): number {
+  if (value === undefined || value === null || value === '') return 0;
+  const num = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  if (!Number.isFinite(num)) return 0;
+  return Math.max(0, Math.min(SENDSPIN_MAX_STATIC_DELAY_MS, Math.round(num)));
 }
 
 export type SendspinMetadataPayload = Parameters<SendspinSession['sendMetadata']>[0];
@@ -75,6 +89,13 @@ export const SENDSPIN_OUTPUT_DEFINITION: OutputConfigDefinition = {
       placeholder: 'ws://esphome.local:8928/sendspin',
       required: false,
       description: 'Optional direct websocket endpoint from discovery; keeps clientId for identity.',
+    },
+    {
+      id: 'latencyMs',
+      label: 'Latency (ms)',
+      type: 'text',
+      placeholder: '0',
+      description: 'Optional client-side static playback delay (0-5000 ms). Higher = sound is later.',
     },
   ],
 };
@@ -132,6 +153,8 @@ export class SendspinOutput implements ZoneOutput {
   private anchorLeadUs = SendspinOutput.resolveAnchorLeadUs();
   // Keep target lead aligned with the configured anchor for low-latency playback.
   private readonly targetLeadUs = this.anchorLeadUs;
+  /** Configured client-side static playback delay (ms), pushed via `set_static_delay`. */
+  private configuredLatencyMs: number;
   private lastMetadataSignature: string | null = null;
   private lastStreamSignature: string | null = null;
   private pcmRemainder: Buffer | null = null;
@@ -154,6 +177,7 @@ export class SendspinOutput implements ZoneOutput {
   ) {
     this.clientId = config.clientId;
     this.resolvedClientId = config.clientId;
+    this.configuredLatencyMs = normalizeSendspinLatencyMs(config.latencyMs);
     this.options = { ignoreVolumeUpdates: true, ...options };
     this.unwatchClient = this.ports.sendspinConnector.watchClient(this.clientId, config.endpointUrl);
     sendspinOutputsByZoneId.set(this.zoneId, this);
@@ -190,6 +214,7 @@ export class SendspinOutput implements ZoneOutput {
             ? zoneState.volume
             : this.lastKnownVolume;
         this.setVolume(initialZoneVolume);
+        this.sendStaticDelay();
         this.sendControllerState();
         this.sendCurrentSnapshot();
         if (this.playbackState === 'playing') {
@@ -222,6 +247,10 @@ export class SendspinOutput implements ZoneOutput {
       },
     };
     this.hooksStop = this.ports.sendspinHooks.register(this.clientId, hooks);
+    // Push the static-delay to any already-connected session right away. onIdentified
+    // only fires on a fresh handshake, so without this the value would only land after
+    // the client reconnects.
+    this.sendStaticDelay();
     this.unwatchResolvedClient = this.ports.sendspinConnector.onClientResolved(this.clientId, (resolvedClientId) => {
       this.resolvedClientId = resolvedClientId;
       if (resolvedClientId === this.clientId || this.resolvedHooksStop) {
@@ -253,7 +282,43 @@ export class SendspinOutput implements ZoneOutput {
   }
 
   public getLatencyMs(): number {
-    return Math.max(0, Math.round(this.targetLeadUs / 1000));
+    const leadMs = Math.max(0, Math.round(this.targetLeadUs / 1000));
+    return leadMs + this.configuredLatencyMs;
+  }
+
+  /** Hot-update the static delay; pushes the new value to the live client. */
+  public setLatencyMs(ms: number): void {
+    const next = normalizeSendspinLatencyMs(ms);
+    if (next === this.configuredLatencyMs) {
+      return;
+    }
+    this.configuredLatencyMs = next;
+    this.sendStaticDelay();
+  }
+
+  /**
+   * Push the configured client-side static delay to the connected client. Not gated by
+   * ownership — the static delay is benign per-client config that should reflect the
+   * latest configured value regardless of which zone currently "owns" the client.
+   */
+  private sendStaticDelay(): void {
+    const session =
+      this.activeSession ?? sendspinCore.getSessionByClientId?.(this.activeClientId()) ?? null;
+    if (!session) {
+      this.log.debug('Sendspin set_static_delay skipped; no live session', {
+        zoneId: this.zoneId,
+        clientId: this.activeClientId(),
+      });
+      return;
+    }
+    session.sendServerCommand(PlayerCommand.SET_STATIC_DELAY, {
+      static_delay_ms: this.configuredLatencyMs,
+    });
+    this.log.info('Sendspin set_static_delay sent', {
+      zoneId: this.zoneId,
+      clientId: this.activeClientId(),
+      staticDelayMs: this.configuredLatencyMs,
+    });
   }
 
   /** Push a volume change down to the client (used by zone manager). */

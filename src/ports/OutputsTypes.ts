@@ -32,6 +32,8 @@ export interface ZoneOutput {
   getPreferredOutput?(): PreferredOutput | null;
   /** Optional estimated output latency/buffer in milliseconds. */
   getLatencyMs?(): number | null;
+  /** Optional hot-update for output latency (e.g. snapcast/squeezelite/sendspin). */
+  setLatencyMs?(ms: number): Promise<void> | void;
   /** Optional HTTP streaming preferences for outputs that pull via HTTP (e.g. DLNA/Cast). */
   getHttpPreferences?(): HttpPreferences | null;
   dispose(): Promise<void> | void;
