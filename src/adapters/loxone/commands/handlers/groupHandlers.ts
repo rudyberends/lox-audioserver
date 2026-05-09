@@ -158,9 +158,10 @@ async function audioGroupedVolume(
   zoneManager: ZoneManagerFacade,
   command: string,
 ) {
+  const players: Array<{ playerid: number; volume: number }> = [];
   const match = command.match(GROUP_VOLUME_RE);
   if (!match) {
-    return buildResponse(command, 'grouped_volume', { success: false, error: 'invalid-url' });
+    return buildResponse(command, 'grouped_volume', { players });
   }
 
   const valueToken = decodeURIComponent(match[1] ?? '');
@@ -170,15 +171,12 @@ async function audioGroupedVolume(
     .map(Number)
     .filter((id) => id > 0);
 
-  const results: Array<{ zoneId: number; newVolume: number }> = [];
-  const skipped: Array<{ zoneId: number; reason: string }> = [];
   const plus = new Set(['+', 'plus', 'up']);
   const minus = new Set(['-', 'minus', 'down']);
 
   for (const zoneId of zoneIds) {
     const state = zoneManager.getState(zoneId);
     if (!state) {
-      skipped.push({ zoneId, reason: 'zone-not-found' });
       continue;
     }
 
@@ -198,31 +196,35 @@ async function audioGroupedVolume(
     try {
       zoneManager.handleCommand(zoneId, 'volume_set', payload);
       const updated = zoneManager.getState(zoneId);
-      results.push({ zoneId, newVolume: clampVolume(updated?.volume ?? next) });
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      skipped.push({ zoneId, reason });
+      players.push({ playerid: zoneId, volume: clampVolume(updated?.volume ?? next) });
+    } catch {
+      // zone refused the volume change — omit from the result set
     }
   }
 
-  if (results.length > 0) {
+  if (players.length > 0) {
     groupManager.broadcastGroupState();
   }
 
-  return buildResponse(command, 'grouped_volume', {
-    success: results.length > 0,
-    updated: results,
-    skipped,
-  });
+  return buildResponse(command, 'grouped_volume', { players });
 }
 
 async function audioGroupedPlayback(zoneManager: ZoneManagerFacade, command: string) {
   const match = command.match(GROUP_PLAYBACK_RE);
+  const action = (match?.[1] ?? '') as 'pause' | 'play' | 'resume' | 'stop' | '';
+  // The v17 client only sends pause/play; the response envelope is keyed per action
+  // (`grouped_pause_result` / `grouped_play_result`) and `mode` literally echoes the URL action.
+  const responseName =
+    action === 'pause' || action === 'play' || action === 'resume' || action === 'stop'
+      ? `grouped_${action}`
+      : 'grouped_play';
+  const responseMode = action === 'pause' ? 'pause' : 'play';
+
+  const players: Array<{ playerid: number; mode: 'pause' | 'play' }> = [];
   if (!match) {
-    return buildResponse(command, 'grouped_playback', { success: false, error: 'invalid-url' });
+    return buildResponse(command, responseName, { players });
   }
 
-  const action = match[1] ?? '';
   const targets = decodeURIComponent(match[2] ?? '')
     .split(',')
     .map(Number)
@@ -234,35 +236,22 @@ async function audioGroupedPlayback(zoneManager: ZoneManagerFacade, command: str
     play: 'resume',
     resume: 'resume',
   };
-
   const mapped = cmdMap[action];
   if (!mapped) {
-    return buildResponse(command, 'grouped_playback', { success: false, error: 'invalid-action' });
+    return buildResponse(command, responseName, { players });
   }
-
-  const updated: number[] = [];
-  const skipped: Array<{ zoneId: number; reason: string }> = [];
 
   for (const zoneId of targets) {
-    const state = zoneManager.getState(zoneId);
-    if (!state) {
-      skipped.push({ zoneId, reason: 'zone-not-found' });
+    if (!zoneManager.getState(zoneId)) {
       continue;
     }
-
     try {
       zoneManager.handleCommand(zoneId, mapped);
-      updated.push(zoneId);
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      skipped.push({ zoneId, reason });
+      players.push({ playerid: zoneId, mode: responseMode });
+    } catch {
+      // zone refused the action — omit from the result set
     }
   }
 
-  return buildResponse(command, 'grouped_playback', {
-    success: updated.length > 0,
-    action: mapped,
-    updated,
-    skipped,
-  });
+  return buildResponse(command, responseName, { players });
 }

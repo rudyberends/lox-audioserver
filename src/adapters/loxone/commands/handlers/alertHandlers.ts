@@ -91,13 +91,11 @@ export async function audioPlayUploadedAlert(command: string) {
     .filter((n) => Number.isFinite(n) && n > 0);
 
   if (!filename || zones.length === 0) {
-    return buildResponse(command, 'groupalert', [
-      { success: false, type: 'uploaded', action: 'on', reason: 'invalid-url' },
-    ]);
+    return buildResponse(command, 'playuploadedfile', false);
   }
 
   const result = await alertsManager.handleUploadedAlert(filename, zones);
-  return buildResponse(command, 'groupalert', [result]);
+  return buildResponse(command, 'playuploadedfile', Boolean(result?.success));
 }
 
 /**
