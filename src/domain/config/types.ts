@@ -211,6 +211,13 @@ export interface ZonePowerManagerConfig {
   offDelayEnabled?: boolean;
   /** Delay before applying OFF actions (zone exits play mode). Defaults to 300000 ms. */
   offDelayMs?: number;
+  /**
+   * When true, pausing the zone immediately resets the runtime volume to the
+   * configured default volume (matches the reference Loxone Audio Server's
+   * behavior). Independent of offDelayMs, so the amp can stay powered on while
+   * the volume reverts. Defaults to false.
+   */
+  resetVolumeOnPause?: boolean;
   gpio?: ZoneGpioPowerConfig | null;
   url?: ZoneUrlPowerConfig | null;
   udp?: ZoneUdpPowerConfig | null;

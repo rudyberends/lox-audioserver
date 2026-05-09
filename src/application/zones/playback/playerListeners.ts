@@ -89,11 +89,19 @@ function onPlayerStarted(
   if (ctx) {
     // During an alert, the alert flow has already set state.volume to the
     // per-event volume (e.g. the TTS slider value). Don't replace it.
+    // When resetVolumeOnPause is enabled, treat pause-resume as a fresh start
+    // too so the configured default volume is reapplied on every play action.
+    const resumeFromPause =
+      ctx.config.powerManager?.resetVolumeOnPause === true && ctx.state.mode === 'pause';
     const isFreshStart =
-      !ctx.alert && (ctx.state.mode === 'stop' || ctx.state.powerState === 'off');
+      !ctx.alert &&
+      (ctx.state.mode === 'stop' || ctx.state.powerState === 'off' || resumeFromPause);
     const volume = isFreshStart
       ? getZoneDefaultVolume(ctx.config)
       : clampVolumeForZone(ctx.config, ctx.state.volume);
+    if (isFreshStart) {
+      ctx.player.setVolume(volume);
+    }
     coordinator.dispatchVolume(ctx, outputs, volume);
     const patch = {
       ...buildStartedPatch({ ctx, session, audioHelpers: coordinator.audioHelpers }),
@@ -120,7 +128,20 @@ function onPlayerResumed(
   }
   const ctx = coordinator.getZone(zoneId);
   if (ctx) {
-    coordinator.applyPatch(zoneId, buildResumedPatch({ ctx, audioHelpers: coordinator.audioHelpers }));
+    // Reset to configured default volume when resuming, if the zone is opted
+    // into the reference Loxone behavior. Skipped during alerts so the alert
+    // volume (e.g. the TTS slider value) is preserved.
+    const resetVolume =
+      !ctx.alert && ctx.config.powerManager?.resetVolumeOnPause === true;
+    const patch = buildResumedPatch({ ctx, audioHelpers: coordinator.audioHelpers });
+    if (resetVolume) {
+      const defaultVolume = getZoneDefaultVolume(ctx.config);
+      ctx.player.setVolume(defaultVolume);
+      coordinator.dispatchVolume(ctx, outputs, defaultVolume);
+      coordinator.applyPatch(zoneId, { ...patch, volume: defaultVolume });
+    } else {
+      coordinator.applyPatch(zoneId, patch);
+    }
   }
 }
 
