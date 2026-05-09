@@ -390,8 +390,15 @@ class SpotifyConnectInstance {
         lowerMessage.includes('too many requests') ||
         lowerMessage.includes('rate limit');
       if (ev.errorCode === 'audio_key_error') {
-        // Audio key errors usually mean the session is unhealthy; trigger a cool-down.
-        this.restartStreak = { count: 10, firstAt: Date.now() };
+        // A single decode failure (e.g. Symphonia end-of-stream on one track) must
+        // not force a 5-minute cooldown. Use count=8 so the next scheduleRestart
+        // increments to 9 (below the >=10 cooldown threshold) and restarts with
+        // the normal max-backoff delay (~60 s + jitter) instead of 5 minutes.
+        // Persistent failures will naturally accumulate to >=10 over subsequent
+        // restarts and then trigger the cooldown as intended.
+        if (this.restartStreak.count < 8) {
+          this.restartStreak = { count: 8, firstAt: Date.now() };
+        }
       } else if (lowerMessage.includes('bad_request') || lowerMessage.includes('bad request')) {
         // Likely invalid/insufficient access token scopes; avoid tight loops.
         this.restartStreak = { count: 10, firstAt: Date.now() };
