@@ -147,6 +147,39 @@ test('buildQueueForRequest clamps startIndex when no match', async () => {
   assert.equal(result.startIndex, 1);
 });
 
+test('buildQueueForRequest finds requested track at startIndex >= 50 when window covers it (issue #200)', async () => {
+  const items = Array.from({ length: 100 }, (_, i) =>
+    makeQueueItem({ audiopath: `spotify:track:t${i}`, unique_id: `id-${i}` }),
+  );
+  const queueController = {
+    buildQueueForUri: async () => items,
+  } as unknown as ZoneQueueController;
+
+  const result = await buildQueueForRequest({
+    request: {
+      zoneId: 1,
+      zoneName: 'Zone',
+      uri: 'spotify:track:t50/parentpath/spotify:playlist:p/50/noshuffle',
+      resolvedTarget: 'spotify:playlist:p',
+      queueSourcePath: 'spotify:track:t50/parentpath/spotify:playlist:p/50',
+      queueAudiopath: 'spotify:track:t50',
+      parentContext: { parent: 'spotify:playlist:p', startItem: 'spotify:track:t50', startIndex: 50 },
+      isRadio: false,
+      isAppleMusic: false,
+      isMusicAssistant: false,
+      queueBuildLimit: 100,
+      startIndexHint: 50,
+      startItemHint: 'spotify:track:t50',
+    },
+    queueController,
+    content: noopContentPort,
+    audioHelpers: noopAudioHelpers,
+  });
+
+  assert.equal(result.startIndex, 50);
+  assert.equal(result.items[result.startIndex]?.audiopath, 'spotify:track:t50');
+});
+
 test('buildPlaybackPlan classifies spotify/musicassistant/provider/playUri', () => {
   const ctx = { id: 1, name: 'Zone' } as ZoneContext;
   const settings: PreferredPlaybackSettings = { outputOverride: null };

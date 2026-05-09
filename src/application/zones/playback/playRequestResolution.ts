@@ -122,7 +122,13 @@ export function resolvePlayRequest(args: {
   const shouldLimitQueueBuild = Boolean(
     targetForQueueBuild && /(library-)?(album|playlist|artist):/i.test(targetForQueueBuild),
   );
-  const queueBuildLimit = shouldLimitQueueBuild ? 50 : undefined;
+  // Grow initial window to cover parentContext.startIndex so the requested track
+  // is in the loaded queue. Without this, an out-of-window startIndex gets clamped
+  // to the last loaded item and the wrong track plays. (issue #200)
+  const startIndexForLimit = parentContext?.startIndex ?? 0;
+  const queueBuildLimit = shouldLimitQueueBuild
+    ? Math.max(50, Math.ceil((startIndexForLimit + 1) / 50) * 50)
+    : undefined;
   const isLineIn = type === 'linein';
 
   return {
