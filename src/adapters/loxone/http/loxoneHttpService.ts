@@ -1,4 +1,6 @@
 import http from 'node:http';
+import https from 'node:https';
+import net from 'node:net';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   connection as WebSocketConnection,
@@ -9,6 +11,8 @@ import { createLogger } from '@/shared/logging/logger';
 import type { LoxoneHttpConfig } from '@/config/loxone';
 import { LoxoneCommandProcessor, type LoxoneCommandProcessorOptions } from '@/adapters/loxone/http/commandProcessor';
 import { LoxoneUdpDiscovery } from '@/adapters/loxone/http/loxoneUdpDiscovery';
+import { createDualProtocolServer } from '@/adapters/loxone/http/protocolDispatcher';
+import { loadOrGenerateSelfSignedTls, type TlsContext } from '@/adapters/loxone/http/tlsContext';
 import type { LoxoneServerOptions } from '@/adapters/loxone/http/types';
 import { formatCommand } from '@/adapters/loxone/commands/utils/commandFormatter';
 import type { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry';
@@ -29,7 +33,9 @@ import type { LoxoneConfigService } from '@/adapters/loxone/services/loxoneConfi
 interface ServerRuntime {
   definition: LoxoneServerOptions;
   httpServer: http.Server;
+  listener: net.Server;
   wsServer: WebSocketServer;
+  tlsEnabled: boolean;
 }
 
 export interface LoxoneHttpServiceOptions {
@@ -82,8 +88,9 @@ export class LoxoneHttpService {
   }
 
   public async start(): Promise<void> {
+    const tls = await loadOrGenerateSelfSignedTls();
     for (const definition of this.config.servers) {
-      const runtime = this.createServer(definition);
+      const runtime = this.createServer(definition, tls);
       await this.listen(runtime);
       this.servers.push(runtime);
     }
@@ -92,21 +99,26 @@ export class LoxoneHttpService {
 
     this.log.info('loxone servers ready', {
       ports: this.config.servers.map((s) => s.port).join(', '),
+      tls: tls ? 'enabled' : 'disabled',
     });
   }
 
   public async stop(): Promise<void> {
     this.udpDiscovery.stop();
     for (const runtime of this.servers) {
-      await new Promise<void>((resolve) => runtime.httpServer.close(() => resolve()));
+      await new Promise<void>((resolve) => runtime.listener.close(() => resolve()));
+      runtime.httpServer.close();
       runtime.wsServer.closeAllConnections();
     }
     this.servers.length = 0;
   }
 
-  private createServer(definition: LoxoneServerOptions): ServerRuntime {
+  private createServer(
+    definition: LoxoneServerOptions,
+    tlsContext: TlsContext | null,
+  ): ServerRuntime {
     const log = this.log;
-    const httpServer = http.createServer((req, res) => {
+    const requestListener = (req: IncomingMessage, res: ServerResponse): void => {
       this.handleHttp(definition, req, res).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         log.error('loxone http handler failed', {
@@ -116,10 +128,19 @@ export class LoxoneHttpService {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'loxone-http-internal-error' }));
       });
-    });
+    };
 
+    const httpServer = http.createServer(requestListener);
+    const httpsServer = tlsContext
+      ? https.createServer({ cert: tlsContext.cert, key: tlsContext.key }, requestListener)
+      : null;
+    const listener = createDualProtocolServer(httpServer, httpsServer);
+
+    const wsTargets: http.Server[] = httpsServer
+      ? [httpServer, httpsServer as unknown as http.Server]
+      : [httpServer];
     const wsServer = new WebSocketServer({
-      httpServer,
+      httpServer: wsTargets,
       autoAcceptConnections: true,
     });
 
@@ -127,16 +148,17 @@ export class LoxoneHttpService {
       this.handleWebSocket(definition, connection),
     );
 
-    return { definition, httpServer, wsServer };
+    return { definition, httpServer, listener, wsServer, tlsEnabled: !!httpsServer };
   }
 
   private listen(runtime: ServerRuntime): Promise<void> {
     return new Promise((resolve, reject) => {
-      runtime.httpServer
+      runtime.listener
         .listen(runtime.definition.port, this.options.host, () => {
           this.log.info('loxone server listening', {
             name: runtime.definition.name,
             port: runtime.definition.port,
+            tls: runtime.tlsEnabled ? 'dual' : 'plain',
           });
           resolve();
         })
