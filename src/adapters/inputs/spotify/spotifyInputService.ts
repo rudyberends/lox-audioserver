@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { resolveDataDir } from '@/shared/utils/file';
 import { createLogger } from '@/shared/logging/logger';
 import { bestEffort } from '@/shared/bestEffort';
 import type {
@@ -100,7 +101,7 @@ class SpotifyConnectInstance {
     accountId: string | undefined,
     private deviceId: string,
     private credentialsPath: string,
-    _configPort: ConfigPort,
+    private readonly configPort: ConfigPort,
     spotifyManagers: SpotifyServiceManagerProvider,
     deviceRegistry: SpotifyDeviceRegistry,
     stopAirplaySession: AirplaySessionStopper,
@@ -226,6 +227,17 @@ class SpotifyConnectInstance {
 
   public setCredentialsPayload(payload: string): void {
     this.credentialsPayload = payload;
+  }
+
+  private resolveAudioCacheOpts(): { cacheDir: string | null; cacheSizeLimitMb: number | null } {
+    const globalSpotify = this.configPort.getConfig()?.content?.spotify;
+    const cacheEnabled = globalSpotify?.cacheEnabled !== false; // default true
+    if (!cacheEnabled) {
+      return { cacheDir: null, cacheSizeLimitMb: null };
+    }
+    const cacheSizeMb = globalSpotify?.cacheSizeMb ?? 1024;
+    const cacheDir = resolveDataDir('spotify', 'audio-cache');
+    return { cacheDir, cacheSizeLimitMb: cacheSizeMb };
   }
 
   public getZoneId(): number {
@@ -891,11 +903,14 @@ class SpotifyConnectInstance {
         await this.crossfadeSession.close().catch(() => {});
         this.crossfadeSession = null;
       }
+      const { cacheDir: xfCacheDir, cacheSizeLimitMb: xfCacheSize } = this.resolveAudioCacheOpts();
       const session = await createNativeLibrespotSession({
         accessToken: accessToken ?? null,
         credentialsJson: credentialsJson ?? null,
         clientId: null,
         deviceName,
+        cacheDir: xfCacheDir,
+        cacheSizeLimitMb: xfCacheSize,
       });
       if (!session) {
         this.log.warn('spotify crossfade session unavailable', { zoneId: this.zoneId });
@@ -1184,11 +1199,14 @@ class SpotifyConnectInstance {
     }
 
     await this.closeNativeSession('replace');
+    const { cacheDir, cacheSizeLimitMb } = this.resolveAudioCacheOpts();
     const session = await createNativeLibrespotSession({
       accessToken: accessToken ?? null,
       credentialsJson: credentialsJson ?? null,
       clientId,
       deviceName,
+      cacheDir,
+      cacheSizeLimitMb,
     });
     if (!session) {
       return null;

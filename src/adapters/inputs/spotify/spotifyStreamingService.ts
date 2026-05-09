@@ -21,6 +21,8 @@ type NativeAddon = typeof import('@lox-audioserver/node-librespot') & {
   createSessionWithCredentials?: (
     credentialsJson: string,
     deviceName: string | null,
+    cacheDir?: string | null,
+    cacheSizeLimitMb?: number | null,
   ) => Promise<LibrespotSession | null>;
   startConnectDeviceWithCredentials?: (...args: unknown[]) => Promise<ConnectHandle>;
   startConnectDeviceWithToken?: (...args: unknown[]) => Promise<ConnectHandle>;
@@ -70,12 +72,23 @@ const handleNativeLog =
     };
 
 async function getSession(
-  opts: CreateSessionOpts & { accessToken?: string; clientId?: string; credentialsJson?: string },
+  opts: CreateSessionOpts & {
+    accessToken?: string;
+    clientId?: string;
+    credentialsJson?: string;
+    cacheDir?: string;
+    cacheSizeLimitMb?: number;
+  },
 ): Promise<LibrespotSession | null> {
   try {
     const credentialsJson = opts.credentialsJson;
     if (credentialsJson && typeof addon.createSessionWithCredentials === 'function') {
-      return await addon.createSessionWithCredentials(credentialsJson, opts.deviceName ?? null);
+      return await addon.createSessionWithCredentials(
+        credentialsJson,
+        opts.deviceName ?? null,
+        opts.cacheDir ?? null,
+        opts.cacheSizeLimitMb ?? null,
+      );
     }
     // Intentionally omit clientId unless explicitly needed; overriding can break playback.
     const safeOpts: any = { ...opts };
@@ -96,8 +109,10 @@ export async function createNativeLibrespotSession(params: {
   credentialsJson?: string | null;
   clientId?: string | null;
   deviceName?: string;
+  cacheDir?: string | null;
+  cacheSizeLimitMb?: number | null;
 }): Promise<LibrespotSession | null> {
-  const { accessToken, credentialsJson, clientId, deviceName } = params;
+  const { accessToken, credentialsJson, clientId, deviceName, cacheDir, cacheSizeLimitMb } = params;
   if (!accessToken && !credentialsJson) {
     return null;
   }
@@ -106,6 +121,8 @@ export async function createNativeLibrespotSession(params: {
     clientId: clientId || undefined,
     deviceName,
     credentialsJson: credentialsJson || undefined,
+    cacheDir: cacheDir || undefined,
+    cacheSizeLimitMb: cacheSizeLimitMb ?? undefined,
   });
 }
 
