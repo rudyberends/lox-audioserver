@@ -14,6 +14,7 @@ import type { ConfigPort } from '../src/ports/ConfigPort';
 import type { ContentPort } from '../src/ports/ContentPort';
 import { makeNotifierFake } from './fakes/notifierPort';
 import { AudioManager } from '../src/application/playback/audioManager';
+import { ZoneAudioPreferences } from '../src/application/playback/ZoneAudioPreferences';
 import { makePlaybackServiceFake } from './fakes/playbackService';
 import { createRecentsManager } from '../src/application/zones/recents/recentsManager';
 import { createFavoritesManager } from '../src/application/zones/favorites/favoritesManager';
@@ -105,6 +106,7 @@ function createHandler(): AdminApiHandler {
     sendspinHookRegistry,
     noopConfigPort,
   );
+  const zoneAudioPrefs = new ZoneAudioPreferences();
   const audioManager = new AudioManager(makePlaybackServiceFake(), {
     notifyOutputError: () => {
       /* noop */
@@ -112,7 +114,7 @@ function createHandler(): AdminApiHandler {
     notifyOutputState: () => {
       /* noop */
     },
-  });
+  }, zoneAudioPrefs);
   const outputHandlers = {
     onQueueUpdate: () => {
       /* noop */
@@ -166,6 +168,7 @@ function createHandler(): AdminApiHandler {
       customRadioStore,
     }),
     audioManager,
+    zoneAudioPrefs,
     mdnsPort: noopMdnsPort,
   });
 }

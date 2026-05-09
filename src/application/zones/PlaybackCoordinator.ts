@@ -1,5 +1,6 @@
 import type { ComponentLogger } from '@/shared/logging/logger';
 import type { AudioManager, PlaybackMetadata, PlaybackSession, PlaybackSource, CoverArtPayload } from '@/application/playback/audioManager';
+import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import type { QueueAuthority, ZoneContext } from '@/application/zones/internal/zoneTypes';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
@@ -70,6 +71,7 @@ type PlaybackCoordinatorDeps = {
   configPort: ConfigPort;
   recentsManager: RecentsManager;
   audioManager: AudioManager;
+  zoneAudioPrefs: ZoneAudioPreferences;
 };
 
 export class PlaybackCoordinator {
@@ -90,6 +92,7 @@ export class PlaybackCoordinator {
   private readonly configPort: ConfigPort;
   private readonly recentsManager: RecentsManager;
   private readonly audioManager: AudioManager;
+  private readonly zoneAudioPrefs: ZoneAudioPreferences;
   private readonly radioParadise: RadioParadiseBlockService;
   private readonly queueStepDispatcher: QueueStepDispatcher;
   private readonly zonesMissingOutput = new Set<number>();
@@ -146,6 +149,7 @@ export class PlaybackCoordinator {
     this.configPort = deps.configPort;
     this.recentsManager = deps.recentsManager;
     this.audioManager = deps.audioManager;
+    this.zoneAudioPrefs = deps.zoneAudioPrefs;
     this.radioParadise = new RadioParadiseBlockService({
       getZone: (zoneId) => this.zoneRepo.get(zoneId),
       updateRadioMetadata: (zoneId, metadata) => this.updateRadioMetadata(zoneId, metadata),
@@ -846,7 +850,7 @@ export class PlaybackCoordinator {
       content: this.contentPort,
       inputs: this.inputsPort,
       log: this.log,
-      audioManager: this.audioManager,
+      zoneAudioPrefs: this.zoneAudioPrefs,
       startAtSec,
     });
     if (!session) {

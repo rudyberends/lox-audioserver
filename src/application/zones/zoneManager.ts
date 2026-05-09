@@ -11,6 +11,7 @@ import {
   type PlaybackSource,
   type CoverArtPayload,
 } from '@/application/playback/audioManager';
+import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import { ZonePlayer } from '@/application/playback/zonePlayer';
 import { QueueController as PlaybackQueueController } from '@/application/playback/queueController';
 import { QueueController as ZoneQueueController } from '@/application/zones/QueueController';
@@ -109,6 +110,7 @@ export class ZoneManager {
   private readonly contentPort: ContentPort;
   private readonly configPort: ConfigPort;
   private readonly audioManager: AudioManager;
+  private readonly zoneAudioPrefs: ZoneAudioPreferences;
   private readonly powerManager: PowerManager;
   private readonly sharedPowerGroupManager: SharedPowerGroupManager;
   private initialized = false;
@@ -154,6 +156,7 @@ export class ZoneManager {
     configPort: ConfigPort,
     recentsManager: RecentsManager,
     audioManager: AudioManager,
+    zoneAudioPrefs: ZoneAudioPreferences,
     mixedGroup: MixedGroupCoordinator | null = null,
   ) {
     this.notifier = notifier;
@@ -162,6 +165,7 @@ export class ZoneManager {
     this.contentPort = contentPort;
     this.configPort = configPort;
     this.audioManager = audioManager;
+    this.zoneAudioPrefs = zoneAudioPrefs;
     this.powerManager = new PowerManager(this.log, undefined, (zoneId, signal) => {
       if (signal === 0) {
         const ctx = this.zoneRepo.get(zoneId);
@@ -183,8 +187,8 @@ export class ZoneManager {
       this.applyPatch(zoneId, { powerState: 'on' });
     });
     this.sharedPowerGroupManager = new SharedPowerGroupManager(this.log);
-    this.audioManager.setZonePowerStateResolver((zoneId) => this.powerManager.isSignalOn(zoneId));
-    this.audioManager.setZoneEqualizerResolver((zoneId) => this.resolveBuiltinEqualizerBands(zoneId));
+    this.zoneAudioPrefs.setZonePowerStateResolver((zoneId) => this.powerManager.isSignalOn(zoneId));
+    this.zoneAudioPrefs.setZoneEqualizerResolver((zoneId) => this.resolveBuiltinEqualizerBands(zoneId));
     this.audioHelpers = createZoneAudioHelpers(contentPort, configPort);
     const audioHelpers = this.audioHelpers;
     const notifierProxy: NotifierPort = {
@@ -258,6 +262,7 @@ export class ZoneManager {
       configPort: this.configPort,
       recentsManager,
       audioManager: this.audioManager,
+      zoneAudioPrefs: this.zoneAudioPrefs,
     });
     this.alertsCoordinator = new AlertsCoordinator({
       zones: this.zoneRepo,
@@ -265,7 +270,7 @@ export class ZoneManager {
       applyPatch: (zoneId, patch, force) => this.applyPatch(zoneId, patch, force),
       log: this.log,
       audioHelpers,
-      audioManager: this.audioManager,
+      zoneAudioPrefs: this.zoneAudioPrefs,
     });
   }
 
@@ -496,7 +501,7 @@ export class ZoneManager {
     if (!ctx) {
       return;
     }
-    this.audioManager.setPlaybackPreDelayMs(zoneId, null);
+    this.zoneAudioPrefs.setPlaybackPreDelayMs(zoneId, null);
     this.powerManager.clearZone(zoneId);
     try {
       const session = ctx.player.stop('reconfigure');
@@ -792,7 +797,7 @@ export class ZoneManager {
   }
 
   private registerZone(config: ZoneConfig): void {
-    this.audioManager.setPlaybackPreDelayMs(
+    this.zoneAudioPrefs.setPlaybackPreDelayMs(
       config.id,
       normalizeZonePlaybackPreDelayMs(config.powerManager?.playbackPreDelayMs),
     );
@@ -871,7 +876,7 @@ export class ZoneManager {
 
   private clearZoneContexts(): void {
     for (const ctx of this.zoneRepo.list()) {
-      this.audioManager.setPlaybackPreDelayMs(ctx.id, null);
+      this.zoneAudioPrefs.setPlaybackPreDelayMs(ctx.id, null);
       this.zoneRepo.delete(ctx.id);
     }
   }

@@ -243,14 +243,10 @@ class FakeRecentsManager {
   }
 }
 
-class FakeAudioManager {
+class FakeZoneAudioPreferences {
   public readonly preferred: Array<{ zoneId: number; settings: unknown }> = [];
   public readonly httpPrefs: Array<{ zoneId: number; prefs: unknown }> = [];
   public readonly inputPrefs: Array<{ zoneId: number; prefs: unknown }> = [];
-  public readonly playRequests: Array<{ zoneId: number; req: { uri: string; type: string } }> = [];
-  public readonly clearedPlayRequests: number[] = [];
-  public readonly sessionMetadataUpdates: Array<{ zoneId: number; metadata: PlaybackMetadata }> = [];
-  public session: PlaybackSession | null = null;
 
   public setPreferredOutputSettings(zoneId: number, settings: unknown): void {
     this.preferred.push({ zoneId, settings });
@@ -263,6 +259,13 @@ class FakeAudioManager {
   public setInputPreferences(zoneId: number, prefs: unknown): void {
     this.inputPrefs.push({ zoneId, prefs });
   }
+}
+
+class FakeAudioManager {
+  public readonly playRequests: Array<{ zoneId: number; req: { uri: string; type: string } }> = [];
+  public readonly clearedPlayRequests: number[] = [];
+  public readonly sessionMetadataUpdates: Array<{ zoneId: number; metadata: PlaybackMetadata }> = [];
+  public session: PlaybackSession | null = null;
 
   public markPlayRequest(zoneId: number, req: { uri: string; type: string }): void {
     this.playRequests.push({ zoneId, req });
@@ -579,6 +582,7 @@ function createHarness(options?: {
   const queueController = new FakeQueueController();
   const recentsManager = new FakeRecentsManager();
   const audioManager = new FakeAudioManager();
+  const zoneAudioPrefs = new FakeZoneAudioPreferences();
   const configPort = new FakeConfigPort(baseConfig);
   const contentPort = options?.contentPort ?? noopContentPort;
   const audioHelpers: ZoneAudioHelpers = createZoneAudioHelpers(contentPort, configPort);
@@ -657,6 +661,7 @@ function createHarness(options?: {
     configPort,
     recentsManager: recentsManager as unknown as RecentsManager,
     audioManager: audioManager as unknown as AudioManager,
+    zoneAudioPrefs: zoneAudioPrefs as any,
   });
   // Speed up queue stepping for tests (otherwise waits 150ms).
   (coordinator as any).queueStepDispatcher.queueStepCoalesceMs = 0;

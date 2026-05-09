@@ -35,6 +35,7 @@ import { StreamEvents } from '@/adapters/http/streams/streamEvents';
 import { SendspinClientConnector } from '@/adapters/outputs/sendspin/sendspinClientConnector';
 import { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import { AudioManager } from '@/application/playback/audioManager';
+import { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
 import { LmsCliServer } from '@/adapters/outputs/squeezelite/lmsCliServer';
 import { NetworkService } from '@/adapters/network';
@@ -157,7 +158,8 @@ export function createRuntime(): Runtime {
     musicAssistant: musicAssistantInputService,
     sendspinLineIn: sendspinLineInService,
   });
-  const audioManager = new AudioManager(new PlaybackService(engine), outputNotifier);
+  const zoneAudioPrefs = new ZoneAudioPreferences();
+  const audioManager = new AudioManager(new PlaybackService(engine), outputNotifier, zoneAudioPrefs);
   const airplayGroupController = createAirplayGroupController(audioManager);
   const snapcastGroupController = createSnapcastGroupController(audioManager);
   const squeezeliteGroupController = createSqueezeliteGroupController();
@@ -193,9 +195,11 @@ export function createRuntime(): Runtime {
     audioManager: {
       getSession: (zoneId) => audioManager.getSession(zoneId),
       getOutputSettings: (zoneId) => audioManager.getOutputSettings(zoneId),
-      getEffectiveOutputSettings: (zoneId) => audioManager.getEffectiveOutputSettings(zoneId),
       startExternalPlayback: (zoneId, label, playbackSource, metadata, requiresPcm) =>
         audioManager.startExternalPlayback(zoneId, label, playbackSource, metadata, requiresPcm),
+    },
+    zoneAudioPrefs: {
+      getEffectiveOutputSettings: (zoneId) => zoneAudioPrefs.getEffectiveOutputSettings(zoneId),
     },
     outputStreamEvents: streamEvents,
     airplayGroup: airplayGroupController,
@@ -223,6 +227,7 @@ export function createRuntime(): Runtime {
     config: configPort,
     recents: recentsManager,
     audioManager,
+    zoneAudioPrefs,
     mixedGroup: mixedGroupController,
   });
   zoneManagerRef = zoneManager;
@@ -333,6 +338,7 @@ export function createRuntime(): Runtime {
       groupManager,
       contentManager,
       audioManager,
+      zoneAudioPrefs,
       mdnsPort: mdnsService,
     });
     networkService = new NetworkService({

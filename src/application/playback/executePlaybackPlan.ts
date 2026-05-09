@@ -1,4 +1,5 @@
-import type { AudioManager, PlaybackMetadata, PlaybackSession, PlaybackSource } from '@/application/playback/audioManager';
+import type { PlaybackMetadata, PlaybackSession, PlaybackSource } from '@/application/playback/audioManager';
+import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import { applyPreferredPlaybackSettings } from '@/application/playback/PlaybackSettingsApplier';
 import type { PlaybackPlan } from '@/application/playback/types/PlaybackPlan';
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
@@ -13,13 +14,13 @@ export type ExecutePlaybackPlanArgs = {
   content: ContentPort;
   inputs: InputsPort;
   log: ComponentLogger;
-  audioManager: AudioManager;
+  zoneAudioPrefs: ZoneAudioPreferences;
   startAtSec?: number;
 };
 
 export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promise<PlaybackSession | null> {
-  const { ctx, plan, content, inputs, log, audioManager, startAtSec } = args;
-  applyPreferredPlaybackSettings(audioManager, ctx.id, plan.preferredSettings);
+  const { ctx, plan, content, inputs, log, zoneAudioPrefs, startAtSec } = args;
+  applyPreferredPlaybackSettings(zoneAudioPrefs, ctx.id, plan.preferredSettings);
   const normalizedStartAt =
     typeof startAtSec === 'number' && Number.isFinite(startAtSec) && startAtSec > 0 ? startAtSec : undefined;
   const resolveStartAt = (source?: PlaybackSource | null): number | undefined => {

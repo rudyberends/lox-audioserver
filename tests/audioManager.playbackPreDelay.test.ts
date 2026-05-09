@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from './testHarness';
 import { AudioManager, type PlaybackSource } from '../src/application/playback/audioManager';
+import { ZoneAudioPreferences } from '../src/application/playback/ZoneAudioPreferences';
 import { PlaybackService } from '../src/application/playback/PlaybackService';
 import type { EnginePort, EngineSessionStats } from '../src/ports/EnginePort';
 import type { EngineStartOptions } from '../src/ports/EngineTypes';
@@ -61,8 +62,9 @@ const outputNotifier = {
 test('audio manager applies zone playback pre-delay to external URL sources', () => {
   const engine = new EngineSpy();
   const service = new PlaybackService(engine);
-  const manager = new AudioManager(service, outputNotifier);
-  manager.setPlaybackPreDelayMs(1, 1200);
+  const prefs = new ZoneAudioPreferences();
+  const manager = new AudioManager(service, outputNotifier, prefs);
+  prefs.setPlaybackPreDelayMs(1, 1200);
 
   manager.startExternalPlayback(1, 'custom', { kind: 'url', url: 'https://example.com/stream.mp3' }, undefined, true);
 
@@ -73,8 +75,9 @@ test('audio manager applies zone playback pre-delay to external URL sources', ()
 test('audio manager keeps larger source pre-delay over zone playback pre-delay', () => {
   const engine = new EngineSpy();
   const service = new PlaybackService(engine);
-  const manager = new AudioManager(service, outputNotifier);
-  manager.setPlaybackPreDelayMs(1, 600);
+  const prefs = new ZoneAudioPreferences();
+  const manager = new AudioManager(service, outputNotifier, prefs);
+  prefs.setPlaybackPreDelayMs(1, 600);
 
   manager.startExternalPlayback(
     1,
@@ -91,9 +94,10 @@ test('audio manager keeps larger source pre-delay over zone playback pre-delay',
 test('audio manager skips zone playback pre-delay when zone power is already on', () => {
   const engine = new EngineSpy();
   const service = new PlaybackService(engine);
-  const manager = new AudioManager(service, outputNotifier);
-  manager.setPlaybackPreDelayMs(1, 1200);
-  manager.setZonePowerStateResolver((zoneId) => zoneId === 1);
+  const prefs = new ZoneAudioPreferences();
+  const manager = new AudioManager(service, outputNotifier, prefs);
+  prefs.setPlaybackPreDelayMs(1, 1200);
+  prefs.setZonePowerStateResolver((zoneId) => zoneId === 1);
 
   manager.startExternalPlayback(1, 'custom', { kind: 'url', url: 'https://example.com/stream.mp3' }, undefined, true);
 

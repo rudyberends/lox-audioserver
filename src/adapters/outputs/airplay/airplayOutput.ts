@@ -155,7 +155,7 @@ export class AirPlayOutput implements ZoneOutput {
       return;
     }
     const outputSettings = this.ports.audioManager.getOutputSettings(this.zoneId);
-    const effectiveOutput = this.ports.audioManager.getEffectiveOutputSettings(this.zoneId);
+    const effectiveOutput = this.ports.zoneAudioPrefs.getEffectiveOutputSettings(this.zoneId);
     const resolvedOutput = outputSettings ?? effectiveOutput;
     this.flowSession.setOutputFormat(
       resolvedOutput.sampleRate,

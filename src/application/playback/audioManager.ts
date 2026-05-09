@@ -11,8 +11,9 @@ import type {
 export type { PlaybackSource, OutputProfile } from '@/ports/EngineTypes';
 import { resolvePlaybackSource } from '@/application/playback/sourceResolver';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
-import { audioOutputSettings, type AudioOutputSettings, type HttpProfile } from '@/ports/types/audioFormat';
+import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 import type { PlaybackService } from '@/application/playback/PlaybackService';
+import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 
 import type {
   PlaybackMetadata,
@@ -47,29 +48,22 @@ type OutputNotifier = {
 export class AudioManager {
   private readonly log = createLogger('Audio', 'Manager');
   private readonly sessions = new Map<number, PlaybackSession>();
-  private readonly zonePcmPreference = new Map<number, boolean>();
-  private readonly zoneOutputOverrides = new Map<number, Partial<AudioOutputSettings>>();
-  private readonly zoneProfileOverrides = new Map<number, OutputProfile>();
-  private readonly zoneInputPreferences = new Map<number, { fileRealTime?: boolean; urlRealTime?: boolean }>();
-  private readonly zonePlaybackPreDelayMs = new Map<number, number>();
-  private readonly zoneTransientGainDb = new Map<number, number>();
-  private isZonePowerOnResolver: ((zoneId: number) => boolean) | null = null;
-  /** Returns the band gains to bake into the ffmpeg pipeline, or null when EQ is off/forwarded. */
-  private zoneEqualizerResolver: ((zoneId: number) => ReadonlyArray<number> | null) | null = null;
   private readonly equalizerRestartTimers = new Map<number, NodeJS.Timeout>();
   private static readonly EQUALIZER_RESTART_DEBOUNCE_MS = 350;
-  private readonly zoneHttpPreferences = new Map<
-    number,
-    { httpProfile?: HttpProfile; icyEnabled?: boolean; icyInterval?: number; icyName?: string }
-  >();
   private readonly playRequestTimes = new Map<number, { requestedAt: number; uri?: string; type?: string }>();
   private readonly playRequestMaxAgeMs = 60_000;
   private readonly playbackService: PlaybackService;
   private readonly outputNotifier: OutputNotifier;
+  private readonly prefs: ZoneAudioPreferences;
 
-  constructor(playbackService: PlaybackService, outputNotifier: OutputNotifier) {
+  constructor(
+    playbackService: PlaybackService,
+    outputNotifier: OutputNotifier,
+    prefs: ZoneAudioPreferences,
+  ) {
     this.playbackService = playbackService;
     this.outputNotifier = outputNotifier;
+    this.prefs = prefs;
     this.playbackService.setSessionTerminationHandler((zoneId, stats, reason) =>
       this.handleEngineTermination(zoneId, stats, reason),
     );
@@ -158,13 +152,13 @@ export class AudioManager {
     if (!source) {
       return source;
     }
-    const zoneDelay = this.zonePlaybackPreDelayMs.get(zoneId);
+    const zoneDelay = this.prefs.getPlaybackPreDelayMs(zoneId);
     if (!Number.isFinite(zoneDelay) || (zoneDelay ?? 0) <= 0) {
       return source;
     }
     const normalizedZoneDelay = Math.max(0, Math.round(zoneDelay ?? 0));
     try {
-      if (this.isZonePowerOnResolver?.(zoneId) === true) {
+      if (this.prefs.getPowerStateResolver()?.(zoneId) === true) {
         return source;
       }
     } catch {
@@ -229,7 +223,7 @@ export class AudioManager {
     options?: { startAtSec?: number },
   ): PlaybackSession | null {
     if (typeof requiresPcm === 'boolean') {
-      this.zonePcmPreference.set(zoneId, requiresPcm);
+      this.prefs.setPcmPreference(zoneId, requiresPcm);
     }
     const startAtSec = this.normalizeStartAtSec(options?.startAtSec);
     const playbackSource = this.decorateRadioSource(
@@ -257,7 +251,7 @@ export class AudioManager {
     options?: { startAtSec?: number },
   ): PlaybackSession | null {
     if (typeof requiresPcm === 'boolean') {
-      this.zonePcmPreference.set(zoneId, requiresPcm);
+      this.prefs.setPcmPreference(zoneId, requiresPcm);
     }
     const startAtSec = this.normalizeStartAtSec(options?.startAtSec);
     const rawSource = playbackSource?.kind === 'url' ? playbackSource.url : undefined;
@@ -322,14 +316,14 @@ export class AudioManager {
       session.playbackSource;
     const profiles = this.computeProfiles(
       effectiveSource,
-      this.zonePcmPreference.get(zoneId) ?? true,
+      this.prefs.getPcmPreference(zoneId) ?? true,
       session.profiles,
     );
     const streamProfile = profiles.includes('flac') ? 'flac' : profiles.includes('aac') ? 'aac' : profiles.includes('mp3') ? 'mp3' : 'pcm';
     const handles = this.createStreamHandles(zoneId, streamProfile);
     session.stream = handles.stream;
     session.pcmStream = handles.pcmStream;
-    const effectiveOutput = this.getEffectiveOutputSettings(zoneId);
+    const effectiveOutput = this.prefs.getEffectiveOutputSettings(zoneId);
     const outputSignature = this.buildOutputSignature(effectiveOutput);
     const startOptions = this.buildEngineStartOptions(zoneId, effectiveSource, profiles, effectiveOutput);
     this.playbackService.start(startOptions);
@@ -478,7 +472,7 @@ export class AudioManager {
       label?: string;
     },
   ): { stream: PassThrough; stop: () => void } | null {
-    const base = this.getEffectiveOutputSettings(zoneId);
+    const base = this.prefs.getEffectiveOutputSettings(zoneId);
     const outputSettings: AudioOutputSettings = {
       ...base,
       sampleRate: options?.outputSettings?.sampleRate ?? base.sampleRate,
@@ -629,7 +623,7 @@ export class AudioManager {
     if (typeof handoff !== 'undefined') {
       options.handoff = handoff;
     }
-    const eqBands = this.zoneEqualizerResolver?.(zoneId) ?? null;
+    const eqBands = this.prefs.getEqualizerResolver()?.(zoneId) ?? null;
     if (eqBands && eqBands.length > 0) {
       options.equalizer = { bands: eqBands };
     }
@@ -662,7 +656,7 @@ export class AudioManager {
       // sources) will keep playback aligned without relying on ffmpeg's `-re`.
       effectiveSource = { ...effectiveSource, realTime: false };
     }
-    const inputPrefs = this.zoneInputPreferences.get(zoneId);
+    const inputPrefs = this.prefs.getInputPreferences(zoneId);
     if (inputPrefs?.fileRealTime === false && effectiveSource?.kind === 'file') {
       effectiveSource = { ...effectiveSource, realTime: false };
     }
@@ -680,17 +674,17 @@ export class AudioManager {
     const effectivePcmPreference =
       typeof requiresPcm === 'boolean'
         ? requiresPcm
-        : this.zonePcmPreference.get(zoneId) ?? true;
+        : this.prefs.getPcmPreference(zoneId) ?? true;
     if (typeof requiresPcm === 'boolean') {
-      this.zonePcmPreference.set(zoneId, requiresPcm);
+      this.prefs.setPcmPreference(zoneId, requiresPcm);
     }
-    const preferredProfile = this.zoneProfileOverrides.get(zoneId);
+    const preferredProfile = this.prefs.getProfileOverride(zoneId);
     const profiles = this.computeProfiles(
       effectiveSource,
       effectivePcmPreference,
       preferredProfile ? [preferredProfile] : undefined,
     );
-    const effectiveOutput = this.getEffectiveOutputSettings(zoneId);
+    const effectiveOutput = this.prefs.getEffectiveOutputSettings(zoneId);
     const outputSignature = this.buildOutputSignature(effectiveOutput);
     const outputOnly =
       !effectiveSource && (label.toLowerCase() === 'spotify' || label.toLowerCase() === 'musicassistant');
@@ -1065,7 +1059,7 @@ export class AudioManager {
           session.source,
           session.playbackSource,
           session.metadata,
-          this.zonePcmPreference.get(zoneId),
+          this.prefs.getPcmPreference(zoneId),
         );
       }, 250);
     }
@@ -1087,52 +1081,6 @@ export class AudioManager {
       return ['mp3'];
     }
     return requiresPcm ? (['pcm'] as Array<'pcm'>) : (['mp3'] as Array<'mp3'>);
-  }
-
-  public setPreferredOutputSettings(
-    zoneId: number,
-    override: (Partial<AudioOutputSettings> & { profile?: OutputProfile }) | null,
-  ): void {
-    if (!override || Object.keys(override).length === 0) {
-      this.zoneOutputOverrides.delete(zoneId);
-      this.zoneProfileOverrides.delete(zoneId);
-      return;
-    }
-    this.zoneOutputOverrides.set(zoneId, override);
-    if (override.profile) {
-      this.zoneProfileOverrides.set(zoneId, override.profile);
-    }
-  }
-
-  public setInputPreferences(zoneId: number, prefs: { fileRealTime?: boolean } | null): void {
-    if (!prefs || Object.keys(prefs).length === 0) {
-      this.zoneInputPreferences.delete(zoneId);
-      return;
-    }
-    this.zoneInputPreferences.set(zoneId, prefs);
-  }
-
-  public setPlaybackPreDelayMs(zoneId: number, delayMs: number | null): void {
-    if (!Number.isFinite(delayMs) || (delayMs ?? 0) <= 0) {
-      this.zonePlaybackPreDelayMs.delete(zoneId);
-      return;
-    }
-    this.zonePlaybackPreDelayMs.set(zoneId, Math.max(0, Math.round(delayMs ?? 0)));
-  }
-
-  public setZonePowerStateResolver(resolver: ((zoneId: number) => boolean) | null): void {
-    this.isZonePowerOnResolver = resolver;
-  }
-
-  /**
-   * Registers a per-zone resolver that returns the EQ band gains to apply inside the ffmpeg
-   * pipeline. Return null (or an empty array) when EQ should not be baked in (provider is
-   * 'off' or a forwarder).
-   */
-  public setZoneEqualizerResolver(
-    resolver: ((zoneId: number) => ReadonlyArray<number> | null) | null,
-  ): void {
-    this.zoneEqualizerResolver = resolver;
   }
 
   /**
@@ -1167,50 +1115,9 @@ export class AudioManager {
     // Cast, ...) stay attached. The standard PlaybackService.start path
     // calls stop({ discardSubscribers: true }) which destroys their
     // PassThrough streams and forces the user to press Play again.
-    const bands = this.zoneEqualizerResolver?.(zoneId) ?? null;
+    const bands = this.prefs.getEqualizerResolver()?.(zoneId) ?? null;
     this.log.info('restarting audio engine to apply equalizer change', { zoneId });
     this.playbackService.restartZoneForEqualizer(zoneId, bands);
-  }
-
-  public setTransientGainDb(zoneId: number, gainDb: number | null): void {
-    if (gainDb === null) {
-      this.zoneTransientGainDb.delete(zoneId);
-    } else {
-      this.zoneTransientGainDb.set(zoneId, gainDb);
-    }
-  }
-
-  public getEffectiveOutputSettings(zoneId: number): AudioOutputSettings {
-    const outputOverride = this.zoneOutputOverrides.get(zoneId);
-    let result: AudioOutputSettings;
-    if (outputOverride && Object.keys(outputOverride).length > 0) {
-      const { profile: _ignoredProfile, ...rest } = outputOverride as Partial<AudioOutputSettings> & { profile?: unknown };
-      result = { ...audioOutputSettings, ...(rest as Partial<AudioOutputSettings>) };
-    } else {
-      result = audioOutputSettings;
-    }
-    const transientGain = this.zoneTransientGainDb.get(zoneId);
-    if (transientGain !== undefined) {
-      result = { ...result, fixedGainDb: (result.fixedGainDb ?? 0) + transientGain };
-    }
-    return result;
-  }
-
-  public setHttpPreferences(
-    zoneId: number,
-    prefs: { httpProfile?: HttpProfile; icyEnabled?: boolean; icyInterval?: number; icyName?: string } | null,
-  ): void {
-    if (!prefs || Object.keys(prefs).length === 0) {
-      this.zoneHttpPreferences.delete(zoneId);
-      return;
-    }
-    this.zoneHttpPreferences.set(zoneId, prefs);
-  }
-
-  public getHttpPreferences(
-    zoneId: number,
-  ): { httpProfile?: HttpProfile; icyEnabled?: boolean; icyInterval?: number; icyName?: string } | undefined {
-    return this.zoneHttpPreferences.get(zoneId);
   }
 
   public getStreamStats(

@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { PassThrough, Readable } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import type { AudioManager, PlaybackSession } from '@/application/playback/audioManager';
+import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import type { EnginePort } from '@/ports/EnginePort';
 import type { OutputProfile } from '@/ports/EngineTypes';
 import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
@@ -38,6 +39,7 @@ export class AudioStreamHandler {
     private readonly engine: EnginePort,
     private readonly streamEvents: StreamEvents,
     private readonly audioManager: AudioManager,
+    private readonly zoneAudioPrefs: ZoneAudioPreferences,
   ) {}
 
   public matches(pathname: string): boolean {
@@ -88,8 +90,8 @@ export class AudioStreamHandler {
       return;
     }
 
-    const outputSettings = this.audioManager.getEffectiveOutputSettings(zoneId);
-    const httpPrefs = this.audioManager.getHttpPreferences(zoneId);
+    const outputSettings = this.zoneAudioPrefs.getEffectiveOutputSettings(zoneId);
+    const httpPrefs = this.zoneAudioPrefs.getHttpPreferences(zoneId);
     const httpProfile = httpPrefs?.httpProfile ?? audioOutputSettings.httpProfile;
     const icyEnabledOverride = httpPrefs?.icyEnabled ?? audioOutputSettings.httpIcyEnabled;
     const icyIntervalOverride = httpPrefs?.icyInterval ?? audioOutputSettings.httpIcyInterval;

@@ -31,6 +31,7 @@ import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { CustomRadioStore } from '@/adapters/content/providers/customRadioStore';
 import type { AudioManager } from '@/application/playback/audioManager';
+import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
 import type { LmsCliServer } from '@/adapters/outputs/squeezelite/lmsCliServer';
 import type { MdnsPort } from '@/ports/MdnsPort';
@@ -76,6 +77,7 @@ export class HttpService {
       groupManager: GroupManagerReadPort;
       contentManager: ContentManager;
       audioManager: AudioManager;
+      zoneAudioPrefs: ZoneAudioPreferences;
       squeezeliteCli: LmsCliServer;
       mdnsPort: MdnsPort;
     },
@@ -98,11 +100,17 @@ export class HttpService {
       groupManager: options.groupManager,
       contentManager: options.contentManager,
       audioManager: options.audioManager,
+      zoneAudioPrefs: options.zoneAudioPrefs,
       mdnsPort: options.mdnsPort,
     });
     this.music = new MusicStreamingHandler(config.musicDir);
     this.staticFiles = new StaticFileHandler(config.publicDir);
-    this.audioStream = new AudioStreamHandler(options.engine, options.streamEvents, options.audioManager);
+    this.audioStream = new AudioStreamHandler(
+      options.engine,
+      options.streamEvents,
+      options.audioManager,
+      options.zoneAudioPrefs,
+    );
     this.audioProxy = new AudioProxyHandler(options.zoneManager);
     this.lineInIngestWs = new LineInIngestWebSocket(options.lineInRegistry);
     this.lineInApi = new LineInApiHandler(options.configPort, options.lineInMetadataService);

@@ -3,6 +3,7 @@ import os from 'node:os';
 import type { ComponentLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { AudioManager } from '@/application/playback/audioManager';
+import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
@@ -29,6 +30,7 @@ export type ZonesHandlerDeps = {
   log: ComponentLogger;
   configPort: ConfigPort;
   audioManager: AudioManager;
+  zoneAudioPrefs: ZoneAudioPreferences;
   zoneManager: ZoneManagerFacade;
   favoritesManager: FavoritesManager;
   recentsManager: RecentsManager;
@@ -125,7 +127,7 @@ async function handleZoneStates(res: ServerResponse, deps: ZonesHandlerDeps): Pr
       const state = deps.zoneManager.getState(zone.id);
       const session = deps.audioManager.getSession(zone.id);
       const playbackSource = session?.playbackSource;
-      const effectiveOutput = deps.audioManager.getEffectiveOutputSettings(zone.id);
+      const effectiveOutput = deps.zoneAudioPrefs.getEffectiveOutputSettings(zone.id);
       const techSnapshot = deps.zoneManager.getTechnicalSnapshot(zone.id);
       const primaryOutput = getZoneOutputConfig(zone);
       const sendspinOutput =

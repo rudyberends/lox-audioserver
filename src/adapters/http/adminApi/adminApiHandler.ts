@@ -13,6 +13,7 @@ import type { RecentsManager } from '@/application/zones/recents/recentsManager'
 import type { CustomRadioStore } from '@/adapters/content/providers/customRadioStore';
 import type { GroupManagerReadPort } from '@/application/groups/groupManager';
 import type { AudioManager } from '@/application/playback/audioManager';
+import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import { loadConfig as loadRuntimeConfig } from '@/config';
 import type { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
@@ -38,6 +39,7 @@ type AdminApiOptions = {
   groupManager: GroupManagerReadPort;
   contentManager: ContentManager;
   audioManager: AudioManager;
+  zoneAudioPrefs: ZoneAudioPreferences;
   mdnsPort: MdnsPort;
 };
 
@@ -150,6 +152,7 @@ export class AdminApiHandler {
   private readonly groupManager: GroupManagerReadPort;
   private readonly contentManager: ContentManager;
   private readonly audioManager: AudioManager;
+  private readonly zoneAudioPrefs: ZoneAudioPreferences;
   private readonly mdns: MdnsPort;
   private readonly clockOffsetTracker = new ClockOffsetTracker(this.log);
   private readonly routes: Route[];
@@ -174,6 +177,7 @@ export class AdminApiHandler {
     this.groupManager = options.groupManager;
     this.contentManager = options.contentManager;
     this.audioManager = options.audioManager;
+    this.zoneAudioPrefs = options.zoneAudioPrefs;
     this.mdns = options.mdnsPort;
     this.routes = this.buildRoutes();
   }
@@ -237,6 +241,7 @@ export class AdminApiHandler {
         log: this.log,
         configPort: this.configPort,
         audioManager: this.audioManager,
+        zoneAudioPrefs: this.zoneAudioPrefs,
         zoneManager: this.zoneManager,
         favoritesManager: this.favoritesManager,
         recentsManager: this.recentsManager,

@@ -1,5 +1,6 @@
 import type { ComponentLogger } from '@/shared/logging/logger';
-import type { AudioManager, PlaybackMetadata } from '@/application/playback/audioManager';
+import type { PlaybackMetadata } from '@/application/playback/audioManager';
+import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import type { AlertMediaResource } from '@/application/alerts/types';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import type { AlertSnapshot, ZoneContext } from '@/application/zones/internal/zoneTypes';
@@ -25,7 +26,7 @@ type AlertsCoordinatorDeps = {
   applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>, force?: boolean) => void;
   log: ComponentLogger;
   audioHelpers: ZoneAudioHelpers;
-  audioManager: AudioManager;
+  zoneAudioPrefs: ZoneAudioPreferences;
 };
 
 export class AlertsCoordinator {
@@ -38,7 +39,7 @@ export class AlertsCoordinator {
   ) => void;
   private readonly log: ComponentLogger;
   private readonly audioHelpers: ZoneAudioHelpers;
-  private readonly audioManager: AudioManager;
+  private readonly zoneAudioPrefs: ZoneAudioPreferences;
   // Per-zone serialization. Concurrent start/stop calls used to corrupt the
   // restore snapshot — caller B could capture state mid-flight from caller A
   // and on stopAlert restore to A's alert metadata instead of the original
@@ -52,7 +53,7 @@ export class AlertsCoordinator {
     this.applyPatch = deps.applyPatch;
     this.log = deps.log;
     this.audioHelpers = deps.audioHelpers;
-    this.audioManager = deps.audioManager;
+    this.zoneAudioPrefs = deps.zoneAudioPrefs;
   }
 
   public startAlert(
@@ -155,7 +156,7 @@ export class AlertsCoordinator {
 	    };
 
     if (/tts/i.test(type)) {
-      this.audioManager.setTransientGainDb(zoneId, TTS_FIXED_GAIN_DB);
+      this.zoneAudioPrefs.setTransientGainDb(zoneId, TTS_FIXED_GAIN_DB);
     }
 
     const session = ctx.player.playUri(playUrl, metadata);
@@ -209,7 +210,7 @@ export class AlertsCoordinator {
     if (activeAlert.stopTimer) {
       clearTimeout(activeAlert.stopTimer);
     }
-    this.audioManager.setTransientGainDb(zoneId, null);
+    this.zoneAudioPrefs.setTransientGainDb(zoneId, null);
     ctx.alert = undefined;
 
     try {

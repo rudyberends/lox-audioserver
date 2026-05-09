@@ -157,7 +157,9 @@ async function createZoneHarness(): Promise<ZoneHarness> {
       notifyOutputState: outputHandlersProxy.onOutputState,
     };
     const { AudioManager } = require('../src/application/playback/audioManager') as typeof import('../src/application/playback/audioManager');
-    const audioManager = new AudioManager(makePlaybackServiceFake(), outputNotifier);
+    const { ZoneAudioPreferences } = require('../src/application/playback/ZoneAudioPreferences') as typeof import('../src/application/playback/ZoneAudioPreferences');
+    const zoneAudioPrefs = new ZoneAudioPreferences();
+    const audioManager = new AudioManager(makePlaybackServiceFake(), outputNotifier, zoneAudioPrefs);
 
     const lineInRegistryModule = require('../src/adapters/inputs/linein/lineInIngestRegistry') as typeof import('../src/adapters/inputs/linein/lineInIngestRegistry');
     const lineInRegistry = new lineInRegistryModule.LineInIngestRegistry();
@@ -234,6 +236,7 @@ async function createZoneHarness(): Promise<ZoneHarness> {
       config: configPort,
       recents: recentsManager,
       audioManager,
+      zoneAudioPrefs,
     });
     lineInMetadataService.initOnce({ zoneManager, configPort });
     const groupManager = groupManagerModule.createGroupManager({
@@ -480,10 +483,11 @@ test('audio manager active local session detection ignores stale no-subscriber s
     restartZoneForEqualizer: () => false,
   };
   const { AudioManager } = require('../src/application/playback/audioManager') as typeof import('../src/application/playback/audioManager');
+  const { ZoneAudioPreferences } = require('../src/application/playback/ZoneAudioPreferences') as typeof import('../src/application/playback/ZoneAudioPreferences');
   const manager = new AudioManager(new PlaybackService(engine), {
     notifyOutputError: () => {},
     notifyOutputState: () => {},
-  });
+  }, new ZoneAudioPreferences());
 
   manager.startPlayback(1, 'https://example.com/test.mp3', {
     title: 'Track',
@@ -540,10 +544,11 @@ test('spotify pipe track change after pause restarts engine instead of continuin
     restartZoneForEqualizer: () => false,
   };
   const { AudioManager } = require('../src/application/playback/audioManager') as typeof import('../src/application/playback/audioManager');
+  const { ZoneAudioPreferences } = require('../src/application/playback/ZoneAudioPreferences') as typeof import('../src/application/playback/ZoneAudioPreferences');
   const manager = new AudioManager(new PlaybackService(engine), {
     notifyOutputError: () => {},
     notifyOutputState: () => {},
-  });
+  }, new ZoneAudioPreferences());
 
   const playbackSource = {
     kind: 'pipe' as const,
@@ -600,10 +605,11 @@ test('spotify explicit serviceplay restarts same pipe when request uri changed b
     restartZoneForEqualizer: () => false,
   };
   const { AudioManager } = require('../src/application/playback/audioManager') as typeof import('../src/application/playback/audioManager');
+  const { ZoneAudioPreferences } = require('../src/application/playback/ZoneAudioPreferences') as typeof import('../src/application/playback/ZoneAudioPreferences');
   const manager = new AudioManager(new PlaybackService(engine), {
     notifyOutputError: () => {},
     notifyOutputState: () => {},
-  });
+  }, new ZoneAudioPreferences());
 
   const playbackSource = {
     kind: 'pipe' as const,

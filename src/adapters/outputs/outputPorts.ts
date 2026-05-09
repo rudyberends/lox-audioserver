@@ -14,6 +14,7 @@ import type { SpotifyDeviceRegistry } from '@/adapters/outputs/spotify/deviceReg
 import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
 import type { QueueItem } from '@/ports/types/queueTypes';
 import type { AudioManager } from '@/application/playback/audioManager';
+import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { GroupManager } from '@/application/groups/groupManager';
 
@@ -32,8 +33,10 @@ type OutputHandlers = {
 
 type AudioManagerHandle = Pick<
   AudioManager,
-  'getSession' | 'getOutputSettings' | 'getEffectiveOutputSettings' | 'startExternalPlayback'
+  'getSession' | 'getOutputSettings' | 'startExternalPlayback'
 >;
+
+type ZoneAudioPrefsHandle = Pick<ZoneAudioPreferences, 'getEffectiveOutputSettings'>;
 
 type ZoneManagerHandle = Pick<
   ZoneManagerFacade,
@@ -45,6 +48,7 @@ type GroupManagerHandle = Pick<GroupManager, 'applySpecGroupVolume'>;
 export type OutputPorts = {
   engine: EnginePort;
   audioManager: AudioManagerHandle;
+  zoneAudioPrefs: ZoneAudioPrefsHandle;
   outputStreamEvents: OutputStreamEventsPort;
   airplayGroup: AirplayGroupCoordinator;
   snapcastCore: SnapcastCorePort;

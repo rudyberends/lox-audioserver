@@ -17,8 +17,11 @@ import { SpotifyDeviceRegistry } from '../../src/adapters/outputs/spotify/device
 export const noopAudioManager = {
   getSession: () => null,
   getOutputSettings: () => null,
-  getEffectiveOutputSettings: () => audioOutputSettings,
   startExternalPlayback: () => null,
+};
+
+export const noopZoneAudioPrefs = {
+  getEffectiveOutputSettings: () => audioOutputSettings,
 };
 
 export const noopOutputStreamEventsPort: OutputStreamEventsPort = {
@@ -237,6 +240,7 @@ export function makeOutputPortsFake(
   return {
     engine: noopEnginePort,
     audioManager: noopAudioManager,
+    zoneAudioPrefs: noopZoneAudioPrefs,
     outputStreamEvents: noopOutputStreamEventsPort,
     airplayGroup: noopAirplayGroupController,
     snapcastCore: noopSnapcastCorePort,
