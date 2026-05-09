@@ -70,6 +70,10 @@ export interface SpotifyContentConfig {
   clientId?: string;
   accounts: SpotifyAccountConfig[];
   bridges: SpotifyBridgeConfig[];
+  /** Cache decoded audio files to disk. Defaults to true. */
+  cacheEnabled?: boolean;
+  /** Maximum size of the audio cache in megabytes. Defaults to 1024. */
+  cacheSizeMb?: number;
 }
 
 export interface LibraryContentConfig {

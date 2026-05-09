@@ -75,7 +75,12 @@ async function getSession(
   try {
     const credentialsJson = opts.credentialsJson;
     if (credentialsJson && typeof addon.createSessionWithCredentials === 'function') {
-      return await addon.createSessionWithCredentials(credentialsJson, opts.deviceName ?? null);
+      return await (addon as any).createSessionWithCredentials(
+        credentialsJson,
+        opts.deviceName ?? null,
+        opts.cacheDir ?? null,
+        opts.cacheSizeLimitMb ?? null,
+      );
     }
     // Intentionally omit clientId unless explicitly needed; overriding can break playback.
     const safeOpts: any = { ...opts };
@@ -96,8 +101,10 @@ export async function createNativeLibrespotSession(params: {
   credentialsJson?: string | null;
   clientId?: string | null;
   deviceName?: string;
+  cacheDir?: string | null;
+  cacheSizeLimitMb?: number | null;
 }): Promise<LibrespotSession | null> {
-  const { accessToken, credentialsJson, clientId, deviceName } = params;
+  const { accessToken, credentialsJson, clientId, deviceName, cacheDir, cacheSizeLimitMb } = params;
   if (!accessToken && !credentialsJson) {
     return null;
   }
@@ -106,6 +113,8 @@ export async function createNativeLibrespotSession(params: {
     clientId: clientId || undefined,
     deviceName,
     credentialsJson: credentialsJson || undefined,
+    cacheDir: cacheDir || undefined,
+    cacheSizeLimitMb: cacheSizeLimitMb ?? undefined,
   });
 }
 
