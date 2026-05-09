@@ -30,6 +30,17 @@ export interface LoxoneZoneState {
   qid?: string;
   type: number;
   volume: number;
+  /**
+   * Player IDs of all members in this zone's sync group (leader first).
+   * Empty when the zone is not grouped. Enriched at emit time from the
+   * shared group tracker — not stored authoritatively per zone.
+   */
+  syncedzones?: number[];
+  /**
+   * Master volume of the sync group this zone belongs to (leader's volume).
+   * 0 when the zone is not grouped.
+   */
+  mastervolume?: number;
 }
 
 export interface LoxoneParentMeta {

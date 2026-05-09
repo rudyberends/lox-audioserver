@@ -231,6 +231,7 @@ export function createRuntime(): Runtime {
     mixedGroup: mixedGroupController,
   });
   zoneManagerRef = zoneManager;
+  loxoneNotifier.setZoneStateLookup((zoneId) => zoneManager.getState(zoneId));
   lineInMetadataService.initOnce({ zoneManager, configPort });
   snapcastCore.initOnce({ zoneManager });
   groupManager.initOnce({ zoneManager });

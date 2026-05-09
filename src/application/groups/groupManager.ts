@@ -41,11 +41,13 @@ export class GroupManager {
           this.log.info('group created', context);
           this.syncAirplayGroup(leader);
           this.zones.syncGroupMembersToLeader(leader);
+          this.refreshZoneEmit(leader);
           break;
         case 'update':
           this.log.info('group updated', context);
           this.syncAirplayGroup(leader);
           this.zones.syncGroupMembersToLeader(leader);
+          this.refreshZoneEmit(leader);
           break;
         case 'remove': {
           this.log.info('group removed', context);
@@ -72,6 +74,9 @@ export class GroupManager {
             type: 'dynamic',
           };
           this.notifier.notifyAudioSyncEvent([emptyPayload]);
+          // Force a re-broadcast so audio_event payloads pick up the now-empty syncedzones.
+          this.refreshZoneEmit(leader);
+          record?.members?.forEach((memberId) => this.refreshZoneEmit(memberId));
           break;
         }
         default:
@@ -86,6 +91,21 @@ export class GroupManager {
         this.log.warn('group broadcast failed', { leader, message });
       }
     });
+  }
+
+  /**
+   * Forces a re-broadcast of a zone's audio_event so the payload picks up
+   * fresh `syncedzones` / `mastervolume` after a group composition change.
+   */
+  private refreshZoneEmit(zoneId: number): void {
+    if (!this.zoneManager) return;
+    if (!this.zoneManager.getState(zoneId)) return;
+    try {
+      this.zoneManager.applyPatch(zoneId, {}, true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.warn('failed to refresh zone emit', { zoneId, message });
+    }
   }
 
   public broadcastGroupState(): void {

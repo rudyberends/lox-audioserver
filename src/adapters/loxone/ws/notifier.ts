@@ -3,11 +3,41 @@ import type { StorageConfig } from '@/adapters/content/storage/storageManager';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import type { AudioSyncGroupPayload } from '@/application/groups/types/AudioSyncGroupPayload';
 import type { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry';
+import { getGroupByZone } from '@/application/groups/groupTracker';
+
+type ZoneStateLookup = (zoneId: number) => LoxoneZoneState | undefined;
 
 export class LoxoneWsNotifier {
   private readonly log = createLogger('LoxoneHttp', 'Notifier');
+  private zoneStateLookup: ZoneStateLookup | null = null;
 
   constructor(private readonly registry: ConnectionRegistry) {}
+
+  /**
+   * Provides the notifier with read access to current zone states so that
+   * `audio_event` payloads can be enriched with sync-group context
+   * (`syncedzones`, `mastervolume`) the v17 client expects.
+   */
+  public setZoneStateLookup(lookup: ZoneStateLookup | null): void {
+    this.zoneStateLookup = lookup;
+  }
+
+  private enrichWithGroupContext(state: LoxoneZoneState): LoxoneZoneState {
+    const group = getGroupByZone(state.playerid);
+    if (!group) {
+      return { ...state, syncedzones: [], mastervolume: 0 };
+    }
+    const syncedzones = Array.from(new Set<number>([group.leader, ...group.members]));
+    const isLeader = group.leader === state.playerid;
+    const leaderVolume = isLeader
+      ? state.volume
+      : (this.zoneStateLookup?.(group.leader)?.volume ?? state.volume);
+    return {
+      ...state,
+      syncedzones,
+      mastervolume: clamp01to100(leaderVolume),
+    };
+  }
 
   private emit(payload: unknown, event: string, context?: Record<string, unknown>): void {
     try {
@@ -35,7 +65,9 @@ export class LoxoneWsNotifier {
       artist: state.artist,
       sourceName: state.sourceName,
     });
-    this.emit({ audio_event: [state] }, 'audio_event', { zoneId: state.playerid });
+    this.emit({ audio_event: [this.enrichWithGroupContext(state)] }, 'audio_event', {
+      zoneId: state.playerid,
+    });
   }
 
   /**
@@ -280,6 +312,14 @@ export class LoxoneWsNotifier {
   public notifyAudioSyncEvent(payload: AudioSyncGroupPayload[]): void {
     this.registry.broadcastMessage(JSON.stringify({ audio_sync_event: payload }));
   }
+}
+
+function clamp01to100(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    return 0;
+  }
+  return Math.min(100, Math.max(0, Math.round(n)));
 }
 
 function buildCategory(
