@@ -12,7 +12,8 @@ import type {
   ZoneStateConfig,
   ZoneTransportConfig,
 } from '@/domain/config/types';
-import { normalizeMacId } from '@/shared/utils/mac';
+import { defaultMacId, normalizeMacId } from '@/shared/utils/mac';
+import { defaultLocalIp } from '@/shared/utils/net';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 
 export type ConfigHandlerDeps = {
@@ -22,14 +23,78 @@ export type ConfigHandlerDeps = {
   loxoneNotifier: LoxoneWsNotifier;
   sendspinLineInService: SendspinLineInService;
   zoneManager: ZoneManagerFacade;
-  defaultConfig: () => AudioServerConfig;
-  getZoneOutputConfig: (zone: {
-    output?: ZoneTransportConfig | null;
-    transports?: ZoneTransportConfig[];
-  }) => ZoneTransportConfig | null;
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
 };
+
+/** Resolve the primary output for a zone, prefering the explicit `output`
+ *  field with a fallback to the legacy `transports[]` shape. */
+export function getZoneOutputConfig(zone: {
+  output?: ZoneTransportConfig | null;
+  transports?: ZoneTransportConfig[];
+}): ZoneTransportConfig | null {
+  if (zone.output && typeof zone.output === 'object') {
+    return zone.output;
+  }
+  if (Array.isArray(zone.transports) && zone.transports.length > 0) {
+    return zone.transports[0] ?? null;
+  }
+  return null;
+}
+
+/** Default config used to seed missing sections during partial updates and
+ *  on first run. Used by config/inputs/system/content handlers, and by
+ *  spotify/misc handlers when reseeding their respective sections. */
+export function defaultConfig(): AudioServerConfig {
+  return {
+    system: {
+      miniserver: { ip: '', serial: '', port: 80, protocol: 'http' },
+      audioserver: {
+        ip: defaultLocalIp(),
+        name: 'Unconfigured',
+        uuid: '',
+        macId: defaultMacId(),
+        paired: false,
+        extensions: [],
+      },
+      logging: {
+        consoleLevel: 'none',
+        fileLevel: 'none',
+      },
+      adminHttp: { enabled: true },
+    },
+    content: {
+      radio: {
+        tuneInUsername: '',
+      },
+      spotify: {
+        clientId: '',
+        accounts: [],
+        bridges: [],
+      },
+      library: {
+        enabled: true,
+        autoScan: true,
+      },
+    },
+    inputs: {
+      airplay: { enabled: true },
+      spotify: { enabled: true },
+      bluetooth: { enabled: false },
+      lineIn: { inputs: [] },
+    },
+    groups: {
+      mixedGroupEnabled: false,
+      powerGroups: [],
+    },
+    zones: [],
+    rawAudioConfig: {
+      raw: null,
+      rawString: null,
+      crc32: null,
+    },
+  };
+}
 
 export function buildConfigRoutes(deps: ConfigHandlerDeps): Route[] {
   return [
@@ -46,14 +111,14 @@ export function buildConfigRoutes(deps: ConfigHandlerDeps): Route[] {
 
 function handleGetConfig(res: ServerResponse, deps: ConfigHandlerDeps): void {
   const cfg = deps.configPort.getConfig();
-  const snapshot = buildAdminConfigSnapshot(cfg, deps);
+  const snapshot = buildAdminConfigSnapshot(cfg);
   deps.sendJson(res, 200, { config: snapshot });
 }
 
 async function handleClear(res: ServerResponse, deps: ConfigHandlerDeps): Promise<void> {
   const currentMacId = deps.configPort.getConfig()?.system?.audioserver?.macId;
   await deps.configPort.updateConfig((cfg) => {
-    Object.assign(cfg, deps.defaultConfig());
+    Object.assign(cfg, defaultConfig());
     if (currentMacId) {
       cfg.system.audioserver.macId = currentMacId;
     }
@@ -172,7 +237,7 @@ async function handleInputsUpdate(
     : null;
 
   await deps.configPort.updateConfig((cfg) => {
-    if (!cfg.inputs) cfg.inputs = deps.defaultConfig().inputs;
+    if (!cfg.inputs) cfg.inputs = defaultConfig().inputs;
     if (body.airplay && typeof body.airplay === 'object' && 'enabled' in body.airplay) {
       cfg.inputs!.airplay = { ...(cfg.inputs!.airplay ?? {}), enabled: Boolean(body.airplay.enabled) };
     }
@@ -294,12 +359,12 @@ async function handleSystemUpdate(
     normalizedMiniserverProtocol = value;
   }
   await deps.configPort.updateConfig((cfg) => {
-    if (!cfg.system) cfg.system = deps.defaultConfig().system;
+    if (!cfg.system) cfg.system = defaultConfig().system;
     if (!cfg.system.audioserver) {
-      cfg.system.audioserver = deps.defaultConfig().system.audioserver;
+      cfg.system.audioserver = defaultConfig().system.audioserver;
     }
     if (!cfg.system.miniserver) {
-      cfg.system.miniserver = deps.defaultConfig().system.miniserver;
+      cfg.system.miniserver = defaultConfig().system.miniserver;
     }
     if (normalizedMac) {
       cfg.system.audioserver.macId = normalizedMac;
@@ -383,7 +448,7 @@ async function handleContentUpdate(
   }
 
   await deps.configPort.updateConfig((cfg) => {
-    if (!cfg.content) cfg.content = deps.defaultConfig().content;
+    if (!cfg.content) cfg.content = defaultConfig().content;
     if (body.radio) {
       cfg.content.radio = {
         ...(cfg.content.radio ?? {}),
@@ -459,12 +524,9 @@ async function reloadZones(deps: ConfigHandlerDeps, zoneIds?: number[]): Promise
   await deps.zoneManager.replaceZones(targets, cfg.inputs ?? null, cfg.groups ?? null);
 }
 
-function buildAdminConfigSnapshot(
-  config: AudioServerConfig,
-  deps: ConfigHandlerDeps,
-): AudioServerConfig {
+function buildAdminConfigSnapshot(config: AudioServerConfig): AudioServerConfig {
   const zones = (config.zones ?? []).map((zone) => {
-    const primaryOutput = deps.getZoneOutputConfig(zone);
+    const primaryOutput = getZoneOutputConfig(zone);
     const transports = primaryOutput ? [primaryOutput] : [];
     const state = normalizeZoneStatePayload((zone as { state?: unknown }).state);
     const { output: _output, transports: _transports, ...rest } = zone as ZoneConfig & Record<string, unknown>;

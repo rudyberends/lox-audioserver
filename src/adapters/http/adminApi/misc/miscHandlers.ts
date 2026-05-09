@@ -10,10 +10,10 @@ import { logManager } from '@/shared/logging/logger';
 import { logBuffer } from '@/shared/logging/logBuffer';
 import type { LogLevel } from '@/types/logLevel';
 import type { ConfigPort } from '@/ports/ConfigPort';
-import type { AudioServerConfig } from '@/domain/config/types';
 import type { GroupManagerReadPort } from '@/application/groups/groupManager';
 import type { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
+import { defaultConfig } from '@/adapters/http/adminApi/config/configHandlers';
 
 const ADDON_PACKAGE_PREFIX = '@lox-audioserver/node-';
 
@@ -55,7 +55,6 @@ export type MiscHandlerDeps = {
   snapcastCore: SnapcastCore;
   runtimeConfig: RuntimeConfigSlice;
   onReinitialize?: () => Promise<boolean>;
-  defaultConfig: () => AudioServerConfig;
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
 };
@@ -301,7 +300,7 @@ async function handleLogLevelUpdate(
   try {
     await deps.configPort.updateConfig((cfg) => {
       if (!cfg.system) {
-        cfg.system = deps.defaultConfig().system;
+        cfg.system = defaultConfig().system;
       }
       if (!cfg.system.logging) {
         cfg.system.logging = { consoleLevel: level, fileLevel: 'none' };

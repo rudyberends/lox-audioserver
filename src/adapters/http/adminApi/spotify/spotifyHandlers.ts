@@ -7,7 +7,7 @@ import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInput
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { MusicAssistantStreamService } from '@/adapters/inputs/musicassistant/musicAssistantStreamService';
-import type { AudioServerConfig, SpotifyBridgeConfig } from '@/domain/config/types';
+import type { SpotifyBridgeConfig } from '@/domain/config/types';
 import {
   buildSpotifyAuthLink,
   deleteSpotifyAccount,
@@ -16,14 +16,14 @@ import {
   handleSpotifyOAuthCallback,
 } from '@/adapters/content/providers/spotify/serviceAuth';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
+import { defaultConfig } from '@/adapters/http/adminApi/config/configHandlers';
+import type { MusicAssistantConnectionResult } from '@/adapters/http/adminApi/musicassistant/musicAssistantHelpers';
+import {
+  isValidMusicAssistantHost,
+  testMusicAssistantBridge,
+} from '@/adapters/http/adminApi/musicassistant/musicAssistantHelpers';
 
-export type MusicAssistantConnectionResult = {
-  ok: boolean;
-  checkedAt: number;
-  message?: string;
-  host: string;
-  port: number;
-};
+export type { MusicAssistantConnectionResult };
 
 export type SpotifyHandlerDeps = {
   log: ComponentLogger;
@@ -34,13 +34,6 @@ export type SpotifyHandlerDeps = {
   spotifyManagerProvider: SpotifyServiceManagerProvider;
   zoneManager: ZoneManagerFacade;
   musicAssistantStreamService: MusicAssistantStreamService;
-  isValidMusicAssistantHost: (host: string) => boolean;
-  testMusicAssistantBridge: (
-    host: string,
-    port: number,
-    apiKey: string,
-  ) => Promise<MusicAssistantConnectionResult>;
-  defaultConfig: () => AudioServerConfig;
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
 };
@@ -203,7 +196,7 @@ async function handleSpotifyBridgeCreate(
         : 8095;
     musicAssistantApiKey = typeof body?.apiKey === 'string' ? body.apiKey.trim() : '';
 
-    if (!deps.isValidMusicAssistantHost(musicAssistantHost)) {
+    if (!isValidMusicAssistantHost(musicAssistantHost)) {
       deps.sendJson(res, 400, { error: 'invalid-musicassistant-host', message: 'Invalid Music Assistant host.' });
       return;
     }
@@ -216,7 +209,7 @@ async function handleSpotifyBridgeCreate(
       return;
     }
 
-    const testResult = await deps.testMusicAssistantBridge(
+    const testResult = await testMusicAssistantBridge(
       musicAssistantHost,
       musicAssistantPort,
       musicAssistantApiKey,
@@ -290,8 +283,8 @@ async function handleSpotifyBridgeCreate(
 
   try {
     await deps.configPort.updateConfig((cfg) => {
-      if (!cfg.content) cfg.content = deps.defaultConfig().content;
-      if (!cfg.content.spotify) cfg.content.spotify = deps.defaultConfig().content.spotify;
+      if (!cfg.content) cfg.content = defaultConfig().content;
+      if (!cfg.content.spotify) cfg.content.spotify = defaultConfig().content.spotify;
       if (!Array.isArray(cfg.content.spotify.bridges)) cfg.content.spotify.bridges = [];
       const bridges = cfg.content.spotify.bridges;
       const idx = bridges.findIndex(

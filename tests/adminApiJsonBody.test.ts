@@ -7,6 +7,7 @@ import {
   AdminApiHandler,
   buildSqueezeliteAdminPlayerSnapshot,
 } from '../src/adapters/http/adminApi/adminApiHandler';
+import { readJsonBody } from "../src/adapters/http/adminApi/helpers/httpUtils";
 import { readMiniserverBaseUrlFromConfig } from '../src/adapters/http/adminApi/auth/miniserverAuthClient';
 import type { ZoneManagerFacade } from '../src/application/zones/createZoneManager';
 import type { ConfigPort } from '../src/ports/ConfigPort';
@@ -174,7 +175,7 @@ test('readJsonBody parses valid json under limit', async () => {
   const stream = new PassThrough();
   const req = stream as unknown as IncomingMessage;
   const res = new FakeResponse();
-  const promise = (handler as any).readJsonBody(req, res as unknown as ServerResponse);
+  const promise = readJsonBody(req, res as unknown as ServerResponse);
   stream.end('{"ok":true}');
 
   const body = await promise;
@@ -227,7 +228,7 @@ test('readJsonBody rejects invalid json with 400', async () => {
   const stream = new PassThrough();
   const req = stream as unknown as IncomingMessage;
   const res = new FakeResponse();
-  const promise = (handler as any).readJsonBody(req, res as unknown as ServerResponse);
+  const promise = readJsonBody(req, res as unknown as ServerResponse);
   stream.end('{"bad":');
 
   const body = await promise;
@@ -242,7 +243,7 @@ test('readJsonBody rejects oversized payloads with 413', async () => {
   const stream = new PassThrough();
   const req = stream as unknown as IncomingMessage;
   const res = new FakeResponse();
-  const promise = (handler as any).readJsonBody(req, res as unknown as ServerResponse);
+  const promise = readJsonBody(req, res as unknown as ServerResponse);
   stream.write(Buffer.alloc(MAX_JSON_BODY_BYTES + 1, 'a'));
   stream.end();
 
@@ -258,7 +259,7 @@ test('readJsonBody supports route-specific max size override', async () => {
   const stream = new PassThrough();
   const req = stream as unknown as IncomingMessage;
   const res = new FakeResponse();
-  const promise = (handler as any).readJsonBody(req, res as unknown as ServerResponse, MAX_JSON_BODY_BYTES + 64);
+  const promise = readJsonBody(req, res as unknown as ServerResponse, MAX_JSON_BODY_BYTES + 64);
   stream.write(Buffer.alloc(MAX_JSON_BODY_BYTES + 1, 'a'));
   stream.end();
 

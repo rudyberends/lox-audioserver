@@ -15,6 +15,7 @@ import {
 import { audioResampler } from '@/ports/types/audioFormat';
 import { sendspinCore } from '@lox-audioserver/node-sendspin';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
+import { getZoneOutputConfig } from '@/adapters/http/adminApi/config/configHandlers';
 
 export const STATE_CONTROLLER_DEFINITIONS = [
   { id: 'internal', label: 'Internal', description: 'Use internal playback state only.' },
@@ -33,9 +34,6 @@ export type ZonesHandlerDeps = {
   recentsManager: RecentsManager;
   squeezeliteCore: SqueezeliteCore;
   getClockOffsetMs: () => Promise<number | null>;
-  getZoneOutputConfig: (zone: { id: number; output?: unknown; transports?: unknown[] }) =>
-    | ZoneOutputLike
-    | undefined;
   buildSqueezeliteAdminPlayerSnapshot: (
     primaryOutput: ZoneOutputLike | undefined,
     players: SqueezeliteCore['players'],
@@ -129,7 +127,7 @@ async function handleZoneStates(res: ServerResponse, deps: ZonesHandlerDeps): Pr
       const playbackSource = session?.playbackSource;
       const effectiveOutput = deps.audioManager.getEffectiveOutputSettings(zone.id);
       const techSnapshot = deps.zoneManager.getTechnicalSnapshot(zone.id);
-      const primaryOutput = deps.getZoneOutputConfig(zone);
+      const primaryOutput = getZoneOutputConfig(zone);
       const sendspinOutput =
         primaryOutput?.id === 'sendspin'
           ? (primaryOutput as { id: string; clientId?: string } & Record<string, unknown>)
@@ -151,7 +149,7 @@ async function handleZoneStates(res: ServerResponse, deps: ZonesHandlerDeps): Pr
             ? [primaryOutput]
             : [];
       const squeezelitePlayer = deps.buildSqueezeliteAdminPlayerSnapshot(
-        primaryOutput,
+        primaryOutput ?? undefined,
         deps.squeezeliteCore.players,
       );
       const groupProtocol =
