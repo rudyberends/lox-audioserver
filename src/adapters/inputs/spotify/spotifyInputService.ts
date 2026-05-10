@@ -76,6 +76,14 @@ class SpotifyConnectInstance {
   private readonly restartCooldownMs = 5 * 60 * 1000; // 5 minutes
   private readonly restartStreakWindowMs = 30 * 1000; // 30 seconds
   static accountCredentials = new Map<string, string>();
+  // [issue #252] Cross-zone error burst detector. Account-side Spotify rebalances
+  // disconnect every offload=false zone simultaneously; that's one event, not N
+  // independent failures. Detect the synchronized pattern (>= burstMinZones zones
+  // reporting Spotify errors within burstWindowMs) so we can bypass the per-zone
+  // cooldown that's appropriate for single-zone reconnect loops but punishing here.
+  private static recentBurstErrors: Array<{ zoneId: number; at: number }> = [];
+  private static readonly burstWindowMs = 3000;
+  private static readonly burstMinZones = 3;
   private readonly pipeId: string;
 
   constructor(
@@ -369,6 +377,36 @@ class SpotifyConnectInstance {
         lowerMessage.includes('429') ||
         lowerMessage.includes('too many requests') ||
         lowerMessage.includes('rate limit');
+      // [issue #252] If multiple zones report Spotify errors within a small
+      // window, classify as an account-side burst (not a per-zone reconnect
+      // loop). Bypass the cooldown the streak counter is otherwise built to
+      // trigger and reschedule with a short jittered, zone-staggered delay.
+      const burstNow = Date.now();
+      SpotifyConnectInstance.recentBurstErrors = SpotifyConnectInstance.recentBurstErrors.filter(
+        (e) => burstNow - e.at <= SpotifyConnectInstance.burstWindowMs,
+      );
+      SpotifyConnectInstance.recentBurstErrors.push({ zoneId: this.zoneId, at: burstNow });
+      const distinctZones = new Set(
+        SpotifyConnectInstance.recentBurstErrors.map((e) => e.zoneId),
+      ).size;
+      if (distinctZones >= SpotifyConnectInstance.burstMinZones) {
+        this.log.warn('synchronized cross-zone error burst; bypassing per-zone cooldown', {
+          zoneId: this.zoneId,
+          zonesAffected: distinctZones,
+          windowMs: SpotifyConnectInstance.burstWindowMs,
+          errorCode: ev.errorCode,
+          message,
+        });
+        this.restartStreak = { count: 0, firstAt: burstNow };
+        this.notifyOutputError(this.zoneId, `spotify ${message}`);
+        this.stopConnectHost();
+        // 8-25s with deterministic per-zone stagger; reconnects don't dogpile
+        // against Spotify's just-recovered backend.
+        const burstDelay =
+          8000 + (this.zoneId % 11) * 750 + Math.floor(Math.random() * 5000);
+        this.scheduleRestart({ minDelayMs: burstDelay });
+        return;
+      }
       if (ev.errorCode === 'audio_key_error') {
         // Audio key errors usually mean the session is unhealthy; trigger a cool-down.
         this.restartStreak = { count: 10, firstAt: Date.now() };
