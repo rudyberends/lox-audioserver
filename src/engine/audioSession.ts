@@ -2119,6 +2119,12 @@ export class AudioSession {
       this.pipeSourceStream.off('end', this.pipeSourceEndListener);
       this.pipeSourceStream.off('close', this.pipeSourceEndListener);
     }
+    // Two-stage pipe path also wires pipeSource → pcmPipe via .pipe(); the resulting
+    // internal 'data' listener stays attached until unpipe is called, so an external
+    // PassThrough source would otherwise still see a residual listener after stop.
+    if (this.pipeSourceStream && this.pcmPipe) {
+      try { this.pipeSourceStream.unpipe(this.pcmPipe); } catch { /* ignore */ }
+    }
     this.pipeSourceStream = undefined;
     this.pipeSourceDataListener = undefined;
     this.pipeSourceErrorListener = undefined;
