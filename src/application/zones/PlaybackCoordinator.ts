@@ -24,10 +24,10 @@ import { ZoneRepository } from '@/application/zones/ZoneRepository';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import { attachPlayerListeners } from '@/application/zones/playback/playerListeners';
 import { handleZoneCommand } from '@/application/zones/playback/commandHandlers';
-import { handleEndOfTrack as handleEndOfTrackTransition } from '@/application/zones/playback/queueTransitions';
 import { QueueStepDispatcher } from '@/application/zones/playback/QueueStepDispatcher';
 import { CrossfadeController } from '@/application/zones/playback/crossfadeController';
 import { PlayRequestService } from '@/application/zones/playback/playRequestService';
+import { QueueAdvanceController } from '@/application/zones/playback/queueAdvanceController';
 import {
   pauseInputSource as handlePauseInputSource,
   playInputSource as handlePlayInputSource,
@@ -84,6 +84,7 @@ export class PlaybackCoordinator {
   private readonly zonesMissingOutput = new Set<number>();
   private readonly crossfade: CrossfadeController;
   private readonly playRequest: PlayRequestService;
+  private readonly queueAdvance: QueueAdvanceController;
   private readonly musicAssistantInputHandlers: MusicAssistantInputHandlers = {
     startPlayback: (zoneId: number, label: string, source: PlaybackSource, metadata?: PlaybackMetadata) => {
       const ctx = this.zoneRepo.get(zoneId);
@@ -152,7 +153,7 @@ export class PlaybackCoordinator {
       isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
       startQueuePlayback: this.startQueuePlayback.bind(this),
       prefetchPlaybackSource: this.prefetchPlaybackSource.bind(this),
-      advanceTrack: this.advanceTrack.bind(this),
+      advanceTrack: (ctx) => this.queueAdvance.advanceTrack(ctx),
     });
     this.crossfade = new CrossfadeController({
       zoneRepo: this.zoneRepo,
@@ -180,13 +181,29 @@ export class PlaybackCoordinator {
       applyPatch: this.applyPatch,
       startQueuePlayback: this.startQueuePlayback.bind(this),
       stopExternalInputSessions: this.stopExternalInputSessions.bind(this),
-      prefetchNextQueueItem: this.prefetchNextQueueItem.bind(this),
+      prefetchNextQueueItem: (ctx) => this.queueAdvance.prefetchNext(ctx),
       dispatchOutputs: this.dispatchOutputs.bind(this),
       consumeMissingOutputFlag: (zoneId) => {
         const had = this.zonesMissingOutput.has(zoneId);
         if (had) this.zonesMissingOutput.delete(zoneId);
         return had;
       },
+    });
+    this.queueAdvance = new QueueAdvanceController({
+      zoneRepo: this.zoneRepo,
+      audioManager: this.audioManager,
+      audioHelpers: this.audioHelpers,
+      contentPort: this.contentPort,
+      configPort: this.configPort,
+      recentsManager: this.recentsManager,
+      radioParadise: this.radioParadise,
+      crossfade: this.crossfade,
+      log: this.log,
+      applyPatch: this.applyPatch,
+      isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
+      dispatchOutputs: this.dispatchOutputs.bind(this),
+      startQueuePlayback: this.startQueuePlayback.bind(this),
+      updateRadioMetadata: this.updateRadioMetadata.bind(this),
     });
   }
 
@@ -464,57 +481,8 @@ export class PlaybackCoordinator {
       }
       return null;
     }
-    this.prefetchNextQueueItem(ctx);
+    this.queueAdvance.prefetchNext(ctx);
     return session;
-  }
-
-  private prefetchNextQueueItem(ctx: ZoneContext): void {
-    if (!this.isLocalQueueAuthority(ctx.queue.authority)) {
-      return;
-    }
-    if (ctx.queue.items.length === 0) {
-      return;
-    }
-    const schedulePrefetch = (index: number): void => {
-      if (index < 0 || index >= ctx.queue.items.length) {
-        return;
-      }
-      const item = ctx.queue.items[index];
-      if (!item) {
-        return;
-      }
-      if (this.audioHelpers.isRadioAudiopath(item.audiopath, item.audiotype)) {
-        return;
-      }
-      const isAppleMusic = this.audioHelpers.isAppleMusicAudiopath(item.audiopath);
-      const isDeezer = this.audioHelpers.isDeezerAudiopath(item.audiopath);
-      const isTidal = this.audioHelpers.isTidalAudiopath(item.audiopath);
-      const isYtMusic = this.audioHelpers.isYtMusicAudiopath(item.audiopath);
-      if (!isAppleMusic && !isDeezer && !isTidal && !isYtMusic) {
-        return;
-      }
-      if (!this.isTrackAudiopath(item.audiopath)) {
-        return;
-      }
-      void this.contentPort.resolvePlaybackSource({
-        zoneId: ctx.id,
-        zoneName: ctx.name,
-        audiopath: item.audiopath,
-        prefetch: true,
-      }).catch((error) => {
-        this.log.debug('next track prefetch failed', {
-          zoneId: ctx.id,
-          audiopath: item.audiopath,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    };
-    const nextIndex = ctx.queueController.nextIndex();
-    if (nextIndex < 0) {
-      return;
-    }
-    schedulePrefetch(nextIndex);
-    schedulePrefetch(nextIndex + 1);
   }
 
   private hasPlaybackOutput(
@@ -616,7 +584,7 @@ export class PlaybackCoordinator {
       const currentAudiopath = ctx.queueController.current()?.audiopath ?? ctx.state.audiopath ?? '';
       if (this.radioParadise.isRadioParadiseAudiopath(currentAudiopath) && this.radioParadise.canSkip(ctx.id)) {
         const delta = command === 'previous' || command === 'queueminus' ? -1 : 1;
-        void this.handleRadioParadiseSkip(ctx, delta);
+        void this.queueAdvance.radioParadiseSkip(ctx, delta);
         return;
       }
     }
@@ -854,99 +822,10 @@ export class PlaybackCoordinator {
     });
   }
 
-  private async advanceTrack(ctx: ZoneContext): Promise<void> {
-    const suppressMs = ((this.configPort.getSystemConfig()?.audioserver?.crossfadeSec ?? 5) + 5) * 1000;
-    if (this.crossfade.consumeRecentTrigger(ctx.id, suppressMs)) {
-      this.log.debug('end_of_track suppressed; crossfade already advanced queue', { zoneId: ctx.id });
-      return;
-    }
-
-    const currentAudiopath = ctx.queueController.current()?.audiopath ?? ctx.state.audiopath ?? '';
-    if (this.radioParadise.isRadioParadiseAudiopath(currentAudiopath) && this.radioParadise.canSkip(ctx.id)) {
-      const resolved = await this.radioParadise.resolveNextBlock(ctx.id);
-      if (resolved) {
-        const metadata = this.buildRadioParadiseMetadata(ctx, resolved);
-        const session = await this.startQueuePlayback(ctx, resolved.url, metadata, {
-          startAtSec: resolved.startAtSec,
-          skipExternalStop: true,
-        });
-        if (session && resolved.track) {
-          this.updateRadioMetadata(ctx.id, {
-            title: resolved.track.title,
-            artist: resolved.track.artist,
-            coverurl: resolved.track.coverurl,
-            duration: resolved.track.durationSec,
-            controllable: true,
-          });
-        }
-        return;
-      }
-    }
-    await handleEndOfTrackTransition({
-      coordinator: {
-        getZone: (id) => this.zoneRepo.get(id),
-        isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
-        startQueuePlayback: this.startQueuePlayback.bind(this),
-        applyPatch: this.applyPatch,
-        dispatchOutputs: this.dispatchOutputs.bind(this),
-        recentsRecord: this.recentsManager.record.bind(this.recentsManager),
-        audioHelpers: this.audioHelpers,
-      },
-      ctx,
-    });
-  }
-
-  private async handleRadioParadiseSkip(ctx: ZoneContext, delta: 1 | -1): Promise<void> {
-    const timeSec = Number(ctx.player.getState().time) || 0;
-    const resolved = await this.radioParadise.resolveSkip(ctx.id, timeSec, delta);
-    if (!resolved) {
-      return;
-    }
-    const metadata = this.buildRadioParadiseMetadata(ctx, resolved);
-    const session = await this.startQueuePlayback(ctx, resolved.url, metadata, {
-      startAtSec: resolved.startAtSec,
-      skipExternalStop: true,
-    });
-    if (session && resolved.track) {
-      this.updateRadioMetadata(ctx.id, {
-        title: resolved.track.title,
-        artist: resolved.track.artist,
-        coverurl: resolved.track.coverurl,
-        duration: resolved.track.durationSec,
-        controllable: true,
-      });
-    }
-  }
-
   public onCrossfadePosition(zoneId: number, time: number, duration: number): void {
     this.crossfade.onPosition(zoneId, time, duration);
   }
 
-  private buildRadioParadiseMetadata(
-    ctx: ZoneContext,
-    resolved: {
-      track?: { title: string; artist: string; album: string; coverurl?: string; durationSec?: number };
-      blockDurationSec: number;
-      stationLabel: string;
-      isRadio: boolean;
-    },
-  ): PlaybackMetadata {
-    const base: PlaybackMetadata = { title: '', artist: '', album: '' };
-    const current = ctx.queueController.current();
-    const audiopath = current?.audiopath ?? ctx.state.audiopath ?? '';
-    const track = resolved.track;
-    return {
-      ...base,
-      isRadio: resolved.isRadio,
-      title: track?.title ?? base.title,
-      artist: track?.artist ?? base.artist,
-      album: track?.album ?? base.album,
-      coverurl: track?.coverurl,
-      duration: track?.durationSec ?? base.duration,
-      station: resolved.stationLabel,
-      audiopath,
-    };
-  }
 
   private isTrackAudiopath(audiopath: string): boolean {
     return /:track:|:library-track:/i.test(audiopath);
