@@ -9,6 +9,7 @@ export function resolveZoneStateControllerId(zone: ZoneConfig): ZoneStateControl
   const normalized = raw.replace(/[\s_-]+/g, '');
   if (normalized === 'beolink') return 'beolink';
   if (normalized === 'sonos') return 'sonos';
+  if (normalized === 'musicassistant' || normalized === 'ma') return 'musicassistant';
   if (normalized === 'internal') return 'internal';
   return raw;
 }
@@ -37,6 +38,25 @@ const CONTROLLER_AUTHORITY_POLICIES: Record<string, StateControllerAuthorityPoli
         return { volume };
       }
       return null;
+    },
+  },
+  // In Music Assistant sink mode the MA player owns the audio path. When a
+  // local lox-audio session is active (we're streaming our own content into
+  // MA) the local session is authoritative for time/title/duration/cover —
+  // MA's queue treats our URL as a radio stream and reports unreliable timing.
+  // We only forward volume from MA in that case.
+  musicassistant: {
+    ownsVolumeState: true,
+    commandAuthorityWhenLocalSessionActive: () => true,
+    patchAuthorityWhenLocalSessionActive: (patch) => {
+      const out: Partial<LoxoneZoneState> = {};
+      if (typeof patch.volume === 'number' && Number.isFinite(patch.volume)) {
+        out.volume = patch.volume;
+      }
+      if (typeof patch.mode === 'string') {
+        out.mode = patch.mode;
+      }
+      return Object.keys(out).length > 0 ? out : null;
     },
   },
 };

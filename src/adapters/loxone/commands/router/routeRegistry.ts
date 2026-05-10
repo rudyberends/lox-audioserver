@@ -146,7 +146,7 @@ export function registerRoutes(
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/status\/?$/, zoneHandlers.audioGetStatus);
   router.registerRegex(
     'audio',
-    /^audio\/(?:cfg\/)?\d+\/getqueue(?:\/\d+\/\d+)?\/?$/,
+    /^audio\/(?:cfg\/)?\d+\/getqueue(?:\/\d+\/\d+(?:\/\d+)?)?\/?$/,
     zoneHandlers.audioCfgGetQueue,
   );
   router.registerRegex(

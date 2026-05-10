@@ -5,19 +5,28 @@ import type { LoxoneZoneState } from '@/domain/loxone/types';
 import { InternalStateController } from '@/application/zones/state/InternalStateController';
 import { BeoLinkStateController } from '@/application/zones/state/BeoLinkStateController';
 import { SonosStateController } from '@/application/zones/state/SonosStateController';
+import { MusicAssistantStateController } from '@/application/zones/state/MusicAssistantStateController';
 import { resolveZoneStateControllerId } from '@/application/zones/state/types';
+import type { ConfigPort } from '@/ports/ConfigPort';
+import type { QueueItem } from '@/ports/types/queueTypes';
 
 type StateControllerManagerOptions = {
   onStatePatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  onQueueMirror?: (zoneId: number, items: QueueItem[], currentIndex: number) => void;
+  configPort: ConfigPort;
 };
 
 export class StateControllerManager {
   private readonly log = createLogger('Zones', 'StateControllers');
   private readonly controllers = new Map<number, ZoneStateController>();
   private readonly onStatePatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  private readonly onQueueMirror?: (zoneId: number, items: QueueItem[], currentIndex: number) => void;
+  private readonly configPort: ConfigPort;
 
   constructor(options: StateControllerManagerOptions) {
     this.onStatePatch = options.onStatePatch;
+    this.onQueueMirror = options.onQueueMirror;
+    this.configPort = options.configPort;
   }
 
   public handleCommand(zoneId: number, command: string, payload?: string): boolean {
@@ -123,6 +132,14 @@ export class StateControllerManager {
       return new SonosStateController({
         zone,
         onStatePatch: this.onStatePatch,
+      });
+    }
+    if (controllerId === 'musicassistant') {
+      return new MusicAssistantStateController({
+        zone,
+        configPort: this.configPort,
+        onStatePatch: this.onStatePatch,
+        onQueueMirror: this.onQueueMirror,
       });
     }
     // Unknown controllers fall back to internal behavior until implemented.

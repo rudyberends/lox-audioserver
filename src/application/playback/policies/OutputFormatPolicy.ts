@@ -99,7 +99,12 @@ export function computePreferredPlaybackSettings(args: ComputeArgs): PreferredPl
       ? { fileRealTime: false }
       : primaryOutput?.type === 'googleCast'
         ? { urlRealTime: false }
-        : null;
+        : primaryOutput?.type === 'musicassistant'
+          ? // MA's HTTP fetcher feeds AirPlay/Sonos/Cast which expect a fast pre-buffer.
+            // Real-time pacing causes "source not providing sufficient data" underruns;
+            // let ffmpeg encode as fast as it can and MA's HTTP layer handles flow.
+            { fileRealTime: false, urlRealTime: false }
+          : null;
 
   const settings: PreferredPlaybackSettings = { outputOverride: override, inputPrefs };
   if (typeof httpPrefs !== 'undefined') {

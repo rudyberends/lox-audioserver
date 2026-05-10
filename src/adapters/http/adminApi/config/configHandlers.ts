@@ -177,6 +177,7 @@ async function handleZonesUpdate(
           target.output = normalizeOutputPayload(incoming);
           delete target.transports;
         }
+        target.state = enforceStateControllerForOutput(target.state, target.output);
       } else {
         const nextZone = { ...incoming } as ZoneConfig & { transport?: unknown };
         if (
@@ -191,6 +192,7 @@ async function handleZonesUpdate(
         if (incoming.state !== undefined) {
           nextZone.state = normalizeZoneStatePayload(incoming.state);
         }
+        nextZone.state = enforceStateControllerForOutput(nextZone.state, nextZone.output);
         if (incoming.powerManager !== undefined) {
           nextZone.powerManager = incoming.powerManager;
         }
@@ -597,6 +599,35 @@ function normalizeEqualizerPayload(
   return Object.keys(next).length > 0 ? next : null;
 }
 
+/**
+ * Force the state controller to `musicassistant` whenever the zone's primary
+ * output is a Music Assistant player — that pairing is the only configuration
+ * where state mirroring + command proxying via MA RPC actually works, so we
+ * lock it in to avoid silent misconfiguration.
+ */
+function enforceStateControllerForOutput(
+  state: ZoneStateConfig | undefined,
+  output: unknown,
+): ZoneStateConfig | undefined {
+  const outputId =
+    output && typeof output === 'object'
+      ? typeof (output as { id?: unknown }).id === 'string'
+        ? ((output as { id: string }).id || '').toLowerCase()
+        : ''
+      : '';
+  if (outputId === 'musicassistant') {
+    return { ...(state ?? {}), controller: 'musicassistant' };
+  }
+  // If the user moves away from an MA output, drop a stale `musicassistant`
+  // controller so it doesn't fail silently against a non-MA target.
+  if (state?.controller === 'musicassistant') {
+    const next = { ...state };
+    next.controller = 'internal';
+    return next;
+  }
+  return state;
+}
+
 function normalizeZoneStatePayload(payload: unknown): ZoneStateConfig {
   if (payload && typeof payload === 'object') {
     const record = payload as Record<string, unknown>;
@@ -607,7 +638,9 @@ function normalizeZoneStatePayload(payload: unknown): ZoneStateConfig {
         ? 'beolink'
         : normalized === 'sonos'
           ? 'sonos'
-          : 'internal';
+          : normalized === 'musicassistant' || normalized === 'ma'
+            ? 'musicassistant'
+            : 'internal';
     return {
       ...record,
       controller,

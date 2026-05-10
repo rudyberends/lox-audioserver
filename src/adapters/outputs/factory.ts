@@ -49,6 +49,11 @@ import {
   SQUEEZELITE_OUTPUT_DEFINITION,
   type SqueezeliteOutputConfig,
 } from '@/adapters/outputs/squeezelite/squeezeliteOutput';
+import {
+  MusicAssistantOutput,
+  MUSIC_ASSISTANT_OUTPUT_DEFINITION,
+  type MusicAssistantOutputConfig,
+} from '@/adapters/outputs/musicassistant/musicAssistantOutput';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 
 type OutputDefinitions =
@@ -61,7 +66,8 @@ type OutputDefinitions =
   | typeof SENDSPIN_CAST_OUTPUT_DEFINITION
   | typeof SNAPCAST_CAST_OUTPUT_DEFINITION
   | typeof SONOS_OUTPUT_DEFINITION
-  | typeof SQUEEZELITE_OUTPUT_DEFINITION;
+  | typeof SQUEEZELITE_OUTPUT_DEFINITION
+  | typeof MUSIC_ASSISTANT_OUTPUT_DEFINITION;
 
 export const OUTPUT_DEFINITIONS: OutputDefinitions[] = [
   DLNA_OUTPUT_DEFINITION,
@@ -74,6 +80,7 @@ export const OUTPUT_DEFINITIONS: OutputDefinitions[] = [
   SNAPCAST_CAST_OUTPUT_DEFINITION,
   SONOS_OUTPUT_DEFINITION,
   SQUEEZELITE_OUTPUT_DEFINITION,
+  MUSIC_ASSISTANT_OUTPUT_DEFINITION,
 ];
 const log = createLogger('Output', 'Factory');
 
@@ -145,6 +152,12 @@ export function buildZoneOutputs(
     }
     if (id === 'squeezelite') {
       const output = createSqueezeliteOutput(entry, zone, ports);
+      if (output) {
+        outputs.push(output);
+      }
+    }
+    if (id === 'musicassistant') {
+      const output = createMusicAssistantOutput(entry, zone, ports);
       if (output) {
         outputs.push(output);
       }
@@ -256,6 +269,23 @@ function createSqueezeliteOutput(
   const cfg: SqueezeliteOutputConfig = { playerId: playerId || undefined, playerName: playerName || undefined };
   log.info('Squeezelite output registered', { zoneId: zone.id, playerId: cfg.playerId, playerName: cfg.playerName });
   return new SqueezeliteOutput(zone.id, zone.name, cfg, ports);
+}
+
+function createMusicAssistantOutput(
+  config: ZoneTransportConfig,
+  zone: ZoneConfig,
+  ports: OutputPorts,
+): ZoneOutput | null {
+  const raw = config as Record<string, unknown>;
+  const bridgeId = typeof raw.bridgeId === 'string' ? raw.bridgeId.trim() : '';
+  const playerId = typeof raw.playerId === 'string' ? raw.playerId.trim() : '';
+  if (!playerId) {
+    log.warn('Music Assistant output skipped; missing playerId', { zoneId: zone.id });
+    return null;
+  }
+  const cfg: MusicAssistantOutputConfig = { bridgeId, playerId };
+  log.info('Music Assistant output registered', { zoneId: zone.id, bridgeId: bridgeId || '(auto)', playerId });
+  return new MusicAssistantOutput(zone.id, zone.name, cfg, ports.config);
 }
 
 function isSpotifyInputEnabled(zone: ZoneConfig): boolean {

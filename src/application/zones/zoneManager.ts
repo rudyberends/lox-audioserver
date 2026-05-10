@@ -105,9 +105,7 @@ export class ZoneManager {
   private readonly alertsCoordinator: AlertsCoordinator;
   private readonly inputsPort: InputsPort;
   private readonly audioHelpers: ZoneAudioHelpers;
-  private readonly stateControllers = new StateControllerManager({
-    onStatePatch: (zoneId, patch) => this.handleExternalStatePatch(zoneId, patch),
-  });
+  private readonly stateControllers: StateControllerManager;
   private readonly outputsPort: OutputsPort;
   private readonly contentPort: ContentPort;
   private readonly configPort: ConfigPort;
@@ -166,6 +164,12 @@ export class ZoneManager {
     this.outputsPort = outputsPort;
     this.contentPort = contentPort;
     this.configPort = configPort;
+    this.stateControllers = new StateControllerManager({
+      onStatePatch: (zoneId, patch) => this.handleExternalStatePatch(zoneId, patch),
+      onQueueMirror: (zoneId, items, currentIndex) =>
+        this.handleExternalQueueMirror(zoneId, items, currentIndex),
+      configPort,
+    });
     this.audioManager = audioManager;
     this.zoneAudioPrefs = zoneAudioPrefs;
     this.powerManager = new PowerManager(this.log, undefined, (zoneId, signal) => {
@@ -758,6 +762,38 @@ export class ZoneManager {
       });
     }
     this.applyPatch(zoneId, patch);
+  }
+
+  private handleExternalQueueMirror(
+    zoneId: number,
+    items: QueueItem[],
+    currentIndex: number,
+  ): void {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx) return;
+    // Only mirror MA's queue when there's no local audio session — when we're
+    // streaming our own content into MA, the local queue is authoritative.
+    if (this.audioManager.hasActiveLocalSession(zoneId)) {
+      return;
+    }
+    const safeIndex = Math.max(0, Math.min(items.length - 1, Math.floor(currentIndex)));
+    ctx.queueController.setItems(items, safeIndex);
+    // Mark the zone as queue-driven so the Loxone app renders the queue UI:
+    //   - audiotype = 2 (Playlist) tells the app "we're playing from a queue"
+    //   - qid is the unique_id of the current item
+    //   - queueAuthority = local mirrors the existing playContent flow
+    const current = items[safeIndex];
+    if (current) {
+      const patch: Partial<LoxoneZoneState> = {
+        audiopath: current.audiopath,
+        audiotype: 2,
+        qindex: safeIndex,
+        qid: current.unique_id,
+        queueAuthority: 'local',
+      };
+      this.applyPatch(zoneId, patch);
+    }
+    this.notifier.notifyQueueUpdated(zoneId, items.length);
   }
 
   public async startAlert(

@@ -203,7 +203,17 @@ export class PlayRequestService {
     if (req.hasParentContext || ctx.state.mode === 'stop') {
       return false;
     }
-    if (!this.deps.queueController.seekExistingQueueInternal(ctx, req.normalizedTarget)) {
+    const seekCandidates = [req.normalizedTarget, req.queueAudiopath, req.uri].filter(
+      (c): c is string => Boolean(c),
+    );
+    let seeked = false;
+    for (const candidate of seekCandidates) {
+      if (this.deps.queueController.seekExistingQueueInternal(ctx, candidate)) {
+        seeked = true;
+        break;
+      }
+    }
+    if (!seeked) {
       return false;
     }
     const current = ctx.queueController.current();

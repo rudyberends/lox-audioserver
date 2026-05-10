@@ -247,6 +247,7 @@ async function handleSpotifyBridgeCreate(
     provider,
     enabled: body?.enabled !== false,
     registerAll: body?.registerAll !== false,
+    mode: isMusicAssistant && body?.mode === 'sink' ? 'sink' : isMusicAssistant ? 'source' : undefined,
     accountId: undefined,
     host: isMusicAssistant
       ? musicAssistantHost

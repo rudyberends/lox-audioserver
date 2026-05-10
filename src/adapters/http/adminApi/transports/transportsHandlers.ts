@@ -6,6 +6,10 @@ import type { MdnsPort, MdnsServiceRecord } from '@/ports/MdnsPort';
 import type { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
 import type { MusicAssistantStreamService } from '@/adapters/inputs/musicassistant/musicAssistantStreamService';
+import {
+  acquireMaApiForBridge,
+  findMusicAssistantBridge,
+} from '@/shared/musicassistant/maBridgeResolver';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import { sendspinCore } from '@lox-audioserver/node-sendspin';
 import { OUTPUT_DEFINITIONS } from '@/adapters/outputs';
@@ -62,8 +66,13 @@ export function buildTransportsRoutes(deps: TransportsHandlerDeps): Route[] {
     },
     {
       method: 'GET',
+      pattern: /^\/transports\/musicassistant\/bridges$/,
+      handler: async (_req, res) => handleMusicAssistantBridges(res, deps),
+    },
+    {
+      method: 'GET',
       pattern: /^\/transports\/musicassistant\/devices$/,
-      handler: async (_req, res) => handleMusicAssistantPlayerDiscovery(res, deps),
+      handler: async (req, res) => handleMusicAssistantPlayerDiscovery(req, res, deps),
     },
     {
       method: 'GET',
@@ -207,21 +216,88 @@ async function handleSonosDiscovery(
   }
 }
 
+function listMusicAssistantBridges(deps: TransportsHandlerDeps) {
+  const bridges = deps.configPort.getConfig().content?.spotify?.bridges ?? [];
+  return bridges
+    .filter((b) => (b?.provider || '').toLowerCase() === 'musicassistant')
+    .map((b) => ({
+      id: b.id,
+      label: b.label || b.id,
+      enabled: b.enabled !== false,
+      mode: b.mode === 'sink' ? 'sink' : 'source',
+      host: b.host,
+      port: b.port,
+    }));
+}
+
+async function handleMusicAssistantBridges(
+  res: ServerResponse,
+  deps: TransportsHandlerDeps,
+): Promise<void> {
+  deps.sendJson(res, 200, { bridges: listMusicAssistantBridges(deps) });
+}
+
 async function handleMusicAssistantPlayerDiscovery(
+  req: IncomingMessage,
   res: ServerResponse,
   deps: TransportsHandlerDeps,
 ): Promise<void> {
   try {
-    const raw = await deps.musicAssistantStreamService.listPlayers();
+    const url = new URL(req.url ?? '/', 'http://internal');
+    const requestedBridgeId = (url.searchParams.get('bridgeId') ?? '').trim();
+
+    let raw: unknown[] = [];
+    let bridgeId: string | null = null;
+    let bridgeMode: 'source' | 'sink' = 'source';
+
+    if (requestedBridgeId) {
+      const bridge = findMusicAssistantBridge(deps.configPort, requestedBridgeId);
+      if (!bridge || (bridge.provider || '').toLowerCase() !== 'musicassistant') {
+        deps.sendJson(res, 404, { error: 'musicassistant-bridge-not-found' });
+        return;
+      }
+      bridgeId = bridge.id;
+      bridgeMode = bridge.mode === 'sink' ? 'sink' : 'source';
+      const api = acquireMaApiForBridge(bridge);
+      try {
+        await api.connect();
+        raw = (await api.getAllPlayers()) as unknown[];
+      } finally {
+        api.release();
+      }
+    } else {
+      raw = (await deps.musicAssistantStreamService.listPlayers()) as unknown[];
+      const bridges = deps.configPort.getConfig().content?.spotify?.bridges ?? [];
+      const maBridge = bridges.find((b) => (b?.provider || '').toLowerCase() === 'musicassistant');
+      bridgeId = maBridge?.id ?? null;
+      bridgeMode = maBridge?.mode === 'sink' ? 'sink' : 'source';
+    }
+
     const devices = raw
       .map((player) => {
-        const id = (player.player_id || player.id || '').trim();
-        const name = (player.name || id || '').trim();
+        const p = player as Record<string, unknown>;
+        const id = (typeof p.player_id === 'string' ? p.player_id : typeof p.id === 'string' ? p.id : '').trim();
+        const name = (typeof p.name === 'string' ? p.name : id).trim();
         if (!id) return null;
-        return { id, deviceId: id, name: name || id };
+        const enabled = typeof p.enabled === 'boolean' ? (p.enabled as boolean) : true;
+        const available = typeof p.available === 'boolean' ? (p.available as boolean) : true;
+        const hideInUi = typeof p.hide_in_ui === 'boolean' ? (p.hide_in_ui as boolean) : false;
+        const syncedTo = typeof p.synced_to === 'string' && p.synced_to ? (p.synced_to as string) : null;
+        const activeGroup = typeof p.active_group === 'string' && p.active_group ? (p.active_group as string) : null;
+        // Hide synced children, group children and ui-hidden players (matches MA frontend playerVisible()).
+        if (hideInUi || syncedTo || activeGroup) return null;
+        return {
+          id,
+          deviceId: id,
+          name: name || id,
+          provider: typeof p.provider === 'string' ? (p.provider as string) : undefined,
+          type: typeof p.type === 'string' ? (p.type as string) : undefined,
+          enabled,
+          available,
+        };
       })
       .filter(Boolean);
-    deps.sendJson(res, 200, { devices });
+    deps.sendJson(res, 200, { devices, bridgeId, bridgeMode });
   } catch (err) {
     deps.log.warn('music assistant player discovery failed', { err });
     deps.sendJson(res, 500, { error: 'musicassistant-discovery-failed' });

@@ -180,7 +180,7 @@ async function audioServicePlay(
         if (
           rest.startsWith('spotify:') &&
           maybeUser &&
-          (/applemusic/i.test(maybeUser) || /deezer/i.test(maybeUser) || /tidal/i.test(maybeUser))
+          (/applemusic/i.test(maybeUser) || /deezer/i.test(maybeUser) || /tidal/i.test(maybeUser) || /musicassistant/i.test(maybeUser) || /^bridge-/i.test(maybeUser))
         ) {
           return `spotify@${maybeUser}:${rest.replace(/^spotify:/i, '')}`;
         }

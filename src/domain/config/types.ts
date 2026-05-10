@@ -156,6 +156,13 @@ export interface SpotifyBridgeConfig {
   appleMusicPaceInput?: boolean;
   /** When true, register all zones as players up front; otherwise register on-demand. */
   registerAll?: boolean;
+  /**
+   * Music Assistant integration mode.
+   * - 'source' (default, current behaviour): we register virtual sendspin players per Loxone zone and stream MA audio back to our outputs.
+   * - 'sink': MA players are external sinks; zone outputs reference an MA player by id and we proxy commands/state via RPC instead of streaming audio.
+   * Only meaningful when provider === 'musicassistant'.
+   */
+  mode?: 'source' | 'sink';
 }
 
 export interface ZoneOutputConfig {

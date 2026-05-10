@@ -293,6 +293,22 @@ export class MusicAssistantApi {
     return true;
   }
 
+  public async playQueueIndex(queueId: string, index: number | string): Promise<boolean> {
+    if (!queueId || index === undefined || index === null) return false;
+    const payload: Record<string, unknown> = { queue_id: queueId, index };
+    try {
+      await this.ensureConnected();
+      await this.client.rpc('player_queues/play_index', payload);
+      return true;
+    } catch (err) {
+      this.log.warn('music assistant rpc failed', {
+        endpoint: 'player_queues/play_index',
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
   public async getQueueItems(queueId: string, offset = 0, limit = 200): Promise<any[]> {
     if (!queueId) return [];
     const payload: Record<string, unknown> = { queue_id: queueId, offset, limit };

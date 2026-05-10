@@ -2,13 +2,18 @@ import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { ZoneConfig } from '@/domain/config/types';
 import type { PlaybackSource, PlaybackMetadata } from '@/application/playback/audioManager';
-import type { QueueItem } from '@/application/zones/zoneManager';
-import WebSocket from 'ws';
-import { performance } from 'node:perf_hooks';
+import type { QueueItem } from '@/ports/types/queueTypes';
 import { MusicAssistantApi } from '@/shared/musicassistant/musicAssistantApi';
-import { decodeAudiopath, encodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import { PassThrough } from 'node:stream';
 import { generateQueueId } from '@/shared/utils/queueId';
+import { SendspinClient, type StreamFormat } from './sendspinClient';
+import {
+  extractCover as extractCoverHelper,
+  parseMaMediaRef,
+  toLoxoneAudiopath as toLoxoneAudiopathHelper,
+} from './maStreamMediaHelpers';
+import { resolveActiveMaPlayerId } from '@/shared/musicassistant/maPlayerResolver';
 
 type StreamEntry = {
   playerId: string;
@@ -30,15 +35,6 @@ type OutputHandlers = {
   onOutputError: (zoneId: number, reason?: string) => void;
 };
 
-type StreamFormat = {
-  codec: string;
-  sampleRate: number;
-  channels: number;
-  bitDepth?: number;
-};
-
-const SUPPORTED_CODECS = ['pcm'] as const;
-
 function toPlayerId(zoneName: string, fallbackId: number): string {
   const normalized = zoneName
     .toLowerCase()
@@ -47,685 +43,13 @@ function toPlayerId(zoneName: string, fallbackId: number): string {
   return `lox-${normalized || fallbackId}`;
 }
 
-class SendspinClient {
-  private readonly volumeStep = 5;
-  private ws: WebSocket | null = null;
-  private ready = false;
-  private reconnectTimer: NodeJS.Timeout | null = null;
-  private reconnectAttempts = 0;
-  private connectInFlight: Promise<boolean> | null = null;
-  private allowReconnect = true;
-  private stream: PassThrough | null = null;
-  private streamFormat: StreamFormat | null = null;
-  private streamGen = 0;
-  private firstChunkLogged = false;
-  private bytesSinceLog = 0;
-  private lastLogTs = 0;
-  private timeSyncTimer: NodeJS.Timeout | null = null;
-  private stateTimer: NodeJS.Timeout | null = null;
-  private volume = 100;
-  private muted = false;
-  private pendingStreamResolvers: Array<(value: { stream: PassThrough; format: StreamFormat } | null) => void> = [];
-  private skippedBinarySlots = new Set<number>();
-  private readonly supportedFormats = SUPPORTED_CODECS.flatMap((codec) => [
-    { codec, sample_rate: 48000, channels: 2, bit_depth: 16 },
-    { codec, sample_rate: 44100, channels: 2, bit_depth: 16 },
-  ]);
-
-  constructor(
-    private readonly host: string,
-    private readonly port: number,
-    private readonly token: string,
-    private readonly playerId: string,
-    private readonly zoneId: number,
-    private readonly providerId: string,
-    private readonly log: ReturnType<typeof createLogger>,
-  private readonly onStream?: {
-      start?: (zoneId: number, playerId: string, stream: PassThrough, fmt: StreamFormat) => void;
-      stop?: (zoneId: number, playerId: string) => void;
-      metadata?: (zoneId: number, playerId: string, metadata: PlaybackMetadata) => void;
-      command?: (
-        zoneId: number,
-        playerId: string,
-        payload: { command?: string; volume?: number; mute?: boolean },
-      ) => void;
-    },
-  ) {}
-
-  public async connect(): Promise<boolean> {
-    if (this.ready) {
-      return true;
-    }
-    if (this.connectInFlight) {
-      return this.connectInFlight;
-    }
-    this.allowReconnect = true;
-    this.connectInFlight = this.connectWithSocket();
-    try {
-      return await this.connectInFlight;
-    } finally {
-      this.connectInFlight = null;
-    }
-  }
-
-  private connectWithSocket(): Promise<boolean> {
-    const url = `ws://${this.host}:${this.port}/sendspin`;
-    return new Promise<boolean>((resolve) => {
-      let settled = false;
-      try {
-        this.ws = new WebSocket(url);
-      } catch (err) {
-        this.log.warn('sendspin ws open failed', { url, message: err instanceof Error ? err.message : String(err) });
-        this.scheduleReconnect('open-failed');
-        return resolve(false);
-      }
-      const ws = this.ws;
-      const timeout = setTimeout(() => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        this.log.warn('sendspin auth timeout', { url, playerId: this.playerId });
-        try {
-          ws.close();
-        } catch {
-          /* ignore */
-        }
-        this.scheduleReconnect('auth-timeout');
-        resolve(false);
-      }, 8000);
-      ws.on('open', () => {
-        try {
-          ws.send(JSON.stringify({ type: 'auth', token: this.token, client_id: this.playerId }));
-        } catch (err) {
-          this.log.warn('sendspin auth send failed', { message: err instanceof Error ? err.message : String(err) });
-        }
-      });
-      ws.on('message', (buf) => {
-        if (settled) {
-          return;
-        }
-        const msg = buf.toString();
-        if (msg.includes('auth_ok') || msg.includes('hello') || msg.includes('player')) {
-          this.ready = true;
-          settled = true;
-          clearTimeout(timeout);
-          this.reconnectAttempts = 0;
-          if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-          }
-          try {
-            this.bootstrapProtocol(ws);
-          } catch (err) {
-            this.log.warn('sendspin bootstrap failed', { message: err instanceof Error ? err.message : String(err) });
-          }
-          resolve(true);
-          this.log.info('sendspin auth ok', { playerId: this.playerId });
-        }
-      });
-      ws.on('error', (err) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timeout);
-        this.log.warn('sendspin ws error', { message: err instanceof Error ? err.message : String(err) });
-        this.scheduleReconnect('ws-error');
-        resolve(false);
-      });
-      ws.on('close', () => {
-        this.ready = false;
-        this.scheduleReconnect('ws-close');
-      });
-    });
-  }
-
-  public close(): void {
-    this.allowReconnect = false;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    try {
-      this.ws?.close();
-    } catch {
-      /* ignore */
-    }
-    this.ws = null;
-    this.ready = false;
-    if (this.stream) {
-      try {
-        this.stream.destroy();
-      } catch {
-        /* ignore */
-      }
-    }
-    this.stream = null;
-    this.streamFormat = null;
-    if (this.timeSyncTimer) {
-      clearInterval(this.timeSyncTimer);
-    }
-    if (this.stateTimer) {
-      clearInterval(this.stateTimer);
-    }
-    this.timeSyncTimer = null;
-    this.stateTimer = null;
-  }
-
-  public getActiveStream(): { stream: PassThrough; format: StreamFormat } | null {
-    if (this.stream && this.streamFormat) {
-      return { stream: this.stream, format: this.streamFormat };
-    }
-    return null;
-  }
-
-  public isReady(): boolean {
-    return this.ready;
-  }
-
-  public awaitStream(timeoutMs = 5000): Promise<{ stream: PassThrough; format: StreamFormat } | null> {
-    const existing = this.getActiveStream();
-    if (existing) {
-      return Promise.resolve(existing);
-    }
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        const idx = this.pendingStreamResolvers.indexOf(resolve);
-        if (idx >= 0) {
-          this.pendingStreamResolvers.splice(idx, 1);
-        }
-        this.log.warn('sendspin stream await timed out', { playerId: this.playerId, timeoutMs });
-        resolve(null);
-      }, timeoutMs);
-      const wrapped = (value: { stream: PassThrough; format: StreamFormat } | null) => {
-        clearTimeout(timer);
-        resolve(value);
-      };
-      this.pendingStreamResolvers.push(wrapped);
-    });
-  }
-
-  private bootstrapProtocol(ws: WebSocket): void {
-    ws.on('message', (data: WebSocket.RawData) => {
-      // Wire-tap messages; downgrade server/time to spam.
-      if (typeof data === 'string' || data instanceof String) {
-        const text = data.toString();
-        try {
-          const msg = JSON.parse(text);
-          this.log.spam('sendspin ws message', { playerId: this.playerId, type: msg?.type, data: text.slice(0, 200) });
-        } catch {
-          this.log.spam('sendspin ws message', { playerId: this.playerId, data: text.slice(0, 200) });
-        }
-        this.handleJsonMessage(text);
-        return;
-      }
-      if (data instanceof Buffer || data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-        const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
-        // Some servers send JSON as binary frames; detect and handle.
-        const first = buf.find((b) => b > 0x20) ?? buf[0];
-        if (first === 0x7b /* { */ || first === 0x5b /* [ */) {
-          const text = buf.toString('utf8');
-          try {
-            const msg = JSON.parse(text);
-            this.log.spam('sendspin ws json-as-binary', { playerId: this.playerId, type: msg?.type, data: text.slice(0, 200) });
-          } catch {
-            this.log.spam('sendspin ws json-as-binary', { playerId: this.playerId, data: text.slice(0, 200) });
-          }
-          this.handleJsonMessage(text);
-          return;
-        }
-        this.handleBinaryMessage(buf);
-        return;
-      }
-    });
-    // Send client/hello
-    const hello = {
-      type: 'client/hello',
-      payload: {
-        client_id: this.playerId,
-        name: this.playerId,
-        version: 1,
-        supported_roles: ['player@v1'],
-        device_info: {
-          product_name: 'Loxone AudioServer',
-          manufacturer: 'Lox-audioserver',
-          software_version: '3.0.1',
-        },
-        player_support: {
-          supported_formats: this.supportedFormats,
-          buffer_capacity: 1024 * 1024 * 5,
-          supported_commands: ['volume', 'mute'],
-        },
-      },
-    };
-    try {
-      ws.send(JSON.stringify(hello));
-    } catch (err) {
-      this.log.warn('sendspin hello failed', { message: err instanceof Error ? err.message : String(err) });
-    }
-    const sendTimeSync = () => {
-      const nowUs = Math.floor(performance.now() * 1000);
-      const timeMsg = { type: 'client/time', payload: { client_transmitted: nowUs } };
-      try {
-        ws.send(JSON.stringify(timeMsg));
-      } catch {
-        /* ignore */
-      }
-    };
-    const sendState = () => {
-      const stateMsg = {
-        type: 'client/state',
-        payload: { player: { state: 'synchronized', volume: this.volume, muted: this.muted } },
-      };
-      try {
-        ws.send(JSON.stringify(stateMsg));
-      } catch {
-        /* ignore */
-      }
-    };
-    // Immediate syncs after hello.
-    sendTimeSync();
-    sendState();
-    // Periodic time sync/state (lightweight).
-    this.timeSyncTimer = setInterval(() => sendTimeSync(), 2000);
-    this.stateTimer = setInterval(() => sendState(), 5000);
-  }
-
-  private scheduleReconnect(reason: string): void {
-    if (!this.allowReconnect) {
-      return;
-    }
-    if (this.reconnectTimer) {
-      return;
-    }
-    const delay = Math.min(15000, 1000 * Math.pow(2, this.reconnectAttempts));
-    this.reconnectAttempts += 1;
-    this.log.debug('sendspin reconnect scheduled', { playerId: this.playerId, delayMs: delay, reason });
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      void this.connect();
-    }, delay);
-  }
-
-  private handleJsonMessage(raw: string): void {
-    if (!raw) {
-      return;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    const msg = parsed as {
-      type?: string;
-      payload?: {
-        player?: {
-          command?: unknown;
-          volume?: unknown;
-          mute?: unknown;
-          codec?: StreamFormat['codec'];
-          sample_rate?: StreamFormat['sampleRate'];
-          channels?: StreamFormat['channels'];
-          bit_depth?: StreamFormat['bitDepth'];
-        } & Record<string, unknown>;
-      } & Record<string, unknown>;
-    } & Record<string, unknown>;
-    if (msg.type === 'server/hello') {
-      this.log.info('sendspin server/hello', { playerId: this.playerId });
-    }
-    if (msg.type === 'server/command') {
-      const rawCmd = msg.payload?.player?.command;
-      const vol = msg.payload?.player?.volume;
-      const mute = msg.payload?.player?.mute;
-      const normalizedCmd =
-        typeof rawCmd === 'string' ? rawCmd.toLowerCase().replace(/[^a-z0-9]+/g, '_') : '';
-      this.log.info('sendspin server command', { playerId: this.playerId, command: rawCmd, volume: vol, mute });
-      const normalizedVolume =
-        typeof vol === 'number'
-          ? Math.max(0, Math.min(100, vol <= 1 ? Math.round(vol * 100) : Math.round(vol)))
-          : null;
-      if (normalizedVolume !== null) {
-        this.volume = normalizedVolume;
-      }
-      if (typeof mute === 'boolean') {
-        this.muted = mute;
-      }
-      if (normalizedVolume === null && normalizedCmd) {
-        if (normalizedCmd === 'volume_up' || normalizedCmd === 'vol_up' || normalizedCmd === 'volumeup') {
-          this.volume = Math.min(100, this.volume + this.volumeStep);
-        } else if (
-          normalizedCmd === 'volume_down' ||
-          normalizedCmd === 'vol_down' ||
-          normalizedCmd === 'volumedown' ||
-          normalizedCmd === 'volume_decrease' ||
-          normalizedCmd === 'volume_down_' ||
-          normalizedCmd === 'volume_down__'
-        ) {
-          this.volume = Math.max(0, this.volume - this.volumeStep);
-        } else if (normalizedCmd === 'volume_mute' || normalizedCmd === 'mute') {
-          this.muted = true;
-        } else if (normalizedCmd === 'volume_unmute' || normalizedCmd === 'unmute') {
-          this.muted = false;
-        }
-      }
-      try {
-        this.onStream?.command?.(this.zoneId, this.playerId, {
-          command: normalizedCmd || undefined,
-          volume: this.volume,
-          mute: typeof mute === 'boolean' ? mute : undefined,
-        });
-      } catch (err) {
-        this.log.debug('sendspin command dispatch failed', {
-          playerId: this.playerId,
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-    if (msg.type === 'server/time') {
-      this.log.spam('sendspin server/time', { playerId: this.playerId });
-      return;
-    }
-    if (msg.type === 'stream/request-format') {
-      this.log.info('sendspin stream/request-format', { playerId: this.playerId });
-      // Re-advertise supported formats.
-      const hello = {
-        type: 'client/hello',
-        payload: {
-          client_id: this.playerId,
-          name: this.playerId,
-          version: 1,
-          supported_roles: ['player@v1'],
-          device_info: {
-            product_name: 'Loxone AudioServer',
-            manufacturer: 'Lox-audioserver',
-            software_version: '3.0.1',
-          },
-          player_support: {
-            supported_formats: this.supportedFormats,
-            buffer_capacity: 1024 * 1024 * 5,
-            supported_commands: ['volume', 'mute'],
-          },
-        },
-      };
-      try {
-        this.ws?.send(JSON.stringify(hello));
-      } catch (err) {
-        this.log.warn('sendspin re-hello failed', { message: err instanceof Error ? err.message : String(err) });
-      }
-    }
-    if (msg.type === 'stream/start' && msg.payload?.player) {
-      const fmt: StreamFormat = {
-        codec: msg.payload.player.codec as string,
-        sampleRate: msg.payload.player.sample_rate as number,
-        channels: msg.payload.player.channels as number,
-        bitDepth: msg.payload.player.bit_depth,
-      };
-      this.streamFormat = fmt;
-      // Keep the PassThrough stable so downstream consumers (audio engine) stay attached across stream restarts.
-      if (!this.stream || this.stream.destroyed || this.stream.writableEnded) {
-        this.stream = new PassThrough();
-      }
-      this.streamGen += 1;
-      this.firstChunkLogged = false;
-      this.bytesSinceLog = 0;
-      this.lastLogTs = 0;
-      this.log.info('sendspin stream/start', {
-        playerId: this.playerId,
-        codec: fmt.codec,
-        sampleRate: fmt.sampleRate,
-        channels: fmt.channels,
-        bitDepth: fmt.bitDepth,
-      });
-      const toResolve = [...this.pendingStreamResolvers];
-      this.pendingStreamResolvers = [];
-      toResolve.forEach((resolver) => resolver({ stream: this.stream!, format: fmt }));
-      this.onStream?.start?.(this.zoneId, this.playerId, this.stream!, fmt);
-      return;
-    }
-    if (msg.type === 'stream/clear' || msg.type === 'stream/end') {
-      // Reset stream state but keep the PassThrough alive so downstream consumers stay attached.
-      this.resetStreamState();
-      this.streamFormat = null;
-      this.log.info('sendspin stream cleared', { playerId: this.playerId, type: msg.type });
-      // Do not stop on stream/end; rely on MA state/STOP for session teardown.
-      return;
-    }
-    if (msg.type === 'metadata') {
-      const meta = this.extractSendspinMetadata(msg);
-      if (meta) {
-        this.onStream?.metadata?.(this.zoneId, this.playerId, meta);
-      }
-      return;
-    }
-    const meta = this.extractSendspinMetadata(msg);
-    if (meta) {
-      this.onStream?.metadata?.(this.zoneId, this.playerId, meta);
-    }
-    this.log.debug('sendspin message', { playerId: this.playerId, type: msg.type });
-  }
-
-  private handleBinaryMessage(buf: Buffer): void {
-    if (!this.streamFormat) {
-      // Fallback: if we receive audio before a stream/start, assume PCM 44.1k/16-bit stereo.
-      const fmt: StreamFormat = { codec: 'pcm', sampleRate: 44100, channels: 2, bitDepth: 16 };
-      this.streamFormat = fmt;
-      if (!this.stream || this.stream.destroyed || this.stream.writableEnded) {
-        this.stream = new PassThrough();
-      }
-      this.streamGen += 1;
-      this.firstChunkLogged = false;
-      this.bytesSinceLog = 0;
-      this.lastLogTs = 0;
-      this.log.warn('sendspin implicit stream/start (no format message)', {
-        playerId: this.playerId,
-        codec: fmt.codec,
-        sampleRate: fmt.sampleRate,
-        channels: fmt.channels,
-        bitDepth: fmt.bitDepth,
-      });
-      const toResolve = [...this.pendingStreamResolvers];
-      this.pendingStreamResolvers = [];
-      toResolve.forEach((resolver) => resolver({ stream: this.stream!, format: fmt }));
-    }
-    if (!this.stream) {
-      return;
-    }
-    const payload = this.extractAudioPayload(buf);
-    if (!payload?.length) {
-      return;
-    }
-    this.stream.write(payload);
-    this.bytesSinceLog += payload.length;
-    if (!this.firstChunkLogged) {
-      this.firstChunkLogged = true;
-      this.log.info('sendspin first audio chunk', {
-        playerId: this.playerId,
-        bytes: payload.length,
-        gen: this.streamGen,
-        fmt: this.streamFormat,
-      });
-      this.lastLogTs = Date.now();
-      return;
-    }
-    const now = Date.now();
-    if (this.lastLogTs && now - this.lastLogTs >= 1000) {
-      const bps = Math.round((this.bytesSinceLog / (now - this.lastLogTs)) * 1000);
-      this.log.spam('sendspin audio throughput', { playerId: this.playerId, bytesPerSec: bps, gen: this.streamGen });
-      this.bytesSinceLog = 0;
-      this.lastLogTs = now;
-    }
-  }
-
-  // Sendspin audio chunks are framed as: [slot:uint8][timestamp:int64be][pcm payload...]
-  private extractAudioPayload(buf: Buffer): Buffer | null {
-    if (!buf || buf.length === 0) {
-      return null;
-    }
-    if (buf.length >= 9) {
-      const slot = buf.readUInt8(0);
-      if (slot === 4) {
-        const payload = buf.subarray(1 + 8);
-        return payload.length ? payload : null;
-      }
-      if (!this.skippedBinarySlots.has(slot)) {
-        this.skippedBinarySlots.add(slot);
-        this.log.debug('sendspin binary frame ignored', { playerId: this.playerId, slot, bytes: buf.length });
-      }
-      return null;
-    }
-    return buf;
-  }
-
-  private resetStreamState(): void {
-    this.firstChunkLogged = false;
-    this.bytesSinceLog = 0;
-    this.lastLogTs = 0;
-  }
-
-  private parseMaMediaRef(mediaId: string): { type: string | null; id: string | null; provider: string | null } {
-    if (!mediaId) {
-      return { type: null, id: null, provider: null };
-    }
-    if (mediaId.includes('://')) {
-      const [scheme, restRaw] = mediaId.split('://');
-      const rest = restRaw || '';
-      const [maybeType, ...restParts] = rest.split('/');
-      const type = maybeType || null;
-      const id = restParts.join('/') || null;
-      return { type, id, provider: scheme || null };
-    }
-    const parts = mediaId.split(':');
-    if (parts.length >= 3) {
-      const provider = parts[0] || null;
-      const type = parts[1] || null;
-      const id = parts.slice(2).join(':') || null;
-      return { type, id, provider };
-    }
-    return { type: null, id: mediaId || null, provider: null };
-  }
-
-  private toLoxoneAudiopath(mediaId: string | undefined, typeHint = 'track'): string | undefined {
-    if (!mediaId) {
-      return undefined;
-    }
-    const ref = this.parseMaMediaRef(mediaId);
-    const type = ref.type || typeHint || 'track';
-    const raw = ref.id && ref.provider ? `${ref.provider}://${type}/${ref.id}` : mediaId;
-    return encodeAudiopath(raw, type, this.providerId);
-  }
-
-  private extractCover(obj: any): string {
-    const images = obj?.metadata?.images || obj?.images || obj?.covers || obj?.artwork;
-    if (Array.isArray(images) && images.length) {
-      const img = images.find((i: any) => i?.path || i?.url || i?.link) || images[0];
-      const path = img?.path || img?.url || img?.link;
-      if (typeof path === 'string') {
-        return this.resizeCover(path);
-      }
-    }
-    if (typeof obj?.image === 'string') {
-      return this.resizeCover(obj.image);
-    }
-    if (typeof obj?.cover === 'string') {
-      return this.resizeCover(obj.cover);
-    }
-    if (typeof obj?.thumbnail === 'string') {
-      return this.resizeCover(obj.thumbnail);
-    }
-    return '';
-  }
-
-  private resizeCover(url: string): string {
-    if (!url) {
-      return '';
-    }
-    try {
-      const parsed = new URL(url);
-      if (parsed.pathname.includes('imageproxy') && !parsed.searchParams.has('size')) {
-        parsed.searchParams.set('size', '256');
-        return parsed.toString();
-      }
-      if (parsed.hostname.includes('mzstatic.com')) {
-        parsed.pathname = parsed.pathname.replace(/\/(\d{2,5})x\1bb\.jpg/i, '/256x256bb.jpg');
-        return parsed.toString();
-      }
-    } catch {
-      /* ignore */
-    }
-    return url;
-  }
-
-  private extractSendspinMetadata(msg: any): PlaybackMetadata | null {
-    const payload = msg?.payload ?? msg;
-    if (!payload) {
-      return null;
-    }
-    const src =
-      payload.metadata ||
-      payload.player?.metadata ||
-      payload.media ||
-      payload.track ||
-      payload.item ||
-      payload;
-    const title =
-      src?.title ||
-      src?.name ||
-      src?.track ||
-      src?.media_title ||
-      src?.track_name ||
-      payload?.title ||
-      payload?.name ||
-      '';
-    const artist =
-      src?.artist ||
-      src?.artists?.[0]?.name ||
-      src?.album_artist ||
-      payload?.artist ||
-      '';
-    const album = src?.album?.name || src?.album || payload?.album || '';
-    const cover = this.extractCover(src);
-    const duration =
-      typeof src?.duration === 'number' && src.duration > 0
-        ? Math.round(src.duration)
-        : typeof payload?.duration === 'number' && payload.duration > 0
-          ? Math.round(payload.duration)
-          : undefined;
-    const rawAudiopath =
-      typeof src?.media_id === 'string'
-        ? src.media_id
-        : typeof src?.uri === 'string'
-          ? src.uri
-          : undefined;
-    const audiopath = this.toLoxoneAudiopath(rawAudiopath, src?.type || payload?.type || 'track');
-    if (!title && !artist && !album && !cover && !audiopath && !duration) {
-      return null;
-    }
-    const meta: PlaybackMetadata = {
-      title: title || '',
-      artist: artist || '',
-      album: album || '',
-    };
-    if (cover) {
-      meta.coverurl = cover;
-    }
-    if (audiopath) {
-      meta.audiopath = audiopath;
-    }
-    if (duration) {
-      meta.duration = duration;
-    }
-    return meta;
-  }
-}
-
 export class MusicAssistantStreamService {
   private readonly log = createLogger('Input', 'MAplayer');
   private host: string | null = null;
   private port = 8095;
   private apiKey?: string;
   private registerAll = true;
+  private mode: 'source' | 'sink' = 'source';
   private api: MusicAssistantApi | null = null;
   private lastConnectionStatus:
     | { ok: boolean; checkedAt: number; message?: string; host?: string; port?: number }
@@ -893,6 +217,7 @@ export class MusicAssistantStreamService {
       this.port = typeof bridge.port === 'number' && bridge.port > 0 ? bridge.port : 8095;
       this.apiKey = typeof bridge.apiKey === 'string' && bridge.apiKey.trim() ? bridge.apiKey.trim() : undefined;
       this.registerAll = bridge.registerAll !== false;
+      this.mode = bridge.mode === 'sink' ? 'sink' : 'source';
       this.api = MusicAssistantApi.acquire(this.host, this.port, this.apiKey);
     } catch {
       this.host = null;
@@ -900,6 +225,9 @@ export class MusicAssistantStreamService {
   }
 
   public async registerZones(zones: ZoneConfig[]): Promise<void> {
+    if (this.mode === 'sink') {
+      return;
+    }
     if (!this.registerAll) {
       return;
     }
@@ -954,6 +282,11 @@ export class MusicAssistantStreamService {
 
   public async registerZone(zoneId: number, zoneName: string, zoneConfig?: ZoneConfig): Promise<StreamEntry | null> {
     if (!this.host) {
+      return null;
+    }
+    if (this.mode === 'sink') {
+      // In sink mode the bridge is not a per-zone source: MA players are external sinks
+      // referenced by zone outputs, so we do not register a sendspin player or stream entry here.
       return null;
     }
     const effectiveConfig = zoneConfig ?? this.resolveZoneConfig(zoneId);
@@ -1026,6 +359,9 @@ export class MusicAssistantStreamService {
     if (!this.host) {
       return null;
     }
+    if (this.mode === 'sink') {
+      return null;
+    }
     const zoneConfig = this.resolveZoneConfig(zoneId);
     if (zoneConfig?.inputs?.musicassistant?.enabled === false) {
       return null;
@@ -1078,6 +414,13 @@ export class MusicAssistantStreamService {
     if (!api) {
       this.reportPlaybackError(zoneId, 'music assistant unavailable');
       return { playbackSource: null };
+    }
+
+    // Sink mode: the zone's audio is owned by an external MA player. Translate
+    // any MA-bridge content selection into an RPC and return outputOnly:true
+    // so the local audio engine doesn't try to stream.
+    if (this.mode === 'sink') {
+      return this.handleSinkPlay(api, zoneId, zoneConfig, audiopath, options);
     }
 
     // Offload: play directly on a user-selected MA player/device without streaming.
@@ -1251,6 +594,120 @@ export class MusicAssistantStreamService {
       return { playbackSource: null };
     } finally {
       this.clearPendingStreamRequest(zoneId, requestToken);
+    }
+  }
+
+  /**
+   * Sink-mode play handler: translate the requested audiopath into either a
+   * `play_index` (when the track is already in the MA player's queue) or a
+   * `play_media` RPC, and return outputOnly so the local audio engine won't
+   * try to stream.
+   */
+  private async handleSinkPlay(
+    api: MusicAssistantApi,
+    zoneId: number,
+    zoneConfig: ZoneConfig | undefined,
+    audiopath: string,
+    options?: {
+      parentAudiopath?: string;
+      startItem?: string;
+      startIndex?: number;
+    },
+  ): Promise<MusicAssistantPlaybackResult> {
+    const savedPlayerId = this.resolveSinkPlayerId(zoneConfig);
+    if (!savedPlayerId) {
+      this.log.warn('MA sink play skipped; zone has no MA-player output', { zoneId });
+      this.reportPlaybackError(zoneId, 'music assistant player not configured');
+      return { playbackSource: null };
+    }
+    // MA registers queues against the player that owns playback (typically the
+    // universal-wrapper `up…` id). Map our saved id to the active one.
+    const sinkPlayerId = await resolveActiveMaPlayerId(api, savedPlayerId);
+    if (!sinkPlayerId) {
+      this.log.warn('MA sink play: cannot resolve active MA player', { zoneId, savedPlayerId });
+      this.reportPlaybackError(zoneId, 'music assistant player unavailable');
+      return { playbackSource: null };
+    }
+    const mediaId = this.decodeMediaId(audiopath);
+    if (!mediaId) {
+      this.log.warn('MA sink play: media id not resolved', { zoneId, audiopath });
+      this.reportPlaybackError(zoneId, 'music assistant media id unresolved');
+      return { playbackSource: null };
+    }
+    const parentMediaId = options?.parentAudiopath ? this.decodeMediaId(options.parentAudiopath) : null;
+    try {
+      await api.connect();
+      // Track-select from a mirrored queue: prefer play_index so we don't
+      // replace the queue with a single item.
+      if (!parentMediaId) {
+        const queueItemId = await this.findQueueItemId(api, sinkPlayerId, mediaId);
+        if (queueItemId) {
+          this.log.info('MA sink play_index', { zoneId, playerId: sinkPlayerId, queueItemId });
+          const ok = await api.playQueueIndex(sinkPlayerId, queueItemId);
+          if (ok) return { playbackSource: null, outputOnly: true };
+          this.log.warn('MA sink play_index failed; falling back to play_media', { zoneId });
+        }
+      }
+      const playTarget = parentMediaId || mediaId;
+      const playOpts: Record<string, unknown> = { option: 'replace', radio_mode: false };
+      if (parentMediaId && mediaId) {
+        playOpts.start_item = options?.startItem
+          ? this.decodeMediaId(options.startItem) ?? mediaId
+          : mediaId;
+      }
+      if (typeof options?.startIndex === 'number' && options.startIndex >= 0) {
+        playOpts.start_index = options.startIndex;
+      }
+      this.log.info('MA sink play_media', {
+        zoneId,
+        playerId: sinkPlayerId,
+        media: playTarget,
+        parent: parentMediaId || null,
+        startIndex: options?.startIndex ?? null,
+      });
+      const ok = await api.playMedia(sinkPlayerId, playTarget, playOpts);
+      if (!ok) {
+        this.reportPlaybackError(zoneId, 'music assistant play failed');
+        return { playbackSource: null };
+      }
+      return { playbackSource: null, outputOnly: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.warn('MA sink play failed', { zoneId, message });
+      this.reportPlaybackError(zoneId, 'music assistant unavailable');
+      return { playbackSource: null };
+    }
+  }
+
+  /** Look up an existing queue_item_id matching `mediaId` in the MA player's queue. */
+  private async findQueueItemId(
+    api: MusicAssistantApi,
+    playerId: string,
+    mediaId: string,
+  ): Promise<string | null> {
+    try {
+      const items = await api.getQueueItems(playerId, 0, 500);
+      if (!Array.isArray(items)) return null;
+      const match = items.find((it: any) => {
+        const uri = typeof it?.uri === 'string' ? it.uri : '';
+        const mediaUri = typeof it?.media_item?.uri === 'string' ? it.media_item.uri : '';
+        return uri === mediaId || mediaUri === mediaId;
+      });
+      const qid = match && typeof (match as any).queue_item_id === 'string'
+        ? ((match as any).queue_item_id as string)
+        : null;
+      if (!qid) {
+        this.log.debug('MA sink play_index: no queue match for mediaId', {
+          playerId,
+          mediaId,
+          queueSize: items.length,
+        });
+      }
+      return qid;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.debug('MA sink play_index lookup failed', { playerId, message });
+      return null;
     }
   }
 
@@ -1519,7 +976,7 @@ export class MusicAssistantStreamService {
       (Array.isArray(media?.artists) ? media.artists.map((a: { name?: string } | null) => a?.name || '').filter(Boolean).join(', ') : '') ||
       '';
     const album = media?.album?.name || media?.album || '';
-    const cover = this.extractCover(media ?? item);
+    const cover = extractCoverHelper(media ?? item);
     const duration =
       typeof item.duration === 'number' && item.duration > 0
         ? Math.round(item.duration)
@@ -1537,7 +994,7 @@ export class MusicAssistantStreamService {
       item?.media_type ||
       item?.streamdetails?.media_type ||
       'track';
-    const audiopath = this.toLoxoneAudiopath(rawUri, typeHint) || '';
+    const audiopath = toLoxoneAudiopathHelper(rawUri, this.providerId, typeHint) || '';
     if (!title && !audiopath) {
       return null;
     }
@@ -1578,7 +1035,7 @@ export class MusicAssistantStreamService {
       src?.album_artist ||
       '';
     meta.album = src?.album?.name || src?.album || '';
-    const cover = this.extractCover(src);
+    const cover = extractCoverHelper(src);
     const duration =
       typeof src?.duration === 'number' && src.duration > 0
         ? Math.round(src.duration)
@@ -1594,9 +1051,8 @@ export class MusicAssistantStreamService {
         : typeof src?.uri === 'string'
           ? src.uri
           : undefined;
-    const audiopath = this.toLoxoneAudiopath(
-      rawAudiopath,
-      src?.type || data?.type || data?.media_type || 'track',
+    const audiopath = toLoxoneAudiopathHelper(
+      rawAudiopath, this.providerId, src?.type || data?.type || data?.media_type || 'track',
     );
     if (audiopath) {
       meta.audiopath = audiopath;
@@ -1608,50 +1064,6 @@ export class MusicAssistantStreamService {
       return null;
     }
     return meta;
-  }
-
-  private extractCover(obj: any): string {
-    const images = obj?.metadata?.images || obj?.images || obj?.covers || obj?.artwork;
-    if (Array.isArray(images) && images.length) {
-      const img = images.find((i: any) => i?.path || i?.url || i?.link) || images[0];
-      const path = img?.path || img?.url || img?.link;
-      if (typeof path === 'string') {
-        return this.resizeCover(path);
-      }
-    }
-    if (typeof obj?.image === 'string') {
-      return this.resizeCover(obj.image);
-    }
-    if (typeof obj?.image_url === 'string') {
-      return this.resizeCover(obj.image_url);
-    }
-    if (typeof obj?.cover === 'string') {
-      return this.resizeCover(obj.cover);
-    }
-    if (typeof obj?.thumbnail === 'string') {
-      return this.resizeCover(obj.thumbnail);
-    }
-    return '';
-  }
-
-  private resizeCover(url: string): string {
-    if (!url) {
-      return '';
-    }
-    try {
-      const parsed = new URL(url);
-      if (parsed.pathname.includes('imageproxy') && !parsed.searchParams.has('size')) {
-        parsed.searchParams.set('size', '256');
-        return parsed.toString();
-      }
-      if (parsed.hostname.includes('mzstatic.com')) {
-        parsed.pathname = parsed.pathname.replace(/\/(\d{2,5})x\1bb\.jpg/i, '/256x256bb.jpg');
-        return parsed.toString();
-      }
-    } catch {
-      /* ignore */
-    }
-    return url;
   }
 
   private decodeBase64Deep(value: string): string {
@@ -1670,6 +1082,29 @@ export class MusicAssistantStreamService {
       }
     }
     return current;
+  }
+
+
+  /** Resolve the MA player_id from the zone's `musicassistant` output (sink mode). */
+  private resolveSinkPlayerId(zoneConfig: ZoneConfig | undefined): string | null {
+    if (!zoneConfig) return null;
+    const candidates: Array<Record<string, unknown> | undefined> = [];
+    if (zoneConfig.output && typeof zoneConfig.output === 'object') {
+      candidates.push(zoneConfig.output as Record<string, unknown>);
+    }
+    if (Array.isArray(zoneConfig.transports)) {
+      for (const t of zoneConfig.transports) {
+        if (t && typeof t === 'object') candidates.push(t as Record<string, unknown>);
+      }
+    }
+    for (const c of candidates) {
+      if (!c) continue;
+      const id = typeof c.id === 'string' ? c.id.toLowerCase() : '';
+      if (id !== 'musicassistant') continue;
+      const playerId = typeof c.playerId === 'string' ? c.playerId.trim() : '';
+      if (playerId) return playerId;
+    }
+    return null;
   }
 
   private decodeMediaId(audiopath: string): string {
@@ -1758,15 +1193,6 @@ export class MusicAssistantStreamService {
     this.lastPauseAt.set(zoneId, Date.now());
   }
 
-  private toLoxoneAudiopath(mediaId: string | undefined, typeHint = 'track'): string | undefined {
-    if (!mediaId) {
-      return undefined;
-    }
-    const ref = this.parseMaMediaRef(mediaId);
-    const type = ref.type || typeHint || 'track';
-    const raw = ref.id && ref.provider ? `${ref.provider}://${type}/${ref.id}` : mediaId;
-    return encodeAudiopath(raw, type, this.providerId);
-  }
 
   private handleInputStreamStart(zoneId: number, playerId: string, stream: PassThrough, fmt: StreamFormat): void {
     if (!this.inputHandlers?.startPlayback) {
@@ -1782,7 +1208,7 @@ export class MusicAssistantStreamService {
       channels: fmt.channels || 2,
       stream,
     };
-    const encodedAudiopath = this.toLoxoneAudiopath(meta?.audiopath ?? `musicassistant://${playerId}`);
+    const encodedAudiopath = toLoxoneAudiopathHelper(meta?.audiopath ?? `musicassistant://${playerId}`, this.providerId);
     const metadata: PlaybackMetadata = {
       title: meta?.title ?? '',
       artist: meta?.artist ?? '',
@@ -1847,7 +1273,7 @@ export class MusicAssistantStreamService {
     if (!metadata) {
       return;
     }
-    const encodedAudiopath = this.toLoxoneAudiopath(metadata.audiopath);
+    const encodedAudiopath = toLoxoneAudiopathHelper(metadata.audiopath, this.providerId);
     const normalized: PlaybackMetadata = encodedAudiopath
       ? { ...metadata, audiopath: encodedAudiopath }
       : metadata;
@@ -1916,27 +1342,6 @@ export class MusicAssistantStreamService {
     });
   }
 
-  private parseMaMediaRef(mediaId: string): { type: string | null; id: string | null; provider: string | null } {
-    if (!mediaId) {
-      return { type: null, id: null, provider: null };
-    }
-    if (mediaId.includes('://')) {
-      const [scheme, restRaw] = mediaId.split('://');
-      const rest = restRaw || '';
-      const [maybeType, ...restParts] = rest.split('/');
-      const type = maybeType || null;
-      const id = restParts.join('/') || null;
-      return { type, id, provider: scheme || null };
-    }
-    const parts = mediaId.split(':');
-    if (parts.length >= 3) {
-      const provider = parts[0] || null;
-      const type = parts[1] || null;
-      const id = parts.slice(2).join(':') || null;
-      return { type, id, provider };
-    }
-    return { type: null, id: mediaId || null, provider: null };
-  }
 
   private toMetadataFromTrack(track: any): PlaybackMetadata | null {
     if (!track) {
@@ -1954,7 +1359,7 @@ export class MusicAssistantStreamService {
       track?.album_artist ||
       '';
     const album = track?.album?.name || track?.album || '';
-    const cover = this.extractCover(track);
+    const cover = extractCoverHelper(track);
     const duration =
       typeof track?.duration === 'number' && track.duration > 0
         ? Math.round(track.duration)
@@ -1965,7 +1370,7 @@ export class MusicAssistantStreamService {
         : typeof track?.uri === 'string'
           ? track.uri
           : undefined;
-    const audiopath = this.toLoxoneAudiopath(rawAudiopath, track?.type || 'track');
+    const audiopath = toLoxoneAudiopathHelper(rawAudiopath, this.providerId, track?.type || 'track');
     if (!title && !artist && !album && !cover && !audiopath && !duration) {
       return null;
     }
@@ -1992,7 +1397,7 @@ export class MusicAssistantStreamService {
       return;
     }
     const decoded = this.decodeMediaId(mediaId);
-    const ref = this.parseMaMediaRef(decoded);
+    const ref = parseMaMediaRef(decoded);
     if (ref.type !== 'track' || !ref.id) {
       return;
     }

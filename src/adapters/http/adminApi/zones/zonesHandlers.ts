@@ -22,6 +22,11 @@ export const STATE_CONTROLLER_DEFINITIONS = [
   { id: 'internal', label: 'Internal', description: 'Use internal playback state only.' },
   { id: 'beolink', label: 'BeoLink', description: 'Use BeoLink external playback state.' },
   { id: 'sonos', label: 'Sonos', description: 'Use Sonos external playback state.' },
+  {
+    id: 'musicassistant',
+    label: 'Music Assistant',
+    description: 'Mirror playback state from a Music Assistant player and proxy commands via RPC.',
+  },
 ] as const;
 
 export type ZoneOutputLike = { id: string } & Record<string, unknown>;
