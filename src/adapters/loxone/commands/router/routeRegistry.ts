@@ -8,14 +8,7 @@ import { createProviderHandlers } from '@/adapters/loxone/commands/handlers/prov
 import { createZoneHandlers } from '@/adapters/loxone/commands/handlers/zoneHandlers';
 import { createGlobalSearchHandlers } from '@/adapters/loxone/commands/handlers/globalSearchHandlers';
 import { createGroupHandlers } from '@/adapters/loxone/commands/handlers/groupHandlers';
-import {
-  audioGroupedAlert,
-  audioCfgUploadAudiouploadAdd,
-  audioPlayEventFile,
-  audioPlayUploadedAlert,
-  audioZoneAlert,
-  audioZoneTts,
-} from '@/adapters/loxone/commands/handlers/alertHandlers';
+import { createAlertHandlers } from '@/adapters/loxone/commands/handlers/alertHandlers';
 import { createInputHandlers } from '@/adapters/loxone/commands/handlers/inputHandlers';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
@@ -24,6 +17,8 @@ import type { GroupManager } from '@/application/groups/groupManager';
 import type { ContentManager } from '@/adapters/content/contentManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
+import type { FadeControllerPort } from '@/ports/FadeControllerPort';
+import type { AlertsPort } from '@/ports/AlertsPort';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
@@ -45,6 +40,8 @@ export interface RouteDependencies {
   favoritesManager: FavoritesManager;
   groupManager: GroupManager;
   groupTracker: GroupTrackerPort;
+  fadeController: FadeControllerPort;
+  alerts: AlertsPort;
   contentManager: ContentManager;
 }
 
@@ -74,7 +71,9 @@ export function registerRoutes(
     dependencies.favoritesManager,
     dependencies.contentManager,
     dependencies.configPort,
+    dependencies.fadeController,
   );
+  const alertHandlers = createAlertHandlers(dependencies.alerts);
   const groupHandlers = createGroupHandlers(
     dependencies.zoneManager,
     dependencies.groupManager,
@@ -142,7 +141,7 @@ export function registerRoutes(
   router.registerPrefix('audio', 'audio/cfg/timezone', placeholder('timezone'));
   router.registerPrefix('audio', 'audio/cfg/servicecfg/getlink', configHandlers.serviceCfgGetLink);
   router.registerPrefix('audio', 'audio/cfg/servicecfg/delete', configHandlers.serviceCfgDelete);
-  router.registerPrefix('audio', 'audio/cfg/upload/audioupload/add/', audioCfgUploadAudiouploadAdd);
+  router.registerPrefix('audio', 'audio/cfg/upload/audioupload/add/', alertHandlers.audioCfgUploadAudiouploadAdd);
 
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/status\/?$/, zoneHandlers.audioGetStatus);
   router.registerRegex(
@@ -164,18 +163,18 @@ export function registerRoutes(
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/equalizersettings\/[^/]+\/?$/, zoneHandlers.audioEqualizerSettings);
   router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/linein(?:\/.*)?$/, inputHandlers.audioLineIn);
 
-  router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/tts\/.+\/\d+\/?$/, audioZoneTts);
+  router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/tts\/.+\/\d+\/?$/, alertHandlers.audioZoneTts);
   router.registerRegex(
     'audio',
     /^audio\/(?:cfg\/)?\d+\/(?:alarm|firealarm|bell|wecker|buzzer|clock|alarmclock)(?:\/\d+)?\/?$/,
-    audioZoneAlert,
+    alertHandlers.audioZoneAlert,
   );
 
   router.registerRegex('audio', /^audio\/grouped\/(pause|play|resume|stop)\//, groupHandlers.audioGroupedPlayback);
   router.registerRegex('audio', /^audio\/grouped\/volume\//, groupHandlers.audioGroupedVolume);
-  router.registerRegex('audio', /^audio\/grouped\/playuploadedfile\//, audioPlayUploadedAlert);
-  router.registerRegex('audio', /^audio\/grouped\/playeventfile\//, audioPlayEventFile);
-  router.registerRegex('audio', /^audio\/grouped\/(?!playuploadedfile)[^/]+\/.+$/, audioGroupedAlert);
+  router.registerRegex('audio', /^audio\/grouped\/playuploadedfile\//, alertHandlers.audioPlayUploadedAlert);
+  router.registerRegex('audio', /^audio\/grouped\/playeventfile\//, alertHandlers.audioPlayEventFile);
+  router.registerRegex('audio', /^audio\/grouped\/(?!playuploadedfile)[^/]+\/.+$/, alertHandlers.audioGroupedAlert);
 
   router.registerRegex('audio', /^audio\/\d+\/mastervolume\//, groupHandlers.audioMasterVolume);
   router.registerRegex('audio', /^audio\/cfg\/dgroup\/update\//, groupHandlers.audioCfgDynamicGroup);

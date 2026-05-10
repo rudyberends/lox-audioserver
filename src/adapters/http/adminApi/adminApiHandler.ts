@@ -41,6 +41,7 @@ type AdminApiOptions = {
   audioManager: AudioManager;
   zoneAudioPrefs: ZoneAudioPreferences;
   mdnsPort: MdnsPort;
+  alertFiles: AlertFilesPort;
 };
 
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
@@ -52,6 +53,7 @@ import { MiniserverAuthClient } from '@/adapters/http/adminApi/auth/miniserverAu
 import { buildAuthRoutes } from '@/adapters/http/adminApi/auth/authHandlers';
 import { buildAppleMusicRoutes } from '@/adapters/http/adminApi/applemusic/appleMusicHandlers';
 import { buildAlertsRoutes } from '@/adapters/http/adminApi/alerts/alertsHandlers';
+import type { AlertFilesPort } from '@/ports/AlertFilesPort';
 import { buildTransportsRoutes } from '@/adapters/http/adminApi/transports/transportsHandlers';
 import { buildContentRoutes } from '@/adapters/http/adminApi/content/contentHandlers';
 import {
@@ -154,6 +156,7 @@ export class AdminApiHandler {
   private readonly audioManager: AudioManager;
   private readonly zoneAudioPrefs: ZoneAudioPreferences;
   private readonly mdns: MdnsPort;
+  private readonly alertFiles: AlertFilesPort;
   private readonly clockOffsetTracker = new ClockOffsetTracker(this.log);
   private readonly routes: Route[];
   private readonly sessionStore = new AdminSessionStore();
@@ -179,6 +182,7 @@ export class AdminApiHandler {
     this.audioManager = options.audioManager;
     this.zoneAudioPrefs = options.zoneAudioPrefs;
     this.mdns = options.mdnsPort;
+    this.alertFiles = options.alertFiles;
     this.routes = this.buildRoutes();
   }
 
@@ -287,6 +291,7 @@ export class AdminApiHandler {
         log: this.log,
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
         sendJson: (res, status, payload) => sendJson(res, status, payload),
+        alertFiles: this.alertFiles,
       }),
     ];
   }

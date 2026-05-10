@@ -8,7 +8,7 @@ import { performance } from 'node:perf_hooks';
 import { MusicAssistantApi } from '@/shared/musicassistant/musicAssistantApi';
 import { decodeAudiopath, encodeAudiopath } from '@/domain/loxone/audiopath';
 import { PassThrough } from 'node:stream';
-import { generateQueueId } from '@/application/zones/helpers/queueHelpers';
+import { generateQueueId } from '@/shared/utils/queueId';
 
 type StreamEntry = {
   playerId: string;

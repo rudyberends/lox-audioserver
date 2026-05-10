@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { alertsManager } from '@/application/alerts/alertsManager';
-import type { AlertAction } from '@/application/alerts/types';
+import type { AlertsPort } from '@/ports/AlertsPort';
+import type { AlertAction } from '@/ports/types/alerts';
 import { createLogger } from '@/shared/logging/logger';
 import { buildResponse } from '@/adapters/loxone/commands/responses';
 import { decodeSegment, splitCommand } from '@/adapters/loxone/commands/utils/commandUtils';
@@ -11,7 +11,18 @@ export type { AlertAction };
 const alertsCacheRoot = path.resolve(process.cwd(), 'public', 'alerts', 'cache');
 const log = createLogger('Alerts', 'Upload');
 
-export async function audioGroupedAlert(command: string) {
+export function createAlertHandlers(alerts: AlertsPort) {
+  return {
+    audioGroupedAlert: (command: string) => audioGroupedAlert(alerts, command),
+    audioCfgUploadAudiouploadAdd,
+    audioPlayUploadedAlert: (command: string) => audioPlayUploadedAlert(alerts, command),
+    audioZoneAlert: (command: string) => audioZoneAlert(alerts, command),
+    audioZoneTts: (command: string) => audioZoneTts(alerts, command),
+    audioPlayEventFile: (command: string) => audioPlayEventFile(alerts, command),
+  };
+}
+
+async function audioGroupedAlert(alerts: AlertsPort, command: string) {
   const parts = splitCommand(command);
   const type = (parts[2] ?? '').toLowerCase();
   const offIndex = parts.findIndex((part) => part === 'off' || part === 'stop');
@@ -43,7 +54,7 @@ export async function audioGroupedAlert(command: string) {
     }
   }
 
-  const result = await alertsManager.handleGroupedAlert(
+  const result = await alerts.handleGroupedAlert(
     zones[0]!,
     type,
     action,
@@ -81,7 +92,7 @@ export async function audioCfgUploadAudiouploadAdd(command: string, payload?: Bu
   return buildResponse(command, 'audioupload', { success: true, filename });
 }
 
-export async function audioPlayUploadedAlert(command: string) {
+async function audioPlayUploadedAlert(alerts: AlertsPort, command: string) {
   const parts = splitCommand(command);
   const filename = decodeSegment(parts[3]);
   const zonesPart = parts[4] ?? '';
@@ -94,7 +105,7 @@ export async function audioPlayUploadedAlert(command: string) {
     return buildResponse(command, 'playuploadedfile', false);
   }
 
-  const result = await alertsManager.handleUploadedAlert(filename, zones);
+  const result = await alerts.handleUploadedAlert(filename, zones);
   return buildResponse(command, 'playuploadedfile', Boolean(result?.success));
 }
 
@@ -102,7 +113,7 @@ export async function audioPlayUploadedAlert(command: string) {
  * Handles `audio/<zoneId>/(alarm|firealarm|bell|wecker)[/<volume>]` —
  * the per-zone alert path the Miniserver uses for direct alarm/clock events.
  */
-export async function audioZoneAlert(command: string) {
+async function audioZoneAlert(alerts: AlertsPort, command: string) {
   const parts = splitCommand(command);
   const zoneId = Number(parts[1]);
   const type = (parts[2] ?? '').toLowerCase();
@@ -115,7 +126,7 @@ export async function audioZoneAlert(command: string) {
     ]);
   }
 
-  const result = await alertsManager.handleGroupedAlert(
+  const result = await alerts.handleGroupedAlert(
     zoneId,
     type,
     'on',
@@ -131,7 +142,7 @@ export async function audioZoneAlert(command: string) {
  * Handles `audio/<zoneId>/tts/<language>|<text>/<volume>` — the per-zone TTS path
  * the Miniserver uses for room-targeted announcements.
  */
-export async function audioZoneTts(command: string) {
+async function audioZoneTts(alerts: AlertsPort, command: string) {
   const parts = splitCommand(command);
   const zoneId = Number(parts[1]);
   const volumeRaw = parts[parts.length - 1];
@@ -154,7 +165,7 @@ export async function audioZoneTts(command: string) {
     ttsText = first.trim();
   }
 
-  const result = await alertsManager.handleGroupedAlert(
+  const result = await alerts.handleGroupedAlert(
     zoneId,
     'tts',
     'on',
@@ -166,7 +177,7 @@ export async function audioZoneTts(command: string) {
   return buildResponse(command, 'groupalert', [result]);
 }
 
-export async function audioPlayEventFile(command: string) {
+async function audioPlayEventFile(alerts: AlertsPort, command: string) {
   const parts = splitCommand(command);
   const zoneTargets = parseZoneTargets(parts[3] ?? '');
   const relativePath = decodeSegment(parts.slice(4).join('/'));
@@ -177,7 +188,7 @@ export async function audioPlayEventFile(command: string) {
     ]);
   }
 
-  const result = await alertsManager.handlePlayEventFile(relativePath, zoneTargets);
+  const result = await alerts.handlePlayEventFile(relativePath, zoneTargets);
   return buildResponse(command, 'groupalert', [result]);
 }
 

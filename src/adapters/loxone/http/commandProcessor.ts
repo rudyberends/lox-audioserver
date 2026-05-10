@@ -12,6 +12,8 @@ import type { GroupManager } from '@/application/groups/groupManager';
 import type { ContentManager } from '@/adapters/content/contentManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
+import type { FadeControllerPort } from '@/ports/FadeControllerPort';
+import type { AlertsPort } from '@/ports/AlertsPort';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
@@ -32,6 +34,8 @@ export interface LoxoneCommandProcessorOptions {
   favoritesManager: FavoritesManager;
   groupManager: GroupManager;
   groupTracker: GroupTrackerPort;
+  fadeController: FadeControllerPort;
+  alerts: AlertsPort;
   contentManager: ContentManager;
 }
 
@@ -59,6 +63,8 @@ export class LoxoneCommandProcessor {
       favoritesManager: options.favoritesManager,
       groupManager: options.groupManager,
       groupTracker: options.groupTracker,
+      fadeController: options.fadeController,
+      alerts: options.alerts,
       contentManager: options.contentManager,
     });
   }

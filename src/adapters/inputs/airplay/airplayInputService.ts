@@ -4,6 +4,7 @@ import type { ZoneConfig, GlobalAirplayConfig } from '@/domain/config/types';
 import type { AirplayController } from '@/ports/InputsPort';
 import { AirplayInstance } from '@/adapters/inputs/airplay/airplayInstance';
 import type { ZonePlayer } from '@/ports/types/zonePlayer';
+import type { PlayerRegistryPort } from '@/ports/PlayerRegistryPort';
 
 type SpotifySessionStopper = (zoneId: number, reason?: string) => void;
 
@@ -11,7 +12,10 @@ export class AirplayInputService {
   private readonly log = createLogger('Audio', 'AirPlayService');
   private readonly instances = new Map<number, AirplayInstance>();
   private controller: AirplayController | null = null;
-  constructor(private readonly spotifySessionStopper: SpotifySessionStopper) {
+  constructor(
+    private readonly spotifySessionStopper: SpotifySessionStopper,
+    private readonly playerRegistry: PlayerRegistryPort,
+  ) {
     for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       process.on(signal, () => this.markAllInstancesStopping());
     }
@@ -60,6 +64,7 @@ export class AirplayInputService {
         zone.sourceMac,
         airplay,
         this.controller,
+        this.playerRegistry,
       );
       this.instances.set(zone.id, instance);
       instance.start().catch((error) => {

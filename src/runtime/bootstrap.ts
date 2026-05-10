@@ -51,6 +51,10 @@ import { sendspinGroupController } from '@/application/outputs/sendspinGroupCont
 import { createSqueezeliteGroupController } from '@/application/outputs/squeezeliteGroupController';
 import { createGroupManager } from '@/application/groups/groupManager';
 import { createGroupTrackerPort } from '@/application/groups/groupTrackerPort';
+import { createPlayerRegistryPort } from '@/application/playback/playerRegistryPort';
+import { createFadeControllerPort } from '@/application/zones/fadeControllerPort';
+import { createAlertsPort } from '@/application/alerts/alertsPort';
+import { createAlertFilesPort } from '@/application/alerts/alertFilesPort';
 import { createMixedGroupController } from '@/application/groups/mixedGroupController';
 import { createFavoritesManager } from '@/application/zones/favorites/favoritesManager';
 import { createRecentsManager } from '@/application/zones/recents/recentsManager';
@@ -82,6 +86,10 @@ type OutputHandlers = ReturnType<ZoneManagerFacade['getOutputHandlers']>;
 export function createRuntime(): Runtime {
   const connectionRegistry = new ConnectionRegistry();
   const groupTracker = createGroupTrackerPort();
+  const playerRegistry = createPlayerRegistryPort();
+  const fadeControllerPort = createFadeControllerPort();
+  const alertsPort = createAlertsPort();
+  const alertFilesPort = createAlertFilesPort();
   const loxoneNotifier = new LoxoneWsNotifier(connectionRegistry, groupTracker);
   const ports = createRuntimePorts({ notifier: new LoxoneNotifierAdapter(loxoneNotifier) });
   const configPort = ports.config;
@@ -147,10 +155,11 @@ export function createRuntime(): Runtime {
     spotifyManagerProvider,
     spotifyDeviceRegistry,
     stopAirplaySession,
+    playerRegistry,
   );
   airplayInputService = new AirplayInputService((zoneId, reason) => {
     spotifyInputService.stopActiveSession(zoneId, reason);
-  });
+  }, playerRegistry);
   if (!airplayInputService) {
     throw new Error('airplay input service not initialized');
   }
@@ -356,6 +365,7 @@ export function createRuntime(): Runtime {
       audioManager,
       zoneAudioPrefs,
       mdnsPort: mdnsService,
+      alertFiles: alertFilesPort,
     });
     networkService = new NetworkService({
       lineInRegistry,
@@ -378,6 +388,8 @@ export function createRuntime(): Runtime {
       favoritesManager,
       groupManager,
       groupTracker,
+      fadeController: fadeControllerPort,
+      alerts: alertsPort,
       contentManager,
     });
 

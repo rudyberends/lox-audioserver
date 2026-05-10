@@ -9,9 +9,9 @@ import {
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
-import { fadeController } from '@/application/zones/fadeController';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
+import type { FadeControllerPort } from '@/ports/FadeControllerPort';
 import { createLogger } from '@/shared/logging/logger';
 import {
   DEFAULT_EQUALIZER_BANDS,
@@ -19,7 +19,7 @@ import {
   getZoneEqualizerBands,
   parseEqualizerSettings,
   resolveEqForwardUrl,
-} from '@/application/zones/equalizer';
+} from '@/domain/zones/equalizer';
 
 const log = createLogger('Loxone', 'ZoneHandlers');
 
@@ -28,16 +28,17 @@ export function createZoneHandlers(
   recentsManager: RecentsManager,
   favoritesManager: FavoritesManager,
   contentManager: ContentManager,
-  configPort?: ConfigPort,
+  configPort: ConfigPort | undefined,
+  fadeController: FadeControllerPort,
 ) {
   return {
     audioGetStatus: (command: string) => audioGetStatus(zoneManager, command),
     audioCfgGetQueue: (command: string) => audioCfgGetQueue(zoneManager, command),
     audioRecent: (command: string) => audioRecent(recentsManager, command),
-    audioPlaylistPlay: (command: string) => audioPlaylistPlay(zoneManager, contentManager, command),
-    audioLibraryPlay: (command: string) => audioLibraryPlay(zoneManager, contentManager, command),
-    audioServicePlay: (command: string) => audioServicePlay(zoneManager, contentManager, command),
-    audioPlayUrl: (command: string) => audioPlayUrl(zoneManager, contentManager, command),
+    audioPlaylistPlay: (command: string) => audioPlaylistPlay(zoneManager, contentManager, fadeController, command),
+    audioLibraryPlay: (command: string) => audioLibraryPlay(zoneManager, contentManager, fadeController, command),
+    audioServicePlay: (command: string) => audioServicePlay(zoneManager, contentManager, fadeController, command),
+    audioPlayUrl: (command: string) => audioPlayUrl(zoneManager, contentManager, fadeController, command),
     audioCfgGetEq: (command: string) => audioCfgGetEq(configPort, command),
     audioCfgEqualizer: (command: string) => audioCfgEqualizer(zoneManager, configPort, command),
     audioCfgSetEq: (command: string) => audioCfgSetEq(zoneManager, configPort, command),
@@ -46,7 +47,7 @@ export function createZoneHandlers(
     audioCfgGetRoomFavs: (command: string) => audioCfgGetRoomFavs(favoritesManager, command),
     audioCfgRoomFavs: (command: string) => audioCfgRoomFavs(favoritesManager, command),
     audioFavoritePlay: (command: string) =>
-      audioFavoritePlay(zoneManager, favoritesManager, command),
+      audioFavoritePlay(zoneManager, favoritesManager, fadeController, command),
     audioRoomFavPlus: (command: string) =>
       audioRoomFavPlus(zoneManager, favoritesManager, command),
   };
@@ -87,9 +88,10 @@ async function audioRecent(recentsManager: RecentsManager, command: string) {
 async function audioPlaylistPlay(
   zoneManager: ZoneManagerFacade,
   contentManager: ContentManager,
+  fadeController: FadeControllerPort,
   command: string,
 ) {
-  return playToZone(zoneManager, contentManager, command, 'playlistplay', (parts) =>
+  return playToZone(zoneManager, contentManager, fadeController, command, 'playlistplay', (parts) =>
     extractPayload(parts.slice(4)),
   );
 }
@@ -97,9 +99,10 @@ async function audioPlaylistPlay(
 async function audioLibraryPlay(
   zoneManager: ZoneManagerFacade,
   contentManager: ContentManager,
+  fadeController: FadeControllerPort,
   command: string,
 ) {
-  return playToZone(zoneManager, contentManager, command, 'libraryplay', (parts) =>
+  return playToZone(zoneManager, contentManager, fadeController, command, 'libraryplay', (parts) =>
     extractPayload(parts.slice(4)),
   );
 }
@@ -150,6 +153,7 @@ function resolveParentIdInCommand(command: string): string {
 async function audioServicePlay(
   zoneManager: ZoneManagerFacade,
   contentManager: ContentManager,
+  fadeController: FadeControllerPort,
   command: string,
 ) {
   const parts = splitCommand(command);
@@ -157,7 +161,7 @@ async function audioServicePlay(
   const hasNoShuffle = /\/noshuffle(?:\/|$)/i.test(command);
   zoneManager.setPendingShuffle(zoneId, !hasNoShuffle);
   const resolvedCommand = resolveParentIdInCommand(command);
-  const response = await playToZone(zoneManager, contentManager, resolvedCommand, 'serviceplay', (parts) => {
+  const response = await playToZone(zoneManager, contentManager, fadeController, resolvedCommand, 'serviceplay', (parts) => {
     const decoded = extractPayload(parts.slice(4));
     const withoutNouser = decoded.startsWith('nouser/')
       ? decoded.slice('nouser/'.length)
@@ -188,9 +192,10 @@ async function audioServicePlay(
 async function audioPlayUrl(
   zoneManager: ZoneManagerFacade,
   contentManager: ContentManager,
+  fadeController: FadeControllerPort,
   command: string,
 ) {
-  return playToZone(zoneManager, contentManager, command, 'playurl', (parts) =>
+  return playToZone(zoneManager, contentManager, fadeController, command, 'playurl', (parts) =>
     extractPayload(parts.slice(3)),
   );
 }
@@ -380,6 +385,7 @@ async function audioCfgRoomFavs(
 async function audioFavoritePlay(
   zoneManager: ZoneManagerFacade,
   favoritesManager: FavoritesManager,
+  fadeController: FadeControllerPort,
   command: string,
 ) {
   const parts = splitCommand(command);
@@ -463,6 +469,7 @@ async function playFavorite(
 async function playToZone(
   zoneManager: ZoneManagerFacade,
   contentManager: ContentManager,
+  fadeController: FadeControllerPort,
   command: string,
   name: string,
   payloadResolver: (parts: string[]) => string,

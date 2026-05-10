@@ -10,7 +10,7 @@ import {
   pcmFormatFromBitDepth,
   type AudioOutputSettings,
 } from '@/engine/audioFormat';
-import { buildEqualizerFilterChain } from '@/application/zones/equalizer';
+import { buildEqualizerFilterChain } from '@/domain/zones/equalizer';
 
 export type PlaybackSource =
   | {

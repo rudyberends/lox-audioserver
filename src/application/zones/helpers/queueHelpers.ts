@@ -69,9 +69,8 @@ export function parseSpotifyUser(audiopath: string): string {
   return match?.[1] ?? 'nouser';
 }
 
-export function generateQueueId(): string {
-  return Math.random().toString(16).slice(2, 14);
-}
+import { generateQueueId } from '@/shared/utils/queueId';
+export { generateQueueId };
 
 export function createQueueItem(
   uri: string,

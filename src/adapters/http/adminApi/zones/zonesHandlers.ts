@@ -12,7 +12,7 @@ import {
   formatEqualizerSettings,
   getZoneEqualizerBands,
   normalizeEqualizerBands,
-} from '@/application/zones/equalizer';
+} from '@/domain/zones/equalizer';
 import { audioResampler } from '@/ports/types/audioFormat';
 import { sendspinCore } from '@lox-audioserver/node-sendspin';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';

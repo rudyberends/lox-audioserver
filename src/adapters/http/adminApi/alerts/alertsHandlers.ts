@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { promises as fs } from 'node:fs';
 import { basename, extname, join, resolve } from 'node:path';
 import type { ComponentLogger } from '@/shared/logging/logger';
-import { listAlertFiles, revertAlertFile, updateAlertFile } from '@/application/alerts/alertFileManager';
+import type { AlertFilesPort } from '@/ports/AlertFilesPort';
 import { ensureDir } from '@/shared/utils/file';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 
@@ -14,6 +14,7 @@ export type AlertsHandlerDeps = {
   log: ComponentLogger;
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
+  alertFiles: AlertFilesPort;
 };
 
 export function buildAlertsRoutes(deps: AlertsHandlerDeps): Route[] {
@@ -102,7 +103,7 @@ async function handleEventSoundUpload(
 
 async function handleAlertFilesList(res: ServerResponse, deps: AlertsHandlerDeps): Promise<void> {
   try {
-    const alerts = await listAlertFiles();
+    const alerts = await deps.alertFiles.list();
     deps.sendJson(res, 200, { alerts });
   } catch (err) {
     deps.log.warn('alerts list failed', { err });
@@ -126,7 +127,7 @@ async function handleAlertFileUpdate(
     return;
   }
   try {
-    await updateAlertFile(alertId, data);
+    await deps.alertFiles.update(alertId, data);
     deps.sendJson(res, 200, { success: true });
   } catch (err) {
     const code = err instanceof Error ? err.message : 'alerts-update-failed';
@@ -141,7 +142,7 @@ async function handleAlertFileRevert(
   deps: AlertsHandlerDeps,
 ): Promise<void> {
   try {
-    await revertAlertFile(alertId);
+    await deps.alertFiles.revert(alertId);
     deps.sendJson(res, 200, { success: true });
   } catch (err) {
     const code = err instanceof Error ? err.message : 'alerts-revert-failed';

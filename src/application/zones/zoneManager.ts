@@ -54,7 +54,7 @@ import {
   formatEqualizerSettings,
   normalizeEqualizerBands,
   type EqualizerBands,
-} from '@/application/zones/equalizer';
+} from '@/domain/zones/equalizer';
 import {
   createZoneAudioHelpers,
   type ZoneAudioHelpers,

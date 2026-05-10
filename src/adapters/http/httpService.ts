@@ -20,6 +20,7 @@ import type { FavoritesManager } from '@/application/zones/favorites/favoritesMa
 import type { GroupManagerReadPort } from '@/application/groups/groupManager';
 import type { ContentManager } from '@/adapters/content/contentManager';
 import type { EnginePort } from '@/ports/EnginePort';
+import type { AlertFilesPort } from '@/ports/AlertFilesPort';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import type { LineInMetadataService } from '@/adapters/inputs/linein/lineInMetadataService';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
@@ -80,6 +81,7 @@ export class HttpService {
       zoneAudioPrefs: ZoneAudioPreferences;
       squeezeliteCli: LmsCliServer;
       mdnsPort: MdnsPort;
+      alertFiles: AlertFilesPort;
     },
   ) {
     this.adminApi = new AdminApiHandler({
@@ -102,6 +104,7 @@ export class HttpService {
       audioManager: options.audioManager,
       zoneAudioPrefs: options.zoneAudioPrefs,
       mdnsPort: options.mdnsPort,
+      alertFiles: options.alertFiles,
     });
     this.music = new MusicStreamingHandler(config.musicDir);
     this.staticFiles = new StaticFileHandler(config.publicDir);

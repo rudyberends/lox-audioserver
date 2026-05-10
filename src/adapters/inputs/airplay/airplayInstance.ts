@@ -1,7 +1,7 @@
 import { createLogger, type ComponentLogger } from '@/shared/logging/logger';
 import type { ZoneAirplayConfig } from '@/domain/config/types';
 import type { PlaybackMetadata, PlaybackSource, CoverArtPayload } from '@/application/playback/audioManager';
-import { getPlayer } from '@/application/playback/playerRegistry';
+import type { PlayerRegistryPort } from '@/ports/PlayerRegistryPort';
 import os from 'node:os';
 import http from 'node:http';
 import { PassThrough } from 'stream';
@@ -62,6 +62,7 @@ export class AirplayInstance {
     private readonly sourceMac: string,
     private config: ZoneAirplayConfig,
     private readonly controller: AirplayInstanceController,
+    private readonly playerRegistry: PlayerRegistryPort,
   ) {
     this.zoneName = zoneName;
     this.log = createLogger('Input', `AirPlay][${zoneName}`);
@@ -269,7 +270,7 @@ export class AirplayInstance {
     this.isPlaying = false;
     this.stopHttpStream();
     this.endPcmStream();
-    const player = getPlayer(this.zoneId);
+    const player = this.playerRegistry.getPlayer(this.zoneId);
     if (player) {
       player.stop('airplay_forced_stop');
     } else {
@@ -462,7 +463,7 @@ export class AirplayInstance {
       raw,
       volume,
     });
-    const player = getPlayer(this.zoneId);
+    const player = this.playerRegistry.getPlayer(this.zoneId);
     if (player) {
       player.setVolume(volume);
     } else {
@@ -581,7 +582,7 @@ export class AirplayInstance {
     if (elapsedProvided) {
       const elapsedSec = Math.max(0, Math.round(elapsedMs !== undefined ? elapsedMs / 1000 : elapsedSeconds!));
       this.currentElapsedSec = elapsedSec;
-      const player = getPlayer(this.zoneId);
+      const player = this.playerRegistry.getPlayer(this.zoneId);
       if (player) {
         player.updateTiming(elapsedSec, this.currentDurationSec);
       } else {
@@ -604,7 +605,7 @@ export class AirplayInstance {
         this.currentDurationSec = 0;
         this.currentMetadata.duration = undefined;
       }
-      const player = getPlayer(this.zoneId);
+      const player = this.playerRegistry.getPlayer(this.zoneId);
       if (player) {
         player.updateTiming(0, this.currentDurationSec);
       } else {
@@ -658,7 +659,7 @@ export class AirplayInstance {
       return;
     }
     this.isPlaying = true;
-    const player = getPlayer(this.zoneId);
+    const player = this.playerRegistry.getPlayer(this.zoneId);
     if (player) {
       player.resume();
     } else {
@@ -671,7 +672,7 @@ export class AirplayInstance {
       return;
     }
     this.isPlaying = false;
-    const player = getPlayer(this.zoneId);
+    const player = this.playerRegistry.getPlayer(this.zoneId);
     if (player) {
       player.pause();
     } else {
@@ -687,7 +688,7 @@ export class AirplayInstance {
     this.isPlaying = false;
     this.stopHttpStream();
     this.endPcmStream();
-    const player = getPlayer(this.zoneId);
+    const player = this.playerRegistry.getPlayer(this.zoneId);
     if (player) {
       player.stop('airplay_stop');
     } else {
@@ -724,7 +725,7 @@ export class AirplayInstance {
         changed,
       });
     }
-    const player = getPlayer(this.zoneId);
+    const player = this.playerRegistry.getPlayer(this.zoneId);
     if (player) {
       player.updateMetadata(metadata);
     } else {
@@ -745,7 +746,7 @@ export class AirplayInstance {
     }
     if (clearCoverArt) {
       this.coverArt = undefined;
-      const player = getPlayer(this.zoneId);
+      const player = this.playerRegistry.getPlayer(this.zoneId);
       if (player) {
         player.updateCover(undefined);
       } else {
@@ -794,7 +795,7 @@ export class AirplayInstance {
     }
     this.currentElapsedSec = elapsedSec;
     this.lastTimingPushMs = now;
-    const player = getPlayer(this.zoneId);
+    const player = this.playerRegistry.getPlayer(this.zoneId);
     if (player) {
       player.updateTiming(elapsedSec, durationSec);
     } else {

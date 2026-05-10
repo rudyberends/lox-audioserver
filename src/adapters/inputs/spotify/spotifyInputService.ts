@@ -16,7 +16,7 @@ import { audioOutputSettings } from '@/ports/types/audioFormat';
 import type { PlaybackMetadata, PlaybackSource, CoverArtPayload } from '@/application/playback/audioManager';
 import type { SpotifyConnectController } from '@/ports/InputsPort';
 import { PassThrough } from 'node:stream';
-import { getPlayer } from '@/application/playback/playerRegistry';
+import type { PlayerRegistryPort } from '@/ports/PlayerRegistryPort';
 import {
   createNativeLibrespotSession,
   getNativeLibrespotStream,
@@ -106,6 +106,7 @@ class SpotifyConnectInstance {
     deviceRegistry: SpotifyDeviceRegistry,
     stopAirplaySession: AirplaySessionStopper,
     notifyOutputError: OutputErrorHandler,
+    private readonly playerRegistry: PlayerRegistryPort,
   ) {
     const cacheRoot = path.join('/tmp', 'lox-librespot');
     this.cacheDir = cacheDirOverride ?? path.join(cacheRoot, String(zoneId), 'cache');
@@ -1238,7 +1239,7 @@ class SpotifyConnectInstance {
   }
 
   private resolvePlayer(zoneId: number) {
-    return getPlayer(zoneId);
+    return this.playerRegistry.getPlayer(zoneId);
   }
 }
 
@@ -1255,6 +1256,7 @@ export class SpotifyInputService {
     private readonly spotifyManagers: SpotifyServiceManagerProvider,
     private readonly deviceRegistry: SpotifyDeviceRegistry,
     private readonly airplaySessionStopper: AirplaySessionStopper,
+    private readonly playerRegistry: PlayerRegistryPort,
   ) {}
 
   public stopActiveSession(zoneId: number, reason?: string): void {
@@ -1480,6 +1482,7 @@ export class SpotifyInputService {
         this.deviceRegistry,
         this.airplaySessionStopper,
         this.notifyOutputError,
+        this.playerRegistry,
       );
       this.instances.set(zone.id, instance);
       if (connectEnabled) {
