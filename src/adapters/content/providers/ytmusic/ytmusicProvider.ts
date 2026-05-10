@@ -69,6 +69,7 @@ export class YtMusicProvider {
     artists?: { items: ContentFolderItem[]; fetchedAt: number };
   } = {};
   private artistTracksCache = new Map<string, { items: ContentFolderItem[]; fetchedAt: number }>();
+  private albumTracksCache = new Map<string, { items: ContentFolderItem[]; fetchedAt: number }>();
   private readonly playlistMetaCacheTtlMs = 5 * 60_000;
   private playlistMetaCache = new Map<string, { title: string; count: number | null; fetchedAt: number }>();
   private playlistMetaInflight = new Map<string, Promise<{ title: string; count: number | null }>>();
@@ -233,8 +234,11 @@ export class YtMusicProvider {
     }
 
     if (normalized.type === 'album') {
-      const browseUrl = buildYtMusicBrowseUrl(normalized.id);
-      const tracks = await this.fetchTracksFromBrowse(browseUrl, start, cap);
+      let tracks = await this.fetchAlbumTracksFromInnertube(normalized.id, start, cap);
+      if (tracks.length === 0) {
+        const browseUrl = buildYtMusicBrowseUrl(normalized.id);
+        tracks = await this.fetchTracksFromBrowse(browseUrl, start, cap);
+      }
       return {
         id: folderId,
         name: 'Album',
@@ -860,6 +864,29 @@ export class YtMusicProvider {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn('ytmusic library artists fetch failed', { providerId: this.providerId, message: msg });
+      return [];
+    }
+  }
+
+  private async fetchAlbumTracksFromInnertube(albumBrowseId: string, offset: number, limit: number): Promise<ContentFolderItem[]> {
+    if (!this.hasCookie()) {
+      return [];
+    }
+    const cached = this.albumTracksCache.get(albumBrowseId);
+    if (cached && Date.now() - cached.fetchedAt < this.libraryCacheTtlMs) {
+      return cached.items.slice(offset, offset + limit);
+    }
+    try {
+      const json = await this.browse(albumBrowseId, { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
+      const listItems = extractResponsiveListItems(json);
+      const tracks = listItems
+        .map((it) => mapResponsiveToTrack(this.providerId, it))
+        .filter(Boolean) as ContentFolderItem[];
+      this.albumTracksCache.set(albumBrowseId, { items: tracks, fetchedAt: Date.now() });
+      return tracks.slice(offset, offset + limit);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn('ytmusic album tracks fetch failed', { providerId: this.providerId, albumBrowseId, message: msg });
       return [];
     }
   }

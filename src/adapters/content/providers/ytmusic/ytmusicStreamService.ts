@@ -99,7 +99,7 @@ export class YtMusicStreamService {
         hasCookie: Boolean(cookieFile),
       });
       const watchUrl = buildYtMusicWatchUrl(request.videoId);
-      const args = [
+      const buildArgs = (withCookies: boolean): string[] => [
         '-g',
         '--js-runtimes',
         'node',
@@ -108,11 +108,29 @@ export class YtMusicStreamService {
         '--skip-download',
         '-f',
         'bestaudio/best',
-        ...this.buildCookieArgs(cookieFile),
+        ...(withCookies ? this.buildCookieArgs(cookieFile) : []),
         watchUrl,
       ];
-      const { stdout } = await runYtDlp(args, this.execOptions());
-      const url = pickLastNonEmptyLine(stdout);
+      let url = '';
+      try {
+        const { stdout } = await runYtDlp(buildArgs(true), this.execOptions());
+        url = pickLastNonEmptyLine(stdout);
+      } catch (err) {
+        // Cookied requests can hit "Requested format is not available" because the
+        // signed-in player client demands a PO token. Public audio formats are still
+        // reachable without cookies, so retry once unauthenticated.
+        const stderr = err instanceof YtDlpError ? err.stderr : '';
+        const formatUnavailable = /Requested format is not available/i.test(stderr);
+        if (!cookieFile || !formatUnavailable) {
+          throw err;
+        }
+        this.log.debug('ytmusic stream retrying without cookies', {
+          zoneId,
+          providerId: request.providerId,
+        });
+        const { stdout } = await runYtDlp(buildArgs(false), this.execOptions());
+        url = pickLastNonEmptyLine(stdout);
+      }
       if (!url) {
         this.reportPlaybackError(zoneId, 'ytmusic stream url unavailable', suppressErrors);
         return { playbackSource: null };
