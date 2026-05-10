@@ -42,6 +42,7 @@ import { buildQueueItemPlaybackPatch } from '@/application/zones/playback/patchB
 import { handleZoneCommand } from '@/application/zones/playback/commandHandlers';
 import { handleEndOfTrack as handleEndOfTrackTransition } from '@/application/zones/playback/queueTransitions';
 import { QueueStepDispatcher } from '@/application/zones/playback/QueueStepDispatcher';
+import { CrossfadeController } from '@/application/zones/playback/crossfadeController';
 import {
   pauseInputSource as handlePauseInputSource,
   playInputSource as handlePlayInputSource,
@@ -56,7 +57,6 @@ import {
 import { handlePlaybackError as handlePlaybackErrorTransition } from '@/application/zones/playback/playbackErrors';
 import { updateOutputState as handleUpdateOutputState } from '@/application/zones/playback/outputStateUpdater';
 import { RadioParadiseBlockService } from '@/application/zones/radioparadise/radioParadiseBlockService';
-import { resolvePlaybackSource } from '@/application/playback/sourceResolver';
 
 type PlaybackCoordinatorDeps = {
   zones: ZoneRepository;
@@ -98,21 +98,7 @@ export class PlaybackCoordinator {
   private readonly queueStepDispatcher: QueueStepDispatcher;
   private readonly zonesMissingOutput = new Set<number>();
   private readonly queueBuildTokens = new Map<number, string>();
-  private readonly crossfadeState = new Map<
-    number,
-    {
-      resolving: boolean;
-      resolvedSource: PlaybackSource | null;
-      resolvedMetadata: PlaybackMetadata | null;
-      nextAudiopath: string;
-      nextQueueIndex: number;
-      triggered: boolean;
-      triggeredAt: number;
-      /** True when the fade-in source is a Spotify stream (started at trigger time via inputsPort). */
-      isSpotifyFadeIn?: boolean;
-    }
-  >();
-  private readonly CROSSFADE_PRE_RESOLVE_EXTRA_SEC = 10;
+  private readonly crossfade: CrossfadeController;
   private readonly musicAssistantInputHandlers: MusicAssistantInputHandlers = {
     startPlayback: (zoneId: number, label: string, source: PlaybackSource, metadata?: PlaybackMetadata) => {
       const ctx = this.zoneRepo.get(zoneId);
@@ -182,6 +168,20 @@ export class PlaybackCoordinator {
       startQueuePlayback: this.startQueuePlayback.bind(this),
       prefetchPlaybackSource: this.prefetchPlaybackSource.bind(this),
       advanceTrack: this.advanceTrack.bind(this),
+    });
+    this.crossfade = new CrossfadeController({
+      zoneRepo: this.zoneRepo,
+      audioManager: this.audioManager,
+      audioHelpers: this.audioHelpers,
+      contentPort: this.contentPort,
+      configPort: this.configPort,
+      inputsPort: this.inputsPort,
+      recentsManager: this.recentsManager,
+      log: this.log,
+      applyPatch: this.applyPatch,
+      isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
+      dispatchOutputs: this.dispatchOutputs.bind(this),
+      startQueuePlayback: this.startQueuePlayback.bind(this),
     });
   }
 
@@ -768,7 +768,7 @@ export class PlaybackCoordinator {
     metadata?: PlaybackMetadata,
     options?: { skipExternalStop?: boolean; startAtSec?: number },
   ): Promise<PlaybackSession | null> {
-    this.crossfadeState.delete(ctx.id);
+    this.crossfade.clear(ctx.id);
     const hasRadioParadise =
       this.radioParadise.isRadioParadiseAudiopath(audiopath) ||
       this.radioParadise.isRadioParadiseAudiopath(metadata?.audiopath ?? '') ||
@@ -1288,17 +1288,11 @@ export class PlaybackCoordinator {
   }
 
   private async advanceTrack(ctx: ZoneContext): Promise<void> {
-    const cfState = this.crossfadeState.get(ctx.id);
-    if (cfState?.triggered && cfState.triggeredAt > 0) {
-      const elapsed = Date.now() - cfState.triggeredAt;
-      const suppressMs = ((this.configPort.getSystemConfig()?.audioserver?.crossfadeSec ?? 5) + 5) * 1000;
-      if (elapsed < suppressMs) {
-        this.log.debug('end_of_track suppressed; crossfade already advanced queue', { zoneId: ctx.id });
-        this.crossfadeState.delete(ctx.id);
-        return;
-      }
+    const suppressMs = ((this.configPort.getSystemConfig()?.audioserver?.crossfadeSec ?? 5) + 5) * 1000;
+    if (this.crossfade.consumeRecentTrigger(ctx.id, suppressMs)) {
+      this.log.debug('end_of_track suppressed; crossfade already advanced queue', { zoneId: ctx.id });
+      return;
     }
-    this.crossfadeState.delete(ctx.id);
 
     const currentAudiopath = ctx.queueController.current()?.audiopath ?? ctx.state.audiopath ?? '';
     if (this.radioParadise.isRadioParadiseAudiopath(currentAudiopath) && this.radioParadise.canSkip(ctx.id)) {
@@ -1358,459 +1352,7 @@ export class PlaybackCoordinator {
   }
 
   public onCrossfadePosition(zoneId: number, time: number, duration: number): void {
-    if (!duration || duration <= 0) return;
-    const ctx = this.zoneRepo.get(zoneId);
-    if (!ctx || ctx.alert || ctx.inputMode === 'alert') return;
-    const crossfadeSec = this.configPort.getSystemConfig()?.audioserver?.crossfadeSec;
-    if (!crossfadeSec || crossfadeSec <= 0) return;
-    if (!this.isLocalQueueAuthority(ctx.queue.authority)) return;
-    const session = this.audioManager.getSession(zoneId);
-    const srcKind = session?.playbackSource?.kind;
-    if (!srcKind) return;
-    if (session.metadata?.isRadio) return;
-
-    const remaining = duration - time;
-    if (remaining <= 0) return;
-
-    // After an inline crossfade Squeezelite's elapsed and the zone timer are both anchored
-    // to the OLD song's timeline (Squeezelite never reconnected).  session.crossfadedAt is
-    // set by audioManager right after the blend completes; use it as the only reliable
-    // clock for the NEW song's position so we don't fire the next crossfade immediately.
-    let accurateElapsed: number;
-    if (session?.crossfadedAt) {
-      accurateElapsed = (Date.now() - session.crossfadedAt) / 1000;
-    } else {
-      // Normal (non-crossfaded) session: use the best available elapsed estimate.
-      // - session.startedAt gives a wall-clock anchor with no lag.
-      // - session.elapsed from Squeezelite is accurate on state changes.
-      // - `time` from zone timer lags VLC by ~5-13 s (VLC buffering).
-      const wallClockElapsedSec = session?.startedAt
-        ? (Date.now() - session.startedAt) / 1000
-        : time;
-      const squeezeliteElapsed =
-        typeof session?.elapsed === 'number' && session.elapsed > 0 ? session.elapsed : 0;
-      // When squeezeliteElapsed is 0 the zone timer may carry a stale position — clamp.
-      const sanitizedTime = squeezeliteElapsed > 0 ? time : Math.min(time, wallClockElapsedSec);
-      accurateElapsed = Math.max(wallClockElapsedSec, squeezeliteElapsed, sanitizedTime);
-    }
-    const accurateDuration = session?.metadata?.duration ?? duration;
-    const accurateRemaining = accurateDuration - accurateElapsed;
-
-    const state = this.crossfadeState.get(zoneId);
-
-    if (accurateRemaining <= crossfadeSec + this.CROSSFADE_PRE_RESOLVE_EXTRA_SEC && !state?.resolving && !state?.triggered) {
-      void this.startCrossfadePreResolve(ctx, crossfadeSec);
-    }
-
-    if (accurateRemaining <= crossfadeSec && state?.resolvedSource && !state.triggered) {
-      void this.triggerCrossfade(ctx, crossfadeSec);
-    }
-  }
-
-  private async startCrossfadePreResolve(ctx: ZoneContext, crossfadeSec: number): Promise<void> {
-    const zoneId = ctx.id;
-    const nextIndex = ctx.queueController.nextIndex();
-    if (nextIndex < 0) return;
-    const nextItem = ctx.queue.items[nextIndex];
-    if (!nextItem) return;
-    if (this.audioHelpers.isRadioAudiopath(nextItem.audiopath, nextItem.audiotype)) return;
-    if (this.audioHelpers.isMusicAssistantAudiopath(nextItem.audiopath)) return;
-
-    const isSpotifyNext = this.audioHelpers.isSpotifyAudiopath(nextItem.audiopath);
-
-    this.crossfadeState.set(zoneId, {
-      resolving: true,
-      resolvedSource: null,
-      resolvedMetadata: null,
-      nextAudiopath: nextItem.audiopath,
-      nextQueueIndex: nextIndex,
-      triggered: false,
-      triggeredAt: 0,
-      isSpotifyFadeIn: isSpotifyNext,
-    });
-
-    try {
-      const resolvedMetadata: PlaybackMetadata = {
-        title: nextItem.title || '',
-        artist: nextItem.artist || '',
-        album: nextItem.album || '',
-        coverurl: nextItem.coverurl,
-        duration: nextItem.duration,
-        audiopath: nextItem.audiopath,
-        station: nextItem.station,
-        isRadio: false,
-      };
-
-      let resolvedSource: PlaybackSource | null = null;
-
-      if (isSpotifyNext) {
-        // For Spotify fade-in the stream is started at trigger time, not pre-resolve.
-        // Use a sentinel pipe source so `resolvedSource` is truthy and the trigger fires.
-        resolvedSource = { kind: 'pipe', path: 'spotify-xf-pending' };
-      } else {
-        const isAppleMusic = this.audioHelpers.isAppleMusicAudiopath(nextItem.audiopath);
-        const isDeezer = this.audioHelpers.isDeezerAudiopath(nextItem.audiopath);
-        const isTidal = this.audioHelpers.isTidalAudiopath(nextItem.audiopath);
-        const isYtMusic = this.audioHelpers.isYtMusicAudiopath(nextItem.audiopath);
-
-        if (isAppleMusic || isDeezer || isTidal || isYtMusic) {
-          const resolution = await this.contentPort
-            .resolvePlaybackSource({ zoneId, zoneName: ctx.name, audiopath: nextItem.audiopath })
-            .catch(() => null);
-          resolvedSource = resolution?.playbackSource ?? null;
-        } else {
-          resolvedSource = resolvePlaybackSource(nextItem.audiopath);
-        }
-      }
-
-      const current = this.crossfadeState.get(zoneId);
-      if (!current || current.nextAudiopath !== nextItem.audiopath) return;
-
-      if (!resolvedSource || (!isSpotifyNext && resolvedSource.kind === 'pipe')) {
-        this.crossfadeState.delete(zoneId);
-        return;
-      }
-
-      current.resolving = false;
-      current.resolvedSource = resolvedSource;
-      current.resolvedMetadata = resolvedMetadata;
-
-      // Eager trigger: if accurate elapsed already crossed the crossfade window while
-      // we were resolving (async services), fire immediately rather than waiting for
-      // the next zone-timer tick.
-      if (!current.triggered) {
-        const session = this.audioManager.getSession(zoneId);
-        const accurateElapsed =
-          typeof session?.elapsed === 'number' && session.elapsed > 0
-            ? session.elapsed
-            : ctx.player.getState().time;
-        const accurateDuration = session?.metadata?.duration ?? ctx.player.getState().duration ?? 0;
-        const remaining = accurateDuration - accurateElapsed;
-        if (remaining > 0 && remaining <= crossfadeSec) {
-          void this.triggerCrossfade(ctx, crossfadeSec);
-        }
-      }
-    } catch {
-      this.crossfadeState.delete(zoneId);
-    }
-  }
-
-  private async triggerCrossfade(ctx: ZoneContext, crossfadeSec: number): Promise<void> {
-    const zoneId = ctx.id;
-    const state = this.crossfadeState.get(zoneId);
-    if (!state?.resolvedSource || state.triggered) return;
-    state.triggered = true;
-    state.triggeredAt = Date.now();
-
-    // Use squeezelite-native client-side crossfade when ALL outputs support it.
-    // Spotify (isSpotifyFadeIn) is now included: triggerNativeCrossfade calls
-    // startCrossfadeStream / releaseCrossfadeStream so Connect-host ownership is
-    // transferred correctly before the old engine stops.
-    const allNativeCrossfade =
-      ctx.outputs.length > 0 &&
-      ctx.outputs.every((o) => typeof o.supportsCrossfade === 'function' && o.supportsCrossfade());
-
-    if (allNativeCrossfade) {
-      await this.triggerNativeCrossfade(ctx, crossfadeSec, state);
-      return;
-    }
-
-    const newSource = state.resolvedSource;
-
-    type FadeIn =
-      | { kind: 'file'; path: string }
-      | { kind: 'url'; url: string; headers?: Record<string, string>; decryptionKey?: string }
-      | { kind: 'pipe'; stream: NodeJS.ReadableStream; sampleRate: number; channels: number };
-
-    let fadeIn: FadeIn;
-    let nextPlaybackSource: PlaybackSource = newSource;
-
-    if (state.isSpotifyFadeIn) {
-      // Start the next Spotify track on the crossfade session now (at blend start time).
-      const xfStream = await this.inputsPort.startCrossfadeStream(zoneId, state.nextAudiopath);
-      if (!xfStream) {
-        state.triggered = false;
-        this.crossfadeState.delete(zoneId);
-        return;
-      }
-      fadeIn = { kind: 'pipe', stream: xfStream.stream, sampleRate: xfStream.sampleRate, channels: xfStream.channels };
-      nextPlaybackSource = {
-        kind: 'pipe',
-        path: `librespot-native-${zoneId}`,
-        format: 's16le',
-        sampleRate: xfStream.sampleRate,
-        channels: xfStream.channels,
-        realTime: false,
-        stream: xfStream.stream,
-      };
-    } else if (newSource.kind === 'file') {
-      fadeIn = { kind: 'file', path: newSource.path };
-    } else if (newSource.kind === 'url') {
-      fadeIn = {
-        kind: 'url',
-        url: newSource.url,
-        headers: (newSource as Extract<PlaybackSource, { kind: 'url' }>).headers,
-        decryptionKey: (newSource as Extract<PlaybackSource, { kind: 'url' }>).decryptionKey,
-      };
-    } else {
-      this.crossfadeState.delete(zoneId);
-      return;
-    }
-
-    // Kick off the blend WITHOUT awaiting yet. The synchronous prologue inside
-    // inlineCrossfadePlayback updates session.metadata/duration/crossfadedAt and
-    // returns a promise that resolves when the actual PCM blend completes
-    // ~`crossfadeSec` seconds from now.
-    const blendPromise = this.audioManager.inlineCrossfadePlayback(
-      zoneId,
-      fadeIn,
-      crossfadeSec,
-      nextPlaybackSource,
-      state.resolvedMetadata ?? undefined,
-    );
-
-    // Hand audio-session ownership to the crossfade target IMMEDIATELY (before the
-    // 10 s blend) so the spotify input service starts ignoring Connect-host events
-    // for the OLD track right away. Otherwise periodic Connect events fired during
-    // the blend would call applyMetadataUpdate() and revert session.metadata back
-    // to the old title/duration — corrupting the URL handover that runs after the
-    // blend, and skewing the next-crossfade trigger time.
-    if (state.isSpotifyFadeIn) {
-      this.inputsPort.releaseCrossfadeStream(zoneId, state.resolvedMetadata ?? undefined);
-    }
-
-    // The session has already been mutated synchronously above. Read it now so we
-    // can flip the visible player state to the NEW track at fade-in start (instead
-    // of after the 10 s blend completes). Without this the audio_event keeps the
-    // OLD title/artist/cover until the blend is finished.
-    const earlySession = this.audioManager.getSession(zoneId);
-    if (earlySession) {
-      ctx.queueController.setCurrentIndex(state.nextQueueIndex);
-      // Player state: title, duration, time=0 — same call we used to make AFTER
-      // the blend, just moved earlier. The HTTP stream URL does not change so
-      // squeezelite is unaffected.
-      ctx.player.updateStateForCrossfade(earlySession);
-      const nextItem = ctx.queue.items[state.nextQueueIndex];
-      if (nextItem) {
-        const patch = buildQueueItemPlaybackPatch(ctx, nextItem, state.nextQueueIndex, this.audioHelpers);
-        this.applyPatch(zoneId, {
-          ...patch,
-          mode: 'play',
-          clientState: 'on',
-          power: 'on',
-          time: 0,
-          duration: typeof nextItem.duration === 'number' ? Math.max(0, Math.round(nextItem.duration)) : undefined,
-        });
-        void this.recentsManager.record(zoneId, nextItem);
-      }
-    }
-
-    const crossfadeSession = await blendPromise;
-    if (!crossfadeSession) {
-      state.triggered = false;
-      this.crossfadeState.delete(zoneId);
-      return;
-    }
-
-    // Clear crossfade state once the blend has actually completed. handleEndOfTrack
-    // must not suppress a future queue advance when song B eventually finishes,
-    // since no separate "song A ended" event fires (the session continues inline).
-    this.crossfadeState.delete(zoneId);
-
-    // Gapless URL handover for HTTP-URL outputs (currently squeezelite only).
-    // The audio session keeps its PCM pipeline + encoder unchanged across the blend,
-    // but we rotate the stream id so the output reconnects to a fresh URL with fresh
-    // metadata. Squeezelite's elapsed-vs-duration tracking would otherwise drift on a
-    // single long URL and eventually misbehave (stuck buffering after upstream stalls).
-    void this.runUrlHandover(ctx, crossfadeSession);
-
-    this.log.info('crossfade triggered', {
-      zoneId,
-      crossfadeSec,
-      next: state.nextAudiopath,
-    });
-  }
-
-  /**
-   * Native crossfade for outputs like squeezelite that have built-in client-side
-   * crossfade support. Instead of a server-side PCM blend we:
-   *  1. Set a crossfade hint on each output so the upcoming play() call uses enqueue
-   *     + TransitionType.CROSSFADE instead of replacing the current stream.
-   *  2. Advance the queue and start the new audio session normally. The old engine
-   *     stops, sending EOF to the sync stream. Players drain their local audio buffer
-   *     (typically 5–15 s) then fade in the new URL — simultaneously for sync groups
-   *     because all players share the same byte stream.
-   */
-  private async triggerNativeCrossfade(
-    ctx: ZoneContext,
-    crossfadeSec: number,
-    state: NonNullable<ReturnType<typeof this.crossfadeState.get>>,
-  ): Promise<void> {
-    const zoneId = ctx.id;
-
-    // For Spotify: start the next track's librespot stream now so the pipe is
-    // ready when the new session starts, then release Connect-host ownership so
-    // the Spotify input service stops reacting to events for the old track.
-    // This mirrors what the server-side blend did but without waiting for the blend.
-    if (state.isSpotifyFadeIn) {
-      const xfStream = await this.inputsPort.startCrossfadeStream(zoneId, state.nextAudiopath);
-      if (!xfStream) {
-        state.triggered = false;
-        this.crossfadeState.delete(zoneId);
-        return;
-      }
-      // Override the resolved source with the live librespot pipe.
-      state.resolvedSource = {
-        kind: 'pipe',
-        path: `librespot-native-${zoneId}`,
-        format: 's16le',
-        sampleRate: xfStream.sampleRate,
-        channels: xfStream.channels,
-        realTime: false,
-        stream: xfStream.stream,
-      };
-      // Transfer Connect ownership to the new track immediately so periodic
-      // Connect events don't revert metadata back to the old track.
-      this.inputsPort.releaseCrossfadeStream(zoneId, state.resolvedMetadata ?? undefined);
-    }
-
-    // Signal all outputs to use native crossfade on the next play() call.
-    for (const output of ctx.outputs) {
-      output.setCrossfadeHint?.(crossfadeSec);
-    }
-
-    // Update early metadata so the UI shows the new track title immediately.
-    const earlySession = this.audioManager.getSession(zoneId);
-    if (earlySession && state.resolvedMetadata) {
-      earlySession.metadata = state.resolvedMetadata;
-      earlySession.source = state.nextAudiopath ?? state.resolvedMetadata.title ?? 'crossfade';
-      earlySession.duration = state.resolvedMetadata.duration ?? 0;
-      earlySession.playbackSource = state.resolvedSource!;
-      earlySession.updatedAt = Date.now();
-    }
-
-    ctx.queueController.setCurrentIndex(state.nextQueueIndex);
-    if (earlySession) {
-      ctx.player.updateStateForCrossfade(earlySession);
-    }
-    const nextItem = ctx.queue.items[state.nextQueueIndex];
-    if (nextItem) {
-      const patch = buildQueueItemPlaybackPatch(ctx, nextItem, state.nextQueueIndex, this.audioHelpers);
-      this.applyPatch(zoneId, {
-        ...patch,
-        mode: 'play',
-        clientState: 'on',
-        power: 'on',
-        time: 0,
-        duration: typeof nextItem.duration === 'number' ? Math.max(0, Math.round(nextItem.duration)) : undefined,
-      });
-      void this.recentsManager.record(zoneId, nextItem);
-    }
-
-    // Gracefully stop the old engine so squeezelite clients receive a clean HTTP
-    // EOF (stream `end()`) rather than an abrupt destroy(). With a clean EOF,
-    // squeezelite's decoder drains its remaining audio buffer and then fires
-    // `STMd` (decoder ready). The node-slimproto client processes `STMd` by
-    // calling the actual `strm`-enqueue command for whatever is stored in
-    // `_nextMedia` — which is set by `orchestrateGroupEnqueue()` (called inside
-    // `play()` below). Without the clean EOF, squeezelite fires `STMu` (stream
-    // underrun) instead, which clears `_nextMedia` and the enqueue is lost.
-    this.audioManager.softStopPlayback(zoneId);
-
-    // Start the new audio session. The old engine was already stopped above; the
-    // playbackService.stop() inside startWithResolvedSource is a no-op. play()
-    // is dispatched on all outputs — with the crossfade hint set above, squeezelite
-    // calls orchestrateGroupEnqueue() so `_nextMedia` is set. Players receive the
-    // actual `strm` command when squeezelite's `STMd` event fires after the old
-    // stream ends cleanly.
-    const nativeSession = await this.startQueuePlayback(
-      ctx,
-      state.nextAudiopath,
-      state.resolvedMetadata ?? undefined,
-      { skipExternalStop: true },
-    );
-
-    this.crossfadeState.delete(zoneId);
-
-    if (!nativeSession) {
-      // Hints were already consumed by play(); nothing more to do.
-      return;
-    }
-
-    this.log.info('crossfade triggered (native)', {
-      zoneId,
-      crossfadeSec,
-      next: state.nextAudiopath,
-    });
-  }
-
-  /**
-   * Phase-1 URL handover: rotates the audio session's stream id, asks each capable
-   * output to enqueue the new URL as the next track, then closes the OLD URL's HTTP
-   * response after a short pre-buffer window so the output transitions naturally.
-   *
-   * Outputs that don't implement `enqueueRotation` are skipped — they either don't
-   * use HTTP URLs (Sendspin/Snapcast/AirPlay) or haven't been wired up for the
-   * gapless handover yet (DLNA/Sonos/Cast — Phase 2).
-   */
-  private async runUrlHandover(ctx: ZoneContext, _session: PlaybackSession): Promise<void> {
-    const candidates = ctx.outputs.filter((o) => typeof o.enqueueRotation === 'function');
-    if (candidates.length === 0) return;
-    const rotation = this.audioManager.rotateStreamId(ctx.id);
-    if (!rotation) return;
-    // Re-fetch the session AFTER rotation so it carries the new stream.url.
-    const rotatedSession = this.audioManager.getSession(ctx.id);
-    if (!rotatedSession) return;
-    let enqueuedAtLeastOne = false;
-    for (const output of candidates) {
-      try {
-        const ok = await output.enqueueRotation!(rotatedSession);
-        if (ok) enqueuedAtLeastOne = true;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.log.warn('output enqueueRotation failed', { zoneId: ctx.id, type: output.type, message });
-      }
-    }
-    if (!enqueuedAtLeastOne) {
-      // No output accepted the handover. This can happen in two cases:
-      // 1. Grouped playback (enqueueRotation returns false for sync groups) AND players
-      //    are still connected — old URL continues serving them, nothing to do.
-      // 2. All players disconnected before the crossfade completed (e.g. squeezelite
-      //    closed the connection when elapsed >= duration) — in this case we must
-      //    dispatch a fresh play to restart the group on the new rotated stream URL.
-      const currentSession = this.audioManager.getSession(ctx.id);
-      if (currentSession && currentSession.state === 'playing') {
-        const streamStats = this.audioManager.getStreamStats(ctx.id);
-        const hasSubscribers = streamStats.some((s) => s.subscribers > 0);
-        if (!hasSubscribers) {
-          this.log.debug('url handover skipped — no subscribers; dispatching play to restart group', { zoneId: ctx.id });
-          this.dispatchOutputs(ctx, ctx.outputs, 'play', currentSession);
-          return;
-        }
-      }
-      this.log.debug('url handover skipped — no output accepted enqueue', { zoneId: ctx.id });
-      return;
-    }
-    // Give the output a moment to receive the slimproto frame, open a TCP connection
-    // to the new URL, and pre-buffer enough FLAC frames that an EOF on the old URL
-    // doesn't cause an audible underrun. The squeezelite `expect=1` param sets the
-    // network buffer threshold to ~32 KB (~200 ms of audio); 700 ms gives squeezelite
-    // ~3.5× that threshold to pre-buffer the new URL while still keeping the OLD URL
-    // alive briefly enough to minimise the perceptible stutter at handover. Earlier
-    // 1500 ms was safe but produced an audible 1–3 s buffering window when the OLD
-    // librespot stalled at the same time as the rotation.
-    setTimeout(() => {
-      try {
-        this.audioManager.closeSubscribersForStreamId(ctx.id, rotation.oldId);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.log.warn('closeSubscribersForStreamId failed', {
-          zoneId: ctx.id,
-          oldId: rotation.oldId,
-          message,
-        });
-      }
-    }, 700);
+    this.crossfade.onPosition(zoneId, time, duration);
   }
 
   private buildRadioParadiseMetadata(
