@@ -1,4 +1,4 @@
-import type { PlaybackMetadata, PlaybackSession } from '@/application/playback/audioManager';
+import type { PlaybackMetadata, PlaybackSession } from '@/ports/types/playback';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
 
 /**
