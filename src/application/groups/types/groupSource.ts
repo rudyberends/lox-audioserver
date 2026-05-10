@@ -1,1 +1,1 @@
-export type GroupSource = 'manual' | 'backend';
+export type { GroupSource } from '@/ports/types/groups';

@@ -50,6 +50,7 @@ import { sonosGroupController } from '@/application/outputs/sonosGroupController
 import { sendspinGroupController } from '@/application/outputs/sendspinGroupController';
 import { createSqueezeliteGroupController } from '@/application/outputs/squeezeliteGroupController';
 import { createGroupManager } from '@/application/groups/groupManager';
+import { createGroupTrackerPort } from '@/application/groups/groupTrackerPort';
 import { createMixedGroupController } from '@/application/groups/mixedGroupController';
 import { createFavoritesManager } from '@/application/zones/favorites/favoritesManager';
 import { createRecentsManager } from '@/application/zones/recents/recentsManager';
@@ -80,7 +81,8 @@ type OutputHandlers = ReturnType<ZoneManagerFacade['getOutputHandlers']>;
 
 export function createRuntime(): Runtime {
   const connectionRegistry = new ConnectionRegistry();
-  const loxoneNotifier = new LoxoneWsNotifier(connectionRegistry);
+  const groupTracker = createGroupTrackerPort();
+  const loxoneNotifier = new LoxoneWsNotifier(connectionRegistry, groupTracker);
   const ports = createRuntimePorts({ notifier: new LoxoneNotifierAdapter(loxoneNotifier) });
   const configPort = ports.config;
   const audioStreamEngine = new AudioStreamEngine();
@@ -213,6 +215,7 @@ export function createRuntime(): Runtime {
     squeezeliteCore,
     zoneManager: zoneManagerProxy,
     groupManager,
+    groupTracker,
     outputHandlers: outputHandlersProxy,
     config: configPort,
     spotifyManagerProvider,
@@ -374,6 +377,7 @@ export function createRuntime(): Runtime {
       recentsManager,
       favoritesManager,
       groupManager,
+      groupTracker,
       contentManager,
     });
 

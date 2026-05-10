@@ -1,11 +1,6 @@
 import { buildResponse } from '@/adapters/loxone/commands/responses';
 import type { GroupManager } from '@/application/groups/groupManager';
-import {
-  getGroupByExternalId,
-  getGroupByLeader,
-  getGroupByZone,
-  removeGroupByLeader,
-} from '@/application/groups/groupTracker';
+import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
 
 // grp-{leaderId}-{protocol}-{base36timestamp}
 const GROUP_ID_LEADER_RE = /^grp-(\d+)-/;
@@ -30,12 +25,13 @@ export function createGroupHandlers(
   zoneManager: ZoneManagerFacade,
   groupManager: GroupManager,
   configPort: ConfigPort,
+  groupTracker: GroupTrackerPort,
 ) {
   return {
     audioCfgDynamicGroup: (command: string) =>
-      audioCfgDynamicGroup(groupManager, zoneManager, configPort, command),
+      audioCfgDynamicGroup(groupManager, zoneManager, configPort, groupTracker, command),
     audioMasterVolume: (command: string) =>
-      audioMasterVolume(groupManager, zoneManager, command),
+      audioMasterVolume(groupManager, zoneManager, groupTracker, command),
     audioGroupedVolume: (command: string) =>
       audioGroupedVolume(groupManager, zoneManager, command),
     audioGroupedPlayback: (command: string) => audioGroupedPlayback(zoneManager, command),
@@ -55,6 +51,7 @@ async function audioCfgDynamicGroup(
   groupManager: GroupManager,
   zoneManager: ZoneManagerFacade,
   configPort: ConfigPort,
+  groupTracker: GroupTrackerPort,
   command: string,
 ) {
   const match = command.match(GROUP_UPDATE_RE);
@@ -66,14 +63,14 @@ async function audioCfgDynamicGroup(
   const zoneListRaw = match[2];
 
   if (!zoneListRaw) {
-    let existing = getGroupByExternalId(groupIdRaw);
+    let existing = groupTracker.getGroupByExternalId(groupIdRaw);
     if (!existing) {
       // After a server restart the leaderByExternalId map is empty but the group
       // may still be tracked under its leader zone. Parse the leader from the ID.
       const leaderMatch = groupIdRaw.match(GROUP_ID_LEADER_RE);
       if (leaderMatch) {
         const leaderId = Number(leaderMatch[1]);
-        existing = getGroupByLeader(leaderId);
+        existing = groupTracker.getGroupByLeader(leaderId);
         if (existing) {
           createLogger('Groups', 'Handlers').debug('dgroup unsync: resolved group by leader (externalId not found)', {
             groupIdRaw,
@@ -124,9 +121,9 @@ async function audioCfgDynamicGroup(
     });
   }
 
-  const existing = getGroupByExternalId(groupIdRaw) ?? getGroupByLeader(leader);
+  const existing = groupTracker.getGroupByExternalId(groupIdRaw) ?? groupTracker.getGroupByLeader(leader);
   if (existing) {
-    removeGroupByLeader(existing.leader);
+    groupTracker.removeGroupByLeader(existing.leader);
   }
 
   const protocols = new Set([leaderProtocol, ...memberProtocols.map((member) => member.protocol)]);
@@ -149,6 +146,7 @@ async function audioCfgDynamicGroup(
 async function audioMasterVolume(
   groupManager: GroupManager,
   zoneManager: ZoneManagerFacade,
+  groupTracker: GroupTrackerPort,
   command: string,
 ) {
   const match = command.match(MASTER_VOLUME_RE);
@@ -165,7 +163,7 @@ async function audioMasterVolume(
   }
 
   await groupManager.applyMasterVolume(zoneId, target);
-  const group = getGroupByZone(zoneId);
+  const group = groupTracker.getGroupByZone(zoneId);
 
   return buildResponse(command, 'mastervolume', {
     success: true,

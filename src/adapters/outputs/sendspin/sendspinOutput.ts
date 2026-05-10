@@ -1,7 +1,6 @@
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { createLogger } from '@/shared/logging/logger';
-import { getGroupByZone, upsertGroup } from '@/application/groups/groupTracker';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import {
   audioOutputSettings,
@@ -1760,7 +1759,7 @@ export class SendspinOutput implements ZoneOutput {
   }
 
   private getGroupInfo(): { groupId: string; groupName: string } {
-    const group = getGroupByZone(this.zoneId);
+    const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
     if (group) {
       const groupId = group.externalId ?? `group-${group.leader}`;
       const groupName =
@@ -1773,7 +1772,7 @@ export class SendspinOutput implements ZoneOutput {
   }
 
   private removeZoneFromGroup(): 'removed' | 'no_group' | 'leader' {
-    const group = getGroupByZone(this.zoneId);
+    const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
     if (!group) {
       return 'no_group';
     }
@@ -1781,7 +1780,7 @@ export class SendspinOutput implements ZoneOutput {
       return 'leader';
     }
     const remainingMembers = group.members.filter((id) => id !== this.zoneId);
-    upsertGroup({
+    this.ports.groupTracker.upsertGroup({
       leader: group.leader,
       members: remainingMembers,
       backend: group.backend,

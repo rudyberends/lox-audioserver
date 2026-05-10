@@ -23,6 +23,7 @@ import type { FavoritesManager } from '@/application/zones/favorites/favoritesMa
 import type { GroupManager } from '@/application/groups/groupManager';
 import type { ContentManager } from '@/adapters/content/contentManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
+import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
@@ -43,6 +44,7 @@ export interface RouteDependencies {
   recentsManager: RecentsManager;
   favoritesManager: FavoritesManager;
   groupManager: GroupManager;
+  groupTracker: GroupTrackerPort;
   contentManager: ContentManager;
 }
 
@@ -77,6 +79,7 @@ export function registerRoutes(
     dependencies.zoneManager,
     dependencies.groupManager,
     dependencies.configPort,
+    dependencies.groupTracker,
   );
   const inputHandlers = createInputHandlers(dependencies.zoneManager, dependencies.configPort, {
     registry: dependencies.lineInRegistry,

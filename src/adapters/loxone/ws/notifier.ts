@@ -3,7 +3,7 @@ import type { StorageConfig } from '@/adapters/content/storage/storageManager';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import type { AudioSyncGroupPayload } from '@/application/groups/types/AudioSyncGroupPayload';
 import type { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry';
-import { getGroupByZone } from '@/application/groups/groupTracker';
+import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
 
 type ZoneStateLookup = (zoneId: number) => LoxoneZoneState | undefined;
 
@@ -11,7 +11,10 @@ export class LoxoneWsNotifier {
   private readonly log = createLogger('LoxoneHttp', 'Notifier');
   private zoneStateLookup: ZoneStateLookup | null = null;
 
-  constructor(private readonly registry: ConnectionRegistry) {}
+  constructor(
+    private readonly registry: ConnectionRegistry,
+    private readonly groupTracker: GroupTrackerPort,
+  ) {}
 
   /**
    * Provides the notifier with read access to current zone states so that
@@ -23,7 +26,7 @@ export class LoxoneWsNotifier {
   }
 
   private enrichWithGroupContext(state: LoxoneZoneState): LoxoneZoneState {
-    const group = getGroupByZone(state.playerid);
+    const group = this.groupTracker.getGroupByZone(state.playerid);
     if (!group) {
       return { ...state, syncedzones: [], mastervolume: 0 };
     }

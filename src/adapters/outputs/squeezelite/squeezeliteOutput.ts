@@ -2,7 +2,6 @@ import { createLogger } from '@/shared/logging/logger';
 import { resolveSessionCover } from '@/shared/coverArt';
 import { buildBaseUrl, resolveAbsoluteUrl, resolveStreamUrl, ensureQueryParam } from '@/shared/streamUrl';
 import type { PlaybackSession } from '@/application/playback/audioManager';
-import { getGroupByZone, onGroupChanged, clearJoinedLeader } from '@/application/groups/groupTracker';
 import type { HttpPreferences, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import type { SlimClient, SlimEvent } from '@lox-audioserver/node-slimproto';
@@ -76,7 +75,7 @@ export class SqueezeliteOutput implements ZoneOutput {
     this.latencyMs = normalizeLatencyMs((config as { latencyMs?: number }).latencyMs);
     this.unsubscribe = this.ports.squeezeliteCore.subscribe((event) => this.handleEvent(event));
     this.syncGroupState();
-    this.unsubscribeGroups = onGroupChanged(() => {
+    this.unsubscribeGroups = this.ports.groupTracker.onGroupChanged(() => {
       void this.handleGroupChanged();
     });
     this.ports.squeezeliteGroup.register({
@@ -98,7 +97,7 @@ export class SqueezeliteOutput implements ZoneOutput {
     // the native path calls softStopPlayback before dispatching play(), so the old
     // HTTP stream ends before squeezelite receives the CROSSFADE command — leaving
     // nothing in the buffer to blend with.
-    const group = getGroupByZone(this.zoneId);
+    const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
     return Boolean(group && group.members.length >= 2);
   }
 
@@ -242,7 +241,7 @@ export class SqueezeliteOutput implements ZoneOutput {
 
   public async pause(_session: PlaybackSession | null): Promise<void> {
     this.clearPendingAutostart();
-    const group = getGroupByZone(this.zoneId);
+    const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
     if (group && group.members.length >= 2) {
       await this.ports.squeezeliteGroup.orchestrateGroupPause(group.leader);
       return;
@@ -253,7 +252,7 @@ export class SqueezeliteOutput implements ZoneOutput {
   }
 
   public async resume(session: PlaybackSession | null): Promise<void> {
-    const group = getGroupByZone(this.zoneId);
+    const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
     if (group && group.members.length >= 2) {
       const ownPlayer = this.resolvePlayer();
       if (ownPlayer?.state === PlayerState.STOPPED) {
@@ -285,7 +284,7 @@ export class SqueezeliteOutput implements ZoneOutput {
 
   public async stop(_session: PlaybackSession | null): Promise<void> {
     this.clearPendingAutostart();
-    const group = getGroupByZone(this.zoneId);
+    const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
     if (group && group.members.length >= 2) {
       if (this.zoneId === group.leader) {
         // Leader stops the whole group.
@@ -353,7 +352,7 @@ export class SqueezeliteOutput implements ZoneOutput {
   }
 
   private syncGroupState(): void {
-    const group = getGroupByZone(this.zoneId);
+    const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
     this.lastGrouped = Boolean(group && group.members.length >= 2);
     this.lastGroupLeaderId = group?.leader ?? null;
   }
@@ -363,7 +362,7 @@ export class SqueezeliteOutput implements ZoneOutput {
     const previousLeader = this.lastGroupLeaderId;
     const previousWasMember = previousGrouped && previousLeader != null && previousLeader !== this.zoneId;
 
-    const group = getGroupByZone(this.zoneId);
+    const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
     const groupedNow = Boolean(group && group.members.length >= 2);
     const leaderNow = group?.leader ?? null;
 
@@ -389,7 +388,7 @@ export class SqueezeliteOutput implements ZoneOutput {
     this.stoppingAfterDrop = true;
     try {
       this.clearPendingAutostart();
-      clearJoinedLeader(this.zoneId);
+      this.ports.groupTracker.clearJoinedLeader(this.zoneId);
       const player = this.resolvePlayer();
       if (!player) return;
       this.log.debug('squeezelite member dropped from group; stopping', {
@@ -460,7 +459,7 @@ export class SqueezeliteOutput implements ZoneOutput {
   }
 
   private async maybeResyncGroup(source: 'group_change'): Promise<void> {
-    const group = getGroupByZone(this.zoneId);
+    const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
     if (!group || group.members.length < 2) {
       return;
     }
@@ -524,7 +523,7 @@ export class SqueezeliteOutput implements ZoneOutput {
   }
 
   private async maybeJoinLeader(source: 'group_change' | 'player_connected'): Promise<void> {
-    const group = getGroupByZone(this.zoneId);
+    const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
     if (!group || group.leader === this.zoneId || group.members.length < 2) {
       return;
     }

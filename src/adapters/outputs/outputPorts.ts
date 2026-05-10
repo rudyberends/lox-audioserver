@@ -7,6 +7,7 @@ import type { SonosGroupCoordinator } from '@/application/outputs/sonosGroupCont
 import type { SqueezeliteGroupCoordinator } from '@/application/outputs/squeezeliteGroupController';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { EnginePort } from '@/ports/EnginePort';
+import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
 import type { SendspinHookRegistryPort } from '@/adapters/outputs/sendspin/sendspinHookRegistry';
 import type { SendspinClientConnector } from '@/adapters/outputs/sendspin/sendspinClientConnector';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
@@ -61,6 +62,7 @@ export type OutputPorts = {
   squeezeliteCore: SqueezeliteCore;
   zoneManager: ZoneManagerHandle;
   groupManager: GroupManagerHandle;
+  groupTracker: GroupTrackerPort;
   outputHandlers: OutputHandlers;
   config: ConfigPort;
   spotifyManagerProvider: SpotifyServiceManagerProvider;
