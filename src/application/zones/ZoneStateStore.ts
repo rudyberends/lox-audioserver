@@ -175,6 +175,7 @@ export class ZoneStateStore {
       } else if (
         !isRadioState &&
         !isLineInState &&
+        !isStopping &&
         !trackChanged &&
         typeof currentDuration === 'number' &&
         currentDuration > 0
