@@ -449,6 +449,9 @@ export function resolveSourceName(
     if (ctx.inputMode === 'musicassistant') {
       return stripSpotifyPrefix(getMusicAssistantProviderId()) || 'musicassistant';
     }
+    if (ctx.inputMode === 'spotify') {
+      return 'Spotify Connect';
+    }
     const user =
       (current?.user && current.user !== 'nouser' ? current.user : undefined) ??
       (() => {
