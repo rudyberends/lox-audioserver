@@ -2,7 +2,6 @@ import path from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
 import type { AlertsPort } from '@/ports/AlertsPort';
 import type { AlertAction } from '@/ports/types/alerts';
-import { alertsManager } from '@/application/alerts/alertsManager';
 import { createLogger } from '@/shared/logging/logger';
 import { buildResponse } from '@/adapters/loxone/commands/responses';
 import { decodeSegment, splitCommand } from '@/adapters/loxone/commands/utils/commandUtils';
@@ -22,18 +21,6 @@ export function createAlertHandlers(alerts: AlertsPort) {
     audioPlayEventFile: (command: string) => audioPlayEventFileImpl(alerts, command),
   };
 }
-
-// Module-level convenience wrappers bound to the application's alertsManager
-// singleton. Tests stub alertsManager methods directly, so these let test
-// imports keep their original shape after the AlertsPort introduction.
-// Production wiring goes through createAlertHandlers above.
-export const audioGroupedAlert = (command: string) => audioGroupedAlertImpl(alertsManager, command);
-export const audioPlayUploadedAlert = (command: string) =>
-  audioPlayUploadedAlertImpl(alertsManager, command);
-export const audioZoneAlert = (command: string) => audioZoneAlertImpl(alertsManager, command);
-export const audioZoneTts = (command: string) => audioZoneTtsImpl(alertsManager, command);
-export const audioPlayEventFile = (command: string) =>
-  audioPlayEventFileImpl(alertsManager, command);
 
 async function audioGroupedAlertImpl(alerts: AlertsPort, command: string) {
   const parts = splitCommand(command);
