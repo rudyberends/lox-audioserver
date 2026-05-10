@@ -23,13 +23,18 @@ import {
 
 const log = createLogger('Loxone', 'ZoneHandlers');
 
+const noopFadeController: FadeControllerPort = {
+  parseFadeOptions: () => ({}),
+  fadeIn: async () => {},
+};
+
 export function createZoneHandlers(
   zoneManager: ZoneManagerFacade,
   recentsManager: RecentsManager,
   favoritesManager: FavoritesManager,
   contentManager: ContentManager,
-  configPort: ConfigPort | undefined,
-  fadeController: FadeControllerPort,
+  configPort?: ConfigPort,
+  fadeController: FadeControllerPort = noopFadeController,
 ) {
   return {
     audioGetStatus: (command: string) => audioGetStatus(zoneManager, command),

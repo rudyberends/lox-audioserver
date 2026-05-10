@@ -151,7 +151,7 @@ export class PlaybackCoordinator {
       applyPatch: this.applyPatch,
       dispatchOutputs: this.dispatchOutputs.bind(this),
       isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
-      startQueuePlayback: this.startQueuePlayback.bind(this),
+      startQueuePlayback: (...args) => this.startQueuePlayback(...args),
       prefetchPlaybackSource: this.prefetchPlaybackSource.bind(this),
       advanceTrack: (ctx) => this.queueAdvance.advanceTrack(ctx),
     });
@@ -167,7 +167,7 @@ export class PlaybackCoordinator {
       applyPatch: this.applyPatch,
       isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
       dispatchOutputs: this.dispatchOutputs.bind(this),
-      startQueuePlayback: this.startQueuePlayback.bind(this),
+      startQueuePlayback: (...args) => this.startQueuePlayback(...args),
     });
     this.playRequest = new PlayRequestService({
       zoneRepo: this.zoneRepo,
@@ -179,7 +179,7 @@ export class PlaybackCoordinator {
       recentsManager: this.recentsManager,
       log: this.log,
       applyPatch: this.applyPatch,
-      startQueuePlayback: this.startQueuePlayback.bind(this),
+      startQueuePlayback: (...args) => this.startQueuePlayback(...args),
       stopExternalInputSessions: this.stopExternalInputSessions.bind(this),
       prefetchNextQueueItem: (ctx) => this.queueAdvance.prefetchNext(ctx),
       dispatchOutputs: this.dispatchOutputs.bind(this),
@@ -202,7 +202,7 @@ export class PlaybackCoordinator {
       applyPatch: this.applyPatch,
       isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
       dispatchOutputs: this.dispatchOutputs.bind(this),
-      startQueuePlayback: this.startQueuePlayback.bind(this),
+      startQueuePlayback: (...args) => this.startQueuePlayback(...args),
       updateRadioMetadata: this.updateRadioMetadata.bind(this),
     });
   }
@@ -599,7 +599,7 @@ export class PlaybackCoordinator {
         setShuffle: this.queueController.setShuffle.bind(this.queueController),
         stepQueue: this.queueStepDispatcher.stepQueue.bind(this.queueStepDispatcher),
         isLocalQueueAuthority: this.isLocalQueueAuthority.bind(this),
-        startQueuePlayback: this.startQueuePlayback.bind(this),
+        startQueuePlayback: (...args) => this.startQueuePlayback(...args),
         audioHelpers: this.audioHelpers,
         remoteControl: (id, cmd) => this.inputsPort.remoteControl(id, cmd),
         remoteVolume: (id, volume) => this.inputsPort.remoteVolume(id, volume),

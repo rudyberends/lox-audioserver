@@ -7,7 +7,7 @@ import {
   normalizeEqualizerBands,
   parseEqualizerSettings,
   resolveEqForwardUrl,
-} from '../src/application/zones/equalizer';
+} from '../src/domain/zones/equalizer';
 import { createZoneHandlers } from '../src/adapters/loxone/commands/handlers/zoneHandlers';
 import { serializeResult } from '../src/adapters/loxone/commands/responses';
 
