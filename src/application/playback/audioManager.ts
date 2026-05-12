@@ -523,6 +523,23 @@ export class AudioManager {
     return ageMs < 5000;
   }
 
+  /**
+   * Returns true when this zone has a live engine session (playing or paused).
+   * Used for command routing: a paused session keeps the ffmpeg engine alive so
+   * resume can reuse it — those commands must stay with the playback coordinator
+   * rather than being deflected to an external state controller.
+   */
+  public hasLocalEngineSession(zoneId: number): boolean {
+    const session = this.sessions.get(zoneId);
+    if (!session) {
+      return false;
+    }
+    if (!session.playbackSource) {
+      return false;
+    }
+    return this.playbackService.hasSession(zoneId);
+  }
+
   public updateSessionCover(zoneId: number, cover?: CoverArtPayload): string | undefined {
     const session = this.sessions.get(zoneId);
     if (!session) {

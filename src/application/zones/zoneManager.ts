@@ -708,7 +708,13 @@ export class ZoneManager {
     const ctx = this.zoneRepo.get(zoneId);
     if (ctx) {
       const controllerId = resolveZoneStateControllerId(ctx.config);
-      const hasActiveLocalSession = this.audioManager.hasActiveLocalSession(zoneId);
+      // For routing, a paused session whose engine is still alive must stay with
+      // the playback coordinator so resume/next/etc. reuse the engine rather than
+      // being deflected to an external state controller that may not own the
+      // current output path.
+      const hasActiveLocalSession =
+        this.audioManager.hasActiveLocalSession(zoneId) ||
+        this.audioManager.hasLocalEngineSession(zoneId);
       const shouldUseExternalController = shouldUseStateControllerForCommand(
         controllerId,
         hasActiveLocalSession,
