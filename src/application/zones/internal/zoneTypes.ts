@@ -17,6 +17,7 @@ export type QueueAuthority =
   | 'deezer'
   | 'tidal'
   | 'ytmusic'
+  | 'youtube'
   | 'airplay'
   | `external:${string}`;
 

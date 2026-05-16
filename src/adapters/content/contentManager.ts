@@ -211,16 +211,19 @@ export class ContentManager {
     }
 
     // cache only browse-like folders; tunein is cheap enough to skip
-    const cacheKey = this.cache.key(service, user, folderId, offset, limit);
+    // Normalize the limit for offset=0 so that the Loxone app (limit=20) and
+    // the queue builder (limit=50) share the same cache entry, avoiding a
+    // duplicate yt-dlp call on every play.
+    const effectiveLimit = offset === 0 ? Math.max(limit, 50) : limit;
+    const cacheKey = this.cache.key(service, user, folderId, offset, effectiveLimit);
     const cached = this.cache.get(cacheKey);
     if (cached) {
       this.log.debug('content cache hit', { service, user, folderId, offset, limit });
-      // refresh in background
-      void this.cache.refresh(cacheKey, () => this.fetchServiceFolder(service, user, folderId, offset, limit));
+      void this.cache.refresh(cacheKey, () => this.fetchServiceFolder(service, user, folderId, offset, effectiveLimit));
       return cached;
     }
     this.log.debug('content cache miss', { service, user, folderId, offset, limit });
-    return this.cache.refresh(cacheKey, () => this.fetchServiceFolder(service, user, folderId, offset, limit));
+    return this.cache.refresh(cacheKey, () => this.fetchServiceFolder(service, user, folderId, offset, effectiveLimit));
   }
 
   private isSpotifyPodcastsFolder(folderId: string): boolean {

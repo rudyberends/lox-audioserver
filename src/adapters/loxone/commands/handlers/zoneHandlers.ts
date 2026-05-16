@@ -496,8 +496,18 @@ async function playToZone(
   }
 
   const metadataTarget = sanitizeMetadataTarget(uri);
-  const metadata = await contentManager.resolveMetadata(metadataTarget);
-  void zoneManager.playContent(zoneId, uri, name, metadata ?? undefined);
+  // Fire playContent immediately so Loading… appears at once; don't await
+  // resolveMetadata which runs yt-dlp for YouTube/ytmusic (3-5 s on cold cache).
+  // The real title is set by ctx.player.updateMetadata after queue rebuild.
+  void zoneManager.playContent(zoneId, uri, name, {
+    title: 'Loading…',
+    artist: '',
+    album: '',
+    duration: 0,
+    audiopath: metadataTarget,
+  } as any);
+  // Warm the metadata cache in the background.
+  void contentManager.resolveMetadata(metadataTarget);
   if (fadeOpts.fade) {
     const duration = fadeOpts.fadeDurationMs ?? 120_000;
     void fadeController.fadeIn(zoneId, duration);

@@ -13,6 +13,7 @@ export type ZoneAudioHelpers = {
   isDeezerAudiopath: (audiopath: string | null | undefined) => boolean;
   isTidalAudiopath: (audiopath: string | null | undefined) => boolean;
   isYtMusicAudiopath: (audiopath: string | null | undefined) => boolean;
+  isYoutubeAudiopath: (audiopath: string | null | undefined) => boolean;
   isMusicAssistantAudiopath: (audiopath: string | null | undefined) => boolean;
   resolveBridgeProvider: (rawAudiopath: string | undefined | null) => string | null;
   getInputAudioType: (ctx: ZoneContext, audiopathOverride?: string) => number | null;
@@ -42,6 +43,7 @@ export function createZoneAudioHelpers(
     isDeezerAudiopath: (audiopath) => isDeezerAudiopath(audiopath, contentPort),
     isTidalAudiopath: (audiopath) => isTidalAudiopath(audiopath, contentPort),
     isYtMusicAudiopath: (audiopath) => isYtMusicAudiopath(audiopath, contentPort),
+    isYoutubeAudiopath: (audiopath) => isYoutubeAudiopath(audiopath, contentPort),
     isMusicAssistantAudiopath,
     resolveBridgeProvider: (rawAudiopath) => resolveBridgeProvider(rawAudiopath, configPort),
     getInputAudioType,
@@ -80,6 +82,9 @@ export function isSpotifyAudiopath(
     return false;
   }
   if (isYtMusicAudiopath(decoded, contentPort)) {
+    return false;
+  }
+  if (isYoutubeAudiopath(decoded, contentPort)) {
     return false;
   }
   return lower.includes('spotify:') || lower.startsWith('spotify@');
@@ -175,6 +180,20 @@ export function isYtMusicAudiopath(
     return true;
   }
   return decoded.toLowerCase().includes('ytmusic') || decoded.toLowerCase().includes('youtube music');
+}
+
+export function isYoutubeAudiopath(
+  audiopath: string | null | undefined,
+  contentPort: ContentPort,
+): boolean {
+  if (!audiopath) return false;
+  const raw = String(audiopath);
+  const rawProvider = raw.split(':')[0] ?? '';
+  if (rawProvider && contentPort.isYoutubeProvider(rawProvider)) return true;
+  const decoded = decodeAudiopath(raw) || raw;
+  const providerSegment = decoded.split(':')[0] ?? '';
+  if (providerSegment && contentPort.isYoutubeProvider(providerSegment)) return true;
+  return false;
 }
 
 export function isMusicAssistantAudiopath(audiopath: string | null | undefined): boolean {
