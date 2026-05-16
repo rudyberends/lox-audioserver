@@ -399,6 +399,22 @@ export class PlaybackCoordinator {
       ctx.metadata.radioControllable = false;
     }
     const classification = this.classifyAudiopath(audiopath);
+    // Broadcast Loading… immediately so the Loxone app shows feedback before
+    // yt-dlp resolves the stream URL (~5-7 s for YouTube/ytmusic).
+    if (classification.isYoutube || classification.isYtMusic) {
+      this.notifier.notifyZoneStateChanged({
+        ...ctx.state,
+        mode: 'play',
+        title: 'Loading…',
+        artist: '',
+        album: '',
+        coverurl: '',
+        duration: 0,
+        time: 0,
+        audiotype: 5,
+        audiopath,
+      });
+    }
     if (!this.hasPlaybackOutput(ctx, classification)) {
       this.zonesMissingOutput.add(ctx.id);
       this.handlePlaybackError(ctx.id, 'No output configured', 'output');
@@ -478,6 +494,9 @@ export class PlaybackCoordinator {
       } else if (plan.provider === 'ytmusic') {
         this.handlePlaybackError(ctx.id, 'ytmusic stream unavailable', 'output');
         this.log.warn('ytmusic stream not ready; skipping playback', { zoneId: ctx.id });
+      } else if (plan.provider === 'youtube') {
+        this.handlePlaybackError(ctx.id, 'youtube stream unavailable', 'output');
+        this.log.warn('youtube stream not ready; skipping playback', { zoneId: ctx.id });
       }
       return null;
     }
@@ -514,6 +533,7 @@ export class PlaybackCoordinator {
     isDeezer: boolean;
     isTidal: boolean;
     isYtMusic: boolean;
+    isYoutube: boolean;
     provider: ProviderKind;
     nextInput: ZoneContext['inputMode'];
   } {
@@ -523,6 +543,7 @@ export class PlaybackCoordinator {
     const isDeezer = this.audioHelpers.isDeezerAudiopath(audiopath);
     const isTidal = this.audioHelpers.isTidalAudiopath(audiopath);
     const isYtMusic = this.audioHelpers.isYtMusicAudiopath(audiopath);
+    const isYoutube = this.audioHelpers.isYoutubeAudiopath(audiopath);
     const nextInput: ZoneContext['inputMode'] =
       isSpotify
         ? 'spotify'
@@ -537,6 +558,8 @@ export class PlaybackCoordinator {
           ? 'tidal'
           : isYtMusic
             ? 'ytmusic'
+          : isYoutube
+            ? 'youtube'
           : null;
     return {
       isSpotify,
@@ -545,6 +568,7 @@ export class PlaybackCoordinator {
       isDeezer,
       isTidal,
       isYtMusic,
+      isYoutube,
       provider,
       nextInput,
     };
@@ -802,7 +826,8 @@ export class PlaybackCoordinator {
     const isDeezer = this.audioHelpers.isDeezerAudiopath(audiopath);
     const isTidal = this.audioHelpers.isTidalAudiopath(audiopath);
     const isYtMusic = this.audioHelpers.isYtMusicAudiopath(audiopath);
-    if (!isAppleMusic && !isDeezer && !isTidal && !isYtMusic) {
+    const isYoutube = this.audioHelpers.isYoutubeAudiopath(audiopath);
+    if (!isAppleMusic && !isDeezer && !isTidal && !isYtMusic && !isYoutube) {
       return;
     }
     if (!this.isTrackAudiopath(audiopath)) {

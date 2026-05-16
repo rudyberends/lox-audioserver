@@ -30,6 +30,7 @@ type QueueControllerDeps = {
   isDeezerAudiopath: (audiopath: string | null | undefined) => boolean;
   isTidalAudiopath: (audiopath: string | null | undefined) => boolean;
   isYtMusicAudiopath: (audiopath: string | null | undefined) => boolean;
+  isYoutubeAudiopath: (audiopath: string | null | undefined) => boolean;
   resolveBridgeProvider: (rawAudiopath: string | undefined | null) => string | null;
   getMusicAssistantUserId: () => string;
   getStateAudiotype: (ctx: ZoneContext, item?: QueueItem | null) => number | null;
@@ -802,6 +803,9 @@ export class QueueController {
       }
       if (this.deps.isYtMusicAudiopath(item.audiopath)) {
         return 'ytmusic';
+      }
+      if (this.deps.isYoutubeAudiopath(item.audiopath)) {
+        return 'youtube';
       }
       if (this.deps.isSpotifyAudiopath(item.audiopath)) {
         return 'spotify';

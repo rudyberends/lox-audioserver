@@ -47,8 +47,9 @@ export async function enrichMetadata(args: {
     };
     const assignText = (key: 'title' | 'artist' | 'album' | 'coverurl') => {
       const current = typeof merged[key] === 'string' ? merged[key].trim() : '';
+      const isPlaceholder = key === 'title' && current === 'Loading…';
       const candidate = typeof incomingMeta[key] === 'string' ? incomingMeta[key].trim() : '';
-      if (!current && candidate) {
+      if ((!current || isPlaceholder) && candidate) {
         merged[key] = candidate;
       }
     };

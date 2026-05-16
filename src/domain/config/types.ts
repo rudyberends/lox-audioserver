@@ -143,6 +143,8 @@ export interface SpotifyBridgeConfig {
   apiKey?: string;
   /** Optional YouTube Music cookie header string when provider === 'ytmusic' (e.g. "SID=...; HSID=..."). */
   ytmusicCookie?: string;
+  /** Optional YouTube Data API v3 key when provider === 'youtube'. Enables better search and trending. */
+  youtubeApiKey?: string;
   /** Optional Apple Music tokens if provider === 'applemusic' */
   developerToken?: string;
   userToken?: string;

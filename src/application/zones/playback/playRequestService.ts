@@ -121,6 +121,21 @@ export class PlayRequestService {
 
     this.deps.audioManager.markPlayRequest(zoneId, { uri, type });
 
+    if (req.isYoutube || req.isYtMusic) {
+      this.deps.notifier.notifyZoneStateChanged({
+        ...ctx.state,
+        mode: 'play',
+        title: 'Loading…',
+        artist: '',
+        album: '',
+        coverurl: '',
+        duration: 0,
+        time: 0,
+        audiotype: 5,
+        audiopath: req.queueAudiopath || uri,
+      });
+    }
+
     this.deps.stopExternalInputSessions(zoneId, ctx.inputMode ?? null, req.nextInput);
 
     if (req.isRadio && req.stationValue?.trim() && !this.deps.audioHelpers.isLikelyHostLabel(req.stationValue)) {
@@ -317,7 +332,7 @@ export class PlayRequestService {
     ctx.queueController.setItems(queueItems, clampedIndex);
     ctx.metadata.queueShuffled = false;
     const immediateCurrent = ctx.queueController.current();
-    if (immediateCurrent) {
+    if (immediateCurrent && !req.isYoutube && !req.isYtMusic) {
       const immediatePatch = buildQueueItemPlaybackPatch(
         ctx,
         immediateCurrent,

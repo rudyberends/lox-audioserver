@@ -280,6 +280,10 @@ async function handleSpotifyBridgeCreate(
       typeof body?.ytmusicCookie === 'string' && body.ytmusicCookie.trim()
         ? body.ytmusicCookie.trim()
         : undefined,
+    youtubeApiKey:
+      typeof body?.youtubeApiKey === 'string' && body.youtubeApiKey.trim()
+        ? body.youtubeApiKey.trim()
+        : undefined,
   };
 
   try {

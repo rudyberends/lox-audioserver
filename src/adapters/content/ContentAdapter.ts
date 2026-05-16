@@ -3,6 +3,7 @@ import type { AppleMusicStreamResolver } from '@/adapters/content/providers/appl
 import type { DeezerStreamResolver } from '@/adapters/content/providers/deezer/deezerStreamResolver';
 import type { TidalStreamResolver } from '@/adapters/content/providers/tidal/tidalStreamResolver';
 import type { YtMusicStreamResolver } from '@/adapters/content/providers/ytmusic/ytmusicStreamResolver';
+import type { YoutubeStreamResolver } from '@/adapters/content/providers/youtube/youtubeStreamResolver';
 import type { ContentPort, BuildQueueOptions } from '@/ports/ContentPort';
 import type { ContentFolder, ContentFolderItem, ContentItemMetadata } from '@/ports/ContentTypes';
 import type { PlaybackSourceResolveArgs, StreamResolution } from '@/ports/types/StreamResolution';
@@ -14,6 +15,7 @@ type ContentStreamResolvers = {
   deezer: DeezerStreamResolver;
   tidal: TidalStreamResolver;
   ytmusic: YtMusicStreamResolver;
+  youtube: YoutubeStreamResolver;
 };
 
 export class ContentAdapter implements ContentPort {
@@ -38,7 +40,11 @@ export class ContentAdapter implements ContentPort {
     args: PlaybackSourceResolveArgs,
   ): Promise<StreamResolution> {
     const { audiopath, zoneId } = args;
-    const cacheKey = `${zoneId}:${audiopath}`;
+    // YouTube and ytmusic stream URLs are zone-independent; share cache across zones.
+    const providerSegment = (audiopath.split(':')[0] ?? '').trim();
+    const isYtLike = this.streamResolvers.youtube.isYoutubeProvider(providerSegment) ||
+      this.streamResolvers.ytmusic.isYtMusicProvider(providerSegment);
+    const cacheKey = isYtLike ? audiopath : `${zoneId}:${audiopath}`;
     const now = Date.now();
     const cached = this.resolveCache.get(cacheKey);
     if (cached && cached.expiresAt > now) {
@@ -77,6 +83,7 @@ export class ContentAdapter implements ContentPort {
     const detectedService = detectServiceFromAudiopath(audiopath);
     const { appleMusic, deezer, tidal } = this.streamResolvers;
     const ytmusic = this.streamResolvers.ytmusic;
+    const youtube = this.streamResolvers.youtube;
     if (providerSegment && appleMusic.isAppleMusicProvider(providerSegment)) {
       const result = await appleMusic.startStreamForAudiopath(
         zoneId,
@@ -112,6 +119,15 @@ export class ContentAdapter implements ContentPort {
         { suppressErrors },
       );
       return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'ytmusic' };
+    }
+    if (providerSegment && youtube.isYoutubeProvider(providerSegment)) {
+      const result = await youtube.startStreamForAudiopath(
+        zoneId,
+        zoneName,
+        audiopath,
+        { suppressErrors },
+      );
+      return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'youtube' };
     }
     if (detectedService === 'applemusic') {
       const result = await appleMusic.startStreamForAudiopath(
@@ -168,6 +184,10 @@ export class ContentAdapter implements ContentPort {
     this.streamResolvers.ytmusic.configure();
   }
 
+  public configureYoutube(): void {
+    this.streamResolvers.youtube.configure();
+  }
+
   public isAppleMusicProvider(providerId: string): boolean {
     return this.streamResolvers.appleMusic.isAppleMusicProvider(providerId);
   }
@@ -182,6 +202,10 @@ export class ContentAdapter implements ContentPort {
 
   public isYtMusicProvider(providerId: string): boolean {
     return this.streamResolvers.ytmusic.isYtMusicProvider(providerId);
+  }
+
+  public isYoutubeProvider(providerId: string): boolean {
+    return this.streamResolvers.youtube.isYoutubeProvider(providerId);
   }
 
   public getMediaFolder(
