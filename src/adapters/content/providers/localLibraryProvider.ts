@@ -29,6 +29,7 @@ import {
 const FILE_TYPE_FOLDER = 1;
 const FILE_TYPE_FILE = 2;
 const COVER_CANDIDATES = ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp'];
+const ARTIST_COVER_CANDIDATES = ['artist.jpg', 'artist.jpeg', 'artist.png', 'artist.webp'];
 const NAS_DIR_TIMEOUT_MS = 3000;
 const MUSICBRAINZ_ENDPOINT = 'https://musicbrainz.org/ws/2/release/';
 const MUSICBRAINZ_USER_AGENT = 'lox-audioserver/1.0 (library-cover-fallback)';
@@ -106,6 +107,7 @@ export class LocalLibraryProvider {
   private initialized = false;
   private stats: LibraryStats | null = null;
   private readonly coverLookupCache = new Map<string, string | null>();
+  private readonly artistCoverProbeCache = new Map<string, string | null>();
   private musicBrainzNextAllowedAt = 0;
 
   constructor(notifier: NotifierPort, configPort: ConfigPort) {
@@ -353,6 +355,7 @@ export class LocalLibraryProvider {
       await ensureNasMounts(this.baseDir);
       await this.store.init();
       this.store.reset();
+      this.artistCoverProbeCache.clear();
 
       await this.scanStorage('local', 'local');
 
@@ -915,11 +918,20 @@ export class LocalLibraryProvider {
 
   private artistItem(artist: ArtistRow): ContentFolderItem {
     const id = buildArtistId(artist.storage_id, artist.name);
+    const cacheBust =
+      typeof artist.last_mtime === 'number' && Number.isFinite(artist.last_mtime)
+        ? Math.max(0, Math.round(artist.last_mtime))
+        : undefined;
+    const coverurl =
+      artist.cover && artist.rel_path
+        ? this.buildCoverUrlForDir(artist.rel_path, artist.cover, cacheBust)
+        : '';
     return {
       id,
       name: artist.name,
       type: FILE_TYPE_FOLDER,
       items: artist.track_count,
+      coverurl,
     };
   }
 
@@ -951,9 +963,20 @@ export class LocalLibraryProvider {
     if (!track?.cover) {
       return '';
     }
-    const host = this.resolveCoverHost();
     const dir = path.dirname(track.relPath);
-    const baseUrl = `http://${host}:7090/music/${encodePath(path.join(dir, track.cover))}`;
+    return this.buildCoverUrlForDir(dir, track.cover, cacheBust);
+  }
+
+  private buildCoverUrlForDir(
+    dirRelPath: string,
+    coverFile: string,
+    cacheBust?: number,
+  ): string {
+    if (!coverFile || !dirRelPath) {
+      return '';
+    }
+    const host = this.resolveCoverHost();
+    const baseUrl = `http://${host}:7090/music/${encodePath(path.join(dirRelPath, coverFile))}`;
     if (typeof cacheBust === 'number' && Number.isFinite(cacheBust) && cacheBust > 0) {
       return `${baseUrl}?cb=${cacheBust}`;
     }
@@ -1095,6 +1118,7 @@ export class LocalLibraryProvider {
 
     track.audiopath = this.buildAudiopath(track);
     track.cover = await this.safeEnsureCoverArt(relPath, metadata.picture, track);
+    await this.ensureArtistCover(storageId, relPath, track.artist);
 
     this.store.insertTrack({
       storageId,
@@ -1123,6 +1147,56 @@ export class LocalLibraryProvider {
       this.log.warn('cover extraction failed', { relPath, message });
       return undefined;
     }
+  }
+
+  private async ensureArtistCover(
+    storageId: string,
+    relPath: string,
+    artistName: string,
+  ): Promise<void> {
+    const trimmedArtist = String(artistName || '').trim();
+    if (!trimmedArtist) {
+      return;
+    }
+    const albumDir = path.dirname(relPath);
+    const artistRelDir = path.dirname(albumDir);
+    if (!artistRelDir || artistRelDir === '.' || artistRelDir === albumDir) {
+      return;
+    }
+    // Storage root itself isn't an artist folder (e.g. 'local', 'nas/<id>').
+    const segments = artistRelDir.split(path.sep).filter(Boolean);
+    const minSegments = artistRelDir.startsWith(`nas${path.sep}`) ? 3 : 2;
+    if (segments.length < minSegments) {
+      return;
+    }
+
+    const cacheKey = `${storageId}::${artistRelDir}::${trimmedArtist}`;
+    if (this.artistCoverProbeCache.has(cacheKey)) {
+      return;
+    }
+
+    const absDir = path.join(this.baseDir, artistRelDir);
+    for (const candidate of ARTIST_COVER_CANDIDATES) {
+      const absFile = path.join(absDir, candidate);
+      const stat = await bestEffort(() => fsp.stat(absFile), {
+        fallback: null as Stats | null,
+        onError: 'debug',
+        log: this.log,
+        label: 'artist cover stat failed',
+      });
+      if (stat && stat.isFile()) {
+        this.store.upsertArtistCover({
+          storageId,
+          name: trimmedArtist,
+          cover: candidate,
+          relPath: artistRelDir,
+          mtime: Math.floor(stat.mtimeMs),
+        });
+        this.artistCoverProbeCache.set(cacheKey, candidate);
+        return;
+      }
+    }
+    this.artistCoverProbeCache.set(cacheKey, null);
   }
 
   private async readMetadata(filePath: string): Promise<SafeTags> {

@@ -58,6 +58,17 @@ export interface ArtistRow {
   storage_id: string;
   name: string;
   track_count: number;
+  cover: string | null;
+  rel_path: string | null;
+  last_mtime: number | null;
+}
+
+export interface ArtistCoverInsert {
+  storageId: string;
+  name: string;
+  cover: string;
+  relPath: string;
+  mtime?: number;
 }
 
 export interface TrackFileRow {
@@ -73,6 +84,7 @@ export class LocalLibraryStore {
   // Schema versions for `PRAGMA user_version`.
   private static readonly SCHEMA_V2 = 2; // adds FTS5 search table + triggers
   private static readonly SCHEMA_V3 = 3; // adds album artist for album grouping
+  private static readonly SCHEMA_V4 = 4; // adds artist_covers sidecar table
 
   public constructor(options: { dbPath?: string } = {}) {
     this.dbPath = options.dbPath ?? resolveDataDir('music', 'library.db');
@@ -93,6 +105,27 @@ export class LocalLibraryStore {
   public reset(): void {
     const db = this.requireDb();
     db.exec('DELETE FROM tracks;');
+    db.exec('DELETE FROM artist_covers;');
+  }
+
+  public upsertArtistCover(entry: ArtistCoverInsert): void {
+    const db = this.requireDb();
+    db.prepare(
+      `
+      INSERT INTO artist_covers (storage_id, name, cover, rel_path, last_mtime)
+      VALUES (@storageId, @name, @cover, @relPath, @mtime)
+      ON CONFLICT(storage_id, name) DO UPDATE SET
+        cover = excluded.cover,
+        rel_path = excluded.rel_path,
+        last_mtime = excluded.last_mtime
+    `,
+    ).run({
+      storageId: entry.storageId,
+      name: entry.name,
+      cover: entry.cover,
+      relPath: entry.relPath,
+      mtime: typeof entry.mtime === 'number' ? entry.mtime : null,
+    });
   }
 
   public insertTrack(track: TrackInsert): void {
@@ -261,11 +294,18 @@ export class LocalLibraryStore {
     const rows = db
       .prepare(
         `
-        SELECT storage_id, artist AS name, COUNT(*) AS track_count
-        FROM tracks
-        ${where}
-        GROUP BY storage_id, artist
-        ORDER BY LOWER(artist)
+        SELECT t.storage_id AS storage_id,
+               t.artist AS name,
+               COUNT(*) AS track_count,
+               ac.cover AS cover,
+               ac.rel_path AS rel_path,
+               ac.last_mtime AS last_mtime
+        FROM tracks t
+        LEFT JOIN artist_covers ac
+          ON ac.storage_id = t.storage_id AND ac.name = t.artist
+        ${where ? where.replace(/storage_id/g, 't.storage_id') : ''}
+        GROUP BY t.storage_id, t.artist
+        ORDER BY LOWER(t.artist)
         LIMIT ? OFFSET ?
       `,
       )
@@ -522,11 +562,16 @@ export class LocalLibraryStore {
         return db
           .prepare(
             `
-            SELECT t.storage_id,
+            SELECT t.storage_id AS storage_id,
                    t.artist AS name,
-                   COUNT(*) AS track_count
+                   COUNT(*) AS track_count,
+                   ac.cover AS cover,
+                   ac.rel_path AS rel_path,
+                   ac.last_mtime AS last_mtime
             FROM tracks_fts
             JOIN tracks t ON t.id = tracks_fts.rowid
+            LEFT JOIN artist_covers ac
+              ON ac.storage_id = t.storage_id AND ac.name = t.artist
             WHERE tracks_fts MATCH ?
             GROUP BY t.storage_id, t.artist
             ORDER BY LOWER(t.artist)
@@ -543,13 +588,18 @@ export class LocalLibraryStore {
     return db
       .prepare(
         `
-          SELECT storage_id,
-                 artist AS name,
-                 COUNT(*) AS track_count
-          FROM tracks
-          WHERE LOWER(artist) LIKE ?
-          GROUP BY storage_id, artist
-          ORDER BY LOWER(artist)
+          SELECT t.storage_id AS storage_id,
+                 t.artist AS name,
+                 COUNT(*) AS track_count,
+                 ac.cover AS cover,
+                 ac.rel_path AS rel_path,
+                 ac.last_mtime AS last_mtime
+          FROM tracks t
+          LEFT JOIN artist_covers ac
+            ON ac.storage_id = t.storage_id AND ac.name = t.artist
+          WHERE LOWER(t.artist) LIKE ?
+          GROUP BY t.storage_id, t.artist
+          ORDER BY LOWER(t.artist)
           LIMIT ?
         `,
       )
@@ -581,6 +631,17 @@ export class LocalLibraryStore {
     `;
     db.exec(baseSchema);
 
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS artist_covers (
+        storage_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        cover TEXT NOT NULL,
+        rel_path TEXT NOT NULL,
+        last_mtime INTEGER,
+        PRIMARY KEY (storage_id, name)
+      );
+    `);
+
     const userVersion = Number(db.pragma('user_version', { simple: true }) ?? 0);
     this.ensureAlbumArtistColumn(db);
     db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(storage_id, album_artist, album);');
@@ -604,8 +665,8 @@ export class LocalLibraryStore {
       this.tryEnableFts(db);
     }
 
-    if (userVersion < LocalLibraryStore.SCHEMA_V3) {
-      db.pragma(`user_version = ${LocalLibraryStore.SCHEMA_V3}`);
+    if (userVersion < LocalLibraryStore.SCHEMA_V4) {
+      db.pragma(`user_version = ${LocalLibraryStore.SCHEMA_V4}`);
     }
   }
 
