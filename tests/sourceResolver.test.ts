@@ -35,12 +35,12 @@ test('source resolver ignores pre-delay query for looping alert sources', () => 
   assert.equal(source.preDelayMs, undefined);
 });
 
-test('source resolver parses alert pad tail seconds for alerts files', () => {
+test('source resolver strips query string from alerts paths', () => {
   const source = resolvePlaybackSource('alerts://cache/tts-demo.mp3?padTailSec=6');
   assert.ok(source);
   assert.equal(source?.kind, 'file');
   if (!source || source.kind !== 'file') {
     return;
   }
-  assert.equal(source.padTailSec, 6);
+  assert.equal(source.path, path.resolve(process.cwd(), 'public', 'alerts', 'cache', 'tts-demo.mp3'));
 });

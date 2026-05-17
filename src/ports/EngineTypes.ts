@@ -3,7 +3,6 @@ export type PlaybackSource =
       kind: 'file';
       path: string;
       loop?: boolean;
-      padTailSec?: number;
       preDelayMs?: number;
       /** Optional start offset in seconds. */
       startAtSec?: number;
@@ -46,7 +45,6 @@ export type EngineInputSpec =
       kind: 'file';
       path: string;
       loop?: boolean;
-      padTailSec?: number;
       preDelayMs?: number;
       /** Optional start offset in seconds. */
       startAtSec?: number;

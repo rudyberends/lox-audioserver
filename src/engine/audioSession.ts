@@ -17,7 +17,6 @@ export type PlaybackSource =
       kind: 'file';
       path: string;
       loop?: boolean;
-      padTailSec?: number;
       preDelayMs?: number;
       /** Optional start offset in seconds. */
       startAtSec?: number;
@@ -93,7 +92,6 @@ export class AudioSession {
   private startTs: number | null = null;
   private subscriberDropCount = 0;
   private lastSubscriberDropAt: number | null = null;
-  private readonly sourcePadTailSec?: number;
   private readonly sourcePreDelayMs?: number;
   private readonly keepInitialBuffer: boolean;
   private readonly isAlertSource: boolean;
@@ -139,8 +137,6 @@ export class AudioSession {
     const candidate = outputSettings.prebufferBytes;
     const hardMax = 1024 * 1024 * 4;
     const hardMin = 1024 * 8; // keep a small guard when enabled
-    this.sourcePadTailSec =
-      this.source.kind === 'file' && !this.source.loop ? this.source.padTailSec : undefined;
     this.sourcePreDelayMs =
       'preDelayMs' in this.source && typeof this.source.preDelayMs === 'number'
         ? this.source.preDelayMs
@@ -284,8 +280,7 @@ export class AudioSession {
         ch === this.outputSettings.channels &&
         this.outputSettings.pcmBitDepth === 16 &&
         (!Number.isFinite(this.outputSettings.fixedGainDb) || this.outputSettings.fixedGainDb === 0) &&
-        !this.sourcePreDelayMs &&
-        !this.sourcePadTailSec;
+        !this.sourcePreDelayMs;
 
       if (canDirectPassthrough) {
         this.directPipeMode = true;
@@ -1680,9 +1675,6 @@ export class AudioSession {
       if (this.sourcePreDelayMs && this.sourcePreDelayMs > 0) {
         const delayMs = Math.max(0, Math.round(this.sourcePreDelayMs));
         filters.push(`adelay=delays=${delayMs}:all=1`);
-      }
-      if (this.sourcePadTailSec && this.sourcePadTailSec > 0) {
-        filters.push(`apad=pad_dur=${this.sourcePadTailSec}`);
       }
       if (Number.isFinite(fixedGainDb) && fixedGainDb !== 0) {
         filters.push(`volume=${fixedGainDb}dB`);

@@ -16,9 +16,6 @@ const TTS_FIXED_GAIN_DB = 6;
 // This is a safety net; we also try to reduce output buffering for alerts where possible.
 const MIN_ALERT_AUDIBLE_MS = 2500;
 const ALERT_STOP_MARGIN_MS = 750;
-const SHORT_ALERT_SEC = 6;
-const GOOGLECAST_SHORT_ALERT_PAD_TAIL_SEC = 8;
-const SQUEEZELITE_SHORT_ALERT_PAD_TAIL_SEC = 4;
 
 type AlertsCoordinatorDeps = {
   zones: ZoneRepository;
@@ -108,24 +105,12 @@ export class AlertsCoordinator {
 	      !media.loop && typeof media.duration === 'number' && media.duration > 0
 	        ? Math.max(0, Math.round(media.duration))
 	        : undefined;
-	    const padTailSec =
-	      /tts/i.test(type) &&
-	      !media.loop &&
-	      typeof media.duration === 'number' &&
-	      media.duration > 0 &&
-	      media.duration <= SHORT_ALERT_SEC
-	        ? this.hasCastOutput(ctx)
-	          ? GOOGLECAST_SHORT_ALERT_PAD_TAIL_SEC
-	          : this.hasOutputType(ctx, 'squeezelite')
-	            ? SQUEEZELITE_SHORT_ALERT_PAD_TAIL_SEC
-	            : 0
-	        : 0;
 	    const durationMs = media.loop
 	      ? undefined
 	      : rawDurationMs !== undefined
-	        ? Math.max(rawDurationMs + ALERT_STOP_MARGIN_MS + padTailSec * 1000, MIN_ALERT_AUDIBLE_MS, 0)
+	        ? Math.max(rawDurationMs + ALERT_STOP_MARGIN_MS, MIN_ALERT_AUDIBLE_MS, 0)
 	        : MIN_ALERT_DURATION_MS;
-	    const playUrl = padTailSec > 0 ? appendAlertPadTail(media.url, padTailSec) : media.url;
+	    const playUrl = media.url;
 	    const title = media.title ?? type;
 
 	    ctx.alert = {
@@ -191,15 +176,23 @@ export class AlertsCoordinator {
     });
 	  }
 
-		  private hasOutputType(ctx: ZoneContext, type: string): boolean {
-		    return (ctx.outputs ?? []).some((output) => output.type === type);
-		  }
-
-      private hasCastOutput(ctx: ZoneContext): boolean {
-        return (ctx.outputs ?? []).some(
-          (output) => output.type === 'googleCast' || output.type.endsWith('-cast'),
-        );
+  private resolveHandoffDrainMs(ctx: ZoneContext): number {
+    const outputs = ctx.outputs ?? [];
+    let max = 0;
+    for (const output of outputs) {
+      const fn = (output as { getAlertHandoffDrainMs?: () => number | null }).getAlertHandoffDrainMs;
+      if (typeof fn !== 'function') continue;
+      try {
+        const value = fn.call(output);
+        if (typeof value === 'number' && Number.isFinite(value) && value > max) {
+          max = value;
+        }
+      } catch {
+        // ignore; drain is best-effort
       }
+    }
+    return max;
+  }
 
   private async stopAlertLocked(zoneId: number): Promise<void> {
     const ctx = this.zoneRepo.get(zoneId);
@@ -218,6 +211,17 @@ export class AlertsCoordinator {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.log.debug('alert stop failed to stop player cleanly', { zoneId, message });
+    }
+
+    // Wait for the renderer's own buffer to drain before swapping its transport URI.
+    // Without this, outputs like Sonos clip the tail of short alerts because we push
+    // the next SetAVTransportURI while ~1.5s of audio is still in their buffer.
+    if (activeAlert.snapshot.mode === 'play') {
+      const drainMs = this.resolveHandoffDrainMs(ctx);
+      if (drainMs > 0) {
+        this.log.debug('waiting for output drain before alert handoff', { zoneId, drainMs });
+        await new Promise<void>((resolve) => setTimeout(resolve, drainMs));
+      }
     }
 
     this.playbackCoordinator.setInputMode(ctx, activeAlert.snapshot.inputMode);
@@ -344,15 +348,4 @@ export class AlertsCoordinator {
       setTimeout(tick, 50);
     });
   }
-}
-
-function appendAlertPadTail(url: string, padTailSec: number): string {
-  if (!/^alerts(?:-loop)?:\/\//i.test(url)) {
-    return url;
-  }
-  const [base = '', rawQuery = ''] = url.split('?', 2);
-  const params = new URLSearchParams(rawQuery);
-  params.set('padTailSec', String(Math.max(0, Math.round(padTailSec))));
-  const query = params.toString();
-  return query ? `${base}?${query}` : base;
 }

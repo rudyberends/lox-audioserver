@@ -53,6 +53,13 @@ export interface ZoneOutput {
   getPreferredOutput?(): PreferredOutput | null;
   /** Optional estimated output latency/buffer in milliseconds. */
   getLatencyMs?(): number | null;
+  /**
+   * Optional drain delay (ms) that the alert coordinator should wait after the
+   * alert stream ends and before issuing the next play to this output. Used to
+   * let the renderer's own buffer empty before its transport URI is swapped —
+   * without this, renderers like Sonos clip the tail of short alerts.
+   */
+  getAlertHandoffDrainMs?(): number | null;
   /** Optional hot-update for output latency (e.g. snapcast/squeezelite/sendspin). */
   setLatencyMs?(ms: number): Promise<void> | void;
   /** Optional HTTP streaming preferences for outputs that pull via HTTP (e.g. DLNA/Cast). */

@@ -414,6 +414,12 @@ export class SonosOutput implements ZoneOutput {
     return { httpProfile: 'forced_content_length', icyEnabled: false };
   }
 
+  public getAlertHandoffDrainMs(): number {
+    // Sonos buffers ~1.5–2s ahead of the playback head. Swapping AVTransportURI
+    // before that buffer drains clips the tail of short alerts (issue #262).
+    return 2000;
+  }
+
   private async fetchDeviceInfo(): Promise<string | null> {
     const host = this.effectiveHost || this.host || this.discoveredHost || this.hostFromControlUrl();
     if (!host) {

@@ -720,7 +720,6 @@ export class AudioManager {
           kind: 'file',
           path: source.path,
           loop: source.loop,
-          padTailSec: source.padTailSec,
           preDelayMs: source.preDelayMs,
           startAtSec: source.startAtSec,
           realTime: source.realTime,

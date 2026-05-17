@@ -153,7 +153,6 @@ export class EngineAdapter implements EnginePort {
           kind: 'file',
           path: input.path,
           loop: input.loop,
-          padTailSec: input.padTailSec,
           preDelayMs: input.preDelayMs,
           startAtSec: input.startAtSec,
         };

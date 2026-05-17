@@ -8,8 +8,6 @@ import { buildProxyUrl } from '@/shared/urlProxy';
 const musicRoot = path.resolve(resolveDataDir('music'));
 const alertsRoot = path.resolve(process.cwd(), 'public', 'alerts');
 const log = createLogger('Audio', 'SourceResolver');
-const MAX_ALERT_PAD_TAIL_SEC = 30;
-const DEFAULT_ALERT_PAD_TAIL_SEC = 2;
 
 export function resolvePlaybackSource(audiopath: string): PlaybackSource | null {
   const decoded = decodeAudiopath(audiopath);
@@ -29,33 +27,23 @@ export function resolvePlaybackSource(audiopath: string): PlaybackSource | null 
   }
 
   if (decoded.startsWith('alerts://')) {
-    const parsed = parseAlertSource(decoded, 'alerts://');
-    const normalized = normalizeAlertsPath(parsed.relativePath);
+    const relativePath = stripQuery(decoded.slice('alerts://'.length));
+    const normalized = normalizeAlertsPath(relativePath);
     if (!normalized) {
       log.warn('failed to normalize alerts path', { audiopath: decoded });
       return null;
     }
-    return {
-      kind: 'file',
-      path: normalized,
-      padTailSec: parsed.padTailSec ?? DEFAULT_ALERT_PAD_TAIL_SEC,
-    };
+    return { kind: 'file', path: normalized };
   }
 
   if (decoded.startsWith('alerts-loop://')) {
-    const parsed = parseAlertSource(decoded, 'alerts-loop://');
-    const normalized = normalizeAlertsPath(parsed.relativePath);
+    const relativePath = stripQuery(decoded.slice('alerts-loop://'.length));
+    const normalized = normalizeAlertsPath(relativePath);
     if (!normalized) {
       log.warn('failed to normalize alerts loop path', { audiopath: decoded });
       return null;
     }
-    return {
-      kind: 'file',
-      path: normalized,
-      loop: true,
-      // For looping alerts tail padding is unnecessary; the stream does not end by itself.
-      padTailSec: 0,
-    };
+    return { kind: 'file', path: normalized, loop: true };
   }
 
   if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
@@ -66,6 +54,11 @@ export function resolvePlaybackSource(audiopath: string): PlaybackSource | null 
   // Anything else (e.g. provider-specific URIs such as spotify:track:abc) is output-only.
   log.debug('no direct playback source resolved (output-only)', { audiopath: decoded });
   return null;
+}
+
+function stripQuery(input: string): string {
+  const i = input.indexOf('?');
+  return i === -1 ? input : input.slice(0, i);
 }
 
 function normalizeLibraryPath(input: string): string | null {
@@ -109,47 +102,6 @@ function normalizeAlertsPath(input: string): string | null {
     return null;
   }
   return candidate;
-}
-
-function parseAlertSource(
-  input: string,
-  prefix: 'alerts://' | 'alerts-loop://',
-): { relativePath: string; padTailSec?: number } {
-  const raw = input.slice(prefix.length);
-  const queryIndex = raw.indexOf('?');
-  if (queryIndex === -1) {
-    return { relativePath: raw };
-  }
-  const relativePath = raw.slice(0, queryIndex);
-  const query = raw.slice(queryIndex + 1);
-  return {
-    relativePath,
-    padTailSec: parseAlertPadTailSec(query),
-  };
-}
-
-function parseAlertPadTailSec(query: string): number | undefined {
-  if (!query) {
-    return undefined;
-  }
-  const params = new URLSearchParams(query);
-  const raw =
-    params.get('padtail') ??
-    params.get('pad_tail') ??
-    params.get('padTailSec') ??
-    params.get('pad_tail_sec') ??
-    params.get('tail') ??
-    params.get('tails') ??
-    params.get('pad');
-  if (!raw?.trim()) {
-    return undefined;
-  }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
-    return undefined;
-  }
-  const rounded = Math.round(parsed);
-  return Math.min(MAX_ALERT_PAD_TAIL_SEC, Math.max(0, rounded));
 }
 
 function safeDecode(value: string): string {
