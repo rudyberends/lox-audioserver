@@ -647,15 +647,15 @@ export class LocalLibraryProvider {
     query: string,
     limits: SearchLimits,
   ): {
-    track: ContentFolderItem[];
-    album: ContentFolderItem[];
-    artist: ContentFolderItem[];
-    playlist: ContentFolderItem[];
-    folder: ContentFolderItem[];
+    tracks: ContentFolderItem[];
+    albums: ContentFolderItem[];
+    artists: ContentFolderItem[];
+    playlists: ContentFolderItem[];
+    folders: ContentFolderItem[];
   } {
     const safeQuery = query?.trim();
     if (!safeQuery) {
-      return { track: [], album: [], artist: [], playlist: [], folder: [] };
+      return { tracks: [], albums: [], artists: [], playlists: [], folders: [] };
     }
     const getLimit = (key: string, fallback = 10) => {
       const value = limits[key];
@@ -667,11 +667,11 @@ export class LocalLibraryProvider {
     const artists = this.store.searchArtists(safeQuery, getLimit('artist'));
 
     return {
-      track: tracks.map((t) => this.trackItem(this.normalizeTrack(t))),
-      album: albums.map((a) => this.albumItem(a)),
-      artist: artists.map((a) => this.artistItem(a)),
-      playlist: [],
-      folder: [],
+      tracks: tracks.map((t) => this.trackItem(this.normalizeTrack(t))),
+      albums: albums.map((a) => this.albumItem(a)),
+      artists: artists.map((a) => this.artistItem(a)),
+      playlists: [],
+      folders: [],
     };
   }
 

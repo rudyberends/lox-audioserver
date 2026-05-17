@@ -264,6 +264,23 @@ export class LoxoneWsNotifier {
     const query = result.query ?? '';
     const totals = (result as { _totals?: Record<string, number> })?._totals;
 
+    // Local library: client expects categories directly in globalsearch_result, no error/result wrapper.
+    if (providerId.toLowerCase() === 'local' || providerId.toLowerCase() === 'library') {
+      const localPayload = {
+        globalsearch_result: {
+          tracks: buildCategory('Titels', result.tracks, providerId, userId, 'track', query, totals),
+          albums: buildCategory('Albums', result.albums, providerId, userId, 'album', query, totals),
+          artists: buildCategory('Artiesten', result.artists, providerId, userId, 'artist', query, totals),
+          playlists: buildCategory('Playlists', result.playlists, providerId, userId, 'playlist', query, totals),
+          folders: buildCategory('Mappen', result.folders, providerId, userId, 'folder', query, totals),
+        },
+        type: providerId,
+        unique,
+      };
+      this.emit(localPayload, 'globalsearch_result', { providerId, unique });
+      return;
+    }
+
     const payload = {
       globalsearch_result: {
         error: 0,
