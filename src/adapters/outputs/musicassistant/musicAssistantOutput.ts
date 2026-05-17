@@ -49,6 +49,8 @@ export class MusicAssistantOutput implements ZoneOutput {
   private readonly playerId: string;
   private readonly bridgeId: string;
   private api: MusicAssistantApi | null;
+  private unavailableReason: string | null = null;
+  private loggedReason: string | null = null;
 
   constructor(
     private readonly zoneId: number,
@@ -62,6 +64,7 @@ export class MusicAssistantOutput implements ZoneOutput {
   }
 
   public isReady(): boolean {
+    if (!this.api) this.api = this.acquireApi();
     return this.api !== null;
   }
 
@@ -78,8 +81,13 @@ export class MusicAssistantOutput implements ZoneOutput {
   }
 
   public async play(session: PlaybackSession): Promise<void> {
+    if (!this.api) this.api = this.acquireApi();
     if (!this.api) {
-      this.log.warn('MA play skipped; api unavailable', { zoneId: this.zoneId });
+      this.log.warn('MA play skipped; api unavailable', {
+        zoneId: this.zoneId,
+        bridgeId: this.bridgeId,
+        reason: this.unavailableReason ?? 'unknown',
+      });
       return;
     }
     // For MA-bridge content the streamService already issued a play_media RPC
@@ -133,6 +141,7 @@ export class MusicAssistantOutput implements ZoneOutput {
   }
 
   public async setVolume(level: number): Promise<void> {
+    if (!this.api) this.api = this.acquireApi();
     if (!this.api) return;
     const volumeLevel = Math.max(0, Math.min(100, Math.round(level)));
     try {
@@ -170,6 +179,7 @@ export class MusicAssistantOutput implements ZoneOutput {
   }
 
   private async sendCommand(command: string): Promise<void> {
+    if (!this.api) this.api = this.acquireApi();
     if (!this.api) return;
     try {
       await this.api.playerCommand(this.playerId, command);
@@ -186,25 +196,33 @@ export class MusicAssistantOutput implements ZoneOutput {
   private acquireApi(): MusicAssistantApi | null {
     const bridge = findMusicAssistantBridge(this.configPort, this.bridgeId);
     if (!bridge) {
-      this.log.warn('MA output created without matching bridge', { zoneId: this.zoneId, bridgeId: this.bridgeId });
-      return null;
+      return this.markUnavailable('no bridge with this id', 'MA output created without matching bridge', {});
     }
     if ((bridge.provider || '').toLowerCase() !== 'musicassistant') {
-      this.log.warn('referenced bridge is not a Music Assistant bridge', {
-        zoneId: this.zoneId,
-        bridgeId: this.bridgeId,
-        provider: bridge.provider,
-      });
-      return null;
+      return this.markUnavailable(
+        `bridge provider is ${bridge.provider || 'unknown'}, expected musicassistant`,
+        'referenced bridge is not a Music Assistant bridge',
+        { provider: bridge.provider },
+      );
     }
     if (bridge.mode !== 'sink') {
-      this.log.warn('MA output requires the bridge to be in sink mode', {
-        zoneId: this.zoneId,
-        bridgeId: this.bridgeId,
-        mode: bridge.mode,
-      });
-      return null;
+      return this.markUnavailable(
+        `bridge is in ${bridge.mode} mode, expected sink`,
+        'MA output requires the bridge to be in sink mode',
+        { mode: bridge.mode },
+      );
     }
+    this.unavailableReason = null;
+    this.loggedReason = null;
     return acquireMaApiForBridge(bridge);
+  }
+
+  private markUnavailable(reason: string, logMessage: string, extra: Record<string, unknown>): null {
+    this.unavailableReason = reason;
+    if (this.loggedReason !== reason) {
+      this.loggedReason = reason;
+      this.log.warn(logMessage, { zoneId: this.zoneId, bridgeId: this.bridgeId, ...extra });
+    }
+    return null;
   }
 }
