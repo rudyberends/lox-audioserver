@@ -9,6 +9,8 @@ import {
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { isMusicAssistantAudiopath } from '@/application/zones/internal/zoneAudioHelpers';
+import type { PlaybackMetadata } from '@/application/playback/audioManager';
 import { decodeLoxoneId } from '@/adapters/loxone/commands/utils/loxoneIdCodec';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
@@ -517,11 +519,17 @@ async function playToZone(
   // (YouTube/ytmusic) take 3-5 s on cold cache; we don't block on those — the
   // PlaybackCoordinator broadcasts a Loading… state and updateMetadata fills in
   // the real title once the queue rebuild resolves it.
-  const metadataPromise = contentManager.resolveMetadata(metadataTarget);
-  const metadata = await Promise.race([
-    metadataPromise,
-    new Promise<null>((resolve) => setTimeout(() => resolve(null), 800).unref?.()),
-  ]);
+  // Music Assistant skips the race entirely: MA delivers track metadata via
+  // its state-mirror right after the play_media RPC, so the 0-800 ms race here
+  // is just dead latency between tap and audio.
+  let metadata: PlaybackMetadata | null = null;
+  if (!isMusicAssistantAudiopath(uri)) {
+    const metadataPromise = contentManager.resolveMetadata(metadataTarget);
+    metadata = await Promise.race([
+      metadataPromise,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 800).unref?.()),
+    ]);
+  }
   void zoneManager.playContent(zoneId, uri, name, metadata ?? undefined);
   if (fadeOpts.fade) {
     const duration = fadeOpts.fadeDurationMs ?? 120_000;

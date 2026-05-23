@@ -387,10 +387,17 @@ export class PlayRequestService {
     metadata?: PlaybackMetadata,
     startAtSec?: number,
   ): Promise<boolean> {
-    if (requestType === 'linein' || req.isRadio || req.isMusicAssistant) {
+    if (requestType === 'linein' || req.isRadio) {
       return false;
     }
-    if (!req.isAppleMusic && !req.isDeezer && !req.isTidal && !req.isYtMusic) {
+    // MA-sink: MA owns the queue, so we don't need to expand the parent
+    // container locally before firing play_media. Fire immediately and let
+    // the MA state-mirror populate the local queue afterwards. The paginated
+    // getServiceFolder loop in QueueController is what makes container picks
+    // take 4-5 s before audio starts in sink mode.
+    const hasMaOutput = ctx.outputs.some((output) => output.type === 'musicassistant');
+    const maSinkFastPath = req.isMusicAssistant && hasMaOutput;
+    if (!maSinkFastPath && !req.isAppleMusic && !req.isDeezer && !req.isTidal && !req.isYtMusic) {
       return false;
     }
     if (requestType !== 'serviceplay') {
@@ -420,6 +427,14 @@ export class PlayRequestService {
     if (!session) {
       return false;
     }
+    // MA-sink owns its queue server-side and mirrors it back via the
+    // MusicAssistantStateController. Skip the local rebuildQueue: it would
+    // paginate MA's getServiceFolder for no benefit (wasted RPC) and the
+    // resulting buildQueueItemPlaybackPatch would overwrite MA's authoritative
+    // title/artist/album with whatever our local queue snapshot resolved to.
+    if (maSinkFastPath) {
+      return true;
+    }
     const token = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
     this.queueBuildTokens.set(ctx.id, token);
     void this.rebuildQueue(ctx, req, metadata, { applyToken: token })
@@ -436,7 +451,11 @@ export class PlayRequestService {
           void this.deps.recentsManager.record(ctx.id, current);
           this.deps.notifier.notifyQueueUpdated(ctx.id, ctx.queue.items.length);
         }
-        if (current && isSameAudiopath(currentAudiopath, audiopath)) {
+        // MA-sink: MA's state-mirror is authoritative for title/artist/album.
+        // The background rebuildQueue completes ~4 s after MA has already pushed
+        // real metadata, so pushing a derived patch here would overwrite the
+        // correct MA values with whatever our local queue mirror resolved to.
+        if (current && isSameAudiopath(currentAudiopath, audiopath) && !maSinkFastPath) {
           const baseMeta = queueBuild.metadata ?? ({} as PlaybackMetadata);
           const resolvedMeta = {
             title: baseMeta.title?.trim() || current.title,
