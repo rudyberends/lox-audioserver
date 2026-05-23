@@ -46,6 +46,7 @@ export class GoogleCastOutput implements ZoneOutput {
   private lastMetadataLoadAttemptAt = 0;
   private metadataLoadCooldownUntil = 0;
   private lastKnownVolume = 50;
+  private lastKnownMuted: boolean | null = null;
   private lastOutboundVolumeAt: number | null = null;
   private lastOutboundVolume: number | null = null;
   private lastOutboundStateAt: number | null = null;
@@ -452,7 +453,8 @@ export class GoogleCastOutput implements ZoneOutput {
         this.ports.zoneManager.handleCommand(this.zoneId, 'volume_set', String(vol));
       }
     }
-    if (typeof volume.muted === 'boolean') {
+    if (typeof volume.muted === 'boolean' && volume.muted !== this.lastKnownMuted) {
+      this.lastKnownMuted = volume.muted;
       if (volume.muted) {
         this.ports.zoneManager.handleCommand(this.zoneId, 'volume_set', '0');
       } else {
