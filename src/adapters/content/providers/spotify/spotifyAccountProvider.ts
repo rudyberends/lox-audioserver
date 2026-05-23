@@ -497,64 +497,44 @@ export class SpotifyAccountProvider {
     if (!playlistId) {
       return { items: [], total: 0 };
     }
-    // Spotify Web API (Feb 2026): playlist entries are surfaced on the playlist resource.
     const safeOffset = Math.max(0, offset || 0);
     const safeLimit = Math.max(1, limit || 50);
-    const playlistPayload = await this.request<{ items?: any[] | { items?: any[]; total?: number }; tracks?: any[] | { items?: any[]; total?: number } }>(
-      `${SPOTIFY_API_BASE}/playlists/${encodeURIComponent(playlistId)}`,
-      {
-        params: {
-          offset: String(safeOffset),
-          limit: String(safeLimit),
+    // Spotify caps /playlists/{id}/items at 50 items per request; chunk larger windows.
+    const SPOTIFY_PAGE_MAX = 50;
+    const mapped: ContentFolderItem[] = [];
+    let total: number | undefined;
+    let fetched = 0;
+    while (fetched < safeLimit) {
+      const chunkLimit = Math.min(SPOTIFY_PAGE_MAX, safeLimit - fetched);
+      const data = await this.request<{ items?: any[]; total?: number }>(
+        `${SPOTIFY_API_BASE}/playlists/${encodeURIComponent(playlistId)}/items`,
+        {
+          params: {
+            offset: String(safeOffset + fetched),
+            limit: String(chunkLimit),
+          },
+          suppressWarn: true,
         },
-        suppressWarn: true,
-      },
-    );
-
-    const nestedItems = !Array.isArray(playlistPayload?.items) && Array.isArray(playlistPayload?.items?.items)
-      ? playlistPayload.items.items
-      : [];
-    const flatItems = Array.isArray(playlistPayload?.items) ? playlistPayload.items : [];
-    const nestedTracks = !Array.isArray(playlistPayload?.tracks) && Array.isArray(playlistPayload?.tracks?.items)
-      ? playlistPayload.tracks.items
-      : [];
-    const flatTracks = Array.isArray(playlistPayload?.tracks) ? playlistPayload.tracks : [];
-    let primaryItems: any[] = [];
-    if (nestedItems.length) {
-      primaryItems = nestedItems;
-    } else if (flatItems.length) {
-      primaryItems = flatItems;
-    } else if (nestedTracks.length) {
-      primaryItems = nestedTracks;
-    } else if (flatTracks.length) {
-      primaryItems = flatTracks;
+      );
+      if (total === undefined && typeof data?.total === 'number') {
+        total = data.total;
+      }
+      const items = Array.isArray(data?.items) ? data!.items : [];
+      if (items.length === 0) {
+        break;
+      }
+      for (const entry of items) {
+        const track = (entry as any)?.item ?? (entry as any)?.track ?? entry;
+        if (track) {
+          mapped.push(this.mapTrack(track));
+        }
+      }
+      fetched += items.length;
+      if (items.length < chunkLimit) {
+        break;
+      }
     }
-    if (primaryItems.length) {
-      const mapped = primaryItems
-        .map((entry: any) => entry?.track ?? entry?.item ?? entry)
-        .filter(Boolean)
-        .map((track: any) => this.mapTrack(track));
-      const itemsTotal =
-        !Array.isArray(playlistPayload?.items) && typeof playlistPayload?.items?.total === 'number'
-          ? playlistPayload.items.total
-          : undefined;
-      const tracksTotal =
-        !Array.isArray(playlistPayload?.tracks) && typeof playlistPayload?.tracks?.total === 'number'
-          ? playlistPayload.tracks.total
-          : undefined;
-      const total = itemsTotal ?? tracksTotal ?? mapped.length;
-      return { items: mapped, total };
-    }
-    const fallbackItemsTotal =
-      !Array.isArray(playlistPayload?.items) && typeof playlistPayload?.items?.total === 'number'
-        ? playlistPayload.items.total
-        : undefined;
-    const fallbackTracksTotal =
-      !Array.isArray(playlistPayload?.tracks) && typeof playlistPayload?.tracks?.total === 'number'
-        ? playlistPayload.tracks.total
-        : undefined;
-    const fallbackTotal = fallbackItemsTotal ?? fallbackTracksTotal ?? 0;
-    return { items: [], total: fallbackTotal };
+    return { items: mapped, total: total ?? mapped.length };
   }
 
   private async fetchAlbumTracks(
