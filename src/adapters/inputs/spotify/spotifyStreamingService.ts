@@ -332,12 +332,32 @@ export async function startNativeConnectHost(params: {
   }
   const pass = new PassThrough();
   let ended = false;
+  // WIP: bound the connect-host PCM buffer to keep playback at the live edge.
+  //
+  // The native connect host emits no PCM while paused, then dumps a full pause-duration
+  // backlog in a single burst on resume (measured: ~11-23 MB at once vs the steady
+  // ~176 kB/s for 44.1 kHz/16-bit stereo, i.e. 60-130 s of audio). That backlog then
+  // drains downstream (ffmpeg -> sendspin) at real time, with two user-visible effects:
+  //   * resume plays from the backlog, ~pause-duration behind live;
+  //   * pause is no longer crisp - a large downstream buffer keeps playing after pause.
+  // It also compounds across pause/resume cycles. Capping the buffer here discards stale
+  // queued audio so the engine always reads near the live edge.
+  const MAX_BUFFERED_BYTES = 2 * 44100 * 2 * 2; // ~2 s of 44.1 kHz stereo s16le
   const safeWrite = (chunk: Buffer) => {
     const state = pass as any;
     if (ended || state.destroyed || state.writableEnded) {
       return;
     }
     pass.write(chunk);
+    // Drop the oldest queued audio if librespot has run ahead of the consumer.
+    let excess = pass.readableLength - MAX_BUFFERED_BYTES;
+    while (excess > 0) {
+      const dropped = pass.read(Math.min(excess, 1 << 16)) as Buffer | null;
+      if (!dropped) {
+        break;
+      }
+      excess -= dropped.length;
+    }
   };
   try {
     const onEvt = (event: ConnectEvent) => {
