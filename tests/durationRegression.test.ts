@@ -5,6 +5,7 @@ import { buildStartedPatch } from '../src/application/zones/playback/patchBuilde
 import { ZoneRepository } from '../src/application/zones/ZoneRepository';
 import { ZoneStateStore } from '../src/application/zones/ZoneStateStore';
 import { attachPlayerListeners } from '../src/application/zones/playback/playerListeners';
+import { RadioParadiseBlockService } from '../src/application/zones/radioparadise/radioParadiseBlockService';
 
 test('buildStartedPatch does not keep a longer previous duration when new track is shorter', () => {
   const ctx: any = {
@@ -368,4 +369,44 @@ test('ZoneStateStore clears stale session metadata on audiopath boundary change'
     queue: undefined,
     queueIndex: undefined,
   });
+});
+
+test('RadioParadise parseTracks treats short promo durations as milliseconds (issue #270)', () => {
+  const service = new RadioParadiseBlockService({
+    getZone: () => undefined,
+    updateRadioMetadata: () => {},
+  });
+  // Real shape returned by api/play for a Radio Paradise promo/announcement block.
+  const promoSong = {
+    0: {
+      type: 'P',
+      elapsed: 0,
+      duration: 4114,
+      artist: 'Commercial-free',
+      title: 'Listener-supported',
+    },
+  };
+  const tracks = (service as any).parseTracks(promoSong, 4.114);
+  assert.equal(tracks.length, 1);
+  // 4114 ms => 4.114 s. Old heuristic (>10000 ? /1000 : raw) returned 4114 s = ~68 min.
+  assert.ok(
+    tracks[0].durationSec > 4 && tracks[0].durationSec < 5,
+    `expected ~4 s promo duration, got ${tracks[0].durationSec}`,
+  );
+});
+
+test('RadioParadise parseTracks converts ms duration/elapsed for music tracks', () => {
+  const service = new RadioParadiseBlockService({
+    getZone: () => undefined,
+    updateRadioMetadata: () => {},
+  });
+  const musicSong = {
+    0: { type: 'M', elapsed: 0, duration: 175122, artist: 'A', title: 'T1' },
+    1: { type: 'M', elapsed: 175122, duration: 139723, artist: 'B', title: 'T2' },
+  };
+  const tracks = (service as any).parseTracks(musicSong, 1730.777);
+  assert.equal(tracks.length, 2);
+  assert.ok(Math.abs(tracks[0].durationSec - 175.122) < 0.01);
+  assert.ok(Math.abs(tracks[1].startSec - 175.122) < 0.01);
+  assert.ok(Math.abs(tracks[1].durationSec - 139.723) < 0.01);
 });

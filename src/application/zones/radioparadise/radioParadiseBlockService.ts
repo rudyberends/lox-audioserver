@@ -798,8 +798,11 @@ export class RadioParadiseBlockService {
       .map((item) => {
         const startRaw = Number(item?.elapsed ?? 0) || 0;
         const durationRaw = Number(item?.duration ?? 0) || 0;
-        const startSec = startRaw > 10000 ? startRaw / 1000 : startRaw;
-        const durationSec = durationRaw > 10000 ? durationRaw / 1000 : durationRaw;
+        // RP api/play returns per-song elapsed/duration in milliseconds. Short
+        // promos (~3-7s) tripped the old >10000 heuristic and were treated as
+        // seconds, yielding 60+ minute "announcements". See issue #270.
+        const startSec = startRaw / 1000;
+        const durationSec = durationRaw / 1000;
         const artist = typeof item?.artist === 'string' ? item.artist.trim() : '';
         const title = typeof item?.title === 'string' ? item.title.trim() : '';
         const album = typeof item?.album === 'string' ? item.album.trim() : '';
