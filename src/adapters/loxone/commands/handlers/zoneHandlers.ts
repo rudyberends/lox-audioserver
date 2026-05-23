@@ -11,7 +11,7 @@ import type { FavoritesManager } from '@/application/zones/favorites/favoritesMa
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import { isMusicAssistantAudiopath } from '@/application/zones/internal/zoneAudioHelpers';
 import type { PlaybackMetadata } from '@/application/playback/audioManager';
-import { decodeLoxoneId } from '@/adapters/loxone/commands/utils/loxoneIdCodec';
+import { BASE_LIBRARY, BASE_PLAYLIST, decodeLoxoneId } from '@/adapters/loxone/commands/utils/loxoneIdCodec';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { FadeControllerPort } from '@/ports/FadeControllerPort';
@@ -100,16 +100,13 @@ async function audioPlaylistPlay(
   command: string,
 ) {
   return playToZone(zoneManager, contentManager, fadeController, command, 'playlistplay', (parts) => {
-    // Local library playlists arrive as `lms/<user>/<numericId>` — rewrite to the
-    // library audiopath form so the queue builder expands tracks via getMediaFolder.
-    const service = parts[4] ?? '';
-    if (service === 'lms') {
-      const rawId = (parts[6] ?? '').split('?')[0] ?? '';
-      const decoded = decodeLoxoneId(rawId);
-      const playlistId = decoded ? String(decoded.data) : rawId;
-      if (playlistId) {
-        return `library:playlist:${playlistId}`;
-      }
+    // Local library playlists arrive as `audio/<zone>/playlist/play/<encId>[/parentid/.../...][/noshuffle]`.
+    // If parts[4] decodes as a Loxone-encoded id with a BASE_PLAYLIST offset, rewrite to
+    // `library:playlist:<numericId>` so the queue builder expands tracks via getMediaFolder.
+    const rawId = parts[4] ?? '';
+    const decoded = decodeLoxoneId(rawId);
+    if (decoded && typeof decoded.offset === 'number' && decoded.offset >= BASE_PLAYLIST && decoded.offset < BASE_LIBRARY) {
+      return `library:playlist:${String(decoded.data)}`;
     }
     return extractPayload(parts.slice(4));
   });
