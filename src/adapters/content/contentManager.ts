@@ -70,10 +70,12 @@ export class ContentManager {
       value: { result: Record<string, ContentFolderItem[]>; user: string; providerId: string };
     }
   >();
+
   private readonly globalSearchInflight = new Map<
     string,
     Promise<{ result: Record<string, ContentFolderItem[]>; user: string; providerId: string }>
   >();
+
   private readonly globalSearchTtlMs = 10_000;
   private readonly globalSearchNegativeTtlMs = 2_000;
   private readonly metadataCache = new Map<string, { expiresAt: number; value: ContentItemMetadata | null }>();
@@ -193,7 +195,54 @@ export class ContentManager {
     offset: number,
     limit: number,
   ): Promise<PlaylistEntry[]> {
+    if (service === 'lms') {
+      return this.library.listPlaylists(offset, limit);
+    }
     return this.requireSpotify().getPlaylists(service, user, offset, limit);
+  }
+
+  // -- Local playlist editing -------------------------------------------------
+
+  public createLocalPlaylist(name: string): PlaylistEntry {
+    this.cache.clearAll();
+    return this.library.createPlaylist(name);
+  }
+
+  public renameLocalPlaylist(id: number, name: string): PlaylistEntry | null {
+    this.cache.clearAll();
+    return this.library.renamePlaylist(id, name);
+  }
+
+  public deleteLocalPlaylist(id: number): boolean {
+    this.cache.clearAll();
+    return this.library.deletePlaylist(id);
+  }
+
+  public getLocalPlaylist(id: number): PlaylistEntry | null {
+    return this.library.getPlaylist(id);
+  }
+
+  public async addItemsToLocalPlaylist(playlistId: number, rawId: string): Promise<number> {
+    this.cache.clearAll();
+    return this.library.addItemsToPlaylist(playlistId, rawId);
+  }
+
+  public removeLocalPlaylistItem(playlistId: number, position: number): boolean {
+    this.cache.clearAll();
+    return this.library.removePlaylistItem(playlistId, position);
+  }
+
+  public moveLocalPlaylistItem(playlistId: number, from: number, to: number): boolean {
+    this.cache.clearAll();
+    return this.library.movePlaylistItem(playlistId, from, to);
+  }
+
+  public getLocalPlaylistItems(
+    playlistId: number,
+    offset: number,
+    limit: number,
+  ): Promise<ContentFolder | null> {
+    return this.library.getPlaylistItemsFolder(playlistId, offset, limit);
   }
 
   public async getServiceFolder(
@@ -225,10 +274,18 @@ export class ContentManager {
 
   private isSpotifyPodcastsFolder(folderId: string): boolean {
     const raw = String(folderId || '').trim().toLowerCase();
-    if (!raw) return false;
-    if (raw === '7' || raw === 'podcasts' || raw === 'podcast') return true;
-    if (raw.includes('liked')) return false;
-    if (raw.includes('podcasts') || raw.includes('show')) return true;
+    if (!raw) {
+      return false;
+    }
+    if (raw === '7' || raw === 'podcasts' || raw === 'podcast') {
+      return true;
+    }
+    if (raw.includes('liked')) {
+      return false;
+    }
+    if (raw.includes('podcasts') || raw.includes('show')) {
+      return true;
+    }
     return false;
   }
 

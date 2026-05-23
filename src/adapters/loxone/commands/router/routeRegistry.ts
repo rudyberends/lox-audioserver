@@ -10,6 +10,7 @@ import { createGlobalSearchHandlers } from '@/adapters/loxone/commands/handlers/
 import { createGroupHandlers } from '@/adapters/loxone/commands/handlers/groupHandlers';
 import { createAlertHandlers } from '@/adapters/loxone/commands/handlers/alertHandlers';
 import { createInputHandlers } from '@/adapters/loxone/commands/handlers/inputHandlers';
+import { createPlaylistEditHandlers } from '@/adapters/loxone/commands/handlers/playlistEditHandlers';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
@@ -85,6 +86,10 @@ export function registerRoutes(
     sendspinLineIn: dependencies.sendspinLineInService,
     notifier: dependencies.loxoneNotifier,
   });
+  const playlistEditHandlers = createPlaylistEditHandlers(
+    dependencies.contentManager,
+    dependencies.loxoneNotifier,
+  );
 
   router.registerPrefix('secure', 'secure/info/pairing', secure.infoPairing);
   router.registerPrefix('secure', 'secure/hello', secure.hello);
@@ -110,6 +115,10 @@ export function registerRoutes(
   router.registerRegex('audio', /^audio\/cfg\/input\/[^/]+\/type\//, inputHandlers.audioCfgInputType);
   router.registerPrefix('audio', 'audio/cfg/getservicefolder', providerHandlers.audioCfgGetServiceFolder);
   router.registerPrefix('audio', 'audio/cfg/getplaylists2', providerHandlers.audioCfgGetPlaylists);
+  router.registerPrefix('audio', 'audio/cfg/playlist/create/', playlistEditHandlers.create);
+  router.registerPrefix('audio', 'audio/cfg/playlist/update/', playlistEditHandlers.update);
+  router.registerPrefix('audio', 'audio/cfg/playlist/rename/', playlistEditHandlers.rename);
+  router.registerPrefix('audio', 'audio/cfg/playlist/deletelist/', playlistEditHandlers.deleteList);
   router.registerPrefix('audio', 'audio/cfg/isfollowed', providerHandlers.audioCfgIsFollowed);
   router.registerPrefix('audio', 'audio/cfg/follow', providerHandlers.audioCfgFollow);
   router.registerPrefix('audio', 'audio/cfg/unfollow', providerHandlers.audioCfgUnfollow);

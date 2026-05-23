@@ -9,6 +9,7 @@ import {
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeLoxoneId } from '@/adapters/loxone/commands/utils/loxoneIdCodec';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { FadeControllerPort } from '@/ports/FadeControllerPort';
@@ -96,9 +97,20 @@ async function audioPlaylistPlay(
   fadeController: FadeControllerPort,
   command: string,
 ) {
-  return playToZone(zoneManager, contentManager, fadeController, command, 'playlistplay', (parts) =>
-    extractPayload(parts.slice(4)),
-  );
+  return playToZone(zoneManager, contentManager, fadeController, command, 'playlistplay', (parts) => {
+    // Local library playlists arrive as `lms/<user>/<numericId>` — rewrite to the
+    // library audiopath form so the queue builder expands tracks via getMediaFolder.
+    const service = parts[4] ?? '';
+    if (service === 'lms') {
+      const rawId = (parts[6] ?? '').split('?')[0] ?? '';
+      const decoded = decodeLoxoneId(rawId);
+      const playlistId = decoded ? String(decoded.data) : rawId;
+      if (playlistId) {
+        return `library:playlist:${playlistId}`;
+      }
+    }
+    return extractPayload(parts.slice(4));
+  });
 }
 
 async function audioLibraryPlay(
@@ -141,7 +153,9 @@ function folderIdToSpotifyAudiopath(folderId: string, providerPrefix: string): s
 function resolveParentIdInCommand(command: string): string {
   // /parentid/<folderId>/<trackIndex> — folderId may contain colons but not slashes
   const match = /\/parentid\/([^/]+)\/(\d+)/.exec(command);
-  if (!match) return command;
+  if (!match) {
+    return command;
+  }
   const folderId = match[1] ?? '';
   const trackIndex = match[2] ?? '';
   // Derive provider prefix from command: audio/{zoneId}/serviceplay/{service}/{user}/...
@@ -151,7 +165,9 @@ function resolveParentIdInCommand(command: string): string {
   const user = rawUser && rawUser !== 'nouser' ? rawUser : '';
   const providerPrefix = user ? `${service}@${user}` : service;
   const audiopath = folderIdToSpotifyAudiopath(folderId, providerPrefix);
-  if (!audiopath) return command;
+  if (!audiopath) {
+    return command;
+  }
   return command.replace(match[0], `/parentpath/${audiopath}/${trackIndex}`);
 }
 

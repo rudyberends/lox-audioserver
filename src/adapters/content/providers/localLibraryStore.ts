@@ -77,6 +77,38 @@ export interface TrackFileRow {
   cover: string | null;
 }
 
+export interface PlaylistRow {
+  id: number;
+  name: string;
+  created_at: number;
+  updated_at: number;
+  item_count: number;
+  cover: string | null;
+  rel_path: string | null;
+}
+
+export interface PlaylistItemRow {
+  playlist_id: number;
+  position: number;
+  audiopath: string;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  duration: number | null;
+  cover: string | null;
+  rel_path: string | null;
+}
+
+export interface PlaylistItemInsert {
+  audiopath: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  duration?: number;
+  cover?: string;
+  relPath?: string;
+}
+
 export class LocalLibraryStore {
   private db: Database.Database | null = null;
   private readonly dbPath: string;
@@ -85,6 +117,7 @@ export class LocalLibraryStore {
   private static readonly SCHEMA_V2 = 2; // adds FTS5 search table + triggers
   private static readonly SCHEMA_V3 = 3; // adds album artist for album grouping
   private static readonly SCHEMA_V4 = 4; // adds artist_covers sidecar table
+  private static readonly SCHEMA_V5 = 5; // adds user-editable playlists
 
   public constructor(options: { dbPath?: string } = {}) {
     this.dbPath = options.dbPath ?? resolveDataDir('music', 'library.db');
@@ -645,7 +678,7 @@ export class LocalLibraryStore {
     const userVersion = Number(db.pragma('user_version', { simple: true }) ?? 0);
     this.ensureAlbumArtistColumn(db);
     db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(storage_id, album_artist, album);');
-    db.exec(`UPDATE tracks SET album_artist = artist WHERE NULLIF(TRIM(album_artist), '') IS NULL;`);
+    db.exec('UPDATE tracks SET album_artist = artist WHERE NULLIF(TRIM(album_artist), \'\') IS NULL;');
 
     // Add FTS-backed searching for large libraries. If FTS5 is unavailable, we keep the LIKE fallback.
     if (userVersion >= LocalLibraryStore.SCHEMA_V2 && userVersion < LocalLibraryStore.SCHEMA_V3) {
@@ -655,7 +688,7 @@ export class LocalLibraryStore {
       if (enabled) {
         // Build the index once for existing databases.
         try {
-          db.exec(`INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild');`);
+          db.exec('INSERT INTO tracks_fts(tracks_fts) VALUES(\'rebuild\');');
         } catch {
           /* ignore */
         }
@@ -668,12 +701,250 @@ export class LocalLibraryStore {
     if (userVersion < LocalLibraryStore.SCHEMA_V4) {
       db.pragma(`user_version = ${LocalLibraryStore.SCHEMA_V4}`);
     }
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS local_playlists (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS local_playlist_items (
+        playlist_id INTEGER NOT NULL REFERENCES local_playlists(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL,
+        audiopath TEXT NOT NULL,
+        title TEXT,
+        artist TEXT,
+        album TEXT,
+        duration INTEGER,
+        cover TEXT,
+        rel_path TEXT,
+        PRIMARY KEY (playlist_id, position)
+      );
+      CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist ON local_playlist_items(playlist_id);
+    `);
+
+    if (userVersion < LocalLibraryStore.SCHEMA_V5) {
+      db.pragma(`user_version = ${LocalLibraryStore.SCHEMA_V5}`);
+    }
+  }
+
+  // -- Playlists ----------------------------------------------------------------
+
+  public createPlaylist(name: string): PlaylistRow {
+    const db = this.requireDb();
+    const now = Date.now();
+    const result = db
+      .prepare('INSERT INTO local_playlists (name, created_at, updated_at) VALUES (?, ?, ?)')
+      .run(name, now, now);
+    const id = Number(result.lastInsertRowid);
+    return {
+      id,
+      name,
+      created_at: now,
+      updated_at: now,
+      item_count: 0,
+      cover: null,
+      rel_path: null,
+    };
+  }
+
+  public renamePlaylist(id: number, name: string): boolean {
+    const db = this.requireDb();
+    const result = db
+      .prepare('UPDATE local_playlists SET name = ?, updated_at = ? WHERE id = ?')
+      .run(name, Date.now(), id);
+    return result.changes > 0;
+  }
+
+  public deletePlaylist(id: number): boolean {
+    const db = this.requireDb();
+    const tx = db.transaction((pid: number) => {
+      db.prepare('DELETE FROM local_playlist_items WHERE playlist_id = ?').run(pid);
+      const r = db.prepare('DELETE FROM local_playlists WHERE id = ?').run(pid);
+      return r.changes > 0;
+    });
+    return tx(id);
+  }
+
+  public getPlaylist(id: number): PlaylistRow | null {
+    const db = this.requireDb();
+    const row = db
+      .prepare(
+        `
+        SELECT p.id, p.name, p.created_at, p.updated_at,
+          (SELECT COUNT(*) FROM local_playlist_items WHERE playlist_id = p.id) AS item_count,
+          (SELECT cover FROM local_playlist_items WHERE playlist_id = p.id AND cover IS NOT NULL ORDER BY position LIMIT 1) AS cover,
+          (SELECT rel_path FROM local_playlist_items WHERE playlist_id = p.id AND cover IS NOT NULL ORDER BY position LIMIT 1) AS rel_path
+        FROM local_playlists p
+        WHERE p.id = ?
+      `,
+      )
+      .get(id) as PlaylistRow | undefined;
+    return row ?? null;
+  }
+
+  public listPlaylists(offset: number, limit: number): PagedResult<PlaylistRow> {
+    const db = this.requireDb();
+    const total = db.prepare('SELECT COUNT(*) AS count FROM local_playlists').get() as {
+      count: number;
+    };
+    const items = db
+      .prepare(
+        `
+        SELECT p.id, p.name, p.created_at, p.updated_at,
+          (SELECT COUNT(*) FROM local_playlist_items WHERE playlist_id = p.id) AS item_count,
+          (SELECT cover FROM local_playlist_items WHERE playlist_id = p.id AND cover IS NOT NULL ORDER BY position LIMIT 1) AS cover,
+          (SELECT rel_path FROM local_playlist_items WHERE playlist_id = p.id AND cover IS NOT NULL ORDER BY position LIMIT 1) AS rel_path
+        FROM local_playlists p
+        ORDER BY LOWER(p.name)
+        LIMIT ? OFFSET ?
+      `,
+      )
+      .all(limit, offset) as PlaylistRow[];
+    return { total: total.count, items };
+  }
+
+  public getPlaylistItems(id: number, offset: number, limit: number): PagedResult<PlaylistItemRow> {
+    const db = this.requireDb();
+    const total = db
+      .prepare('SELECT COUNT(*) AS count FROM local_playlist_items WHERE playlist_id = ?')
+      .get(id) as { count: number };
+    const items = db
+      .prepare(
+        `
+        SELECT playlist_id, position, audiopath, title, artist, album, duration, cover, rel_path
+        FROM local_playlist_items
+        WHERE playlist_id = ?
+        ORDER BY position
+        LIMIT ? OFFSET ?
+      `,
+      )
+      .all(id, limit, offset) as PlaylistItemRow[];
+    return { total: total.count, items };
+  }
+
+  public getAllPlaylistItems(id: number): PlaylistItemRow[] {
+    const db = this.requireDb();
+    return db
+      .prepare(
+        `
+        SELECT playlist_id, position, audiopath, title, artist, album, duration, cover, rel_path
+        FROM local_playlist_items
+        WHERE playlist_id = ?
+        ORDER BY position
+      `,
+      )
+      .all(id) as PlaylistItemRow[];
+  }
+
+  public appendPlaylistItems(id: number, items: PlaylistItemInsert[]): number {
+    if (items.length === 0) {
+      return 0;
+    }
+    const db = this.requireDb();
+    const tx = db.transaction((pid: number, entries: PlaylistItemInsert[]) => {
+      const maxRow = db
+        .prepare('SELECT COALESCE(MAX(position), -1) AS max FROM local_playlist_items WHERE playlist_id = ?')
+        .get(pid) as { max: number };
+      let nextPos = maxRow.max + 1;
+      const insert = db.prepare(`
+        INSERT INTO local_playlist_items
+          (playlist_id, position, audiopath, title, artist, album, duration, cover, rel_path)
+        VALUES (@playlist_id, @position, @audiopath, @title, @artist, @album, @duration, @cover, @rel_path)
+      `);
+      for (const entry of entries) {
+        insert.run({
+          playlist_id: pid,
+          position: nextPos,
+          audiopath: entry.audiopath,
+          title: entry.title ?? null,
+          artist: entry.artist ?? null,
+          album: entry.album ?? null,
+          duration: typeof entry.duration === 'number' ? Math.round(entry.duration) : null,
+          cover: entry.cover ?? null,
+          rel_path: entry.relPath ?? null,
+        });
+        nextPos += 1;
+      }
+      db.prepare('UPDATE local_playlists SET updated_at = ? WHERE id = ?').run(Date.now(), pid);
+      return entries.length;
+    });
+    return tx(id, items);
+  }
+
+  public removePlaylistItem(id: number, position: number): boolean {
+    const db = this.requireDb();
+    const tx = db.transaction((pid: number, pos: number) => {
+      const result = db
+        .prepare('DELETE FROM local_playlist_items WHERE playlist_id = ? AND position = ?')
+        .run(pid, pos);
+      if (result.changes === 0) {
+        return false;
+      }
+      // Compact positions above the removed one.
+      db.prepare(
+        `UPDATE local_playlist_items
+         SET position = position - 1
+         WHERE playlist_id = ? AND position > ?`,
+      ).run(pid, pos);
+      db.prepare('UPDATE local_playlists SET updated_at = ? WHERE id = ?').run(Date.now(), pid);
+      return true;
+    });
+    return tx(id, position);
+  }
+
+  public movePlaylistItem(id: number, from: number, to: number): boolean {
+    const db = this.requireDb();
+    const tx = db.transaction((pid: number, fromPos: number, toPos: number) => {
+      const item = db
+        .prepare('SELECT * FROM local_playlist_items WHERE playlist_id = ? AND position = ?')
+        .get(pid, fromPos) as PlaylistItemRow | undefined;
+      if (!item) {
+        return false;
+      }
+      db.prepare('DELETE FROM local_playlist_items WHERE playlist_id = ? AND position = ?').run(
+        pid,
+        fromPos,
+      );
+      if (toPos > fromPos) {
+        db.prepare(
+          `UPDATE local_playlist_items
+           SET position = position - 1
+           WHERE playlist_id = ? AND position > ? AND position <= ?`,
+        ).run(pid, fromPos, toPos);
+      } else {
+        db.prepare(
+          `UPDATE local_playlist_items
+           SET position = position + 1
+           WHERE playlist_id = ? AND position >= ? AND position < ?`,
+        ).run(pid, toPos, fromPos);
+      }
+      db.prepare(
+        `INSERT INTO local_playlist_items
+           (playlist_id, position, audiopath, title, artist, album, duration, cover, rel_path)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        pid,
+        toPos,
+        item.audiopath,
+        item.title,
+        item.artist,
+        item.album,
+        item.duration,
+        item.cover,
+        item.rel_path,
+      );
+      db.prepare('UPDATE local_playlists SET updated_at = ? WHERE id = ?').run(Date.now(), pid);
+      return true;
+    });
+    return tx(id, from, to);
   }
 
   private ensureAlbumArtistColumn(db: Database.Database): void {
     const columns = db.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === 'album_artist')) {
-      db.exec(`ALTER TABLE tracks ADD COLUMN album_artist TEXT NOT NULL DEFAULT '';`);
+      db.exec('ALTER TABLE tracks ADD COLUMN album_artist TEXT NOT NULL DEFAULT \'\';');
     }
   }
 
@@ -691,7 +962,7 @@ export class LocalLibraryStore {
     const enabled = this.tryEnableFts(db);
     if (enabled) {
       try {
-        db.exec(`INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild');`);
+        db.exec('INSERT INTO tracks_fts(tracks_fts) VALUES(\'rebuild\');');
       } catch {
         /* ignore */
       }
@@ -732,9 +1003,13 @@ export class LocalLibraryStore {
 
   private toFtsQuery(query: string): string | null {
     const raw = String(query || '').trim().toLowerCase();
-    if (!raw) return null;
+    if (!raw) {
+      return null;
+    }
     const tokens = raw.match(/[a-z0-9]+/g) ?? [];
-    if (!tokens.length) return null;
+    if (!tokens.length) {
+      return null;
+    }
     // Prefix matching keeps "typed as you go" searches responsive.
     return tokens.map((t) => `${t}*`).join(' ');
   }
@@ -747,8 +1022,8 @@ export class LocalLibraryStore {
   }
 }
 
-const ALBUM_GROUP_EXPR = "COALESCE(NULLIF(TRIM(album_artist), ''), artist)";
-const ALBUM_GROUP_EXPR_T = "COALESCE(NULLIF(TRIM(t.album_artist), ''), t.artist)";
+const ALBUM_GROUP_EXPR = 'COALESCE(NULLIF(TRIM(album_artist), \'\'), artist)';
+const ALBUM_GROUP_EXPR_T = 'COALESCE(NULLIF(TRIM(t.album_artist), \'\'), t.artist)';
 
 function normalizeGroupArtist(value: string): string {
   const normalized = String(value || '').trim();

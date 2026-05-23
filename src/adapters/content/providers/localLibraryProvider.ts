@@ -22,9 +22,12 @@ import {
   type AlbumRow,
   type AlbumCoverRow,
   type ArtistRow,
+  type PlaylistItemRow,
+  type PlaylistRow,
   type StoredTrack,
   type TrackFileRow,
 } from '@/adapters/content/providers/localLibraryStore';
+import type { PlaylistEntry } from '@/ports/ContentTypes';
 
 const FILE_TYPE_FOLDER = 1;
 const FILE_TYPE_FILE = 2;
@@ -463,6 +466,15 @@ export class LocalLibraryProvider {
     if (normalized.startsWith('library:artist:')) {
       const key = normalized.slice('library:artist:'.length);
       return this.buildArtistTracks(key, offset, limit);
+    }
+
+    if (normalized.startsWith('library:playlist:')) {
+      const idPart = normalized.slice('library:playlist:'.length);
+      const playlistId = Number.parseInt(idPart, 10);
+      if (!Number.isFinite(playlistId)) {
+        return null;
+      }
+      return this.getPlaylistItemsFolder(playlistId, offset, limit);
     }
 
     if (normalized.startsWith('library:folder:')) {
@@ -1448,6 +1460,165 @@ export class LocalLibraryProvider {
     return resolved;
   }
 
+  // -- Playlists --------------------------------------------------------------
+
+  public async listPlaylists(offset: number, limit: number): Promise<PlaylistEntry[]> {
+    const safeOffset = Number.isFinite(offset) && offset > 0 ? offset : 0;
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
+    const { items } = this.store.listPlaylists(safeOffset, safeLimit);
+    return items.map((row) => this.playlistEntry(row));
+  }
+
+  public createPlaylist(name: string): PlaylistEntry {
+    const safeName = String(name || '').trim() || 'New Playlist';
+    const row = this.store.createPlaylist(safeName);
+    return this.playlistEntry(row);
+  }
+
+  public renamePlaylist(id: number, name: string): PlaylistEntry | null {
+    const safeName = String(name || '').trim();
+    if (!safeName) {
+      return null;
+    }
+    if (!this.store.renamePlaylist(id, safeName)) {
+      return null;
+    }
+    const row = this.store.getPlaylist(id);
+    return row ? this.playlistEntry(row) : null;
+  }
+
+  public deletePlaylist(id: number): boolean {
+    return this.store.deletePlaylist(id);
+  }
+
+  public getPlaylist(id: number): PlaylistEntry | null {
+    const row = this.store.getPlaylist(id);
+    return row ? this.playlistEntry(row) : null;
+  }
+
+  public async getPlaylistItemsFolder(
+    id: number,
+    offset: number,
+    limit: number,
+  ): Promise<ContentFolder | null> {
+    const playlist = this.store.getPlaylist(id);
+    if (!playlist) {
+      return null;
+    }
+    const { items, total } = this.store.getPlaylistItems(id, offset, limit);
+    const folderItems = items.map((row) => this.playlistItemToFolderItem(row));
+    return this.buildFolder(`library:playlist:${id}`, playlist.name, folderItems, offset, limit, total, true);
+  }
+
+  /**
+   * Resolves a Loxone "addbrowsable" or "additem" payload into one or more track rows.
+   * Tracks → single entry; albums/artists/folders/playlists → expanded list.
+   */
+  public async resolveAddableItems(rawId: string): Promise<PlaylistItemRow[]> {
+    const id = String(rawId || '').trim();
+    if (!id) {
+      return [];
+    }
+
+    // Direct track audiopath
+    const track = this.store.findByAudiopath(id);
+    if (track) {
+      const normalized = this.normalizeTrack(track);
+      return [
+        {
+          playlist_id: 0,
+          position: 0,
+          audiopath: normalized.audiopath,
+          title: normalized.title,
+          artist: normalized.artist,
+          album: normalized.album,
+          duration: typeof normalized.duration === 'number' ? Math.round(normalized.duration) : null,
+          cover: normalized.cover ?? null,
+          rel_path: normalized.relPath,
+        },
+      ];
+    }
+
+    // Container ids: expand via mediaFolder (walks pages up to 500 items)
+    if (id.startsWith('library:')) {
+      const folder = await this.getMediaFolder(id, 0, 1000);
+      const tracks = folder?.items?.filter((item) => item.type === FILE_TYPE_FILE) ?? [];
+      return tracks.map((item) => ({
+        playlist_id: 0,
+        position: 0,
+        audiopath: item.audiopath ?? item.id ?? '',
+        title: item.name ?? item.title ?? null,
+        artist: item.artist ?? null,
+        album: item.album ?? null,
+        duration: typeof item.duration === 'number' ? Math.round(item.duration) : null,
+        cover: null,
+        rel_path: null,
+      }));
+    }
+
+    return [];
+  }
+
+  public async addItemsToPlaylist(playlistId: number, rawId: string): Promise<number> {
+    if (!this.store.getPlaylist(playlistId)) {
+      return 0;
+    }
+    const resolved = await this.resolveAddableItems(rawId);
+    if (resolved.length === 0) {
+      return 0;
+    }
+    return this.store.appendPlaylistItems(
+      playlistId,
+      resolved.map((row) => ({
+        audiopath: row.audiopath,
+        title: row.title ?? undefined,
+        artist: row.artist ?? undefined,
+        album: row.album ?? undefined,
+        duration: typeof row.duration === 'number' ? row.duration : undefined,
+        cover: row.cover ?? undefined,
+        relPath: row.rel_path ?? undefined,
+      })),
+    );
+  }
+
+  public removePlaylistItem(playlistId: number, position: number): boolean {
+    return this.store.removePlaylistItem(playlistId, position);
+  }
+
+  public movePlaylistItem(playlistId: number, from: number, to: number): boolean {
+    return this.store.movePlaylistItem(playlistId, from, to);
+  }
+
+  private playlistEntry(row: PlaylistRow): PlaylistEntry {
+    const coverurl =
+      row.cover && row.rel_path
+        ? this.buildCoverUrlForDir(path.dirname(row.rel_path), row.cover)
+        : '';
+    return {
+      id: String(row.id),
+      name: row.name,
+      tracks: row.item_count,
+      audiopath: `library:playlist:${row.id}`,
+      coverurl,
+    };
+  }
+
+  private playlistItemToFolderItem(row: PlaylistItemRow): ContentFolderItem {
+    const dir = row.rel_path ? path.dirname(row.rel_path) : '';
+    const coverurl = row.cover && dir ? this.buildCoverUrlForDir(dir, row.cover) : '';
+    return {
+      id: row.audiopath,
+      name: row.title ?? '',
+      type: FILE_TYPE_FILE,
+      audiopath: row.audiopath,
+      coverurl,
+      artist: row.artist ?? '',
+      album: row.album ?? '',
+      duration: typeof row.duration === 'number' ? row.duration : undefined,
+      tag: 'sd',
+    };
+  }
+
   public resolveItem(audiopath: string): ContentItemMetadata | null {
     const track = this.store.findByAudiopath(audiopath);
     if (!track) {
@@ -1566,8 +1737,12 @@ function sanitizePathSegment(value: string): string {
 
 function resolveCoverExtension(format: string | undefined): '.jpg' | '.png' | '.webp' {
   const value = String(format ?? '').toLowerCase();
-  if (value.includes('png')) return '.png';
-  if (value.includes('webp')) return '.webp';
+  if (value.includes('png')) {
+    return '.png';
+  }
+  if (value.includes('webp')) {
+    return '.webp';
+  }
   return '.jpg';
 }
 

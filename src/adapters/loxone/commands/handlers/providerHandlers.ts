@@ -5,6 +5,12 @@ import {
   decodeSegment,
 } from '@/adapters/loxone/commands/utils/commandUtils';
 import { buildEmptyResponse, buildResponse } from '@/adapters/loxone/commands/responses';
+import {
+  BASE_PLAYLIST,
+  decodeLoxoneId,
+  encodeLoxoneId,
+} from '@/adapters/loxone/commands/utils/loxoneIdCodec';
+import type { ContentFolderItem } from '@/ports/ContentTypes';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import { decodeBase64Segment, safeJsonParse } from '@/adapters/loxone/commands/utils/payload';
 import { decryptWithAudioCfgKey } from '@/adapters/loxone/commands/handlers/configHandlers';
@@ -44,6 +50,40 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
       const parts = splitCommand(command);
       const service = parts[3] ?? '';
       const user = parts[4] ?? 'nouser';
+      if (service === 'lms') {
+        // URL: audio/cfg/getplaylists2/lms/<user>/<rootId>/<start>/<length>
+        // rootId = '0' → list playlists; rootId encoded → list tracks inside that playlist.
+        const rootId = parts[5] ?? '0';
+        const start = parseNumberPart(parts[6], 0);
+        const limit = parseNumberPart(parts[7], 50);
+
+        const rootDecoded = rootId && rootId !== '0' ? decodeLoxoneId(rootId) : null;
+        if (rootDecoded !== null) {
+          const playlistId = Number(rootDecoded.data);
+          if (Number.isFinite(playlistId)) {
+            const playlist = contentManager.getLocalPlaylist(playlistId);
+            const folder = await contentManager.getLocalPlaylistItems(playlistId, start, limit);
+            const tracks = (folder?.items ?? []).map((track, idx) =>
+              buildPlaylistTrackItem(track, start + idx),
+            );
+            return buildResponse(command, 'getplaylists2', [
+              {
+                id: rootId,
+                name: playlist?.name ?? '',
+                totalitems: folder?.totalitems ?? tracks.length,
+                start,
+                items: tracks,
+              },
+            ]);
+          }
+        }
+
+        const playlists = await contentManager.getPlaylists(service, user, start, limit);
+        const items = playlists.map((entry, idx) => buildPlaylistItem(entry, start + idx));
+        return buildResponse(command, 'getplaylists2', [
+          { id: rootId, name: 'Playlists', totalitems: items.length, start, items },
+        ]);
+      }
       const start = parseNumberPart(parts[5], 0);
       const limit = parseNumberPart(parts[6], 50);
       const playlists = await contentManager.getPlaylists(service, user, start, limit);
@@ -206,6 +246,53 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
       void provider?.setFollowState?.(service, user, itemId, false);
       return buildResponse(command, 'unfollow', { action: 'unfollow', id: itemId });
     },
+  };
+}
+
+export function buildPlaylistTrackItem(track: ContentFolderItem, slot: number) {
+  const audiopath = track.audiopath ?? track.id ?? '';
+  const encodedId = encodeLoxoneId(audiopath, BASE_PLAYLIST + slot);
+  const name = track.name ?? track.title ?? '';
+  return {
+    type: 2, // FileType.File
+    id: encodedId,
+    audiopath: encodedId,
+    coverurl: track.coverurl ?? '',
+    name,
+    title: name,
+    artist: track.artist ?? '',
+    album: track.album ?? '',
+    tag: 'lms',
+    uniqueId: String(audiopath),
+  };
+}
+
+function buildPlaylistItem(
+  entry: { id: string; name: string; tracks: number; audiopath: string; coverurl?: string },
+  slot: number,
+) {
+  const numericId = Number(entry.id);
+  // Encode without slot offset so the id is stable across pages and matches the
+  // id used in `playlistchanged_event` broadcasts (which the client uses to
+  // splice deleted/renamed items out of its cache).
+  const encodedId = encodeLoxoneId(Number.isFinite(numericId) ? numericId : entry.id, BASE_PLAYLIST);
+  return {
+    type: 11,
+    slot: slot + 1,
+    audiopath: encodedId,
+    coverurl: entry.coverurl ?? '',
+    id: encodedId,
+    name: entry.name,
+    title: '',
+    artist: '',
+    album: '',
+    station: '',
+    unique_id: String(numericId || entry.id),
+    audiotype: 0,
+    contentType: 'Playlists',
+    mediaType: 'playlist',
+    plus: '',
+    items: entry.tracks,
   };
 }
 

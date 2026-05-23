@@ -167,10 +167,27 @@ export class LoxoneWsNotifier {
   }
 
   /**
-   * Signals that local playlists were created, edited, or removed.
+   * Signals that local playlists were created, edited, or removed. The optional
+   * `command` field at the top level matches the reference music-server payload
+   * shape and lets the client correlate the broadcast with the original request.
    */
-  public notifyPlaylistChanged(): void {
-    this.emit({ playlistchanged_event: [] }, 'playlistchanged_event');
+  public notifyPlaylistChanged(
+    detail?: {
+      action: string;
+      playlistid: number | string;
+      audiopath?: string;
+      cmd?: string;
+      user?: string;
+      name?: string;
+    },
+    command?: string,
+  ): void {
+    const payload = detail ? [detail] : [];
+    const message: Record<string, unknown> = { playlistchanged_event: payload };
+    if (command) {
+      message.command = command;
+    }
+    this.emit(message, 'playlistchanged_event');
   }
 
   /**
