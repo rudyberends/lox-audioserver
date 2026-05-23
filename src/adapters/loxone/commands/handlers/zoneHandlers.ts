@@ -99,6 +99,13 @@ async function audioPlaylistPlay(
   fadeController: FadeControllerPort,
   command: string,
 ) {
+  // The Loxone client appends `/noshuffle` for plain play; omitted means shuffle.
+  // Mirror the audioServicePlay convention so the queue is shuffled/ordered as
+  // the user intended. Applies to all playlist sources (local and bridges).
+  const zoneIdForShuffle = parseNumberPart(splitCommand(command)[1], 0);
+  const hasNoShuffle = /\/noshuffle(?:\/|$)/i.test(command);
+  zoneManager.setPendingShuffle(zoneIdForShuffle, !hasNoShuffle);
+
   return playToZone(zoneManager, contentManager, fadeController, command, 'playlistplay', (parts) => {
     // Local library playlists arrive as `audio/<zone>/playlist/play/<encId>[/parentid/.../...][/noshuffle]`.
     // If parts[4] decodes as a Loxone-encoded id with a BASE_PLAYLIST offset, rewrite to
