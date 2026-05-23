@@ -187,7 +187,10 @@ export class ZoneManager {
           zoneId,
         });
         this.stopInputSource(zoneId);
-        this.resetZoneStateToInitial(zoneId, 'off');
+        // Preserve last-played track metadata (title/artist/album/coverurl/station) so
+        // the Loxone baustein keeps "Aktueller Sender" populated and the favorites
+        // banner stays meaningful. Only flag the zone as powered down.
+        this.applyPatch(zoneId, { powerState: 'off', mode: 'stop' }, true);
         return;
       }
       this.applyPatch(zoneId, { powerState: 'on' });
@@ -871,16 +874,6 @@ export class ZoneManager {
       return null;
     }
     return eq.bands;
-  }
-
-  private resetZoneStateToInitial(zoneId: number, powerState: 'on' | 'off'): void {
-    const ctx = this.zoneRepo.get(zoneId);
-    if (!ctx) {
-      return;
-    }
-    const initial = buildInitialState(ctx.config);
-    initial.powerState = powerState;
-    this.applyPatch(zoneId, initial, true);
   }
 
   public syncGroupMembersToLeader(leaderId: number): void {
