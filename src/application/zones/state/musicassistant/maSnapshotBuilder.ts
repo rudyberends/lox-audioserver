@@ -65,18 +65,21 @@ export function buildSnapshotPatch(inputs: SnapshotInputs): SnapshotResult | nul
 
   if (current) {
     const meta = extractMediaMeta(current);
-    patch.title = meta.title;
-    patch.artist = meta.artist;
-    patch.album = meta.album;
+    // Only apply non-empty fields: MA can emit transient frames with partial
+    // metadata (e.g. cover/audiopath populated but title/artist/album blank).
+    // Overwriting would clobber the previous good state in the Loxone audio_event.
+    if (meta.title) patch.title = meta.title;
+    if (meta.artist) patch.artist = meta.artist;
+    if (meta.album) patch.album = meta.album;
     if (meta.cover) patch.coverurl = meta.cover;
   }
 
-  const sourceName = player
-    ? pickString(player.active_source) ?? pickString(player.source) ?? pickString(player.name)
-    : null;
-  if (sourceName) {
-    patch.sourceName = sourceName;
-  }
+  // In sink + MA-output mode the bridge is the user-visible source. MA's own
+  // `active_source` / `source` / `name` fields resolve to the underlying player
+  // id (e.g. a Spotify Connect device name like "up501e2d2c8584"), which leaks
+  // into the Loxone UI as the source label. Always report "Music Assistant"
+  // here so the bridge is shown, consistent with other service bridges.
+  patch.sourceName = 'Music Assistant';
 
   let derivedDuration: number | null = null;
   const durationRaw =

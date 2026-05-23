@@ -64,9 +64,11 @@ export function extractMediaMeta(item: Record<string, unknown>): {
   cover: string;
   audiotype: number | null;
 } {
+  // Intentionally no fallback to `item.name`: on a MA player payload that field
+  // can be the player's display_name (e.g. "Music Assistant") which then leaks
+  // into the Loxone audio_event title while artist/album stay empty.
   const title =
     pickString(item.title) ??
-    pickString(item.name) ??
     pickString(item.track) ??
     pickString(item.media_title) ??
     pickString(item.track_name) ??
