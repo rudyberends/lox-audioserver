@@ -222,9 +222,17 @@ async function audioPlayUrl(
   fadeController: FadeControllerPort,
   command: string,
 ) {
-  return playToZone(zoneManager, contentManager, fadeController, command, 'playurl', (parts) =>
-    extractPayload(parts.slice(3)),
-  );
+  return playToZone(zoneManager, contentManager, fadeController, command, 'playurl', (parts) => {
+    const raw = extractPayload(parts.slice(3));
+    // Clicking a track inside a local playlist wraps the track audiopath in the
+    // Loxone-canonical id (base64url of [<audiopath>, BASE_PLAYLIST + slot]).
+    // Unwrap so the queue builder can resolve the inner library: audiopath.
+    const decoded = decodeLoxoneId(raw);
+    if (decoded && typeof decoded.data === 'string') {
+      return decoded.data;
+    }
+    return raw;
+  });
 }
 
 async function audioEqualizerSettings(
