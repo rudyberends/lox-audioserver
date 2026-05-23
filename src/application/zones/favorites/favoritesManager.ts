@@ -82,13 +82,24 @@ export class FavoritesManager {
         typeof item.service === 'string' && item.service.trim().length > 0 && item.service !== 'custom';
       const hasMeaningfulServiceType =
         typeof item.serviceType === 'number' && item.serviceType !== 3;
+      const resolvedType = resolveFavoriteType(item.type, normalizedPath);
+      const ownerString = typeof item.owner === 'string' ? item.owner : '';
+      // Loxone v2 schemas demand `ownerId` (and the alt-spelled `owner_id`) for
+      // spotify_playlist / spotify_collection favorites. Without them the client
+      // drops the item silently via `.catch(() => null).filter(Boolean)`.
+      const needsOwnerId =
+        resolvedType === 'spotify_playlist' || resolvedType === 'spotify_collection';
+      const ownerFields = needsOwnerId
+        ? { ownerId: ownerString, owner_id: ownerString }
+        : {};
       return {
         ...item,
         plus: true,
         audiopath: normalizedPath,
-        type: resolveFavoriteType(item.type, normalizedPath),
+        type: resolvedType,
         service: hasMeaningfulService ? item.service : detectedService.name,
         serviceType: hasMeaningfulServiceType ? item.serviceType : detectedService.type,
+        ...ownerFields,
       };
     });
     return {
