@@ -12,6 +12,7 @@ import {
 } from '@/engine/audioFormat';
 import { buildEqualizerFilterChain } from '@/domain/zones/equalizer';
 import { RollingBuffer } from '@/engine/rollingBuffer';
+import { SubscriberFanout } from '@/engine/subscriberFanout';
 
 export type PlaybackSource =
   | {
@@ -60,16 +61,13 @@ const FLAC_SIGNATURE = Buffer.from('fLaC', 'ascii');
 
 export class AudioSession {
   private readonly log = createLogger('Audio', 'Session');
-  private readonly subscribers = new Set<PassThrough>();
-  private readonly subscriberLabels = new Map<PassThrough, string>();
-  private subscriberCounter = 0;
+  private readonly fanout: SubscriberFanout;
   private process?: ChildProcessWithoutNullStreams;
   private ending = false;
   private readonly ffmpegPath =
     typeof ffmpegStatic === 'string' && ffmpegStatic ? ffmpegStatic : 'ffmpeg';
 
   private readonly buffer: RollingBuffer;
-  private readonly maxSubscriberLagBytes = 1024 * 1024; // guard slow clients
   private firstChunkLogged = false;
   private firstChunkPromise: Promise<boolean> | null = null;
   private firstChunkResolve: ((value: boolean) => void) | null = null;
@@ -89,8 +87,6 @@ export class AudioSession {
   private lastExitSignal: string | null = null;
   private lastExitAt: number | null = null;
   private startTs: number | null = null;
-  private subscriberDropCount = 0;
-  private lastSubscriberDropAt: number | null = null;
   private readonly sourcePreDelayMs?: number;
   private readonly isAlertSource: boolean;
   private debugTapStream?: fs.WriteStream;
@@ -109,8 +105,6 @@ export class AudioSession {
   private discardSubscribersOnStop = false;
   private restartingForEq = false;
   private stdoutPaused = false;
-  private backpressureCount = 0;
-  private readonly backpressureListeners = new Map<PassThrough, () => void>();
   private readonly pacingBps: number | null;
   private readonly pacingMaxAheadBytes: number;
   private pacingPaused = false;
@@ -168,6 +162,14 @@ export class AudioSession {
       maxBufferBytes = Math.max(maxBufferBytes, clampedAlert);
     }
     this.buffer = new RollingBuffer(maxBufferBytes, isAlertSource);
+    this.fanout = new SubscriberFanout(
+      {
+        pause: () => this.pauseStdout(),
+        resume: () => this.resumeStdout(),
+      },
+      this.log,
+      1024 * 1024,
+    );
 
     // When URL input pacing is explicitly disabled (realTime=false), ffmpeg may process finite
     // sources (e.g. Apple Music track MP4s) far ahead of wall clock time and then exit,
@@ -653,7 +655,7 @@ export class AudioSession {
         stderrAt: this.lastStderrAt ?? undefined,
         totalBytes: this.totalBytes,
         bufferedBytes: this.buffer.bytes,
-        subscribers: this.subscribers.size,
+        subscribers: this.fanout.size,
         runMs,
         earlyExit,
       });
@@ -1238,7 +1240,7 @@ export class AudioSession {
   }
 
   private resumeStdout(): void {
-    if (!this.stdoutPaused || this.backpressureCount > 0) {
+    if (!this.stdoutPaused || this.fanout.hasBackpressure()) {
       return;
     }
     if (this.directPipeMode && this.pipeSourceStream && typeof this.pipeSourceStream.resume === 'function') {
@@ -1291,7 +1293,7 @@ export class AudioSession {
     if (!this.process?.stdout) return;
     if (!this.pacingBps || this.pacingBps <= 0) return;
     if (!this.startTs) return;
-    if (this.backpressureCount > 0) return;
+    if (this.fanout.hasBackpressure()) return;
     if (this.pacingMaxAheadBytes <= 0) return;
 
     const now = Date.now();
@@ -1308,7 +1310,7 @@ export class AudioSession {
           profile: this.profile,
           overshootBytes: Math.round(overshoot),
           maxAheadBytes: this.pacingMaxAheadBytes,
-          subscribers: this.subscribers.size,
+          subscribers: this.fanout.size,
         });
       }
       this.pauseStdout();
@@ -1318,7 +1320,7 @@ export class AudioSession {
       if (!this.pacingTimer) {
         this.pacingTimer = setTimeout(() => {
           this.pacingTimer = undefined;
-          if (this.subscribers.size === 0) {
+          if (this.fanout.size === 0) {
             return;
           }
           this.pacingPaused = false;
@@ -1330,36 +1332,12 @@ export class AudioSession {
       return;
     }
 
-    if (this.pacingPaused && this.subscribers.size > 0) {
+    if (this.pacingPaused && this.fanout.size > 0) {
       this.pacingPaused = false;
       this.log.spam('ffmpeg output pacing resume', { zoneId: this.zoneId, profile: this.profile });
       this.clearPacingTimer();
       this.resumeStdout();
     }
-  }
-
-  private addBackpressure(subscriber: PassThrough): void {
-    if (this.backpressureListeners.has(subscriber)) {
-      return;
-    }
-    const onDrain = () => {
-      this.clearBackpressure(subscriber);
-    };
-    this.backpressureListeners.set(subscriber, onDrain);
-    this.backpressureCount += 1;
-    subscriber.once('drain', onDrain);
-    this.pauseStdout();
-  }
-
-  private clearBackpressure(subscriber: PassThrough): void {
-    const onDrain = this.backpressureListeners.get(subscriber);
-    if (!onDrain) {
-      return;
-    }
-    subscriber.off('drain', onDrain);
-    this.backpressureListeners.delete(subscriber);
-    this.backpressureCount = Math.max(0, this.backpressureCount - 1);
-    this.resumeStdout();
   }
 
   // ─── Two-stage PCM pipeline ────────────────────────────────────────────────
@@ -1826,70 +1804,28 @@ export class AudioSession {
     if (!this.process && !this.directPipeMode) {
       return null;
     }
-    const stream = new PassThrough({ highWaterMark: 1024 * 512 });
-    let primedBytes = 0;
     const primeWithBuffer = options.primeWithBuffer !== false;
-    const codecHeader = this.codecHeader;
     // For codec streams (FLAC), prepend the saved header so the subscriber's
     // decoder can initialize correctly even when joining mid-stream.
-    if (codecHeader && (!primeWithBuffer || !this.bufferedChunkStartsWithCodecHeader())) {
-      stream.write(codecHeader);
-      primedBytes += codecHeader.length;
-    }
-    // Prime the subscriber with buffered audio to prevent initial starvation unless disabled.
-    if (primeWithBuffer) {
-      for (const chunk of this.buffer.snapshot()) {
-        stream.write(chunk);
-        primedBytes += chunk.length;
-      }
-    }
-    this.subscribers.add(stream);
-    if (this.subscribers.size === 1) {
-      this.resumeStdout();
-    }
-    const label = options.label ?? `sub-${++this.subscriberCounter}`;
-    this.subscriberLabels.set(stream, label);
-    this.log.debug('audio subscriber attached', {
+    const includeCodecHeader =
+      this.codecHeader && (!primeWithBuffer || !this.bufferedChunkStartsWithCodecHeader());
+    return this.fanout.attach({
       zoneId: this.zoneId,
       profile: this.profile,
-      label,
       primeWithBuffer,
-      primedBytes,
-      primedMs:
-        this.profile === 'pcm' &&
-        this.outputSettings.sampleRate > 0 &&
-        this.outputSettings.channels > 0 &&
-        this.outputSettings.pcmBitDepth > 0
-          ? Math.round(
-              (primedBytes /
-                (this.outputSettings.sampleRate *
-                  this.outputSettings.channels *
-                  (this.outputSettings.pcmBitDepth / 8))) *
-                1000,
-            )
+      label: options.label,
+      codecHeader: includeCodecHeader ? this.codecHeader : null,
+      primingChunks: primeWithBuffer ? this.buffer.snapshot() : undefined,
+      pcmFrameRate:
+        this.profile === 'pcm'
+          ? {
+              sampleRate: this.outputSettings.sampleRate,
+              channels: this.outputSettings.channels,
+              bitDepth: this.outputSettings.pcmBitDepth,
+            }
           : null,
       sessionBufferedBytes: this.buffer.bytes,
-      subscriberCount: this.subscribers.size,
     });
-    const remove = () => {
-      this.clearBackpressure(stream);
-      if (this.subscribers.delete(stream)) {
-        const tag = this.subscriberLabels.get(stream);
-        this.subscriberLabels.delete(stream);
-        this.log.debug('audio subscriber detached', {
-          zoneId: this.zoneId,
-          profile: this.profile,
-          label: tag ?? label,
-          subscriberCount: this.subscribers.size,
-        });
-        if (this.subscribers.size === 0) {
-          this.pauseStdout();
-        }
-      }
-    };
-    stream.on('close', remove);
-    stream.on('error', remove);
-    return stream;
   }
 
   public getStats(): {
@@ -1910,14 +1846,14 @@ export class AudioSession {
     subscriberDrops: number;
     lastSubscriberDropAt: number | null;
     } {
-    const subscriberCount = this.subscribers.size;
+    const drops = this.fanout.drops;
     return {
       profile: this.profile,
       bps: this.lastBpsTs ? this.lastBps : null,
       bufferedBytes: this.buffer.bytes,
       totalBytes: this.totalBytes,
       lastUpdated: this.lastBpsTs || null,
-      subscribers: subscriberCount,
+      subscribers: this.fanout.size,
       restarts: this.restartAttempts,
       lastError: this.lastErrorMessage,
       lastErrorAt: this.lastErrorAt,
@@ -1926,8 +1862,8 @@ export class AudioSession {
       lastExitCode: this.lastExitCode,
       lastExitSignal: this.lastExitSignal,
       lastExitAt: this.lastExitAt,
-      subscriberDrops: this.subscriberDropCount,
-      lastSubscriberDropAt: this.lastSubscriberDropAt,
+      subscriberDrops: drops.count,
+      lastSubscriberDropAt: drops.lastAt,
     };
   }
 
@@ -1954,28 +1890,14 @@ export class AudioSession {
       this.process.stderr?.removeAllListeners();
       this.process = undefined;
     }
-    for (const [subscriber, onDrain] of this.backpressureListeners.entries()) {
-      subscriber.off('drain', onDrain);
-    }
-    this.backpressureListeners.clear();
-    this.backpressureCount = 0;
+    this.fanout.clearAllBackpressure();
     this.stdoutPaused = false;
     this.pacingPaused = false;
     // When suppressTermination is true, ffmpeg is restarting internally (restartOnFailure).
     // Keep subscribers alive so the sync stream and downstream clients (e.g. Squeezelite)
     // stay connected and receive audio from the new ffmpeg process without interruption.
     if (!suppressTermination) {
-      for (const subscriber of this.subscribers) {
-        if (subscriber.writableEnded) {
-          continue;
-        }
-        if (this.discardSubscribersOnStop) {
-          subscriber.destroy();
-        } else {
-          subscriber.end();
-        }
-      }
-      this.subscribers.clear();
+      this.fanout.endAll(this.discardSubscribersOnStop);
       this.discardSubscribersOnStop = false;
     }
     if (this.debugTapStream) {
@@ -1992,28 +1914,7 @@ export class AudioSession {
   }
 
   private writeToSubscribers(chunk: Buffer): void {
-    for (const subscriber of Array.from(this.subscribers)) {
-      if (subscriber.writableEnded) {
-        this.clearBackpressure(subscriber);
-        this.subscribers.delete(subscriber);
-        if (this.subscribers.size === 0) {
-          this.pauseStdout();
-        }
-        continue;
-      }
-      const ok = subscriber.write(chunk);
-      if (!ok) {
-        const pending = (subscriber as { _writableState?: { length?: number } })?._writableState?.length ?? 0;
-        this.addBackpressure(subscriber);
-        if (pending > this.maxSubscriberLagBytes) {
-          subscriber.destroy();
-          this.subscribers.delete(subscriber);
-          this.clearBackpressure(subscriber);
-          this.subscriberDropCount += 1;
-          this.lastSubscriberDropAt = Date.now();
-        }
-      }
-    }
+    this.fanout.write(chunk);
   }
 
   private maybeLogThroughput(): void {
@@ -2034,8 +1935,8 @@ export class AudioSession {
       profile: this.profile,
       bytesPerSec,
       bufferBytes: this.buffer.bytes,
-      subscribers: this.subscribers.size,
-      labels: Array.from(this.subscriberLabels.values()),
+      subscribers: this.fanout.size,
+      labels: this.fanout.labels(),
     });
     this.lastLogTs = now;
     this.bytesSinceLog = 0;
