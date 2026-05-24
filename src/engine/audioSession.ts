@@ -12,7 +12,11 @@ import { SubscriberFanout } from '@/engine/subscriberFanout';
 import { OutputPacer } from '@/engine/outputPacer';
 import { PcmFrameAligner } from '@/engine/pcmFrameAligner';
 import { codecPolicyForProfile, type CodecPolicy } from '@/engine/codecPolicy';
-import { runPcmBlend } from '@/engine/pcmCrossfade';
+import {
+  blendPcmStreams,
+  processStdoutChunkSource,
+  streamChunkSource,
+} from '@/engine/pcmCrossfade';
 import type { OutputProfile } from '@/ports/EngineTypes';
 import type { EngineSessionStats } from '@/ports/EnginePort';
 import { FfmpegArgBuilder, FFMPEG_LOW_LATENCY_ARGS } from '@/engine/ffmpegArgs';
@@ -720,36 +724,19 @@ export class AudioSession {
     // Keep decoder→pcmPipe intact (avoids OS-pipe stall from unpipe+resume).
     // Only disconnect pcmPipe→encoderInput so we can write blended PCM directly.
     this.pipeline.pcmPipe!.unpipe(this.pipeline.encoderInput);
-
-    // Collect old PCM from pcmPipe (decoder still writes to it as normal).
-    // Collect new PCM from the freshly-spawned decoder's stdout.
-    const oldChunks: Buffer[] = [];
-    const newChunks: Buffer[] = [];
-    let oldEnded = false;
-    let newEnded = false;
-
-    this.pipeline.pcmPipe!.on('data', (c: Buffer) => oldChunks.push(c));
-    // decoder→pcmPipe uses { end: false }, so pcmPipe never emits 'end' when the
-    // decoder exits. Watch the decoder process exit directly instead.
-    const onOldDecoderExit = () => { oldEnded = true; };
-    oldDecoder.once('exit', onOldDecoderExit);
     // Explicitly resume the backpressure chain: unpiping from encoderInput may have
-    // left pcmPipe and decoder.stdout in a paused state. Resume both to restart flow.
+    // left pcmPipe and decoder.stdout in a paused state.
     this.pipeline.pcmPipe!.resume();
     oldDecoder.stdout.resume();
-    newDecoder.stdout.on('data', (c: Buffer) => newChunks.push(c));
-    newDecoder.stdout.on('end', () => { newEnded = true; });
 
-    // Use a fixed-interval timer rather than a recursive setTimeout/drain chain.
-    // The drain-based approach silently stalls when the encoder's stdout is paused
-    // (e.g., subscriber briefly disconnected). setInterval always fires regardless
-    // of downstream backpressure; we intentionally ignore write backpressure here
-    // since the PCM trickles in at real-time rate (~1.76 KB per 10 ms tick).
-    const { framesProcessed, newRem } = await runPcmBlend(oldChunks, newChunks, {
+    // Old PCM arrives on pcmPipe but the *end* signal must come from the decoder's
+    // process exit (decoder→pcmPipe uses { end: false }, so pcmPipe never emits 'end').
+    const oldSource = processStdoutChunkSource(oldDecoder, this.pipeline.pcmPipe!);
+    const newSource = processStdoutChunkSource(newDecoder);
+
+    const { framesProcessed, newRem } = await blendPcmStreams(oldSource, newSource, {
       channels: this.outputSettings.channels,
       totalFrames,
-      getOldEnded: () => oldEnded,
-      getNewEnded: () => newEnded,
       onBlendedFrame: (blended) => { this.pipeline.encoderInput?.write(blended); },
       log: this.log,
       logContext: { zoneId: this.zoneId },
@@ -757,12 +744,10 @@ export class AudioSession {
 
     // Crossfade complete — transition to new decoder only.
     this.crossfadeActive = false;
-    // Remove all exit/error listeners before killing so the old decoder's exit does
+    // Remove old decoder's process-level listeners before killing so its exit does
     // NOT call encoderInput.end() (which would prematurely terminate the encoder).
-    oldDecoder.off('exit', onOldDecoderExit);
     oldDecoder.removeAllListeners('exit');
     oldDecoder.removeAllListeners('error');
-    this.pipeline.pcmPipe!.removeAllListeners('data');
     // Disconnect old decoder from old pcmPipe, then kill it.
     oldDecoder.stdout.unpipe(this.pipeline.pcmPipe!);
     oldDecoder.kill('SIGTERM');
@@ -835,25 +820,16 @@ export class AudioSession {
     if (this.stdoutPaused) this.resumeStdout();
 
     this.pipeline.pcmPipe.unpipe(this.pipeline.encoderInput);
-
-    const oldChunks: Buffer[] = [];
-    const newChunks: Buffer[] = [];
-    let oldEnded = false;
-    let newEnded = false;
-
-    this.pipeline.pcmPipe.on('data', (c: Buffer) => oldChunks.push(c));
-    const onOldEnd = () => { oldEnded = true; };
-    oldPipeStream.once('end', onOldEnd);
     this.pipeline.pcmPipe.resume();
 
-    newSourceStream.on('data', (c: Buffer) => newChunks.push(c));
-    newSourceStream.once('end', () => { newEnded = true; });
+    // Old PCM arrives on pcmPipe but the end-signal must come from the upstream
+    // pipe source (librespot's stream); pcmPipe itself uses { end: false } piping.
+    const oldSource = streamChunkSource(oldPipeStream);
+    const newSource = streamChunkSource(newSourceStream);
 
-    const { framesProcessed, newRem } = await runPcmBlend(oldChunks, newChunks, {
+    const { framesProcessed, newRem } = await blendPcmStreams(oldSource, newSource, {
       channels: this.outputSettings.channels,
       totalFrames,
-      getOldEnded: () => oldEnded,
-      getNewEnded: () => newEnded,
       onBlendedFrame: (blended) => this.pipeline.encoderInput?.write(blended),
       log: this.log,
       logContext: { zoneId: this.zoneId },
@@ -861,7 +837,6 @@ export class AudioSession {
 
     this.crossfadeActive = false;
 
-    oldPipeStream.off('end', onOldEnd);
     this.pipeline.pcmPipe.removeAllListeners('data');
     this.pipeSource.detach(this.pipeline.pcmPipe);
 
@@ -950,25 +925,13 @@ export class AudioSession {
     // session; we add a private collector below for the duration of the blend.
     this.pipeSource.detach();
 
-    const oldChunks: Buffer[] = [];
-    const newChunks: Buffer[] = [];
-    let oldEnded = false;
-    let newEnded = false;
-
-    const onOldData = (c: Buffer) => oldChunks.push(c);
-    const onOldEnd = () => { oldEnded = true; };
-    oldStream.on('data', onOldData);
-    oldStream.once('end', onOldEnd);
+    const oldSource = streamChunkSource(oldStream);
+    const newSource = streamChunkSource(newSourceStream);
     oldStream.resume();
 
-    newSourceStream.on('data', (c: Buffer) => newChunks.push(c));
-    newSourceStream.once('end', () => { newEnded = true; });
-
-    const { framesProcessed, newRem } = await runPcmBlend(oldChunks, newChunks, {
+    const { framesProcessed, newRem } = await blendPcmStreams(oldSource, newSource, {
       channels: this.outputSettings.channels,
       totalFrames,
-      getOldEnded: () => oldEnded,
-      getNewEnded: () => newEnded,
       onBlendedFrame: (blended) => {
         this.buffer.push(blended);
         this.writeToSubscribers(blended);
@@ -979,9 +942,6 @@ export class AudioSession {
 
     this.crossfadeActive = false;
     this.directPipeMode = false;
-
-    oldStream.off('data', onOldData);
-    oldStream.off('end', onOldEnd);
 
     if (newRem.length) {
       this.buffer.push(newRem);

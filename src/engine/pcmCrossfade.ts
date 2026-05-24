@@ -1,3 +1,71 @@
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+
+/**
+ * A PCM-emitting source seen from the blender's point of view. Implementations
+ * differ in *what* signals "ended" (decoder process exit, stream `end` event,
+ * stalled-and-silent), but the blender only sees an `isEnded()` predicate plus
+ * data via a `chunks` array filled by the attached listener.
+ */
+export interface PcmChunkSource {
+  /** Listener that pushes incoming PCM chunks into the supplied array. */
+  attach(chunks: Buffer[]): void;
+  /** Remove the data listener and any ended-tracking listeners. */
+  detach(): void;
+  /** True when the source has signalled completion (stream end / process exit). */
+  isEnded(): boolean;
+}
+
+/**
+ * Adopts a Readable stream; `isEnded()` flips when the stream emits `end`.
+ * Used when the source's lifetime is governed by the stream itself
+ * (pipe-source from librespot, fade-in pipe stream).
+ */
+export function streamChunkSource(stream: NodeJS.ReadableStream): PcmChunkSource {
+  let ended = false;
+  let data: ((chunk: Buffer) => void) | undefined;
+  const onEnd = () => { ended = true; };
+  return {
+    attach(chunks: Buffer[]): void {
+      data = (chunk: Buffer) => chunks.push(chunk);
+      stream.on('data', data);
+      stream.once('end', onEnd);
+    },
+    detach(): void {
+      if (data) stream.off('data', data);
+      stream.off('end', onEnd);
+      data = undefined;
+    },
+    isEnded: () => ended,
+  };
+}
+
+/**
+ * Adopts a child process's stdout; `isEnded()` flips when the *process* exits.
+ * Used when stdout is piped with `{ end: false }`, so the stream's `end` event
+ * never fires — the decoder exit is the only reliable end-signal.
+ */
+export function processStdoutChunkSource(
+  proc: ChildProcessWithoutNullStreams,
+  stream: NodeJS.ReadableStream = proc.stdout,
+): PcmChunkSource {
+  let ended = false;
+  let data: ((chunk: Buffer) => void) | undefined;
+  const onExit = () => { ended = true; };
+  return {
+    attach(chunks: Buffer[]): void {
+      data = (chunk: Buffer) => chunks.push(chunk);
+      stream.on('data', data);
+      proc.once('exit', onExit);
+    },
+    detach(): void {
+      if (data) stream.off('data', data);
+      proc.off('exit', onExit);
+      data = undefined;
+    },
+    isEnded: () => ended,
+  };
+}
+
 export interface PcmBlendLogger {
   debug(message: string, context?: Record<string, unknown>): void;
   warn(message: string, context?: Record<string, unknown>): void;
@@ -148,4 +216,44 @@ export async function runPcmBlend(
   });
 
   return { framesProcessed, newRem };
+}
+
+export interface BlendStreamsOptions {
+  channels: number;
+  /** Linear-ramp length in PCM frames. */
+  totalFrames: number;
+  onBlendedFrame: (blended: Buffer) => void;
+  log: PcmBlendLogger;
+  logContext: Record<string, unknown>;
+}
+
+/**
+ * Orchestrate a PCM crossfade between two `PcmChunkSource`s. Wires data
+ * collectors, runs `runPcmBlend`, then guarantees the sources are detached
+ * even on error. Returns framesProcessed plus any leftover new-source PCM
+ * that arrived during the final tick (callers may want to forward it).
+ */
+export async function blendPcmStreams(
+  oldSource: PcmChunkSource,
+  newSource: PcmChunkSource,
+  options: BlendStreamsOptions,
+): Promise<{ framesProcessed: number; newRem: Buffer }> {
+  const oldChunks: Buffer[] = [];
+  const newChunks: Buffer[] = [];
+  oldSource.attach(oldChunks);
+  newSource.attach(newChunks);
+  try {
+    return await runPcmBlend(oldChunks, newChunks, {
+      channels: options.channels,
+      totalFrames: options.totalFrames,
+      getOldEnded: () => oldSource.isEnded(),
+      getNewEnded: () => newSource.isEnded(),
+      onBlendedFrame: options.onBlendedFrame,
+      log: options.log,
+      logContext: options.logContext,
+    });
+  } finally {
+    oldSource.detach();
+    newSource.detach();
+  }
 }
