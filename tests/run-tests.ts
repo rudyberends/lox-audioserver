@@ -29,6 +29,8 @@ import './sourceResolver.test';
 import './beolinkStateController.test';
 import './externalStateRouter.test';
 import './equalizerRestartScheduler.test';
+import './zoneHeartbeatService.test';
+import './inputSourceConfigurator.test';
 import './audioManager.playbackPreDelay.test';
 import './sendspinLineInService.test';
 import './powerManager.test';
