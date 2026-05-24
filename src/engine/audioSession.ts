@@ -22,6 +22,7 @@ import type { EngineSessionStats } from '@/ports/EnginePort';
 import { FfmpegArgBuilder, FFMPEG_LOW_LATENCY_ARGS } from '@/engine/ffmpegArgs';
 import { PipeSourceAdapter } from '@/engine/pipeSourceAdapter';
 import { TwoStagePipeline } from '@/engine/twoStagePipeline';
+import { FirstChunkBarrier } from '@/engine/firstChunkBarrier';
 
 export type { OutputProfile };
 
@@ -74,10 +75,7 @@ export class AudioSession {
   private readonly ffmpegPath = FFMPEG_BINARY;
 
   private readonly buffer: RollingBuffer;
-  private firstChunkLogged = false;
-  private firstChunkPromise: Promise<boolean> | null = null;
-  private firstChunkResolve: ((value: boolean) => void) | null = null;
-  private chainedFirstChunkResolve: ((value: boolean) => void) | null = null;
+  private readonly firstChunk = new FirstChunkBarrier();
   private bytesSinceLog = 0;
   private lastLogTs = 0;
   private totalBytes = 0;
@@ -227,19 +225,7 @@ export class AudioSession {
     this.bytesSinceLog = 0;
     this.lastLogTs = 0;
     this.totalBytes = 0;
-    this.firstChunkLogged = false;
-    const chainedResolve = this.chainedFirstChunkResolve;
-    this.chainedFirstChunkResolve = null;
-    this.firstChunkPromise = new Promise((resolve) => {
-      if (chainedResolve) {
-        this.firstChunkResolve = (ok: boolean) => {
-          resolve(ok);
-          chainedResolve(ok);
-        };
-      } else {
-        this.firstChunkResolve = resolve;
-      }
-    });
+    this.firstChunk.arm();
     this.log.info('audio session buffer config', {
       zoneId: this.zoneId,
       maxBufferBytes: this.buffer.capacity,
@@ -342,12 +328,7 @@ export class AudioSession {
         this.recordBytes(chunk.length);
         return;
       }
-      if (!this.firstChunkLogged) {
-        this.firstChunkLogged = true;
-        if (this.firstChunkResolve) {
-          this.firstChunkResolve(true);
-          this.firstChunkResolve = null;
-        }
+      if (this.firstChunk.signal()) {
         this.log.info('direct pipe first chunk', {
           zoneId: this.zoneId,
           profile: this.profile,
@@ -558,12 +539,7 @@ export class AudioSession {
             this.maybeApplyOutputPacing();
             return;
           }
-          if (!this.firstChunkLogged) {
-            this.firstChunkLogged = true;
-            if (this.firstChunkResolve) {
-              this.firstChunkResolve(true);
-              this.firstChunkResolve = null;
-            }
+          if (this.firstChunk.signal()) {
             if (options.logFirstChunk !== false) {
               const now = Date.now();
               this.log.info('ffmpeg first chunk', {
@@ -1133,25 +1109,12 @@ export class AudioSession {
     this.process.terminate();
   }
 
-  public async waitForFirstChunk(timeoutMs = 2000): Promise<boolean> {
-    if (this.firstChunkLogged) {
-      return true;
-    }
-    const pending = this.firstChunkPromise;
-    if (!pending) {
-      return false;
-    }
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(false), timeoutMs);
-      void pending.then((ok) => {
-        clearTimeout(timer);
-        resolve(ok);
-      });
-    });
+  public waitForFirstChunk(timeoutMs = 2000): Promise<boolean> {
+    return this.firstChunk.wait(timeoutMs);
   }
 
   public hasFirstChunk(): boolean {
-    return this.firstChunkLogged;
+    return this.firstChunk.hasFired();
   }
 
   public createSubscriber(options: { primeWithBuffer?: boolean; label?: string } = {}): PassThrough | null {
@@ -1211,15 +1174,13 @@ export class AudioSession {
     this.pacer.reset();
     this.pipeSource.detach(this.pipeline.pcmPipe);
     this.directPipeMode = false;
-    if (suppressTermination && this.firstChunkResolve) {
-      // ffmpeg is restarting; chain existing waiters to the next promise so the position
-      // ticker does not start prematurely before the restarted process produces output.
-      this.chainedFirstChunkResolve = this.firstChunkResolve;
-    } else if (this.firstChunkResolve) {
-      this.firstChunkResolve(false);
+    if (suppressTermination) {
+      // ffmpeg is restarting; chain existing waiters to the next arm() cycle so the
+      // position ticker does not start prematurely before the restarted process produces output.
+      this.firstChunk.chainRestart();
+    } else {
+      this.firstChunk.abort();
     }
-    this.firstChunkResolve = null;
-    this.firstChunkPromise = null;
     if (this.process) {
       this.process.detach();
       this.process = undefined;
