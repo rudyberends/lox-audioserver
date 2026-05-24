@@ -4,13 +4,9 @@ import { PassThrough } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import { FFMPEG_BINARY, FfmpegProcess } from '@/engine/ffmpegProcess';
 import {
-  audioResampler,
   mp3BitrateToBps,
-  pcmCodecFromBitDepth,
-  pcmFormatFromBitDepth,
   type AudioOutputSettings,
 } from '@/engine/audioFormat';
-import { buildEqualizerFilterChain } from '@/domain/zones/equalizer';
 import { RollingBuffer } from '@/engine/rollingBuffer';
 import { SubscriberFanout } from '@/engine/subscriberFanout';
 import { OutputPacer } from '@/engine/outputPacer';
@@ -19,6 +15,7 @@ import { codecPolicyForProfile, type CodecPolicy } from '@/engine/codecPolicy';
 import { runPcmBlend } from '@/engine/pcmCrossfade';
 import type { OutputProfile } from '@/ports/EngineTypes';
 import type { EngineSessionStats } from '@/ports/EnginePort';
+import { FfmpegArgBuilder, FFMPEG_LOW_LATENCY_ARGS } from '@/engine/ffmpegArgs';
 
 export type { OutputProfile };
 
@@ -91,7 +88,6 @@ export class AudioSession {
   private lastExitAt: number | null = null;
   private startTs: number | null = null;
   private readonly sourcePreDelayMs?: number;
-  private readonly isAlertSource: boolean;
   private debugTapStream?: fs.WriteStream;
   private pipeSourceStream?: NodeJS.ReadableStream;
   private pipeSourceDataListener?: (chunk: Buffer) => void;
@@ -112,6 +108,7 @@ export class AudioSession {
   // which results in loud noise (misaligned sample boundaries).
   private readonly pcmAligner: PcmFrameAligner | null;
   private readonly codec: CodecPolicy;
+  private readonly args: FfmpegArgBuilder;
   // For codec streams (FLAC, etc.), store the initial header so new subscribers
   // joining mid-stream can initialize their decoders correctly.
   private codecHeader: Buffer | null = null;
@@ -138,7 +135,6 @@ export class AudioSession {
       this.source.kind === 'file' &&
       typeof this.source.path === 'string' &&
       this.source.path.includes('/alerts/');
-    this.isAlertSource = isAlertSource;
     const alertBufferBytes = isAlertSource
       ? Math.round(
           (alertPrebufferMs / 1000) *
@@ -199,6 +195,13 @@ export class AudioSession {
         ? new PcmFrameAligner(this.outputSettings.channels, this.outputSettings.pcmBitDepth)
         : null;
     this.codec = codecPolicyForProfile(this.profile);
+    this.args = new FfmpegArgBuilder(
+      this.source,
+      this.profile,
+      this.outputSettings,
+      isAlertSource,
+      this.sourcePreDelayMs,
+    );
   }
 
   private alignPcmChunk(chunk: Buffer): Buffer | null {
@@ -400,7 +403,7 @@ export class AudioSession {
     // format, ffmpeg still runs an analyze phase that buffers ~1.1 s of PCM before
     // producing any output. Setting analyzeduration=0 reduces that to ~50 ms.
     const inputArgs = [
-      ...this.buildLowLatencyArgs(),
+      ...FFMPEG_LOW_LATENCY_ARGS,
       ...(paceInput ? ['-re'] : []),
       '-f', fmt,
       '-ar', String(sr),
@@ -408,9 +411,9 @@ export class AudioSession {
       '-i', 'pipe:0',
     ];
     const args = [
-      '-hide_banner', '-loglevel', this.getLogLevel(),
+      '-hide_banner', '-loglevel', this.args.getLogLevel(),
       ...inputArgs,
-      ...this.buildOutputArgs(),
+      ...this.args.buildOutputArgs(this.equalizerBands),
       'pipe:1',
     ];
 
@@ -520,9 +523,9 @@ export class AudioSession {
    */
   private startSingleStage(): void {
     const args = [
-      '-hide_banner', '-loglevel', this.getLogLevel(),
-      ...this.buildInputArgs(),
-      ...this.buildOutputArgs(),
+      '-hide_banner', '-loglevel', this.args.getLogLevel(),
+      ...this.args.buildInputArgs(),
+      ...this.args.buildOutputArgs(this.equalizerBands),
       'pipe:1',
     ];
 
@@ -709,7 +712,7 @@ export class AudioSession {
     const totalFrames = Math.round(durationSec * sampleRate);
 
     // Spawn new decoder for the incoming track.
-    const newDecoderArgs = this.buildPcmDecoderArgsForSource(fadeIn);
+    const newDecoderArgs = this.args.buildPcmDecoderArgsForSource(fadeIn);
     const newDecoder = spawn(this.ffmpegPath, newDecoderArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
     }) as ChildProcessWithoutNullStreams;
@@ -831,7 +834,7 @@ export class AudioSession {
     if (fadeIn.kind === 'pipe') {
       newSourceStream = fadeIn.stream;
     } else {
-      newDecoder = spawn(this.ffmpegPath, this.buildPcmDecoderArgsForSource(fadeIn), {
+      newDecoder = spawn(this.ffmpegPath, this.args.buildPcmDecoderArgsForSource(fadeIn), {
         stdio: ['pipe', 'pipe', 'pipe'],
       }) as ChildProcessWithoutNullStreams;
       newDecoder.stderr?.on('data', (c: Buffer) => {
@@ -946,7 +949,7 @@ export class AudioSession {
     if (fadeIn.kind === 'pipe') {
       newSourceStream = fadeIn.stream;
     } else {
-      newDecoder = spawn(this.ffmpegPath, this.buildPcmDecoderArgsForSource(fadeIn), {
+      newDecoder = spawn(this.ffmpegPath, this.args.buildPcmDecoderArgsForSource(fadeIn), {
         stdio: ['pipe', 'pipe', 'pipe'],
       }) as ChildProcessWithoutNullStreams;
       newDecoder.stderr?.on('data', (c: Buffer) => {
@@ -1061,29 +1064,6 @@ export class AudioSession {
     return true;
   }
 
-  private getLogLevel(): string {
-    if (this.source.kind === 'url' && this.source.logLevel) {
-      return this.source.logLevel;
-    }
-    return 'error';
-  }
-
-  // All three flags are required for truly low-latency pipe/stream sources:
-  //   -fflags nobuffer      – disable ffmpeg's input read-ahead buffer
-  //   -probesize 32k        – limit format probing to 32 KB (default 5 MB)
-  //   -analyzeduration 0    – skip the stream analysis phase entirely
-  // Even when the input format is explicitly specified with -f, ffmpeg still runs an
-  // analyze phase that reads ~200 KB (~1.1 s of 44.1 kHz stereo PCM) before producing
-  // any output. -fflags nobuffer alone does NOT suppress this — analyzeduration=0 is
-  // required to reduce the startup delay to ~50 ms.
-  private buildLowLatencyArgs(): string[] {
-    return ['-fflags', 'nobuffer', '-probesize', '32k', '-analyzeduration', '0'];
-  }
-
-  private buildBufferedArgs(): string[] {
-    return ['-probesize', '256k', '-analyzeduration', '1M'];
-  }
-
   private pauseStdout(): void {
     // Never pause the encoder during an active PCM crossfade blend — the blend loop
     // writes directly to encoderInput and must not be blocked by subscriber backpressure.
@@ -1155,118 +1135,6 @@ export class AudioSession {
 
   // ─── Two-stage PCM pipeline ────────────────────────────────────────────────
 
-  /** Args for decoder FFmpeg: source → PCM s16le at target sample-rate/channels. */
-  private buildPcmDecoderArgs(): string[] {
-    const { sampleRate, channels } = this.outputSettings;
-    const pcmOut = [
-      '-vn', '-acodec', 'pcm_s16le',
-      '-ar', String(sampleRate), '-ac', String(channels),
-      '-f', 's16le', 'pipe:1',
-    ];
-    const log = ['-hide_banner', '-loglevel', this.getLogLevel()];
-
-    if (this.source.kind === 'file') {
-      const loopArgs = this.source.loop ? ['-stream_loop', '-1'] : [];
-      const latencyArgs = this.isAlertSource ? this.buildBufferedArgs() : this.buildLowLatencyArgs();
-      const realTimeArgs = this.source.realTime !== false ? ['-re'] : [];
-      const seekArgs = this.buildSeekArgs(this.source.startAtSec);
-      return [...log, ...latencyArgs, ...loopArgs, ...realTimeArgs, ...seekArgs, '-i', this.source.path, ...pcmOut];
-    }
-
-    if (this.source.kind === 'url') {
-      const lowLatency = this.source.lowLatency !== false;
-      const headerLines = this.source.headers ? this.formatHeaders(this.source.headers) : '';
-      const headerArgs = headerLines ? ['-headers', headerLines] : [];
-      const decryptionArgs = this.source.decryptionKey ? ['-decryption_key', this.source.decryptionKey] : [];
-      const needsTls = Boolean(this.source.tlsVerifyHost && /^https:/i.test(this.source.url));
-      const tlsArgs = needsTls ? ['-tls_verify', '0', '-verifyhost', this.source.tlsVerifyHost!] : [];
-      const inputFormatArgs = this.source.inputFormat ? ['-f', this.source.inputFormat] : [];
-      const realTimeArgs = this.source.realTime !== false ? ['-re'] : [];
-      const seekArgs = this.buildSeekArgs(this.source.startAtSec);
-      return [
-        ...log,
-        ...(lowLatency ? this.buildLowLatencyArgs() : this.buildBufferedArgs()),
-        '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
-        ...tlsArgs, ...decryptionArgs, ...headerArgs, ...inputFormatArgs,
-        ...realTimeArgs, ...seekArgs, '-i', this.source.url,
-        ...pcmOut,
-      ];
-    }
-
-    return [];
-  }
-
-  /** Args for decoder FFmpeg for an arbitrary fade-in source (used during crossfade). */
-  private buildPcmDecoderArgsForSource(
-    source: { kind: 'file'; path: string } | { kind: 'url'; url: string; headers?: Record<string, string>; decryptionKey?: string },
-  ): string[] {
-    const { sampleRate, channels } = this.outputSettings;
-    const pcmOut = ['-vn', '-acodec', 'pcm_s16le', '-ar', String(sampleRate), '-ac', String(channels), '-f', 's16le', 'pipe:1'];
-    const log = ['-hide_banner', '-loglevel', this.getLogLevel()];
-
-    if (source.kind === 'file') {
-      return [...log, ...this.buildLowLatencyArgs(), '-re', '-i', source.path, ...pcmOut];
-    }
-
-    const headerLines = source.headers ? this.formatHeaders(source.headers) : '';
-    const headerArgs = headerLines ? ['-headers', headerLines] : [];
-    const decryptionArgs = source.decryptionKey ? ['-decryption_key', source.decryptionKey] : [];
-    return [
-      ...log, ...this.buildLowLatencyArgs(),
-      '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
-      ...decryptionArgs, ...headerArgs, '-re', '-i', source.url,
-      ...pcmOut,
-    ];
-  }
-
-  /** Args for encoder FFmpeg: PCM s16le from stdin → output profile. */
-  private buildPcmEncoderArgs(): string[] {
-    const { sampleRate, channels, pcmBitDepth, mp3Bitrate, fixedGainDb } = this.outputSettings;
-    // -fflags nobuffer / -analyzeduration 0: without these, FFmpeg buffers ~5 s of raw
-    // PCM from pipe:0 before producing its first output frame (probing raw input).
-    // Since we fully specify the format, probing is unnecessary and wastes startup time.
-    const pcmIn = [
-      '-fflags', 'nobuffer', '-probesize', '32', '-analyzeduration', '0',
-      '-f', 's16le', '-ar', String(sampleRate), '-ac', String(channels), '-i', 'pipe:0',
-    ];
-
-    const filters: string[] = [];
-    if (this.sourcePreDelayMs && this.sourcePreDelayMs > 0) {
-      filters.push(`adelay=delays=${this.sourcePreDelayMs}:all=1`);
-    }
-    if (Number.isFinite(fixedGainDb) && fixedGainDb !== 0) {
-      filters.push(`volume=${fixedGainDb}dB`);
-    }
-    const filterArgs = filters.length ? ['-af', filters.join(',')] : [];
-    const log = ['-hide_banner', '-loglevel', this.getLogLevel()];
-    const base = [...log, ...pcmIn, ...filterArgs];
-
-    switch (this.profile) {
-      case 'flac':
-        return [...base, '-acodec', 'flac', '-compression_level', '0', '-frame_size', '512',
-          '-ar', String(sampleRate), '-ac', String(channels), '-f', 'flac', 'pipe:1'];
-      case 'aac': {
-        const br = mp3Bitrate || '160k';
-        return [...base, '-acodec', 'aac', '-ar', String(sampleRate), '-ac', String(channels), '-b:a', br, '-f', 'adts', 'pipe:1'];
-      }
-      case 'pcm': {
-        const codec = pcmCodecFromBitDepth(pcmBitDepth);
-        const fmt = pcmFormatFromBitDepth(pcmBitDepth);
-        return [...base, '-acodec', codec, '-ar', String(sampleRate), '-ac', String(channels), '-f', fmt, 'pipe:1'];
-      }
-      case 'opus': {
-        const br = mp3Bitrate || '160k';
-        return [...base, '-acodec', 'libopus', '-application', 'audio', '-b:a', br,
-          '-ar', String(sampleRate), '-ac', String(channels), '-f', 'opus', 'pipe:1'];
-      }
-      case 'mp3':
-      default: {
-        const br = mp3Bitrate || '320k';
-        return [...base, '-acodec', 'libmp3lame', '-ar', String(sampleRate), '-ac', String(channels), '-b:a', br, '-f', 'mp3', 'pipe:1'];
-      }
-    }
-  }
-
   /**
    * Starts the session as a two-stage PCM pipeline:
    *   Decoder FFmpeg (source → s16le PCM) → pcmPipe → encoderInput → Encoder FFmpeg (PCM → output)
@@ -1280,7 +1148,7 @@ export class AudioSession {
     this.startTs = Date.now();
 
     // ── Decoder ──────────────────────────────────────────────────────────────
-    const decoderArgs = this.buildPcmDecoderArgs();
+    const decoderArgs = this.args.buildPcmDecoderArgs();
     this.log.debug('spawning ffmpeg (decoder)', { zoneId: this.zoneId, args: decoderArgs, profile: this.profile });
 
     const decoderProc = spawn(this.ffmpegPath, decoderArgs, {
@@ -1309,7 +1177,7 @@ export class AudioSession {
     });
 
     // ── Encoder ──────────────────────────────────────────────────────────────
-    const encoderArgs = this.buildPcmEncoderArgs();
+    const encoderArgs = this.args.buildPcmEncoderArgs();
     this.log.debug('spawning ffmpeg (encoder)', { zoneId: this.zoneId, args: encoderArgs, profile: this.profile });
 
     const encoderProc = this.spawnFfmpeg(encoderArgs, {
@@ -1318,229 +1186,6 @@ export class AudioSession {
     });
     this.process = encoderProc;
     this.restartAttempts = 0;
-  }
-
-  // ─── (end two-stage) ───────────────────────────────────────────────────────
-
-  private buildInputArgs(): string[] {
-    if (this.source.kind === 'url') {
-      const lowLatency = this.source.lowLatency !== false;
-      const headerLines = this.source.headers ? this.formatHeaders(this.source.headers) : '';
-      const headerArgs = headerLines ? ['-headers', headerLines] : [];
-      const decryptionArgs = this.source.decryptionKey ? ['-decryption_key', this.source.decryptionKey] : [];
-      const needsTlsVerifyHost = Boolean(this.source.tlsVerifyHost && /^https:/i.test(this.source.url));
-      const tlsArgs = needsTlsVerifyHost ? ['-tls_verify', '0', '-verifyhost', this.source.tlsVerifyHost!] : [];
-      const inputFormatArgs = this.source.inputFormat ? ['-f', this.source.inputFormat] : [];
-      // When URL input pacing is disabled (`realTime=false`), we rely on output backpressure to prevent
-      // ffmpeg from running far ahead and exiting early on finite sources (e.g. Apple Music track MP4s).
-      // That backpressure is computed using output bitrate; FLAC is variable so we can't pace it reliably
-      // that way. For FLAC, force `-re` even when `realTime=false` to keep ffmpeg aligned with wall clock.
-      const realtimeArgs =
-        this.source.realTime === true || (this.source.realTime === false && this.profile === 'flac')
-          ? ['-re']
-          : [];
-      const seekArgs = this.buildSeekArgs(this.source.startAtSec);
-      return [
-        ...(lowLatency ? this.buildLowLatencyArgs() : this.buildBufferedArgs()),
-        '-reconnect',
-        '1',
-        '-reconnect_streamed',
-        '1',
-        '-reconnect_delay_max',
-        '5',
-        ...tlsArgs,
-        ...decryptionArgs,
-        ...headerArgs,
-        ...inputFormatArgs,
-        ...realtimeArgs,
-        ...seekArgs,
-        '-i',
-        this.source.url,
-      ];
-    }
-
-    if (this.source.kind === 'pipe') {
-      const sampleRate = this.source.sampleRate ?? this.outputSettings.sampleRate;
-      const channels = this.source.channels ?? this.outputSettings.channels;
-      const format = this.source.format ?? 's16le';
-      const paceInput = this.source.realTime !== false;
-      return [
-        ...this.buildLowLatencyArgs(),
-        ...(paceInput ? ['-re'] : []),
-        '-f',
-        format,
-        '-ar',
-        String(sampleRate),
-        '-ac',
-        String(channels),
-        '-i',
-        this.source.path,
-      ];
-    }
-
-    const inputs: string[] = [];
-    const loopArgs = this.source.loop ? ['-stream_loop', '-1'] : [];
-    const inputLatencyArgs = this.isAlertSource ? this.buildBufferedArgs() : this.buildLowLatencyArgs();
-    // Pace file sources in real-time so downstream outputs (e.g., Snapcast) don’t get flooded.
-    const paceInput = this.source.realTime !== false;
-    const realTimeArgs = paceInput ? ['-re'] : [];
-    const seekArgs = this.buildSeekArgs(this.source.startAtSec);
-    inputs.push(...inputLatencyArgs, ...loopArgs, ...realTimeArgs, ...seekArgs, '-i', this.source.path);
-    return inputs;
-  }
-
-  private buildSeekArgs(startAtSec?: number): string[] {
-    if (!Number.isFinite(startAtSec)) {
-      return [];
-    }
-    const safe = Math.max(0, startAtSec ?? 0);
-    if (safe <= 0) {
-      return [];
-    }
-    return ['-ss', String(safe)];
-  }
-
-  private formatHeaders(headers: Record<string, string>): string {
-    const lines = Object.entries(headers)
-      .filter(([, value]) => typeof value === 'string' && value.length > 0)
-      .map(([key, value]) => `${key}: ${value}`);
-    if (!lines.length) {
-      return '';
-    }
-    return `${lines.join('\r\n')}\r\n`;
-  }
-
-  private buildOutputArgs(): string[] {
-    const { sampleRate, channels, pcmBitDepth, mp3Bitrate, fixedGainDb } = this.outputSettings;
-    const buildFilterArgs = (): { filterArgs: string[] } => {
-      const filters: string[] = [];
-      const pipeSourceSampleRate =
-        this.source.kind === 'pipe' ? this.source.sampleRate ?? this.outputSettings.sampleRate : null;
-      const pipeSourceChannels =
-        this.source.kind === 'pipe' ? this.source.channels ?? this.outputSettings.channels : null;
-      const pipeSourceFormat = this.source.kind === 'pipe' ? this.source.format ?? 's16le' : null;
-      const canBypassResampleForPipe =
-        (this.profile === 'pcm' || this.profile === 'flac') &&
-        this.source.kind === 'pipe' &&
-        pipeSourceFormat === 's16le' &&
-        pipeSourceSampleRate === this.outputSettings.sampleRate &&
-        pipeSourceChannels === this.outputSettings.channels;
-
-      if (this.sourcePreDelayMs && this.sourcePreDelayMs > 0) {
-        const delayMs = Math.max(0, Math.round(this.sourcePreDelayMs));
-        filters.push(`adelay=delays=${delayMs}:all=1`);
-      }
-      if (Number.isFinite(fixedGainDb) && fixedGainDb !== 0) {
-        filters.push(`volume=${fixedGainDb}dB`);
-      }
-      if (audioResampler.name === 'soxr' && !canBypassResampleForPipe) {
-        // For live pipe inputs (e.g. librespot), ffmpeg's async resampling can build up
-        // noticeable startup latency before first output chunk. Keep resampling enabled
-        // but disable async clock correction for pipe sources.
-        const asyncPart = this.source.kind === 'pipe' ? '' : ':async=1';
-        filters.push(
-          `aresample=resampler=soxr:precision=${audioResampler.precision}:cutoff=${audioResampler.cutoff}${asyncPart}`,
-        );
-      }
-
-      // Apply built-in 10-band EQ at the output sample rate, after resampling.
-      const eqChain = buildEqualizerFilterChain(this.equalizerBands);
-      if (eqChain) {
-        filters.push(eqChain);
-      }
-
-      return { filterArgs: filters.length ? ['-af', filters.join(',')] : [] };
-    };
-
-    const { filterArgs } = buildFilterArgs();
-    switch (this.profile) {
-      case 'aac': {
-        const bitrate = mp3Bitrate || '160k';
-        return [
-          '-vn',
-          '-acodec',
-          'aac',
-          '-ar',
-          String(sampleRate),
-          '-ac',
-          String(channels),
-          '-b:a',
-          bitrate,
-          ...filterArgs,
-          '-f',
-          'adts',
-        ];
-      }
-      case 'pcm': {
-        const pcmCodec = pcmCodecFromBitDepth(pcmBitDepth);
-        const pcmFormat = pcmFormatFromBitDepth(pcmBitDepth);
-        return [
-          '-vn',
-          '-acodec',
-          pcmCodec,
-          '-ar',
-          String(sampleRate),
-          '-ac',
-          String(channels),
-          ...filterArgs,
-          '-f',
-          pcmFormat,
-        ];
-      }
-      case 'opus': {
-        const bitrate = mp3Bitrate || '160k';
-        return [
-          '-vn',
-          '-acodec',
-          'libopus',
-          '-application',
-          'audio',
-          '-b:a',
-          bitrate,
-          '-ar',
-          String(sampleRate),
-          '-ac',
-          String(channels),
-          ...filterArgs,
-          '-f',
-          'opus',
-        ];
-      }
-      case 'flac': {
-        return [
-          '-vn',
-          '-acodec',
-          'flac',
-          '-compression_level',
-          '0',
-          '-frame_size',
-          '512',
-          '-ar',
-          String(sampleRate),
-          '-ac',
-          String(channels),
-          ...filterArgs,
-          '-f',
-          'flac',
-        ];
-      }
-      case 'mp3':
-      default:
-        return [
-          '-vn',
-          '-acodec',
-          'libmp3lame',
-          '-ar',
-          String(sampleRate),
-          '-ac',
-          String(channels),
-          '-b:a',
-          mp3Bitrate,
-          ...filterArgs,
-          '-f',
-          'mp3',
-        ];
-    }
   }
 
   public stop(discardSubscribers = false): void {
