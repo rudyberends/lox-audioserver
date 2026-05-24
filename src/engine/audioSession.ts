@@ -13,6 +13,7 @@ import {
 import { buildEqualizerFilterChain } from '@/domain/zones/equalizer';
 import { RollingBuffer } from '@/engine/rollingBuffer';
 import { SubscriberFanout } from '@/engine/subscriberFanout';
+import { OutputPacer } from '@/engine/outputPacer';
 
 export type PlaybackSource =
   | {
@@ -101,10 +102,7 @@ export class AudioSession {
   private discardSubscribersOnStop = false;
   private restartingForEq = false;
   private stdoutPaused = false;
-  private readonly pacingBps: number | null;
-  private readonly pacingMaxAheadBytes: number;
-  private pacingPaused = false;
-  private pacingTimer?: NodeJS.Timeout;
+  private readonly pacer: OutputPacer;
   // When streaming raw PCM, ensure we only emit full audio frames.
   // Otherwise, a subscriber that attaches mid-stream can start at an arbitrary byte offset,
   // which results in loud noise (misaligned sample boundaries).
@@ -171,12 +169,26 @@ export class AudioSession {
     // sources (e.g. Apple Music track MP4s) far ahead of wall clock time and then exit,
     // terminating the session while pull-based outputs (Cast) still expect a live stream.
     // We prevent that by backpressuring ffmpeg stdout to keep a bounded lead buffer.
-    this.pacingBps = this.computePacingBps();
+    const pacingBps = this.computePacingBps() ?? 0;
     const minLeadBytes =
-      this.pacingBps && this.targetLeadMs > 0
-        ? Math.round((this.pacingBps * this.targetLeadMs) / 1000)
+      pacingBps > 0 && this.targetLeadMs > 0
+        ? Math.round((pacingBps * this.targetLeadMs) / 1000)
         : 0;
-    this.pacingMaxAheadBytes = Math.max(minLeadBytes, maxBufferBytes, 0);
+    const pacingMaxAheadBytes = Math.max(minLeadBytes, maxBufferBytes, 0);
+    this.pacer = new OutputPacer(
+      pacingBps,
+      pacingMaxAheadBytes,
+      {
+        hasBackpressure: () => this.fanout.hasBackpressure(),
+        subscriberCount: () => this.fanout.size,
+      },
+      {
+        pause: () => this.pauseStdout(),
+        resume: () => this.resumeStdout(),
+      },
+      this.log,
+      { zoneId: this.zoneId, profile: this.profile },
+    );
 
     this.pcmFrameBytes =
       this.profile === 'pcm'
@@ -1271,62 +1283,9 @@ export class AudioSession {
     }
   }
 
-  private clearPacingTimer(): void {
-    if (this.pacingTimer) {
-      clearTimeout(this.pacingTimer);
-      this.pacingTimer = undefined;
-    }
-  }
-
   private maybeApplyOutputPacing(): void {
-    if (!this.process?.stdout) return;
-    if (!this.pacingBps || this.pacingBps <= 0) return;
-    if (!this.startTs) return;
-    if (this.fanout.hasBackpressure()) return;
-    if (this.pacingMaxAheadBytes <= 0) return;
-
-    const now = Date.now();
-    const elapsedMs = Math.max(0, now - this.startTs);
-    const expectedBytes = (this.pacingBps * elapsedMs) / 1000;
-    const allowedBytes = expectedBytes + this.pacingMaxAheadBytes;
-    const overshoot = this.totalBytes - allowedBytes;
-
-    if (overshoot > 0) {
-      if (!this.pacingPaused) {
-        this.pacingPaused = true;
-        this.log.spam('ffmpeg output pacing pause', {
-          zoneId: this.zoneId,
-          profile: this.profile,
-          overshootBytes: Math.round(overshoot),
-          maxAheadBytes: this.pacingMaxAheadBytes,
-          subscribers: this.fanout.size,
-        });
-      }
-      this.pauseStdout();
-
-      // Resume when wall clock catches up. Keep the stream paused when no subscribers are present.
-      const waitMs = Math.min(15_000, Math.max(5, Math.ceil((overshoot / this.pacingBps) * 1000)));
-      if (!this.pacingTimer) {
-        this.pacingTimer = setTimeout(() => {
-          this.pacingTimer = undefined;
-          if (this.fanout.size === 0) {
-            return;
-          }
-          this.pacingPaused = false;
-          this.log.spam('ffmpeg output pacing resume', { zoneId: this.zoneId, profile: this.profile });
-          this.resumeStdout();
-        }, waitMs);
-        this.pacingTimer.unref();
-      }
-      return;
-    }
-
-    if (this.pacingPaused && this.fanout.size > 0) {
-      this.pacingPaused = false;
-      this.log.spam('ffmpeg output pacing resume', { zoneId: this.zoneId, profile: this.profile });
-      this.clearPacingTimer();
-      this.resumeStdout();
-    }
+    if (!this.process) return;
+    this.pacer.tick(this.totalBytes, this.startTs);
   }
 
   // ─── Two-stage PCM pipeline ────────────────────────────────────────────────
@@ -1858,7 +1817,7 @@ export class AudioSession {
     const suppressTermination = options.suppressTermination === true;
     this.bytesSinceLog = 0;
     this.lastLogTs = 0;
-    this.clearPacingTimer();
+    this.pacer.reset();
     this.detachPipeSourceListeners();
     this.directPipeMode = false;
     if (suppressTermination && this.firstChunkResolve) {
@@ -1876,7 +1835,6 @@ export class AudioSession {
     }
     this.fanout.clearAllBackpressure();
     this.stdoutPaused = false;
-    this.pacingPaused = false;
     // When suppressTermination is true, ffmpeg is restarting internally (restartOnFailure).
     // Keep subscribers alive so the sync stream and downstream clients (e.g. Squeezelite)
     // stay connected and receive audio from the new ffmpeg process without interruption.
