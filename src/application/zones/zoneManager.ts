@@ -42,6 +42,7 @@ import {
 import type { AlertMediaResource } from '@/application/alerts/types';
 import { PowerManager } from '@/application/zones/services/powerManager';
 import { SharedPowerGroupManager } from '@/application/zones/services/sharedPowerGroupManager';
+import { ZoneHeartbeatService } from '@/application/zones/services/ZoneHeartbeatService';
 import {
   buildInitialState,
   getZoneDefaultVolume,
@@ -132,27 +133,10 @@ export class ZoneManager {
   private readonly zoneAudioPrefs: ZoneAudioPreferences;
   private readonly powerManager: PowerManager;
   private readonly sharedPowerGroupManager: SharedPowerGroupManager;
+  private readonly heartbeat: ZoneHeartbeatService;
   private initialized = false;
   private inputsConfigured = false;
-  private heartbeatTimer: NodeJS.Timeout | null = null;
   private notifier: NotifierPort;
-
-  private startHeartbeat(): void {
-    if (this.heartbeatTimer) {
-      return;
-    }
-    const intervalMs = 60_000;
-    this.heartbeatTimer = setInterval(() => {
-      const now = Date.now();
-      for (const ctx of this.zoneRepo.list()) {
-        if (!ctx.state) {
-          continue;
-        }
-        ctx.lastZoneBroadcastAt = now;
-        this.notifier.notifyZoneStateChanged(ctx.state);
-      }
-    }, intervalMs);
-  }
 
   /** Read-only snapshot of the current zone state for external consumers (e.g. outputs). */
   public getZoneState(zoneId: number): LoxoneZoneState | null {
@@ -307,6 +291,10 @@ export class ZoneManager {
       log: this.log,
       audioHelpers,
       zoneAudioPrefs: this.zoneAudioPrefs,
+    });
+    this.heartbeat = new ZoneHeartbeatService({
+      listZones: () => this.zoneRepo.list(),
+      notifier: { notifyZoneStateChanged: (state) => this.notifier.notifyZoneStateChanged(state) },
     });
     this.inputs = this.playbackCoordinator;
     this.queue = this.queueController;
@@ -466,7 +454,7 @@ export class ZoneManager {
       await this.configPort.load();
       const cfg = this.configPort.getConfig();
       await this.replaceAll(cfg.zones, cfg.inputs, cfg.groups ?? null);
-      this.startHeartbeat();
+      this.heartbeat.start();
       this.initialized = true;
     }
   }
@@ -587,6 +575,7 @@ export class ZoneManager {
   }
 
   public async shutdown(): Promise<void> {
+    this.heartbeat.stop();
     await this.stateControllers.stopAll();
     this.powerManager.clearAll();
     this.sharedPowerGroupManager.clearAll();
