@@ -87,6 +87,14 @@ export class AudioSession {
     private readonly onTerminated: () => void,
     /** @internal */ public readonly outputSettings: AudioOutputSettings,
     /** @internal */ public equalizerBands: ReadonlyArray<number> | null = null,
+    /**
+     * When true (default), file/URL sources use the two-stage pipeline
+     * (decoder + encoder) so inlineCrossfade can blend PCM mid-stream. When
+     * false, file/URL run a single ffmpeg — half the process count and no
+     * encoderInput/pcmPipe state. Set by AudioStreamEngine based on the
+     * system-wide `audioserver.crossfadeSec` config.
+     */
+    public readonly crossfadeEnabled: boolean = true,
   ) {
     const candidate = outputSettings.prebufferBytes;
     const hardMax = 1024 * 1024 * 4;
@@ -227,9 +235,15 @@ export class AudioSession {
     }
 
     // File and URL sources use the two-stage PCM pipeline so crossfade can be
-    // performed by blending raw PCM without switching the HTTP stream.
+    // performed by blending raw PCM without switching the HTTP stream — but
+    // only when crossfade is enabled. With crossfade off we save one ffmpeg
+    // process per zone by running single-stage.
     if (this.source.kind === 'file' || this.source.kind === 'url') {
-      this.starter.startTwoStage();
+      if (this.crossfadeEnabled) {
+        this.starter.startTwoStage();
+      } else {
+        this.starter.startSingleStage();
+      }
       return;
     }
 

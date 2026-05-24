@@ -95,7 +95,12 @@ export function createRuntime(): Runtime {
   const loxoneNotifier = new LoxoneWsNotifier(connectionRegistry, groupTracker);
   const ports = createRuntimePorts({ notifier: new LoxoneNotifierAdapter(loxoneNotifier) });
   const configPort = ports.config;
-  const audioStreamEngine = new AudioStreamEngine();
+  // Drive the per-session crossfade pipeline-shape from the system-wide
+  // `audioserver.crossfadeSec` config: when crossfade is off (0 or empty) the
+  // engine starts a single ffmpeg per file/URL zone instead of decoder+encoder.
+  const audioStreamEngine = new AudioStreamEngine(
+    () => (configPort.getSystemConfig()?.audioserver?.crossfadeSec ?? 0) > 0,
+  );
   const customRadioStore = new CustomRadioStore();
   const spotifyManagerProvider = new SpotifyServiceManagerProvider(configPort);
   const spotifyDeviceRegistry = new SpotifyDeviceRegistry();

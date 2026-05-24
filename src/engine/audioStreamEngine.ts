@@ -17,6 +17,13 @@ export class AudioStreamEngine {
   private readonly stopReasonByProfileMap = new Map<Map<OutputProfile, AudioSession>, string>();
   private readonly outputSettings = audioOutputSettings;
   private readonly handoffTokens = new Map<number, string>();
+
+  /**
+   * Snapshot the crossfade-enabled flag each session-start. When the system-wide
+   * config flips, in-flight sessions keep their original pipeline shape and the
+   * next start() picks up the new value.
+   */
+  constructor(private readonly isCrossfadeEnabled: () => boolean = () => true) {}
   private onSessionTerminated?: (
     zoneId: number,
     stats: EngineSessionStats | null,
@@ -43,6 +50,7 @@ export class AudioStreamEngine {
     this.stop(zoneId, 'replace', { discardSubscribers: true });
     const profileMap = new Map<OutputProfile, AudioSession>();
     const effectiveOutput = outputSettings ?? this.outputSettings;
+    const crossfadeEnabled = this.isCrossfadeEnabled();
     profiles.forEach((profile) => {
       const session = new AudioSession(zoneId, source, profile, () => {
         profileMap.delete(profile);
@@ -57,10 +65,10 @@ export class AudioStreamEngine {
           this.sessions.delete(zoneId);
           this.onSessionTerminated?.(zoneId, stats, stopReason);
         }
-      }, effectiveOutput, equalizerBands);
+      }, effectiveOutput, equalizerBands, crossfadeEnabled);
       profileMap.set(profile, session);
       session.start();
-      this.log.info('audio session started', { zoneId, source: source.kind, profile });
+      this.log.info('audio session started', { zoneId, source: source.kind, profile, crossfadeEnabled });
     });
     if (profileMap.size > 0) {
       this.sessions.set(zoneId, profileMap);
@@ -80,6 +88,7 @@ export class AudioStreamEngine {
     this.handoffTokens.set(zoneId, handoffToken);
     const profileMap = new Map<OutputProfile, AudioSession>();
     const effectiveOutput = outputSettings ?? this.outputSettings;
+    const crossfadeEnabled = this.isCrossfadeEnabled();
     profiles.forEach((profile) => {
       const session = new AudioSession(zoneId, source, profile, () => {
         profileMap.delete(profile);
@@ -94,10 +103,10 @@ export class AudioStreamEngine {
           this.sessions.delete(zoneId);
           this.onSessionTerminated?.(zoneId, stats, stopReason);
         }
-      }, effectiveOutput, equalizerBands);
+      }, effectiveOutput, equalizerBands, crossfadeEnabled);
       profileMap.set(profile, session);
       session.start();
-      this.log.info('audio session started (handoff)', { zoneId, source: source.kind, profile });
+      this.log.info('audio session started (handoff)', { zoneId, source: source.kind, profile, crossfadeEnabled });
     });
 
     // Make the new sessions available immediately so subscribers bind to the new stream.
