@@ -16,6 +16,7 @@ import { SubscriberFanout } from '@/engine/subscriberFanout';
 import { OutputPacer } from '@/engine/outputPacer';
 import { PcmFrameAligner } from '@/engine/pcmFrameAligner';
 import { codecPolicyForProfile, type CodecPolicy } from '@/engine/codecPolicy';
+import { runPcmBlend } from '@/engine/pcmCrossfade';
 
 export type PlaybackSource =
   | {
@@ -727,11 +728,15 @@ export class AudioSession {
     // (e.g., subscriber briefly disconnected). setInterval always fires regardless
     // of downstream backpressure; we intentionally ignore write backpressure here
     // since the PCM trickles in at real-time rate (~1.76 KB per 10 ms tick).
-    const { framesProcessed, newRem } = await this.runPcmBlend(
-      oldChunks, newChunks, totalFrames,
-      () => oldEnded, () => newEnded,
-      (blended) => { this.encoderInput?.write(blended); },
-    );
+    const { framesProcessed, newRem } = await runPcmBlend(oldChunks, newChunks, {
+      channels: this.outputSettings.channels,
+      totalFrames,
+      getOldEnded: () => oldEnded,
+      getNewEnded: () => newEnded,
+      onBlendedFrame: (blended) => { this.encoderInput?.write(blended); },
+      log: this.log,
+      logContext: { zoneId: this.zoneId },
+    });
 
     // Crossfade complete — transition to new decoder only.
     this.crossfadeActive = false;
@@ -770,140 +775,6 @@ export class AudioSession {
       zoneId: this.zoneId, framesProcessed, totalFrames, durationSec,
     });
     return true;
-  }
-
-  /**
-   * Shared PCM blend loop — collects PCM from oldChunks/newChunks arrays (filled by
-   * concurrent data-event listeners) and calls onBlendedFrame every 10 ms with the
-   * linearly cross-faded result. Returns framesProcessed and any leftover new PCM.
-   *
-   * Stall handling: a Spotify pipe-source PassThrough never fires `'end'` when the
-   * track ends — librespot just stops writing. If we waited for `*Ended` we would
-   * spin forever (which previously caused the blend to hang for minutes and
-   * orphan the whole audio session). When one source has been silent longer than
-   * STALL_MS *after producing at least one chunk* we treat its samples as silence
-   * so the linear ramp keeps running and the blend completes within `totalFrames`.
-   *
-   * Sources that have never produced data get a separate STARTUP_TIMEOUT_MS budget
-   * (librespot needs ~600 ms before its first PCM chunk arrives). Without this we
-   * would bail at framesProcessed=0 whenever the OLD librespot was already stalled
-   * before the trigger fired (e.g., a 4 s pcm_stall right before song-end).
-   */
-  private async runPcmBlend(
-    oldChunks: Buffer[],
-    newChunks: Buffer[],
-    totalFrames: number,
-    getOldEnded: () => boolean,
-    getNewEnded: () => boolean,
-    onBlendedFrame: (blended: Buffer) => void,
-  ): Promise<{ framesProcessed: number; newRem: Buffer }> {
-    const { channels } = this.outputSettings;
-    const frameBytes = channels * 2;
-    let framesProcessed = 0;
-    let oldRem = Buffer.alloc(0);
-    let newRem = Buffer.alloc(0);
-    const STALL_MS = 300;
-    const STARTUP_TIMEOUT_MS = 1500;
-    const startTs = Date.now();
-    let oldLastDataAt = startTs;
-    let newLastDataAt = startTs;
-    let oldHasProduced = false;
-    let newHasProduced = false;
-    let oldStallLogged = false;
-    let newStallLogged = false;
-
-    await new Promise<void>((resolve) => {
-      const timer = setInterval(() => {
-        const now = Date.now();
-        if (oldChunks.length) {
-          oldRem = Buffer.concat([oldRem, ...oldChunks.splice(0)]);
-          oldLastDataAt = now;
-          oldHasProduced = true;
-        }
-        if (newChunks.length) {
-          newRem = Buffer.concat([newRem, ...newChunks.splice(0)]);
-          newLastDataAt = now;
-          newHasProduced = true;
-        }
-
-        const elapsedMs = now - startTs;
-        const oldStalledAfterProducing =
-          oldHasProduced && oldRem.length < frameBytes && now - oldLastDataAt > STALL_MS;
-        const oldNeverStarted = !oldHasProduced && elapsedMs > STARTUP_TIMEOUT_MS;
-        const oldEffectivelyDone = getOldEnded() || oldStalledAfterProducing || oldNeverStarted;
-
-        const newStalledAfterProducing =
-          newHasProduced && newRem.length < frameBytes && now - newLastDataAt > STALL_MS;
-        const newNeverStarted = !newHasProduced && elapsedMs > STARTUP_TIMEOUT_MS;
-        const newEffectivelyDone = getNewEnded() || newStalledAfterProducing || newNeverStarted;
-
-        if (oldEffectivelyDone && !oldStallLogged) {
-          oldStallLogged = true;
-          this.log.debug('PCM crossfade old source stalled — using silence for remaining blend', {
-            zoneId: this.zoneId, framesProcessed, totalFrames,
-            oldEnded: getOldEnded(), oldHasProduced, elapsedMs,
-          });
-        }
-        if (newEffectivelyDone && !newStallLogged) {
-          newStallLogged = true;
-          this.log.debug('PCM crossfade new source stalled — using silence for remaining blend', {
-            zoneId: this.zoneId, framesProcessed, totalFrames,
-            newEnded: getNewEnded(), newHasProduced, elapsedMs,
-          });
-        }
-
-        if (oldEffectivelyDone && newEffectivelyDone) {
-          this.log.warn('PCM crossfade blend ended early', {
-            zoneId: this.zoneId, framesProcessed, totalFrames,
-            oldEnded: getOldEnded(), newEnded: getNewEnded(),
-            oldHasProduced, newHasProduced, elapsedMs,
-          });
-          clearInterval(timer);
-          resolve();
-          return;
-        }
-
-        // Bound how many frames to process this tick so we never write a multi-second
-        // burst to the encoder when one side stalls and the other has buffered ahead.
-        const remainingFrames = totalFrames - framesProcessed;
-        const oldAvailFrames = oldEffectivelyDone ? remainingFrames : Math.floor(oldRem.length / frameBytes);
-        const newAvailFrames = newEffectivelyDone ? remainingFrames : Math.floor(newRem.length / frameBytes);
-        const framesThisTick = Math.min(oldAvailFrames, newAvailFrames, remainingFrames);
-        if (framesThisTick <= 0) {
-          return;
-        }
-
-        const blended = Buffer.alloc(framesThisTick * frameBytes);
-        let oldOff = 0;
-        let newOff = 0;
-        for (let f = 0; f < framesThisTick; f++) {
-          const t = Math.min(1, framesProcessed / totalFrames);
-          const dstOff = f * frameBytes;
-          for (let ch = 0; ch < channels; ch++) {
-            const co = ch * 2;
-            const a = oldEffectivelyDone ? 0 : oldRem.readInt16LE(oldOff + co);
-            const b = newEffectivelyDone ? 0 : newRem.readInt16LE(newOff + co);
-            blended.writeInt16LE(
-              Math.max(-32768, Math.min(32767, Math.round(a * (1 - t) + b * t))),
-              dstOff + co,
-            );
-          }
-          if (!oldEffectivelyDone) oldOff += frameBytes;
-          if (!newEffectivelyDone) newOff += frameBytes;
-          framesProcessed++;
-        }
-        if (!oldEffectivelyDone) oldRem = oldRem.subarray(oldOff);
-        if (!newEffectivelyDone) newRem = newRem.subarray(newOff);
-        onBlendedFrame(blended);
-
-        if (framesProcessed >= totalFrames) {
-          clearInterval(timer);
-          resolve();
-        }
-      }, 10);
-    });
-
-    return { framesProcessed, newRem };
   }
 
   /**
@@ -960,11 +831,15 @@ export class AudioSession {
     newSourceStream.on('data', (c: Buffer) => newChunks.push(c));
     newSourceStream.once('end', () => { newEnded = true; });
 
-    const { framesProcessed, newRem } = await this.runPcmBlend(
-      oldChunks, newChunks, totalFrames,
-      () => oldEnded, () => newEnded,
-      (blended) => this.encoderInput?.write(blended),
-    );
+    const { framesProcessed, newRem } = await runPcmBlend(oldChunks, newChunks, {
+      channels: this.outputSettings.channels,
+      totalFrames,
+      getOldEnded: () => oldEnded,
+      getNewEnded: () => newEnded,
+      onBlendedFrame: (blended) => this.encoderInput?.write(blended),
+      log: this.log,
+      logContext: { zoneId: this.zoneId },
+    });
 
     this.crossfadeActive = false;
 
@@ -1076,14 +951,18 @@ export class AudioSession {
     newSourceStream.on('data', (c: Buffer) => newChunks.push(c));
     newSourceStream.once('end', () => { newEnded = true; });
 
-    const { framesProcessed, newRem } = await this.runPcmBlend(
-      oldChunks, newChunks, totalFrames,
-      () => oldEnded, () => newEnded,
-      (blended) => {
+    const { framesProcessed, newRem } = await runPcmBlend(oldChunks, newChunks, {
+      channels: this.outputSettings.channels,
+      totalFrames,
+      getOldEnded: () => oldEnded,
+      getNewEnded: () => newEnded,
+      onBlendedFrame: (blended) => {
         this.buffer.push(blended);
         this.writeToSubscribers(blended);
       },
-    );
+      log: this.log,
+      logContext: { zoneId: this.zoneId },
+    });
 
     this.crossfadeActive = false;
     this.directPipeMode = false;
