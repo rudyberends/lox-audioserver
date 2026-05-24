@@ -14,6 +14,7 @@ import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 import type { PlaybackService } from '@/application/playback/PlaybackService';
 import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
+import { EqualizerRestartScheduler } from '@/application/playback/EqualizerRestartScheduler';
 
 import type {
   PlaybackMetadata,
@@ -48,13 +49,12 @@ type OutputNotifier = {
 export class AudioManager {
   private readonly log = createLogger('Audio', 'Manager');
   private readonly sessions = new Map<number, PlaybackSession>();
-  private readonly equalizerRestartTimers = new Map<number, NodeJS.Timeout>();
-  private static readonly EQUALIZER_RESTART_DEBOUNCE_MS = 350;
   private readonly playRequestTimes = new Map<number, { requestedAt: number; uri?: string; type?: string }>();
   private readonly playRequestMaxAgeMs = 60_000;
   private readonly playbackService: PlaybackService;
   private readonly outputNotifier: OutputNotifier;
   private readonly prefs: ZoneAudioPreferences;
+  public readonly equalizerScheduler: EqualizerRestartScheduler;
   /**
    * HTTP responses currently serving a given streamId. Each entry registers a
    * dispose() callback; calling closeSubscribersForStreamId() ends them all so
@@ -71,6 +71,12 @@ export class AudioManager {
     this.playbackService = playbackService;
     this.outputNotifier = outputNotifier;
     this.prefs = prefs;
+    this.equalizerScheduler = new EqualizerRestartScheduler({
+      getSession: (zoneId) => this.sessions.get(zoneId),
+      playbackService: this.playbackService,
+      getEqualizerBands: (zoneId) => this.prefs.getEqualizerResolver()?.(zoneId) ?? null,
+      log: this.log,
+    });
     this.playbackService.setSessionTerminationHandler((zoneId, stats, reason) =>
       this.handleEngineTermination(zoneId, stats, reason),
     );
@@ -1218,43 +1224,6 @@ export class AudioManager {
       return ['mp3'];
     }
     return requiresPcm ? (['pcm'] as Array<'pcm'>) : (['mp3'] as Array<'mp3'>);
-  }
-
-  /**
-   * Restarts a zone's audio engine to pick up new EQ band values. Debounced so rapid
-   * Loxone App slider drags coalesce into a single restart.
-   */
-  public scheduleEqualizerRestart(zoneId: number): void {
-    const existing = this.equalizerRestartTimers.get(zoneId);
-    if (existing) {
-      clearTimeout(existing);
-    }
-    const timer = setTimeout(() => {
-      this.equalizerRestartTimers.delete(zoneId);
-      this.applyEqualizerRestart(zoneId);
-    }, AudioManager.EQUALIZER_RESTART_DEBOUNCE_MS);
-    timer.unref?.();
-    this.equalizerRestartTimers.set(zoneId, timer);
-  }
-
-  private applyEqualizerRestart(zoneId: number): void {
-    const session = this.sessions.get(zoneId);
-    if (!session || !session.playbackSource) {
-      return;
-    }
-    if (!this.playbackService.hasSession(zoneId)) {
-      return;
-    }
-    if (session.state !== 'playing') {
-      return;
-    }
-    // Swap ffmpeg in-place so output subscribers (Squeezelite, Snapcast,
-    // Cast, ...) stay attached. The standard PlaybackService.start path
-    // calls stop({ discardSubscribers: true }) which destroys their
-    // PassThrough streams and forces the user to press Play again.
-    const bands = this.prefs.getEqualizerResolver()?.(zoneId) ?? null;
-    this.log.info('restarting audio engine to apply equalizer change', { zoneId });
-    this.playbackService.restartZoneForEqualizer(zoneId, bands);
   }
 
   public async inlineCrossfadePlayback(

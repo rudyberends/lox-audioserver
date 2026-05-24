@@ -758,7 +758,7 @@ export class ZoneManager {
     this.applyPatch(zoneId, { equalizerSettings }, true);
 
     if (ctx?.config.equalizer?.provider === 'builtin') {
-      this.audioManager.scheduleEqualizerRestart(zoneId);
+      this.audioManager.equalizerScheduler.schedule(zoneId);
     }
 
     return {
