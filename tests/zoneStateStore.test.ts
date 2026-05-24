@@ -205,6 +205,31 @@ test('ZoneStateStore.patch uses radioStationFallback when station empty on radio
   assert.equal(fakes.ctx.state.station, 'Fallback FM');
 });
 
+test('ZoneStateStore.patch clears stale station when merged state is non-radio', () => {
+  // Regression for #205: a `station` label left over from a radio session
+  // would pin itself on the next source (local track, AirPlay takeover, …)
+  // because nothing in the per-controller translation layers consistently
+  // cleared it. The reducer now treats `station` as radio-specific and drops
+  // any leftover value whenever the merged state is not a radio state.
+  const { store, fakes } = buildStore({
+    isRadioAudiopath: (audiopath) => audiopath === 'radio://x',
+    initialState: { audiopath: 'radio://x', station: 'ORF Hitradio OE3', audiotype: 1 },
+  });
+  store.patch(1, { audiopath: 'library://local/song.mp3', audiotype: 0 });
+  assert.equal(fakes.ctx.state.station, '');
+});
+
+test('ZoneStateStore.patch preserves station set explicitly by an incoming patch', () => {
+  // The clamp must not stomp on a fresh station label that a state controller
+  // explicitly provides (e.g. an AirPlay sender reporting "iTunes Radio").
+  const { store, fakes } = buildStore({
+    isRadioAudiopath: () => false,
+    initialState: { audiopath: 'airplay://external', audiotype: 4, station: '' },
+  });
+  store.patch(1, { station: 'iTunes Radio' });
+  assert.equal(fakes.ctx.state.station, 'iTunes Radio');
+});
+
 test('ZoneStateStore.patch resolves line-in audiopath as FileType.LineIn', () => {
   const { store, fakes } = buildStore();
   store.patch(1, { audiopath: 'linein:0' });

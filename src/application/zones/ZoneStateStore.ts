@@ -133,6 +133,19 @@ export class ZoneStateStore {
           patch.station = fallback;
         }
       }
+    } else if (
+      !('station' in patch) &&
+      typeof mergedForType.station === 'string' &&
+      mergedForType.station.length > 0
+    ) {
+      // Symmetric to the radio clamps above: `station` is a radio-specific
+      // label and must drop the moment the merged state stops being a radio
+      // state, otherwise a leftover "ORF Hitradio OE3" pins itself on the
+      // next source (library track, AirPlay takeover, Spotify, …) until
+      // something else explicitly clears it. Incoming patches that carry an
+      // explicit `station` (e.g. BeoLink NOW_PLAYING with a station label
+      // from an AirPlay sender) win over this clamp.
+      patch.station = '';
     }
 
     const isStopping = patch.mode === 'stop';
