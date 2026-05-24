@@ -104,4 +104,11 @@ export interface ZoneContext {
     | 'alert'
     | null;
   alert?: ActiveAlertState;
+  /**
+   * Pending pause-time volume reset (resetVolumeOnPause). Held long enough
+   * that the receiver buffer has drained and any pre-play volume adjustment
+   * gets a chance to override it; cancelled on play/resume/stop and on user
+   * volume changes during the window.
+   */
+  resetVolumeTimer?: NodeJS.Timeout;
 }

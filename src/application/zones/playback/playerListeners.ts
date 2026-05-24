@@ -58,6 +58,36 @@ export function attachPlayerListeners(args: {
   player.on('error', (reason) => onPlayerError(coordinator, zoneId, reason, zoneName, sourceMac));
 }
 
+const RESET_VOLUME_ON_PAUSE_DELAY_MS = 20000;
+
+function clearResetVolumeTimer(ctx: ZoneContext | undefined): void {
+  if (ctx?.resetVolumeTimer) {
+    clearTimeout(ctx.resetVolumeTimer);
+    ctx.resetVolumeTimer = undefined;
+  }
+}
+
+function scheduleResetVolumeOnPause(
+  coordinator: PlayerListenerCoordinator,
+  ctx: ZoneContext,
+): void {
+  clearResetVolumeTimer(ctx);
+  const timer = setTimeout(() => {
+    ctx.resetVolumeTimer = undefined;
+    const current = coordinator.getZone(ctx.id);
+    // Only fire if the zone is still paused on the same context and not in an alert.
+    if (!current || current !== ctx || current.alert || current.state.mode !== 'pause') {
+      return;
+    }
+    const defaultVolume = getZoneDefaultVolume(current.config);
+    // Routing the change through the player makes onPlayerVolume update state
+    // and dispatch to outputs through the existing path.
+    current.player.setVolume(defaultVolume);
+  }, RESET_VOLUME_ON_PAUSE_DELAY_MS);
+  timer.unref?.();
+  ctx.resetVolumeTimer = timer;
+}
+
 function onPlayerPaused(
   coordinator: PlayerListenerCoordinator,
   zoneId: number,
@@ -69,6 +99,10 @@ function onPlayerPaused(
     coordinator.dispatchOutputs(ctxLocal, outputs, 'pause', session);
   }
   coordinator.applyPatch(zoneId, { mode: 'pause', clientState: 'on', power: 'on' });
+  const ctx = coordinator.getZone(zoneId);
+  if (ctx && !ctx.alert && ctx.config.powerManager?.resetVolumeOnPause === true) {
+    scheduleResetVolumeOnPause(coordinator, ctx);
+  }
 }
 
 function onPlayerStarted(
@@ -78,9 +112,15 @@ function onPlayerStarted(
   session: PlaybackSession | null | undefined,
 ): void {
   const ctxReset = coordinator.getZone(zoneId);
+  // Capture pending reset *before* clearing — a still-pending timer means
+  // "pause happened, reset hasn't been applied or overridden yet". In that
+  // case the play should start at the default (reference Loxone: pause =
+  // volume back to default for the next play).
+  const hadPendingReset = ctxReset?.resetVolumeTimer !== undefined;
   if (ctxReset) {
     ctxReset.outputTimingActive = false;
     ctxReset.lastOutputTimingAt = 0;
+    clearResetVolumeTimer(ctxReset);
   }
   const ctxLocal = coordinator.getZone(zoneId);
   if (ctxLocal) {
@@ -90,13 +130,9 @@ function onPlayerStarted(
   if (ctx) {
     // During an alert, the alert flow has already set state.volume to the
     // per-event volume (e.g. the TTS slider value). Don't replace it.
-    // When resetVolumeOnPause is enabled, treat pause-resume as a fresh start
-    // too so the configured default volume is reapplied on every play action.
-    const resumeFromPause =
-      ctx.config.powerManager?.resetVolumeOnPause === true && ctx.state.mode === 'pause';
     const isFreshStart =
       !ctx.alert &&
-      (ctx.state.mode === 'stop' || ctx.state.powerState === 'off' || resumeFromPause);
+      (ctx.state.mode === 'stop' || ctx.state.powerState === 'off' || hadPendingReset);
     const volume = isFreshStart
       ? getZoneDefaultVolume(ctx.config)
       : clampVolumeForZone(ctx.config, ctx.state.volume);
@@ -119,9 +155,13 @@ function onPlayerResumed(
   session: PlaybackSession | null | undefined,
 ): void {
   const ctxReset = coordinator.getZone(zoneId);
+  // See onPlayerStarted: a pending reset at resume time means the user hasn't
+  // overridden the volume during the pause window, so apply the default now.
+  const hadPendingReset = ctxReset?.resetVolumeTimer !== undefined;
   if (ctxReset) {
     ctxReset.outputTimingActive = false;
     ctxReset.lastOutputTimingAt = 0;
+    clearResetVolumeTimer(ctxReset);
   }
   const ctxLocal = coordinator.getZone(zoneId);
   if (ctxLocal) {
@@ -129,13 +169,8 @@ function onPlayerResumed(
   }
   const ctx = coordinator.getZone(zoneId);
   if (ctx) {
-    // Reset to configured default volume when resuming, if the zone is opted
-    // into the reference Loxone behavior. Skipped during alerts so the alert
-    // volume (e.g. the TTS slider value) is preserved.
-    const resetVolume =
-      !ctx.alert && ctx.config.powerManager?.resetVolumeOnPause === true;
     const patch = buildResumedPatch({ ctx, audioHelpers: coordinator.audioHelpers });
-    if (resetVolume) {
+    if (!ctx.alert && hadPendingReset) {
       const defaultVolume = getZoneDefaultVolume(ctx.config);
       ctx.player.setVolume(defaultVolume);
       coordinator.dispatchVolume(ctx, outputs, defaultVolume);
@@ -156,6 +191,7 @@ function onPlayerStopped(
   if (ctxReset) {
     ctxReset.outputTimingActive = false;
     ctxReset.lastOutputTimingAt = 0;
+    clearResetVolumeTimer(ctxReset);
   }
   const ctxLocal = coordinator.getZone(zoneId);
   if (ctxLocal) {
@@ -256,6 +292,10 @@ function onPlayerVolume(
   if (!ctx) {
     return;
   }
+  // A volume change during a pending pause-time reset is treated as the user
+  // intentionally setting the next-play volume — cancel the reset so it
+  // doesn't clobber their choice when the window expires.
+  clearResetVolumeTimer(ctx);
   const clamped = clampVolumeForZone(ctx.config, level);
   coordinator.applyPatch(zoneId, buildVolumePatch(clamped));
   coordinator.dispatchVolume(ctx, outputs, clamped);
