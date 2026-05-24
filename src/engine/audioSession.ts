@@ -1,8 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
 import { PassThrough } from 'node:stream';
-import ffmpegStatic from 'ffmpeg-static';
 import { createLogger } from '@/shared/logging/logger';
+import { FFMPEG_BINARY, FfmpegProcess } from '@/engine/ffmpegProcess';
 import {
   audioResampler,
   mp3BitrateToBps,
@@ -56,16 +56,14 @@ export type PlaybackSource =
 
 export type OutputProfile = 'mp3' | 'aac' | 'pcm' | 'opus' | 'flac';
 
-const DEFAULT_KILL_TIMEOUT_MS = 2000;
 const FLAC_SIGNATURE = Buffer.from('fLaC', 'ascii');
 
 export class AudioSession {
   private readonly log = createLogger('Audio', 'Session');
   private readonly fanout: SubscriberFanout;
-  private process?: ChildProcessWithoutNullStreams;
+  private process?: FfmpegProcess;
   private ending = false;
-  private readonly ffmpegPath =
-    typeof ffmpegStatic === 'string' && ffmpegStatic ? ffmpegStatic : 'ffmpeg';
+  private readonly ffmpegPath = FFMPEG_BINARY;
 
   private readonly buffer: RollingBuffer;
   private firstChunkLogged = false;
@@ -100,8 +98,6 @@ export class AudioSession {
   private pcmPipe?: PassThrough;
   private encoderInput?: PassThrough; // permanent bridge to encoder stdin
   private crossfadeActive = false;
-  private killTimer?: NodeJS.Timeout;
-  private readonly killTimeoutMs = DEFAULT_KILL_TIMEOUT_MS;
   private discardSubscribersOnStop = false;
   private restartingForEq = false;
   private stdoutPaused = false;
@@ -438,7 +434,7 @@ export class AudioSession {
       pipeSource.stream.on('error', this.pipeSourceErrorListener);
 
       this.startTs = Date.now();
-      let proc: ChildProcessWithoutNullStreams;
+      let proc: FfmpegProcess;
       proc = this.spawnFfmpeg(args, {
         restartOnFailure: false,
         logFirstChunk: false,
@@ -544,10 +540,117 @@ export class AudioSession {
       stdinStream?: NodeJS.ReadableStream;
       onExit?: () => void;
     } = {},
-  ): ChildProcessWithoutNullStreams {
-    const proc = spawn(this.ffmpegPath, args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }) as ChildProcessWithoutNullStreams;
+  ): FfmpegProcess {
+    const proc = new FfmpegProcess(
+      args,
+      {
+        onStdout: (chunk: Buffer) => {
+          if (!chunk?.length) {
+            return;
+          }
+          const aligned = this.profile === 'pcm' ? this.alignPcmChunk(chunk) : chunk;
+          if (!aligned?.length) {
+            // Hold until we have a full PCM frame so new subscribers don't start mid-sample.
+            this.recordBytes(chunk.length);
+            this.maybeApplyOutputPacing();
+            return;
+          }
+          if (!this.firstChunkLogged) {
+            this.firstChunkLogged = true;
+            if (this.firstChunkResolve) {
+              this.firstChunkResolve(true);
+              this.firstChunkResolve = null;
+            }
+            if (options.logFirstChunk !== false) {
+              const now = Date.now();
+              this.log.info('ffmpeg first chunk', {
+                zoneId: this.zoneId,
+                profile: this.profile,
+                bytes: aligned.length,
+                spawnToFirstChunkMs: this.startTs ? Math.max(0, now - this.startTs) : null,
+              });
+            }
+            // Capture only the FLAC STREAMINFO block as the codec header.
+            // Sending the full first chunk (64 KB) as a burst causes VLC's adaptive
+            // network-cache to inflate its buffer to 30+ seconds before playback starts.
+            // STREAMINFO alone (42 bytes) is sufficient for the decoder to initialise.
+            if (this.isCodecHeaderChunk(aligned)) {
+              const metaLen = this.extractFlacMetadataLength(aligned);
+              const header = Buffer.from(aligned.subarray(0, metaLen));
+              // Set is_last on the STREAMINFO block so VLC knows audio frames follow immediately.
+              if (header.length >= 5) {
+                header[4] = (header[4]! & 0x7f) | 0x80;
+              }
+              this.codecHeader = header;
+            }
+          }
+          this.buffer.push(aligned);
+          this.recordBytes(chunk.length);
+          this.writeToSubscribers(aligned);
+          this.maybeApplyOutputPacing();
+        },
+        onStderr: (message: string) => {
+          this.lastStderrLine = message;
+          this.lastStderrAt = Date.now();
+          this.log.debug('ffmpeg stderr', { zoneId: this.zoneId, message });
+        },
+        onExit: (code, signal) => {
+          this.lastExitAt = Date.now();
+          const runMs =
+            this.startTs != null && this.lastExitAt != null ? this.lastExitAt - this.startTs : null;
+          // Treat very short runs as suspicious, but don't flag short finite files (e.g. alert MP3s)
+          // just because they naturally produce <200KB of output.
+          const smallOutputIsSuspicious =
+            this.source.kind !== 'file' && this.totalBytes < 200 * 1024;
+          const earlyExit = runMs !== null && (runMs < 1000 || smallOutputIsSuspicious);
+          this.lastExitCode = typeof code === 'number' ? code : null;
+          this.lastExitSignal = signal ?? null;
+          this.log.info('ffmpeg exited', {
+            zoneId: this.zoneId,
+            profile: this.profile,
+            code,
+            signal,
+            stderr: this.lastStderrLine ?? undefined,
+            stderrAt: this.lastStderrAt ?? undefined,
+            totalBytes: this.totalBytes,
+            bufferedBytes: this.buffer.bytes,
+            subscribers: this.fanout.size,
+            runMs,
+            earlyExit,
+          });
+          options.onExit?.();
+          const shouldRestartForEq = this.restartingForEq && !this.ending;
+          const shouldRestart =
+            !shouldRestartForEq && options.restartOnFailure === true && !this.ending && code !== 0;
+          this.cleanup({ suppressTermination: shouldRestart || shouldRestartForEq });
+          if (shouldRestartForEq) {
+            this.restartingForEq = false;
+            setTimeout(() => this.start(), 0);
+            return;
+          }
+          if (shouldRestart) {
+            this.restartAttempts += 1;
+            setTimeout(() => this.start(), Math.min(500, 100 * this.restartAttempts));
+          }
+        },
+        onError: (error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') {
+            this.log.error('ffmpeg binary not found', {
+              zoneId: this.zoneId,
+              path: this.ffmpegPath,
+              hint: 'Install ffmpeg or set AUDIO_FFMPEG_PATH/FFMPEG_PATH env variables',
+            });
+          } else {
+            this.log.error('ffmpeg error', { zoneId: this.zoneId, message: error.message });
+          }
+          this.lastErrorMessage = error.message;
+          this.lastErrorAt = Date.now();
+          this.cleanup();
+        },
+      },
+      this.log,
+      { logContext: { zoneId: this.zoneId, profile: this.profile } },
+    );
 
     if (options.stdinStream) {
       options.stdinStream.pipe(proc.stdin);
@@ -575,120 +678,6 @@ export class AudioSession {
         }
       });
     }
-
-    proc.stdout.on('data', (chunk: Buffer) => {
-      if (!chunk?.length) {
-        return;
-      }
-      const aligned = this.profile === 'pcm' ? this.alignPcmChunk(chunk) : chunk;
-      if (!aligned?.length) {
-        // Hold until we have a full PCM frame so new subscribers don't start mid-sample.
-        this.recordBytes(chunk.length);
-        this.maybeApplyOutputPacing();
-        return;
-      }
-      if (!this.firstChunkLogged) {
-        this.firstChunkLogged = true;
-        if (this.firstChunkResolve) {
-          this.firstChunkResolve(true);
-          this.firstChunkResolve = null;
-        }
-        if (options.logFirstChunk !== false) {
-          const now = Date.now();
-          this.log.info('ffmpeg first chunk', {
-            zoneId: this.zoneId,
-            profile: this.profile,
-            bytes: aligned.length,
-            spawnToFirstChunkMs: this.startTs ? Math.max(0, now - this.startTs) : null,
-          });
-        }
-        // Capture only the FLAC STREAMINFO block as the codec header.
-        // Sending the full first chunk (64 KB) as a burst causes VLC's adaptive
-        // network-cache to inflate its buffer to 30+ seconds before playback starts.
-        // STREAMINFO alone (42 bytes) is sufficient for the decoder to initialise.
-        if (this.isCodecHeaderChunk(aligned)) {
-          const metaLen = this.extractFlacMetadataLength(aligned);
-          const header = Buffer.from(aligned.subarray(0, metaLen));
-          // Set is_last on the STREAMINFO block so VLC knows audio frames follow immediately.
-          if (header.length >= 5) {
-            header[4] = (header[4]! & 0x7f) | 0x80;
-          }
-          this.codecHeader = header;
-        }
-      }
-      this.buffer.push(aligned);
-      this.recordBytes(chunk.length);
-      this.writeToSubscribers(aligned);
-      this.maybeApplyOutputPacing();
-    });
-
-    proc.stdout.on('close', () => {
-      this.log.debug('ffmpeg stdout closed', { zoneId: this.zoneId, profile: this.profile });
-    });
-
-    proc.stderr?.on('data', (chunk: Buffer) => {
-      const message = chunk.toString().trim();
-      if (message) {
-        this.lastStderrLine = message;
-        this.lastStderrAt = Date.now();
-        this.log.debug('ffmpeg stderr', { zoneId: this.zoneId, message });
-      }
-    });
-
-    proc.on('exit', (code, signal) => {
-      this.lastExitAt = Date.now();
-      const runMs =
-        this.startTs != null && this.lastExitAt != null ? this.lastExitAt - this.startTs : null;
-      // Treat very short runs as suspicious, but don't flag short finite files (e.g. alert MP3s)
-      // just because they naturally produce <200KB of output.
-      const smallOutputIsSuspicious =
-        this.source.kind !== 'file' && this.totalBytes < 200 * 1024;
-      const earlyExit = runMs !== null && (runMs < 1000 || smallOutputIsSuspicious);
-      this.lastExitCode = typeof code === 'number' ? code : null;
-      this.lastExitSignal = signal ?? null;
-      this.log.info('ffmpeg exited', {
-        zoneId: this.zoneId,
-        profile: this.profile,
-        code,
-        signal,
-        stderr: this.lastStderrLine ?? undefined,
-        stderrAt: this.lastStderrAt ?? undefined,
-        totalBytes: this.totalBytes,
-        bufferedBytes: this.buffer.bytes,
-        subscribers: this.fanout.size,
-        runMs,
-        earlyExit,
-      });
-      options.onExit?.();
-      const shouldRestartForEq = this.restartingForEq && !this.ending;
-      const shouldRestart =
-        !shouldRestartForEq && options.restartOnFailure === true && !this.ending && code !== 0;
-      this.cleanup({ suppressTermination: shouldRestart || shouldRestartForEq });
-      if (shouldRestartForEq) {
-        this.restartingForEq = false;
-        setTimeout(() => this.start(), 0);
-        return;
-      }
-      if (shouldRestart) {
-        this.restartAttempts += 1;
-        setTimeout(() => this.start(), Math.min(500, 100 * this.restartAttempts));
-      }
-    });
-
-    proc.on('error', (error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') {
-        this.log.error('ffmpeg binary not found', {
-          zoneId: this.zoneId,
-          path: this.ffmpegPath,
-          hint: 'Install ffmpeg or set AUDIO_FFMPEG_PATH/FFMPEG_PATH env variables',
-        });
-      } else {
-        this.log.error('ffmpeg error', { zoneId: this.zoneId, message: error.message });
-      }
-      this.lastErrorMessage = error.message;
-      this.lastErrorAt = Date.now();
-      this.cleanup();
-    });
 
     return proc;
   }
@@ -1743,8 +1732,7 @@ export class AudioSession {
       this.decoderProc = undefined;
     }
     if (this.process) {
-      this.process.kill('SIGTERM');
-      this.armKillTimer();
+      this.process.terminate();
     } else {
       this.cleanup();
     }
@@ -1775,8 +1763,7 @@ export class AudioSession {
       return;
     }
     this.restartingForEq = true;
-    this.process.kill('SIGTERM');
-    this.armKillTimer();
+    this.process.terminate();
   }
 
   public async waitForFirstChunk(timeoutMs = 2000): Promise<boolean> {
@@ -1871,7 +1858,6 @@ export class AudioSession {
     const suppressTermination = options.suppressTermination === true;
     this.bytesSinceLog = 0;
     this.lastLogTs = 0;
-    this.clearKillTimer();
     this.clearPacingTimer();
     this.detachPipeSourceListeners();
     this.directPipeMode = false;
@@ -1885,9 +1871,7 @@ export class AudioSession {
     this.firstChunkResolve = null;
     this.firstChunkPromise = null;
     if (this.process) {
-      this.process.removeAllListeners();
-      this.process.stdout?.removeAllListeners();
-      this.process.stderr?.removeAllListeners();
+      this.process.detach();
       this.process = undefined;
     }
     this.fanout.clearAllBackpressure();
@@ -1946,22 +1930,6 @@ export class AudioSession {
     this.bytesSinceLog += length;
     this.totalBytes += length;
     this.maybeLogThroughput();
-  }
-
-  private armKillTimer(): void {
-    this.clearKillTimer();
-    this.killTimer = setTimeout(() => {
-      if (this.process && !this.process.killed) {
-        this.process.kill('SIGKILL');
-      }
-    }, this.killTimeoutMs);
-  }
-
-  private clearKillTimer(): void {
-    if (this.killTimer) {
-      clearTimeout(this.killTimer);
-      this.killTimer = undefined;
-    }
   }
 
   private detachPipeSourceListeners(): void {
