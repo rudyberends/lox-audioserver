@@ -14,6 +14,7 @@ import {
 } from '@/application/zones/helpers/queueHelpers';
 import { audioOutputSettings } from '@/ports/types/audioFormat';
 import { computePreferredPlaybackSettings } from '@/application/playback/policies/OutputFormatPolicy';
+import { applyPreferredPlaybackSettings } from '@/application/playback/PlaybackSettingsApplier';
 import { buildPlaybackPlan } from '@/application/playback/buildPlaybackPlan';
 import { executePlaybackPlan } from '@/application/playback/executePlaybackPlan';
 import type { ProviderKind } from '@/application/playback/types/PlaybackPlan';
@@ -213,6 +214,26 @@ export class PlaybackCoordinator {
     playbackSource: PlaybackSource,
     metadata?: PlaybackMetadata,
   ): void {
+    // Align the engine output format with the target output's preferred format BEFORE starting.
+    // The queue path does this via computePreferredPlaybackSettings; the input/connect path
+    // (e.g. Spotify Connect) skipped it, so the engine started at the default rate and then
+    // restarted mid-stream to match the sink (e.g. a sendspin client at 48 kHz/24-bit). That
+    // format-mismatch restart (reason=replace) races with source churn and can leave the sink
+    // with a started-but-starved stream — an audible dmix loop / noise.
+    const ctx = this.zoneRepo.get(zoneId);
+    if (ctx) {
+      const settings = computePreferredPlaybackSettings({
+        zoneId,
+        zoneName: ctx.name,
+        audiopath: metadata?.audiopath ?? label,
+        isRadio: false,
+        queueAuthority: ctx.queue?.authority,
+        outputs: ctx.outputs,
+        activeOutputType: ctx.activeOutput,
+        defaults: audioOutputSettings,
+      });
+      applyPreferredPlaybackSettings(this.audioManager, zoneId, settings);
+    }
     handlePlayInputSource({
       coordinator: this.buildInputCoordinator(),
       zoneId,
