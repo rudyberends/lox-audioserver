@@ -26,46 +26,8 @@ import { FirstChunkBarrier } from '@/engine/firstChunkBarrier';
 
 export type { OutputProfile };
 
-export type PlaybackSource =
-  | {
-      kind: 'file';
-      path: string;
-      loop?: boolean;
-      preDelayMs?: number;
-      /** Optional start offset in seconds. */
-      startAtSec?: number;
-      /** Whether ffmpeg should pace input with -re (default: true). */
-      realTime?: boolean;
-    }
-  | {
-      kind: 'url';
-      url: string;
-      preDelayMs?: number;
-      headers?: Record<string, string>;
-      decryptionKey?: string;
-      tlsVerifyHost?: string;
-      inputFormat?: string;
-      logLevel?: string;
-      /** Optional start offset in seconds. */
-      startAtSec?: number;
-      realTime?: boolean;
-      lowLatency?: boolean;
-      restartOnFailure?: boolean;
-    }
-  | {
-      kind: 'pipe';
-      path: string;
-      preDelayMs?: number;
-      format?: 's16le' | 's24le' | 's32le' | 's16be';
-      sampleRate?: number;
-      channels?: number;
-      /** Whether ffmpeg should pace input with -re (default: true). */
-      realTime?: boolean;
-      /** Optional shared readable stream to feed directly (bypasses URL). */
-      stream?: NodeJS.ReadableStream;
-    }
-;
-
+import type { PlaybackSource } from '@/engine/playbackSource';
+export type { PlaybackSource };
 
 export class AudioSession {
   private readonly log = createLogger('Audio', 'Session');
