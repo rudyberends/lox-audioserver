@@ -5,7 +5,7 @@ import {
   audioOutputSettings,
   type AudioOutputSettings,
 } from '@/engine/audioFormat';
-import type { EnginePort } from '@/ports/EnginePort';
+import type { EnginePort, EngineSessionStats } from '@/ports/EnginePort';
 
 export class AudioStreamEngine {
   private readonly log = createLogger('Audio', 'Engine');
@@ -15,48 +15,14 @@ export class AudioStreamEngine {
   private readonly handoffTokens = new Map<number, string>();
   private onSessionTerminated?: (
     zoneId: number,
-    stats: {
-      profile: OutputProfile;
-      bps: number | null;
-      bufferedBytes: number;
-      totalBytes: number;
-      lastUpdated: number | null;
-      subscribers: number;
-      restarts: number;
-      lastError: string | null;
-      lastErrorAt: number | null;
-      lastStderr: string | null;
-      lastStderrAt: number | null;
-      lastExitCode: number | null;
-      lastExitSignal: string | null;
-      lastExitAt: number | null;
-      subscriberDrops: number;
-      lastSubscriberDropAt: number | null;
-    } | null,
+    stats: EngineSessionStats | null,
     reason?: string,
   ) => void;
 
   public setSessionTerminationHandler(
     handler: (
       zoneId: number,
-      stats: {
-        profile: OutputProfile;
-        bps: number | null;
-        bufferedBytes: number;
-        totalBytes: number;
-        lastUpdated: number | null;
-        subscribers: number;
-        restarts: number;
-        lastError: string | null;
-        lastErrorAt: number | null;
-        lastStderr: string | null;
-        lastStderrAt: number | null;
-        lastExitCode: number | null;
-        lastExitSignal: string | null;
-        lastExitAt: number | null;
-        subscriberDrops: number;
-        lastSubscriberDropAt: number | null;
-      } | null,
+      stats: EngineSessionStats | null,
       reason?: string,
     ) => void,
   ): void {
@@ -260,46 +226,10 @@ export class AudioStreamEngine {
     return this.sessions.has(zoneId);
   }
 
-  public getSessionStats(
-    zoneId: number,
-  ): Array<{
-    profile: OutputProfile;
-    bps: number | null;
-    bufferedBytes: number;
-    totalBytes: number;
-    lastUpdated: number | null;
-    subscribers: number;
-    restarts: number;
-    lastError: string | null;
-    lastErrorAt: number | null;
-    lastStderr: string | null;
-    lastStderrAt: number | null;
-    lastExitCode: number | null;
-    lastExitSignal: string | null;
-    lastExitAt: number | null;
-    subscriberDrops: number;
-    lastSubscriberDropAt: number | null;
-  }> {
+  public getSessionStats(zoneId: number): EngineSessionStats[] {
     const map = this.sessions.get(zoneId);
     if (!map) return [];
-    const stats: Array<{
-      profile: OutputProfile;
-      bps: number | null;
-      bufferedBytes: number;
-      totalBytes: number;
-      lastUpdated: number | null;
-      subscribers: number;
-      restarts: number;
-      lastError: string | null;
-      lastErrorAt: number | null;
-      lastStderr: string | null;
-      lastStderrAt: number | null;
-      lastExitCode: number | null;
-      lastExitSignal: string | null;
-      lastExitAt: number | null;
-      subscriberDrops: number;
-      lastSubscriberDropAt: number | null;
-    }> = [];
+    const stats: EngineSessionStats[] = [];
     for (const session of map.values()) {
       stats.push(session.getStats());
     }

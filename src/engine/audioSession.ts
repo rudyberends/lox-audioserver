@@ -17,6 +17,10 @@ import { OutputPacer } from '@/engine/outputPacer';
 import { PcmFrameAligner } from '@/engine/pcmFrameAligner';
 import { codecPolicyForProfile, type CodecPolicy } from '@/engine/codecPolicy';
 import { runPcmBlend } from '@/engine/pcmCrossfade';
+import type { OutputProfile } from '@/ports/EngineTypes';
+import type { EngineSessionStats } from '@/ports/EnginePort';
+
+export type { OutputProfile };
 
 export type PlaybackSource =
   | {
@@ -57,8 +61,6 @@ export type PlaybackSource =
       stream?: NodeJS.ReadableStream;
     }
 ;
-
-export type OutputProfile = 'mp3' | 'aac' | 'pcm' | 'opus' | 'flac';
 
 
 export class AudioSession {
@@ -1637,24 +1639,7 @@ export class AudioSession {
     });
   }
 
-  public getStats(): {
-    profile: OutputProfile;
-    bps: number | null;
-    bufferedBytes: number;
-    totalBytes: number;
-    lastUpdated: number | null;
-    subscribers: number;
-    restarts: number;
-    lastError: string | null;
-    lastErrorAt: number | null;
-    lastStderr: string | null;
-    lastStderrAt: number | null;
-    lastExitCode: number | null;
-    lastExitSignal: string | null;
-    lastExitAt: number | null;
-    subscriberDrops: number;
-    lastSubscriberDropAt: number | null;
-    } {
+  public getStats(): EngineSessionStats {
     const drops = this.fanout.drops;
     return {
       profile: this.profile,
