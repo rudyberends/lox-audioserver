@@ -41,7 +41,7 @@ type ZoneAudioPrefsHandle = Pick<ZoneAudioPreferences, 'getEffectiveOutputSettin
 
 type ZoneManagerHandle = Pick<
   ZoneManagerFacade,
-  'getZoneState' | 'handleCommand' | 'setRepeatMode' | 'setShuffle'
+  'getZoneState' | 'handleCommand' | 'queue'
 >;
 
 type GroupManagerHandle = Pick<GroupManager, 'applySpecGroupVolume'>;

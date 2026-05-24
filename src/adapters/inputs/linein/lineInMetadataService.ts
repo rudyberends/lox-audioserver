@@ -557,7 +557,7 @@ export class LineInMetadataService {
       if (!matches) {
         continue;
       }
-      this.zones.updateInputMetadata(zone.id, {
+      this.zones.inputs.updateInputMetadata(zone.id, {
         title: metadata.title ?? undefined,
         artist: metadata.artist ?? undefined,
         album: metadata.album ?? undefined,

@@ -164,11 +164,11 @@ const noopZoneManager: OutputPorts['zoneManager'] = {
   handleCommand: () => {
     /* noop */
   },
-  setRepeatMode: () => {
-    /* noop */
-  },
-  setShuffle: () => {
-    /* noop */
+  queue: {
+    setShuffle: () => {},
+    setPendingShuffle: () => {},
+    setRepeatMode: () => {},
+    seekInQueue: () => false,
   },
 };
 

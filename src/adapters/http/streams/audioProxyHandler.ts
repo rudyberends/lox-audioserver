@@ -263,7 +263,7 @@ export class AudioProxyHandler {
         return;
       }
       lastSignature = signature;
-      this.zoneManager.updateRadioMetadata(zoneId, update);
+      this.zoneManager.inputs.updateRadioMetadata(zoneId, update);
     };
 
     const onData = (chunk: Buffer) => {

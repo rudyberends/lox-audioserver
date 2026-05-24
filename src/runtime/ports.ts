@@ -31,11 +31,12 @@ export function createZoneManagerProxy(
     handleCommand: (zoneId, command, value) => {
       requireZoneManager().handleCommand(zoneId, command, value);
     },
-    setRepeatMode: (zoneId, mode) => {
-      requireZoneManager().setRepeatMode(zoneId, mode);
-    },
-    setShuffle: (zoneId, enabled) => {
-      requireZoneManager().setShuffle(zoneId, enabled);
+    queue: {
+      setShuffle: (zoneId, enabled) => requireZoneManager().queue.setShuffle(zoneId, enabled),
+      setPendingShuffle: (zoneId, enabled) =>
+        requireZoneManager().queue.setPendingShuffle(zoneId, enabled),
+      setRepeatMode: (zoneId, mode) => requireZoneManager().queue.setRepeatMode(zoneId, mode),
+      seekInQueue: (zoneId, target) => requireZoneManager().queue.seekInQueue(zoneId, target),
     },
   };
 }

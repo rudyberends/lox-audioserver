@@ -8,8 +8,6 @@ import {
   type AudioManager,
   type PlaybackMetadata,
   type PlaybackSession,
-  type PlaybackSource,
-  type CoverArtPayload,
 } from '@/application/playback/audioManager';
 import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import { ZonePlayer } from '@/application/playback/zonePlayer';
@@ -94,6 +92,24 @@ export type EqualizerUpdateResult = {
   equalizerSettings: string;
 };
 
+export type ZoneInputController = Pick<
+  PlaybackCoordinator,
+  | 'playInputSource'
+  | 'stopInputSource'
+  | 'pauseInputSource'
+  | 'resumeInputSource'
+  | 'updateInputMetadata'
+  | 'updateRadioMetadata'
+  | 'updateInputCover'
+  | 'updateInputVolume'
+  | 'updateInputTiming'
+>;
+
+export type ZoneQueueOps = Pick<
+  ZoneQueueController,
+  'setShuffle' | 'setPendingShuffle' | 'setRepeatMode' | 'seekInQueue'
+>;
+
 export class ZoneManager {
   private readonly log = createLogger('Zones', 'Manager');
   private readonly zoneRepo = new ZoneRepository();
@@ -102,6 +118,8 @@ export class ZoneManager {
   private readonly outputRouter: OutputRouter;
   private readonly groupingCoordinator: GroupingCoordinator;
   private readonly playbackCoordinator: PlaybackCoordinator;
+  public readonly inputs!: ZoneInputController;
+  public readonly queue!: ZoneQueueOps;
   private readonly alertsCoordinator: AlertsCoordinator;
   private readonly inputsPort: InputsPort;
   private readonly audioHelpers: ZoneAudioHelpers;
@@ -186,7 +204,7 @@ export class ZoneManager {
         this.log.info('zone power manager forcing playback stop on off transition', {
           zoneId,
         });
-        this.stopInputSource(zoneId);
+        this.playbackCoordinator.stopInputSource(zoneId);
         // Preserve last-played track metadata (title/artist/album/coverurl/station) so
         // the Loxone baustein keeps "Aktueller Sender" populated and the favorites
         // banner stays meaningful. Only flag the zone as powered down.
@@ -282,6 +300,8 @@ export class ZoneManager {
       audioHelpers,
       zoneAudioPrefs: this.zoneAudioPrefs,
     });
+    this.inputs = this.playbackCoordinator;
+    this.queue = this.queueController;
   }
 
   public setNotifier(notifier: NotifierPort): void {
@@ -309,20 +329,20 @@ export class ZoneManager {
     const inputsPort = this.inputsPort;
     inputsPort.configureAirplay({
       startPlayback: (zoneId, label, source, metadata) => {
-        this.playInputSource(zoneId, label, source, metadata);
+        this.playbackCoordinator.playInputSource(zoneId, label, source, metadata);
       },
       updateMetadata: (zoneId, metadata) => {
-        this.updateInputMetadata(zoneId, metadata);
+        this.playbackCoordinator.updateInputMetadata(zoneId, metadata);
       },
-      updateCover: (zoneId, cover) => this.updateInputCover(zoneId, cover),
-      updateVolume: (zoneId, volume) => this.updateInputVolume(zoneId, volume),
+      updateCover: (zoneId, cover) => this.playbackCoordinator.updateInputCover(zoneId, cover),
+      updateVolume: (zoneId, volume) => this.playbackCoordinator.updateInputVolume(zoneId, volume),
       updateTiming: (zoneId, elapsed, duration) => {
-        this.updateInputTiming(zoneId, elapsed, duration);
+        this.playbackCoordinator.updateInputTiming(zoneId, elapsed, duration);
       },
-      pausePlayback: (zoneId) => this.pauseInputSource(zoneId),
-      resumePlayback: (zoneId) => this.resumeInputSource(zoneId),
+      pausePlayback: (zoneId) => this.playbackCoordinator.pauseInputSource(zoneId),
+      resumePlayback: (zoneId) => this.playbackCoordinator.resumeInputSource(zoneId),
       stopPlayback: (zoneId) => {
-        this.stopInputSource(zoneId);
+        this.playbackCoordinator.stopInputSource(zoneId);
       },
     });
     inputsPort.configureSpotify({
@@ -368,7 +388,7 @@ export class ZoneManager {
         // is also updated. Without this, the next updateQueueFromOutput call
         // from Squeezelite would overwrite the coverurl with the stale empty
         // value from the queue item, wiping the cover immediately after it loads.
-        return this.updateInputCover(zoneId, cover);
+        return this.playbackCoordinator.updateInputCover(zoneId, cover);
       },
       updateVolume: (zoneId, volume) => {
         const ctx = this.zoneRepo.get(zoneId);
@@ -609,50 +629,6 @@ export class ZoneManager {
     return this.playbackCoordinator.playContent(zoneId, uri, type, metadata, options);
   }
 
-  public playInputSource(
-    zoneId: number,
-    label: string,
-    playbackSource: PlaybackSource,
-    metadata?: PlaybackMetadata,
-  ): void {
-    this.playbackCoordinator.playInputSource(zoneId, label, playbackSource, metadata);
-  }
-
-  public stopInputSource(zoneId: number): void {
-    this.playbackCoordinator.stopInputSource(zoneId);
-  }
-
-  public pauseInputSource(zoneId: number): void {
-    this.playbackCoordinator.pauseInputSource(zoneId);
-  }
-
-  public resumeInputSource(zoneId: number): void {
-    this.playbackCoordinator.resumeInputSource(zoneId);
-  }
-
-  public updateInputMetadata(zoneId: number, metadata: Partial<PlaybackMetadata>): void {
-    this.playbackCoordinator.updateInputMetadata(zoneId, metadata);
-  }
-
-  public updateRadioMetadata(
-    zoneId: number,
-    metadata: { title: string; artist: string; coverurl?: string; duration?: number; controllable?: boolean },
-  ): void {
-    this.playbackCoordinator.updateRadioMetadata(zoneId, metadata);
-  }
-
-  public updateInputCover(zoneId: number, cover?: CoverArtPayload): string | undefined {
-    return this.playbackCoordinator.updateInputCover(zoneId, cover);
-  }
-
-  public updateInputVolume(zoneId: number, volume: number): void {
-    this.playbackCoordinator.updateInputVolume(zoneId, volume);
-  }
-
-  public updateInputTiming(zoneId: number, elapsed: number, duration: number): void {
-    this.playbackCoordinator.updateInputTiming(zoneId, elapsed, duration);
-  }
-
   /**
    * Hot-update the configured output latency for a zone. Calls `setLatencyMs` on each
    * live output that supports it. Returns true if at least one output applied the value.
@@ -704,10 +680,6 @@ export class ZoneManager {
     this.applyPatch(zoneId, patch);
     void this.inputsPort.renameAirplayZone(zoneId, trimmed);
     void this.inputsPort.renameSpotifyZone(zoneId, trimmed);
-  }
-
-  public seekInQueue(zoneId: number, target: string): boolean {
-    return this.queueController.seekInQueue(zoneId, target);
   }
 
   public handleCommand(zoneId: number, command: string, payload?: string): void {
@@ -894,18 +866,6 @@ export class ZoneManager {
     return this.stateStore.getTechnicalSnapshot(zoneId);
   }
 
-  public setShuffle(zoneId: number, enabled: boolean): void {
-    this.queueController.setShuffle(zoneId, enabled);
-  }
-
-  public setPendingShuffle(zoneId: number, enabled: boolean): void {
-    this.queueController.setPendingShuffle(zoneId, enabled);
-  }
-
-  public setRepeatMode(zoneId: number, mode: 'off' | 'one' | 'all'): void {
-    this.queueController.setRepeatMode(zoneId, mode);
-  }
-
   private registerZone(config: ZoneConfig): void {
     this.zoneAudioPrefs.setPlaybackPreDelayMs(
       config.id,
@@ -939,15 +899,15 @@ export class ZoneManager {
     });
     const spotifyAdapter = new SpotifyInputAdapter(inputAdapter, {
       startPlayback: (_zoneId, label, source, metadata) =>
-        this.playInputSource(config.id, label, source, metadata),
-      updateMetadata: (zoneId, metadata) => this.updateInputMetadata(zoneId, metadata),
-      updateCover: (zoneId, cover) => this.updateInputCover(zoneId, cover),
-      updateVolume: (zoneId, volume) => this.updateInputVolume(zoneId, volume),
+        this.playbackCoordinator.playInputSource(config.id, label, source, metadata),
+      updateMetadata: (zoneId, metadata) => this.playbackCoordinator.updateInputMetadata(zoneId, metadata),
+      updateCover: (zoneId, cover) => this.playbackCoordinator.updateInputCover(zoneId, cover),
+      updateVolume: (zoneId, volume) => this.playbackCoordinator.updateInputVolume(zoneId, volume),
       updateTiming: (zoneId, elapsed, duration) =>
-        this.updateInputTiming(zoneId, elapsed, duration),
-      pausePlayback: (zoneId) => this.pauseInputSource(zoneId),
-      resumePlayback: (zoneId) => this.resumeInputSource(zoneId),
-      stopPlayback: (zoneId) => this.stopInputSource(zoneId),
+        this.playbackCoordinator.updateInputTiming(zoneId, elapsed, duration),
+      pausePlayback: (zoneId) => this.playbackCoordinator.pauseInputSource(zoneId),
+      resumePlayback: (zoneId) => this.playbackCoordinator.resumeInputSource(zoneId),
+      stopPlayback: (zoneId) => this.playbackCoordinator.stopInputSource(zoneId),
     }, config.id);
     const context: ZoneContext = {
       id: config.id,

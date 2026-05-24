@@ -8,8 +8,10 @@ test('audio cfg roomfavs add returns created favorite id (not zone id)', async (
       getState: () => undefined,
       getQueue: () => ({ id: 7, items: [], shuffle: false, start: 0, totalitems: 0 }),
       handleCommand: () => {},
-      setPendingShuffle: () => {},
-      seekInQueue: () => false,
+      queue: {
+        setPendingShuffle: () => {},
+        seekInQueue: () => false,
+      },
       playContent: async () => {},
       getMetadata: () => ({}),
     } as any,

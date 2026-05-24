@@ -552,19 +552,19 @@ export class SendspinOutput implements ZoneOutput {
         }
         break;
       case 'repeat_off':
-        this.ports.zoneManager.setRepeatMode(this.zoneId, 'off');
+        this.ports.zoneManager.queue.setRepeatMode(this.zoneId, 'off');
         break;
       case 'repeat_one':
-        this.ports.zoneManager.setRepeatMode(this.zoneId, 'one');
+        this.ports.zoneManager.queue.setRepeatMode(this.zoneId, 'one');
         break;
       case 'repeat_all':
-        this.ports.zoneManager.setRepeatMode(this.zoneId, 'all');
+        this.ports.zoneManager.queue.setRepeatMode(this.zoneId, 'all');
         break;
       case 'shuffle':
-        this.ports.zoneManager.setShuffle(this.zoneId, true);
+        this.ports.zoneManager.queue.setShuffle(this.zoneId, true);
         break;
       case 'unshuffle':
-        this.ports.zoneManager.setShuffle(this.zoneId, false);
+        this.ports.zoneManager.queue.setShuffle(this.zoneId, false);
         break;
       case 'switch':
         this.handleSwitchCommand();

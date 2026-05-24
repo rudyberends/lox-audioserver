@@ -259,7 +259,7 @@ function startLineInPlayback(
     handleLineInStopped(zoneManager, deps, state, zoneId, inputId);
   });
   state.activeLineInByZone.set(zoneId, { inputId, stop });
-  zoneManager.playInputSource(
+  zoneManager.inputs.playInputSource(
     zoneId,
     'linein',
     {

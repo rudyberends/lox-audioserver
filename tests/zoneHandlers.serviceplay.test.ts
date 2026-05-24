@@ -10,8 +10,10 @@ test('audio serviceplay strips parentid suffix for metadata lookup', async () =>
       getState: () => undefined,
       getQueue: () => ({ id: 7, items: [], shuffle: false, start: 0, totalitems: 0 }),
       handleCommand: () => {},
-      setPendingShuffle: () => {},
-      seekInQueue: () => false,
+      queue: {
+        setPendingShuffle: () => {},
+        seekInQueue: () => false,
+      },
       playContent: async (_zoneId: number, uri: string) => {
         playedUri = uri;
       },

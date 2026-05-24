@@ -104,7 +104,7 @@ async function audioPlaylistPlay(
   // the user intended. Applies to all playlist sources (local and bridges).
   const zoneIdForShuffle = parseNumberPart(splitCommand(command)[1], 0);
   const hasNoShuffle = /\/noshuffle(?:\/|$)/i.test(command);
-  zoneManager.setPendingShuffle(zoneIdForShuffle, !hasNoShuffle);
+  zoneManager.queue.setPendingShuffle(zoneIdForShuffle, !hasNoShuffle);
 
   return playToZone(zoneManager, contentManager, fadeController, command, 'playlistplay', (parts) => {
     // Local library playlists arrive as `audio/<zone>/playlist/play/<encId>[/parentid/.../...][/noshuffle]`.
@@ -186,7 +186,7 @@ async function audioServicePlay(
   const parts = splitCommand(command);
   const zoneId = parseNumberPart(parts[1], 0);
   const hasNoShuffle = /\/noshuffle(?:\/|$)/i.test(command);
-  zoneManager.setPendingShuffle(zoneId, !hasNoShuffle);
+  zoneManager.queue.setPendingShuffle(zoneId, !hasNoShuffle);
   const resolvedCommand = resolveParentIdInCommand(command);
   const response = await playToZone(zoneManager, contentManager, fadeController, resolvedCommand, 'serviceplay', (parts) => {
     const decoded = extractPayload(parts.slice(4));
@@ -519,7 +519,7 @@ async function playToZone(
   if (looksLikeQueueClick) {
     const candidates = [uri, decodeAudiopath(uri)].filter(Boolean);
     for (const target of candidates) {
-      if (zoneManager.seekInQueue(zoneId, target)) {
+      if (zoneManager.queue.seekInQueue(zoneId, target)) {
         break;
       }
     }

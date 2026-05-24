@@ -524,7 +524,7 @@ class MixedGroupController implements MixedGroupCoordinator {
         }
         continue;
       }
-      this.zones.playInputSource(
+      this.zones.inputs.playInputSource(
         memberId,
         'mixedgroup',
         {
@@ -575,7 +575,7 @@ class MixedGroupController implements MixedGroupCoordinator {
         }
         continue;
       }
-      this.zones.playInputSource(
+      this.zones.inputs.playInputSource(
         memberId,
         label,
         {
@@ -621,7 +621,7 @@ class MixedGroupController implements MixedGroupCoordinator {
       return;
     }
     for (const memberId of members) {
-      this.zones.updateInputMetadata(memberId, metadata);
+      this.zones.inputs.updateInputMetadata(memberId, metadata);
     }
   }
 

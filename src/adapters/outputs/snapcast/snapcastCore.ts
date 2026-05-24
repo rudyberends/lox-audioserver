@@ -303,7 +303,7 @@ export class SnapcastCore {
       if (typeof value !== 'boolean') {
         return { ok: false, error: { code: -32602, message: 'Value for shuffle must be bool' } };
       }
-      this.zones.setShuffle(zoneId, value);
+      this.zones.queue.setShuffle(zoneId, value);
       return { ok: true };
     }
     if (property === 'loopStatus') {
@@ -314,15 +314,15 @@ export class SnapcastCore {
         };
       }
       if (value === 'none') {
-        this.zones.setRepeatMode(zoneId, 'off');
+        this.zones.queue.setRepeatMode(zoneId, 'off');
         return { ok: true };
       }
       if (value === 'track') {
-        this.zones.setRepeatMode(zoneId, 'one');
+        this.zones.queue.setRepeatMode(zoneId, 'one');
         return { ok: true };
       }
       if (value === 'playlist') {
-        this.zones.setRepeatMode(zoneId, 'all');
+        this.zones.queue.setRepeatMode(zoneId, 'all');
         return { ok: true };
       }
       return {
