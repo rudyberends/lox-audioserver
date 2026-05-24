@@ -64,7 +64,7 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
             const playlist = contentManager.getLocalPlaylist(playlistId);
             const folder = await contentManager.getLocalPlaylistItems(playlistId, start, limit);
             const tracks = (folder?.items ?? []).map((track, idx) =>
-              buildPlaylistTrackItem(track, start + idx),
+              buildPlaylistTrackItem(track, start + idx, playlistId),
             );
             return buildResponse(command, 'getplaylists2', [
               {
@@ -249,9 +249,21 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
   };
 }
 
-export function buildPlaylistTrackItem(track: ContentFolderItem, slot: number) {
+export function buildPlaylistTrackItem(
+  track: ContentFolderItem,
+  slot: number,
+  playlistId?: number | string,
+) {
   const audiopath = track.audiopath ?? track.id ?? '';
-  const encodedId = encodeLoxoneId(audiopath, BASE_PLAYLIST + slot);
+  // Embed playlist context so a later `playurl` carries enough info to rebuild
+  // the full playlist queue (starting at this slot) instead of degrading to a
+  // single-track play with no resolvable metadata. Mirrors the album/parentpath
+  // mechanism that already exists in parseParentContext.
+  const dataWithContext =
+    audiopath && playlistId != null && playlistId !== ''
+      ? `${audiopath}/parentpath/library:playlist:${playlistId}/${slot}`
+      : audiopath;
+  const encodedId = encodeLoxoneId(dataWithContext, BASE_PLAYLIST + slot);
   const name = track.name ?? track.title ?? '';
   return {
     type: 2, // FileType.File

@@ -223,10 +223,15 @@ async function audioPlayUrl(
   command: string,
 ) {
   return playToZone(zoneManager, contentManager, fadeController, command, 'playurl', (parts) => {
-    const raw = extractPayload(parts.slice(3));
+    // Loxone occasionally appends `/parentid/<x>/<y>` after the encoded id;
+    // strip it so the leading segment is a clean base64url payload that
+    // decodeLoxoneId can parse.
+    const raw = extractPayload(parts.slice(3)).replace(/\/parentid\/.*$/i, '');
     // Clicking a track inside a local playlist wraps the track audiopath in the
     // Loxone-canonical id (base64url of [<audiopath>, BASE_PLAYLIST + slot]).
-    // Unwrap so the queue builder can resolve the inner library: audiopath.
+    // The inner data may itself carry a `/parentpath/library:playlist:<id>/<slot>`
+    // suffix (added by buildPlaylistTrackItem) so the queue rebuilder can
+    // expand the full playlist and start at the clicked track.
     const decoded = decodeLoxoneId(raw);
     if (decoded && typeof decoded.data === 'string') {
       return decoded.data;

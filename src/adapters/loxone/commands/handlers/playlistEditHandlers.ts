@@ -232,7 +232,7 @@ export function createPlaylistEditHandlers(
           const added = await contentManager.addItemsToLocalPlaylist(playlistId, arg);
           const folder = await contentManager.getLocalPlaylistItems(playlistId, 0, 500);
           const items = (folder?.items ?? []).map((track, idx) =>
-            buildPlaylistTrackItem(track, idx),
+            buildPlaylistTrackItem(track, idx, playlistId),
           );
           log.debug('playlist update add', {
             playlistId,
