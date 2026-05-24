@@ -33,10 +33,10 @@ import type {
 import { ZoneStateStore } from '@/application/zones/ZoneStateStore';
 import { ZoneRepository } from '@/application/zones/ZoneRepository';
 import { StateControllerManager } from '@/application/zones/state/StateControllerManager';
+import { ExternalStateRouter } from '@/application/zones/state/ExternalStateRouter';
 import {
   resolveZoneStateControllerId,
   shouldUseStateControllerForCommand,
-  filterAuthoritativePatchWhileLocalSessionActive,
   isVolumeOwnedByStateController,
 } from '@/application/zones/state/types';
 import type { AlertMediaResource } from '@/application/alerts/types';
@@ -124,6 +124,7 @@ export class ZoneManager {
   private readonly inputsPort: InputsPort;
   private readonly audioHelpers: ZoneAudioHelpers;
   private readonly stateControllers: StateControllerManager;
+  private readonly externalStateRouter: ExternalStateRouter;
   private readonly outputsPort: OutputsPort;
   private readonly contentPort: ContentPort;
   private readonly configPort: ConfigPort;
@@ -182,13 +183,20 @@ export class ZoneManager {
     this.outputsPort = outputsPort;
     this.contentPort = contentPort;
     this.configPort = configPort;
+    this.audioManager = audioManager;
+    this.externalStateRouter = new ExternalStateRouter({
+      zones: this.zoneRepo,
+      audioManager: this.audioManager,
+      applyPatch: (zoneId, patch, force) => this.applyPatch(zoneId, patch, force),
+      notifyQueueUpdated: (zoneId, count) => this.notifier.notifyQueueUpdated(zoneId, count),
+      log: this.log,
+    });
     this.stateControllers = new StateControllerManager({
-      onStatePatch: (zoneId, patch) => this.handleExternalStatePatch(zoneId, patch),
+      onStatePatch: (zoneId, patch) => this.externalStateRouter.onStatePatch(zoneId, patch),
       onQueueMirror: (zoneId, items, currentIndex) =>
-        this.handleExternalQueueMirror(zoneId, items, currentIndex),
+        this.externalStateRouter.onQueueMirror(zoneId, items, currentIndex),
       configPort,
     });
-    this.audioManager = audioManager;
     this.zoneAudioPrefs = zoneAudioPrefs;
     this.powerManager = new PowerManager(this.log, undefined, (zoneId, signal) => {
       if (signal === 0) {
@@ -703,81 +711,6 @@ export class ZoneManager {
       }
     }
     this.playbackCoordinator.handleCommand(zoneId, command, payload);
-  }
-
-  private handleExternalStatePatch(zoneId: number, patch: Partial<LoxoneZoneState>): void {
-    const ctx = this.zoneRepo.get(zoneId);
-    if (!ctx) {
-      return;
-    }
-    const controllerId = resolveZoneStateControllerId(ctx.config);
-    if (controllerId === 'internal') {
-      this.applyPatch(zoneId, patch);
-      return;
-    }
-    const hasActiveLocalSession = this.audioManager.hasActiveLocalSession(zoneId);
-    if (hasActiveLocalSession) {
-      const authoritativePatch = filterAuthoritativePatchWhileLocalSessionActive(controllerId, patch);
-      if (authoritativePatch) {
-        const keys = Object.keys(authoritativePatch);
-        if (keys.length === 1 && keys[0] === 'volume' && typeof authoritativePatch.volume === 'number') {
-          this.log.info('accepted external volume-only patch while local session active', {
-            zoneId,
-            controller: controllerId,
-            volume: authoritativePatch.volume,
-          });
-        }
-        this.applyPatch(zoneId, authoritativePatch);
-        return;
-      }
-      this.log.debug('ignored external state patch while local session active', {
-        zoneId,
-        controller: controllerId,
-        keys: Object.keys(patch),
-      });
-      return;
-    }
-    if (this.audioManager.getSession(zoneId)) {
-      // Session object can outlive real output playback; drop it before accepting external authority.
-      this.audioManager.stopPlayback(zoneId);
-      this.log.info('cleared stale local session before external state patch', {
-        zoneId,
-        controller: controllerId,
-      });
-    }
-    this.applyPatch(zoneId, patch);
-  }
-
-  private handleExternalQueueMirror(
-    zoneId: number,
-    items: QueueItem[],
-    currentIndex: number,
-  ): void {
-    const ctx = this.zoneRepo.get(zoneId);
-    if (!ctx) return;
-    // Only mirror MA's queue when there's no local audio session — when we're
-    // streaming our own content into MA, the local queue is authoritative.
-    if (this.audioManager.hasActiveLocalSession(zoneId)) {
-      return;
-    }
-    const safeIndex = Math.max(0, Math.min(items.length - 1, Math.floor(currentIndex)));
-    ctx.queueController.setItems(items, safeIndex);
-    // Mark the zone as queue-driven so the Loxone app renders the queue UI:
-    //   - audiotype = 2 (Playlist) tells the app "we're playing from a queue"
-    //   - qid is the unique_id of the current item
-    //   - queueAuthority = local mirrors the existing playContent flow
-    const current = items[safeIndex];
-    if (current) {
-      const patch: Partial<LoxoneZoneState> = {
-        audiopath: current.audiopath,
-        audiotype: 2,
-        qindex: safeIndex,
-        qid: current.unique_id,
-        queueAuthority: 'local',
-      };
-      this.applyPatch(zoneId, patch);
-    }
-    this.notifier.notifyQueueUpdated(zoneId, items.length);
   }
 
   public async startAlert(
