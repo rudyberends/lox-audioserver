@@ -16,6 +16,7 @@ import { runPcmBlend } from '@/engine/pcmCrossfade';
 import type { OutputProfile } from '@/ports/EngineTypes';
 import type { EngineSessionStats } from '@/ports/EnginePort';
 import { FfmpegArgBuilder, FFMPEG_LOW_LATENCY_ARGS } from '@/engine/ffmpegArgs';
+import { PipeSourceAdapter } from '@/engine/pipeSourceAdapter';
 
 export type { OutputProfile };
 
@@ -89,10 +90,7 @@ export class AudioSession {
   private startTs: number | null = null;
   private readonly sourcePreDelayMs?: number;
   private debugTapStream?: fs.WriteStream;
-  private pipeSourceStream?: NodeJS.ReadableStream;
-  private pipeSourceDataListener?: (chunk: Buffer) => void;
-  private pipeSourceErrorListener?: (err: unknown) => void;
-  private pipeSourceEndListener?: () => void;
+  private readonly pipeSource = new PipeSourceAdapter();
   private directPipeMode = false;
   // Two-stage PCM pipeline (decoder → pcmPipe → encoderInput → encoder)
   private decoderProc?: ChildProcessWithoutNullStreams;
@@ -288,8 +286,7 @@ export class AudioSession {
     sr: number,
     ch: number,
   ): void {
-    this.detachPipeSourceListeners();
-    this.pipeSourceStream = stream;
+    this.pipeSource.adopt(stream);
     this.directPipeMode = true;
     this.startTs = Date.now();
     this.log.info('using direct pipe passthrough', {
@@ -303,7 +300,7 @@ export class AudioSession {
     let sourceBytesSinceLog = 0;
     let sourceLastLogTs = 0;
     let sourceFirstChunkLogged = false;
-    this.pipeSourceDataListener = (chunk: Buffer) => {
+    this.pipeSource.onData((chunk: Buffer) => {
       if (!chunk?.length) {
         return;
       }
@@ -355,8 +352,8 @@ export class AudioSession {
       this.buffer.push(aligned);
       this.recordBytes(chunk.length);
       this.writeToSubscribers(aligned);
-    };
-    this.pipeSourceErrorListener = (err: unknown) => {
+    });
+    this.pipeSource.onError((err: unknown) => {
       this.log.warn('pipe source error', {
         zoneId: this.zoneId,
         message: (err as { message?: string } | null)?.message || String(err),
@@ -364,17 +361,9 @@ export class AudioSession {
       if (!this.ending) {
         this.cleanup();
       }
-    };
-    stream.on('data', this.pipeSourceDataListener);
-    stream.on('error', this.pipeSourceErrorListener);
-    stream.once('end', () => {
-      this.log.debug('pipe source ended', { zoneId: this.zoneId, profile: this.profile });
-      if (!this.ending) {
-        this.cleanup();
-      }
     });
-    stream.once('close', () => {
-      this.log.debug('pipe source closed', { zoneId: this.zoneId, profile: this.profile });
+    this.pipeSource.onEndOrClose(() => {
+      this.log.debug('pipe source ended', { zoneId: this.zoneId, profile: this.profile });
       if (!this.ending) {
         this.cleanup();
       }
@@ -392,8 +381,8 @@ export class AudioSession {
     sr: number,
     ch: number,
   ): void {
-    this.detachPipeSourceListeners();
-    this.pipeSourceStream = stream;
+    this.pipeSource.detach(this.pcmPipe);
+    this.pipeSource.adopt(stream);
     const paceInput = (this.source as { realTime?: boolean }).realTime !== false;
     // When pacing is enabled, apply -re so ffmpeg throttles to real-time. Without it,
     // ffmpeg may read from the upstream pipe as fast as possible which makes the
@@ -437,22 +426,17 @@ export class AudioSession {
     stream.pipe(pcmBridge, { end: false });
     pcmBridge.pipe(encInput, { end: false });
 
-    const onSourceEnd = () => {
+    this.pipeSource.onEndOrClose(() => {
       try { stream.unpipe(pcmBridge); } catch { /* ignore */ }
       if (!this.crossfadeActive && !this.ending) encInput.end();
-    };
-    stream.once('end', onSourceEnd);
-    stream.once('close', onSourceEnd);
-    this.pipeSourceEndListener = onSourceEnd;
-
-    this.pipeSourceErrorListener = (err: unknown) => {
+    });
+    this.pipeSource.onError((err: unknown) => {
       this.log.warn('pipe source error', {
         zoneId: this.zoneId,
         message: err instanceof Error ? err.message : String(err),
       });
       encInput.destroy();
-    };
-    stream.on('error', this.pipeSourceErrorListener);
+    });
 
     this.startTs = Date.now();
     let proc: FfmpegProcess;
@@ -479,7 +463,7 @@ export class AudioSession {
     let sourceBytesSinceLog = 0;
     let sourceLastLogTs = 0;
     let sourceFirstChunkLogged = false;
-    this.pipeSourceDataListener = (chunk: Buffer) => {
+    this.pipeSource.onData((chunk: Buffer) => {
       if (!chunk?.length) {
         return;
       }
@@ -510,8 +494,7 @@ export class AudioSession {
         sourceLastLogTs = now;
         sourceBytesSinceLog = 0;
       }
-    };
-    stream.on('data', this.pipeSourceDataListener);
+    });
 
     this.process = proc;
     this.restartAttempts = 0;
@@ -656,18 +639,14 @@ export class AudioSession {
 
     if (options.stdinStream) {
       options.stdinStream.pipe(proc.stdin);
-      if (this.pipeSourceStream && this.pipeSourceErrorListener) {
-        this.pipeSourceStream.off('error', this.pipeSourceErrorListener);
-      }
-      this.pipeSourceStream = options.stdinStream;
-      this.pipeSourceErrorListener = (err: unknown) => {
+      this.pipeSource.adopt(options.stdinStream);
+      this.pipeSource.onError((err: unknown) => {
         this.log.warn('pipe source error', {
           zoneId: this.zoneId,
           message: (err as { message?: string } | null)?.message || String(err),
         });
         proc.stdin.destroy();
-      };
-      options.stdinStream.on('error', this.pipeSourceErrorListener);
+      });
       proc.stdin.on('error', (err: NodeJS.ErrnoException) => {
         const e = err as { code?: string; message?: string } | null;
         if (e?.code === 'EPIPE') {
@@ -699,10 +678,11 @@ export class AudioSession {
       | { kind: 'pipe'; stream: NodeJS.ReadableStream; sampleRate: number; channels: number },
     durationSec: number,
   ): Promise<boolean> {
-    if (this.directPipeMode && this.pipeSourceStream) {
+    const activePipe = this.pipeSource.current();
+    if (this.directPipeMode && activePipe) {
       return this.inlineCrossfadeFromDirectPipe(fadeIn, durationSec);
     }
-    if (this.pipeSourceStream && this.pcmPipe && this.encoderInput && !this.decoderProc) {
+    if (activePipe && this.pcmPipe && this.encoderInput && !this.decoderProc) {
       return this.inlineCrossfadeFromPipeFFmpeg(fadeIn, durationSec);
     }
     if (!this.pcmPipe || !this.encoderInput || !this.decoderProc) return false;
@@ -823,7 +803,8 @@ export class AudioSession {
       | { kind: 'pipe'; stream: NodeJS.ReadableStream; sampleRate: number; channels: number },
     durationSec: number,
   ): Promise<boolean> {
-    if (!this.pcmPipe || !this.encoderInput || !this.pipeSourceStream) return false;
+    const oldPipeStream = this.pipeSource.current();
+    if (!this.pcmPipe || !this.encoderInput || !oldPipeStream) return false;
 
     const { sampleRate } = this.outputSettings;
     const totalFrames = Math.round(durationSec * sampleRate);
@@ -860,7 +841,7 @@ export class AudioSession {
 
     this.pcmPipe.on('data', (c: Buffer) => oldChunks.push(c));
     const onOldEnd = () => { oldEnded = true; };
-    this.pipeSourceStream.once('end', onOldEnd);
+    oldPipeStream.once('end', onOldEnd);
     this.pcmPipe.resume();
 
     newSourceStream.on('data', (c: Buffer) => newChunks.push(c));
@@ -878,10 +859,9 @@ export class AudioSession {
 
     this.crossfadeActive = false;
 
-    this.pipeSourceStream.off('end', onOldEnd);
+    oldPipeStream.off('end', onOldEnd);
     this.pcmPipe.removeAllListeners('data');
-    try { this.pipeSourceStream.unpipe(this.pcmPipe); } catch { /* ignore */ }
-    this.detachPipeSourceListeners();
+    this.pipeSource.detach(this.pcmPipe);
 
     if (newRem.length) this.encoderInput!.write(newRem);
     newSourceStream.removeAllListeners('data');
@@ -892,20 +872,16 @@ export class AudioSession {
 
     if (fadeIn.kind === 'pipe') {
       // Pipe fade-in: wire the new Spotify stream as the new pcmPipe source.
-      this.pipeSourceStream = fadeIn.stream;
+      this.pipeSource.adopt(fadeIn.stream);
       fadeIn.stream.pipe(newPcmPipe, { end: false });
       newPcmPipe.pipe(this.encoderInput!, { end: false });
-      const onEnd = () => {
+      this.pipeSource.onEndOrClose(() => {
         if (!this.crossfadeActive && !this.ending) this.encoderInput?.end();
-      };
-      fadeIn.stream.once('end', onEnd);
-      fadeIn.stream.once('close', onEnd);
-      this.pipeSourceEndListener = onEnd;
-      this.pipeSourceErrorListener = (err: unknown) => {
+      });
+      this.pipeSource.onError((err: unknown) => {
         this.log.warn('crossfade pipe stream error', { zoneId: this.zoneId, message: err instanceof Error ? err.message : String(err) });
         if (!this.crossfadeActive && !this.ending) this.encoderInput?.end();
-      };
-      fadeIn.stream.on('error', this.pipeSourceErrorListener);
+      });
     } else {
       // Decoder fade-in: wire the decoder as the new decoderProc.
       this.decoderProc = newDecoder!;
@@ -939,7 +915,8 @@ export class AudioSession {
       | { kind: 'pipe'; stream: NodeJS.ReadableStream; sampleRate: number; channels: number },
     durationSec: number,
   ): Promise<boolean> {
-    if (!this.directPipeMode || !this.pipeSourceStream) return false;
+    const oldStreamAtEntry = this.pipeSource.current();
+    if (!this.directPipeMode || !oldStreamAtEntry) return false;
 
     const { sampleRate } = this.outputSettings;
     const totalFrames = Math.round(durationSec * sampleRate);
@@ -960,17 +937,16 @@ export class AudioSession {
     }
 
     this.crossfadeActive = true;
-    const oldStream = this.pipeSourceStream;
+    const oldStream = oldStreamAtEntry;
 
     this.log.info('PCM crossfade blend starting (direct-pipe)', {
       zoneId: this.zoneId, durationSec, totalFrames, fadeInKind: fadeIn.kind,
     });
     if (this.stdoutPaused) this.resumeStdout();
 
-    if (this.pipeSourceDataListener) {
-      oldStream.off('data', this.pipeSourceDataListener);
-      this.pipeSourceDataListener = undefined;
-    }
+    // Strip the session-level data listener so the old stream goes silent for the
+    // session; we add a private collector below for the duration of the blend.
+    this.pipeSource.detach();
 
     const oldChunks: Buffer[] = [];
     const newChunks: Buffer[] = [];
@@ -1004,7 +980,6 @@ export class AudioSession {
 
     oldStream.off('data', onOldData);
     oldStream.off('end', onOldEnd);
-    this.pipeSourceStream = undefined;
 
     if (newRem.length) {
       this.buffer.push(newRem);
@@ -1031,20 +1006,16 @@ export class AudioSession {
     });
 
     if (fadeIn.kind === 'pipe') {
-      this.pipeSourceStream = fadeIn.stream;
+      this.pipeSource.adopt(fadeIn.stream);
       fadeIn.stream.pipe(newPcmPipe, { end: false });
       newPcmPipe.pipe(newEncoderInput, { end: false });
-      const onEnd = () => {
+      this.pipeSource.onEndOrClose(() => {
         if (!this.crossfadeActive && !this.ending) newEncoderInput.end();
-      };
-      fadeIn.stream.once('end', onEnd);
-      fadeIn.stream.once('close', onEnd);
-      this.pipeSourceEndListener = onEnd;
-      this.pipeSourceErrorListener = (err: unknown) => {
+      });
+      this.pipeSource.onError((err: unknown) => {
         this.log.warn('crossfade pipe stream error', { zoneId: this.zoneId, message: err instanceof Error ? err.message : String(err) });
         if (!this.crossfadeActive && !this.ending) newEncoderInput.end();
-      };
-      fadeIn.stream.on('error', this.pipeSourceErrorListener);
+      });
     } else {
       this.decoderProc = newDecoder!;
       newDecoder!.stdout.pipe(newPcmPipe, { end: false });
@@ -1073,8 +1044,7 @@ export class AudioSession {
     if (this.stdoutPaused) {
       return;
     }
-    if (this.directPipeMode && this.pipeSourceStream && typeof this.pipeSourceStream.pause === 'function') {
-      this.pipeSourceStream.pause();
+    if (this.directPipeMode && this.pipeSource.pause()) {
       this.stdoutPaused = true;
       return;
     }
@@ -1089,8 +1059,7 @@ export class AudioSession {
     if (!this.stdoutPaused || this.fanout.hasBackpressure()) {
       return;
     }
-    if (this.directPipeMode && this.pipeSourceStream && typeof this.pipeSourceStream.resume === 'function') {
-      this.pipeSourceStream.resume();
+    if (this.directPipeMode && this.pipeSource.resume()) {
       this.stdoutPaused = false;
       return;
     }
@@ -1311,7 +1280,7 @@ export class AudioSession {
     this.bytesSinceLog = 0;
     this.lastLogTs = 0;
     this.pacer.reset();
-    this.detachPipeSourceListeners();
+    this.pipeSource.detach(this.pcmPipe);
     this.directPipeMode = false;
     if (suppressTermination && this.firstChunkResolve) {
       // ffmpeg is restarting; chain existing waiters to the next promise so the position
@@ -1383,26 +1352,4 @@ export class AudioSession {
     this.maybeLogThroughput();
   }
 
-  private detachPipeSourceListeners(): void {
-    if (this.pipeSourceStream && this.pipeSourceDataListener) {
-      this.pipeSourceStream.off('data', this.pipeSourceDataListener);
-    }
-    if (this.pipeSourceStream && this.pipeSourceErrorListener) {
-      this.pipeSourceStream.off('error', this.pipeSourceErrorListener);
-    }
-    if (this.pipeSourceStream && this.pipeSourceEndListener) {
-      this.pipeSourceStream.off('end', this.pipeSourceEndListener);
-      this.pipeSourceStream.off('close', this.pipeSourceEndListener);
-    }
-    // Two-stage pipe path also wires pipeSource → pcmPipe via .pipe(); the resulting
-    // internal 'data' listener stays attached until unpipe is called, so an external
-    // PassThrough source would otherwise still see a residual listener after stop.
-    if (this.pipeSourceStream && this.pcmPipe) {
-      try { this.pipeSourceStream.unpipe(this.pcmPipe); } catch { /* ignore */ }
-    }
-    this.pipeSourceStream = undefined;
-    this.pipeSourceDataListener = undefined;
-    this.pipeSourceErrorListener = undefined;
-    this.pipeSourceEndListener = undefined;
-  }
 }
