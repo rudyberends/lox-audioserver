@@ -1,4 +1,3 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
 import { PassThrough } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
@@ -12,11 +11,6 @@ import { SubscriberFanout } from '@/engine/subscriberFanout';
 import { OutputPacer } from '@/engine/outputPacer';
 import { PcmFrameAligner } from '@/engine/pcmFrameAligner';
 import { codecPolicyForProfile, type CodecPolicy } from '@/engine/codecPolicy';
-import {
-  blendPcmStreams,
-  processStdoutChunkSource,
-  streamChunkSource,
-} from '@/engine/pcmCrossfade';
 import type { OutputProfile } from '@/ports/EngineTypes';
 import type { EngineSessionStats } from '@/ports/EnginePort';
 import { FfmpegArgBuilder } from '@/engine/ffmpegArgs';
@@ -24,6 +18,7 @@ import { PipeSourceAdapter } from '@/engine/pipeSourceAdapter';
 import { TwoStagePipeline } from '@/engine/twoStagePipeline';
 import { FirstChunkBarrier } from '@/engine/firstChunkBarrier';
 import { SessionStarter } from '@/engine/sessionStarter';
+import { Crossfader } from '@/engine/crossfader';
 
 export type { OutputProfile };
 
@@ -71,7 +66,7 @@ export class AudioSession {
   /** @internal */ public crossfadeActive = false;
   private discardSubscribersOnStop = false;
   private restartingForEq = false;
-  private stdoutPaused = false;
+  /** @internal */ public stdoutPaused = false;
   private readonly pacer: OutputPacer;
   // When streaming raw PCM, ensure we only emit full audio frames.
   // Otherwise, a subscriber that attaches mid-stream can start at an arbitrary byte offset,
@@ -83,6 +78,7 @@ export class AudioSession {
   // joining mid-stream can initialize their decoders correctly.
   /** @internal */ public codecHeader: Buffer | null = null;
   private readonly starter: SessionStarter;
+  private readonly crossfader: Crossfader;
 
   constructor(
     /** @internal */ public readonly zoneId: number,
@@ -175,6 +171,7 @@ export class AudioSession {
     );
     this.pipeline = new TwoStagePipeline(this.log, { zoneId: this.zoneId, profile: this.profile });
     this.starter = new SessionStarter(this);
+    this.crossfader = new Crossfader(this);
   }
 
   /** @internal */ public alignPcmChunk(chunk: Buffer): Buffer | null {
@@ -370,331 +367,18 @@ export class AudioSession {
   }
 
   /**
-   * PCM crossfade — works for any source that uses the two-stage pipeline.
-   *
-   * The running decoder (old track) continues naturally; a new decoder is spawned
-   * for the fade-in source. Both PCM streams are blended frame-by-frame in Node.js
-   * with a linear volume ramp and written directly to encoderInput (which stays
-   * connected to the encoder FFmpeg throughout). Squeezelite never reconnects.
+   * PCM crossfade between the currently-playing source and a fade-in source.
+   * Dispatches to one of three topologies (two-stage decoder, pipe-with-ffmpeg,
+   * direct passthrough) implemented in {@link Crossfader}.
    */
-  public async inlineCrossfade(
+  public inlineCrossfade(
     fadeIn:
       | { kind: 'file'; path: string }
       | { kind: 'url'; url: string; headers?: Record<string, string>; decryptionKey?: string }
       | { kind: 'pipe'; stream: NodeJS.ReadableStream; sampleRate: number; channels: number },
     durationSec: number,
   ): Promise<boolean> {
-    const activePipe = this.pipeSource.current();
-    if (this.directPipeMode && activePipe) {
-      return this.inlineCrossfadeFromDirectPipe(fadeIn, durationSec);
-    }
-    if (activePipe && this.pipeline.pcmPipe && this.pipeline.encoderInput && !this.pipeline.decoder) {
-      return this.inlineCrossfadeFromPipeFFmpeg(fadeIn, durationSec);
-    }
-    if (!this.pipeline.pcmPipe || !this.pipeline.encoderInput || !this.pipeline.decoder) return false;
-    if (fadeIn.kind === 'pipe') return false; // pipe fade-in requires pipe fade-out path
-
-    const { sampleRate } = this.outputSettings;
-    const totalFrames = Math.round(durationSec * sampleRate);
-
-    // Spawn new decoder for the incoming track.
-    const newDecoderArgs = this.args.buildPcmDecoderArgsForSource(fadeIn);
-    const newDecoder = spawn(this.ffmpegPath, newDecoderArgs, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }) as ChildProcessWithoutNullStreams;
-    newDecoder.stderr?.on('data', (c: Buffer) => {
-      const msg = c.toString().trim();
-      if (msg) this.log.debug('new decoder stderr', { zoneId: this.zoneId, message: msg });
-    });
-
-    this.crossfadeActive = true;
-    const oldDecoder = this.pipeline.decoder as ChildProcessWithoutNullStreams;
-
-    this.log.info('PCM crossfade blend starting', {
-      zoneId: this.zoneId,
-      durationSec,
-      totalFrames,
-    });
-    // If the encoder's stdout was paused (subscriber count dropped to 0 mid-song),
-    // resume it now so the blend loop can write PCM without hitting backpressure.
-    if (this.stdoutPaused) {
-      this.resumeStdout();
-    }
-
-    // Keep decoder→pcmPipe intact (avoids OS-pipe stall from unpipe+resume).
-    // Only disconnect pcmPipe→encoderInput so we can write blended PCM directly.
-    this.pipeline.pcmPipe!.unpipe(this.pipeline.encoderInput);
-    // Explicitly resume the backpressure chain: unpiping from encoderInput may have
-    // left pcmPipe and decoder.stdout in a paused state.
-    this.pipeline.pcmPipe!.resume();
-    oldDecoder.stdout.resume();
-
-    // Old PCM arrives on pcmPipe but the *end* signal must come from the decoder's
-    // process exit (decoder→pcmPipe uses { end: false }, so pcmPipe never emits 'end').
-    const oldSource = processStdoutChunkSource(oldDecoder, this.pipeline.pcmPipe!);
-    const newSource = processStdoutChunkSource(newDecoder);
-
-    const { framesProcessed, newRem } = await blendPcmStreams(oldSource, newSource, {
-      channels: this.outputSettings.channels,
-      totalFrames,
-      onBlendedFrame: (blended) => { this.pipeline.encoderInput?.write(blended); },
-      log: this.log,
-      logContext: { zoneId: this.zoneId },
-    });
-
-    // Crossfade complete — transition to new decoder only.
-    this.crossfadeActive = false;
-    // Remove old decoder's process-level listeners before killing so its exit does
-    // NOT call encoderInput.end() (which would prematurely terminate the encoder).
-    oldDecoder.removeAllListeners('exit');
-    oldDecoder.removeAllListeners('error');
-    // Disconnect old decoder from old pcmPipe, then kill it.
-    oldDecoder.stdout.unpipe(this.pipeline.pcmPipe!);
-    oldDecoder.kill('SIGTERM');
-
-    // Write any leftover new-decoder PCM buffered during blend.
-    if (newRem.length) this.pipeline.encoderInput!.write(newRem);
-    newDecoder.stdout.removeAllListeners('data');
-    newDecoder.stdout.removeAllListeners('end');
-
-    // Reconnect: newDecoder → fresh pcmPipe → encoderInput.
-    const newPcmPipe = new PassThrough();
-    this.pipeline.pcmPipe = newPcmPipe;
-    this.pipeline.decoder = newDecoder;
-
-    newDecoder.stdout.pipe(newPcmPipe, { end: false });
-    newPcmPipe.pipe(this.pipeline.encoderInput!, { end: false });
-
-    newDecoder.on('exit', (code, signal) => {
-      this.log.debug('new decoder exited (after crossfade)', { zoneId: this.zoneId, code, signal });
-      if (!this.crossfadeActive) this.pipeline.encoderInput?.end();
-    });
-    newDecoder.on('error', (err: NodeJS.ErrnoException) => {
-      this.log.warn('new decoder error', { zoneId: this.zoneId, message: err.message });
-    });
-
-    this.log.info('PCM crossfade complete', {
-      zoneId: this.zoneId, framesProcessed, totalFrames, durationSec,
-    });
-    return true;
-  }
-
-  /**
-   * PCM crossfade for pipe sources in FFmpeg mode (pipeSource → pcmPipe → encoderInput → FFmpeg).
-   * Supports file/URL (spawns a decoder) and pipe (uses stream directly) as fade-in.
-   */
-  private async inlineCrossfadeFromPipeFFmpeg(
-    fadeIn:
-      | { kind: 'file'; path: string }
-      | { kind: 'url'; url: string; headers?: Record<string, string>; decryptionKey?: string }
-      | { kind: 'pipe'; stream: NodeJS.ReadableStream; sampleRate: number; channels: number },
-    durationSec: number,
-  ): Promise<boolean> {
-    const oldPipeStream = this.pipeSource.current();
-    if (!this.pipeline.pcmPipe || !this.pipeline.encoderInput || !oldPipeStream) return false;
-
-    const { sampleRate } = this.outputSettings;
-    const totalFrames = Math.round(durationSec * sampleRate);
-
-    // New source: either a decoder process (file/url) or a live pipe stream (Spotify-to-Spotify).
-    let newSourceStream: NodeJS.ReadableStream;
-    let newDecoder: ChildProcessWithoutNullStreams | undefined;
-    if (fadeIn.kind === 'pipe') {
-      newSourceStream = fadeIn.stream;
-    } else {
-      newDecoder = spawn(this.ffmpegPath, this.args.buildPcmDecoderArgsForSource(fadeIn), {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      }) as ChildProcessWithoutNullStreams;
-      newDecoder.stderr?.on('data', (c: Buffer) => {
-        const msg = c.toString().trim();
-        if (msg) this.log.debug('new decoder stderr', { zoneId: this.zoneId, message: msg });
-      });
-      newSourceStream = newDecoder.stdout;
-    }
-
-    this.crossfadeActive = true;
-
-    this.log.info('PCM crossfade blend starting (pipe-ffmpeg)', {
-      zoneId: this.zoneId, durationSec, totalFrames, fadeInKind: fadeIn.kind,
-    });
-    if (this.stdoutPaused) this.resumeStdout();
-
-    this.pipeline.pcmPipe.unpipe(this.pipeline.encoderInput);
-    this.pipeline.pcmPipe.resume();
-
-    // Old PCM arrives on pcmPipe but the end-signal must come from the upstream
-    // pipe source (librespot's stream); pcmPipe itself uses { end: false } piping.
-    const oldSource = streamChunkSource(oldPipeStream);
-    const newSource = streamChunkSource(newSourceStream);
-
-    const { framesProcessed, newRem } = await blendPcmStreams(oldSource, newSource, {
-      channels: this.outputSettings.channels,
-      totalFrames,
-      onBlendedFrame: (blended) => this.pipeline.encoderInput?.write(blended),
-      log: this.log,
-      logContext: { zoneId: this.zoneId },
-    });
-
-    this.crossfadeActive = false;
-
-    this.pipeline.pcmPipe.removeAllListeners('data');
-    this.pipeSource.detach(this.pipeline.pcmPipe);
-
-    if (newRem.length) this.pipeline.encoderInput!.write(newRem);
-    newSourceStream.removeAllListeners('data');
-    newSourceStream.removeAllListeners('end');
-
-    const newPcmPipe = new PassThrough();
-    this.pipeline.pcmPipe = newPcmPipe;
-
-    if (fadeIn.kind === 'pipe') {
-      // Pipe fade-in: wire the new Spotify stream as the new pcmPipe source.
-      this.pipeSource.adopt(fadeIn.stream);
-      fadeIn.stream.pipe(newPcmPipe, { end: false });
-      newPcmPipe.pipe(this.pipeline.encoderInput!, { end: false });
-      this.pipeSource.onEndOrClose(() => {
-        if (!this.crossfadeActive && !this.ending) this.pipeline.encoderInput?.end();
-      });
-      this.pipeSource.onError((err: unknown) => {
-        this.log.warn('crossfade pipe stream error', { zoneId: this.zoneId, message: err instanceof Error ? err.message : String(err) });
-        if (!this.crossfadeActive && !this.ending) this.pipeline.encoderInput?.end();
-      });
-    } else {
-      // Decoder fade-in: wire the decoder as the new decoderProc.
-      this.pipeline.decoder = newDecoder!;
-      newDecoder!.stdout.pipe(newPcmPipe, { end: false });
-      newPcmPipe.pipe(this.pipeline.encoderInput!, { end: false });
-      newDecoder!.on('exit', (code, signal) => {
-        this.log.debug('new decoder exited (after pipe-ffmpeg crossfade)', { zoneId: this.zoneId, code, signal });
-        if (!this.crossfadeActive) this.pipeline.encoderInput?.end();
-      });
-      newDecoder!.on('error', (err: NodeJS.ErrnoException) => {
-        this.log.warn('new decoder error', { zoneId: this.zoneId, message: err.message });
-      });
-    }
-
-    this.log.info('PCM crossfade complete (pipe-ffmpeg)', {
-      zoneId: this.zoneId, framesProcessed, totalFrames, durationSec,
-    });
-    return true;
-  }
-
-  /**
-   * PCM crossfade for pipe sources in direct-passthrough mode (profile=pcm, no FFmpeg).
-   * Supports file/URL (spawns a decoder) and pipe (Spotify stream) as fade-in.
-   * Blended PCM is written directly to subscribers. Afterwards a pseudo-two-stage pipeline
-   * is wired so future crossfades on the new track work normally.
-   */
-  private async inlineCrossfadeFromDirectPipe(
-    fadeIn:
-      | { kind: 'file'; path: string }
-      | { kind: 'url'; url: string; headers?: Record<string, string>; decryptionKey?: string }
-      | { kind: 'pipe'; stream: NodeJS.ReadableStream; sampleRate: number; channels: number },
-    durationSec: number,
-  ): Promise<boolean> {
-    const oldStreamAtEntry = this.pipeSource.current();
-    if (!this.directPipeMode || !oldStreamAtEntry) return false;
-
-    const { sampleRate } = this.outputSettings;
-    const totalFrames = Math.round(durationSec * sampleRate);
-
-    let newSourceStream: NodeJS.ReadableStream;
-    let newDecoder: ChildProcessWithoutNullStreams | undefined;
-    if (fadeIn.kind === 'pipe') {
-      newSourceStream = fadeIn.stream;
-    } else {
-      newDecoder = spawn(this.ffmpegPath, this.args.buildPcmDecoderArgsForSource(fadeIn), {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      }) as ChildProcessWithoutNullStreams;
-      newDecoder.stderr?.on('data', (c: Buffer) => {
-        const msg = c.toString().trim();
-        if (msg) this.log.debug('new decoder stderr', { zoneId: this.zoneId, message: msg });
-      });
-      newSourceStream = newDecoder.stdout;
-    }
-
-    this.crossfadeActive = true;
-    const oldStream = oldStreamAtEntry;
-
-    this.log.info('PCM crossfade blend starting (direct-pipe)', {
-      zoneId: this.zoneId, durationSec, totalFrames, fadeInKind: fadeIn.kind,
-    });
-    if (this.stdoutPaused) this.resumeStdout();
-
-    // Strip the session-level data listener so the old stream goes silent for the
-    // session; we add a private collector below for the duration of the blend.
-    this.pipeSource.detach();
-
-    const oldSource = streamChunkSource(oldStream);
-    const newSource = streamChunkSource(newSourceStream);
-    oldStream.resume();
-
-    const { framesProcessed, newRem } = await blendPcmStreams(oldSource, newSource, {
-      channels: this.outputSettings.channels,
-      totalFrames,
-      onBlendedFrame: (blended) => {
-        this.buffer.push(blended);
-        this.writeToSubscribers(blended);
-      },
-      log: this.log,
-      logContext: { zoneId: this.zoneId },
-    });
-
-    this.crossfadeActive = false;
-    this.directPipeMode = false;
-
-    if (newRem.length) {
-      this.buffer.push(newRem);
-      this.writeToSubscribers(newRem);
-    }
-    newSourceStream.removeAllListeners('data');
-    newSourceStream.removeAllListeners('end');
-
-    // Wire a pseudo-two-stage pipeline so future inlineCrossfade calls work on the new track.
-    const newPcmPipe = new PassThrough();
-    const newEncoderInput = new PassThrough();
-    this.pipeline.pcmPipe = newPcmPipe;
-    this.pipeline.encoderInput = newEncoderInput;
-
-    newEncoderInput.on('data', (chunk: Buffer) => {
-      const aligned = this.alignPcmChunk(chunk);
-      if (aligned?.length) {
-        this.buffer.push(aligned);
-        this.writeToSubscribers(aligned);
-      }
-    });
-    newEncoderInput.on('end', () => {
-      if (!this.crossfadeActive && !this.ending) this.cleanup();
-    });
-
-    if (fadeIn.kind === 'pipe') {
-      this.pipeSource.adopt(fadeIn.stream);
-      fadeIn.stream.pipe(newPcmPipe, { end: false });
-      newPcmPipe.pipe(newEncoderInput, { end: false });
-      this.pipeSource.onEndOrClose(() => {
-        if (!this.crossfadeActive && !this.ending) newEncoderInput.end();
-      });
-      this.pipeSource.onError((err: unknown) => {
-        this.log.warn('crossfade pipe stream error', { zoneId: this.zoneId, message: err instanceof Error ? err.message : String(err) });
-        if (!this.crossfadeActive && !this.ending) newEncoderInput.end();
-      });
-    } else {
-      this.pipeline.decoder = newDecoder!;
-      newDecoder!.stdout.pipe(newPcmPipe, { end: false });
-      newPcmPipe.pipe(newEncoderInput, { end: false });
-      newDecoder!.on('exit', (code, signal) => {
-        this.log.debug('new decoder exited (after direct-pipe crossfade)', { zoneId: this.zoneId, code, signal });
-        if (!this.crossfadeActive) newEncoderInput.end();
-      });
-      newDecoder!.on('error', (err: NodeJS.ErrnoException) => {
-        this.log.warn('new decoder error', { zoneId: this.zoneId, message: err.message });
-      });
-    }
-
-    this.log.info('PCM crossfade complete (direct-pipe)', {
-      zoneId: this.zoneId, framesProcessed, totalFrames, durationSec,
-    });
-    return true;
+    return this.crossfader.inlineCrossfade(fadeIn, durationSec);
   }
 
   private pauseStdout(): void {
@@ -717,7 +401,7 @@ export class AudioSession {
     this.stdoutPaused = true;
   }
 
-  private resumeStdout(): void {
+  /** @internal */ public resumeStdout(): void {
     if (!this.stdoutPaused || this.fanout.hasBackpressure()) {
       return;
     }
