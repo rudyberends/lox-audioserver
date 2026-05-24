@@ -1,4 +1,17 @@
-import { EventType, SonosClient, type SonosGroup } from '@lox-audioserver/node-sonos';
+import {
+  EventType,
+  S1Client,
+  SonosClient,
+  detectGeneration,
+  type S1SonosGroup,
+  type SonosGroup,
+} from '@lox-audioserver/node-sonos';
+
+// Either backend exposes the same `player.group.*` shape that the snapshot
+// builder consumes; the union here keeps the dispatcher type-safe without
+// templating the whole controller.
+type AnySonosGroup = SonosGroup | S1SonosGroup;
+type AnySonosClient = SonosClient | S1Client;
 import type { ZoneConfig } from '@/domain/config/types';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import { AudioType } from '@/domain/loxone/enums';
@@ -14,6 +27,12 @@ const TIME_TICK_MS = 1000;
 const RECONNECT_INITIAL_DELAY_MS = 5_000;
 const RECONNECT_MAX_DELAY_MS = 60_000;
 const RECONNECT_BACKOFF_FACTOR = 2;
+// Cap how long the initial start may block the StateControllerManager loop.
+// A speaker that accepts TCP but stalls during the TLS/WebSocket handshake (or
+// the S1 UPnP probe) would otherwise hang start() indefinitely, blocking every
+// later zone's controller from coming up. On timeout we drop to the reconnect
+// schedule and return so the manager can move on.
+const START_TIMEOUT_MS = 15_000;
 
 export class SonosStateController implements ZoneStateController {
   private readonly log = createLogger('Zones', 'StateController:Sonos');
@@ -21,7 +40,7 @@ export class SonosStateController implements ZoneStateController {
   private readonly onStatePatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
   private readonly host: string | null;
 
-  private client: SonosClient | null = null;
+  private client: AnySonosClient | null = null;
   private startPromise: Promise<void> | null = null;
   private stopRequested = false;
   private unsubscribeEvent: (() => void) | null = null;
@@ -43,7 +62,31 @@ export class SonosStateController implements ZoneStateController {
   public async start(): Promise<void> {
     this.stopRequested = false;
     this.reconnectDelay = RECONNECT_INITIAL_DELAY_MS;
-    await this.connect();
+    let timeoutHandle: NodeJS.Timeout | null = null;
+    const timeoutPromise = new Promise<'timeout'>((resolve) => {
+      timeoutHandle = setTimeout(() => resolve('timeout'), START_TIMEOUT_MS);
+      timeoutHandle.unref?.();
+    });
+    try {
+      const result = await Promise.race([
+        this.connect().then(() => 'done' as const),
+        timeoutPromise,
+      ]);
+      if (result === 'timeout') {
+        this.log.warn('sonos state controller start timed out; scheduling reconnect', {
+          zoneId: this.zone.id,
+          host: this.host,
+          timeoutMs: START_TIMEOUT_MS,
+        });
+        // Tear down whatever half-initialised client we may have so the next
+        // attempt starts clean. We do not await — destroy can itself hang on a
+        // pathological speaker, and we are already past the budget.
+        void this.destroyClient();
+        this.scheduleReconnect();
+      }
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
   }
 
   private async connect(): Promise<void> {
@@ -58,7 +101,25 @@ export class SonosStateController implements ZoneStateController {
 
     await this.destroyClient();
     const generation = ++this.connectionGeneration;
-    const client = new SonosClient(this.host, { logger: console });
+
+    // Probe S2 vs S1 firmware before instantiating the backend client. Sonos
+    // S2 speakers expose the modern WebSocket API on TLS:1443; S1 speakers do
+    // not, and need the legacy UPnP/SOAP path. `unknown` is treated as S2 so
+    // we don't change behaviour for healthy S2 fleets that happen to be slow
+    // to respond — the existing failure paths still log and reconnect.
+    const generationKind = await detectGeneration(this.host).catch(() => 'unknown' as const);
+    if (this.connectionGeneration !== generation || this.stopRequested) {
+      return;
+    }
+    const client: AnySonosClient =
+      generationKind === 'S1'
+        ? new S1Client(this.host, { logger: console })
+        : new SonosClient(this.host, { logger: console });
+    this.log.info('sonos state controller backend selected', {
+      zoneId: this.zone.id,
+      host: this.host,
+      generation: generationKind,
+    });
 
     this.client = client;
 
@@ -422,7 +483,7 @@ function firstImage(images: Array<{ url?: string }> | undefined): string {
   return '';
 }
 
-function resolveAudiotype(group: SonosGroup, mediaUrl: string, containerType: string): number {
+function resolveAudiotype(group: AnySonosGroup, mediaUrl: string, containerType: string): number {
   const media = mediaUrl.toLowerCase();
   const type = containerType.toLowerCase();
   const service = String(group.activeService ?? '').toLowerCase();

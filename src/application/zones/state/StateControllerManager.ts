@@ -60,16 +60,20 @@ export class StateControllerManager {
 
   public async replaceAll(zones: ZoneConfig[]): Promise<void> {
     await this.stopAll();
-    for (const zone of zones) {
-      await this.startForZone(zone);
-    }
+    // Start zones in parallel. Each controller's start() already swallows its
+    // own errors via startForZone, but allSettled is the explicit contract: a
+    // single hanging zone (e.g. a Sonos speaker stuck in TLS handshake) must
+    // not block any other zone's controller from coming online.
+    await Promise.allSettled(zones.map((zone) => this.startForZone(zone)));
   }
 
   public async replaceZones(zones: ZoneConfig[]): Promise<void> {
-    for (const zone of zones) {
-      await this.stopForZone(zone.id);
-      await this.startForZone(zone);
-    }
+    await Promise.allSettled(
+      zones.map(async (zone) => {
+        await this.stopForZone(zone.id);
+        await this.startForZone(zone);
+      }),
+    );
   }
 
   public async stopForZone(zoneId: number): Promise<void> {
