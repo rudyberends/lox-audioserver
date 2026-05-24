@@ -243,8 +243,6 @@ export class AudioSession {
 
     if (this.source.kind === 'pipe' && this.source.stream) {
       const pipeSource = this.source as typeof this.source & { stream: NodeJS.ReadableStream };
-      this.detachPipeSourceListeners();
-      this.pipeSourceStream = pipeSource.stream;
       const fmt = this.source.format ?? 's16le';
       const sr = this.source.sampleRate ?? this.outputSettings.sampleRate;
       const ch = this.source.channels ?? 2;
@@ -258,221 +256,10 @@ export class AudioSession {
         !this.sourcePreDelayMs;
 
       if (canDirectPassthrough) {
-        this.directPipeMode = true;
-        this.startTs = Date.now();
-        this.log.info('using direct pipe passthrough', {
-          zoneId: this.zoneId,
-          profile: this.profile,
-          format: fmt,
-          sampleRate: sr,
-          channels: ch,
-        });
-
-        let sourceBytesSinceLog = 0;
-        let sourceLastLogTs = 0;
-        let sourceFirstChunkLogged = false;
-        this.pipeSourceDataListener = (chunk: Buffer) => {
-          if (!chunk?.length) {
-            return;
-          }
-          sourceBytesSinceLog += chunk.length;
-          if (!sourceFirstChunkLogged) {
-            sourceFirstChunkLogged = true;
-            this.log.info('pipe source first chunk', {
-              zoneId: this.zoneId,
-              bytes: chunk.length,
-              format: fmt,
-              sampleRate: sr,
-              channels: ch,
-            });
-          }
-          const now = Date.now();
-          if (!sourceLastLogTs) {
-            sourceLastLogTs = now;
-          } else {
-            const elapsed = now - sourceLastLogTs;
-            if (elapsed >= 1000) {
-              const bps = Math.round((sourceBytesSinceLog / elapsed) * 1000);
-              this.log.spam('pipe source throughput', {
-                zoneId: this.zoneId,
-                bytesPerSec: bps,
-              });
-              sourceLastLogTs = now;
-              sourceBytesSinceLog = 0;
-            }
-          }
-
-          const aligned = this.alignPcmChunk(chunk);
-          if (!aligned?.length) {
-            this.recordBytes(chunk.length);
-            return;
-          }
-          if (!this.firstChunkLogged) {
-            this.firstChunkLogged = true;
-            if (this.firstChunkResolve) {
-              this.firstChunkResolve(true);
-              this.firstChunkResolve = null;
-            }
-            this.log.info('direct pipe first chunk', {
-              zoneId: this.zoneId,
-              profile: this.profile,
-              bytes: aligned.length,
-              spawnToFirstChunkMs: this.startTs ? Math.max(0, Date.now() - this.startTs) : null,
-            });
-          }
-          this.buffer.push(aligned);
-          this.recordBytes(chunk.length);
-          this.writeToSubscribers(aligned);
-        };
-        this.pipeSourceErrorListener = (err: unknown) => {
-          this.log.warn('pipe source error', {
-            zoneId: this.zoneId,
-            message: (err as { message?: string } | null)?.message || String(err),
-          });
-          if (!this.ending) {
-            this.cleanup();
-          }
-        };
-        pipeSource.stream.on('data', this.pipeSourceDataListener);
-        pipeSource.stream.on('error', this.pipeSourceErrorListener);
-        pipeSource.stream.once('end', () => {
-          this.log.debug('pipe source ended', { zoneId: this.zoneId, profile: this.profile });
-          if (!this.ending) {
-            this.cleanup();
-          }
-        });
-        pipeSource.stream.once('close', () => {
-          this.log.debug('pipe source closed', { zoneId: this.zoneId, profile: this.profile });
-          if (!this.ending) {
-            this.cleanup();
-          }
-        });
-        this.restartAttempts = 0;
-        return;
+        this.startDirectPipe(pipeSource.stream, fmt, sr, ch);
+      } else {
+        this.startPipeWithFfmpeg(pipeSource.stream, fmt, sr, ch);
       }
-
-      const paceInput = this.source.realTime !== false;
-      // When pacing is enabled, apply -re so ffmpeg throttles to real-time. Without it,
-      // ffmpeg may read from the upstream pipe as fast as possible which makes the
-      // Sendspin timestamps run ahead of wall clock and causes the client to speed up.
-      // buildLowLatencyArgs() includes -probesize 32k -analyzeduration 0 even though the
-      // format is explicitly specified via -f. This is intentional: even with an explicit
-      // format, ffmpeg still runs an analyze phase that buffers ~1.1 s of PCM before
-      // producing any output. Setting analyzeduration=0 reduces that to ~50 ms.
-      const inputArgs = [
-        ...this.buildLowLatencyArgs(),
-        ...(paceInput ? ['-re'] : []),
-        '-f',
-        fmt,
-        '-ar',
-        String(sr),
-        '-ac',
-        String(ch),
-        '-i',
-        'pipe:0',
-      ];
-      const outputArgs = this.buildOutputArgs();
-      const args = ['-hide_banner', '-loglevel', this.getLogLevel(), ...inputArgs, ...outputArgs, 'pipe:1'];
-
-      this.log.debug('spawning ffmpeg (pipe stream)', {
-        zoneId: this.zoneId,
-        args,
-        inputFormat: fmt,
-        inputSampleRate: sr,
-        inputChannels: ch,
-        outputSampleRate: this.outputSettings.sampleRate,
-        outputChannels: this.outputSettings.channels,
-        outputBitDepth: this.outputSettings.pcmBitDepth,
-        profile: this.profile,
-      });
-      // Insert PassThrough chain so crossfade can blend PCM before the encoder.
-      // pipeSource.stream → pcmPipe → encoderInput → FFmpeg.stdin
-      const pcmBridge = new PassThrough();
-      const encInput = new PassThrough();
-      this.pcmPipe = pcmBridge;
-      this.encoderInput = encInput;
-      this.pipeSourceStream = pipeSource.stream;
-      pipeSource.stream.pipe(pcmBridge, { end: false });
-      pcmBridge.pipe(encInput, { end: false });
-
-      const onSourceEnd = () => {
-        try { pipeSource.stream.unpipe(pcmBridge); } catch { /* ignore */ }
-        if (!this.crossfadeActive && !this.ending) encInput.end();
-      };
-      pipeSource.stream.once('end', onSourceEnd);
-      pipeSource.stream.once('close', onSourceEnd);
-      this.pipeSourceEndListener = onSourceEnd;
-
-      this.pipeSourceErrorListener = (err: unknown) => {
-        this.log.warn('pipe source error', {
-          zoneId: this.zoneId,
-          message: err instanceof Error ? err.message : String(err),
-        });
-        encInput.destroy();
-      };
-      pipeSource.stream.on('error', this.pipeSourceErrorListener);
-
-      this.startTs = Date.now();
-      let proc: FfmpegProcess;
-      proc = this.spawnFfmpeg(args, {
-        restartOnFailure: false,
-        logFirstChunk: false,
-        onExit: () => {
-          try { encInput.unpipe(proc.stdin); } catch { /* ignore */ }
-        },
-      });
-      encInput.pipe(proc.stdin);
-      proc.stdin.on('error', (err: NodeJS.ErrnoException) => {
-        if (err?.code === 'EPIPE') {
-          this.log.debug('ffmpeg stdin closed (EPIPE)', { zoneId: this.zoneId });
-        } else {
-          this.log.warn('ffmpeg stdin error', {
-            zoneId: this.zoneId,
-            message: err instanceof Error ? err.message : String(err),
-          });
-        }
-      });
-
-      // Monitor incoming source stream for pacing visibility.
-      let sourceBytesSinceLog = 0;
-      let sourceLastLogTs = 0;
-      let sourceFirstChunkLogged = false;
-      this.pipeSourceDataListener = (chunk: Buffer) => {
-        if (!chunk?.length) {
-          return;
-        }
-        sourceBytesSinceLog += chunk.length;
-        if (!sourceFirstChunkLogged) {
-          sourceFirstChunkLogged = true;
-          this.log.info('pipe source first chunk', {
-            zoneId: this.zoneId,
-            bytes: chunk.length,
-            format: fmt,
-            sampleRate: sr,
-            channels: ch,
-            spawnToFirstInputMs: this.startTs ? Math.max(0, Date.now() - this.startTs) : null,
-          });
-        }
-        const now = Date.now();
-        if (!sourceLastLogTs) {
-          sourceLastLogTs = now;
-          return;
-        }
-        const elapsed = now - sourceLastLogTs;
-        if (elapsed >= 1000) {
-          const bps = Math.round((sourceBytesSinceLog / elapsed) * 1000);
-          this.log.spam('pipe source throughput', {
-            zoneId: this.zoneId,
-            bytesPerSec: bps,
-          });
-          sourceLastLogTs = now;
-          sourceBytesSinceLog = 0;
-        }
-      };
-      pipeSource.stream.on('data', this.pipeSourceDataListener);
-
-      this.process = proc;
-      this.restartAttempts = 0;
       return;
     }
 
@@ -483,10 +270,255 @@ export class AudioSession {
       return;
     }
 
+    this.startSingleStage();
+  }
+
+  /**
+   * Pipe source, profile=pcm, format/rate/channels already match output settings, no
+   * filter chain needed. Stream bytes straight to subscribers without an ffmpeg hop.
+   */
+  private startDirectPipe(
+    stream: NodeJS.ReadableStream,
+    fmt: string,
+    sr: number,
+    ch: number,
+  ): void {
+    this.detachPipeSourceListeners();
+    this.pipeSourceStream = stream;
+    this.directPipeMode = true;
+    this.startTs = Date.now();
+    this.log.info('using direct pipe passthrough', {
+      zoneId: this.zoneId,
+      profile: this.profile,
+      format: fmt,
+      sampleRate: sr,
+      channels: ch,
+    });
+
+    let sourceBytesSinceLog = 0;
+    let sourceLastLogTs = 0;
+    let sourceFirstChunkLogged = false;
+    this.pipeSourceDataListener = (chunk: Buffer) => {
+      if (!chunk?.length) {
+        return;
+      }
+      sourceBytesSinceLog += chunk.length;
+      if (!sourceFirstChunkLogged) {
+        sourceFirstChunkLogged = true;
+        this.log.info('pipe source first chunk', {
+          zoneId: this.zoneId,
+          bytes: chunk.length,
+          format: fmt,
+          sampleRate: sr,
+          channels: ch,
+        });
+      }
+      const now = Date.now();
+      if (!sourceLastLogTs) {
+        sourceLastLogTs = now;
+      } else {
+        const elapsed = now - sourceLastLogTs;
+        if (elapsed >= 1000) {
+          const bps = Math.round((sourceBytesSinceLog / elapsed) * 1000);
+          this.log.spam('pipe source throughput', {
+            zoneId: this.zoneId,
+            bytesPerSec: bps,
+          });
+          sourceLastLogTs = now;
+          sourceBytesSinceLog = 0;
+        }
+      }
+
+      const aligned = this.alignPcmChunk(chunk);
+      if (!aligned?.length) {
+        this.recordBytes(chunk.length);
+        return;
+      }
+      if (!this.firstChunkLogged) {
+        this.firstChunkLogged = true;
+        if (this.firstChunkResolve) {
+          this.firstChunkResolve(true);
+          this.firstChunkResolve = null;
+        }
+        this.log.info('direct pipe first chunk', {
+          zoneId: this.zoneId,
+          profile: this.profile,
+          bytes: aligned.length,
+          spawnToFirstChunkMs: this.startTs ? Math.max(0, Date.now() - this.startTs) : null,
+        });
+      }
+      this.buffer.push(aligned);
+      this.recordBytes(chunk.length);
+      this.writeToSubscribers(aligned);
+    };
+    this.pipeSourceErrorListener = (err: unknown) => {
+      this.log.warn('pipe source error', {
+        zoneId: this.zoneId,
+        message: (err as { message?: string } | null)?.message || String(err),
+      });
+      if (!this.ending) {
+        this.cleanup();
+      }
+    };
+    stream.on('data', this.pipeSourceDataListener);
+    stream.on('error', this.pipeSourceErrorListener);
+    stream.once('end', () => {
+      this.log.debug('pipe source ended', { zoneId: this.zoneId, profile: this.profile });
+      if (!this.ending) {
+        this.cleanup();
+      }
+    });
+    stream.once('close', () => {
+      this.log.debug('pipe source closed', { zoneId: this.zoneId, profile: this.profile });
+      if (!this.ending) {
+        this.cleanup();
+      }
+    });
+    this.restartAttempts = 0;
+  }
+
+  /**
+   * Pipe source that needs filter/codec conversion. PCM is bridged through pcmPipe →
+   * encoderInput so a crossfade can swap the source without dropping ffmpeg.
+   */
+  private startPipeWithFfmpeg(
+    stream: NodeJS.ReadableStream,
+    fmt: string,
+    sr: number,
+    ch: number,
+  ): void {
+    this.detachPipeSourceListeners();
+    this.pipeSourceStream = stream;
+    const paceInput = (this.source as { realTime?: boolean }).realTime !== false;
+    // When pacing is enabled, apply -re so ffmpeg throttles to real-time. Without it,
+    // ffmpeg may read from the upstream pipe as fast as possible which makes the
+    // Sendspin timestamps run ahead of wall clock and causes the client to speed up.
+    // buildLowLatencyArgs() includes -probesize 32k -analyzeduration 0 even though the
+    // format is explicitly specified via -f. This is intentional: even with an explicit
+    // format, ffmpeg still runs an analyze phase that buffers ~1.1 s of PCM before
+    // producing any output. Setting analyzeduration=0 reduces that to ~50 ms.
+    const inputArgs = [
+      ...this.buildLowLatencyArgs(),
+      ...(paceInput ? ['-re'] : []),
+      '-f', fmt,
+      '-ar', String(sr),
+      '-ac', String(ch),
+      '-i', 'pipe:0',
+    ];
     const args = [
-      '-hide_banner',
-      '-loglevel',
-      this.getLogLevel(),
+      '-hide_banner', '-loglevel', this.getLogLevel(),
+      ...inputArgs,
+      ...this.buildOutputArgs(),
+      'pipe:1',
+    ];
+
+    this.log.debug('spawning ffmpeg (pipe stream)', {
+      zoneId: this.zoneId,
+      args,
+      inputFormat: fmt,
+      inputSampleRate: sr,
+      inputChannels: ch,
+      outputSampleRate: this.outputSettings.sampleRate,
+      outputChannels: this.outputSettings.channels,
+      outputBitDepth: this.outputSettings.pcmBitDepth,
+      profile: this.profile,
+    });
+    // Insert PassThrough chain so crossfade can blend PCM before the encoder.
+    // stream → pcmPipe → encoderInput → FFmpeg.stdin
+    const pcmBridge = new PassThrough();
+    const encInput = new PassThrough();
+    this.pcmPipe = pcmBridge;
+    this.encoderInput = encInput;
+    stream.pipe(pcmBridge, { end: false });
+    pcmBridge.pipe(encInput, { end: false });
+
+    const onSourceEnd = () => {
+      try { stream.unpipe(pcmBridge); } catch { /* ignore */ }
+      if (!this.crossfadeActive && !this.ending) encInput.end();
+    };
+    stream.once('end', onSourceEnd);
+    stream.once('close', onSourceEnd);
+    this.pipeSourceEndListener = onSourceEnd;
+
+    this.pipeSourceErrorListener = (err: unknown) => {
+      this.log.warn('pipe source error', {
+        zoneId: this.zoneId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      encInput.destroy();
+    };
+    stream.on('error', this.pipeSourceErrorListener);
+
+    this.startTs = Date.now();
+    let proc: FfmpegProcess;
+    proc = this.spawnFfmpeg(args, {
+      restartOnFailure: false,
+      logFirstChunk: false,
+      onExit: () => {
+        try { encInput.unpipe(proc.stdin); } catch { /* ignore */ }
+      },
+    });
+    encInput.pipe(proc.stdin);
+    proc.stdin.on('error', (err: NodeJS.ErrnoException) => {
+      if (err?.code === 'EPIPE') {
+        this.log.debug('ffmpeg stdin closed (EPIPE)', { zoneId: this.zoneId });
+      } else {
+        this.log.warn('ffmpeg stdin error', {
+          zoneId: this.zoneId,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+
+    // Monitor incoming source stream for pacing visibility.
+    let sourceBytesSinceLog = 0;
+    let sourceLastLogTs = 0;
+    let sourceFirstChunkLogged = false;
+    this.pipeSourceDataListener = (chunk: Buffer) => {
+      if (!chunk?.length) {
+        return;
+      }
+      sourceBytesSinceLog += chunk.length;
+      if (!sourceFirstChunkLogged) {
+        sourceFirstChunkLogged = true;
+        this.log.info('pipe source first chunk', {
+          zoneId: this.zoneId,
+          bytes: chunk.length,
+          format: fmt,
+          sampleRate: sr,
+          channels: ch,
+          spawnToFirstInputMs: this.startTs ? Math.max(0, Date.now() - this.startTs) : null,
+        });
+      }
+      const now = Date.now();
+      if (!sourceLastLogTs) {
+        sourceLastLogTs = now;
+        return;
+      }
+      const elapsed = now - sourceLastLogTs;
+      if (elapsed >= 1000) {
+        const bps = Math.round((sourceBytesSinceLog / elapsed) * 1000);
+        this.log.spam('pipe source throughput', {
+          zoneId: this.zoneId,
+          bytesPerSec: bps,
+        });
+        sourceLastLogTs = now;
+        sourceBytesSinceLog = 0;
+      }
+    };
+    stream.on('data', this.pipeSourceDataListener);
+
+    this.process = proc;
+    this.restartAttempts = 0;
+  }
+
+  /**
+   * Pipe source without an attached stream (rare fallback). Builds input args from
+   * the source path and runs a single ffmpeg without the pcmPipe/encoderInput bridge.
+   */
+  private startSingleStage(): void {
+    const args = [
+      '-hide_banner', '-loglevel', this.getLogLevel(),
       ...this.buildInputArgs(),
       ...this.buildOutputArgs(),
       'pipe:1',
@@ -501,13 +533,11 @@ export class AudioSession {
       profile: this.profile,
     });
     this.startTs = Date.now();
-    const proc = this.spawnFfmpeg(args, {
-      // After the file/url guard above, only pipe/crossfade sources reach here.
+    this.process = this.spawnFfmpeg(args, {
+      // After the file/url guard, only pipe/crossfade sources reach here.
       restartOnFailure: this.source.kind === 'pipe',
       logFirstChunk: true,
     });
-
-    this.process = proc;
     this.restartAttempts = 0;
   }
 
