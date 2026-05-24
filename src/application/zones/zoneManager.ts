@@ -43,12 +43,11 @@ import type { AlertMediaResource } from '@/application/alerts/types';
 import { PowerManager } from '@/application/zones/services/powerManager';
 import { SharedPowerGroupManager } from '@/application/zones/services/sharedPowerGroupManager';
 import { ZoneHeartbeatService } from '@/application/zones/services/ZoneHeartbeatService';
+import { InputSourceConfigurator } from '@/application/zones/services/InputSourceConfigurator';
 import {
   buildInitialState,
   getZoneDefaultVolume,
-  clampVolumeForZone,
 } from '@/application/zones/helpers/stateHelpers';
-import { buildVolumePatch } from '@/application/zones/playback/patchBuilder';
 import {
   formatEqualizerSettings,
   normalizeEqualizerBands,
@@ -134,8 +133,8 @@ export class ZoneManager {
   private readonly powerManager: PowerManager;
   private readonly sharedPowerGroupManager: SharedPowerGroupManager;
   private readonly heartbeat: ZoneHeartbeatService;
+  private readonly inputConfigurator: InputSourceConfigurator;
   private initialized = false;
-  private inputsConfigured = false;
   private notifier: NotifierPort;
 
   /** Read-only snapshot of the current zone state for external consumers (e.g. outputs). */
@@ -296,6 +295,14 @@ export class ZoneManager {
       listZones: () => this.zoneRepo.list(),
       notifier: { notifyZoneStateChanged: (state) => this.notifier.notifyZoneStateChanged(state) },
     });
+    this.inputConfigurator = new InputSourceConfigurator({
+      inputsPort: this.inputsPort,
+      zoneRepo: this.zoneRepo,
+      playback: this.playbackCoordinator,
+      outputRouter: this.outputRouter,
+      stateStore: this.stateStore,
+      applyPatch: (zoneId, patch, force) => this.applyPatch(zoneId, patch, force),
+    });
     this.inputs = this.playbackCoordinator;
     this.queue = this.queueController;
   }
@@ -316,127 +323,6 @@ export class ZoneManager {
         this.playbackCoordinator.updateOutputState(zoneId, state);
       },
     };
-  }
-
-  private configureInputs(): void {
-    if (this.inputsConfigured) {
-      return;
-    }
-    const inputsPort = this.inputsPort;
-    inputsPort.configureAirplay({
-      startPlayback: (zoneId, label, source, metadata) => {
-        this.playbackCoordinator.playInputSource(zoneId, label, source, metadata);
-      },
-      updateMetadata: (zoneId, metadata) => {
-        this.playbackCoordinator.updateInputMetadata(zoneId, metadata);
-      },
-      updateCover: (zoneId, cover) => this.playbackCoordinator.updateInputCover(zoneId, cover),
-      updateVolume: (zoneId, volume) => this.playbackCoordinator.updateInputVolume(zoneId, volume),
-      updateTiming: (zoneId, elapsed, duration) => {
-        this.playbackCoordinator.updateInputTiming(zoneId, elapsed, duration);
-      },
-      pausePlayback: (zoneId) => this.playbackCoordinator.pauseInputSource(zoneId),
-      resumePlayback: (zoneId) => this.playbackCoordinator.resumeInputSource(zoneId),
-      stopPlayback: (zoneId) => {
-        this.playbackCoordinator.stopInputSource(zoneId);
-      },
-    });
-    inputsPort.configureSpotify({
-      startPlayback: (zoneId, label, source, metadata) => {
-        const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx) {
-          return;
-        }
-        // Spotify Connect may take over from any input except AirPlay (which has
-        // its own exclusivity). Regular Spotify callbacks only proceed when spotify
-        // is already the active input (prevents Connect stealing an AirPlay session).
-        if (label === 'spotify-connect') {
-          if (ctx.activeInput === 'airplay') {
-            return;
-          }
-        } else if (ctx.activeInput && ctx.activeInput !== 'spotify') {
-          return;
-        }
-        // Spotify Connect sessions use a dedicated label. Mark the zone as Connect-
-        // controlled so resolveSourceName returns 'Spotify Connect' and
-        // buildActiveItemPatch preserves the live-source audiotype (no shuffle/repeat).
-        // Also set activeInput/inputMode so subsequent metadata callbacks are not
-        // blocked by the ctx.activeInput !== 'spotify' guards.
-        if (label === 'spotify-connect') {
-          ctx.queue.authority = 'spotify';
-          this.playbackCoordinator.setInputMode(ctx, 'spotify');
-          // Sync zone volume to the Connect device immediately so it does not
-          // start at librespot's default (100%).
-          const initialVolume = ctx.state.volume ?? getZoneDefaultVolume(ctx.config);
-          this.outputRouter.dispatchVolume(ctx, ctx.outputs, initialVolume);
-        }
-        ctx.spotifyAdapter.start(label, source, metadata);
-      },
-      updateMetadata: (zoneId, metadata) => {
-        const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx || ctx.activeInput !== 'spotify') {
-          return;
-        }
-        ctx.spotifyAdapter.updateMetadata(metadata);
-      },
-      updateCover: (zoneId, cover) => {
-        // Route through updateInputCover so current.coverurl in the queue item
-        // is also updated. Without this, the next updateQueueFromOutput call
-        // from Squeezelite would overwrite the coverurl with the stale empty
-        // value from the queue item, wiping the cover immediately after it loads.
-        return this.playbackCoordinator.updateInputCover(zoneId, cover);
-      },
-      updateVolume: (zoneId, volume) => {
-        const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx || ctx.activeInput !== 'spotify') {
-          return;
-        }
-        const level = clampVolumeForZone(ctx.config, volume);
-        // Patch zone state so the Loxone UI reflects the change.
-        // Do NOT route through player.setVolume: that triggers onPlayerVolume
-        // → dispatchVolume → SpotifyConnectInputController → Spotify API, which
-        // causes librespot to echo a volume event back → infinite loop.
-        this.stateStore.applyPatch(zoneId, buildVolumePatch(level));
-        // Sync squeezelite hardware volume only; skip spotify-input to avoid the loop.
-        const nonInputOutputs = ctx.outputs.filter(o => o.type !== 'spotify-input');
-        this.outputRouter.dispatchVolume(ctx, nonInputOutputs, level);
-      },
-      updateTiming: (zoneId, elapsed, duration) => {
-        const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx || ctx.activeInput !== 'spotify') {
-          return;
-        }
-        ctx.spotifyAdapter.updateTiming(elapsed, duration);
-      },
-      pausePlayback: (zoneId) => {
-        const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx || ctx.activeInput !== 'spotify') {
-          return;
-        }
-        ctx.spotifyAdapter.pause();
-      },
-      resumePlayback: (zoneId) => {
-        const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx || ctx.activeInput !== 'spotify') {
-          return;
-        }
-        ctx.spotifyAdapter.resume();
-      },
-      stopPlayback: (zoneId) => {
-        const ctx = this.zoneRepo.get(zoneId);
-        if (!ctx || ctx.activeInput !== 'spotify') {
-          return;
-        }
-        // Clear track metadata before the player stops so the zone resets cleanly
-        // instead of showing the last track's title/artist/cover in stopped state.
-        this.applyPatch(zoneId, { title: '', artist: '', album: '', coverurl: '' });
-        ctx.queue.authority = 'local';
-        this.playbackCoordinator.setInputMode(ctx, null);
-        ctx.spotifyAdapter.stop();
-      },
-    });
-    inputsPort.setAirplayPlayerResolver((zoneId: number) => this.zoneRepo.get(zoneId)?.player ?? null);
-    this.inputsConfigured = true;
   }
 
   public refreshContentProviders(): void {
@@ -471,7 +357,7 @@ export class ZoneManager {
     clearPlayers();
     zoneConfigs.forEach((cfg) => this.registerZone(cfg));
     this.sharedPowerGroupManager.configure(groups?.powerGroups, zoneConfigs);
-    this.configureInputs();
+    this.inputConfigurator.configure();
     const inputsPort = this.inputsPort;
     inputsPort.syncAirplayZones(zoneConfigs, inputs?.airplay ?? null);
     inputsPort.syncSpotifyZones(zoneConfigs, inputs?.spotify ?? null);
@@ -526,7 +412,7 @@ export class ZoneManager {
     // Refresh input services using the full current set.
     const allZones = this.zoneRepo.list().map((ctx) => ctx.config);
     this.sharedPowerGroupManager.configure(groups?.powerGroups, allZones);
-    this.configureInputs();
+    this.inputConfigurator.configure();
     const inputsPort = this.inputsPort;
     inputsPort.syncAirplayZones(allZones, inputs?.airplay ?? null);
     inputsPort.syncSpotifyZones(allZones, inputs?.spotify ?? null);

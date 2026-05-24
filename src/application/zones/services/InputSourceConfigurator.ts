@@ -1,0 +1,180 @@
+import type { InputsPort } from '@/ports/InputsPort';
+import type { OutputRouter } from '@/application/zones/OutputRouter';
+import type { PlaybackCoordinator } from '@/application/zones/PlaybackCoordinator';
+import type { ZoneStateStore } from '@/application/zones/ZoneStateStore';
+import type { ZoneRepository } from '@/application/zones/ZoneRepository';
+import type { LoxoneZoneState } from '@/domain/loxone/types';
+import { buildVolumePatch } from '@/application/zones/playback/patchBuilder';
+import {
+  clampVolumeForZone,
+  getZoneDefaultVolume,
+} from '@/application/zones/helpers/stateHelpers';
+
+export type InputSourceConfiguratorDeps = {
+  inputsPort: Pick<InputsPort, 'configureAirplay' | 'configureSpotify' | 'setAirplayPlayerResolver'>;
+  zoneRepo: Pick<ZoneRepository, 'get'>;
+  playback: Pick<
+    PlaybackCoordinator,
+    | 'playInputSource'
+    | 'stopInputSource'
+    | 'pauseInputSource'
+    | 'resumeInputSource'
+    | 'updateInputMetadata'
+    | 'updateInputCover'
+    | 'updateInputVolume'
+    | 'updateInputTiming'
+    | 'setInputMode'
+  >;
+  outputRouter: Pick<OutputRouter, 'dispatchVolume'>;
+  stateStore: Pick<ZoneStateStore, 'applyPatch'>;
+  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>, force?: boolean) => void;
+};
+
+/**
+ * Wires the AirPlay and Spotify Connect input controllers to the playback
+ * coordinator. Idempotent: configure() is a no-op after the first call.
+ *
+ * AirPlay is a straight pass-through to playback-coordinator input methods.
+ * Spotify Connect has authority gates (e.g. AirPlay blocks Connect take-over)
+ * and dedicated volume handling that avoids feedback loops with librespot.
+ */
+export class InputSourceConfigurator {
+  private readonly deps: InputSourceConfiguratorDeps;
+  private configured = false;
+
+  constructor(deps: InputSourceConfiguratorDeps) {
+    this.deps = deps;
+  }
+
+  public configure(): void {
+    if (this.configured) {
+      return;
+    }
+    this.configureAirplay();
+    this.configureSpotify();
+    this.deps.inputsPort.setAirplayPlayerResolver(
+      (zoneId) => this.deps.zoneRepo.get(zoneId)?.player ?? null,
+    );
+    this.configured = true;
+  }
+
+  private configureAirplay(): void {
+    const { playback } = this.deps;
+    this.deps.inputsPort.configureAirplay({
+      startPlayback: (zoneId, label, source, metadata) => {
+        playback.playInputSource(zoneId, label, source, metadata);
+      },
+      updateMetadata: (zoneId, metadata) => {
+        playback.updateInputMetadata(zoneId, metadata);
+      },
+      updateCover: (zoneId, cover) => playback.updateInputCover(zoneId, cover),
+      updateVolume: (zoneId, volume) => playback.updateInputVolume(zoneId, volume),
+      updateTiming: (zoneId, elapsed, duration) => {
+        playback.updateInputTiming(zoneId, elapsed, duration);
+      },
+      pausePlayback: (zoneId) => playback.pauseInputSource(zoneId),
+      resumePlayback: (zoneId) => playback.resumeInputSource(zoneId),
+      stopPlayback: (zoneId) => {
+        playback.stopInputSource(zoneId);
+      },
+    });
+  }
+
+  private configureSpotify(): void {
+    const { playback, zoneRepo, outputRouter, stateStore, applyPatch } = this.deps;
+    this.deps.inputsPort.configureSpotify({
+      startPlayback: (zoneId, label, source, metadata) => {
+        const ctx = zoneRepo.get(zoneId);
+        if (!ctx) {
+          return;
+        }
+        // Spotify Connect may take over from any input except AirPlay (which has
+        // its own exclusivity). Regular Spotify callbacks only proceed when spotify
+        // is already the active input (prevents Connect stealing an AirPlay session).
+        if (label === 'spotify-connect') {
+          if (ctx.activeInput === 'airplay') {
+            return;
+          }
+        } else if (ctx.activeInput && ctx.activeInput !== 'spotify') {
+          return;
+        }
+        // Spotify Connect sessions use a dedicated label. Mark the zone as Connect-
+        // controlled so resolveSourceName returns 'Spotify Connect' and
+        // buildActiveItemPatch preserves the live-source audiotype (no shuffle/repeat).
+        // Also set activeInput/inputMode so subsequent metadata callbacks are not
+        // blocked by the ctx.activeInput !== 'spotify' guards.
+        if (label === 'spotify-connect') {
+          ctx.queue.authority = 'spotify';
+          playback.setInputMode(ctx, 'spotify');
+          // Sync zone volume to the Connect device immediately so it does not
+          // start at librespot's default (100%).
+          const initialVolume = ctx.state.volume ?? getZoneDefaultVolume(ctx.config);
+          outputRouter.dispatchVolume(ctx, ctx.outputs, initialVolume);
+        }
+        ctx.spotifyAdapter.start(label, source, metadata);
+      },
+      updateMetadata: (zoneId, metadata) => {
+        const ctx = zoneRepo.get(zoneId);
+        if (!ctx || ctx.activeInput !== 'spotify') {
+          return;
+        }
+        ctx.spotifyAdapter.updateMetadata(metadata);
+      },
+      updateCover: (zoneId, cover) => {
+        // Route through updateInputCover so current.coverurl in the queue item
+        // is also updated. Without this, the next updateQueueFromOutput call
+        // from Squeezelite would overwrite the coverurl with the stale empty
+        // value from the queue item, wiping the cover immediately after it loads.
+        return playback.updateInputCover(zoneId, cover);
+      },
+      updateVolume: (zoneId, volume) => {
+        const ctx = zoneRepo.get(zoneId);
+        if (!ctx || ctx.activeInput !== 'spotify') {
+          return;
+        }
+        const level = clampVolumeForZone(ctx.config, volume);
+        // Patch zone state so the Loxone UI reflects the change.
+        // Do NOT route through player.setVolume: that triggers onPlayerVolume
+        // → dispatchVolume → SpotifyConnectInputController → Spotify API, which
+        // causes librespot to echo a volume event back → infinite loop.
+        stateStore.applyPatch(zoneId, buildVolumePatch(level));
+        // Sync squeezelite hardware volume only; skip spotify-input to avoid the loop.
+        const nonInputOutputs = ctx.outputs.filter((o) => o.type !== 'spotify-input');
+        outputRouter.dispatchVolume(ctx, nonInputOutputs, level);
+      },
+      updateTiming: (zoneId, elapsed, duration) => {
+        const ctx = zoneRepo.get(zoneId);
+        if (!ctx || ctx.activeInput !== 'spotify') {
+          return;
+        }
+        ctx.spotifyAdapter.updateTiming(elapsed, duration);
+      },
+      pausePlayback: (zoneId) => {
+        const ctx = zoneRepo.get(zoneId);
+        if (!ctx || ctx.activeInput !== 'spotify') {
+          return;
+        }
+        ctx.spotifyAdapter.pause();
+      },
+      resumePlayback: (zoneId) => {
+        const ctx = zoneRepo.get(zoneId);
+        if (!ctx || ctx.activeInput !== 'spotify') {
+          return;
+        }
+        ctx.spotifyAdapter.resume();
+      },
+      stopPlayback: (zoneId) => {
+        const ctx = zoneRepo.get(zoneId);
+        if (!ctx || ctx.activeInput !== 'spotify') {
+          return;
+        }
+        // Clear track metadata before the player stops so the zone resets cleanly
+        // instead of showing the last track's title/artist/cover in stopped state.
+        applyPatch(zoneId, { title: '', artist: '', album: '', coverurl: '' });
+        ctx.queue.authority = 'local';
+        playback.setInputMode(ctx, null);
+        ctx.spotifyAdapter.stop();
+      },
+    });
+  }
+}
