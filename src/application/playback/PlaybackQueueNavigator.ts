@@ -11,7 +11,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-export class QueueController {
+export class PlaybackQueueNavigator {
   constructor(private readonly queue: QueueState) {}
 
   public setItems(items: QueueItem[], startIndex = 0): void {

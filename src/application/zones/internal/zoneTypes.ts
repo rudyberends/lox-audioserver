@@ -1,6 +1,6 @@
 import type { ZoneConfig } from '@/domain/config/types';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
-import type { QueueController as PlaybackQueueController } from '@/application/playback/queueController';
+import type { PlaybackQueueNavigator } from '@/application/playback/PlaybackQueueNavigator';
 import type { InputAdapter } from '@/application/playback/inputAdapter';
 import type { SpotifyInputAdapter } from '@/application/playback/adapters/SpotifyInputAdapter';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
@@ -60,7 +60,7 @@ export interface ZoneContext {
   config: ZoneConfig;
   state: LoxoneZoneState;
   queue: QueueState;
-  queueController: PlaybackQueueController;
+  queueController: PlaybackQueueNavigator;
   inputAdapter: InputAdapter;
   spotifyAdapter: SpotifyInputAdapter;
   metadata: Record<string, unknown>;

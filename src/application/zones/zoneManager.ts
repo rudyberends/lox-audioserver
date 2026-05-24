@@ -11,7 +11,7 @@ import {
 } from '@/application/playback/audioManager';
 import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import { ZonePlayer } from '@/application/playback/zonePlayer';
-import { QueueController as PlaybackQueueController } from '@/application/playback/queueController';
+import { PlaybackQueueNavigator } from '@/application/playback/PlaybackQueueNavigator';
 import { QueueController as ZoneQueueController } from '@/application/zones/QueueController';
 import { OutputRouter } from '@/application/zones/OutputRouter';
 import { GroupingCoordinator } from '@/application/zones/GroupingCoordinator';
@@ -815,7 +815,7 @@ export class ZoneManager {
       currentIndex: 0,
       authority: 'local',
     };
-    const queueController = new PlaybackQueueController(queue);
+    const queueController = new PlaybackQueueNavigator(queue);
     registerPlayer(config.id, player);
     const inputAdapter = new InputAdapter({
       player,

@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { test } from './testHarness';
 import { PlaybackCoordinator } from '../src/application/zones/PlaybackCoordinator';
 import { ZoneRepository } from '../src/application/zones/ZoneRepository';
-import { QueueController as PlaybackQueueController } from '../src/application/playback/queueController';
+import { PlaybackQueueNavigator } from '../src/application/playback/PlaybackQueueNavigator';
 import { buildInitialState } from '../src/application/zones/helpers/stateHelpers';
 import { normalizeSpotifyAudiopath } from '../src/application/zones/helpers/queueHelpers';
 import { applyZonePatch } from '../src/domain/loxone/reducer';
@@ -612,7 +612,7 @@ function createHarness(options?: {
     currentIndex: 0,
     authority: 'local' as QueueAuthority,
   };
-  const playbackQueue = new PlaybackQueueController(queue);
+  const playbackQueue = new PlaybackQueueNavigator(queue);
   const player = new FakePlayer();
   const stopCalls: Array<PlaybackSession | null> = [];
   const outputs: ZoneOutput[] = [
