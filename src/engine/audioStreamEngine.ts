@@ -10,7 +10,11 @@ import type { EnginePort, EngineSessionStats } from '@/ports/EnginePort';
 export class AudioStreamEngine {
   private readonly log = createLogger('Audio', 'Engine');
   private readonly sessions = new Map<number, Map<OutputProfile, AudioSession>>();
-  private readonly stopReasons = new WeakMap<Map<OutputProfile, AudioSession>, string>();
+  // Keyed by profileMap (not zoneId) so a handoff/replace can put a reason on
+  // the *outgoing* map without overwriting state for the incoming map under
+  // the same zone. Each session's onTerminated callback reads + deletes its
+  // own entry, so the Map stays bounded.
+  private readonly stopReasonByProfileMap = new Map<Map<OutputProfile, AudioSession>, string>();
   private readonly outputSettings = audioOutputSettings;
   private readonly handoffTokens = new Map<number, string>();
   private onSessionTerminated?: (
@@ -48,8 +52,8 @@ export class AudioStreamEngine {
         }
         if (profileMap.size === 0) {
           const stats = session.getStats();
-          const stopReason = this.stopReasons.get(profileMap);
-          this.stopReasons.delete(profileMap);
+          const stopReason = this.stopReasonByProfileMap.get(profileMap);
+          this.stopReasonByProfileMap.delete(profileMap);
           this.sessions.delete(zoneId);
           this.onSessionTerminated?.(zoneId, stats, stopReason);
         }
@@ -85,8 +89,8 @@ export class AudioStreamEngine {
         }
         if (profileMap.size === 0) {
           const stats = session.getStats();
-          const stopReason = this.stopReasons.get(profileMap);
-          this.stopReasons.delete(profileMap);
+          const stopReason = this.stopReasonByProfileMap.get(profileMap);
+          this.stopReasonByProfileMap.delete(profileMap);
           this.sessions.delete(zoneId);
           this.onSessionTerminated?.(zoneId, stats, stopReason);
         }
@@ -117,7 +121,7 @@ export class AudioStreamEngine {
     const existingReady = existingWaitSession?.hasFirstChunk() ?? false;
     const skipHandoff = Boolean(existing && !existingReady);
     if (skipHandoff && existing) {
-      this.stopReasons.set(existing, 'switch');
+      this.stopReasonByProfileMap.set(existing, 'switch');
       existing.forEach((session) => session.stop(true));
       this.log.info('audio handoff skipped; existing not ready', { zoneId });
     }
@@ -144,7 +148,7 @@ export class AudioStreamEngine {
         return;
       }
       if (!skipHandoff && existing) {
-        this.stopReasons.set(existing, 'switch');
+        this.stopReasonByProfileMap.set(existing, 'switch');
         existing.forEach((session) => session.stop(true));
       }
       if (this.handoffTokens.get(zoneId) === handoffToken) {
@@ -163,7 +167,7 @@ export class AudioStreamEngine {
     if (!existing) {
       return;
     }
-    this.stopReasons.set(existing, reason);
+    this.stopReasonByProfileMap.set(existing, reason);
     const discardSubscribers = options.discardSubscribers === true;
     existing.forEach((session) => session.stop(discardSubscribers));
     this.sessions.delete(zoneId);
