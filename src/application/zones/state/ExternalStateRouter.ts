@@ -6,7 +6,7 @@ import type { QueueItem } from '@/application/zones/internal/zoneTypes';
 import {
   resolveZoneStateControllerId,
   filterAuthoritativePatchWhileLocalSessionActive,
-} from '@/application/zones/state/types';
+} from '@/application/zones/state/authorityPolicies';
 
 export type ExternalStateRouterDeps = {
   zones: ZoneRepository;

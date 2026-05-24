@@ -5,7 +5,7 @@ import {
   shouldUseStateControllerForCommand,
   filterAuthoritativePatchWhileLocalSessionActive,
   isVolumeOwnedByStateController,
-} from '../src/application/zones/state/types';
+} from '../src/application/zones/state/authorityPolicies';
 import type { ZoneConfig } from '../src/domain/config/types';
 
 function zoneWith(controller?: string): ZoneConfig {

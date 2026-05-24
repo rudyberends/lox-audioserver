@@ -6,7 +6,7 @@ import { InternalStateController } from '@/application/zones/state/InternalState
 import { BeoLinkStateController } from '@/application/zones/state/BeoLinkStateController';
 import { SonosStateController } from '@/application/zones/state/SonosStateController';
 import { MusicAssistantStateController } from '@/application/zones/state/MusicAssistantStateController';
-import { resolveZoneStateControllerId } from '@/application/zones/state/types';
+import { resolveZoneStateControllerId } from '@/application/zones/state/authorityPolicies';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { QueueItem } from '@/ports/types/queueTypes';
 

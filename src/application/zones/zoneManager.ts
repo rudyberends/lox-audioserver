@@ -38,7 +38,7 @@ import {
   resolveZoneStateControllerId,
   shouldUseStateControllerForCommand,
   isVolumeOwnedByStateController,
-} from '@/application/zones/state/types';
+} from '@/application/zones/state/authorityPolicies';
 import type { AlertMediaResource } from '@/application/alerts/types';
 import { PowerManager } from '@/application/zones/services/powerManager';
 import { SharedPowerGroupManager } from '@/application/zones/services/sharedPowerGroupManager';

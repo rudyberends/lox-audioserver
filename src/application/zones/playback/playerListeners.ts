@@ -12,7 +12,7 @@ import {
   buildStoppedPatch,
   buildVolumePatch,
 } from '@/application/zones/playback/patchBuilder';
-import { resolveZoneStateControllerId } from '@/application/zones/state/types';
+import { resolveZoneStateControllerId } from '@/application/zones/state/authorityPolicies';
 
 type PlayerListenerCoordinator = {
   getZone: (zoneId: number) => ZoneContext | undefined;
