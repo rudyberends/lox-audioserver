@@ -141,11 +141,8 @@ export function detectLoxoneItemType(
 }
 
 /**
- * Small heuristic to infer audiotype from a URI.
- *  - 5: Spotify (and Music Assistant bridge)
- *  - 4: Radio
- *  - 1: File/stream
- *  - 0: Unknown / other
+ * Small heuristic to infer audiotype from a URI. Returns values from the
+ * Loxone `AudioType` enum (File=0, Radio=1, LineIn=3, Spotify=5).
  */
 export function inferAudiotype(uri: string): number {
   const lower = uri.toLowerCase();
@@ -159,16 +156,25 @@ export function inferAudiotype(uri: string): number {
   ) {
     return 5;
   }
-  if (lower.startsWith('radio://') || lower.includes('tunein')) {
-    return 4;
-  }
   if (
-    lower.startsWith('http://') ||
-    lower.startsWith('https://') ||
-    lower.startsWith('library:') ||
-    lower.startsWith('library://')
+    lower.startsWith('radio://') ||
+    lower.startsWith('tunein:') ||
+    lower.startsWith('radioparadise:') ||
+    lower.includes('tunein')
   ) {
     return 1;
+  }
+  if (lower.startsWith('linein:') || lower.startsWith('linein://')) {
+    return 3;
+  }
+  if (
+    lower.startsWith('library:') ||
+    lower.startsWith('library://') ||
+    lower.startsWith('http://') ||
+    lower.startsWith('https://') ||
+    lower.startsWith('file:')
+  ) {
+    return 0;
   }
   return 0;
 }
