@@ -11,6 +11,7 @@ import {
   type AudioOutputSettings,
 } from '@/engine/audioFormat';
 import { buildEqualizerFilterChain } from '@/domain/zones/equalizer';
+import { RollingBuffer } from '@/engine/rollingBuffer';
 
 export type PlaybackSource =
   | {
@@ -67,9 +68,7 @@ export class AudioSession {
   private readonly ffmpegPath =
     typeof ffmpegStatic === 'string' && ffmpegStatic ? ffmpegStatic : 'ffmpeg';
 
-  private readonly bufferQueue: Buffer[] = [];
-  private bufferBytes = 0;
-  private readonly maxBufferBytes: number;
+  private readonly buffer: RollingBuffer;
   private readonly maxSubscriberLagBytes = 1024 * 1024; // guard slow clients
   private firstChunkLogged = false;
   private firstChunkPromise: Promise<boolean> | null = null;
@@ -93,7 +92,6 @@ export class AudioSession {
   private subscriberDropCount = 0;
   private lastSubscriberDropAt: number | null = null;
   private readonly sourcePreDelayMs?: number;
-  private readonly keepInitialBuffer: boolean;
   private readonly isAlertSource: boolean;
   private debugTapStream?: fs.WriteStream;
   private pipeSourceStream?: NodeJS.ReadableStream;
@@ -149,26 +147,27 @@ export class AudioSession {
       typeof this.source.path === 'string' &&
       this.source.path.includes('/alerts/');
     this.isAlertSource = isAlertSource;
-    this.keepInitialBuffer = isAlertSource;
     const alertBufferBytes = isAlertSource
       ? Math.round(
           (alertPrebufferMs / 1000) *
             (outputSettings.sampleRate * outputSettings.channels * (outputSettings.pcmBitDepth / 8)),
         )
       : 0;
+    let maxBufferBytes: number;
     if (!Number.isFinite(candidate) || candidate <= 0) {
       // Allow disabling the rolling buffer; we still stream live without caching chunks.
-      this.maxBufferBytes = 0;
+      maxBufferBytes = 0;
     } else {
       // Allow larger prebuffer when upstream requests it (e.g., Sendspin wants ~5s).
       // Keep a safety cap to avoid unbounded memory; 4MB is still modest.
       const requested = Math.min(candidate, hardMax);
-      this.maxBufferBytes = Math.max(requested, hardMin);
+      maxBufferBytes = Math.max(requested, hardMin);
     }
     if (alertBufferBytes > 0) {
       const clampedAlert = Math.min(hardMax, Math.max(alertBufferBytes, hardMin));
-      this.maxBufferBytes = Math.max(this.maxBufferBytes, clampedAlert);
+      maxBufferBytes = Math.max(maxBufferBytes, clampedAlert);
     }
+    this.buffer = new RollingBuffer(maxBufferBytes, isAlertSource);
 
     // When URL input pacing is explicitly disabled (realTime=false), ffmpeg may process finite
     // sources (e.g. Apple Music track MP4s) far ahead of wall clock time and then exit,
@@ -179,7 +178,7 @@ export class AudioSession {
       this.pacingBps && this.targetLeadMs > 0
         ? Math.round((this.pacingBps * this.targetLeadMs) / 1000)
         : 0;
-    this.pacingMaxAheadBytes = Math.max(minLeadBytes, this.maxBufferBytes, 0);
+    this.pacingMaxAheadBytes = Math.max(minLeadBytes, maxBufferBytes, 0);
 
     this.pcmFrameBytes =
       this.profile === 'pcm'
@@ -228,7 +227,7 @@ export class AudioSession {
   }
 
   private bufferedChunkStartsWithCodecHeader(): boolean {
-    const firstBufferedChunk = this.bufferQueue[0];
+    const firstBufferedChunk = this.buffer.firstChunk();
     return Boolean(firstBufferedChunk && this.isCodecHeaderChunk(firstBufferedChunk));
   }
 
@@ -236,8 +235,7 @@ export class AudioSession {
     if (this.process) {
       return;
     }
-    this.bufferQueue.length = 0;
-    this.bufferBytes = 0;
+    this.buffer.clear();
     this.pcmRemainder = null;
     this.codecHeader = null;
     this.bytesSinceLog = 0;
@@ -258,7 +256,7 @@ export class AudioSession {
     });
     this.log.info('audio session buffer config', {
       zoneId: this.zoneId,
-      maxBufferBytes: this.maxBufferBytes,
+      maxBufferBytes: this.buffer.capacity,
       targetLeadMs: this.targetLeadMs,
       outputSampleRate: this.outputSettings.sampleRate,
       outputChannels: this.outputSettings.channels,
@@ -345,7 +343,7 @@ export class AudioSession {
               spawnToFirstChunkMs: this.startTs ? Math.max(0, Date.now() - this.startTs) : null,
             });
           }
-          this.bufferChunk(aligned);
+          this.buffer.push(aligned);
           this.recordBytes(chunk.length);
           this.writeToSubscribers(aligned);
         };
@@ -616,7 +614,7 @@ export class AudioSession {
           this.codecHeader = header;
         }
       }
-      this.bufferChunk(aligned);
+      this.buffer.push(aligned);
       this.recordBytes(chunk.length);
       this.writeToSubscribers(aligned);
       this.maybeApplyOutputPacing();
@@ -654,7 +652,7 @@ export class AudioSession {
         stderr: this.lastStderrLine ?? undefined,
         stderrAt: this.lastStderrAt ?? undefined,
         totalBytes: this.totalBytes,
-        bufferedBytes: this.bufferBytes,
+        bufferedBytes: this.buffer.bytes,
         subscribers: this.subscribers.size,
         runMs,
         earlyExit,
@@ -1125,7 +1123,7 @@ export class AudioSession {
       oldChunks, newChunks, totalFrames,
       () => oldEnded, () => newEnded,
       (blended) => {
-        this.bufferChunk(blended);
+        this.buffer.push(blended);
         this.writeToSubscribers(blended);
       },
     );
@@ -1138,7 +1136,7 @@ export class AudioSession {
     this.pipeSourceStream = undefined;
 
     if (newRem.length) {
-      this.bufferChunk(newRem);
+      this.buffer.push(newRem);
       this.writeToSubscribers(newRem);
     }
     newSourceStream.removeAllListeners('data');
@@ -1153,7 +1151,7 @@ export class AudioSession {
     newEncoderInput.on('data', (chunk: Buffer) => {
       const aligned = this.alignPcmChunk(chunk);
       if (aligned?.length) {
-        this.bufferChunk(aligned);
+        this.buffer.push(aligned);
         this.writeToSubscribers(aligned);
       }
     });
@@ -1362,41 +1360,6 @@ export class AudioSession {
     this.backpressureListeners.delete(subscriber);
     this.backpressureCount = Math.max(0, this.backpressureCount - 1);
     this.resumeStdout();
-  }
-
-  private bufferChunk(chunk: Buffer): void {
-    if (this.maxBufferBytes <= 0 || !chunk?.length) {
-      return;
-    }
-
-    if (this.keepInitialBuffer) {
-      const remaining = this.maxBufferBytes - this.bufferBytes;
-      if (remaining <= 0) {
-        return;
-      }
-      const toStore = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
-      this.bufferQueue.push(toStore);
-      this.bufferBytes += toStore.length;
-      return;
-    }
-
-    if (chunk.length >= this.maxBufferBytes) {
-      const tail = chunk.subarray(chunk.length - this.maxBufferBytes);
-      this.bufferQueue.length = 0;
-      this.bufferQueue.push(tail);
-      this.bufferBytes = tail.length;
-      return;
-    }
-
-    this.bufferQueue.push(chunk);
-    this.bufferBytes += chunk.length;
-    while (this.bufferBytes > this.maxBufferBytes && this.bufferQueue.length > 0) {
-      const removed = this.bufferQueue.shift();
-      if (!removed) {
-        break;
-      }
-      this.bufferBytes -= removed.length;
-    }
   }
 
   // ─── Two-stage PCM pipeline ────────────────────────────────────────────────
@@ -1874,8 +1837,8 @@ export class AudioSession {
       primedBytes += codecHeader.length;
     }
     // Prime the subscriber with buffered audio to prevent initial starvation unless disabled.
-    if (primeWithBuffer && this.bufferQueue.length) {
-      for (const chunk of this.bufferQueue) {
+    if (primeWithBuffer) {
+      for (const chunk of this.buffer.snapshot()) {
         stream.write(chunk);
         primedBytes += chunk.length;
       }
@@ -1905,7 +1868,7 @@ export class AudioSession {
                 1000,
             )
           : null,
-      sessionBufferedBytes: this.bufferBytes,
+      sessionBufferedBytes: this.buffer.bytes,
       subscriberCount: this.subscribers.size,
     });
     const remove = () => {
@@ -1951,7 +1914,7 @@ export class AudioSession {
     return {
       profile: this.profile,
       bps: this.lastBpsTs ? this.lastBps : null,
-      bufferedBytes: this.bufferBytes,
+      bufferedBytes: this.buffer.bytes,
       totalBytes: this.totalBytes,
       lastUpdated: this.lastBpsTs || null,
       subscribers: subscriberCount,
@@ -2070,7 +2033,7 @@ export class AudioSession {
       zoneId: this.zoneId,
       profile: this.profile,
       bytesPerSec,
-      bufferBytes: this.bufferBytes,
+      bufferBytes: this.buffer.bytes,
       subscribers: this.subscribers.size,
       labels: Array.from(this.subscriberLabels.values()),
     });
