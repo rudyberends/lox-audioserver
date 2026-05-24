@@ -3,10 +3,7 @@ import type { LoxoneZoneState } from '@/domain/loxone/types';
 import type { AudioManager } from '@/application/playback/audioManager';
 import type { ZoneRepository } from '@/application/zones/ZoneRepository';
 import type { QueueItem } from '@/application/zones/internal/zoneTypes';
-import {
-  resolveZoneStateControllerId,
-  filterAuthoritativePatchWhileLocalSessionActive,
-} from '@/application/zones/state/authorityPolicies';
+import { resolveZoneStateControllerId } from '@/application/zones/state/authorityPolicies';
 
 export type ExternalStateRouterDeps = {
   zones: ZoneRepository;
@@ -19,10 +16,15 @@ export type ExternalStateRouterDeps = {
 /**
  * Routes state-controller updates (BeoLink, MA, Sonos, etc.) into the zone.
  *
- * When a local audio session is active we let the per-controller authority
- * policy decide which fields the external controller is still allowed to
- * write — see filterAuthoritativePatchWhileLocalSessionActive. Without an
- * active local session the external controller is fully authoritative.
+ * The state controller is the source of truth for what the speaker is actually
+ * playing — even when we have a local audio session feeding it. Patches are
+ * therefore applied unconditionally, with one narrow exception: while a local
+ * session is active we suppress `time` and `duration` because some controllers
+ * (notably MA, which treats our HTTP stream as a radio source) report jittery
+ * or bogus position for our own content. The local ticker remains authoritative
+ * for those two fields; everything else (mode/title/artist/album/cover/audiopath/
+ * volume) propagates so external takeovers and source changes surface in Loxone
+ * the moment the controller observes them.
  */
 export class ExternalStateRouter {
   private readonly deps: ExternalStateRouterDeps;
@@ -43,24 +45,11 @@ export class ExternalStateRouter {
     }
     const hasActiveLocalSession = this.deps.audioManager.hasActiveLocalSession(zoneId);
     if (hasActiveLocalSession) {
-      const authoritativePatch = filterAuthoritativePatchWhileLocalSessionActive(controllerId, patch);
-      if (authoritativePatch) {
-        const keys = Object.keys(authoritativePatch);
-        if (keys.length === 1 && keys[0] === 'volume' && typeof authoritativePatch.volume === 'number') {
-          this.deps.log.info('accepted external volume-only patch while local session active', {
-            zoneId,
-            controller: controllerId,
-            volume: authoritativePatch.volume,
-          });
-        }
-        this.deps.applyPatch(zoneId, authoritativePatch);
-        return;
-      }
-      this.deps.log.debug('ignored external state patch while local session active', {
-        zoneId,
-        controller: controllerId,
-        keys: Object.keys(patch),
-      });
+      const propagated: Partial<LoxoneZoneState> = { ...patch };
+      delete propagated.time;
+      delete propagated.duration;
+      if (Object.keys(propagated).length === 0) return;
+      this.deps.applyPatch(zoneId, propagated);
       return;
     }
     if (this.deps.audioManager.getSession(zoneId)) {

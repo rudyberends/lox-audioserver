@@ -1,5 +1,4 @@
 import type { ZoneConfig } from '@/domain/config/types';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
 
 export type ZoneStateControllerId = 'internal' | string;
 
@@ -17,9 +16,6 @@ export function resolveZoneStateControllerId(zone: ZoneConfig): ZoneStateControl
 type StateControllerAuthorityPolicy = {
   ownsVolumeState?: boolean;
   commandAuthorityWhenLocalSessionActive?: (command: string) => boolean;
-  patchAuthorityWhenLocalSessionActive?: (
-    patch: Partial<LoxoneZoneState>,
-  ) => Partial<LoxoneZoneState> | null;
 };
 
 const isVolumeCommand = (command: string): boolean => {
@@ -27,37 +23,20 @@ const isVolumeCommand = (command: string): boolean => {
   return normalized === 'volume' || normalized === 'volume_set';
 };
 
+// Per-controller authority hints. The state controller itself is the source of
+// truth for what the speaker is doing; these flags only govern command routing
+// and volume ownership. Patch filtering used to live here too, but that was an
+// overcorrection — it silenced legitimate external updates (e.g. AirPlay
+// commandeering an MA-fed Sonos) along with the time-jitter it was meant to
+// suppress. Time/duration suppression is now a narrow rule in ExternalStateRouter.
 const CONTROLLER_AUTHORITY_POLICIES: Record<string, StateControllerAuthorityPolicy> = {
-  // Initial policy: external controller keeps authority on volume while local session is active.
   beolink: {
     ownsVolumeState: true,
     commandAuthorityWhenLocalSessionActive: isVolumeCommand,
-    patchAuthorityWhenLocalSessionActive: (patch) => {
-      const volume = patch.volume;
-      if (typeof volume === 'number' && Number.isFinite(volume)) {
-        return { volume };
-      }
-      return null;
-    },
   },
-  // In Music Assistant sink mode the MA player owns the audio path. When a
-  // local lox-audio session is active (we're streaming our own content into
-  // MA) the local session is authoritative for time/title/duration/cover —
-  // MA's queue treats our URL as a radio stream and reports unreliable timing.
-  // We only forward volume from MA in that case.
   musicassistant: {
     ownsVolumeState: true,
     commandAuthorityWhenLocalSessionActive: () => true,
-    patchAuthorityWhenLocalSessionActive: (patch) => {
-      const out: Partial<LoxoneZoneState> = {};
-      if (typeof patch.volume === 'number' && Number.isFinite(patch.volume)) {
-        out.volume = patch.volume;
-      }
-      if (typeof patch.mode === 'string') {
-        out.mode = patch.mode;
-      }
-      return Object.keys(out).length > 0 ? out : null;
-    },
   },
 };
 
@@ -70,17 +49,6 @@ export function shouldUseStateControllerForCommand(
   if (!hasActiveLocalSession) return true;
   const policy = CONTROLLER_AUTHORITY_POLICIES[controllerId];
   return policy?.commandAuthorityWhenLocalSessionActive?.(command) === true;
-}
-
-export function filterAuthoritativePatchWhileLocalSessionActive(
-  controllerId: string,
-  patch: Partial<LoxoneZoneState>,
-): Partial<LoxoneZoneState> | null {
-  if (controllerId === 'internal') {
-    return patch;
-  }
-  const policy = CONTROLLER_AUTHORITY_POLICIES[controllerId];
-  return policy?.patchAuthorityWhenLocalSessionActive?.(patch) ?? null;
 }
 
 export function isVolumeOwnedByStateController(controllerId: string): boolean {
