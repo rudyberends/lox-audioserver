@@ -42,6 +42,7 @@ import './zoneHeartbeatService.test';
 import './inputSourceConfigurator.test';
 import './stateControllerPolicies.test';
 import './zoneStateStore.test';
+import './isRadioAudiopath.test';
 import './audioManager.playbackPreDelay.test';
 import './sendspinLineInService.test';
 import './powerManager.test';

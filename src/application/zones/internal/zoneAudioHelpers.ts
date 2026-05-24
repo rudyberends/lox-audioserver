@@ -329,20 +329,23 @@ export function isRadioAudiopath(audiopath: string | undefined, audiotype?: numb
   if (audiotype === AudioType.File) {
     return false;
   }
-  if (audiotype === AudioType.Radio) {
-    return true;
-  }
-  if (!raw) {
+  // Audiopath is the authoritative source kind. A stale `audiotype===Radio` left
+  // over from a previous radio session would otherwise lock zone state into
+  // radio mode for any subsequent non-radio audiopath (library://, spotify:, …):
+  // the ZoneStateStore reducer would re-clamp `audiotype` back to 1 and prevent
+  // `station` from ever clearing. So when we have a real audiopath, let it
+  // decide; only fall back to the audiotype shortcut when no audiopath exists.
+  if (raw) {
+    if (detectServiceFromAudiopath(raw) === 'radio') {
+      return true;
+    }
+    const decoded = decodeAudiopath(raw);
+    if (decoded && detectServiceFromAudiopath(decoded) === 'radio') {
+      return true;
+    }
     return false;
   }
-  if (detectServiceFromAudiopath(raw) === 'radio') {
-    return true;
-  }
-  const decoded = decodeAudiopath(raw);
-  if (!decoded) {
-    return false;
-  }
-  return detectServiceFromAudiopath(decoded) === 'radio';
+  return audiotype === AudioType.Radio;
 }
 
 export function isLineInAudiopath(audiopath: string | undefined): boolean {
