@@ -14,6 +14,8 @@ import { buildEqualizerFilterChain } from '@/domain/zones/equalizer';
 import { RollingBuffer } from '@/engine/rollingBuffer';
 import { SubscriberFanout } from '@/engine/subscriberFanout';
 import { OutputPacer } from '@/engine/outputPacer';
+import { PcmFrameAligner } from '@/engine/pcmFrameAligner';
+import { codecPolicyForProfile, type CodecPolicy } from '@/engine/codecPolicy';
 
 export type PlaybackSource =
   | {
@@ -57,7 +59,6 @@ export type PlaybackSource =
 
 export type OutputProfile = 'mp3' | 'aac' | 'pcm' | 'opus' | 'flac';
 
-const FLAC_SIGNATURE = Buffer.from('fLaC', 'ascii');
 
 export class AudioSession {
   private readonly log = createLogger('Audio', 'Session');
@@ -106,8 +107,8 @@ export class AudioSession {
   // When streaming raw PCM, ensure we only emit full audio frames.
   // Otherwise, a subscriber that attaches mid-stream can start at an arbitrary byte offset,
   // which results in loud noise (misaligned sample boundaries).
-  private readonly pcmFrameBytes: number | null;
-  private pcmRemainder: Buffer | null = null;
+  private readonly pcmAligner: PcmFrameAligner | null;
+  private readonly codec: CodecPolicy;
   // For codec streams (FLAC, etc.), store the initial header so new subscribers
   // joining mid-stream can initialize their decoders correctly.
   private codecHeader: Buffer | null = null;
@@ -190,55 +191,20 @@ export class AudioSession {
       { zoneId: this.zoneId, profile: this.profile },
     );
 
-    this.pcmFrameBytes =
+    this.pcmAligner =
       this.profile === 'pcm'
-        ? Math.max(1, Math.round(this.outputSettings.channels * (this.outputSettings.pcmBitDepth / 8)))
+        ? new PcmFrameAligner(this.outputSettings.channels, this.outputSettings.pcmBitDepth)
         : null;
+    this.codec = codecPolicyForProfile(this.profile);
   }
 
   private alignPcmChunk(chunk: Buffer): Buffer | null {
-    const frameBytes = this.pcmFrameBytes;
-    if (!frameBytes) {
-      return chunk;
-    }
-    const combined =
-      this.pcmRemainder && this.pcmRemainder.length
-        ? Buffer.concat([this.pcmRemainder, chunk], this.pcmRemainder.length + chunk.length)
-        : chunk;
-    const alignedLen = Math.floor(combined.length / frameBytes) * frameBytes;
-    if (alignedLen <= 0) {
-      // Not enough bytes for a full frame yet; keep accumulating.
-      this.pcmRemainder = Buffer.from(combined);
-      return null;
-    }
-    const out = combined.subarray(0, alignedLen);
-    const remLen = combined.length - alignedLen;
-    this.pcmRemainder = remLen > 0 ? Buffer.from(combined.subarray(alignedLen)) : null;
-    return out;
-  }
-
-  private isCodecHeaderChunk(chunk: Buffer): boolean {
-    return (
-      this.profile === 'flac' &&
-      chunk.length >= FLAC_SIGNATURE.length &&
-      chunk.subarray(0, FLAC_SIGNATURE.length).equals(FLAC_SIGNATURE)
-    );
-  }
-
-  private extractFlacMetadataLength(data: Buffer): number {
-    // Return only the STREAMINFO block (always the first block, always 34 bytes of data).
-    // STREAMINFO is the only block VLC needs to initialize the decoder.
-    // Optional blocks (PADDING, SEEKTABLE, VORBIS_COMMENT) can be very large
-    // and are not needed for decoding — sending them as a burst inflates VLC's
-    // network-cache estimate.
-    if (data.length < 8) return data.length;
-    const firstBlockDataLen = (data[5]! << 16) | (data[6]! << 8) | data[7]!;
-    return Math.min(4 + 4 + firstBlockDataLen, data.length); // fLaC + block-header + STREAMINFO
+    return this.pcmAligner ? this.pcmAligner.align(chunk) : chunk;
   }
 
   private bufferedChunkStartsWithCodecHeader(): boolean {
     const firstBufferedChunk = this.buffer.firstChunk();
-    return Boolean(firstBufferedChunk && this.isCodecHeaderChunk(firstBufferedChunk));
+    return Boolean(firstBufferedChunk && this.codec.startsWithHeader(firstBufferedChunk));
   }
 
   public start(): void {
@@ -246,7 +212,7 @@ export class AudioSession {
       return;
     }
     this.buffer.clear();
-    this.pcmRemainder = null;
+    this.pcmAligner?.reset();
     this.codecHeader = null;
     this.bytesSinceLog = 0;
     this.lastLogTs = 0;
@@ -582,19 +548,7 @@ export class AudioSession {
                 spawnToFirstChunkMs: this.startTs ? Math.max(0, now - this.startTs) : null,
               });
             }
-            // Capture only the FLAC STREAMINFO block as the codec header.
-            // Sending the full first chunk (64 KB) as a burst causes VLC's adaptive
-            // network-cache to inflate its buffer to 30+ seconds before playback starts.
-            // STREAMINFO alone (42 bytes) is sufficient for the decoder to initialise.
-            if (this.isCodecHeaderChunk(aligned)) {
-              const metaLen = this.extractFlacMetadataLength(aligned);
-              const header = Buffer.from(aligned.subarray(0, metaLen));
-              // Set is_last on the STREAMINFO block so VLC knows audio frames follow immediately.
-              if (header.length >= 5) {
-                header[4] = (header[4]! & 0x7f) | 0x80;
-              }
-              this.codecHeader = header;
-            }
+            this.codecHeader = this.codec.captureHeader(aligned);
           }
           this.buffer.push(aligned);
           this.recordBytes(chunk.length);
