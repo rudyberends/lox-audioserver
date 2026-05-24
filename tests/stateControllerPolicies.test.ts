@@ -3,7 +3,6 @@ import { test } from './testHarness';
 import {
   resolveZoneStateControllerId,
   shouldUseStateControllerForCommand,
-  filterAuthoritativePatchWhileLocalSessionActive,
   isVolumeOwnedByStateController,
 } from '../src/application/zones/state/authorityPolicies';
 import type { ZoneConfig } from '../src/domain/config/types';
@@ -67,64 +66,6 @@ test('shouldUseStateControllerForCommand: musicassistant with active local sessi
 
 test('shouldUseStateControllerForCommand: unknown controller with active session yields false (no policy)', () => {
   assert.equal(shouldUseStateControllerForCommand('homepod', true, 'volume'), false);
-});
-
-// ---- filterAuthoritativePatchWhileLocalSessionActive ----
-
-test('filterAuthoritativePatchWhileLocalSessionActive: internal controller passes patch unfiltered', () => {
-  const patch = { volume: 50, mode: 'play' as const, title: 'X' };
-  const result = filterAuthoritativePatchWhileLocalSessionActive('internal', patch);
-  assert.deepEqual(result, patch);
-});
-
-test('filterAuthoritativePatchWhileLocalSessionActive: beolink yields volume-only', () => {
-  const result = filterAuthoritativePatchWhileLocalSessionActive('beolink', {
-    volume: 33,
-    mode: 'play',
-    title: 'Discarded',
-  });
-  assert.deepEqual(result, { volume: 33 });
-});
-
-test('filterAuthoritativePatchWhileLocalSessionActive: beolink with no volume returns null', () => {
-  assert.equal(
-    filterAuthoritativePatchWhileLocalSessionActive('beolink', { mode: 'play', title: 'X' }),
-    null,
-  );
-});
-
-test('filterAuthoritativePatchWhileLocalSessionActive: musicassistant yields volume+mode', () => {
-  const result = filterAuthoritativePatchWhileLocalSessionActive('musicassistant', {
-    volume: 25,
-    mode: 'pause',
-    title: 'Discarded',
-  });
-  assert.deepEqual(result, { volume: 25, mode: 'pause' });
-});
-
-test('filterAuthoritativePatchWhileLocalSessionActive: musicassistant with neither volume nor mode returns null', () => {
-  assert.equal(
-    filterAuthoritativePatchWhileLocalSessionActive('musicassistant', { title: 'X' }),
-    null,
-  );
-});
-
-test('filterAuthoritativePatchWhileLocalSessionActive: unknown controller returns null', () => {
-  assert.equal(
-    filterAuthoritativePatchWhileLocalSessionActive('homepod', { volume: 50 }),
-    null,
-  );
-});
-
-test('filterAuthoritativePatchWhileLocalSessionActive: rejects non-finite volume values', () => {
-  assert.equal(
-    filterAuthoritativePatchWhileLocalSessionActive('beolink', { volume: Number.NaN }),
-    null,
-  );
-  assert.equal(
-    filterAuthoritativePatchWhileLocalSessionActive('beolink', { volume: Number.POSITIVE_INFINITY }),
-    null,
-  );
 });
 
 // ---- isVolumeOwnedByStateController ----

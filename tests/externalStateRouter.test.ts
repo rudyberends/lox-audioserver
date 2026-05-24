@@ -80,18 +80,25 @@ test('ExternalStateRouter onStatePatch defaults to internal when controller is m
   assert.deepEqual(fakes.applied[0]?.patch, { volume: 33 });
 });
 
-test('ExternalStateRouter onStatePatch filters non-authoritative fields while local session active (beolink)', () => {
+test('ExternalStateRouter onStatePatch strips only time/duration while local session active (beolink)', () => {
+  // Post-43fb740 behaviour: state controllers are the source of truth for what
+  // the speaker is doing, so patches flow through during a local session — with
+  // the single exception of time/duration (some controllers, notably MA, report
+  // jittery position for our own HTTP-stream content; the local ticker stays
+  // authoritative there).
   const { router, fakes } = buildRouter({ controller: 'beolink' });
   fakes.activeLocal.add(1);
-  router.onStatePatch(1, { volume: 42, mode: 'play', title: 'Foreign' });
+  router.onStatePatch(1, { volume: 42, mode: 'play', title: 'Foreign', time: 9, duration: 180 });
   assert.equal(fakes.applied.length, 1);
-  assert.deepEqual(fakes.applied[0]?.patch, { volume: 42 });
+  assert.deepEqual(fakes.applied[0]?.patch, { volume: 42, mode: 'play', title: 'Foreign' });
 });
 
-test('ExternalStateRouter onStatePatch drops fully unauthoritative patches while local session active', () => {
+test('ExternalStateRouter onStatePatch drops time-/duration-only patches while local session active', () => {
+  // After stripping the only fields a local session owns, the patch is empty
+  // and must not be applied at all (avoids no-op broadcasts).
   const { router, fakes } = buildRouter({ controller: 'beolink' });
   fakes.activeLocal.add(1);
-  router.onStatePatch(1, { title: 'Foreign', mode: 'play' });
+  router.onStatePatch(1, { time: 9, duration: 180 });
   assert.equal(fakes.applied.length, 0);
 });
 
@@ -111,12 +118,14 @@ test('ExternalStateRouter onStatePatch applies fully when no local session and n
   assert.equal(fakes.applied.length, 1);
 });
 
-test('ExternalStateRouter onStatePatch accepts MA mode+volume while local session active', () => {
+test('ExternalStateRouter onStatePatch lets MA metadata propagate during local session', () => {
+  // Same rule for MA: title/album/cover changes from the external speaker
+  // (e.g. an AirPlay takeover that MA mirrors back) must surface in Loxone.
   const { router, fakes } = buildRouter({ controller: 'musicassistant' });
   fakes.activeLocal.add(1);
-  router.onStatePatch(1, { volume: 25, mode: 'pause', title: 'Discarded' });
+  router.onStatePatch(1, { volume: 25, mode: 'pause', title: 'External', time: 12 });
   assert.equal(fakes.applied.length, 1);
-  assert.deepEqual(fakes.applied[0]?.patch, { volume: 25, mode: 'pause' });
+  assert.deepEqual(fakes.applied[0]?.patch, { volume: 25, mode: 'pause', title: 'External' });
 });
 
 test('ExternalStateRouter onQueueMirror skips unknown zones', () => {
