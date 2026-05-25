@@ -196,13 +196,6 @@ export class AirplayFlowSession {
     this.clients.clear();
     this.stopChunker();
     this.detachSharedStream();
-    if (this.sharedStream && !this.sharedStream.destroyed) {
-      try {
-        this.sharedStream.destroy();
-      } catch {
-        /* ignore */
-      }
-    }
     this.sharedStream = null;
     this.backlog.length = 0;
     this.backlogBytes = 0;
