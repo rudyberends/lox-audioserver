@@ -60,7 +60,7 @@
     "@isaacs/brace-expansion": "^5.0.0"
   },
   "dependencies": {
-    "@lox-audioserver/node-airplay-sender": "0.4.8",
+    "@lox-audioserver/node-airplay-sender": "0.4.9",
     "@lox-audioserver/node-googlecast": "^0.1.1",
     "@lox-audioserver/node-libraop": "^0.3.3",
     "@lox-audioserver/node-librespot": "^0.4.2",

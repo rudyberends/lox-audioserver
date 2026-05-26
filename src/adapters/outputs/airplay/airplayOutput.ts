@@ -106,7 +106,10 @@ export class AirPlayOutput implements ZoneOutput {
     initialVolume?: number,
   ) {
     const configOverrides: AirplaySenderOverrides = {
-      packets_in_buffer: 520,
+      // Lower buffer size so the FILLING→NORMAL warmup after a sender reset
+      // (track switch) is ~400ms instead of ~2s. Trade-off: less network jitter
+      // tolerance — raise if WiFi underruns become audible.
+      packets_in_buffer: 100,
       // Keep default sender pacing. Large values here can increase burstiness and/or reduce sync cadence,
       // which may show up as audible stutter on some renderers.
       control_sync_base_delay_ms: 2,
@@ -190,16 +193,11 @@ export class AirPlayOutput implements ZoneOutput {
       this.fastStartNext = true;
       this.noBacklogNext = true;
       if (this.sender.isRunning()) {
-        this.log.info('AirPlay track change; restarting sender to drop buffered audio', {
+        this.log.info('AirPlay track change; flushing sender buffer', {
           zoneId: this.zoneId,
           zoneName: this.zoneName,
         });
-        this.suppressSessionEnded(2000);
-        await this.flowSession.stopAll();
-        this.lastInputUrl = null;
-        this.running = false;
-        this.starting = false;
-        this.clientStarted = false;
+        this.sender.reset();
       }
     }
     if (this.clientStarted || this.starting || this.running) {

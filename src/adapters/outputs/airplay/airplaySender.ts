@@ -117,6 +117,14 @@ export class AirplaySender {
     }
   }
 
+  /**
+   * Flush the underlying AirPlay circular buffer without dropping the RTSP session.
+   * Use on track switches to drop in-flight PCM in place of a full sender restart.
+   */
+  public reset(): void {
+    this.sender?.reset();
+  }
+
   // --- Sender helpers ------------------------------------------------------
 
   private async startSender(inputUrl: string | null, sourceStream?: Readable | null, startTimeMs?: number): Promise<boolean> {
