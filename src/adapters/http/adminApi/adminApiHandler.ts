@@ -42,6 +42,7 @@ type AdminApiOptions = {
   zoneAudioPrefs: ZoneAudioPreferences;
   mdnsPort: MdnsPort;
   alertFiles: AlertFilesPort;
+  browserZoneRegistry: BrowserZoneRegistry;
 };
 
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
@@ -60,6 +61,8 @@ import {
   buildZonesRoutes,
   STATE_CONTROLLER_DEFINITIONS,
 } from '@/adapters/http/adminApi/zones/zonesHandlers';
+import { buildBrowserZonesRoutes } from '@/adapters/http/adminApi/browserZones/browserZonesHandlers';
+import type { BrowserZoneRegistry } from '@/application/zones/browserZoneRegistry';
 import { buildSpotifyRoutes } from '@/adapters/http/adminApi/spotify/spotifyHandlers';
 import { buildMiscRoutes } from '@/adapters/http/adminApi/misc/miscHandlers';
 import { buildConfigRoutes } from '@/adapters/http/adminApi/config/configHandlers';
@@ -157,6 +160,7 @@ export class AdminApiHandler {
   private readonly zoneAudioPrefs: ZoneAudioPreferences;
   private readonly mdns: MdnsPort;
   private readonly alertFiles: AlertFilesPort;
+  private readonly browserZoneRegistry: BrowserZoneRegistry;
   private readonly clockOffsetTracker = new ClockOffsetTracker(this.log);
   private readonly routes: Route[];
   private readonly sessionStore = new AdminSessionStore();
@@ -183,6 +187,7 @@ export class AdminApiHandler {
     this.zoneAudioPrefs = options.zoneAudioPrefs;
     this.mdns = options.mdnsPort;
     this.alertFiles = options.alertFiles;
+    this.browserZoneRegistry = options.browserZoneRegistry;
     this.routes = this.buildRoutes();
   }
 
@@ -254,6 +259,12 @@ export class AdminApiHandler {
         getClockOffsetMs: () => this.clockOffsetTracker.get(),
         buildSqueezeliteAdminPlayerSnapshot: (primaryOutput, players) =>
           buildSqueezeliteAdminPlayerSnapshot(primaryOutput as ZoneTransportConfig | undefined, players),
+        readJsonBody: (req, res, max) => readJsonBody(req, res, max),
+        sendJson: (res, status, payload) => sendJson(res, status, payload),
+      }),
+      ...buildBrowserZonesRoutes({
+        log: this.log,
+        registry: this.browserZoneRegistry,
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),

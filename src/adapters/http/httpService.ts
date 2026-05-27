@@ -29,6 +29,13 @@ import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInput
 import type { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import type { StreamEvents } from '@/adapters/http/streams/streamEvents';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
+import type { LoxoneCommandProcessor } from '@/adapters/loxone/http/commandProcessor';
+import type { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry';
+import type { BrowserZoneRegistry } from '@/application/zones/browserZoneRegistry';
+import {
+  connection as WebSocketConnection,
+  server as WebSocketServer,
+} from 'websocket';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { CustomRadioStore } from '@/adapters/content/providers/customRadioStore';
 import type { AudioManager } from '@/application/playback/audioManager';
@@ -52,7 +59,11 @@ export class HttpService {
   private readonly sendspin: SendspinGateway;
   private readonly snapcast: SnapcastGateway;
   private readonly lmsCli: LmsCliServer;
+  private readonly loxoneProcessor: LoxoneCommandProcessor;
+  private readonly connectionRegistry: ConnectionRegistry;
+  private readonly zoneManager: ZoneManagerFacade;
   private server?: http.Server;
+  private eventsWsServer?: WebSocketServer;
 
   constructor(
     private readonly config: HttpServerConfig,
@@ -82,6 +93,9 @@ export class HttpService {
       squeezeliteCli: LmsCliServer;
       mdnsPort: MdnsPort;
       alertFiles: AlertFilesPort;
+      loxoneProcessor: LoxoneCommandProcessor;
+      connectionRegistry: ConnectionRegistry;
+      browserZoneRegistry: BrowserZoneRegistry;
     },
   ) {
     this.adminApi = new AdminApiHandler({
@@ -105,6 +119,7 @@ export class HttpService {
       zoneAudioPrefs: options.zoneAudioPrefs,
       mdnsPort: options.mdnsPort,
       alertFiles: options.alertFiles,
+      browserZoneRegistry: options.browserZoneRegistry,
     });
     this.music = new MusicStreamingHandler(config.musicDir);
     this.staticFiles = new StaticFileHandler(config.publicDir);
@@ -120,6 +135,9 @@ export class HttpService {
     this.sendspin = new SendspinGateway();
     this.snapcast = new SnapcastGateway(options.snapcastCore);
     this.lmsCli = options.squeezeliteCli;
+    this.loxoneProcessor = options.loxoneProcessor;
+    this.connectionRegistry = options.connectionRegistry;
+    this.zoneManager = options.zoneManager;
   }
 
   public async start(): Promise<void> {
@@ -142,6 +160,21 @@ export class HttpService {
 
     this.server.on('upgrade', (req, socket, head) => {
       this.handleUpgrade(req, socket, head);
+    });
+
+    // WebSocket endpoint that mirrors the Loxone audio_event broadcast on the
+    // main HTTP port so the admin UI can subscribe to live zone state without
+    // hitting the separate Loxone WS port (cross-origin).
+    this.eventsWsServer = new WebSocketServer({
+      httpServer: this.server,
+      autoAcceptConnections: false,
+    });
+    this.eventsWsServer.on('request', (request) => {
+      if (request.resourceURL.pathname !== '/audio/events') {
+        return;
+      }
+      const connection = request.accept(null, request.origin);
+      this.handleEventsConnection(connection);
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -170,6 +203,53 @@ export class HttpService {
     this.snapcast.close();
   }
 
+  private handleEventsConnection(connection: WebSocketConnection): void {
+    this.connectionRegistry.registerConnection(connection);
+
+    // Send initial snapshot so clients render immediately, without waiting
+    // for the next zone-state mutation.
+    for (const state of this.zoneManager.getAllZoneStates()) {
+      try {
+        connection.sendUTF(JSON.stringify({ audio_event: [state] }));
+      } catch {
+        break;
+      }
+    }
+
+    connection.on('close', () => this.connectionRegistry.unregisterConnection(connection));
+    connection.on('error', () => this.connectionRegistry.unregisterConnection(connection));
+  }
+
+  private async handleLoxoneCommand(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const url = req.url ?? '/';
+    const command = url.replace(/^\//, '');
+    try {
+      const body = await this.readRequestBody(req);
+      const response = await this.loxoneProcessor.execute(command, body);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(response);
+    } catch (err) {
+      this.log.warn('loxone command dispatch failed', {
+        command,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'command-failed' }));
+    }
+  }
+
+  private async readRequestBody(req: IncomingMessage): Promise<Buffer | undefined> {
+    if (req.method === 'GET' || req.method === 'HEAD') return undefined;
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return chunks.length > 0 ? Buffer.concat(chunks) : undefined;
+  }
+
   private async handleRequest(
     req: IncomingMessage,
     res: ServerResponse,
@@ -184,12 +264,6 @@ export class HttpService {
 
     const pathname = this.normalizePath(req.url ?? '/');
 
-    if (pathname === '/') {
-      res.writeHead(302, { Location: '/admin/' });
-      res.end();
-      return;
-    }
-
     if (pathname === '/sendspin') {
       res.writeHead(426, { 'Content-Type': 'text/plain' });
       res.end('Upgrade Required');
@@ -203,6 +277,14 @@ export class HttpService {
 
     if (this.adminApi.matches(pathname)) {
       await this.adminApi.handle(req, res);
+      return;
+    }
+
+    // Mirror the standard Loxone audio command surface on the main port so
+    // browser clients (admin UI) can drive playback via the same routes the
+    // Loxone webclient uses (audio/<zoneId>/<command>).
+    if (pathname.startsWith('/audio/') || pathname === '/audio') {
+      await this.handleLoxoneCommand(req, res);
       return;
     }
 
@@ -241,6 +323,14 @@ export class HttpService {
       return;
     }
     if (this.lineInIngestWs.handleUpgrade(req, socket, head)) {
+      return;
+    }
+    // Let the `WebSocketServer` (attached to the same http.Server for
+    // `/audio/events`) handle its own upgrades — its 'upgrade' listener is
+    // registered on the same emitter and will fire alongside this one.
+    // Destroying the socket here would race with the WS accept handshake.
+    const pathname = this.normalizePath(req.url ?? '/');
+    if (pathname === '/audio/events') {
       return;
     }
     socket.destroy();

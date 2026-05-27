@@ -127,4 +127,5 @@ public/.DS_Store
 public/alerts/cache
 .DS_Store
 public/admin
+public/player
 public/alerts/Event_Sounds/*

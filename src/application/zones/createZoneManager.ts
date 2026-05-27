@@ -36,6 +36,7 @@ export type ZoneManagerFacade = Pick<
   | 'syncGroupMembersToLeader'
   | 'refreshContentProviders'
   | 'setNotifier'
+  | 'removeZone'
 >;
 
 export type ZoneManagerDeps = {

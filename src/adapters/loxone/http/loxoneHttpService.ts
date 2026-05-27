@@ -9,7 +9,7 @@ import {
 } from 'websocket';
 import { createLogger } from '@/shared/logging/logger';
 import type { LoxoneHttpConfig } from '@/config/loxone';
-import { LoxoneCommandProcessor, type LoxoneCommandProcessorOptions } from '@/adapters/loxone/http/commandProcessor';
+import { LoxoneCommandProcessor } from '@/adapters/loxone/http/commandProcessor';
 import { LoxoneUdpDiscovery } from '@/adapters/loxone/http/loxoneUdpDiscovery';
 import { createDualProtocolServer } from '@/adapters/loxone/http/protocolDispatcher';
 import { loadOrGenerateSelfSignedTls, type TlsContext } from '@/adapters/loxone/http/tlsContext';
@@ -17,21 +17,8 @@ import type { LoxoneServerOptions } from '@/adapters/loxone/http/types';
 import { formatCommand } from '@/adapters/loxone/commands/utils/commandFormatter';
 import type { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry';
 import type { ServerHeartbeat } from '@/adapters/loxone/ws/serverHeartbeat';
-import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
-import type { RecentsManager } from '@/application/zones/recents/recentsManager';
-import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
-import type { GroupManager } from '@/application/groups/groupManager';
-import type { ContentManager } from '@/adapters/content/contentManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
-import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
-import type { FadeControllerPort } from '@/ports/FadeControllerPort';
-import type { AlertsPort } from '@/ports/AlertsPort';
-import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
-import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
-import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
-import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
-import type { LoxoneConfigService } from '@/adapters/loxone/services/loxoneConfigService';
 
 interface ServerRuntime {
   definition: LoxoneServerOptions;
@@ -43,24 +30,11 @@ interface ServerRuntime {
 
 export interface LoxoneHttpServiceOptions {
   host: string;
-  onRestart?: LoxoneCommandProcessorOptions['onRestart'];
-  notifier: NotifierPort;
-  loxoneNotifier: LoxoneWsNotifier;
-  configService: LoxoneConfigService;
+  processor: LoxoneCommandProcessor;
   connectionRegistry: ConnectionRegistry;
   serverHeartbeat: ServerHeartbeat;
   zoneManager: ZoneManagerFacade;
   configPort: ConfigPort;
-  lineInRegistry: LineInIngestRegistry;
-  sendspinLineInService: SendspinLineInService;
-  spotifyInputService: SpotifyInputService;
-  recentsManager: RecentsManager;
-  favoritesManager: FavoritesManager;
-  groupManager: GroupManager;
-  groupTracker: GroupTrackerPort;
-  fadeController: FadeControllerPort;
-  alerts: AlertsPort;
-  contentManager: ContentManager;
 }
 
 /**
@@ -76,24 +50,7 @@ export class LoxoneHttpService {
     private readonly config: LoxoneHttpConfig,
     private readonly options: LoxoneHttpServiceOptions,
   ) {
-    this.processor = new LoxoneCommandProcessor(config, {
-      onRestart: options.onRestart,
-      notifier: options.notifier,
-      loxoneNotifier: options.loxoneNotifier,
-      configService: options.configService,
-      zoneManager: options.zoneManager,
-      configPort: options.configPort,
-      lineInRegistry: options.lineInRegistry,
-      sendspinLineInService: options.sendspinLineInService,
-      spotifyInputService: options.spotifyInputService,
-      recentsManager: options.recentsManager,
-      favoritesManager: options.favoritesManager,
-      groupManager: options.groupManager,
-      groupTracker: options.groupTracker,
-      fadeController: options.fadeController,
-      alerts: options.alerts,
-      contentManager: options.contentManager,
-    });
+    this.processor = options.processor;
   }
 
   public async start(): Promise<void> {

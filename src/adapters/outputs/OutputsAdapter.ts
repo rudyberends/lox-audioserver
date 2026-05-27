@@ -2,16 +2,12 @@ import { buildZoneOutputs } from '@/adapters/outputs/factory';
 import type { OutputsPort, OutputCapabilities } from '@/ports/OutputsPort';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
+import type { ZoneConfig } from '@/domain/config/types';
 
 export class OutputsAdapter implements OutputsPort {
   constructor(private readonly ports: OutputPorts) {}
 
-  public listZoneOutputs(zoneId: number): ZoneOutput[] {
-    const cfg = this.ports.config.getConfig();
-    const zone = cfg?.zones?.find((entry) => entry.id === zoneId) ?? null;
-    if (!zone) {
-      return [];
-    }
+  public buildOutputs(zone: ZoneConfig): ZoneOutput[] {
     return buildZoneOutputs(zone, this.ports);
   }
 

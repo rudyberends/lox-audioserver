@@ -65,6 +65,7 @@ export function buildMiscRoutes(deps: MiscHandlerDeps): Route[] {
   // In-flight gates — captured by handler closures so /adminui/update and
   // /components/update reject overlapping requests with 409.
   let adminUiUpdateInFlight: Promise<AdminUiUpdateResult> | null = null;
+  let playerUpdateInFlight: Promise<AdminUiUpdateResult> | null = null;
   let componentPackageUpdateInFlight: Promise<ComponentPackageUpdateResult> | null = null;
   const containerized = detectContainerized();
 
@@ -117,6 +118,35 @@ export function buildMiscRoutes(deps: MiscHandlerDeps): Route[] {
         } finally {
           if (adminUiUpdateInFlight === task) {
             adminUiUpdateInFlight = null;
+          }
+        }
+      },
+    },
+    {
+      method: 'POST',
+      pattern: /^\/player\/update$/,
+      handler: async (req, res) => {
+        if (playerUpdateInFlight) {
+          deps.sendJson(res, 409, { error: 'player-update-in-progress' });
+          return;
+        }
+        const body = (await deps.readJsonBody(req, res)) as AdminUiUpdateRequest | null;
+        if (res.writableEnded) {
+          return;
+        }
+        const release = typeof body?.release === 'string' ? body.release.trim() : '';
+        const task = performWebBundleUpdate(PLAYER_BUNDLE, release || undefined, deps);
+        playerUpdateInFlight = task;
+        try {
+          const result = await task;
+          if (!result.ok) {
+            deps.sendJson(res, 500, result);
+            return;
+          }
+          deps.sendJson(res, 200, result);
+        } finally {
+          if (playerUpdateInFlight === task) {
+            playerUpdateInFlight = null;
           }
         }
       },
@@ -195,6 +225,7 @@ function handleInfo(res: ServerResponse, deps: MiscHandlerDeps, containerized: b
     const pkgVersion = readPackageVersion();
     const buildVersion = readBuildVersion(pkgVersion);
     const packages = readAddonPackageVersions();
+    const player = { installed: readPlayerVersion(deps.runtimeConfig.http.publicDir) };
 
     const payload = {
       version: buildVersion,
@@ -210,6 +241,7 @@ function handleInfo(res: ServerResponse, deps: MiscHandlerDeps, containerized: b
       paired: !!cfg.system.audioserver.paired,
       authEnabled: cfg.system.audioserver.authEnabled !== false,
       packages,
+      player,
       containerized,
     };
 
@@ -411,6 +443,19 @@ function readDeclaredAddonPackages(): Record<string, string> {
   }
 }
 
+/** Reads the Player bundle's installed version from the version.json emitted
+ *  into public/player by the player build. Returns null when the player has
+ *  not been fetched/built yet or the manifest predates versioning. */
+function readPlayerVersion(publicDir: string): string | null {
+  try {
+    const json = readFileSync(join(publicDir, 'player', 'version.json'), 'utf8');
+    const parsed = JSON.parse(json) as { version?: string };
+    return typeof parsed.version === 'string' && parsed.version.trim() ? parsed.version.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 function readInstalledPackageVersion(name: string): string | null {
   try {
     const parts = name.split('/').filter(Boolean);
@@ -440,24 +485,67 @@ function detectContainerized(): boolean {
 
 // ---- Update helpers ----
 
+/** Static descriptor for a downloadable web bundle that the AudioServer serves
+ *  from its public dir and can update in-place (atomic swap + rollback). */
+type WebBundleSpec = {
+  /** Human label used in log lines, e.g. "admin ui" / "player". */
+  label: string;
+  repo: string;
+  assetName: string;
+  /** Sub-directory under publicDir that holds the served bundle. */
+  publicSubdir: string;
+  /** Prefix for the temp staging/backup dirs + archive file. */
+  workPrefix: string;
+  /** Optional env overrides for the release tag and full dist URL. */
+  releaseEnv?: string;
+  distUrlEnv?: string;
+};
+
+const ADMINUI_BUNDLE: WebBundleSpec = {
+  label: 'admin ui',
+  repo: 'lox-audioserver/adminui',
+  assetName: 'admin-dist.tgz',
+  publicSubdir: 'admin',
+  workPrefix: 'admin',
+  releaseEnv: 'ADMINUI_RELEASE',
+  distUrlEnv: 'ADMINUI_DIST_URL',
+};
+
+const PLAYER_BUNDLE: WebBundleSpec = {
+  label: 'player',
+  repo: 'lox-audioserver/player',
+  assetName: 'player-dist.tgz',
+  publicSubdir: 'player',
+  workPrefix: 'player',
+  releaseEnv: 'PLAYER_RELEASE',
+  distUrlEnv: 'PLAYER_DIST_URL',
+};
+
 async function performAdminUiUpdate(
   releaseOverride: string | undefined,
   deps: MiscHandlerDeps,
 ): Promise<AdminUiUpdateResult> {
-  const repo = 'lox-audioserver/adminui';
-  const assetName = 'admin-dist.tgz';
-  const release = releaseOverride || process.env.ADMINUI_RELEASE || 'latest';
-  const distUrl =
-    process.env.ADMINUI_DIST_URL ??
-    (release === 'latest'
-      ? `https://github.com/${repo}/releases/latest/download/${assetName}`
-      : `https://github.com/${repo}/releases/download/${encodeURIComponent(release)}/${assetName}`);
-  const targetDir = join(deps.runtimeConfig.http.publicDir, 'admin');
-  const stagingDir = join(deps.runtimeConfig.http.publicDir, `admin-staging-${Date.now()}`);
-  const backupDir = join(deps.runtimeConfig.http.publicDir, `admin-backup-${Date.now()}`);
-  const archivePath = join(os.tmpdir(), `admin-dist-${Date.now()}.tgz`);
+  return performWebBundleUpdate(ADMINUI_BUNDLE, releaseOverride, deps);
+}
 
-  deps.log.info('admin ui update started', { release, distUrl, targetDir });
+async function performWebBundleUpdate(
+  spec: WebBundleSpec,
+  releaseOverride: string | undefined,
+  deps: MiscHandlerDeps,
+): Promise<AdminUiUpdateResult> {
+  const release =
+    releaseOverride || (spec.releaseEnv ? process.env[spec.releaseEnv] : undefined) || 'latest';
+  const distUrl =
+    (spec.distUrlEnv ? process.env[spec.distUrlEnv] : undefined) ??
+    (release === 'latest'
+      ? `https://github.com/${spec.repo}/releases/latest/download/${spec.assetName}`
+      : `https://github.com/${spec.repo}/releases/download/${encodeURIComponent(release)}/${spec.assetName}`);
+  const targetDir = join(deps.runtimeConfig.http.publicDir, spec.publicSubdir);
+  const stagingDir = join(deps.runtimeConfig.http.publicDir, `${spec.workPrefix}-staging-${Date.now()}`);
+  const backupDir = join(deps.runtimeConfig.http.publicDir, `${spec.workPrefix}-backup-${Date.now()}`);
+  const archivePath = join(os.tmpdir(), `${spec.workPrefix}-dist-${Date.now()}.tgz`);
+
+  deps.log.info(`${spec.label} update started`, { release, distUrl, targetDir });
 
   const baseResult = { release, distUrl, targetDir };
   let backupCreated = false;
@@ -471,8 +559,8 @@ async function performAdminUiUpdate(
     await fs.rm(stagingDir, { recursive: true, force: true });
     await fs.mkdir(stagingDir, { recursive: true });
 
-    await downloadAdminUi(distUrl, archivePath);
-    await extractAdminUi(archivePath, stagingDir);
+    await downloadBundle(distUrl, archivePath);
+    await extractBundle(archivePath, stagingDir);
     try {
       await fs.rm(archivePath, { force: true });
     } catch {
@@ -490,15 +578,15 @@ async function performAdminUiUpdate(
         await fs.rm(backupDir, { recursive: true, force: true });
       } catch (cleanupErr) {
         const cleanupMessage = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
-        deps.log.warn('admin ui cleanup failed', { cleanupMessage });
+        deps.log.warn(`${spec.label} cleanup failed`, { cleanupMessage });
       }
     }
 
-    deps.log.info('admin ui update finished', { release, distUrl });
+    deps.log.info(`${spec.label} update finished`, { release, distUrl });
     return { ok: true, updatedAt: new Date().toISOString(), ...baseResult };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    deps.log.warn('admin ui update failed', { release, distUrl, message });
+    deps.log.warn(`${spec.label} update failed`, { release, distUrl, message });
 
     try {
       if (await pathExists(stagingDir)) {
@@ -520,7 +608,7 @@ async function performAdminUiUpdate(
         await moveDir(backupDir, targetDir);
       } catch (rollbackErr) {
         const rollbackMessage = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
-        deps.log.warn('admin ui rollback failed', { rollbackMessage });
+        deps.log.warn(`${spec.label} rollback failed`, { rollbackMessage });
       }
     }
 
@@ -580,7 +668,7 @@ async function performComponentPackageUpdate(
   }
 }
 
-async function downloadAdminUi(url: string, dest: string, redirects = 0): Promise<void> {
+async function downloadBundle(url: string, dest: string, redirects = 0): Promise<void> {
   if (redirects > 5) {
     throw new Error(`Too many redirects while downloading ${url}`);
   }
@@ -588,18 +676,18 @@ async function downloadAdminUi(url: string, dest: string, redirects = 0): Promis
   await new Promise<void>((resolveOuter, rejectOuter) => {
     const request = https.get(
       url,
-      { headers: { 'User-Agent': 'lox-audioserver-admin-fetch' } },
+      { headers: { 'User-Agent': 'lox-audioserver-bundle-fetch' } },
       (response) => {
         const status = response.statusCode ?? 0;
         if ([301, 302, 303, 307, 308].includes(status) && response.headers.location) {
           response.resume();
-          resolveOuter(downloadAdminUi(response.headers.location, dest, redirects + 1));
+          resolveOuter(downloadBundle(response.headers.location, dest, redirects + 1));
           return;
         }
 
         if (status !== 200) {
           response.resume();
-          rejectOuter(new Error(`Failed to download admin dist (${status}) from ${url}`));
+          rejectOuter(new Error(`Failed to download bundle (${status}) from ${url}`));
           return;
         }
 
@@ -626,7 +714,7 @@ async function moveDir(sourceDir: string, targetDir: string): Promise<void> {
   await fs.rm(sourceDir, { recursive: true, force: true });
 }
 
-async function extractAdminUi(archive: string, dest: string): Promise<void> {
+async function extractBundle(archive: string, dest: string): Promise<void> {
   await new Promise<void>((resolveOuter, rejectOuter) => {
     const proc = spawn('tar', ['-xzf', archive, '-C', dest], {
       stdio: ['ignore', 'ignore', 'pipe'],

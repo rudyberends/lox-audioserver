@@ -442,6 +442,16 @@ export class ZoneManager {
     }
   }
 
+  /**
+   * Public remove for runtime-registered zones (e.g. ephemeral browser zones).
+   * Tears down playback, outputs, state controller and removes the zone from
+   * the registry. The original config file is untouched.
+   */
+  public async removeZone(zoneId: number): Promise<void> {
+    await this.stateControllers.stopForZone(zoneId);
+    await this.disposeZone(zoneId);
+  }
+
   private async disposeZone(zoneId: number): Promise<void> {
     const ctx = this.zoneRepo.get(zoneId);
     if (!ctx) {
@@ -679,7 +689,7 @@ export class ZoneManager {
       config.id,
       normalizeZonePlaybackPreDelayMs(config.powerManager?.playbackPreDelayMs),
     );
-    const outputs = this.outputsPort.listZoneOutputs(config.id);
+    const outputs = this.outputsPort.buildOutputs(config);
     const requiresPcm = this.outputsRequirePcm(outputs);
     const player = new ZonePlayer(this.audioManager, config.id, config.name, config.sourceMac, requiresPcm);
     this.playbackCoordinator.setupPlayerListeners(player, outputs, config.id, config.name, config.sourceMac);

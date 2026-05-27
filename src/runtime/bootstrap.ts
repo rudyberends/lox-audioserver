@@ -16,6 +16,8 @@ import { YoutubeStreamService } from '@/adapters/content/providers/youtube/youtu
 import { YoutubeStreamResolver } from '@/adapters/content/providers/youtube/youtubeStreamResolver';
 import { HttpService } from '@/adapters/http';
 import { LoxoneHttpService } from '@/adapters/loxone/http';
+import { LoxoneCommandProcessor } from '@/adapters/loxone/http/commandProcessor';
+import { BrowserZoneRegistry } from '@/application/zones/browserZoneRegistry';
 import { createInputsAdapter } from '@/adapters/inputs/InputsAdapter';
 import { createOutputsAdapter } from '@/adapters/outputs/OutputsAdapter';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
@@ -273,6 +275,7 @@ export function createRuntime(): Runtime {
   let httpService: HttpService | null = null;
   let networkService: NetworkService | null = null;
   let loxoneService: LoxoneHttpService | null = null;
+  let browserZoneRegistry: BrowserZoneRegistry | null = null;
   let restartInFlight = false;
 
   async function handleReinitialize(): Promise<boolean> {
@@ -350,6 +353,27 @@ export function createRuntime(): Runtime {
     await squeezeliteCore.start();
     await squeezeliteCli.start();
 
+    const loxoneProcessor = new LoxoneCommandProcessor(config.loxone, {
+      onRestart: handleSoftRestart,
+      notifier: ports.notifier,
+      loxoneNotifier,
+      configService: loxoneConfigService,
+      zoneManager,
+      configPort,
+      lineInRegistry,
+      sendspinLineInService,
+      spotifyInputService,
+      recentsManager,
+      favoritesManager,
+      groupManager,
+      groupTracker,
+      fadeController: fadeControllerPort,
+      alerts: alertsPort,
+      contentManager,
+    });
+
+    browserZoneRegistry = new BrowserZoneRegistry(zoneManager);
+
     httpService = new HttpService(config.http, {
       onReinitialize: handleReinitialize,
       notifier: ports.notifier,
@@ -376,6 +400,9 @@ export function createRuntime(): Runtime {
       zoneAudioPrefs,
       mdnsPort: mdnsService,
       alertFiles: alertFilesPort,
+      loxoneProcessor,
+      connectionRegistry,
+      browserZoneRegistry,
     });
     networkService = new NetworkService({
       lineInRegistry,
@@ -383,24 +410,11 @@ export function createRuntime(): Runtime {
     });
     loxoneService = new LoxoneHttpService(config.loxone, {
       host: config.env.hostname,
-      onRestart: handleSoftRestart,
-      notifier: ports.notifier,
-      loxoneNotifier,
-      configService: loxoneConfigService,
+      processor: loxoneProcessor,
       connectionRegistry,
       serverHeartbeat,
       zoneManager,
       configPort,
-      lineInRegistry,
-      sendspinLineInService,
-      spotifyInputService,
-      recentsManager,
-      favoritesManager,
-      groupManager,
-      groupTracker,
-      fadeController: fadeControllerPort,
-      alerts: alertsPort,
-      contentManager,
     });
 
     await httpService.start();
@@ -431,6 +445,9 @@ export function createRuntime(): Runtime {
   async function stopServices(): Promise<void> {
     const log = createLogger('Server');
     const services: LifecycleService[] = [
+      // Tear down ephemeral browser zones before the zone manager shutdown so
+      // each one's outputs get cleaned up via the standard removeZone path.
+      { name: 'browser-zones', stop: async () => browserZoneRegistry?.shutdown() },
       { name: 'zones', stop: () => zoneManager.shutdown() },
     ];
     services.push({ name: 'linein-metadata', stop: async () => lineInMetadataService.stop() });
