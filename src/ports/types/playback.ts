@@ -8,6 +8,12 @@ export interface PlaybackMetadata {
   coverurl?: string;
   duration?: number;
   isRadio?: boolean;
+  /**
+   * Marks a short announcement/alert (TTS, event file, recorded message). Sonos must not be
+   * told the clip's duration in DIDL, otherwise it stops at that mark and clips the tail
+   * (issues #262/#276/#279); the alert session ends on the encoder's EOF instead.
+   */
+  isAlert?: boolean;
   /** Optional absolute audiopath/uri (e.g. spotify:track:abc123) to preserve in queue. */
   audiopath?: string;
   /** Optional provider-specific track id (e.g. spotify track id). */

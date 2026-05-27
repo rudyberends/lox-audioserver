@@ -125,8 +125,6 @@ export class AlertsCoordinator {
     this.playbackCoordinator.setInputMode(ctx, 'alert');
 
     const clampedVolume = clampVolumeForZone(ctx.config, volume);
-    ctx.player.setVolume(clampedVolume);
-    this.applyPatch(zoneId, { volume: clampedVolume });
 
 	    const metadata: PlaybackMetadata = {
 	      title,
@@ -138,6 +136,7 @@ export class AlertsCoordinator {
 	      duration: durationMs ? Math.round(durationMs / 1000) : reportedDurationSec ?? media.duration,
 	      audiopath: playUrl,
 	      station: '',
+	      isAlert: true,
 	    };
 
     if (/tts/i.test(type)) {
@@ -150,6 +149,13 @@ export class AlertsCoordinator {
       await this.stopAlertLocked(zoneId);
       return;
     }
+
+    // Apply the announcement volume only after playUri has switched the active output to the
+    // alert source. Setting it earlier dispatched SetVolume to the *previous* stream's transport,
+    // so the still-playing radio briefly blasted at the alert volume before the source swapped
+    // (issue #279). The Sonos output stashes this as pendingVolume and applies it after its Play.
+    ctx.player.setVolume(clampedVolume);
+    this.applyPatch(zoneId, { volume: clampedVolume });
 
     if (durationMs && durationMs > 0) {
       const clampedMs = Math.min(durationMs + 150, 2147483647);

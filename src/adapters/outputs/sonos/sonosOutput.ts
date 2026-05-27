@@ -965,7 +965,10 @@ export class SonosOutput implements ZoneOutput {
     const title = session.metadata?.title || this.zoneName;
     const album = session.metadata?.album || '';
     const artist = session.metadata?.artist || '';
-    const duration = this.formatDlnaDuration(session.duration);
+    // Alerts must not advertise a duration: Sonos honors the DIDL res duration strictly and
+    // stops at that mark, clipping the tail of short announcements (issues #262/#276/#279).
+    // Treating the alert as an open-ended broadcast lets it play until we close the stream.
+    const duration = session.metadata?.isAlert ? '' : this.formatDlnaDuration(session.duration);
     const isStream = !duration;
     const protocolInfo = this.buildProtocolInfo(uri, isStream);
     const mediaClass = isStream
@@ -1033,6 +1036,11 @@ export class SonosOutput implements ZoneOutput {
   }
 
   private isRadioSession(session: PlaybackSession): boolean {
+    // Alerts are streamed open-ended (see buildDidlMetadata) so Sonos plays until we close the
+    // connection rather than stopping at a declared duration (issues #262/#276/#279).
+    if (session.metadata?.isAlert) {
+      return true;
+    }
     const duration = Number(session.duration ?? 0);
     const metaDuration = Number(session.metadata?.duration ?? 0);
     return !(duration > 0) && !(metaDuration > 0);

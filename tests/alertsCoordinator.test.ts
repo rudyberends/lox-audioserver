@@ -6,7 +6,7 @@ import { buildInitialState } from '../src/application/zones/helpers/stateHelpers
 import type { ZoneContext } from '../src/application/zones/internal/zoneTypes';
 import type { ZoneConfig } from '../src/domain/config/types';
 
-test('startAlert patches alert volume into zone state before play patch', async () => {
+test('startAlert applies alert volume after switching to the alert source', async () => {
   const zone: ZoneConfig = {
     id: 1,
     name: 'Living',
@@ -28,6 +28,8 @@ test('startAlert patches alert volume into zone state before play patch', async 
   const patches: Array<Record<string, unknown>> = [];
   const playerVolumes: number[] = [];
   const inputModes: Array<ZoneContext['inputMode']> = [];
+  const callOrder: string[] = [];
+  let playedMetadata: Record<string, unknown> | null = null;
   const ctx = {
     id: zone.id,
     name: zone.name,
@@ -53,8 +55,13 @@ test('startAlert patches alert volume into zone state before play patch', async 
     player: {
       setVolume: (level: number) => {
         playerVolumes.push(level);
+        callOrder.push('setVolume');
       },
-      playUri: () => ({}) as any,
+      playUri: (_uri: string, metadata: Record<string, unknown>) => {
+        playedMetadata = metadata;
+        callOrder.push('playUri');
+        return {} as any;
+      },
     },
     outputTimingActive: false,
     lastOutputTimingAt: 0,
@@ -112,4 +119,10 @@ test('startAlert patches alert volume into zone state before play patch', async 
   assert.equal(patches[0]?.volume, 55);
   assert.equal(ctx.state.volume, 55);
   assert.equal(patches[1]?.mode, 'play');
+  // Volume must be applied only after the source has switched to the alert (issue #279),
+  // otherwise the previous stream briefly plays at the announcement volume.
+  assert.deepEqual(callOrder, ['playUri', 'setVolume']);
+  // Alert metadata must be flagged so the Sonos output omits the DIDL duration and streams
+  // the clip open-ended instead of self-truncating the tail (issues #262/#276/#279).
+  assert.equal(playedMetadata?.isAlert, true);
 });
