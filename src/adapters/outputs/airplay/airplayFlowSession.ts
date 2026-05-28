@@ -30,8 +30,11 @@ export class AirplayFlowSession {
   private chunkQueueBytes = 0;
   private chunkTimer: NodeJS.Timeout | null = null;
   private readonly chunkDurationMs = 80;
-  // Keep more headroom to avoid audible gaps when the event loop is briefly busy.
-  private readonly maxChunkQueueSeconds = 8;
+  // This is the backpressure ceiling, and since faster-than-realtime sources
+  // (e.g. ffmpeg) run ahead, it is effectively the steady-state queue depth =
+  // added playout latency. Keep it small: the wall-clock chunker absorbs brief
+  // event-loop stalls by bursting to catch up, so we don't need seconds of lead.
+  private readonly maxChunkQueueSeconds = 1;
   private chunkSizeBytes = 44100 * 2 * 2;
   private maxChunkQueueBytes = 44100 * 2 * 2;
   private preloadBytes = 44100 * 2 * 2;
@@ -39,6 +42,10 @@ export class AirplayFlowSession {
   private lastTrimLogAt = 0;
   private sourceAttached = false;
   private streamedBytes = 0;
+  // Wall-clock anchor for paced draining. setTimeout drifts slower than real time,
+  // so pace against elapsed wall clock instead of a fixed amount per tick.
+  private streamClockStart: number | null = null;
+  private streamClockBytesBase = 0;
   private bytesPerSecond = 44100 * 2 * 2;
   private readonly pendingChunks: Buffer[] = [];
   private pendingBytes = 0;
@@ -590,6 +597,8 @@ export class AirplayFlowSession {
     if (!this.preloadComplete) {
       if (this.chunkQueueBytes >= this.preloadBytes) {
         this.preloadComplete = true;
+        this.streamClockStart = Date.now();
+        this.streamClockBytesBase = this.streamedBytes;
         this.log.debug('airplay flow preload complete', {
           zoneId: this.zoneId,
           preloadBytes: this.preloadBytes,
@@ -599,11 +608,26 @@ export class AirplayFlowSession {
         return;
       }
     }
-    const drainCount =
-      this.maxChunkQueueBytes > 0 && this.chunkQueueBytes > this.maxChunkQueueBytes * 0.75 ? 2 : 1;
-    for (let i = 0; i < drainCount; i += 1) {
+
+    // Pace against wall clock, not the timer cadence: send enough to match the
+    // real time elapsed since preload. This self-corrects setTimeout drift, which
+    // otherwise feeds the sender slightly slow and underruns the airtunes buffer.
+    const elapsedMs = Date.now() - (this.streamClockStart ?? Date.now());
+    const targetBytes = Math.round((elapsedMs / 1000) * this.bytesPerSecond);
+    // Cap the per-tick burst so a stalled event loop can't dump an unbounded catch-up.
+    let guard = Math.ceil((this.bytesPerSecond * 2) / Math.max(1, this.chunkSizeBytes));
+    while (this.streamedBytes - this.streamClockBytesBase < targetBytes && guard-- > 0) {
       const next = this.popChunk(this.chunkSizeBytes);
-      if (!next) break;
+      if (!next) {
+        // Source underran (e.g. the reconnect gap on a track switch). Re-anchor
+        // the wall clock instead of catching the gap up later: a catch-up burst
+        // would dump the missed seconds straight into the unbounded airtunes
+        // buffer and permanently add latency, stacking on every switch. Staying
+        // current keeps any surplus in the bounded chunk queue (backpressured).
+        this.streamClockStart = Date.now();
+        this.streamClockBytesBase = this.streamedBytes;
+        break;
+      }
       for (const client of this.clients.values()) {
         client.buffer?.push(next);
       }
