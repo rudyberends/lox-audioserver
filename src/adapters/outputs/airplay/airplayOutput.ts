@@ -106,10 +106,12 @@ export class AirPlayOutput implements ZoneOutput {
     initialVolume?: number,
   ) {
     const configOverrides: AirplaySenderOverrides = {
-      // Lower buffer size so the FILLING→NORMAL warmup after a sender reset
-      // (track switch) is ~400ms instead of ~2s. Trade-off: less network jitter
-      // tolerance — raise if WiFi underruns become audible.
-      packets_in_buffer: 100,
+      // Keep a generous jitter buffer (~2.1s) so bursty/slightly-slow sources
+      // don't underrun, but start playback after a short prefill (~400ms) so a
+      // track-switch reset re-anchors quickly instead of warming up the full
+      // buffer. start_fill_packets is decoupled from packets_in_buffer.
+      packets_in_buffer: 260,
+      start_fill_packets: 50,
       // Keep default sender pacing. Large values here can increase burstiness and/or reduce sync cadence,
       // which may show up as audible stutter on some renderers.
       control_sync_base_delay_ms: 2,
@@ -188,25 +190,19 @@ export class AirPlayOutput implements ZoneOutput {
     const effectiveStream = directStream ?? existing?.stream ?? null;
     this.lastInputUrl = effectiveStream ? 'shared' : null;
     if (isNewTrack) {
-      this.flowSession.resetBuffers('new_track');
-      this.sender.clearBuffers();
+      // Gapless track switch: keep the sender running and let the continuous
+      // stream carry the transition. (NOTE: the renderer's buffer can drift up
+      // over a long session — a timing issue in the sender library, not here;
+      // an iPhone does not exhibit it. Flushing per switch bounds it but breaks
+      // playback in combination with the wall-clock chunker, so we keep it
+      // gapless for now.)
       this.fastStartNext = true;
       this.noBacklogNext = true;
-      if (this.sender.isRunning()) {
-        this.log.info('AirPlay track change; flushing sender buffer', {
-          zoneId: this.zoneId,
-          zoneName: this.zoneName,
-        });
-        this.sender.reset();
-      }
     }
     if (this.clientStarted || this.starting || this.running) {
       // Sender already active (or starting); keep the session and just refresh stream + volume.
       if (effectiveStream) {
         await this.flowSession.setSharedStream(effectiveStream);
-      }
-      if (isNewTrack) {
-        this.sender.clearBuffers();
       }
       await this.flowSession.setVolume(this.clientId, this.currentVolume);
       this.running = true;
