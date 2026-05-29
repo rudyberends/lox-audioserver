@@ -3,6 +3,7 @@ import { SpotifyAccountProvider, type SpotifyAccountState, type SpotifyAccountPr
 import { MusicAssistantApi } from '@/shared/musicassistant/musicAssistantApi';
 import { createLogger } from '@/shared/logging/logger';
 import { bestEffort } from '@/shared/bestEffort';
+import { resizeCoverUrl, COVER_ART_BROWSE_SIZE } from '@/shared/coverArt';
 import { DEFAULT_MIN_SEARCH_LIMIT } from '@/adapters/content/utils/searchLimits';
 
 const enum FileType {
@@ -535,34 +536,13 @@ export class MusicAssistantBridgeProvider extends SpotifyAccountProvider {
     if (Array.isArray(images) && images.length) {
       const img = images.find((i: any) => i?.path) || images[0];
       const path = img?.path || img?.url || img?.link;
-      if (typeof path === 'string') return this.resizeCover(path);
+      if (typeof path === 'string') return resizeCoverUrl(path, COVER_ART_BROWSE_SIZE);
     }
-    if (typeof source?.image === 'string') return this.resizeCover(source.image);
-    if (typeof source?.cover === 'string') return this.resizeCover(source.cover);
-    if (typeof source?.thumbnail === 'string') return this.resizeCover(source.thumbnail);
+    if (typeof source?.image === 'string') return resizeCoverUrl(source.image, COVER_ART_BROWSE_SIZE);
+    if (typeof source?.cover === 'string') return resizeCoverUrl(source.cover, COVER_ART_BROWSE_SIZE);
+    if (typeof source?.thumbnail === 'string')
+      return resizeCoverUrl(source.thumbnail, COVER_ART_BROWSE_SIZE);
     return '';
-  }
-
-  /**
-   * Ensure cover URLs are limited to ~256px where supported (Music Assistant imageproxy).
-   */
-  private resizeCover(url: string): string {
-    if (!url) return '';
-    try {
-      const parsed = new URL(url);
-      if (parsed.pathname.includes('imageproxy') && !parsed.searchParams.has('size')) {
-        parsed.searchParams.set('size', '256');
-        return parsed.toString();
-      }
-      // Apple Music images: .../<hash>/<filename>/<WxH>bb.jpg → force to 256x256
-      if (parsed.hostname.includes('mzstatic.com')) {
-        parsed.pathname = parsed.pathname.replace(/\/(\d{2,5})x\1bb\.jpg/i, '/256x256bb.jpg');
-        return parsed.toString();
-      }
-    } catch {
-      // not a full URL; return as-is
-    }
-    return url;
   }
 
   private toMaUri(type: string, raw: string, item?: any): string {

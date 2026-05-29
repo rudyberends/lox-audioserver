@@ -7,6 +7,12 @@ import { Jimp, JimpMime } from 'jimp';
 import { createLogger } from '@/shared/logging/logger';
 import { ensureDir, resolveDataDir } from '@/shared/utils/file';
 import { bestEffort, bestEffortSync } from '@/shared/bestEffort';
+import {
+  COVER_ART_JPEG_QUALITY,
+  COVER_ART_MAX_BYTES,
+  COVER_ART_NOW_PLAYING_SIZE,
+  coverArtArchiveSize,
+} from '@/shared/coverArt';
 import type {
   ContentFolder,
   ContentFolderItem,
@@ -37,7 +43,6 @@ const NAS_DIR_TIMEOUT_MS = 3000;
 const MUSICBRAINZ_ENDPOINT = 'https://musicbrainz.org/ws/2/release/';
 const MUSICBRAINZ_USER_AGENT = 'lox-audioserver/1.0 (library-cover-fallback)';
 const COVER_ART_ARCHIVE_RELEASE = 'https://coverartarchive.org/release';
-const COVER_ART_MAX_BYTES = 8 * 1024 * 1024;
 const ALERTS_PUBLIC_DIR = path.resolve(process.cwd(), 'public', 'alerts');
 const SD_ROOT_FOLDER_ID = 'library-sd';
 const SD_ALERTS_FOLDER_ID = 'library-sd-alerts';
@@ -1253,7 +1258,10 @@ export class LocalLibraryProvider {
     const rawBuffer = Buffer.from(picture.data);
     try {
       const image = await Jimp.read(rawBuffer);
-      const maxSize = 500;
+      // One stored file serves both now-playing and browse; keep it at the larger
+      // now-playing tier. (Per-list thumbnails would need an on-the-fly resize on
+      // the /music endpoint — deferred.)
+      const maxSize = COVER_ART_NOW_PLAYING_SIZE;
       const width = image.bitmap.width;
       const height = image.bitmap.height;
       const scale = Math.min(1, maxSize / width, maxSize / height);
@@ -1263,7 +1271,7 @@ export class LocalLibraryProvider {
       const buffer =
         extension === '.png'
           ? await image.getBuffer(JimpMime.png)
-          : await image.getBuffer(JimpMime.jpeg, { quality: 85 });
+          : await image.getBuffer(JimpMime.jpeg, { quality: COVER_ART_JPEG_QUALITY });
       await fsp.writeFile(outPath, Buffer.from(buffer));
     } catch (error) {
       // Some embedded cover formats are not decoded by Jimp; store raw bytes as fallback.
@@ -1301,7 +1309,7 @@ export class LocalLibraryProvider {
         this.coverLookupCache.set(cacheKey, null);
         return undefined;
       }
-      coverUrl = `${COVER_ART_ARCHIVE_RELEASE}/${encodeURIComponent(mbid)}/front-500`;
+      coverUrl = `${COVER_ART_ARCHIVE_RELEASE}/${encodeURIComponent(mbid)}/front-${coverArtArchiveSize(COVER_ART_NOW_PLAYING_SIZE)}`;
       this.log.info('remote cover lookup: matched musicbrainz release', {
         relPath,
         artist,

@@ -7,6 +7,7 @@ import type {
   RadioStation,
 } from '@/ports/ContentTypes';
 import { TuneInClient } from '@/adapters/content/providers/tunein/tuneinClient';
+import { resizeTuneInCoverUrl, COVER_ART_BROWSE_SIZE } from '@/shared/coverArt';
 
 const DEFAULT_ICON =
   'https://extended-app-content.s3.eu-central-1.amazonaws.com/audioZone/services/Icon-TuneIn.svg';
@@ -312,7 +313,7 @@ export class TuneInProvider {
 
     let coverurl = item.image ?? item.playing_image;
     if (coverurl) {
-      coverurl = coverurl.replace(/q(?=\.[^.]*$)/, 'd'); // replaces `q` char before file extension to `d` to get 300x300 pixel squared cover
+      coverurl = resizeTuneInCoverUrl(coverurl, COVER_ART_BROWSE_SIZE);
     } else {
       coverurl = DEFAULT_ICON;
     }

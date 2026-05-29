@@ -1,4 +1,5 @@
 import { encodeAudiopath } from '@/domain/loxone/audiopath';
+import { resizeCoverUrl, COVER_ART_NOW_PLAYING_SIZE } from '@/shared/coverArt';
 import type { PlaybackMetadata } from '@/application/playback/audioManager';
 
 export type MaMediaRef = {
@@ -44,37 +45,21 @@ export function toLoxoneAudiopath(
   return encodeAudiopath(raw, type, providerId);
 }
 
-export function resizeCover(url: string): string {
-  if (!url) return '';
-  try {
-    const parsed = new URL(url);
-    if (parsed.pathname.includes('imageproxy') && !parsed.searchParams.has('size')) {
-      parsed.searchParams.set('size', '256');
-      return parsed.toString();
-    }
-    if (parsed.hostname.includes('mzstatic.com')) {
-      parsed.pathname = parsed.pathname.replace(/\/(\d{2,5})x\1bb\.jpg/i, '/256x256bb.jpg');
-      return parsed.toString();
-    }
-  } catch {
-    /* ignore */
-  }
-  return url;
-}
-
+// All callers build now-playing playback metadata, so covers use the larger tier.
 export function extractCover(obj: any): string {
+  const size = COVER_ART_NOW_PLAYING_SIZE;
   const images = obj?.metadata?.images || obj?.images || obj?.covers || obj?.artwork;
   if (Array.isArray(images) && images.length) {
     const img = images.find((i: any) => i?.path || i?.url || i?.link) || images[0];
     const path = img?.path || img?.url || img?.link;
     if (typeof path === 'string') {
-      return resizeCover(path);
+      return resizeCoverUrl(path, size);
     }
   }
-  if (typeof obj?.image === 'string') return resizeCover(obj.image);
-  if (typeof obj?.image_url === 'string') return resizeCover(obj.image_url);
-  if (typeof obj?.cover === 'string') return resizeCover(obj.cover);
-  if (typeof obj?.thumbnail === 'string') return resizeCover(obj.thumbnail);
+  if (typeof obj?.image === 'string') return resizeCoverUrl(obj.image, size);
+  if (typeof obj?.image_url === 'string') return resizeCoverUrl(obj.image_url, size);
+  if (typeof obj?.cover === 'string') return resizeCoverUrl(obj.cover, size);
+  if (typeof obj?.thumbnail === 'string') return resizeCoverUrl(obj.thumbnail, size);
   return '';
 }
 

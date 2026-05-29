@@ -2,6 +2,7 @@ import type { QueueItem } from '@/ports/types/queueTypes';
 import { createQueueItem } from '@/application/zones/helpers/queueHelpers';
 import { encodeAudiopath } from '@/domain/loxone/audiopath';
 import { extractCoverUrl, pickNumber, pickRecord, pickString } from './maHelpers';
+import { COVER_ART_BROWSE_SIZE } from '@/shared/coverArt';
 
 /**
  * Map a list of MA queue items into Loxone QueueItem format. MA queue items
@@ -24,7 +25,7 @@ export function mapMaItemsToLoxoneQueue(
     const artist =
       pickString(media.artist) ?? pickString(media.artists) ?? pickString(media.album_artist) ?? '';
     const album = pickString(media.album) ?? '';
-    const cover = extractCoverUrl(media as Record<string, unknown>);
+    const cover = extractCoverUrl(media as Record<string, unknown>, COVER_ART_BROWSE_SIZE);
     const durationRaw = pickNumber(r.duration) ?? pickNumber(media.duration);
     const rawUri =
       pickString(r.uri) ??

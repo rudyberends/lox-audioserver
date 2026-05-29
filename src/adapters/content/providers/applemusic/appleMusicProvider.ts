@@ -1,6 +1,7 @@
 import type { ContentFolder, ContentFolderItem, ContentServiceAccount, PlaylistEntry } from '@/ports/ContentTypes';
 import { createLogger } from '@/shared/logging/logger';
 import { DEFAULT_MIN_SEARCH_LIMIT } from '@/adapters/content/utils/searchLimits';
+import { resizeCoverUrl, COVER_ART_BROWSE_SIZE } from '@/shared/coverArt';
 
 const enum FileType {
   Folder = 1,
@@ -649,7 +650,7 @@ export class AppleMusicProvider {
     }
 
     if (typeof attrs?.artworkUrl100 === 'string') {
-      return attrs.artworkUrl100.replace(/\/\d+x\d+bb\.jpg/i, '/256x256bb.jpg');
+      return resizeCoverUrl(attrs.artworkUrl100, COVER_ART_BROWSE_SIZE);
     }
 
     const editorial = attrs?.editorialArtwork;

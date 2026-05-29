@@ -1,6 +1,7 @@
 import type { ZoneConfig } from '@/domain/config/types';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import { AudioType } from '@/domain/loxone/enums';
+import { resizeCoverUrl, COVER_ART_NOW_PLAYING_SIZE } from '@/shared/coverArt';
 
 export { findMusicAssistantBridge } from '@/shared/musicassistant/maBridgeResolver';
 
@@ -79,7 +80,8 @@ export function extractMediaMeta(item: Record<string, unknown>): {
     pickString(item.album_artist) ??
     '';
   const album = pickString(item.album) ?? '';
-  const cover = extractCoverUrl(item);
+  // extractMediaMeta feeds the now-playing snapshot → larger tier.
+  const cover = extractCoverUrl(item, COVER_ART_NOW_PLAYING_SIZE);
   const mediaType = (pickString(item.media_type) ?? '').toLowerCase();
   let audiotype: number | null = null;
   if (mediaType.includes('radio')) audiotype = AudioType.Radio;
@@ -88,7 +90,7 @@ export function extractMediaMeta(item: Record<string, unknown>): {
   return { title, artist, album, cover, audiotype };
 }
 
-export function extractCoverUrl(obj: Record<string, unknown>): string {
+export function extractCoverUrl(obj: Record<string, unknown>, targetSize: number): string {
   const candidates: Array<unknown> = [
     pickRecord(obj.metadata)?.images,
     obj.images,
@@ -108,7 +110,7 @@ export function extractCoverUrl(obj: Record<string, unknown>): string {
           (typeof e.path === 'string' ? e.path : '') ||
           (typeof e.url === 'string' ? e.url : '') ||
           (typeof e.link === 'string' ? e.link : '');
-        if (url) return resizeCover(url);
+        if (url) return resizeCoverUrl(url, targetSize);
       }
     }
   }
@@ -117,25 +119,7 @@ export function extractCoverUrl(obj: Record<string, unknown>): string {
     pickString(obj.image_url) ??
     pickString(obj.cover) ??
     pickString(obj.thumbnail);
-  return direct ? resizeCover(direct) : '';
-}
-
-export function resizeCover(url: string): string {
-  if (!url) return '';
-  try {
-    const parsed = new URL(url);
-    if (parsed.pathname.includes('imageproxy') && !parsed.searchParams.has('size')) {
-      parsed.searchParams.set('size', '256');
-      return parsed.toString();
-    }
-    if (parsed.hostname.includes('mzstatic.com')) {
-      parsed.pathname = parsed.pathname.replace(/\/(\d{2,5})x\1bb\.jpg/i, '/256x256bb.jpg');
-      return parsed.toString();
-    }
-  } catch {
-    /* ignore */
-  }
-  return url;
+  return direct ? resizeCoverUrl(direct, targetSize) : '';
 }
 
 export function pickString(value: unknown): string | null {
