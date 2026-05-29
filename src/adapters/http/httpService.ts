@@ -264,6 +264,12 @@ export class HttpService {
 
     const pathname = this.normalizePath(req.url ?? '/');
 
+    if (pathname === '/') {
+      res.writeHead(302, { Location: '/admin/?chooser=1' });
+      res.end();
+      return;
+    }
+
     if (pathname === '/sendspin') {
       res.writeHead(426, { 'Content-Type': 'text/plain' });
       res.end('Upgrade Required');
