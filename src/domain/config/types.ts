@@ -60,6 +60,16 @@ export interface ContentConfig {
   spotify: SpotifyContentConfig;
   library?: LibraryContentConfig | null;
   tts?: TtsContentConfig;
+  appleMusic?: AppleMusicContentConfig;
+}
+
+export interface AppleMusicContentConfig {
+  /**
+   * Default MusicKit developer token (ES256 JWT). Used to bootstrap the browser sign-in flow and
+   * as the Apple Music API bearer (a per-bridge `developerToken` overrides it). Expires (~6 months)
+   * — regenerate from the Apple Developer MusicKit key and replace it before `exp`.
+   */
+  developerToken?: string;
 }
 
 export interface RadioContentConfig {

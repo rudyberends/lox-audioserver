@@ -5,8 +5,25 @@ import type { SpotifyBridgeConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import Widevine, { LicenseType as WvLicenseType } from 'widevine';
-import { loadWidevineArtifacts, WidevineArtifactsError } from './widevine';
-import protobuf from 'protobufjs';
+import {
+  loadWidevineArtifacts,
+  WidevineArtifactsError,
+  extractPsshFromKeyUri,
+  extractKidFromKeyUri,
+  normalizeBase64,
+} from './widevine';
+import {
+  extractKeyInfo,
+  findPsshKeyUri,
+  findVariantPlaylistUrl,
+  extractFirstSegmentUrl,
+  parseSegmentUrls,
+  readM3u8Attribute,
+  replaceM3u8Attribute,
+  stripM3u8Attribute,
+  isHlsUrl,
+} from './appleMusicHls';
+import { getShippedDeveloperToken, buildBaseHeaders, scrapeBearerToken } from './appleMusicAuth';
 import { gunzipSync } from 'zlib';
 import { Agent } from 'undici';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -17,6 +34,8 @@ const APPLE_MUSIC_API_BASE = 'https://amp-api.music.apple.com/v1';
 const WEBPLAYBACK_URL = 'https://play.music.apple.com/WebObjects/MZPlay.woa/wa/webPlayback';
 
 const BEARER_TOKEN_TTL_MS = 30 * 60 * 1000;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 type AppleMusicPlaybackResult = {
   playbackSource: PlaybackSource | null;
@@ -62,7 +81,6 @@ type AppleMusicDrmKeyCacheEntry = {
 
 type OutputErrorHandler = (zoneId: number, reason?: string) => void;
 
-const WIDEVINE_KEYFORMAT_UUID = 'urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed';
 const DRM_KEY_TTL_MS = 60 * 60 * 1000;
 const WIDEVINE_MISSING_REASON = 'widevine missing';
 
@@ -70,20 +88,6 @@ type DrmKeyResult = {
   key: string | null;
   errorReason?: string;
 };
-
-const WIDEVINE_PSSH_PROTO = `
-syntax = "proto2";
-
-message WidevinePsshData {
-  optional uint32 algorithm = 1;
-  repeated bytes key_ids = 2;
-}
-`;
-
-const WidevinePsshDataMsg = (() => {
-  const parsed = protobuf.parse(WIDEVINE_PSSH_PROTO);
-  return parsed.root.lookupType('WidevinePsshData');
-})();
 
 export class AppleMusicStreamService {
   private readonly log = createLogger('Content', 'AppleMusicStream');
@@ -142,16 +146,39 @@ export class AppleMusicStreamService {
       return { playbackSource: null };
     }
 
-    const headers = await this.buildAuthHeaders(request.bridge);
+    let headers = await this.buildAuthHeaders(request.bridge);
     if (!headers.authorization) {
       this.log.warn('apple music stream missing bearer token', { zoneId, providerId: request.providerId });
     }
 
     let webPlayback = await this.fetchWebPlayback(headers, request.trackId, request.isLibrary);
+    if (webPlayback?.__error?.authStatus) {
+      // Stale bearer: drop it, rebuild auth headers and retry once with a fresh token. (A configured
+      // developerToken can't be refreshed, so this only recovers the scraped-bearer path.)
+      this.log.info('apple music webPlayback auth failed; refreshing bearer', {
+        zoneId,
+        status: webPlayback.__error.authStatus,
+      });
+      this.invalidateBearer(request.bridge);
+      headers = await this.buildAuthHeaders(request.bridge);
+      webPlayback = await this.fetchWebPlayback(headers, request.trackId, request.isLibrary);
+    }
     let streamUrl = this.extractStreamUrl(webPlayback);
     let drmTrackId = request.trackId;
     let drmIsLibrary = request.isLibrary;
     let failureReason = '';
+
+    // MA-aligned fast path: library tracks frequently expose a direct, unencrypted asset URL.
+    // When that URL is not an HLS playlist it needs no Widevine, so play it straight away and
+    // skip the catalog/DRM round-trip entirely. HLS/DRM library URLs fall through to the
+    // catalog resolution below.
+    if (request.isLibrary && streamUrl && !isHlsUrl(streamUrl)) {
+      this.log.info('apple music library direct stream (no drm)', {
+        zoneId,
+        trackId: request.trackId,
+      });
+      return { playbackSource: await this.buildStreamPlaybackSource(streamUrl, headers, request.bridge) };
+    }
 
     if (request.isLibrary) {
       const catalogId = await this.fetchCatalogIdForLibraryTrack(headers, request.trackId);
@@ -195,8 +222,11 @@ export class AppleMusicStreamService {
 
     if (!streamUrl) {
       const webPlaybackError = webPlayback?.__error as
-        | { failureType?: string; customerMessage?: string; keys?: string[] }
+        | { failureType?: string; customerMessage?: string; keys?: string[]; authStatus?: number }
         | undefined;
+      if (!failureReason && webPlaybackError?.authStatus) {
+        failureReason = `apple music auth rejected (${webPlaybackError.authStatus})`;
+      }
       if (!failureReason && webPlaybackError) {
         const details = [
           webPlaybackError.failureType,
@@ -262,7 +292,8 @@ export class AppleMusicStreamService {
     const decodedId = decodeAudiopath(rawId);
     const trackId = decodedId || rawId;
     if (!providerId || !trackId) return null;
-    const looksLikeLibraryId = /^[il]\./i.test(trackId);
+    // Apple library IDs are prefixed a./i./l./p. (artist/item/album/playlist).
+    const looksLikeLibraryId = /^[ailp]\./i.test(trackId);
     const isLibrary = type.startsWith('library-') || looksLikeLibraryId;
     const normalized = type.replace(/^library-/, '');
     if (normalized !== 'track') return null;
@@ -281,65 +312,84 @@ export class AppleMusicStreamService {
     trackId: string,
     isLibrary: boolean,
   ): Promise<any | null> {
-    try {
-      const normalizedTrackId = isLibrary ? trackId : this.normalizeSalableAdamId(trackId);
-      const payload: Record<string, any> = {
-        'user-initiated': true,
-      };
-      if (isLibrary) {
-        payload.universalLibraryId = trackId;
-        payload.isLibrary = true;
-      } else {
-        payload.salableAdamId = normalizedTrackId;
-      }
+    const normalizedTrackId = isLibrary ? trackId : this.normalizeSalableAdamId(trackId);
+    const payload: Record<string, any> = {
+      'user-initiated': true,
+    };
+    if (isLibrary) {
+      payload.universalLibraryId = trackId;
+      payload.isLibrary = true;
+    } else {
+      payload.salableAdamId = normalizedTrackId;
+    }
+    const body = JSON.stringify(payload);
 
-      const res = await fetch(WEBPLAYBACK_URL, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-      });
+    // One retry on transient failures (network error / 429 / 5xx). A response that parses but is
+    // missing songList is a genuine content problem, so we return it without retrying.
+    const maxAttempts = 2;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const res = await fetch(WEBPLAYBACK_URL, { method: 'POST', headers, body });
 
-      if (!res.ok) {
-        const body = await safeReadText(res, '', {
-          onError: 'debug',
-          log: this.log,
-          label: 'apple music web playback read failed',
-          context: { status: res.status },
+        if (!res.ok) {
+          const text = await safeReadText(res, '', {
+            onError: 'debug',
+            log: this.log,
+            label: 'apple music web playback read failed',
+            context: { status: res.status },
+          });
+          this.log.warn('apple music webPlayback failed', {
+            status: res.status,
+            attempt: attempt + 1,
+            body: text ? text.slice(0, 200) : undefined,
+          });
+          if ((res.status === 429 || res.status >= 500) && attempt < maxAttempts - 1) {
+            await sleep(500 * 2 ** attempt);
+            continue;
+          }
+          // Signal auth failures so the caller can refresh a stale bearer and retry once.
+          if (res.status === 401 || res.status === 403) {
+            return { __error: { authStatus: res.status } };
+          }
+          return null;
+        }
+
+        const data = (await res.json()) as Record<string, any> | null;
+        const song = data?.songList?.[0];
+        if (!song) {
+          const keys = data && typeof data === 'object' ? Object.keys(data) : undefined;
+          const failureType = data?.failureType ?? data?.['failureType'];
+          const customerMessage = data?.customerMessage ?? data?.['customerMessage'];
+          this.log.warn('apple music webPlayback missing songList', {
+            keys,
+            failureType,
+            customerMessage,
+          });
+          return {
+            __error: {
+              failureType: typeof failureType === 'string' ? failureType : undefined,
+              customerMessage: typeof customerMessage === 'string' ? customerMessage : undefined,
+              keys,
+            },
+          };
+        }
+        if (song && data?.['hls-key-server-url'] && !song['hls-key-server-url']) {
+          song['hls-key-server-url'] = data['hls-key-server-url'];
+        }
+        return song ?? null;
+      } catch (err) {
+        this.log.warn('apple music webPlayback error', {
+          attempt: attempt + 1,
+          message: err instanceof Error ? err.message : String(err),
         });
-        this.log.warn('apple music webPlayback failed', {
-          status: res.status,
-          body: body ? body.slice(0, 200) : undefined,
-        });
+        if (attempt < maxAttempts - 1) {
+          await sleep(500 * 2 ** attempt);
+          continue;
+        }
         return null;
       }
-
-      const data = (await res.json()) as Record<string, any> | null;
-      const song = data?.songList?.[0];
-      if (!song) {
-        const keys = data && typeof data === 'object' ? Object.keys(data) : undefined;
-        const failureType = data?.failureType ?? data?.['failureType'];
-        const customerMessage = data?.customerMessage ?? data?.['customerMessage'];
-        this.log.warn('apple music webPlayback missing songList', {
-          keys,
-          failureType,
-          customerMessage,
-        });
-        return {
-          __error: {
-            failureType: typeof failureType === 'string' ? failureType : undefined,
-            customerMessage: typeof customerMessage === 'string' ? customerMessage : undefined,
-            keys,
-          },
-        };
-      }
-      if (song && data?.['hls-key-server-url'] && !song['hls-key-server-url']) {
-        song['hls-key-server-url'] = data['hls-key-server-url'];
-      }
-      return song ?? null;
-    } catch (err) {
-      this.log.warn('apple music webPlayback error', { message: err instanceof Error ? err.message : String(err) });
-      return null;
     }
+    return null;
   }
 
   private normalizeSalableAdamId(trackId: string): string {
@@ -391,7 +441,7 @@ export class AppleMusicStreamService {
       return null;
     }
 
-    const variantUrl = this.findVariantPlaylistUrl(playlist, streamUrl);
+    const variantUrl = findVariantPlaylistUrl(playlist, streamUrl);
     if (variantUrl) {
       this.log.debug('Apple Music DRM: resolved variant playlist', { variantUrl });
     }
@@ -404,19 +454,19 @@ export class AppleMusicStreamService {
       }
     }
 
-    const keyInfo = this.extractKeyInfo(playlist);
+    const keyInfo = extractKeyInfo(playlist);
     let keyUri = keyInfo?.uri ?? null;
 
-    if (keyUri && !this.extractPsshFromKeyUri(keyUri)) {
+    if (keyUri && !extractPsshFromKeyUri(keyUri)) {
       this.log.debug('Apple Music DRM: key URI missing PSSH; searching fallback', {
         keyUri,
         keyLine: keyInfo?.line,
       });
-      const fallbackUri = this.findPsshKeyUri(playlist);
+      const fallbackUri = findPsshKeyUri(playlist);
       if (fallbackUri) keyUri = fallbackUri;
     }
 
-    if (!keyUri || !this.extractPsshFromKeyUri(keyUri)) {
+    if (!keyUri || !extractPsshFromKeyUri(keyUri)) {
       const assetKey = await this.findKeyUriFromAssets(webPlayback, headers);
       if (assetKey) keyUri = assetKey;
     }
@@ -451,23 +501,6 @@ export class AppleMusicStreamService {
     return {
       playbackSource: await this.buildStreamPlaybackSource(playbackUrl, headers, bridge, drmKeyResult.key),
     };
-  }
-
-  private extractKeyInfo(playlist: string): { uri: string; line: string; format?: string } | null {
-    const lines = playlist.split(/\r?\n/);
-    const entries: Array<{ uri: string; line: string; format?: string }> = [];
-    for (const line of lines) {
-      if (!line.startsWith('#EXT-X-KEY')) continue;
-      const uri = this.readM3u8Attribute(line, 'URI');
-      if (!uri) continue;
-      const format = this.readM3u8Attribute(line, 'KEYFORMAT');
-      entries.push({ uri, line, format });
-    }
-    if (!entries.length) return null;
-    const widevine = entries.find((entry) => this.isWidevineKeyformat(entry.format));
-    if (widevine) return widevine;
-    const base64 = entries.find((entry) => entry.uri.toLowerCase().includes('base64,'));
-    return base64 ?? entries[0] ?? null;
   }
 
   private async fetchDrmKey(
@@ -530,12 +563,12 @@ export class AppleMusicStreamService {
     try {
       this.log.info('Apple Music DRM: starting key extraction (new format)', { trackId, isLibrary, keyUri });
 
-      const pssh = this.extractPsshFromKeyUri(keyUri);
+      const pssh = extractPsshFromKeyUri(keyUri);
       if (!pssh) {
         this.log.warn('Apple Music DRM: unsupported key URI; missing PSSH data', { keyUri });
         return { key: null };
       }
-      const expectedKid = this.extractKidFromKeyUri(keyUri, pssh);
+      const expectedKid = extractKidFromKeyUri(keyUri, pssh);
       const expectedKidHex = expectedKid ? expectedKid.toString('hex') : null;
 
       let device: ReturnType<typeof Widevine.init>;
@@ -628,7 +661,7 @@ export class AppleMusicStreamService {
         return { key: null };
       }
 
-      let license = Buffer.from(this.normalizeBase64(licenseBase64), 'base64');
+      let license = Buffer.from(normalizeBase64(licenseBase64), 'base64');
       if (license.length >= 2 && license[0] === 0x1f && license[1] === 0x8b) {
         try {
           license = gunzipSync(license);
@@ -689,130 +722,6 @@ export class AppleMusicStreamService {
     return `${isLibrary ? 'library' : 'catalog'}:${trackId}`;
   }
 
-  private readM3u8Attribute(line: string, name: string): string | undefined {
-    const pattern = new RegExp(`${name}=("(?:[^"\\\\]|\\\\.)*"|[^,]*)`, 'i');
-    const match = line.match(pattern);
-    if (!match?.[1]) return undefined;
-    let value = match[1].trim();
-    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
-      value = value.slice(1, -1);
-    }
-    value = value.replace(/\\(.)/g, '$1');
-    return value;
-  }
-
-  private isWidevineKeyformat(format?: string): boolean {
-    if (!format) return false;
-    const normalized = format.toLowerCase();
-    return normalized.includes('widevine') || normalized.includes(WIDEVINE_KEYFORMAT_UUID);
-  }
-
-  private extractPsshFromKeyUri(keyUri: string): Buffer | null {
-    const trimmed = keyUri.trim();
-    if (/^skd:\/\//i.test(trimmed)) return null;
-    const base64Index = trimmed.indexOf('base64,');
-    if (base64Index !== -1) {
-      const payload = trimmed.slice(base64Index + 'base64,'.length).trim();
-      if (!payload) return null;
-      return this.coercePssh(Buffer.from(payload, 'base64'));
-    }
-    if (/^[A-Za-z0-9+/=]+$/.test(trimmed) && trimmed.length >= 16) {
-      try {
-        return this.coercePssh(Buffer.from(trimmed, 'base64'));
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-
-  private extractKidFromKeyUri(keyUri: string, pssh?: Buffer | null): Buffer | null {
-    const trimmed = keyUri.trim();
-    if (/^skd:\/\//i.test(trimmed)) return null;
-    const base64Index = trimmed.indexOf('base64,');
-    const payload = base64Index !== -1 ? trimmed.slice(base64Index + 'base64,'.length).trim() : trimmed;
-    if (payload && /^[A-Za-z0-9+/=]+$/.test(payload)) {
-      try {
-        const decoded = Buffer.from(payload, 'base64');
-        if (decoded.length === 16) return decoded;
-      } catch {
-        // ignore
-      }
-    }
-    if (pssh) {
-      return this.extractKidFromPssh(pssh);
-    }
-    return null;
-  }
-
-  private extractKidFromPssh(pssh: Buffer): Buffer | null {
-    if (!pssh || pssh.length < 32) return null;
-    if (pssh.subarray(4, 8).toString('ascii') !== 'pssh') return null;
-    try {
-      const decoded = WidevinePsshDataMsg.decode(pssh.subarray(32)) as { keyIds?: Buffer[] };
-      const keyId = decoded?.keyIds?.[0];
-      return Buffer.isBuffer(keyId) ? keyId : keyId ? Buffer.from(keyId) : null;
-    } catch {
-      return null;
-    }
-  }
-
-  private findPsshKeyUri(playlist: string): string | null {
-    const match = playlist.match(/URI=(?:"|\\")?(data:[^,]+;base64,[A-Za-z0-9+/=]+)(?:"|\\")?/i);
-    return match?.[1] ?? null;
-  }
-
-  private findVariantPlaylistUrl(playlist: string, baseUrl: string): string | null {
-    if (!/#EXT-X-STREAM-INF/i.test(playlist)) return null;
-    const lines = playlist.split(/\r?\n/);
-    for (let i = 0; i < lines.length; i += 1) {
-      const line = lines[i];
-      if (!line || !line.startsWith('#EXT-X-STREAM-INF')) continue;
-      for (let j = i + 1; j < lines.length; j += 1) {
-        const uri = lines[j]?.trim();
-        if (!uri || uri.startsWith('#')) continue;
-        try {
-          return new URL(uri, baseUrl).toString();
-        } catch {
-          return null;
-        }
-      }
-    }
-    return null;
-  }
-
-  private normalizeBase64(value: string): string {
-    const trimmed = value.trim().replace(/-/g, '+').replace(/_/g, '/');
-    const pad = trimmed.length % 4;
-    if (pad === 0) return trimmed;
-    return trimmed + '='.repeat(4 - pad);
-  }
-
-  private coercePssh(data: Buffer): Buffer | null {
-    if (data.length >= 32 && data.subarray(4, 8).toString('ascii') === 'pssh') {
-      return data;
-    }
-    if (data.length === 16) {
-      return this.buildWidevinePsshFromKid(data);
-    }
-    return null;
-  }
-
-  private buildWidevinePsshFromKid(kid: Buffer): Buffer {
-    const initData = WidevinePsshDataMsg.encode({ algorithm: 1, keyIds: [kid] }).finish();
-    const systemId = Buffer.from('edef8ba979d64acea3c827dcd51d21ed', 'hex');
-    const totalSize = 32 + initData.length;
-    const pssh = Buffer.alloc(totalSize);
-    let offset = 0;
-    pssh.writeUInt32BE(totalSize, offset); offset += 4;
-    pssh.write('pssh', offset); offset += 4;
-    pssh.writeUInt32BE(0, offset); offset += 4;
-    systemId.copy(pssh, offset); offset += 16;
-    pssh.writeUInt32BE(initData.length, offset); offset += 4;
-    Buffer.from(initData).copy(pssh, offset);
-    return pssh;
-  }
-
   private async findKeyUriFromAssets(
     webPlayback: any,
     headers: Record<string, string>,
@@ -828,16 +737,16 @@ export class AppleMusicStreamService {
     let playlist = await this.fetchText(assetUrl, headers);
     if (!playlist) return null;
 
-    const variantUrl = this.findVariantPlaylistUrl(playlist, assetUrl);
+    const variantUrl = findVariantPlaylistUrl(playlist, assetUrl);
     if (variantUrl) {
       const variantPlaylist = await this.fetchText(variantUrl, headers);
       if (variantPlaylist) playlist = variantPlaylist;
     }
 
-    const keyInfo = this.extractKeyInfo(playlist);
+    const keyInfo = extractKeyInfo(playlist);
     const keyUri = keyInfo?.uri ?? null;
-    if (keyUri && this.extractPsshFromKeyUri(keyUri)) return keyUri;
-    return this.findPsshKeyUri(playlist);
+    if (keyUri && extractPsshFromKeyUri(keyUri)) return keyUri;
+    return findPsshKeyUri(playlist);
   }
 
   private buildStreamHeaders(headers: Record<string, string>): Record<string, string> | undefined {
@@ -868,14 +777,10 @@ export class AppleMusicStreamService {
     decryptionKey?: string,
   ): Promise<PlaybackSource> {
     const streamHeaders = this.buildStreamHeaders(headers);
-    if (this.isHlsUrl(streamUrl)) {
+    if (isHlsUrl(streamUrl)) {
       return this.buildProxyPlaybackSource(streamUrl, streamHeaders, bridge, decryptionKey);
     }
     return this.buildDirectProxyPlaybackSource(streamUrl, streamHeaders, bridge, decryptionKey);
-  }
-
-  private isHlsUrl(streamUrl: string): boolean {
-    return /\.m3u8($|\?)/i.test(streamUrl);
   }
 
   private async buildDirectProxyPlaybackSource(
@@ -917,7 +822,7 @@ export class AppleMusicStreamService {
     let playlist = await this.fetchText(assetUrl, headers);
     if (!playlist) return null;
     let baseUrl = assetUrl;
-    const variantUrl = this.findVariantPlaylistUrl(playlist, assetUrl);
+    const variantUrl = findVariantPlaylistUrl(playlist, assetUrl);
     if (variantUrl) {
       const variantPlaylist = await this.fetchText(variantUrl, headers);
       if (variantPlaylist) {
@@ -925,24 +830,10 @@ export class AppleMusicStreamService {
         baseUrl = variantUrl;
       }
     }
-    const fileUrl = this.extractFirstSegmentUrl(playlist, baseUrl);
+    const fileUrl = extractFirstSegmentUrl(playlist, baseUrl);
     if (!fileUrl) return null;
-    const keyInfo = this.extractKeyInfo(playlist);
+    const keyInfo = extractKeyInfo(playlist);
     return { fileUrl, keyUri: keyInfo?.uri };
-  }
-
-  private extractFirstSegmentUrl(playlist: string, baseUrl: string): string | null {
-    const lines = playlist.split(/\r?\n/);
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      try {
-        return new URL(trimmed, baseUrl).toString();
-      } catch {
-        return null;
-      }
-    }
-    return null;
   }
 
   private async buildProxyPlaybackSource(
@@ -999,6 +890,7 @@ export class AppleMusicStreamService {
   ): Promise<{ host: string; port: number; sessionId: string }> {
     const { host, port } = await this.ensureProxyServer();
     this.pruneProxySessions();
+    this.pruneDrmKeyCache();
     const sessionId = randomUUID();
     const session: AppleMusicProxySession = {
       id: sessionId,
@@ -1108,7 +1000,7 @@ export class AppleMusicStreamService {
     let playlist = await this.fetchText(session.streamUrl, session.headers ?? {});
     if (!playlist) return null;
     let baseUrl = session.streamUrl;
-    const variantUrl = this.findVariantPlaylistUrl(playlist, baseUrl);
+    const variantUrl = findVariantPlaylistUrl(playlist, baseUrl);
     if (variantUrl) {
       const variantPlaylist = await this.fetchText(variantUrl, session.headers ?? {});
       if (variantPlaylist) {
@@ -1140,18 +1032,18 @@ export class AppleMusicStreamService {
     const output: string[] = [];
     for (const line of sourceLines) {
       if (line.startsWith('#EXT-X-KEY')) {
-        let next = this.replaceM3u8Attribute(line, 'URI', keyUrl);
-        next = this.stripM3u8Attribute(next, 'KEYFORMAT');
-        next = this.stripM3u8Attribute(next, 'KEYFORMATVERSIONS');
+        let next = replaceM3u8Attribute(line, 'URI', keyUrl);
+        next = stripM3u8Attribute(next, 'KEYFORMAT');
+        next = stripM3u8Attribute(next, 'KEYFORMATVERSIONS');
         output.push(next);
         continue;
       }
       if (line.startsWith('#EXT-X-MAP')) {
-        const mapUri = this.readM3u8Attribute(line, 'URI');
+        const mapUri = readM3u8Attribute(line, 'URI');
         if (mapUri) {
           const absolute = new URL(mapUri, baseUrl).toString();
           const proxyUrl = this.buildProxySegmentUrl(session.id, absolute);
-          output.push(this.replaceM3u8Attribute(line, 'URI', proxyUrl));
+          output.push(replaceM3u8Attribute(line, 'URI', proxyUrl));
           continue;
         }
       }
@@ -1323,7 +1215,7 @@ export class AppleMusicStreamService {
     let playlist = await this.fetchText(session.streamUrl, session.headers ?? {});
     if (!playlist) return null;
     let baseUrl = session.streamUrl;
-    const variantUrl = this.findVariantPlaylistUrl(playlist, baseUrl);
+    const variantUrl = findVariantPlaylistUrl(playlist, baseUrl);
     if (variantUrl) {
       const variantPlaylist = await this.fetchText(variantUrl, session.headers ?? {});
       if (variantPlaylist) {
@@ -1331,39 +1223,10 @@ export class AppleMusicStreamService {
         baseUrl = variantUrl;
       }
     }
-    const { initUrl, segments } = this.parseSegmentUrls(playlist, baseUrl);
+    const { initUrl, segments } = parseSegmentUrls(playlist, baseUrl);
     session.initUrl = initUrl ?? undefined;
     session.segmentUrls = segments;
     return segments;
-  }
-
-  private parseSegmentUrls(
-    playlist: string,
-    baseUrl: string,
-  ): { initUrl?: string; segments: string[] } {
-    const lines = playlist.split(/\r?\n/);
-    let initUrl: string | undefined;
-    const segments: string[] = [];
-    for (const line of lines) {
-      if (line.startsWith('#EXT-X-MAP')) {
-        const uri = this.readM3u8Attribute(line, 'URI');
-        if (uri) {
-          try {
-            initUrl = new URL(uri, baseUrl).toString();
-          } catch {
-            initUrl = undefined;
-          }
-        }
-        continue;
-      }
-      if (!line || line.startsWith('#')) continue;
-      try {
-        segments.push(new URL(line.trim(), baseUrl).toString());
-      } catch {
-        // ignore invalid
-      }
-    }
-    return { initUrl, segments };
   }
 
   private async pipeFetchToResponse(
@@ -1438,22 +1301,14 @@ export class AppleMusicStreamService {
     }
   }
 
-  private stripM3u8Attribute(line: string, name: string): string {
-    const pattern = new RegExp(`(?:,)?${name}=("(?:[^"\\\\]|\\\\.)*"|[^,]*)`, 'ig');
-    let next = line.replace(pattern, '');
-    next = next.replace(/,(\s*)$/, '');
-    next = next.replace(/:,+/, ':');
-    next = next.replace(/,,+/g, ',');
-    return next;
-  }
-
-  private replaceM3u8Attribute(line: string, name: string, value: string): string {
-    const pattern = new RegExp(`${name}=("(?:[^"\\\\]|\\\\.)*"|[^,]*)`, 'i');
-    if (pattern.test(line)) {
-      return line.replace(pattern, `${name}="${value}"`);
+  /** Drop expired DRM key cache entries (those without an in-flight fetch). */
+  private pruneDrmKeyCache(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.drmKeyCache) {
+      if (!entry.inFlight && entry.expiresAt && entry.expiresAt <= now) {
+        this.drmKeyCache.delete(key);
+      }
     }
-    const suffix = line.includes(':') ? ',' : ':';
-    return `${line}${suffix}${name}="${value}"`;
   }
 
   private buildLicenseHeaders(headers: Record<string, string>): Record<string, string> {
@@ -1486,10 +1341,37 @@ export class AppleMusicStreamService {
     return url;
   }
 
+  /**
+   * Fetch with one retry on transient failures (network error / 429 / 5xx). Returns the Response
+   * (which may be a non-ok, non-transient status the caller should inspect), or null when every
+   * attempt threw. Keeps the stream path resilient to the same hiccups the metadata path retries.
+   */
+  private async fetchResilient(url: string, init?: RequestInit, maxAttempts = 2): Promise<Response | null> {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const res = await fetch(url, init);
+        if (res.ok) return res;
+        if ((res.status === 429 || res.status >= 500) && attempt < maxAttempts - 1) {
+          await sleep(500 * 2 ** attempt);
+          continue;
+        }
+        return res;
+      } catch (err) {
+        if (attempt < maxAttempts - 1) {
+          await sleep(500 * 2 ** attempt);
+          continue;
+        }
+        this.log.warn('apple music fetch failed', { url, message: err instanceof Error ? err.message : String(err) });
+        return null;
+      }
+    }
+    return null;
+  }
+
   private async fetchJson<T>(url: string, headers: Record<string, string>): Promise<T | null> {
+    const res = await this.fetchResilient(url, { headers });
+    if (!res || !res.ok) return null;
     try {
-      const res = await fetch(url, { headers });
-      if (!res.ok) return null;
       return (await res.json()) as T;
     } catch (err) {
       this.log.warn('apple music json fetch failed', { url, message: err instanceof Error ? err.message : String(err) });
@@ -1498,9 +1380,9 @@ export class AppleMusicStreamService {
   }
 
   private async fetchText(url: string, headers?: Record<string, string>): Promise<string | null> {
+    const res = await this.fetchResilient(url, headers ? { headers } : undefined);
+    if (!res || !res.ok) return null;
     try {
-      const res = await fetch(url, headers ? { headers } : undefined);
-      if (!res.ok) return null;
       return await res.text();
     } catch (err) {
       this.log.warn('apple music text fetch failed', { url, message: err instanceof Error ? err.message : String(err) });
@@ -1517,36 +1399,17 @@ export class AppleMusicStreamService {
     return catalogId ? String(catalogId) : null;
   }
 
-  private baseHeaders(userToken?: string): Record<string, string> {
-    const headers: Record<string, string> = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:95.0) Gecko/20100101 Firefox/95.0',
-      Accept: 'application/json',
-      'Accept-Language': 'en-US',
-      // Allow response compression; the previous value ('utf-8') is not a valid encoding token.
-      'Accept-Encoding': 'gzip, deflate, br',
-      'content-type': 'application/json',
-      'x-apple-renewal': 'true',
-      DNT: '1',
-      Connection: 'keep-alive',
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Site': 'same-site',
-      origin: 'https://music.apple.com',
-      referer: 'https://music.apple.com/',
-    };
-    if (userToken) {
-      headers['Media-User-Token'] = userToken;
-      headers['Music-User-Token'] = userToken;
-    }
-    return headers;
-  }
-
   private async buildAuthHeaders(bridge: SpotifyBridgeConfig): Promise<Record<string, string>> {
-    const headers = this.baseHeaders(bridge.userToken);
-    let bearer = bridge.developerToken ?? null;
+    const headers = buildBaseHeaders(bridge.userToken);
+    let bearer: string | null = bridge.developerToken ?? getShippedDeveloperToken();
     if (!bearer && bridge.userToken) bearer = await this.ensureBearerToken(bridge);
     if (bearer) headers.authorization = `Bearer ${bearer}`;
     return headers;
+  }
+
+  /** Drop the cached bearer for a bridge so the next auth-header build re-scrapes a fresh token. */
+  private invalidateBearer(bridge: SpotifyBridgeConfig): void {
+    this.bearerTokens.delete(bridge.id);
   }
 
   private async ensureBearerToken(bridge: SpotifyBridgeConfig): Promise<string | null> {
@@ -1558,18 +1421,8 @@ export class AppleMusicStreamService {
     const state: BearerState = cached ?? { fetchedAt: 0 };
     state.inFlight = (async () => {
       try {
-        const headers = this.baseHeaders(bridge.userToken);
-        const homeRes = await fetch('https://music.apple.com', { headers });
-        const homeText = await homeRes.text();
-        const match = homeText.match(/\/(assets\/index-legacy[~-][^/"]+\.js)/i);
-        if (!match) return null;
-
-        const jsRes = await fetch(`https://music.apple.com/${match[1]}`, { headers });
-        const jsText = await jsRes.text();
-        const tokenMatch = jsText.match(/eyJh[^"]+/);
-        if (!tokenMatch) return null;
-
-        const token = tokenMatch[0];
+        const token = await scrapeBearerToken(buildBaseHeaders(bridge.userToken));
+        if (!token) return null;
         state.token = token;
         state.fetchedAt = Date.now();
         return token;

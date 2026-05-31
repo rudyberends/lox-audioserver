@@ -5,6 +5,7 @@ import { createContentAdapter } from '@/adapters/content/ContentAdapter';
 import { CustomRadioStore } from '@/adapters/content/providers/customRadioStore';
 import { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import { AppleMusicStreamService } from '@/adapters/content/providers/applemusic/appleMusicStreamService';
+import { setAppleMusicDeveloperTokenSource } from '@/adapters/content/providers/applemusic/appleMusicAuth';
 import { AppleMusicStreamResolver } from '@/adapters/content/providers/applemusic/appleMusicStreamResolver';
 import { DeezerStreamService } from '@/adapters/content/providers/deezer/deezerStreamService';
 import { DeezerStreamResolver } from '@/adapters/content/providers/deezer/deezerStreamResolver';
@@ -128,6 +129,8 @@ export function createRuntime(): Runtime {
     notifyOutputError: outputHandlersProxy.onOutputError,
     notifyOutputState: outputHandlersProxy.onOutputState,
   };
+  // Source the Apple Music developer token live from config for the auth flow and API bearer.
+  setAppleMusicDeveloperTokenSource(() => configPort.getConfig().content?.appleMusic?.developerToken);
   const appleMusicStreamService = new AppleMusicStreamService(outputHandlersProxy.onOutputError, configPort);
   const deezerStreamService = new DeezerStreamService(outputHandlersProxy.onOutputError, configPort);
   const tidalStreamService = new TidalStreamService(outputHandlersProxy.onOutputError, configPort);

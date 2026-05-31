@@ -1,16 +1,25 @@
 import type { ContentFolder, ContentFolderItem, ContentServiceAccount, PlaylistEntry } from '@/ports/ContentTypes';
 import { createLogger } from '@/shared/logging/logger';
 import { DEFAULT_MIN_SEARCH_LIMIT } from '@/adapters/content/utils/searchLimits';
-import { resizeCoverUrl, COVER_ART_BROWSE_SIZE } from '@/shared/coverArt';
-
-const enum FileType {
-  Folder = 1,
-  File = 2,
-  PlaylistBrowsable = 7,
-}
+import {
+  FileType,
+  decodeId,
+  mapTrack,
+  mapLibraryTrack,
+  mapAlbum,
+  mapLibraryAlbum,
+  mapArtist,
+  mapLibraryArtist,
+  mapPlaylist,
+  mapLibraryPlaylist,
+  mapRecommendationItem,
+} from './appleMusicParsers';
+import { getShippedDeveloperToken, buildBaseHeaders, scrapeBearerToken } from './appleMusicAuth';
 
 const APPLE_MUSIC_API_BASE = 'https://amp-api.music.apple.com/v1';
 const BEARER_TOKEN_TTL_MS = 30 * 60 * 1000;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 type SearchResult = {
   tracks?: ContentFolderItem[];
@@ -230,12 +239,12 @@ export class AppleMusicProvider {
       return null;
     }
     const item = normalized.source === 'library'
-      ? await this.lookup(`${APPLE_MUSIC_API_BASE}/me/library/songs/${encodeURIComponent(id)}`)
+      ? await this.lookup(`${APPLE_MUSIC_API_BASE}/me/library/songs/${encodeURIComponent(id)}?include=catalog`)
       : await this.lookup(`${APPLE_MUSIC_API_BASE}/catalog/${await this.ensureStorefront()}/songs/${encodeURIComponent(id)}`);
     if (!item) {
       return null;
     }
-    return normalized.source === 'library' ? this.mapLibraryTrack(item) : this.mapTrack(item);
+    return normalized.source === 'library' ? mapLibraryTrack(this.providerId, item) : mapTrack(this.providerId, item);
   }
 
   public async search(query: string, limits: Record<string, number>, maxLimit: number): Promise<{ result: SearchResult; providerId: string; user: string }> {
@@ -245,7 +254,8 @@ export class AppleMusicProvider {
     );
     const storefront = await this.ensureStorefront();
     const url = new URL(`${APPLE_MUSIC_API_BASE}/catalog/${storefront}/search`);
-    url.searchParams.set('term', query);
+    // Apple's search endpoint chokes on apostrophes; strip them like MA does.
+    url.searchParams.set('term', query.replace(/'/g, ''));
     url.searchParams.set('limit', String(limit));
     const requestedTypes = Object.keys(limits).map((k) => k.trim().toLowerCase()).filter(Boolean);
     const typeSet = requestedTypes.length ? new Set(requestedTypes) : null;
@@ -264,19 +274,19 @@ export class AppleMusicProvider {
     const result: SearchResult = {};
     if (data?.results?.songs?.data) {
       const max = limits.track ?? limits.tracks ?? limit;
-      result.tracks = data.results.songs.data.slice(0, max).map((t: unknown) => this.mapTrack(t));
+      result.tracks = data.results.songs.data.slice(0, max).map((t: unknown) => mapTrack(this.providerId, t));
     }
     if (data?.results?.albums?.data) {
       const max = limits.album ?? limits.albums ?? limit;
-      result.albums = data.results.albums.data.slice(0, max).map((a: unknown) => this.mapAlbum(a));
+      result.albums = data.results.albums.data.slice(0, max).map((a: unknown) => mapAlbum(this.providerId, a));
     }
     if (data?.results?.artists?.data) {
       const max = limits.artist ?? limits.artists ?? limit;
-      result.artists = data.results.artists.data.slice(0, max).map((a: unknown) => this.mapArtist(a));
+      result.artists = data.results.artists.data.slice(0, max).map((a: unknown) => mapArtist(this.providerId, a));
     }
     if (data?.results?.playlists?.data) {
       const max = limits.playlist ?? limits.playlists ?? limit;
-      result.playlists = data.results.playlists.data.slice(0, max).map((p: unknown) => this.mapPlaylist(p));
+      result.playlists = data.results.playlists.data.slice(0, max).map((p: unknown) => mapPlaylist(this.providerId, p));
     }
     return { result, providerId: this.providerId, user: 'applemusic' };
   }
@@ -316,10 +326,6 @@ export class AppleMusicProvider {
     };
   }
 
-  private makeUri(type: string, id: string): string {
-    return `${this.providerId}:${type}:${id}`;
-  }
-
   private stripProviderPrefix(value: string): string {
     const raw = value || '';
     const lower = raw.toLowerCase();
@@ -342,11 +348,16 @@ export class AppleMusicProvider {
     const raw = this.stripProviderPrefix(value || '').trim();
     const libraryMatch = raw.match(new RegExp(`(?:^|:)library-${kind}:(.+)$`, 'i'));
     if (libraryMatch) {
-      return { id: this.decodeId(libraryMatch[1] ?? ''), source: 'library' };
+      return { id: decodeId(libraryMatch[1] ?? ''), source: 'library' };
     }
     const match = raw.match(new RegExp(`(?:^|:)${kind}:(.+)$`, 'i'));
-    const id = match ? (match[1] ?? '') : raw;
-    return { id: this.decodeId(id), source: 'catalog' };
+    const id = decodeId(match ? (match[1] ?? '') : raw);
+    // Apple library ids carry an a./i./l./p. prefix (artist/item/album/playlist). Loxone recents
+    // and MA-bridge audiopaths store library items as `…:<kind>:<libId>` without the `library-`
+    // marker, so detect those by prefix and route them to the library endpoint — otherwise a
+    // catalog lookup 404s and metadata never resolves (the stream service uses the same heuristic).
+    const source = /^[ailp]\./i.test(id) ? 'library' : 'catalog';
+    return { id, source };
   }
 
   private normalizeFolderId(folderId: string):
@@ -395,276 +406,30 @@ export class AppleMusicProvider {
 
     const libraryAlbumMatch = raw.match(/(?:^|:)library-album:(.+)$/i);
     if (libraryAlbumMatch) {
-      return { type: 'albumItem', id: this.decodeId(libraryAlbumMatch[1] ?? ''), source: 'library' };
+      return { type: 'albumItem', id: decodeId(libraryAlbumMatch[1] ?? ''), source: 'library' };
     }
     const libraryArtistMatch = raw.match(/(?:^|:)library-artist:(.+)$/i);
     if (libraryArtistMatch) {
-      return { type: 'artistItem', id: this.decodeId(libraryArtistMatch[1] ?? ''), source: 'library' };
+      return { type: 'artistItem', id: decodeId(libraryArtistMatch[1] ?? ''), source: 'library' };
     }
     const libraryPlaylistMatch = raw.match(/(?:^|:)library-playlist:(.+)$/i);
     if (libraryPlaylistMatch) {
-      return { type: 'playlistItem', id: this.decodeId(libraryPlaylistMatch[1] ?? ''), source: 'library' };
+      return { type: 'playlistItem', id: decodeId(libraryPlaylistMatch[1] ?? ''), source: 'library' };
     }
 
     const albumMatch = raw.match(/(?:^|:)album:(.+)$/i);
     if (albumMatch) {
-      return { type: 'albumItem', id: this.decodeId(albumMatch[1] ?? ''), source: 'catalog' };
+      return { type: 'albumItem', id: decodeId(albumMatch[1] ?? ''), source: 'catalog' };
     }
     const artistMatch = raw.match(/(?:^|:)artist:(.+)$/i);
     if (artistMatch) {
-      return { type: 'artistItem', id: this.decodeId(artistMatch[1] ?? ''), source: 'catalog' };
+      return { type: 'artistItem', id: decodeId(artistMatch[1] ?? ''), source: 'catalog' };
     }
     const playlistMatch = raw.match(/(?:^|:)playlist:(.+)$/i);
     if (playlistMatch) {
-      return { type: 'playlistItem', id: this.decodeId(playlistMatch[1] ?? ''), source: 'catalog' };
+      return { type: 'playlistItem', id: decodeId(playlistMatch[1] ?? ''), source: 'catalog' };
     }
     return { type: 'unknown' };
-  }
-
-  private mapTrack(track: any): ContentFolderItem {
-    const attrs = track?.attributes ?? track;
-    const id = this.encodeId(track?.id ?? attrs?.id ?? '');
-    const name = attrs?.name ?? 'Track';
-    const artist = attrs?.artistName ?? '';
-    const album = attrs?.albumName ?? '';
-    const cover = this.extractArtwork(attrs);
-    return {
-      id: this.makeUri('track', id),
-      audiopath: this.makeUri('track', id),
-      name,
-      title: name,
-      artist,
-      album,
-      coverurl: cover,
-      thumbnail: cover,
-      type: FileType.File,
-      tag: 'track',
-      duration: typeof attrs?.durationInMillis === 'number'
-        ? Math.round(attrs.durationInMillis / 1000)
-        : undefined,
-      hasCover: !!cover,
-      provider: 'applemusic',
-    };
-  }
-
-  private mapLibraryTrack(track: any): ContentFolderItem {
-    const attrs = track?.attributes ?? track;
-    const id = this.encodeId(track?.id ?? attrs?.id ?? '');
-    const name = attrs?.name ?? 'Track';
-    const artist = attrs?.artistName ?? '';
-    const album = attrs?.albumName ?? '';
-    const cover = this.extractArtwork(attrs);
-    return {
-      id: this.makeUri('track', id),
-      audiopath: this.makeUri('track', id),
-      name,
-      title: name,
-      artist,
-      album,
-      coverurl: cover,
-      thumbnail: cover,
-      type: FileType.File,
-      tag: 'track',
-      duration: typeof attrs?.durationInMillis === 'number'
-        ? Math.round(attrs.durationInMillis / 1000)
-        : undefined,
-      hasCover: !!cover,
-      provider: 'applemusic',
-    };
-  }
-
-  private mapAlbum(album: any): ContentFolderItem {
-    const attrs = album?.attributes ?? album;
-    const id = this.encodeId(album?.id ?? attrs?.id ?? '');
-    const name = attrs?.name ?? 'Album';
-    const artist = attrs?.artistName ?? '';
-    const cover = this.extractArtwork(attrs);
-    return {
-      id: this.makeUri('album', id),
-      audiopath: this.makeUri('album', id),
-      name,
-      title: name,
-      artist,
-      coverurl: cover,
-      thumbnail: cover,
-      type: FileType.PlaylistBrowsable,
-      tag: 'album',
-      provider: 'applemusic',
-    };
-  }
-
-  private mapLibraryAlbum(album: any): ContentFolderItem {
-    const attrs = album?.attributes ?? album;
-    const id = this.encodeId(album?.id ?? attrs?.id ?? '');
-    const name = attrs?.name ?? 'Album';
-    const artist = attrs?.artistName ?? '';
-    const cover = this.extractArtwork(attrs);
-    return {
-      id: this.makeUri('library-album', id),
-      audiopath: this.makeUri('library-album', id),
-      name,
-      title: name,
-      artist,
-      coverurl: cover,
-      thumbnail: cover,
-      type: FileType.PlaylistBrowsable,
-      tag: 'album',
-      provider: 'applemusic',
-    };
-  }
-
-  private mapArtist(artistObj: any): ContentFolderItem {
-    const attrs = artistObj?.attributes ?? artistObj;
-    const id = this.encodeId(artistObj?.id ?? attrs?.id ?? '');
-    const name = attrs?.name ?? 'Artist';
-    const cover = this.extractArtwork(attrs);
-    return {
-      id: this.makeUri('artist', id),
-      audiopath: this.makeUri('artist', id),
-      name,
-      title: name,
-      artist: name,
-      coverurl: cover,
-      thumbnail: cover,
-      type: FileType.PlaylistBrowsable,
-      tag: 'artist',
-      provider: 'applemusic',
-    };
-  }
-
-  private mapLibraryArtist(artistObj: any): ContentFolderItem {
-    const relCatalogAttrs =
-      artistObj?.relationships?.catalog?.data?.[0]?.attributes ??
-      artistObj?.relationships?.catalog?.data?.[0];
-    const attrs = relCatalogAttrs ?? artistObj?.attributes ?? artistObj;
-    const id = this.encodeId(artistObj?.id ?? attrs?.id ?? '');
-    const name = attrs?.name ?? 'Artist';
-    const cover = this.extractArtwork(attrs);
-    return {
-      id: this.makeUri('library-artist', id),
-      audiopath: this.makeUri('library-artist', id),
-      name,
-      title: name,
-      artist: name,
-      coverurl: cover,
-      thumbnail: cover,
-      type: FileType.PlaylistBrowsable,
-      tag: 'artist',
-      provider: 'applemusic',
-    };
-  }
-
-  private mapPlaylist(playlist: any): ContentFolderItem {
-    const attrs = playlist?.attributes ?? playlist;
-    const id = this.encodeId(playlist?.id ?? attrs?.id ?? '');
-    const name = attrs?.name ?? 'Playlist';
-    const cover = this.extractArtwork(attrs);
-    return {
-      id: this.makeUri('playlist', id),
-      audiopath: this.makeUri('playlist', id),
-      name,
-      title: name,
-      owner: attrs?.curatorName || '',
-      owner_id: attrs?.curatorName || '',
-      coverurl: cover,
-      thumbnail: cover,
-      type: FileType.PlaylistBrowsable,
-      tag: 'playlist',
-      provider: 'applemusic',
-    };
-  }
-
-  private mapLibraryPlaylist(playlist: any): ContentFolderItem {
-    const attrs = playlist?.attributes ?? playlist;
-    const id = this.encodeId(playlist?.id ?? attrs?.id ?? '');
-    const name = attrs?.name ?? 'Playlist';
-    const cover = this.extractArtwork(attrs);
-    return {
-      id: this.makeUri('library-playlist', id),
-      audiopath: this.makeUri('library-playlist', id),
-      name,
-      title: name,
-      owner: attrs?.curatorName || attrs?.creatorName || '',
-      owner_id: attrs?.curatorName || attrs?.creatorName || '',
-      coverurl: cover,
-      thumbnail: cover,
-      type: FileType.PlaylistBrowsable,
-      tag: 'playlist',
-      provider: 'applemusic',
-    };
-  }
-
-  private mapRecommendationItem(item: any): ContentFolderItem | null {
-    switch (item?.type) {
-      case 'albums':
-        return this.mapAlbum(item);
-      case 'playlists':
-        return this.mapPlaylist(item);
-      case 'artists':
-        return this.mapArtist(item);
-      case 'songs':
-        return this.mapTrack(item);
-      default:
-        return null;
-    }
-  }
-
-  private encodeId(raw: string): string {
-    if (!raw) {
-      return '';
-    }
-    if (raw.startsWith('b64_')) {
-      return raw;
-    }
-    return `b64_${Buffer.from(raw, 'utf-8').toString('base64')}`;
-  }
-
-  private decodeId(raw: string): string {
-    if (!raw) {
-      return '';
-    }
-    if (raw.startsWith('b64_')) {
-      try {
-        return Buffer.from(raw.slice(4), 'base64').toString('utf-8');
-      } catch {
-        return raw.slice(4);
-      }
-    }
-    return raw;
-  }
-
-  private extractArtwork(attrs: any): string {
-    const fromTemplate = (tmpl?: string): string | null => {
-      if (typeof tmpl === 'string' && tmpl.includes('{w}') && tmpl.includes('{h}')) {
-        return tmpl.replace('{w}', '256').replace('{h}', '256');
-      }
-      if (typeof tmpl === 'string' && tmpl.startsWith('http')) {
-        return tmpl;
-      }
-      return null;
-    };
-
-    const direct = fromTemplate(attrs?.artwork?.url);
-    if (direct) {
-      return direct;
-    }
-
-    if (typeof attrs?.artworkUrl100 === 'string') {
-      return resizeCoverUrl(attrs.artworkUrl100, COVER_ART_BROWSE_SIZE);
-    }
-
-    const editorial = attrs?.editorialArtwork;
-    if (editorial && typeof editorial === 'object') {
-      for (const key of Object.keys(editorial)) {
-        const entry = editorial[key];
-        const candidate = fromTemplate(entry?.url);
-        if (candidate) {
-          return candidate;
-        }
-      }
-    }
-
-    return '';
   }
 
   /* ------------------------------------------------------------------------ */
@@ -672,23 +437,59 @@ export class AppleMusicProvider {
   /* ------------------------------------------------------------------------ */
 
   private async fetchJson<T>(url: string, retryAuth = true): Promise<T | null> {
-    try {
-      const headers = await this.buildAuthHeaders();
-      let res = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
-      if ((res.status === 401 || res.status === 403) && retryAuth) {
-        await this.refreshBearerToken();
-        const retryHeaders = await this.buildAuthHeaders();
-        res = await fetch(url, { headers: retryHeaders, signal: AbortSignal.timeout(15_000) });
-      }
-      if (!res.ok) {
+    const maxAttempts = 3;
+    let lastStatus = 0;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const headers = await this.buildAuthHeaders();
+        let res = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
+        if ((res.status === 401 || res.status === 403) && retryAuth && attempt === 0) {
+          await this.refreshBearerToken();
+          const retryHeaders = await this.buildAuthHeaders();
+          res = await fetch(url, { headers: retryHeaders, signal: AbortSignal.timeout(15_000) });
+        }
+        if (res.ok) {
+          return (await res.json()) as T;
+        }
+        lastStatus = res.status;
+        // Transient: rate-limited (429), gateway/overload (500/503/504) → back off and retry.
+        if (this.isTransientStatus(res.status) && attempt < maxAttempts - 1) {
+          const waitMs = this.computeRetryDelay(res, attempt);
+          this.log.debug('apple music request retrying', { url, status: res.status, attempt: attempt + 1, waitMs });
+          await sleep(waitMs);
+          continue;
+        }
+        return null;
+      } catch (err) {
+        // Network/timeout errors are usually transient; retry with backoff until the last attempt.
+        if (attempt < maxAttempts - 1) {
+          await sleep(this.computeRetryDelay(null, attempt));
+          continue;
+        }
+        this.log.warn('apple music request failed', { url, message: err instanceof Error ? err.message : String(err) });
         return null;
       }
-      const data = (await res.json()) as T;
-      return data;
-    } catch (err) {
-      this.log.warn('apple music request failed', { url, message: err instanceof Error ? err.message : String(err) });
-      return null;
     }
+    if (lastStatus) {
+      this.log.warn('apple music request gave up after retries', { url, status: lastStatus });
+    }
+    return null;
+  }
+
+  private isTransientStatus(status: number): boolean {
+    return status === 429 || status === 500 || status === 503 || status === 504;
+  }
+
+  private computeRetryDelay(res: Response | null, attempt: number): number {
+    const header = res?.headers.get('retry-after');
+    if (header) {
+      const seconds = Number(header);
+      if (Number.isFinite(seconds) && seconds >= 0) {
+        return Math.min(seconds * 1000, 15_000);
+      }
+    }
+    const base = 500 * 2 ** attempt;
+    return Math.min(base + Math.round(Math.random() * 300), 8_000);
   }
 
   private async lookup(url: string): Promise<any | null> {
@@ -710,7 +511,7 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((t: any) => this.mapTrack(t)),
+      items: items.map((t: any) => mapTrack(this.providerId, t)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -725,7 +526,7 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((t: any) => this.mapTrack(t)),
+      items: items.map((t: any) => mapTrack(this.providerId, t)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -740,7 +541,7 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((t: any) => this.mapTrack(t)),
+      items: items.map((t: any) => mapTrack(this.providerId, t)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -749,11 +550,11 @@ export class AppleMusicProvider {
     limit: number,
     offset: number,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
-    const url = `${APPLE_MUSIC_API_BASE}/me/library/albums?limit=${limit}&offset=${offset}`;
+    const url = `${APPLE_MUSIC_API_BASE}/me/library/albums?limit=${limit}&offset=${offset}&include=catalog`;
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((entry: any) => this.mapLibraryAlbum(entry)),
+      items: items.map((entry: any) => mapLibraryAlbum(this.providerId, entry)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -766,7 +567,7 @@ export class AppleMusicProvider {
     const url = `${APPLE_MUSIC_API_BASE}/me/library/artists?limit=${limit}&offset=${offset}&include=catalog`;
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
-    const mapped: ContentFolderItem[] = items.map((entry: any) => this.mapLibraryArtist(entry));
+    const mapped: ContentFolderItem[] = items.map((entry: any) => mapLibraryArtist(this.providerId, entry));
     return {
       items: mapped,
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
@@ -781,7 +582,7 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((entry: any) => this.mapLibraryPlaylist(entry)),
+      items: items.map((entry: any) => mapLibraryPlaylist(this.providerId, entry)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -790,11 +591,11 @@ export class AppleMusicProvider {
     limit: number,
     offset: number,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
-    const url = `${APPLE_MUSIC_API_BASE}/me/library/songs?limit=${limit}&offset=${offset}`;
+    const url = `${APPLE_MUSIC_API_BASE}/me/library/songs?limit=${limit}&offset=${offset}&include=catalog`;
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((entry: any) => this.mapLibraryTrack(entry)),
+      items: items.map((entry: any) => mapLibraryTrack(this.providerId, entry)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -803,11 +604,11 @@ export class AppleMusicProvider {
     limit: number,
     offset: number,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
-    const url = `${APPLE_MUSIC_API_BASE}/me/library/albums?limit=${limit}&offset=${offset}&sort=recent`;
+    const url = `${APPLE_MUSIC_API_BASE}/me/library/albums?limit=${limit}&offset=${offset}&sort=recent&include=catalog`;
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((entry: any) => this.mapLibraryAlbum(entry)),
+      items: items.map((entry: any) => mapLibraryAlbum(this.providerId, entry)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -817,11 +618,11 @@ export class AppleMusicProvider {
     limit: number,
     offset: number,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
-    const url = `${APPLE_MUSIC_API_BASE}/me/library/albums/${encodeURIComponent(albumId)}/tracks?limit=${limit}&offset=${offset}`;
+    const url = `${APPLE_MUSIC_API_BASE}/me/library/albums/${encodeURIComponent(albumId)}/tracks?limit=${limit}&offset=${offset}&include=catalog`;
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((t: any) => this.mapLibraryTrack(t)),
+      items: items.map((t: any) => mapLibraryTrack(this.providerId, t)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -831,11 +632,11 @@ export class AppleMusicProvider {
     limit: number,
     offset: number,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
-    const url = `${APPLE_MUSIC_API_BASE}/me/library/playlists/${encodeURIComponent(playlistId)}/tracks?limit=${limit}&offset=${offset}`;
+    const url = `${APPLE_MUSIC_API_BASE}/me/library/playlists/${encodeURIComponent(playlistId)}/tracks?limit=${limit}&offset=${offset}&include=catalog`;
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((t: any) => this.mapLibraryTrack(t)),
+      items: items.map((t: any) => mapLibraryTrack(this.providerId, t)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -845,11 +646,11 @@ export class AppleMusicProvider {
     limit: number,
     offset: number,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
-    const url = `${APPLE_MUSIC_API_BASE}/me/library/artists/${encodeURIComponent(artistId)}/albums?limit=${limit}&offset=${offset}`;
+    const url = `${APPLE_MUSIC_API_BASE}/me/library/artists/${encodeURIComponent(artistId)}/albums?limit=${limit}&offset=${offset}&include=catalog`;
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((entry: any) => this.mapLibraryAlbum(entry)),
+      items: items.map((entry: any) => mapLibraryAlbum(this.providerId, entry)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -875,7 +676,7 @@ export class AppleMusicProvider {
         if (allowedTypes && (!type || !allowedTypes.has(type))) {
           continue;
         }
-        const mapped = this.mapRecommendationItem(entry);
+        const mapped = mapRecommendationItem(this.providerId, entry);
         if (mapped) {
           items.push(mapped);
         }
@@ -898,41 +699,15 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url.toString());
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((entry: any) => this.mapAlbum(entry)),
+      items: items.map((entry: any) => mapAlbum(this.providerId, entry)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
 
-  private baseHeaders(): Record<string, string> {
-    return {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:95.0) Gecko/20100101 Firefox/95.0',
-      Accept: 'application/json',
-      'Accept-Language': 'en-US',
-      // Allow response compression; the previous value ('utf-8') is not a valid encoding token.
-      'Accept-Encoding': 'gzip, deflate, br',
-      'content-type': 'application/json',
-      'Media-User-Token': this.userToken || '',
-      'x-apple-renewal': 'true',
-      DNT: '1',
-      Connection: 'keep-alive',
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Site': 'same-site',
-      origin: 'https://music.apple.com',
-      referer: 'https://music.apple.com/',
-    };
-  }
-
   private async buildAuthHeaders(): Promise<Record<string, string>> {
-    const headers = this.baseHeaders();
-    if (this.userToken) {
-      headers['Music-User-Token'] = this.userToken;
-      headers['Media-User-Token'] = this.userToken;
-    } else {
-      delete headers['Media-User-Token'];
-    }
-    // Prefer configured developer token to avoid expensive bearer scraping.
-    let bearer = this.developerToken ?? null;
+    const headers = buildBaseHeaders(this.userToken);
+    // Prefer a configured developer token, then the shipped one (only if unexpired); scrape last.
+    let bearer: string | null = this.developerToken ?? getShippedDeveloperToken();
     if (!bearer) bearer = await this.ensureBearerToken();
     if (bearer) {
       headers.authorization = `Bearer ${bearer}`;
@@ -952,23 +727,14 @@ export class AppleMusicProvider {
     }
     this.bearerTokenPromise = (async () => {
       try {
-        const homeRes = await fetch('https://music.apple.com', { headers: this.baseHeaders(), signal: AbortSignal.timeout(15_000) });
-        const homeText = await homeRes.text();
-        const match = homeText.match(/\/(assets\/index-legacy[~-][^/\"]+\.js)/i);
-        if (!match) {
-          this.log.warn('apple music token fetch failed: index js not found');
-          return null;
-        }
-        const jsRes = await fetch(`https://music.apple.com/${match[1]}`, { headers: this.baseHeaders(), signal: AbortSignal.timeout(15_000) });
-        const jsText = await jsRes.text();
-        const tokenMatch = jsText.match(/eyJh[^"]+/);
-        if (!tokenMatch) {
+        const token = await scrapeBearerToken(buildBaseHeaders(this.userToken));
+        if (!token) {
           this.log.warn('apple music token fetch failed: bearer token not found');
           return null;
         }
-        this.bearerToken = tokenMatch[0];
+        this.bearerToken = token;
         this.bearerTokenFetchedAt = Date.now();
-        return this.bearerToken;
+        return token;
       } catch (err) {
         this.log.warn('apple music token fetch failed', { message: err instanceof Error ? err.message : String(err) });
         return null;

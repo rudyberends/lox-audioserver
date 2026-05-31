@@ -7,6 +7,7 @@ import {
   loadWidevineArtifacts,
   WidevineArtifactsError,
 } from '@/adapters/content/providers/applemusic/widevine';
+import { getConfiguredDeveloperToken } from '@/adapters/content/providers/applemusic/appleMusicAuth';
 import { ensureDir, resolveDataDir } from '@/shared/utils/file';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 
@@ -51,7 +52,9 @@ async function handleAppleMusicAuth(
   deps: AppleMusicHandlerDeps,
 ): Promise<void> {
   try {
-    const developerToken = await fetchAppleMusicDeveloperToken(deps.log);
+    // Prefer the configured developer token (works with authorize() from any origin); fall back to
+    // the scraped web-player token only if it's missing.
+    const developerToken = getConfiguredDeveloperToken() || (await fetchAppleMusicDeveloperToken(deps.log));
     if (!developerToken) {
       deps.sendHtml(res, 500, renderAppleMusicAuthError('Apple Music token unavailable. Try again.'));
       return;
@@ -218,28 +221,27 @@ function renderAppleMusicAuthPage(payload: { developerToken: string; appName: st
     <meta name="referrer" content="strict-origin-when-cross-origin" />
     <title>Apple Music Sign-in</title>
     <style>
-      body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; background: radial-gradient(1200px 700px at 10% 10%, #2a2a2f 0%, #0f0f10 65%); color: #f2f2f2; margin: 0; padding: 24px; }
-      .card { max-width: 440px; margin: 6vh auto 0; padding: 28px; background: #1c1c1f; border-radius: 16px; box-shadow: 0 24px 60px rgba(0,0,0,.5); }
-      h1 { font-size: 22px; margin: 0 0 8px; }
-      p { margin: 0 0 16px; color: #c9c9c9; line-height: 1.4; }
+      /* Chrome-free and matched to the admin portal theme — this page is embedded in the
+         portal's modal, which provides the title, framing and close button. */
+      body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; background: #15181D; color: #EDEEF0; margin: 0; padding: 4px 24px 20px; }
+      p { margin: 0 0 18px; color: #9CA3AF; line-height: 1.45; font-size: 14px; }
       .actions { display: flex; gap: 12px; flex-wrap: wrap; }
-      button { appearance: none; border: 0; background: #f23d4f; color: #fff; padding: 10px 16px; border-radius: 10px; cursor: pointer; font-weight: 600; }
-      button.secondary { background: #2a2a2f; color: #f2f2f2; }
-      button[disabled] { opacity: .6; cursor: default; }
-      .status { margin-top: 16px; font-size: 13px; color: #9f9fa4; }
+      button { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11px; letter-spacing: 1.8px; font-weight: 700; text-transform: uppercase; padding: 10px 22px; border-radius: 8px; cursor: pointer; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04); color: #9CA3AF; transition: background .15s, color .15s, border-color .15s; }
+      button:hover:not(:disabled) { color: #EDEEF0; border-color: rgba(255,255,255,0.25); }
+      button.primary { background: #4ADE80; color: #062812; border-color: #4ADE80; }
+      button.primary:hover:not(:disabled) { background: #86EFAC; border-color: #86EFAC; }
+      button:disabled { opacity: .4; cursor: not-allowed; }
+      .status { margin-top: 18px; font-size: 13px; color: #9CA3AF; }
     </style>
     <script src="https://js-cdn.music.apple.com/musickit/v3/musickit.js" data-web-components async></script>
   </head>
   <body>
-    <div class="card">
-      <h1>Apple Music Sign-in</h1>
-      <p>Sign in with Apple to fetch your Media User Token for the Apple Music bridge.</p>
-      <div class="actions">
-        <button id="signin" disabled>Sign in</button>
-        <button id="close" class="secondary">Close</button>
-      </div>
-      <div id="status" class="status">Loading MusicKit…</div>
+    <p>Sign in with Apple to fetch your Media User Token for the Apple Music bridge.</p>
+    <div class="actions">
+      <button id="signin" class="primary" disabled>Sign in</button>
+      <button id="close">Close</button>
     </div>
+    <div id="status" class="status">Loading MusicKit…</div>
     <script>
       const developerToken = ${developerToken};
       const appName = ${appName};
@@ -252,29 +254,78 @@ function renderAppleMusicAuthPage(payload: { developerToken: string; appName: st
         statusEl.textContent = text;
       }
 
+      // Posts back to the embedder: window.parent when hosted in an iframe (in-portal modal),
+      // or window.opener when opened as a separate popup window.
+      function authTarget() {
+        return (window.parent && window.parent !== window) ? window.parent : window.opener;
+      }
+      function postToParent(message) {
+        const target = authTarget();
+        if (!target) return;
+        target.postMessage(message, window.location.origin);
+      }
       function sendToken(token) {
-        if (!window.opener || !token) return;
-        window.opener.postMessage({ type: 'applemusic-token', token }, window.location.origin);
+        if (!token) return;
+        postToParent({ type: 'applemusic-token', token });
       }
 
-      closeBtn.addEventListener('click', () => window.close());
+      function describeError(err) {
+        if (!err) return 'unknown error';
+        if (typeof err === 'string') return err;
+        return err.message || err.name || err.errorCode || err.title || JSON.stringify(err);
+      }
+
+      // Decode the developer token's JWT payload so we can surface obvious problems (expiry,
+      // wrong token) instead of a generic "sign-in failed" after Apple rejects it.
+      function inspectDeveloperToken(token) {
+        try {
+          const parts = String(token).split('.');
+          if (parts.length !== 3) return { ok: false, reason: 'not a JWT' };
+          const json = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+          const now = Math.floor(Date.now() / 1000);
+          if (typeof json.exp === 'number' && json.exp <= now) {
+            return { ok: false, reason: 'developer token expired' };
+          }
+          return { ok: true, payload: json };
+        } catch (err) {
+          return { ok: false, reason: 'developer token unreadable' };
+        }
+      }
+
+      closeBtn.addEventListener('click', () => {
+        postToParent({ type: 'applemusic-auth-close' });
+        window.close();
+      });
       signInBtn.addEventListener('click', async () => {
         if (!musicInstance) return;
         signInBtn.disabled = true;
         setStatus('Opening Apple Music sign-in…');
         try {
           const token = await musicInstance.authorize();
+          if (!token) {
+            setStatus('Sign-in returned no token. Please try again.');
+            signInBtn.disabled = false;
+            return;
+          }
           setStatus('Token received. You can close this window.');
           sendToken(token);
           setTimeout(() => window.close(), 500);
         } catch (err) {
+          // Surface the real MusicKit error. With the scraped web-player developer token Apple
+          // typically rejects authorize() here ("Unauthorized"); a proper developer token is needed.
           console.error('Apple Music sign-in failed', err);
-          setStatus('Sign-in failed. Please try again.');
+          setStatus('Sign-in failed: ' + describeError(err));
           signInBtn.disabled = false;
         }
       });
 
       document.addEventListener('musickitloaded', async () => {
+        const tokenCheck = inspectDeveloperToken(developerToken);
+        if (!tokenCheck.ok) {
+          console.error('Apple Music developer token problem', tokenCheck.reason);
+          setStatus('Developer token problem: ' + tokenCheck.reason + '. Try again later.');
+          return;
+        }
         try {
           await MusicKit.configure({
             developerToken,
@@ -285,9 +336,19 @@ function renderAppleMusicAuthPage(payload: { developerToken: string; appName: st
           setStatus(musicInstance.isAuthorized ? 'Already signed in. Click sign in to refresh.' : 'Ready to sign in.');
         } catch (err) {
           console.error('MusicKit init failed', err);
-          setStatus('Unable to initialize MusicKit.');
+          setStatus('Unable to initialize MusicKit: ' + describeError(err));
         }
       });
+
+      // Report our content height so the embedding modal can size the iframe to fit (no empty space).
+      function reportHeight() {
+        postToParent({ type: 'applemusic-auth-height', height: Math.ceil(document.body.getBoundingClientRect().height) });
+      }
+      if (window.ResizeObserver) {
+        new ResizeObserver(reportHeight).observe(document.body);
+      } else {
+        window.addEventListener('load', reportHeight);
+      }
     </script>
   </body>
 </html>`;

@@ -54,6 +54,15 @@ module.exports = tseslint.config(
       '@typescript-eslint/no-non-null-assertion': 'off',
       '@typescript-eslint/explicit-module-boundary-types': 'off',
       '@typescript-eslint/no-explicit-any': 'off',
+      // Honor the `_`-prefix convention for intentionally-unused args/vars/caught errors.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
 
       // ---------------------------------------------------------------------
       // Stylistic Overrides (instead of deprecated TS rules)
