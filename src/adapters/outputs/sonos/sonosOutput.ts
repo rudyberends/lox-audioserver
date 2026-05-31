@@ -106,6 +106,12 @@ export class SonosOutput implements ZoneOutput {
   private volumeRetryTimer: NodeJS.Timeout | null = null;
   private volumeRetryCount = 0;
   private volumeApplyInFlight = false;
+  // True while play() is mid-SOAP (SetAVTransportURI → Play). During this window we stash
+  // any setVolume() call instead of sending a separate RenderingControl request, because
+  // the volume SOAP races ahead of the transport swap and lands on the *previous* stream's
+  // URI — briefly blasting the old source at the new volume (issue #279). play() calls
+  // applyPendingVolume() after Play succeeds, so the stashed value lands on the new source.
+  private playInProgress = false;
 
   constructor(
     private readonly zoneId: number,
@@ -182,26 +188,32 @@ export class SonosOutput implements ZoneOutput {
       this.ports.outputHandlers.onOutputError(this.zoneId, 'sonos no source');
       return;
     }
-    if (await this.ports.sonosGroup.tryJoinLeader(this)) {
-      return;
+    this.playInProgress = true;
+    try {
+      if (await this.ports.sonosGroup.tryJoinLeader(this)) {
+        return;
+      }
+      const uri = this.resolveStreamUri(session);
+      if (!uri) {
+        this.log.warn('no playable URI for session', { zoneId: this.zoneId });
+        this.ports.outputHandlers.onOutputError(this.zoneId, 'sonos no stream uri');
+        return;
+      }
+      const httpStreamUri = this.withPrimeToken(this.normalizeStreamUri(uri), session);
+      const s2Played = await this.playViaS2(httpStreamUri, session);
+      if (s2Played) {
+        this.playInProgress = false;
+        void this.applyPendingVolume('play-s2');
+        return;
+      }
+      if (!(await this.ensureEndpoints())) {
+        return;
+      }
+      await this.ports.sonosGroup.syncGroupMembers(this);
+      await this.sendPlaybackWithSoap(httpStreamUri, session);
+    } finally {
+      this.playInProgress = false;
     }
-    const uri = this.resolveStreamUri(session);
-    if (!uri) {
-      this.log.warn('no playable URI for session', { zoneId: this.zoneId });
-      this.ports.outputHandlers.onOutputError(this.zoneId, 'sonos no stream uri');
-      return;
-    }
-    const httpStreamUri = this.withPrimeToken(this.normalizeStreamUri(uri), session);
-    const s2Played = await this.playViaS2(httpStreamUri, session);
-    if (s2Played) {
-      void this.applyPendingVolume('play-s2');
-      return;
-    }
-    if (!(await this.ensureEndpoints())) {
-      return;
-    }
-    await this.ports.sonosGroup.syncGroupMembers(this);
-    await this.sendPlaybackWithSoap(httpStreamUri, session);
     void this.applyPendingVolume('play-soap');
   }
 
@@ -253,6 +265,11 @@ export class SonosOutput implements ZoneOutput {
 
   public async setVolume(level: number): Promise<void> {
     this.pendingVolume = clampSonosVolume(level);
+    if (this.playInProgress) {
+      // play() will apply pendingVolume after its SOAP Play succeeds; sending SetVolume now
+      // would land on the previous transport URI before the swap completes (issue #279).
+      return;
+    }
     await this.applyPendingVolume('setVolume');
   }
 
