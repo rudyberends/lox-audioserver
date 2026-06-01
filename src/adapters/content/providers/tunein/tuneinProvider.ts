@@ -339,7 +339,11 @@ export class TuneInProvider {
     try {
       const url = new URL(raw);
       url.hash = '';
-      url.search = '';
+      // Keep the query string: many shared stream URLs (e.g. BBC HLS
+      // aggregators) differ only by a query parameter such as
+      // `?station=bbc_radio_one`. Dropping it collapsed distinct custom
+      // streams onto the same key, so every favourite resolved to the
+      // first matching station (see issue #282).
       const normalized = url.toString().replace(/\/$/, '');
       return normalized;
     } catch {
