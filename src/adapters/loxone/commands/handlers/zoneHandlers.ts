@@ -400,6 +400,12 @@ async function audioCfgRoomFavs(
       await favoritesManager.setId(zoneId, oldId, newId);
       return buildResponse(command, 'roomfavs_set', { changed_from: oldId, changed_to: newId });
     }
+    case 'setname': {
+      const id = parseNumberPart(rest[0], 0);
+      const name = decodeSegment(rest.slice(1).join('/'));
+      await favoritesManager.setName(zoneId, id, name);
+      return buildResponse(command, 'roomfavs_setname', { id, name });
+    }
     case 'delete': {
       const id = parseNumberPart(rest[0], 0);
       await favoritesManager.remove(zoneId, id);

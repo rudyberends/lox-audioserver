@@ -162,6 +162,14 @@ export class FavoritesManager {
     return this.persist(zoneId, items);
   }
 
+  public async setName(zoneId: number, id: number, name: string): Promise<FavoriteResponse> {
+    const stored = await loadFavorites(zoneId);
+    const items = stored.items.map((item) =>
+      item.id === id ? { ...item, name, title: name } : item,
+    );
+    return this.persist(zoneId, items);
+  }
+
   public async reorder(zoneId: number, newOrder: readonly number[]): Promise<FavoriteResponse> {
     const stored = await loadFavorites(zoneId);
     const byId = new Map(stored.items.map((item) => [item.id, item]));
