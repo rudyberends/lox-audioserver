@@ -14,6 +14,7 @@ import type { GroupManagerReadPort } from '@/application/groups/groupManager';
 import type { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
+import type { LoxAudioPeerRegistry } from '@/adapters/discovery/loxAudioPeerRegistry';
 import { defaultConfig } from '@/adapters/http/adminApi/config/configHandlers';
 
 const ADDON_PACKAGE_PREFIX = '@lox-audioserver/node-';
@@ -57,6 +58,7 @@ export type MiscHandlerDeps = {
   runtimeConfig: RuntimeConfigSlice;
   onReinitialize?: () => Promise<boolean>;
   loxoneNotifier?: LoxoneWsNotifier;
+  loxAudioPeers: LoxAudioPeerRegistry;
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
 };
@@ -266,6 +268,10 @@ type AudioServerEntry = {
   uuid: string | null;
   master: string | null;
   isSelf: boolean;
+  // True when this server advertises itself as lox-audioserver over mDNS (i.e. runs our admin).
+  // Real Loxone audioservers share the protocol but lack the service, so they come through false —
+  // the player still lists them, the admin UI uses this to offer only switchable servers.
+  isLoxAudioserver: boolean;
 };
 
 /**
@@ -278,7 +284,13 @@ function handleAudioServers(res: ServerResponse, deps: MiscHandlerDeps): void {
   try {
     const cfg = deps.configPort.getConfig();
     const selfMacId = cfg.system?.audioserver?.macId?.trim().toUpperCase() ?? null;
-    const servers = parseAudioServers(cfg.rawAudioConfig?.raw ?? cfg.rawAudioConfig?.rawString, selfMacId);
+    const isLoxAudioserver = (macId: string): boolean =>
+      (selfMacId != null && macId === selfMacId) || deps.loxAudioPeers.has(macId);
+    const servers = parseAudioServers(
+      cfg.rawAudioConfig?.raw ?? cfg.rawAudioConfig?.rawString,
+      selfMacId,
+      isLoxAudioserver,
+    );
     deps.sendJson(res, 200, { self: selfMacId, servers });
   } catch (err) {
     deps.log.warn('audioservers list failed', { err });
@@ -287,7 +299,11 @@ function handleAudioServers(res: ServerResponse, deps: MiscHandlerDeps): void {
 }
 
 /** Parses rawAudioConfig.raw (array of single-key {<MAC>: section} objects) into a flat list. */
-function parseAudioServers(raw: unknown, selfMacId: string | null): AudioServerEntry[] {
+function parseAudioServers(
+  raw: unknown,
+  selfMacId: string | null,
+  isLoxAudioserver: (macId: string) => boolean,
+): AudioServerEntry[] {
   let parsed = raw;
   if (typeof parsed === 'string') {
     const trimmed = parsed.trim();
@@ -317,6 +333,7 @@ function parseAudioServers(raw: unknown, selfMacId: string | null): AudioServerE
         uuid: normalizeString(section.uuid) ?? null,
         master: normalizeString(section.master)?.toUpperCase() ?? null,
         isSelf: selfMacId != null && macId === selfMacId,
+        isLoxAudioserver: isLoxAudioserver(macId),
       });
     }
   }

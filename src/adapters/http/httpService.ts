@@ -43,6 +43,7 @@ import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPrefe
 import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
 import type { LmsCliServer } from '@/adapters/outputs/squeezelite/lmsCliServer';
 import type { MdnsPort } from '@/ports/MdnsPort';
+import type { LoxAudioPeerRegistry } from '@/adapters/discovery/loxAudioPeerRegistry';
 
 /**
  * Hosts the public HTTP gateway (admin UI, API stub, music streaming, Sendspin).
@@ -92,6 +93,7 @@ export class HttpService {
       zoneAudioPrefs: ZoneAudioPreferences;
       squeezeliteCli: LmsCliServer;
       mdnsPort: MdnsPort;
+      loxAudioPeers: LoxAudioPeerRegistry;
       alertFiles: AlertFilesPort;
       loxoneProcessor: LoxoneCommandProcessor;
       connectionRegistry: ConnectionRegistry;
@@ -119,6 +121,7 @@ export class HttpService {
       audioManager: options.audioManager,
       zoneAudioPrefs: options.zoneAudioPrefs,
       mdnsPort: options.mdnsPort,
+      loxAudioPeers: options.loxAudioPeers,
       alertFiles: options.alertFiles,
       browserZoneRegistry: options.browserZoneRegistry,
       lineInApi: this.lineInApi,

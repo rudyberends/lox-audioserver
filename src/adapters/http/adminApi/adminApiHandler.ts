@@ -20,6 +20,7 @@ import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
 import type { MdnsPort } from '@/ports/MdnsPort';
+import type { LoxAudioPeerRegistry } from '@/adapters/discovery/loxAudioPeerRegistry';
 
 type AdminApiOptions = {
   onReinitialize?: () => Promise<boolean>;
@@ -41,6 +42,7 @@ type AdminApiOptions = {
   audioManager: AudioManager;
   zoneAudioPrefs: ZoneAudioPreferences;
   mdnsPort: MdnsPort;
+  loxAudioPeers: LoxAudioPeerRegistry;
   alertFiles: AlertFilesPort;
   browserZoneRegistry: BrowserZoneRegistry;
   lineInApi: LineInApiHandler;
@@ -162,6 +164,7 @@ export class AdminApiHandler {
   private readonly audioManager: AudioManager;
   private readonly zoneAudioPrefs: ZoneAudioPreferences;
   private readonly mdns: MdnsPort;
+  private readonly loxAudioPeers: LoxAudioPeerRegistry;
   private readonly alertFiles: AlertFilesPort;
   private readonly browserZoneRegistry: BrowserZoneRegistry;
   private readonly lineInApi: LineInApiHandler;
@@ -190,6 +193,7 @@ export class AdminApiHandler {
     this.audioManager = options.audioManager;
     this.zoneAudioPrefs = options.zoneAudioPrefs;
     this.mdns = options.mdnsPort;
+    this.loxAudioPeers = options.loxAudioPeers;
     this.alertFiles = options.alertFiles;
     this.browserZoneRegistry = options.browserZoneRegistry;
     this.lineInApi = options.lineInApi;
@@ -249,6 +253,7 @@ export class AdminApiHandler {
         runtimeConfig: this.runtimeConfig,
         onReinitialize: this.onReinitialize,
         loxoneNotifier: this.loxoneNotifier,
+        loxAudioPeers: this.loxAudioPeers,
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),

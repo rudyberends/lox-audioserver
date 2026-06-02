@@ -46,6 +46,7 @@ import { LmsCliServer } from '@/adapters/outputs/squeezelite/lmsCliServer';
 import { NetworkService } from '@/adapters/network';
 import { MdnsService } from '@/adapters/discovery';
 import { LoxAudioMdnsService } from '@/adapters/discovery/loxAudioMdnsService';
+import { LoxAudioPeerRegistry } from '@/adapters/discovery/loxAudioPeerRegistry';
 import { SnapcastMdnsService } from '@/adapters/outputs/snapcast/snapcastMdnsService';
 import { SendspinServerAdvertiser } from '@/adapters/outputs/sendspin/sendspinServerAdvertiser';
 import type { MdnsLifecycleService } from '@/adapters/discovery/mdnsLifecycle';
@@ -144,6 +145,8 @@ export function createRuntime(): Runtime {
   const engine = new EngineAdapter(audioStreamEngine);
   const lineInRegistry = new LineInIngestRegistry();
   const mdnsService = new MdnsService();
+  const loxAudioPeers = new LoxAudioPeerRegistry(mdnsService);
+  loxAudioPeers.start();
   const sendspinConnector = new SendspinClientConnector(mdnsService);
   let sendspinServerAdvertiser: SendspinServerAdvertiser | null = null;
   let loxAudioMdnsService: LoxAudioMdnsService | null = null;
@@ -402,6 +405,7 @@ export function createRuntime(): Runtime {
       audioManager,
       zoneAudioPrefs,
       mdnsPort: mdnsService,
+      loxAudioPeers,
       alertFiles: alertFilesPort,
       loxoneProcessor,
       connectionRegistry,
@@ -466,6 +470,7 @@ export function createRuntime(): Runtime {
       stop: async () => {
         mdnsServices.forEach((service) => service.stop());
         mdnsServices.length = 0;
+        loxAudioPeers.stop();
         mdnsService.shutdown();
       },
     });
