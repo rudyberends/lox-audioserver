@@ -41,6 +41,17 @@ export function extractSessionId(req: IncomingMessage): string | undefined {
       return match[1].trim();
     }
   }
+  // EventSource/WebSocket can't set headers, so cross-origin streams pass the token as a query
+  // param. (It can end up in access logs — acceptable for the LAN admin tool, stream-only use.)
+  if (req.url) {
+    const q = req.url.indexOf('?');
+    if (q >= 0) {
+      const token = new URLSearchParams(req.url.slice(q + 1)).get('token');
+      if (token?.trim()) {
+        return token.trim();
+      }
+    }
+  }
   return parseCookies(req)[AUTH_COOKIE_NAME];
 }
 
@@ -124,5 +135,8 @@ export function isPublicAdminApiRoute(pathname: string, method: string): boolean
   if (/^\/spotify\/auth\/callback/.test(pathname)) return true;
   if (/^\/spotify\/librespot\/credentials/.test(pathname)) return true;
   if (/^\/zones\/\d+\/equalizer$/.test(pathname) && (method === 'GET' || method === 'PUT')) return true;
+  // Read-only list of peer audioservers (LAN-local, low-sensitivity) — the
+  // player reads this to discover/switch servers without an admin login.
+  if (pathname === '/audioservers' && method === 'GET') return true;
   return false;
 }
