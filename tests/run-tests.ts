@@ -19,6 +19,7 @@ import './engine/pipeSourceAdapter.test';
 import './playbackRefactorSeams.test';
 import './playbackCoordinator.characterization.test';
 import './adminApiJsonBody.test';
+import './lineInAdminRoutes.test';
 import './outputFactory.airplay.test';
 import './airplayPcmStream.test';
 import './airplayStreamSession.test';

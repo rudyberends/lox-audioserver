@@ -43,6 +43,7 @@ type AdminApiOptions = {
   mdnsPort: MdnsPort;
   alertFiles: AlertFilesPort;
   browserZoneRegistry: BrowserZoneRegistry;
+  lineInApi: LineInApiHandler;
 };
 
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
@@ -66,6 +67,8 @@ import type { BrowserZoneRegistry } from '@/application/zones/browserZoneRegistr
 import { buildSpotifyRoutes } from '@/adapters/http/adminApi/spotify/spotifyHandlers';
 import { buildMiscRoutes } from '@/adapters/http/adminApi/misc/miscHandlers';
 import { buildConfigRoutes } from '@/adapters/http/adminApi/config/configHandlers';
+import { buildLineInRoutes } from '@/adapters/http/adminApi/linein/lineInAdminHandlers';
+import type { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
 import {
   readBinaryBody,
   readJsonBody,
@@ -161,6 +164,7 @@ export class AdminApiHandler {
   private readonly mdns: MdnsPort;
   private readonly alertFiles: AlertFilesPort;
   private readonly browserZoneRegistry: BrowserZoneRegistry;
+  private readonly lineInApi: LineInApiHandler;
   private readonly clockOffsetTracker = new ClockOffsetTracker(this.log);
   private readonly routes: Route[];
   private readonly sessionStore = new AdminSessionStore();
@@ -188,6 +192,7 @@ export class AdminApiHandler {
     this.mdns = options.mdnsPort;
     this.alertFiles = options.alertFiles;
     this.browserZoneRegistry = options.browserZoneRegistry;
+    this.lineInApi = options.lineInApi;
     this.routes = this.buildRoutes();
   }
 
@@ -296,6 +301,11 @@ export class AdminApiHandler {
         sendspinLineInService: this.sendspinLineInService,
         zoneManager: this.zoneManager,
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
+        sendJson: (res, status, payload) => sendJson(res, status, payload),
+      }),
+      ...buildLineInRoutes({
+        log: this.log,
+        lineInApi: this.lineInApi,
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),
       ...buildAlertsRoutes({

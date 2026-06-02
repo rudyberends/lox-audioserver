@@ -98,6 +98,7 @@ export class HttpService {
       browserZoneRegistry: BrowserZoneRegistry;
     },
   ) {
+    this.lineInApi = new LineInApiHandler(options.configPort, options.lineInMetadataService);
     this.adminApi = new AdminApiHandler({
       onReinitialize: options.onReinitialize,
       notifier: options.notifier,
@@ -120,6 +121,7 @@ export class HttpService {
       mdnsPort: options.mdnsPort,
       alertFiles: options.alertFiles,
       browserZoneRegistry: options.browserZoneRegistry,
+      lineInApi: this.lineInApi,
     });
     this.music = new MusicStreamingHandler(config.musicDir);
     this.staticFiles = new StaticFileHandler(config.publicDir);
@@ -131,7 +133,6 @@ export class HttpService {
     );
     this.audioProxy = new AudioProxyHandler(options.zoneManager);
     this.lineInIngestWs = new LineInIngestWebSocket(options.lineInRegistry);
-    this.lineInApi = new LineInApiHandler(options.configPort, options.lineInMetadataService);
     this.sendspin = new SendspinGateway();
     this.snapcast = new SnapcastGateway(options.snapcastCore);
     this.lmsCli = options.squeezeliteCli;

@@ -74,6 +74,28 @@ export class LineInApiHandler {
     return pathname.startsWith('/api/linein');
   }
 
+  /**
+   * Read-only bridge list for the admin API. Same data as the device-facing GET /api/linein/bridges,
+   * but exposed so the (auth-gated) admin API can serve it under /admin/api without the admin UI
+   * having to reach into the ungated device namespace.
+   */
+  public listBridgesForAdmin(): ReturnType<LineInApiHandler['listBridges']> {
+    return this.listBridges();
+  }
+
+  /**
+   * Read-only bridge status for a line-in input, for the admin API. Returns null when the line-in
+   * id is unknown so the caller can answer 404 (mirrors the device-facing GET bridge-status).
+   */
+  public getBridgeStatusForAdmin(
+    inputId: string,
+  ): ReturnType<LineInApiHandler['buildStatusResponse']> | null {
+    if (!this.resolveLineIns().some((entry) => entry.id === inputId)) {
+      return null;
+    }
+    return this.buildStatusResponse(inputId);
+  }
+
   public async handle(
     req: IncomingMessage,
     res: ServerResponse,
