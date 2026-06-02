@@ -25,6 +25,7 @@ import './airplayStreamSession.test';
 import './airplaySenderDiscovery.test';
 import './audioStreamHandlerIcy.test';
 import './queueAuthority.test';
+import './queueMutations.test';
 import './ytmusicNative.mock.test';
 import './spotifyAccountProvider.playlists.test';
 import './spotifyRecoveryPolicy.test';

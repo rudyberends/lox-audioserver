@@ -39,10 +39,13 @@ type AudioManagerHandle = Pick<
 
 type ZoneAudioPrefsHandle = Pick<ZoneAudioPreferences, 'getEffectiveOutputSettings'>;
 
-type ZoneManagerHandle = Pick<
-  ZoneManagerFacade,
-  'getZoneState' | 'handleCommand' | 'queue'
->;
+type ZoneManagerHandle = Pick<ZoneManagerFacade, 'getZoneState' | 'handleCommand'> & {
+  // Outputs only drive shuffle/repeat/seek; the queue-edit ops are not exposed here.
+  queue: Pick<
+    ZoneManagerFacade['queue'],
+    'setShuffle' | 'setPendingShuffle' | 'setRepeatMode' | 'seekInQueue'
+  >;
+};
 
 type GroupManagerHandle = Pick<GroupManager, 'applySpecGroupVolume'>;
 

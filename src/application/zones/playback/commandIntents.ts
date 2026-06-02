@@ -50,6 +50,10 @@ export function mapZoneCommandToIntent(input: {
     case 'queueminus':
     case 'previous':
       return { kind: 'QueueStep', delta: -1 };
+    case 'queueplaycurrent':
+      // Internal command: start playback of the current queue item (used by
+      // queue/play jump-to-item and queueandplay insert-and-play).
+      return { kind: 'QueuePlayCurrent' };
     case 'shuffle': {
       const normalized = typeof payload === 'string' ? payload.trim().toLowerCase() : '';
       let enabled: boolean | null = null;

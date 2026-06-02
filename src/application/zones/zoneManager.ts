@@ -107,7 +107,17 @@ export type ZoneInputController = Pick<
 
 export type ZoneQueueOps = Pick<
   ZoneQueueController,
-  'setShuffle' | 'setPendingShuffle' | 'setRepeatMode' | 'seekInQueue'
+  | 'setShuffle'
+  | 'setPendingShuffle'
+  | 'setRepeatMode'
+  | 'seekInQueue'
+  | 'appendUri'
+  | 'insertUriAfterCurrent'
+  | 'selectIndex'
+  | 'removeByUniqueId'
+  | 'moveBeforeUniqueId'
+  | 'clear'
+  | 'undo'
 >;
 
 export class ZoneManager {

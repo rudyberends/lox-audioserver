@@ -840,6 +840,191 @@ export class QueueController {
     return true;
   }
 
+  // --- Queue mutation commands (refcode parity: add/insert/remove/move/clear/undo) ---
+
+  private static readonly UNDO_DEPTH = 25;
+
+  private static matchesTarget(item: QueueItem, target: string, normalizedTarget: string): boolean {
+    return (
+      item.unique_id === target ||
+      normalizeSpotifyAudiopath(item.unique_id) === normalizedTarget ||
+      normalizeSpotifyAudiopath(item.audiopath) === normalizedTarget
+    );
+  }
+
+  private static findTargetIndex(items: QueueItem[], target: string): number {
+    const normalized = normalizeSpotifyAudiopath(target);
+    return items.findIndex((item) => QueueController.matchesTarget(item, target, normalized));
+  }
+
+  private pushUndoSnapshot(ctx: ZoneContext): void {
+    const stack =
+      (ctx.metadata.queueUndoStack as Array<{ items: QueueItem[]; currentIndex: number }> | undefined) ?? [];
+    stack.push({
+      items: ctx.queue.items.map((item) => ({ ...item })),
+      currentIndex: ctx.queueController.currentIndex(),
+    });
+    while (stack.length > QueueController.UNDO_DEPTH) {
+      stack.shift();
+    }
+    ctx.metadata.queueUndoStack = stack;
+  }
+
+  private async resolveItemsForUri(ctx: ZoneContext, audiopath: string): Promise<QueueItem[]> {
+    if (!audiopath) {
+      return [];
+    }
+    return this.buildQueueForUri(audiopath, ctx.name, undefined, audiopath);
+  }
+
+  /** Append the resolved item(s) for `audiopath` to the end of the queue. */
+  public async appendUri(zoneId: number, audiopath: string): Promise<boolean> {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx) {
+      return false;
+    }
+    const items = await this.resolveItemsForUri(ctx, audiopath);
+    if (!items.length) {
+      return false;
+    }
+    this.pushUndoSnapshot(ctx);
+    const currentIndex = ctx.queueController.currentIndex();
+    ctx.queueController.setItems(ctx.queue.items.concat(items), currentIndex);
+    this.deps.notifier.notifyQueueUpdated(zoneId, ctx.queue.items.length);
+    this.log.debug('queue append', { zoneId, added: items.length, total: ctx.queue.items.length });
+    return true;
+  }
+
+  /**
+   * Insert the resolved item(s) for `audiopath` directly after the current track.
+   * Returns the insertion index (for queueandplay), or -1 on failure. The current
+   * track stays selected.
+   */
+  public async insertUriAfterCurrent(zoneId: number, audiopath: string): Promise<number> {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx) {
+      return -1;
+    }
+    const items = await this.resolveItemsForUri(ctx, audiopath);
+    if (!items.length) {
+      return -1;
+    }
+    this.pushUndoSnapshot(ctx);
+    const currentIndex = ctx.queueController.currentIndex();
+    const insertAt = ctx.queue.items.length ? currentIndex + 1 : 0;
+    const next = ctx.queue.items.slice();
+    next.splice(insertAt, 0, ...items);
+    ctx.queueController.setItems(next, currentIndex);
+    this.deps.notifier.notifyQueueUpdated(zoneId, ctx.queue.items.length);
+    this.log.debug('queue insert', { zoneId, added: items.length, insertAt, total: ctx.queue.items.length });
+    return insertAt;
+  }
+
+  /** Move the queue cursor to `index` (used by queueandplay after insert). */
+  public selectIndex(zoneId: number, index: number): boolean {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx) {
+      return false;
+    }
+    return ctx.queueController.setCurrentIndex(index) !== null;
+  }
+
+  /** Remove the item matching `target` (unique_id or audiopath). */
+  public removeByUniqueId(zoneId: number, target: string): boolean {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx || !target) {
+      return false;
+    }
+    const idx = QueueController.findTargetIndex(ctx.queue.items, target);
+    if (idx < 0) {
+      return false;
+    }
+    this.pushUndoSnapshot(ctx);
+    const currentIndex = ctx.queueController.currentIndex();
+    const next = ctx.queue.items.slice();
+    next.splice(idx, 1);
+    let newCurrent = currentIndex;
+    if (idx < currentIndex) {
+      newCurrent = currentIndex - 1;
+    } else if (idx === currentIndex) {
+      newCurrent = Math.min(currentIndex, next.length - 1);
+    }
+    ctx.queueController.setItems(next, Math.max(0, newCurrent));
+    this.deps.notifier.notifyQueueUpdated(zoneId, ctx.queue.items.length);
+    this.log.debug('queue remove', { zoneId, removedIndex: idx, total: ctx.queue.items.length });
+    return true;
+  }
+
+  /**
+   * Move the item matching `srcTarget` to before the item matching
+   * `targetOrEnd` (or to the end when `targetOrEnd === 'end'`). The currently
+   * playing track keeps its identity (qindex is recomputed).
+   */
+  public moveBeforeUniqueId(zoneId: number, srcTarget: string, targetOrEnd: string): boolean {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx || !srcTarget) {
+      return false;
+    }
+    const from = QueueController.findTargetIndex(ctx.queue.items, srcTarget);
+    if (from < 0) {
+      return false;
+    }
+    const isEnd = targetOrEnd === 'end';
+    const targetIndex = isEnd ? ctx.queue.items.length : QueueController.findTargetIndex(ctx.queue.items, targetOrEnd);
+    if (!isEnd && targetIndex < 0) {
+      return false;
+    }
+    const currentUid = ctx.queueController.current()?.unique_id;
+    this.pushUndoSnapshot(ctx);
+    const next = ctx.queue.items.slice();
+    const [moved] = next.splice(from, 1);
+    if (!moved) {
+      return false;
+    }
+    // After removing `from`, indices at/after it shift left by one.
+    const insertAt = isEnd ? next.length : targetIndex > from ? targetIndex - 1 : targetIndex;
+    next.splice(insertAt, 0, moved);
+    const newCurrent = currentUid
+      ? next.findIndex((item) => item.unique_id === currentUid)
+      : ctx.queueController.currentIndex();
+    ctx.queueController.setItems(next, Math.max(0, newCurrent));
+    this.deps.notifier.notifyQueueUpdated(zoneId, ctx.queue.items.length);
+    this.log.debug('queue move', { zoneId, from, insertAt, total: ctx.queue.items.length });
+    return true;
+  }
+
+  /** Empty the queue. Current playback continues until end-of-track. */
+  public clear(zoneId: number): boolean {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx || !ctx.queue.items.length) {
+      return false;
+    }
+    this.pushUndoSnapshot(ctx);
+    ctx.queueController.setItems([], 0);
+    this.deps.notifier.notifyQueueUpdated(zoneId, 0);
+    this.log.debug('queue cleared', { zoneId });
+    return true;
+  }
+
+  /** Restore the queue to the state before the most recent mutation. */
+  public undo(zoneId: number): boolean {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx) {
+      return false;
+    }
+    const stack = ctx.metadata.queueUndoStack as
+      | Array<{ items: QueueItem[]; currentIndex: number }>
+      | undefined;
+    const snapshot = stack?.pop();
+    if (!snapshot) {
+      return false;
+    }
+    ctx.queueController.setItems(snapshot.items, snapshot.currentIndex);
+    this.deps.notifier.notifyQueueUpdated(zoneId, ctx.queue.items.length);
+    this.log.debug('queue undo', { zoneId, total: ctx.queue.items.length });
+    return true;
+  }
+
   public reorderQueue(
     ctx: ZoneContext,
     mode: 'shuffle' | 'unshuffle',

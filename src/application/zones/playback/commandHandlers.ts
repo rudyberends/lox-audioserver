@@ -83,6 +83,9 @@ export function handleZoneCommand(args: {
     case 'QueueStep':
       handleQueueStep(coordinator, ctx, zoneId, mode, intent.delta);
       break;
+    case 'QueuePlayCurrent':
+      handleQueuePlayCurrent(coordinator, ctx, zoneId);
+      break;
     case 'Shuffle':
       handleShuffle(coordinator, ctx, zoneId, intent.enabled);
       break;
@@ -360,6 +363,37 @@ function handleQueueStep(
       coordinator.log.debug('queue step skipped; non-local authority and no dispatched output', { zoneId, authority: ctx.queue.authority });
     }
   }
+}
+
+function handleQueuePlayCurrent(
+  coordinator: CommandCoordinator,
+  ctx: ZoneContext,
+  zoneId: number,
+): void {
+  const current = ctx.queueController.current();
+  if (!current?.audiopath) {
+    coordinator.log.debug('queue play-current ignored; no current item', { zoneId });
+    return;
+  }
+  const isRadio = coordinator.audioHelpers.isRadioAudiopath(current.audiopath, current.audiotype);
+  const metadata: PlaybackMetadata = {
+    title: current.title,
+    artist: current.artist,
+    album: current.album,
+    coverurl: current.coverurl,
+    audiopath: current.audiopath,
+    duration: current.duration,
+    station: current.station,
+    stationIndex: ctx.queueController.currentIndex(),
+    isRadio,
+  };
+  void coordinator.startQueuePlayback(ctx, current.audiopath, metadata).catch((error) => {
+    coordinator.log.warn('queue play-current failed', {
+      zoneId,
+      audiopath: current.audiopath,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
 }
 
 function requestLineInControl(

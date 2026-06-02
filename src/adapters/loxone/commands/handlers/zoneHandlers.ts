@@ -363,6 +363,10 @@ function audioDynamicCommand(zoneManager: ZoneManagerFacade, command: string) {
   const cmd = (parts[2] ?? '').toLowerCase();
   const payload = parts.slice(3).join('/');
   zoneManager.handleCommand(zoneId, cmd, payload);
+  // Client schema expects `{action:"queueplus"|"queueminus"}` for next/previous.
+  if (cmd === 'queueplus' || cmd === 'queueminus') {
+    return buildResponse(command, cmd, { action: cmd });
+  }
   return buildEmptyResponse(command);
 }
 

@@ -11,6 +11,7 @@ import { createGroupHandlers } from '@/adapters/loxone/commands/handlers/groupHa
 import { createAlertHandlers } from '@/adapters/loxone/commands/handlers/alertHandlers';
 import { createInputHandlers } from '@/adapters/loxone/commands/handlers/inputHandlers';
 import { createPlaylistEditHandlers } from '@/adapters/loxone/commands/handlers/playlistEditHandlers';
+import { createQueueEditHandlers } from '@/adapters/loxone/commands/handlers/queueEditHandlers';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
@@ -87,6 +88,11 @@ export function registerRoutes(
     notifier: dependencies.loxoneNotifier,
   });
   const playlistEditHandlers = createPlaylistEditHandlers(
+    dependencies.contentManager,
+    dependencies.loxoneNotifier,
+  );
+  const queueEditHandlers = createQueueEditHandlers(
+    dependencies.zoneManager,
     dependencies.contentManager,
     dependencies.loxoneNotifier,
   );
@@ -190,6 +196,24 @@ export function registerRoutes(
   router.registerRegex('audio', /^audio\/cfg\/defaultvolume\//, configHandlers.setDefaultVolume);
   router.registerRegex('audio', /^audio\/cfg\/maxvolume\//, configHandlers.setMaxVolume);
   router.registerRegex('audio', /^audio\/cfg\/eventvolumes\//, configHandlers.setEventVolumes);
+
+  // Queue-edit command set (refcode parity). Registered before the generic
+  // dynamic command so the queue paths win. Audiopaths/uids may contain `/`
+  // and `:`, so these match greedily like serviceplay.
+  router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/queue\/play\/.+$/, queueEditHandlers.queuePlay);
+  router.registerRegex(
+    'audio',
+    /^audio\/(?:cfg\/)?\d+\/queue\/move\/.+\/before\/.+$/,
+    queueEditHandlers.queueMove,
+  );
+  router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/queue\/remove\/.+$/, queueEditHandlers.queueRemove);
+  router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/queue\/clear\/?$/, queueEditHandlers.queueClear);
+  router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/queueadd\/.+$/, queueEditHandlers.queueAdd);
+  router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/queueinsert\/.+$/, queueEditHandlers.queueInsert);
+  router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/queueandplay\/.+$/, queueEditHandlers.queueAndPlay);
+  router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/queueremove\/.+$/, queueEditHandlers.queueRemove);
+  router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/queueundo\/?$/, queueEditHandlers.queueUndo);
+  router.registerRegex('audio', /^audio\/(?:cfg\/)?\d+\/playlist\/save\/.+$/, queueEditHandlers.playlistSave);
 
   router.registerRegex(
     'audio',
