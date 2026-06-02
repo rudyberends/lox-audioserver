@@ -133,7 +133,7 @@ export class HttpService {
     );
     this.audioProxy = new AudioProxyHandler(options.zoneManager);
     this.lineInIngestWs = new LineInIngestWebSocket(options.lineInRegistry);
-    this.sendspin = new SendspinGateway();
+    this.sendspin = new SendspinGateway(options.browserZoneRegistry);
     this.snapcast = new SnapcastGateway(options.snapcastCore);
     this.lmsCli = options.squeezeliteCli;
     this.loxoneProcessor = options.loxoneProcessor;

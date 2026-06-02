@@ -3,17 +3,30 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { createLogger } from '@/shared/logging/logger';
 import { ConnectionReason, sendspinCore } from '@lox-audioserver/node-sendspin';
+import type { BrowserZoneRegistry } from '@/application/zones/browserZoneRegistry';
+
+/** Sendspin clientIds the player webapp uses are prefixed so we can recognise a
+ *  browser tab (vs. a real receiver / Cast output) and give it its own zone. */
+const BROWSER_CLIENT_PREFIX = 'browser-';
 
 /**
  * WebSocket gateway for the Sendspin protocol.
+ *
+ * The player webapp connects here as an ordinary Sendspin client; its arrival
+ * (clientId `browser-…`) auto-registers an ephemeral browser zone and its
+ * departure tears it down — so local playback needs no separate (auth'd) call.
  */
 export class SendspinGateway {
   private readonly log = createLogger('Http', 'Sendspin');
   private readonly wsServer = new WebSocketServer({ noServer: true });
   private readonly knownClients = new Set<string>();
+  // serial(clientId) -> zoneId for the browser zones we spun up from sessions.
+  private readonly browserZones = new Map<string, number>();
+  // serials currently mid-(un)register, to avoid double work across polls.
+  private readonly pendingBrowser = new Set<string>();
   private pollTimer: NodeJS.Timeout | null = null;
 
-  constructor() {
+  constructor(private readonly browserZoneRegistry?: BrowserZoneRegistry) {
     this.wsServer.on('connection', (socket, req) => {
       if (!req) return;
       sendspinCore.handleConnection(socket, req, ConnectionReason.DISCOVERY);
@@ -47,12 +60,16 @@ export class SendspinGateway {
 
   private pollConnections(): void {
     const activeClients = new Set<string>();
+    const browserNames = new Map<string, string>();
     for (const session of sendspinCore.getSessions()) {
       const clientId = session.getClientId();
       if (!clientId) {
         continue;
       }
       activeClients.add(clientId);
+      if (clientId.startsWith(BROWSER_CLIENT_PREFIX)) {
+        browserNames.set(clientId, session.getClientName() || '');
+      }
       if (!this.knownClients.has(clientId)) {
         this.knownClients.add(clientId);
         this.log.info('sendspin client connected', {
@@ -68,6 +85,47 @@ export class SendspinGateway {
       if (!activeClients.has(clientId)) {
         this.knownClients.delete(clientId);
       }
+    }
+    this.reconcileBrowserZones(browserNames);
+  }
+
+  /** Create a zone for each connected browser client, remove zones whose client
+   *  has gone. Register/unregister are async; guard with `pendingBrowser` so a
+   *  slow call isn't started twice across polls. */
+  private reconcileBrowserZones(active: Map<string, string>): void {
+    const registry = this.browserZoneRegistry;
+    if (!registry) return;
+
+    for (const [serial, name] of active) {
+      if (this.browserZones.has(serial) || this.pendingBrowser.has(serial)) continue;
+      this.pendingBrowser.add(serial);
+      registry
+        .register({ serial, name: name || undefined })
+        .then((record) => {
+          this.browserZones.set(serial, record.zoneId);
+        })
+        .catch((err) => {
+          this.log.warn('browser zone auto-register failed', {
+            serial,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        })
+        .finally(() => this.pendingBrowser.delete(serial));
+    }
+
+    for (const [serial, zoneId] of this.browserZones) {
+      if (active.has(serial) || this.pendingBrowser.has(serial)) continue;
+      this.pendingBrowser.add(serial);
+      this.browserZones.delete(serial);
+      Promise.resolve(registry.unregister(zoneId))
+        .catch((err) => {
+          this.log.warn('browser zone auto-unregister failed', {
+            serial,
+            zoneId,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        })
+        .finally(() => this.pendingBrowser.delete(serial));
     }
   }
 }
