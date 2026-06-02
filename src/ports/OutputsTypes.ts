@@ -15,6 +15,13 @@ export type HttpPreferences = {
   icyEnabled?: boolean;
   icyInterval?: number;
   icyName?: string;
+  /**
+   * Keep the HTTP response open this many ms after the source ends before closing it.
+   * A buffering network renderer (Google Cast holds ~the engine's read-ahead) plays out
+   * its buffer after we stop sending; closing immediately makes it glitch/clip the tail.
+   * Holding the connection open lets it drain so the close lands at its real end-of-audio.
+   */
+  drainMsAfterEnd?: number;
 };
 
 export interface ZoneOutput {

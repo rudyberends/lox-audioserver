@@ -218,8 +218,20 @@ export class GoogleCastOutput implements ZoneOutput {
   }
 
   public getHttpPreferences(): HttpPreferences {
-    // Cast is happier with a stable Content-Length; disable ICY metadata.
-    return { httpProfile: 'forced_content_length', icyEnabled: false };
+    // Use chunked transfer (no Content-Length) and disable ICY metadata.
+    //
+    // A forced Content-Length is computed from the track duration, but for our live
+    // transcode that duration is unreliable: it can be stale across an Apple Music
+    // track handoff (the previous track's length lingers) or unknown (12h fallback).
+    // When the real encoded byte count then ends short of the advertised length, Node
+    // aborts the socket and Cast drops its buffered-ahead audio — clipping the tail of
+    // every track. Chunked lets Cast play to the real end-of-stream and drain its buffer,
+    // independent of any duration estimate.
+    //
+    // Cast buffers ~the engine's read-ahead (~8s) plus the prime burst, so the stream
+    // closes several seconds before Cast finishes playing. Hold the connection open after
+    // the source ends so Cast can drain its buffer without glitching/clipping the tail.
+    return { httpProfile: 'chunked', icyEnabled: false, drainMsAfterEnd: 12000 };
   }
 
   private async connect(): Promise<void> {
@@ -406,7 +418,13 @@ export class GoogleCastOutput implements ZoneOutput {
     if (typeof status.mediaSessionId === 'number') {
       this.lastMediaSessionId = status.mediaSessionId;
     }
-    this.log.debug('Google Cast status', { zoneId: this.zoneId, state: status.playerState });
+    this.log.debug('Google Cast status', {
+      zoneId: this.zoneId,
+      state: status.playerState,
+      idleReason: status.idleReason,
+      currentTime: status.currentTime,
+      duration: status.duration,
+    });
     const mappedStatus =
       status.playerIsPlaying ? 'playing' : status.playerIsPaused ? 'paused' : status.playerIsIdle ? 'stopped' : undefined;
     if (!mappedStatus) {

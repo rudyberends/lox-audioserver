@@ -94,6 +94,7 @@ export class AudioStreamHandler {
     const outputSettings = this.zoneAudioPrefs.getEffectiveOutputSettings(zoneId);
     const httpPrefs = this.zoneAudioPrefs.getHttpPreferences(zoneId);
     const httpProfile = httpPrefs?.httpProfile ?? audioOutputSettings.httpProfile;
+    const drainMsAfterEnd = httpPrefs?.drainMsAfterEnd ?? 0;
     const icyEnabledOverride = httpPrefs?.icyEnabled ?? audioOutputSettings.httpIcyEnabled;
     const icyIntervalOverride = httpPrefs?.icyInterval ?? audioOutputSettings.httpIcyInterval;
     const icyNameOverride = httpPrefs?.icyName ?? audioOutputSettings.httpIcyName;
@@ -173,14 +174,45 @@ export class AudioStreamHandler {
       });
       res.write(header);
     }
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
     if (icyEnabled) {
       this.pipeWithIcyMetadata(req, res, audioStream, session, icyIntervalOverride, icyNameOverride);
+    } else if (!isWav && contentLength && contentLength > 0) {
+      // Deliver exactly Content-Length bytes. A live transcode's real byte count rarely
+      // matches the (bitrate × duration) estimate, so ending short of the advertised length
+      // makes Node abort the socket (RST) and the client (notably Google Cast) drops the
+      // audio it had buffered ahead — clipping the tail of every track.
+      this.pipeWithContentLength(res, audioStream, contentLength);
+    } else if (drainMsAfterEnd > 0) {
+      // Keep the response open for a drain window after the source ends so a buffering
+      // renderer (Cast) can play out its read-ahead before the connection closes.
+      audioStream.pipe(res, { end: false });
+      const scheduleDrainEnd = () => {
+        if (drainTimer || res.writableEnded) return;
+        drainTimer = setTimeout(() => {
+          drainTimer = undefined;
+          if (!res.writableEnded) {
+            try {
+              res.end();
+            } catch {
+              /* ignore */
+            }
+          }
+        }, drainMsAfterEnd);
+        drainTimer.unref?.();
+      };
+      audioStream.on('end', scheduleDrainEnd);
+      audioStream.on('close', scheduleDrainEnd);
     } else {
       audioStream.pipe(res);
     }
 
     let unregisterHandle: (() => void) | undefined;
     const dispose = () => {
+      if (drainTimer) {
+        clearTimeout(drainTimer);
+        drainTimer = undefined;
+      }
       audioStream.destroy();
       // End the HTTP response so squeezelite/etc see a clean EOF on this stream id.
       // Important for URL rotation: closeSubscribersForStreamId() relies on this to
@@ -449,6 +481,73 @@ export class AudioStreamHandler {
     req.on('close', dispose);
     req.on('aborted', dispose);
     res.on('close', dispose);
+  }
+
+  /**
+   * Pipe a live transcoded stream to a response that advertised a fixed Content-Length,
+   * guaranteeing the body is exactly that many bytes.
+   *
+   * The encoder's real output rarely equals the (bitrate × duration) estimate and the source
+   * asset can be a touch shorter than the catalog duration. If the body ends short of the
+   * advertised length Node aborts the socket (RST); Google Cast then discards whatever it had
+   * buffered ahead of the playback head, clipping the last several seconds of every track.
+   * So we never write past Content-Length (truncating a rare overshoot) and pad a short tail
+   * with zero bytes — trailing zeros after the last MP3 frame are ignored by decoders and only
+   * serve to make the response complete and drainable. Backpressure is honoured so the engine's
+   * output pacing keeps working.
+   */
+  private pipeWithContentLength(
+    res: ServerResponse,
+    audioStream: NodeJS.ReadableStream & { destroy?: (error?: Error) => void },
+    contentLength: number,
+  ): void {
+    let written = 0;
+    let finished = false;
+    // Cap tail padding (~30s @ 256 kbit) so a wildly wrong estimate can't blast huge buffers.
+    const MAX_PAD_BYTES = 1024 * 1024;
+
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      audioStream.off('data', onData);
+      if (res.writableEnded || res.destroyed || !res.writable) return;
+      const remaining = contentLength - written;
+      try {
+        if (remaining > 0 && remaining <= MAX_PAD_BYTES) {
+          res.end(Buffer.alloc(remaining));
+        } else {
+          res.end();
+        }
+      } catch {
+        /* socket may have gone away */
+      }
+    };
+
+    const onData = (chunk: Buffer) => {
+      if (finished) return;
+      const remaining = contentLength - written;
+      if (remaining <= 0) {
+        audioStream.destroy?.();
+        finish();
+        return;
+      }
+      const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+      written += slice.length;
+      const ok = res.write(slice);
+      if (written >= contentLength) {
+        audioStream.destroy?.();
+        finish();
+        return;
+      }
+      if (!ok) audioStream.pause();
+    };
+
+    res.on('drain', () => {
+      if (!finished) audioStream.resume();
+    });
+    audioStream.on('data', onData);
+    audioStream.on('end', finish);
+    audioStream.on('close', finish);
   }
 
   private buildIcyBlock(session: PlaybackSession): Buffer | null {

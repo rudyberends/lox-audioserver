@@ -8,6 +8,7 @@ export type ZoneHttpPreferences = {
   icyEnabled?: boolean;
   icyInterval?: number;
   icyName?: string;
+  drainMsAfterEnd?: number;
 };
 
 export type ZonePowerStateResolver = (zoneId: number) => boolean;
