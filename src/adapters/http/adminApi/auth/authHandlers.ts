@@ -74,6 +74,9 @@ async function handleAuthLogin(
       tokenRights: result.tokenRights,
       loginAt: session.createdAt,
       expiresAt: session.expiresAt,
+      // Same session id as the cookie, exposed so the admin UI can authenticate cross-origin
+      // (Authorization: Bearer) when switching to a peer audioserver. Same-origin keeps the cookie.
+      token: session.id,
     });
   } catch (err) {
     if (err instanceof MiniserverAuthError) {

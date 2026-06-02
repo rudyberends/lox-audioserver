@@ -24,6 +24,26 @@ export function parseCookies(req: IncomingMessage): Record<string, string> {
   return cookies;
 }
 
+/**
+ * The session id, from either the `Authorization: Bearer <id>` header or the auth cookie.
+ *
+ * The cookie is HttpOnly + SameSite=Lax — secure for same-origin use, but a Lax cookie is not sent
+ * on cross-site fetch/XHR, so the admin UI of one audioserver cannot call a peer's /admin/api with
+ * it. The bearer token (the same session id, returned in the login response body) carries the
+ * session cross-origin instead. Same-origin requests keep using the cookie; only cross-server
+ * switching needs the token. Header takes precedence so an explicit token always wins.
+ */
+export function extractSessionId(req: IncomingMessage): string | undefined {
+  const auth = req.headers.authorization;
+  if (auth) {
+    const match = /^Bearer\s+(.+)$/i.exec(auth.trim());
+    if (match?.[1]) {
+      return match[1].trim();
+    }
+  }
+  return parseCookies(req)[AUTH_COOKIE_NAME];
+}
+
 export class AdminSessionStore {
   private readonly sessions = new Map<string, AdminServerSession>();
 
@@ -37,7 +57,7 @@ export class AdminSessionStore {
 
   public getFromRequest(req: IncomingMessage): AdminServerSession | null {
     this.cleanupExpired();
-    const sessionId = parseCookies(req)[AUTH_COOKIE_NAME];
+    const sessionId = extractSessionId(req);
     if (!sessionId) return null;
     const session = this.sessions.get(sessionId);
     if (!session) return null;
@@ -62,7 +82,7 @@ export class AdminSessionStore {
   }
 
   public clearFromRequest(req: IncomingMessage): void {
-    const sessionId = parseCookies(req)[AUTH_COOKIE_NAME];
+    const sessionId = extractSessionId(req);
     if (!sessionId) return;
     this.sessions.delete(sessionId);
   }
