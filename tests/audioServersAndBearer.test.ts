@@ -38,6 +38,11 @@ test('extractSessionId returns undefined without a token or cookie', () => {
   assert.equal(extractSessionId(fakeReq({})), undefined);
 });
 
+test('extractSessionId reads the token query param (for EventSource/WebSocket)', () => {
+  const req = { headers: {}, url: '/admin/api/logs/stream?token=tok-from-query' } as unknown as IncomingMessage;
+  assert.equal(extractSessionId(req), 'tok-from-query');
+});
+
 // Mirrors the real rawAudioConfig.raw shape: an array of single-key {<MAC>: section} objects.
 const RAW_AUDIO_CONFIG = {
   raw: [
