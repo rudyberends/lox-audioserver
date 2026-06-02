@@ -22,8 +22,15 @@ export interface RecentItem {
 
 const RECENTS_DIR = resolveDataDir('recents');
 
+// Ephemeral browser zones (id >= 9000) share one "recent" store — their per-tab
+// ids are not persisted, so per-id files would leak between browsers on restart.
+const BROWSER_ZONE_BASE = 9000;
+function storeKey(zoneId: number): string {
+  return zoneId >= BROWSER_ZONE_BASE ? 'browser' : String(zoneId);
+}
+
 function filePath(zoneId: number): string {
-  return resolveDataDir('recents', `${zoneId}.json`);
+  return resolveDataDir('recents', `${storeKey(zoneId)}.json`);
 }
 
 function defaultRecents(): RecentStoreFile {
