@@ -170,7 +170,7 @@ export class ZoneStateStore {
       patch.album.trim() !== (ctx.state.album ?? '').trim();
     const trackChanged = audiopathChanged || qidChanged || titleChanged || artistChanged || albumChanged;
     const metadataBoundaryChanged = isStopping || audiopathChanged || qidChanged;
-    // Prevent overwriting a valid duration with zero/invalid values.
+    // A track's duration comes from its metadata and is fixed for that track. Guard it:
     if ('duration' in patch) {
       const nextDuration = patch.duration;
       const currentDuration = ctx.state.duration;
@@ -184,6 +184,7 @@ export class ZoneStateStore {
           // where the API may not provide duration for every "now playing" update.
           !(ctx.metadata.radioControllable === true && trackChanged && nextDuration === 0))
       ) {
+        // Never overwrite a valid duration with a zero/invalid value.
         delete patch.duration;
       } else if (
         !isRadioState &&
@@ -193,9 +194,24 @@ export class ZoneStateStore {
         typeof currentDuration === 'number' &&
         currentDuration > 0
       ) {
-        // keep the larger of the known durations
-        patch.duration = Math.max(nextDuration, currentDuration);
+        // Same track: keep the duration already established from metadata; ignore a value
+        // carried by a jittery timing update. (A lingering previous session can still emit
+        // its own duration across an Apple Music handoff; `Math.max` used to latch that
+        // stale, larger value over the new track's real duration.)
+        delete patch.duration;
       }
+    }
+    if (
+      (audiopathChanged || qidChanged) &&
+      !isStopping &&
+      !isRadioState &&
+      !isLineInState &&
+      !(typeof patch.duration === 'number' && patch.duration > 0)
+    ) {
+      // Genuine track boundary without a new duration in this patch: drop the previous
+      // track's duration so the new track's duration (which may land in a later patch) is
+      // accepted instead of being blocked by the same-track guard above.
+      patch.duration = 0;
     }
 
     const entries = Object.entries(patch);
