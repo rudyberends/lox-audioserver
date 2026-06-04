@@ -8,7 +8,7 @@ import type {
   RadioMenuEntry,
   ScanStatus,
 } from '@/ports/ContentTypes';
-import { decodeAudiopath, detectServiceFromAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath, detectServiceFromAudiopath, metadataKeyVariants } from '@/domain/loxone/audiopath';
 import {
   LocalLibraryProvider,
   type LibraryCoverSample,
@@ -82,6 +82,13 @@ export class ContentManager {
   private readonly metadataInflight = new Map<string, Promise<ContentItemMetadata | null>>();
   private readonly metadataTtlMs = 5 * 60 * 1000;
   private readonly metadataNegativeTtlMs = 30 * 1000;
+  // Metadata harvested from every served folder listing, keyed per
+  // metadataKeyVariants(). Lets resolveMetadata() answer favourites/recents (and
+  // the now-playing path) from the listing the player just browsed instead of a
+  // second browse. Bounded LRU keyed by audiopath variant; entries share the
+  // metadata TTL so a stale listing eventually re-resolves live.
+  private readonly metadataByAudiopath = new Map<string, { expiresAt: number; value: ContentItemMetadata }>();
+  private readonly metadataByAudiopathMax = 5000;
   private initialized = false;
   private readonly configPort: ConfigPort;
   private readonly customRadioStore: CustomRadioStore;
@@ -135,6 +142,7 @@ export class ContentManager {
     this.globalSearchInflight.clear();
     this.metadataCache.clear();
     this.metadataInflight.clear();
+    this.metadataByAudiopath.clear();
     this.spotify = this.spotifyManagerProvider.reload();
     this.tunein = new TuneInProvider(this.customRadioStore, this.readTuneInConfig());
     this.radioParadise = new RadioParadiseProvider({ iconBaseUrl: this.readLocalIconBaseUrl() });
@@ -176,12 +184,17 @@ export class ContentManager {
   ): Promise<ContentFolder | null> {
     const safeFolderId = folderId || 'root';
     const cacheKey = this.cache.key('media', 'local', safeFolderId, offset, limit);
+    const fetcher = () =>
+      this.library
+        .getMediaFolder(safeFolderId, offset, limit)
+        .then((folder) => this.harvestFolderMetadata(folder));
     const cached = this.cache.get(cacheKey);
     if (cached) {
-      void this.cache.refresh(cacheKey, () => this.library.getMediaFolder(safeFolderId, offset, limit));
+      this.harvestFolderMetadata(cached);
+      void this.cache.refresh(cacheKey, fetcher);
       return Promise.resolve(cached);
     }
-    return this.cache.refresh(cacheKey, () => this.library.getMediaFolder(safeFolderId, offset, limit));
+    return this.cache.refresh(cacheKey, fetcher);
   }
 
   public async getRadios(): Promise<RadioMenuEntry[]> {
@@ -242,7 +255,9 @@ export class ContentManager {
     offset: number,
     limit: number,
   ): Promise<ContentFolder | null> {
-    return this.library.getPlaylistItemsFolder(playlistId, offset, limit);
+    return this.library
+      .getPlaylistItemsFolder(playlistId, offset, limit)
+      .then((folder) => this.harvestFolderMetadata(folder));
   }
 
   public async getServiceFolder(
@@ -269,6 +284,7 @@ export class ContentManager {
     const cached = this.cache.get(cacheKey);
     if (cached) {
       this.log.debug('content cache hit', { service, user, folderId, offset, limit });
+      this.harvestFolderMetadata(cached);
       void this.cache.refresh(cacheKey, () => this.fetchServiceFolder(service, user, folderId, offset, effectiveLimit));
       return cached;
     }
@@ -300,13 +316,91 @@ export class ContentManager {
     offset: number,
     limit: number,
   ): Promise<ContentFolder | null> {
+    let folder: ContentFolder | null;
     if (service === 'local' || service === 'custom') {
-      return this.tunein.getFolder(service, folderId, offset, limit);
+      folder = await this.tunein.getFolder(service, folderId, offset, limit);
+    } else if (service.toLowerCase() === 'radioparadise') {
+      folder = await this.radioParadise.getFolder(folderId, offset, limit);
+    } else {
+      folder = await this.requireSpotify().getFolder(service, user, folderId, offset, limit);
     }
-    if (service.toLowerCase() === 'radioparadise') {
-      return this.radioParadise.getFolder(folderId, offset, limit);
+    return this.harvestFolderMetadata(folder);
+  }
+
+  /**
+   * Indexes every item of a served folder into the harvested-metadata cache so a
+   * later resolveMetadata(<item audiopath>) is a cache hit rather than a second
+   * browse. Returns the folder untouched for chaining onto fetchers.
+   */
+  private harvestFolderMetadata(folder: ContentFolder | null): ContentFolder | null {
+    if (folder?.items?.length) {
+      for (const item of folder.items) {
+        this.storeHarvestedItem(item);
+      }
     }
-    return this.requireSpotify().getFolder(service, user, folderId, offset, limit);
+    return folder;
+  }
+
+  private storeHarvestedItem(item: ContentFolderItem): void {
+    const audiopath = (item.audiopath ?? '').trim();
+    if (!audiopath) {
+      return;
+    }
+    // Leave radio/stream items to the live tunein path: it sets the `station`
+    // field that a harvested metadata entry can't carry.
+    if (detectServiceFromAudiopath(audiopath) === 'radio' || /^https?:\/\//i.test(audiopath)) {
+      return;
+    }
+    const title = (item.title || item.name || '').trim();
+    // A title-less entry is useless and could mask a richer live resolve; skip it.
+    if (!title) {
+      return;
+    }
+    const value: ContentItemMetadata = {
+      title,
+      artist: (item.artist ?? '').trim(),
+      album: (item.album ?? '').trim(),
+      coverurl: item.coverurl ?? '',
+      duration: typeof item.duration === 'number' && item.duration > 0 ? Math.round(item.duration) : undefined,
+    };
+    const expiresAt = Date.now() + this.metadataTtlMs;
+    for (const key of metadataKeyVariants(audiopath)) {
+      this.setHarvestedEntry(key, value, expiresAt);
+    }
+  }
+
+  private setHarvestedEntry(key: string, value: ContentItemMetadata, expiresAt: number): void {
+    // Re-insert so the most-recently-harvested keys sit at the tail (LRU order).
+    if (this.metadataByAudiopath.has(key)) {
+      this.metadataByAudiopath.delete(key);
+    }
+    this.metadataByAudiopath.set(key, { value, expiresAt });
+    while (this.metadataByAudiopath.size > this.metadataByAudiopathMax) {
+      const oldest = this.metadataByAudiopath.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      this.metadataByAudiopath.delete(oldest);
+    }
+  }
+
+  private lookupHarvestedMetadata(audiopath: string): ContentItemMetadata | null {
+    const now = Date.now();
+    for (const key of metadataKeyVariants(audiopath)) {
+      const entry = this.metadataByAudiopath.get(key);
+      if (!entry) {
+        continue;
+      }
+      if (entry.expiresAt <= now) {
+        this.metadataByAudiopath.delete(key);
+        continue;
+      }
+      // LRU touch.
+      this.metadataByAudiopath.delete(key);
+      this.metadataByAudiopath.set(key, entry);
+      return entry.value;
+    }
+    return null;
   }
 
   public getServiceTrack(
@@ -474,10 +568,29 @@ export class ContentManager {
 
     const cached = this.metadataCache.get(cacheKey);
     if (cached && cached.expiresAt > now) {
-      return cached.value;
+      // A positive memoised result wins; for a cached negative, give the harvest
+      // cache a chance first — a listing may have arrived since it was recorded.
+      if (cached.value) {
+        return cached.value;
+      }
+      const harvestedAfterNegative = this.lookupHarvestedMetadata(raw);
+      if (harvestedAfterNegative) {
+        this.metadataCache.set(cacheKey, { value: harvestedAfterNegative, expiresAt: Date.now() + this.metadataTtlMs });
+        return harvestedAfterNegative;
+      }
+      return null;
     }
     if (cached) {
       this.metadataCache.delete(cacheKey);
+    }
+
+    // Metadata harvested from a previously served listing answers without a
+    // second browse or any per-service live lookup. Memoise the hit so repeat
+    // calls short-circuit on the metadataCache fast path above.
+    const harvested = this.lookupHarvestedMetadata(raw);
+    if (harvested) {
+      this.metadataCache.set(cacheKey, { value: harvested, expiresAt: Date.now() + this.metadataTtlMs });
+      return harvested;
     }
 
     const inflight = this.metadataInflight.get(cacheKey);

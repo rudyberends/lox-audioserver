@@ -1,0 +1,291 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { test } from './testHarness';
+import { ContentManager, createContentManager } from '../src/adapters/content/contentManager';
+import { CustomRadioStore } from '../src/adapters/content/providers/customRadioStore';
+import { metadataKeyVariants, normalizeProviderAudiopath } from '../src/domain/loxone/audiopath';
+import type { ContentFolder, ContentFolderItem } from '../src/ports/ContentTypes';
+import type { ContentPort } from '../src/ports/ContentPort';
+import type { NotifierPort } from '../src/ports/NotifierPort';
+import type { ConfigPort } from '../src/ports/ConfigPort';
+import type { SpotifyServiceManagerProvider } from '../src/adapters/content/providers/spotifyServiceManager';
+import type { QueueItem } from '../src/ports/types/queueTypes';
+import { createFavoritesManager } from '../src/application/zones/favorites/favoritesManager';
+import { createRecentsManager } from '../src/application/zones/recents/recentsManager';
+
+type ManagerHarness = {
+  cm: ContentManager;
+  calls: { getFolder: number; getTrack: number };
+  setFolder: (folder: ContentFolder | null) => void;
+  setTrack: (track: ContentFolderItem | null) => void;
+};
+
+// Builds a ContentManager wired to a fake Spotify/bridge manager so we can count
+// the live getFolder/getTrack calls and prove the harvest cache short-circuits.
+function makeManager(): ManagerHarness {
+  const calls = { getFolder: 0, getTrack: 0 };
+  let folder: ContentFolder | null = null;
+  let track: ContentFolderItem | null = null;
+  const fakeManager = {
+    getFolder: async () => {
+      calls.getFolder += 1;
+      return folder;
+    },
+    getTrack: async () => {
+      calls.getTrack += 1;
+      return track;
+    },
+    hasProvider: () => true,
+    listAccounts: () => [],
+    getDefaultAccountId: () => null,
+    listServiceEntries: () => [],
+  };
+  const spotifyManagerProvider = {
+    get: () => fakeManager,
+    reload: () => fakeManager,
+  } as unknown as SpotifyServiceManagerProvider;
+  const configPort = {
+    getConfig: () => ({}),
+    load: async () => ({}),
+  } as unknown as ConfigPort;
+  const notifier = {} as unknown as NotifierPort;
+  const cm = createContentManager({
+    notifier,
+    configPort,
+    spotifyManagerProvider,
+    customRadioStore: new CustomRadioStore(),
+  });
+  return {
+    cm,
+    calls,
+    setFolder: (next) => {
+      folder = next;
+    },
+    setTrack: (next) => {
+      track = next;
+    },
+  };
+}
+
+function makeFolder(items: ContentFolderItem[]): ContentFolder {
+  return { id: 'f', name: 'Folder', start: 0, totalitems: items.length, items };
+}
+
+function makeQueueItem(overrides: Partial<QueueItem>): QueueItem {
+  return {
+    album: '',
+    artist: '',
+    audiopath: '',
+    audiotype: 0,
+    coverurl: '',
+    duration: 0,
+    qindex: 0,
+    station: '',
+    title: '',
+    unique_id: 'queue-1',
+    user: 'nouser',
+    ...overrides,
+  };
+}
+
+async function withTempCwd(fn: () => Promise<void>): Promise<void> {
+  const originalCwd = process.cwd();
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lox-harvest-test-'));
+  process.chdir(tempDir);
+  try {
+    await fn();
+  } finally {
+    process.chdir(originalCwd);
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test('metadataKeyVariants indexes raw, decoded and provider-stripped forms', () => {
+  const variants = metadataKeyVariants('spotify@bridge-applemusic-x:album:111');
+  assert.ok(variants.includes('spotify@bridge-applemusic-x:album:111'));
+  assert.ok(variants.includes('spotify:album:111'));
+});
+
+test('metadataKeyVariants decodes a trailing b64 segment', () => {
+  const inner = 'library://track/abc';
+  const b64 = Buffer.from(inner, 'utf-8').toString('base64');
+  const variants = metadataKeyVariants(`spotify@acc:track:b64_${b64}`);
+  assert.ok(variants.includes(`spotify@acc:track:b64_${b64}`));
+  assert.ok(variants.includes(inner));
+  assert.ok(variants.includes(`spotify:track:b64_${b64}`));
+});
+
+test('harvest cache resolves a browsed item without a second browse', async () => {
+  const { cm, calls, setFolder } = makeManager();
+  const albumPath = 'spotify@bridge-applemusic-x:album:111';
+  setFolder(
+    makeFolder([
+      {
+        id: 'a1',
+        name: 'Greatest Hits',
+        type: 2,
+        audiopath: albumPath,
+        coverurl: 'http://cover/111',
+        artist: 'The Band',
+        album: 'Greatest Hits',
+      },
+    ]),
+  );
+
+  const folder = await cm.getServiceFolder('spotify@bridge-applemusic-x', 'user', 'album:111', 0, 50);
+  assert.ok(folder);
+  assert.equal(calls.getFolder, 1);
+
+  const meta = await cm.resolveMetadata(albumPath);
+  assert.ok(meta);
+  assert.equal(meta?.title, 'Greatest Hits');
+  assert.equal(meta?.artist, 'The Band');
+  assert.equal(meta?.album, 'Greatest Hits');
+  assert.equal(meta?.coverurl, 'http://cover/111');
+  // No second browse, no live track lookup.
+  assert.equal(calls.getFolder, 1);
+  assert.equal(calls.getTrack, 0);
+});
+
+test('harvest miss falls back to a live track lookup', async () => {
+  const { cm, calls, setTrack } = makeManager();
+  setTrack({
+    id: 't1',
+    name: 'Live Title',
+    type: 2,
+    title: 'Live Title',
+    artist: 'Live Artist',
+    album: 'Live Album',
+    coverurl: 'http://cover/live',
+    duration: 123,
+  });
+
+  const meta = await cm.resolveMetadata('spotify@acc:track:xyz');
+  assert.ok(meta);
+  assert.equal(meta?.title, 'Live Title');
+  assert.equal(meta?.artist, 'Live Artist');
+  assert.equal(meta?.duration, 123);
+  assert.equal(calls.getTrack, 1);
+});
+
+test('harvested provider-path metadata is found via the normalized favorite path', async () => {
+  const { cm, calls, setFolder } = makeManager();
+  setFolder(
+    makeFolder([
+      {
+        id: 'a1',
+        name: 'Greatest Hits',
+        type: 2,
+        audiopath: 'spotify@bridge-applemusic-x:album:111',
+        coverurl: 'http://cover/111',
+        artist: 'The Band',
+        album: 'Greatest Hits',
+      },
+    ]),
+  );
+  await cm.getServiceFolder('spotify@bridge-applemusic-x', 'user', 'album:111', 0, 50);
+
+  // favoritesManager stores the provider-stripped path; a resolve via that form must still hit.
+  const normalized = normalizeProviderAudiopath('spotify@bridge-applemusic-x:album:111');
+  assert.equal(normalized, 'spotify:album:111');
+  const meta = await cm.resolveMetadata(normalized);
+  assert.ok(meta);
+  assert.equal(meta?.coverurl, 'http://cover/111');
+  assert.equal(meta?.artist, 'The Band');
+  assert.equal(calls.getTrack, 0);
+});
+
+test('favorites add picks up harvested cover/artist/album without a second browse', async () => {
+  await withTempCwd(async () => {
+    const { cm, calls, setFolder } = makeManager();
+    const albumPath = 'spotify@bridge-applemusic-x:album:222';
+    setFolder(
+      makeFolder([
+        {
+          id: 'a1',
+          name: 'Night Visions',
+          type: 2,
+          audiopath: albumPath,
+          coverurl: 'http://cover/222',
+          artist: 'Imagine Dragons',
+          album: 'Night Visions',
+        },
+      ]),
+    );
+    await cm.getServiceFolder('spotify@bridge-applemusic-x', 'user', 'album:222', 0, 50);
+
+    const contentPort = {
+      resolveMetadata: (p: string) => cm.resolveMetadata(p),
+    } as unknown as ContentPort;
+    const favorites = createFavoritesManager({
+      notifier: { notifyRoomFavoritesChanged: () => {} } as unknown as NotifierPort,
+      contentPort,
+    });
+    favorites.initOnce({ zoneManager: { getState: () => undefined } as never });
+
+    const created = await favorites.add(7, 'User Album Title', albumPath);
+    assert.equal(created.coverurl, 'http://cover/222');
+    assert.equal(created.artist, 'Imagine Dragons');
+    assert.equal(created.album, 'Night Visions');
+    // Harvested title wins over the placeholder the user-facing add carried in.
+    assert.equal(created.title, 'Night Visions');
+    assert.equal(calls.getTrack, 0);
+  });
+});
+
+test('recents record fills metadata from the harvest cache (no live lookup)', async () => {
+  await withTempCwd(async () => {
+    const { cm, calls, setFolder } = makeManager();
+    setFolder(
+      makeFolder([
+        {
+          id: 't1',
+          name: 'Harvested Song',
+          type: 2,
+          title: 'Harvested Song',
+          audiopath: 'spotify@user:track:abc',
+          coverurl: 'http://cover/abc',
+          artist: 'Some Artist',
+          album: 'Some Album',
+          duration: 200,
+        },
+      ]),
+    );
+    await cm.getServiceFolder('spotify@user', 'user', 'pl:1', 0, 50);
+
+    const contentPort = {
+      resolveMetadata: (p: string) => cm.resolveMetadata(p),
+      getDefaultSpotifyAccountId: () => null,
+    } as unknown as ContentPort;
+    const recents = createRecentsManager({
+      notifier: { notifyRecentlyPlayedChanged: () => {} } as unknown as NotifierPort,
+      contentPort,
+    });
+
+    await recents.record(9, makeQueueItem({ audiopath: 'spotify:track:abc', user: 'user', title: '' }));
+
+    const stored = await recents.get(9);
+    assert.equal(stored.items.length, 1);
+    assert.equal(stored.items[0]?.title, 'Harvested Song');
+    assert.equal(calls.getTrack, 0);
+  });
+});
+
+test('radio/stream listing items are not harvested (live tunein path keeps station)', async () => {
+  const { cm } = makeManager();
+  // Drive the harvest helper directly with a radio + http item, then confirm nothing was stored.
+  const cmInternals = cm as unknown as {
+    harvestFolderMetadata: (folder: ContentFolder | null) => ContentFolder | null;
+    lookupHarvestedMetadata: (audiopath: string) => unknown;
+  };
+  cmInternals.harvestFolderMetadata(
+    makeFolder([
+      { id: 's1', name: 'Bayern 1', type: 3, audiopath: 'tunein:station:abc', coverurl: 'http://cover/radio' },
+      { id: 's2', name: 'Web Radio', type: 3, audiopath: 'https://example.com/stream.mp3', coverurl: 'http://cover/web' },
+    ]),
+  );
+  assert.equal(cmInternals.lookupHarvestedMetadata('tunein:station:abc'), null);
+  assert.equal(cmInternals.lookupHarvestedMetadata('https://example.com/stream.mp3'), null);
+});

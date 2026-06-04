@@ -66,6 +66,50 @@ function stripRoutingSuffix(path: string): string {
 }
 
 /**
+ * Normalises a provider-scoped Loxone audiopath to its provider-less canonical
+ * form, mirroring how room favourites are stored. Strips a leading
+ * `spotify@<account>:` bridge prefix down to `spotify:` and collapses the Apple
+ * `:library-track:` alias to `:track:`.
+ */
+export function normalizeProviderAudiopath(audiopath: string): string {
+  if (!audiopath) {
+    return audiopath;
+  }
+  if (audiopath.startsWith('spotify@')) {
+    const tail = audiopath.replace(/^spotify@[^:]+:/i, 'spotify:');
+    return tail.replace(/:library-track:/i, ':track:');
+  }
+  return audiopath.replace(/:library-track:/i, ':track:');
+}
+
+/**
+ * The set of keys an audiopath may be stored under / looked up by in the
+ * harvested-metadata cache. Both the harvest (store) and resolve (lookup) sides
+ * run an audiopath through this, so a listing item indexed under its raw
+ * provider path is still found when a caller later asks with the decoded or
+ * provider-stripped variant (e.g. a normalised room-favourite path).
+ */
+export function metadataKeyVariants(audiopath: string): string[] {
+  const raw = (audiopath || '').trim();
+  if (!raw) {
+    return [];
+  }
+  const variants: string[] = [];
+  const add = (value: string | undefined | null): void => {
+    const trimmed = (value || '').trim();
+    if (trimmed && !variants.includes(trimmed)) {
+      variants.push(trimmed);
+    }
+  };
+  add(raw);
+  const decoded = decodeAudiopath(raw);
+  add(decoded);
+  add(normalizeProviderAudiopath(raw));
+  add(normalizeProviderAudiopath(decoded));
+  return variants;
+}
+
+/**
  * Lightweight provider detection for Loxone audiopaths.
  */
 export function detectServiceFromAudiopath(
