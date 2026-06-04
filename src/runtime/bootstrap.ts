@@ -268,6 +268,9 @@ export function createRuntime(): Runtime {
   loxoneNotifier.setOutputProtocolLookup((zoneId) =>
     resolveZoneOutputProtocol(zoneManager.getTechnicalSnapshot(zoneId)),
   );
+  loxoneNotifier.setMixedGroupLookup(
+    () => configPort.getConfig().groups?.mixedGroupEnabled === true,
+  );
   lineInMetadataService.initOnce({ zoneManager, configPort });
   snapcastCore.initOnce({ zoneManager });
   groupManager.initOnce({ zoneManager });

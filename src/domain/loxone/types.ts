@@ -48,6 +48,12 @@ export interface LoxoneZoneState {
    * requires matching output protocols (which the native app has no concept of).
    */
   outputProtocol?: string;
+  /**
+   * Whether this zone's server allows grouping across different output protocols
+   * (the `mixedGroupEnabled` config). Custom field; our player uses it to relax
+   * the protocol-match grouping hint when mixed groups are enabled.
+   */
+  mixedGroupEnabled?: boolean;
 }
 
 export interface LoxoneParentMeta {

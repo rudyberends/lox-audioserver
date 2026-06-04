@@ -174,12 +174,17 @@ export class LoxoneHttpService {
 
     for (const state of this.options.zoneManager.getAllZoneStates()) {
       try {
-        // Enrich the connect snapshot with the output protocol so idle zones
-        // (which never emit a follow-up state change) still carry it.
+        // Enrich the connect snapshot with the output protocol + mixed-group
+        // flag so idle zones (which never emit a follow-up state change) carry
+        // them immediately.
         const outputProtocol = resolveZoneOutputProtocol(
           this.options.zoneManager.getTechnicalSnapshot(state.playerid),
         );
-        connection.sendUTF(JSON.stringify({ audio_event: [{ ...state, outputProtocol }] }));
+        const mixedGroupEnabled =
+          this.options.configPort.getConfig().groups?.mixedGroupEnabled === true;
+        connection.sendUTF(
+          JSON.stringify({ audio_event: [{ ...state, outputProtocol, mixedGroupEnabled }] }),
+        );
       } catch {
         // connection will be cleaned up via the error/close event
         break;

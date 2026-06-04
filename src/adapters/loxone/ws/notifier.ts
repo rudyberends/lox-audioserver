@@ -12,6 +12,7 @@ export class LoxoneWsNotifier {
   private readonly log = createLogger('LoxoneHttp', 'Notifier');
   private zoneStateLookup: ZoneStateLookup | null = null;
   private outputProtocolLookup: OutputProtocolLookup | null = null;
+  private mixedGroupLookup: (() => boolean) | null = null;
 
   constructor(
     private readonly registry: ConnectionRegistry,
@@ -33,11 +34,18 @@ export class LoxoneWsNotifier {
     this.outputProtocolLookup = lookup;
   }
 
+  /** Whether this server allows mixed-protocol grouping — surfaced so the player
+   *  can relax its protocol-match grouping hint. */
+  public setMixedGroupLookup(lookup: (() => boolean) | null): void {
+    this.mixedGroupLookup = lookup;
+  }
+
   private enrichWithGroupContext(state: LoxoneZoneState): LoxoneZoneState {
     const outputProtocol = this.outputProtocolLookup?.(state.playerid) ?? state.outputProtocol;
+    const mixedGroupEnabled = this.mixedGroupLookup?.() ?? state.mixedGroupEnabled;
     const group = this.groupTracker.getGroupByZone(state.playerid);
     if (!group) {
-      return { ...state, syncedzones: [], mastervolume: 0, outputProtocol };
+      return { ...state, syncedzones: [], mastervolume: 0, outputProtocol, mixedGroupEnabled };
     }
     const syncedzones = Array.from(new Set<number>([group.leader, ...group.members]));
     const isLeader = group.leader === state.playerid;
@@ -49,6 +57,7 @@ export class LoxoneWsNotifier {
       syncedzones,
       mastervolume: clamp01to100(leaderVolume),
       outputProtocol,
+      mixedGroupEnabled,
     };
   }
 
