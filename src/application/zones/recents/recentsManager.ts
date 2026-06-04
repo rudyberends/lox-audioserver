@@ -304,11 +304,35 @@ export class RecentsManager {
 
   private normalizeForClient(item: RecentItem): RecentItem {
     const normalizedService = this.normalizeRecentService(item.service, item.audiopath);
-    return {
+    const audiopath = this.normalizeRecentAudiopath(item.audiopath, normalizedService);
+    const name = item.name || item.title || '';
+    // The native client's recently-played schema is a strict discriminated union
+    // (one bad item drops the whole list). Mirror the browse/search item shape it
+    // already accepts: a `tag` (track/album/artist/playlist/show/episode) for
+    // service/library items, `thumbnail`/`id`, and a station shape for radio.
+    const p = (item.audiopath || '').toLowerCase();
+    const isRadio = /^https?:\/\//.test(p) || p.startsWith('tunein:') || /(?:tunein|radio)/.test(p);
+    const base: RecentItem = {
       ...item,
+      name,
       service: normalizedService,
-      audiopath: this.normalizeRecentAudiopath(item.audiopath, normalizedService),
+      audiopath,
+      id: item.id ?? audiopath,
+      thumbnail: item.thumbnail || item.coverurl || '',
     };
+    if (isRadio) {
+      // Playable radio station: type File + station name + the "Playlists" content marker.
+      return { ...base, type: 2, station: item.station || name, contentType: 'Playlists' };
+    }
+    const tag =
+      /(?:^|[:\-])(?:library-)?album:/.test(p) ? 'album'
+      : /(?:^|[:\-])(?:library-)?artist:/.test(p) ? 'artist'
+      : /(?:^|[:\-])(?:library-)?playlist:/.test(p) ? 'playlist'
+      : /(?:^|[:\-])show:/.test(p) ? 'show'
+      : /(?:^|[:\-])episode:/.test(p) ? 'episode'
+      : /(?:^|[:\-])(?:library-)?track:/.test(p) ? 'track'
+      : undefined;
+    return tag ? { ...base, tag } : base;
   }
 
   private normalizeRecentService(service: string, audiopath: string): string {

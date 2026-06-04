@@ -15,9 +15,18 @@ export interface RecentItem {
   service: string;
   serviceType: number;
   title: string;
+  name?: string;
   type: number;
   album?: string;
   artist?: string;
+  // Extra fields the native client's recently-played schema discriminates on.
+  // Added on read (normalizeForClient), mirroring the browse/search item shape
+  // the client already accepts, so recents items pass the strict item union.
+  id?: string;
+  tag?: string;
+  thumbnail?: string;
+  station?: string;
+  contentType?: string;
 }
 
 const RECENTS_DIR = resolveDataDir('recents');
