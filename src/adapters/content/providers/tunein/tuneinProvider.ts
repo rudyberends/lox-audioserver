@@ -385,6 +385,7 @@ export class TuneInProvider {
       name: station.name,
       title: station.name,
       type: 2,
+      tag: 'radio',
       audiopath: station.stream,
       coverurl: station.coverurl ?? DEFAULT_ICON,
       items: 0,
