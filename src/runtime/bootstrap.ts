@@ -271,6 +271,9 @@ export function createRuntime(): Runtime {
   loxoneNotifier.setMixedGroupLookup(
     () => configPort.getConfig().groups?.mixedGroupEnabled === true,
   );
+  // Let recents fall back to the live now-playing state for titles missing on
+  // the queue item (e.g. radio/tunein station names).
+  recentsManager.setZoneStateLookup((zoneId) => zoneManager.getState(zoneId));
   lineInMetadataService.initOnce({ zoneManager, configPort });
   snapcastCore.initOnce({ zoneManager });
   groupManager.initOnce({ zoneManager });

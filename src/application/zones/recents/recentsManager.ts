@@ -47,6 +47,10 @@ export class RecentsManager {
   private notifier: NotifierPort;
   private readonly recordLocks = new Map<number, Promise<void>>();
   private contentPort: ContentPort;
+  // Live zone-state fallback for titles that aren't on the queue item or
+  // resolvable as metadata (notably radio/tunein stations, whose name only
+  // lives in the now-playing state).
+  private zoneStateLookup: ((zoneId: number) => { station?: string; title?: string } | undefined) | null = null;
 
   constructor(notifier: NotifierPort, contentPort: ContentPort) {
     this.notifier = notifier;
@@ -55,6 +59,12 @@ export class RecentsManager {
 
   public setNotifier(notifier: NotifierPort): void {
     this.notifier = notifier;
+  }
+
+  public setZoneStateLookup(
+    lookup: ((zoneId: number) => { station?: string; title?: string } | undefined) | null,
+  ): void {
+    this.zoneStateLookup = lookup;
   }
 
   public decodeBase64Deep(value: string): string {
@@ -183,10 +193,15 @@ export class RecentsManager {
 
     const metaTitle = (meta?.title ?? '').trim();
     const safeTitle = (() => {
-      const candidate = (item.title ?? '').trim();
       if (metaTitle) return metaTitle;
+      const candidate = (item.title ?? '').trim();
       if (candidate) return candidate;
-      return '';
+      // Radio/tunein stations carry their name in `station` (on the queue item)
+      // or only in the now-playing state — never in title/metadata.
+      const station = (item.station ?? '').trim();
+      if (station) return station;
+      const live = this.zoneStateLookup?.(zoneId);
+      return (live?.station ?? '').trim() || (live?.title ?? '').trim() || '';
     })();
     const ownerBase =
       service.service === 'musicassistant'
