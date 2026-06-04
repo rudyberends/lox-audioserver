@@ -18,6 +18,7 @@ import { formatCommand } from '@/adapters/loxone/commands/utils/commandFormatter
 import type { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry';
 import type { ServerHeartbeat } from '@/adapters/loxone/ws/serverHeartbeat';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
+import { resolveZoneOutputProtocol } from '@/application/zones/outputProtocol';
 import type { ConfigPort } from '@/ports/ConfigPort';
 
 interface ServerRuntime {
@@ -173,7 +174,12 @@ export class LoxoneHttpService {
 
     for (const state of this.options.zoneManager.getAllZoneStates()) {
       try {
-        connection.sendUTF(JSON.stringify({ audio_event: [state] }));
+        // Enrich the connect snapshot with the output protocol so idle zones
+        // (which never emit a follow-up state change) still carry it.
+        const outputProtocol = resolveZoneOutputProtocol(
+          this.options.zoneManager.getTechnicalSnapshot(state.playerid),
+        );
+        connection.sendUTF(JSON.stringify({ audio_event: [{ ...state, outputProtocol }] }));
       } catch {
         // connection will be cleaned up via the error/close event
         break;

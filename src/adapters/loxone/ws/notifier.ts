@@ -6,10 +6,12 @@ import type { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry
 import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
 
 type ZoneStateLookup = (zoneId: number) => LoxoneZoneState | undefined;
+type OutputProtocolLookup = (zoneId: number) => string | null;
 
 export class LoxoneWsNotifier {
   private readonly log = createLogger('LoxoneHttp', 'Notifier');
   private zoneStateLookup: ZoneStateLookup | null = null;
+  private outputProtocolLookup: OutputProtocolLookup | null = null;
 
   constructor(
     private readonly registry: ConnectionRegistry,
@@ -25,10 +27,17 @@ export class LoxoneWsNotifier {
     this.zoneStateLookup = lookup;
   }
 
+  /** Read access to each zone's output protocol, surfaced in audio_event as a
+   *  grouping hint for our own player (the native client ignores the field). */
+  public setOutputProtocolLookup(lookup: OutputProtocolLookup | null): void {
+    this.outputProtocolLookup = lookup;
+  }
+
   private enrichWithGroupContext(state: LoxoneZoneState): LoxoneZoneState {
+    const outputProtocol = this.outputProtocolLookup?.(state.playerid) ?? state.outputProtocol;
     const group = this.groupTracker.getGroupByZone(state.playerid);
     if (!group) {
-      return { ...state, syncedzones: [], mastervolume: 0 };
+      return { ...state, syncedzones: [], mastervolume: 0, outputProtocol };
     }
     const syncedzones = Array.from(new Set<number>([group.leader, ...group.members]));
     const isLeader = group.leader === state.playerid;
@@ -39,6 +48,7 @@ export class LoxoneWsNotifier {
       ...state,
       syncedzones,
       mastervolume: clamp01to100(leaderVolume),
+      outputProtocol,
     };
   }
 

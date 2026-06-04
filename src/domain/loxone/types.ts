@@ -41,6 +41,13 @@ export interface LoxoneZoneState {
    * 0 when the zone is not grouped.
    */
   mastervolume?: number;
+  /**
+   * The zone's output protocol (e.g. 'sendspin', 'snapcast', 'googlecast',
+   * 'dlna', 'sonos', 'airplay', 'squeezelite'). A custom field the native Loxone
+   * client ignores; our own player surfaces it as a grouping hint, since grouping
+   * requires matching output protocols (which the native app has no concept of).
+   */
+  outputProtocol?: string;
 }
 
 export interface LoxoneParentMeta {

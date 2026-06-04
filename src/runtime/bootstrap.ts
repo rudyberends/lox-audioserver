@@ -25,6 +25,7 @@ import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import { EngineAdapter } from '@/adapters/engine/EngineAdapter';
 import { AudioStreamEngine } from '@/engine/audioStreamEngine';
 import { createZoneManager, type ZoneManagerFacade } from '@/application/zones/createZoneManager';
+import { resolveZoneOutputProtocol } from '@/application/zones/outputProtocol';
 import type { AudioServerConfig } from '@/domain/config/types';
 import { PlaybackService } from '@/application/playback/PlaybackService';
 import { AirplayInputService } from '@/adapters/inputs/airplay/airplayInputService';
@@ -262,6 +263,11 @@ export function createRuntime(): Runtime {
   });
   zoneManagerRef = zoneManager;
   loxoneNotifier.setZoneStateLookup((zoneId) => zoneManager.getState(zoneId));
+  // Surface each zone's output protocol in audio_event so our player can hint
+  // grouping compatibility (grouping requires matching protocols).
+  loxoneNotifier.setOutputProtocolLookup((zoneId) =>
+    resolveZoneOutputProtocol(zoneManager.getTechnicalSnapshot(zoneId)),
+  );
   lineInMetadataService.initOnce({ zoneManager, configPort });
   snapcastCore.initOnce({ zoneManager });
   groupManager.initOnce({ zoneManager });
