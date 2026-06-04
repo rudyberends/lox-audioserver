@@ -22,6 +22,7 @@ import { YtMusicProvider } from '@/adapters/content/providers/ytmusic/ytmusicPro
 import { YoutubeProvider } from '@/adapters/content/providers/youtube/youtubeProvider';
 import { resolveSpotifyClientId } from '@/adapters/content/providers/spotify/utils';
 import { parseSearchLimits } from '@/adapters/content/utils/searchLimits';
+import { resolveCoverHost } from '@/shared/utils/net';
 
 type ProviderId = string;
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
@@ -875,6 +876,7 @@ export class SpotifyServiceManager {
           label: labelOverride,
           developerToken: bridge.developerToken,
           userToken: bridge.userToken,
+          coverHost: resolveCoverHost(this.configPort.getConfig()?.system?.audioserver?.ip),
         });
         this.providers.set(providerId, provider);
         continue;

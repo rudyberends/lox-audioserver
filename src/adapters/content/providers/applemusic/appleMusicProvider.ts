@@ -15,6 +15,7 @@ import {
   mapRecommendationItem,
 } from './appleMusicParsers';
 import { getShippedDeveloperToken, buildBaseHeaders, scrapeBearerToken } from './appleMusicAuth';
+import { collageKey, collageCachedUrl, ensureCollage } from '@/shared/playlistCollage';
 
 const APPLE_MUSIC_API_BASE = 'https://amp-api.music.apple.com/v1';
 const BEARER_TOKEN_TTL_MS = 30 * 60 * 1000;
@@ -34,6 +35,8 @@ interface AppleMusicProviderOptions {
   storefront?: string;
   developerToken?: string;
   userToken?: string;
+  /** Host clients use to fetch locally-served mosaic covers (the /music route). */
+  coverHost?: string;
 }
 
 /**
@@ -47,6 +50,7 @@ export class AppleMusicProvider {
   private storefront: string;
   private readonly developerToken?: string;
   private readonly userToken?: string;
+  private readonly coverHost: string;
   private bearerToken?: string;
   private bearerTokenFetchedAt = 0;
   private bearerTokenPromise: Promise<string | null> | null = null;
@@ -59,6 +63,7 @@ export class AppleMusicProvider {
     this.storefront = (options.storefront || 'us').toLowerCase();
     this.developerToken = options.developerToken;
     this.userToken = options.userToken;
+    this.coverHost = options.coverHost || '127.0.0.1';
   }
 
   public get accountId(): string {
@@ -585,9 +590,40 @@ export class AppleMusicProvider {
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
     const url = `${APPLE_MUSIC_API_BASE}/me/library/playlists?limit=${limit}&offset=${offset}`;
     const data = await this.fetchJson<any>(url);
-    const items = Array.isArray(data?.data) ? data.data : [];
+    const raw: any[] = Array.isArray(data?.data) ? data.data : [];
+    const items: ContentFolderItem[] = raw.map((entry: any) => mapLibraryPlaylist(this.providerId, entry));
+    // Apple exposes no artwork for many user playlists — the app builds a mosaic
+    // from the tracks, which the API doesn't return. Mirror Music Assistant: tile
+    // the track covers into a server-side mosaic. Generation is lazy + cached, so
+    // we serve a cached mosaic when present and otherwise the first track's cover
+    // (never blank) while the mosaic builds in the background.
+    const coverless = items
+      .map((it, idx) => ({ it, id: raw[idx]?.id }))
+      .filter(({ it, id }) => !it.coverurl && id)
+      .slice(0, 16);
+    await Promise.all(
+      coverless.map(async ({ it, id }) => {
+        const key = collageKey(this.providerId, 'playlist', String(id));
+        const cached = await collageCachedUrl(this.coverHost, key);
+        if (cached) {
+          it.coverurl = cached;
+          it.thumbnail = cached;
+          return;
+        }
+        const tracks = await this.fetchLibraryPlaylistTracks(String(id), 60, 0).catch(() => null);
+        const covers = (tracks?.items ?? [])
+          .map((t) => t.coverurl)
+          .filter((c): c is string => typeof c === 'string' && c.length > 0);
+        if (covers.length) {
+          ensureCollage(key, covers);
+          const first = covers[0];
+          it.coverurl = first;
+          it.thumbnail = first;
+        }
+      }),
+    );
     return {
-      items: items.map((entry: any) => mapLibraryPlaylist(this.providerId, entry)),
+      items,
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }

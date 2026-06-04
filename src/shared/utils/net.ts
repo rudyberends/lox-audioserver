@@ -21,6 +21,19 @@ export function defaultLocalIp(): string {
   return '';
 }
 
+/**
+ * Resolve the host clients should use to fetch locally-served artwork (the
+ * `/music` and `/collage` routes on :7090). Prefers a configured, non-loopback
+ * `audioserver.ip`, then the first non-loopback IPv4, then 127.0.0.1.
+ */
+export function resolveCoverHost(configuredIp?: string): string {
+  const configured = configuredIp?.trim();
+  if (configured && configured !== '0.0.0.0' && !configured.startsWith('127.')) {
+    return configured;
+  }
+  return defaultLocalIp() || configured || '127.0.0.1';
+}
+
 export function resolveMdnsHost(host?: string, preferredIp?: string): string | undefined {
   const preferred = preferredIp?.trim();
   if (preferred && preferred !== '0.0.0.0') {

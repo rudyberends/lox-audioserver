@@ -243,6 +243,9 @@ export function mapPlaylist(providerId: string, playlist: any): ContentFolderIte
 }
 
 export function mapLibraryPlaylist(providerId: string, playlist: any): ContentFolderItem {
+  // Apple often omits artwork on a library playlist. The catalog relationship is
+  // too sparse to help (Music Assistant bypasses it too), so coverless playlists
+  // get a server-side track-cover mosaic in the provider instead.
   const attrs = playlist?.attributes ?? playlist;
   const id = encodeId(playlist?.id ?? attrs?.id ?? '');
   const name = attrs?.name ?? 'Playlist';
