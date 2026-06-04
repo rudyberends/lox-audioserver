@@ -29,6 +29,7 @@ import { resolvePlayRequest } from '@/application/zones/playback/playRequestReso
 import type { ResolvedPlayRequest } from '@/application/zones/playback/types';
 import { isSameAudiopath } from '@/application/zones/playback/targetResolution';
 import { buildQueueItemPlaybackPatch } from '@/application/zones/playback/patchBuilder';
+import { selectQueuePlaybackMetadata } from '@/application/zones/playback/nowPlayingMetadata';
 
 type InputMode = ZoneContext['inputMode'];
 
@@ -520,15 +521,17 @@ export class PlayRequestService {
     const stationForPlayback =
       req.isMusicAssistant && current.station ? current.station : req.stationValue;
     const enrichedMetadata = buildResult.metadata;
+    // Now-playing must describe the item actually being started (`current`), not
+    // the play-request seed (which for a container favourite is the container).
+    const nowPlaying = selectQueuePlaybackMetadata(current, enrichedMetadata, {
+      itemFirst: !req.isYoutube && !req.isYtMusic,
+      fallbackTitle: ctx.name,
+    });
     const session = await this.deps.startQueuePlayback(
       ctx,
       current.audiopath,
       {
-        title: enrichedMetadata?.title?.trim() || current.title || ctx.name,
-        artist: enrichedMetadata?.artist?.trim() || current.artist || '',
-        album: enrichedMetadata?.album?.trim() || current.album || '',
-        coverurl: enrichedMetadata?.coverurl || current.coverurl,
-        duration: typeof enrichedMetadata?.duration === 'number' ? enrichedMetadata.duration : current.duration,
+        ...nowPlaying,
         audiopath: enrichedMetadata?.audiopath,
         trackId: enrichedMetadata?.trackId,
         station: stationForPlayback,
