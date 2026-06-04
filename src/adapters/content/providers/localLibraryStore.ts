@@ -347,6 +347,28 @@ export class LocalLibraryStore {
     return { total: total.count, items: rows };
   }
 
+  public getArtist(storageId: string, name: string): ArtistRow | null {
+    const db = this.requireDb();
+    const row = db
+      .prepare(
+        `
+        SELECT t.storage_id AS storage_id,
+               t.artist AS name,
+               COUNT(*) AS track_count,
+               ac.cover AS cover,
+               ac.rel_path AS rel_path,
+               ac.last_mtime AS last_mtime
+        FROM tracks t
+        LEFT JOIN artist_covers ac
+          ON ac.storage_id = t.storage_id AND ac.name = t.artist
+        WHERE t.storage_id = ? AND t.artist = ?
+        GROUP BY t.storage_id, t.artist
+      `,
+      )
+      .get(storageId, name) as ArtistRow | undefined;
+    return row ?? null;
+  }
+
   public getTracks(
     storageId: string | null,
     offset: number,

@@ -1643,18 +1643,25 @@ export class LocalLibraryProvider {
         coverurl: first ? this.buildCoverUrl(this.normalizeTrack(first)) : '',
       };
     }
-    // Artist container: name + cover (from its first track) for the favourite.
+    // Artist container: name + cover for the favourite. Prefer the artist's own
+    // image (artist.jpg); fall back to the first track's album cover only when
+    // the artist has no dedicated cover.
     if (raw.startsWith('library:artist:')) {
       const payload = decodeArtistKey(raw.slice('library:artist:'.length));
       if (!payload) {
         return null;
       }
-      const first = this.store.getTracksForArtist(payload.storageId, payload.artist, 0, 1).items[0];
+      const artistRow = this.store.getArtist(payload.storageId, payload.artist);
+      let coverurl = artistRow ? this.artistItem(artistRow).coverurl ?? '' : '';
+      if (!coverurl) {
+        const first = this.store.getTracksForArtist(payload.storageId, payload.artist, 0, 1).items[0];
+        coverurl = first ? this.buildCoverUrl(this.normalizeTrack(first)) : '';
+      }
       return {
         title: payload.artist,
         artist: '',
         album: '',
-        coverurl: first ? this.buildCoverUrl(this.normalizeTrack(first)) : '',
+        coverurl,
       };
     }
     const track = this.store.findByAudiopath(audiopath);

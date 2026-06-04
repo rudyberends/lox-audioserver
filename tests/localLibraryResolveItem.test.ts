@@ -51,12 +51,41 @@ test('local library resolveItem fills artist/album container metadata', async ()
       duration: 354,
     });
 
+    // A second artist with album art but NO dedicated artist image.
+    store.insertTrack({
+      storageId: 'local',
+      relPath: 'music/Daft Punk/Discovery/01 - One More Time.mp3',
+      title: 'One More Time',
+      album: 'Discovery',
+      artist: 'Daft Punk',
+      audiopath: 'library:local:track:2',
+      cover: 'folder.jpg',
+      mtime: undefined,
+      size: undefined,
+      duration: 320,
+    });
+
+    // Dedicated artist image (artist.jpg) sitting in the artist directory.
+    store.upsertArtistCover({
+      storageId: 'local',
+      name: 'Queen',
+      cover: 'artist.jpg',
+      relPath: 'music/Queen',
+    });
+
     const provider = new LocalLibraryProvider(makeNotifierFake(), configPort);
     (provider as unknown as { store: LocalLibraryStore }).store = store;
 
     const artistMeta = provider.resolveItem(`library:artist:${artistKey('local', 'Queen')}`);
     assert.equal(artistMeta?.title, 'Queen');
-    assert.ok(artistMeta?.coverurl, 'expected an artist cover from the first track');
+    // The artist's own image must win over the album cover of its first track.
+    assert.ok(artistMeta?.coverurl?.includes('artist.jpg'), `expected the artist cover, got ${artistMeta?.coverurl}`);
+    assert.ok(!artistMeta?.coverurl?.includes('A%20Night'), 'artist cover must not be the album cover');
+
+    // No artist.jpg for Daft Punk → fall back to the first track's album cover.
+    const fallbackArtist = provider.resolveItem(`library:artist:${artistKey('local', 'Daft Punk')}`);
+    assert.equal(fallbackArtist?.title, 'Daft Punk');
+    assert.ok(fallbackArtist?.coverurl?.includes('folder.jpg'), `expected the album-cover fallback, got ${fallbackArtist?.coverurl}`);
 
     const albumMeta = provider.resolveItem(`library:album:${albumKey('local', 'Queen', 'A Night at the Opera')}`);
     assert.equal(albumMeta?.title, 'A Night at the Opera');
