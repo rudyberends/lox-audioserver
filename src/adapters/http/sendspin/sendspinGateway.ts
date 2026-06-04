@@ -2,12 +2,27 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { createLogger } from '@/shared/logging/logger';
-import { ConnectionReason, sendspinCore } from '@lox-audioserver/node-sendspin';
+import { ConnectionReason, GoodbyeReason, sendspinCore } from '@lox-audioserver/node-sendspin';
 import type { BrowserZoneRegistry } from '@/application/zones/browserZoneRegistry';
 
 /** Sendspin clientIds the player webapp uses are prefixed so we can recognise a
  *  browser tab (vs. a real receiver / Cast output) and give it its own zone. */
 const BROWSER_CLIENT_PREFIX = 'browser-';
+
+/** Grace period before a disconnected browser zone is torn down. A reload or
+ *  app restart that reconnects with the same sticky serial within this window
+ *  re-attaches to the *same* zoneId — so it doesn't churn through ids (and
+ *  leave stale "Browser" zones behind) on every restart. Mirrors the reference
+ *  server's CLIENT_CLEANUP_DELAY (30s). */
+const BROWSER_ZONE_GRACE_MS = 30000;
+
+/** Goodbye reasons that mean the client left on purpose — tear its zone down
+ *  immediately instead of holding the grace window. Matches the reference
+ *  server's IMMEDIATE_CLEANUP_REASONS. */
+const IMMEDIATE_TEARDOWN_REASONS = new Set<GoodbyeReason>([
+  GoodbyeReason.USER_REQUEST,
+  GoodbyeReason.SHUTDOWN,
+]);
 
 /**
  * WebSocket gateway for the Sendspin protocol.
@@ -22,6 +37,8 @@ export class SendspinGateway {
   private readonly knownClients = new Set<string>();
   // serial(clientId) -> zoneId for the browser zones we spun up from sessions.
   private readonly browserZones = new Map<string, number>();
+  // serial -> epoch ms after which a disconnected browser zone may be reaped.
+  private readonly teardownDeadlines = new Map<string, number>();
   // serials currently mid-(un)register, to avoid double work across polls.
   private readonly pendingBrowser = new Set<string>();
   private pollTimer: NodeJS.Timeout | null = null;
@@ -97,6 +114,10 @@ export class SendspinGateway {
     if (!registry) return;
 
     for (const [serial, name] of active) {
+      // Client is back (or still here) — cancel any pending teardown and drop a
+      // stale goodbye from a prior session so it can't trip an early teardown.
+      this.teardownDeadlines.delete(serial);
+      sendspinCore.takeGoodbyeReason(serial);
       if (this.browserZones.has(serial) || this.pendingBrowser.has(serial)) continue;
       this.pendingBrowser.add(serial);
       registry
@@ -113,8 +134,24 @@ export class SendspinGateway {
         .finally(() => this.pendingBrowser.delete(serial));
     }
 
+    const now = Date.now();
     for (const [serial, zoneId] of this.browserZones) {
       if (active.has(serial) || this.pendingBrowser.has(serial)) continue;
+      const deadline = this.teardownDeadlines.get(serial);
+      if (deadline === undefined) {
+        // First poll that sees this client gone. An intentional leave
+        // (user_request/shutdown) is reaped now; anything else (dropped socket,
+        // restart) gets a grace window so a quick reconnect reuses the zone.
+        const reason = sendspinCore.takeGoodbyeReason(serial);
+        if (reason === null || !IMMEDIATE_TEARDOWN_REASONS.has(reason)) {
+          this.teardownDeadlines.set(serial, now + BROWSER_ZONE_GRACE_MS);
+          continue;
+        }
+      } else if (now < deadline) {
+        continue;
+      } else {
+        this.teardownDeadlines.delete(serial);
+      }
       this.pendingBrowser.add(serial);
       this.browserZones.delete(serial);
       Promise.resolve(registry.unregister(zoneId))
