@@ -1628,6 +1628,35 @@ export class LocalLibraryProvider {
   }
 
   public resolveItem(audiopath: string): ContentItemMetadata | null {
+    const raw = String(audiopath || '').trim();
+    // Album container: name + album-artist + cover, taken from its first track.
+    if (raw.startsWith('library:album:')) {
+      const payload = decodeAlbumKey(raw.slice('library:album:'.length));
+      if (!payload) {
+        return null;
+      }
+      const first = this.store.getTracksForAlbum(payload.storageId, payload.artist, payload.album, 0, 1).items[0];
+      return {
+        title: payload.album,
+        artist: payload.artist,
+        album: payload.album,
+        coverurl: first ? this.buildCoverUrl(this.normalizeTrack(first)) : '',
+      };
+    }
+    // Artist container: name + cover (from its first track) for the favourite.
+    if (raw.startsWith('library:artist:')) {
+      const payload = decodeArtistKey(raw.slice('library:artist:'.length));
+      if (!payload) {
+        return null;
+      }
+      const first = this.store.getTracksForArtist(payload.storageId, payload.artist, 0, 1).items[0];
+      return {
+        title: payload.artist,
+        artist: '',
+        album: '',
+        coverurl: first ? this.buildCoverUrl(this.normalizeTrack(first)) : '',
+      };
+    }
     const track = this.store.findByAudiopath(audiopath);
     if (!track) {
       return null;

@@ -266,6 +266,12 @@ function detectTypeFromAudiopath(audiopath: string): string {
     if (lower.includes(':playlist:')) {
       return 'playlist';
     }
+    if (lower.includes(':album:')) {
+      return 'library_album';
+    }
+    if (lower.includes(':artist:')) {
+      return 'library_artist';
+    }
     return 'library_track';
   }
   if (lower.startsWith('spotify:')) {
@@ -356,6 +362,8 @@ function detectService(
 const KNOWN_FAVORITE_TYPES = new Set([
   'library_track',
   'library_folder',
+  'library_album',
+  'library_artist',
   'playlist',
   'linein',
   'tunein',
@@ -372,24 +380,26 @@ const KNOWN_FAVORITE_TYPES = new Set([
   'spotify_episode',
 ]);
 
-// Specific Spotify/Apple item kinds the audiopath can assert authoritatively.
-// `spotify_track` is intentionally excluded: it is the kind-less fallback, so a
-// path without a recognised kind must never downgrade a good stored type.
-const SPECIFIC_SPOTIFY_TYPES = new Set([
+// Item kinds the audiopath asserts authoritatively (everything except the
+// kind-less `*_track` fallbacks). Used to heal stored mislabels on read without
+// ever downgrading a good type to the track fallback.
+const AUTHORITATIVE_ITEM_TYPES = new Set([
   'spotify_playlist',
   'spotify_collection',
   'spotify_album',
   'spotify_artist',
   'spotify_show',
   'spotify_episode',
+  'library_album',
+  'library_artist',
 ]);
 
 function resolveFavoriteType(storedType: unknown, audiopath: string): string {
   const detected = detectTypeFromAudiopath(audiopath);
-  // The audiopath is authoritative for a Spotify/Apple item's kind: heal stale
-  // mislabels (e.g. an Apple `library-artist` saved as spotify_track before the
-  // kind was recognised) instead of trusting the stored type.
-  if (SPECIFIC_SPOTIFY_TYPES.has(detected)) {
+  // The audiopath is authoritative for an item's kind: heal stale mislabels
+  // (e.g. an Apple `library-artist` saved as spotify_track, or a local
+  // `library:artist:` saved as library_track) instead of trusting the stored type.
+  if (AUTHORITATIVE_ITEM_TYPES.has(detected)) {
     return detected;
   }
   if (typeof storedType === 'string' && KNOWN_FAVORITE_TYPES.has(storedType)) {

@@ -238,6 +238,67 @@ test('favorites manager heals a stale spotify_track type for an apple-music arti
   });
 });
 
+test('favorites manager types local library artist/album containers', async () => {
+  await withTempCwd(async () => {
+    const favoritesManager = createFavoritesManager({
+      notifier: { notifyRoomFavoritesChanged: () => {} } as any,
+      contentPort: { resolveMetadata: async () => null } as any,
+    });
+    favoritesManager.initOnce({ zoneManager: { getState: () => undefined } as any });
+
+    const artist = await favoritesManager.add(
+      1,
+      'Queen',
+      'library:artist:eyJzdG9yYWdlSWQiOiJsb2NhbCIsImFydGlzdCI6IlF1ZWVuIn0',
+    );
+    assert.equal(artist.type, 'library_artist');
+
+    const album = await favoritesManager.add(1, 'Some Album', 'library:album:abc');
+    assert.equal(album.type, 'library_album');
+  });
+});
+
+test('favorites manager heals a stale library_track type for a local artist', async () => {
+  await withTempCwd(async () => {
+    await fs.mkdir(path.join(process.cwd(), 'data', 'favorites'), { recursive: true });
+    await fs.writeFile(
+      path.join(process.cwd(), 'data', 'favorites', '8.json'),
+      JSON.stringify({
+        id: 8,
+        type: 4,
+        start: 0,
+        totalitems: 1,
+        items: [
+          {
+            id: 8,
+            slot: 7,
+            plus: true,
+            name: 'Queen',
+            title: 'Queen',
+            audiopath: 'library:artist:eyJzdG9yYWdlSWQiOiJsb2NhbCIsImFydGlzdCI6IlF1ZWVuIn0',
+            type: 'library_track',
+            coverurl: '',
+            artist: '',
+            album: '',
+            service: 'library',
+            serviceType: 2,
+            owner: '',
+          },
+        ],
+      }),
+    );
+
+    const favoritesManager = createFavoritesManager({
+      notifier: { notifyRoomFavoritesChanged: () => {} } as any,
+      contentPort: { resolveMetadata: async () => null } as any,
+    });
+    favoritesManager.initOnce({ zoneManager: { getState: () => undefined } as any });
+
+    const result = await favoritesManager.get(8);
+    assert.equal(result.items[0]?.type, 'library_artist');
+  });
+});
+
 test('favorites manager stores stream favorites as custom_stream', async () => {
   await withTempCwd(async () => {
     const favoritesManager = createFavoritesManager({
