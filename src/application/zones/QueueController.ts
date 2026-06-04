@@ -348,6 +348,59 @@ export class QueueController {
     }
   }
 
+  /**
+   * Flattens container items (e.g. the albums returned when browsing a library
+   * artist) down to their tracks by browsing each one level deep, so an
+   * artist/album favourite plays through like a playlist. Items that are already
+   * tracks pass through untouched. Bounded to avoid unbounded fan-out, and falls
+   * back to the original items if nothing flattens (preserves prior behaviour).
+   */
+  private async flattenContainersToTracks(
+    items: ContentFolderItem[],
+    providerId: string,
+    user: string,
+    maxItems?: number,
+  ): Promise<ContentFolderItem[]> {
+    const cap = maxItems && maxItems > 0 ? maxItems : 500;
+    const tracks: ContentFolderItem[] = [];
+    let expandedAny = false;
+    for (const item of items) {
+      if (tracks.length >= cap) {
+        break;
+      }
+      const audiopath = item.audiopath ?? '';
+      if (isPlayableTrackAudiopath(audiopath)) {
+        tracks.push(item);
+        continue;
+      }
+      const subFolderId = stripProviderPrefix(audiopath);
+      if (!subFolderId) {
+        continue;
+      }
+      try {
+        const sub = await this.contentPort.getServiceFolder(providerId, user, subFolderId, 0, 200);
+        for (const child of sub?.items ?? []) {
+          if (tracks.length >= cap) {
+            break;
+          }
+          if (isPlayableTrackAudiopath(child.audiopath ?? '')) {
+            tracks.push(child);
+            expandedAny = true;
+          }
+        }
+      } catch (error) {
+        this.log.debug('container flatten sub-browse failed', {
+          providerId,
+          subFolderId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    // If nothing was expanded (all items were already tracks, or no container
+    // yielded tracks), keep the original list so behaviour is never worse.
+    return expandedAny ? tracks : items;
+  }
+
   public async buildQueueForUri(
     uri: string,
     zoneName: string,
@@ -515,7 +568,11 @@ export class QueueController {
         }
       }
       if (allItems.length) {
-        const trimmed = maxItems ? allItems.slice(0, maxItems) : allItems;
+        // Browsing a library artist returns albums, not tracks; flatten any
+        // container items down to their tracks so the favourite plays through
+        // like a playlist (the stream service only accepts track audiopaths).
+        const playable = await this.flattenContainersToTracks(allItems, providerId, user, maxItems);
+        const trimmed = maxItems ? playable.slice(0, maxItems) : playable;
         return mapFolderItemsToQueue(trimmed, zoneName, 5, user, station ?? rawClean, defaultSpotifyUserId);
       }
     }
@@ -1108,4 +1165,25 @@ function sanitizeAudiopathForOutput(audiopath: string): string {
     return `spotify:${audiopath.replace(/^spotify@[^:]+:/i, '')}`;
   }
   return audiopath;
+}
+
+/**
+ * True when the audiopath points at a directly playable item (a track) rather
+ * than a container (album/artist/playlist) that must first be browsed for its
+ * tracks. Matches both the plain and Apple `library-` kind forms.
+ */
+function isPlayableTrackAudiopath(audiopath: string | undefined): boolean {
+  if (!audiopath) {
+    return false;
+  }
+  return /:(library-)?track:/i.test(audiopath);
+}
+
+/** Strips a `<provider>@<account>:` or `<provider>:` prefix down to the `kind:id` folder id. */
+function stripProviderPrefix(audiopath: string): string {
+  return audiopath
+    .replace(/^spotify@[^:]+:/i, '')
+    .replace(/^applemusic@[^:]+:/i, '')
+    .replace(/^spotify:/i, '')
+    .replace(/^applemusic:/i, '');
 }
