@@ -233,7 +233,9 @@ export class DeezerProvider {
 
     await Promise.all(tasks);
 
-    return { result, providerId: this.providerId, user: 'deezer' };
+    // See AppleMusicProvider.search: the search `user` must equal the account
+    // segment in the audiopaths so the native client can browse searched albums.
+    return { result, providerId: this.providerId, user: this.providerId.split('@')[1] || this.providerId };
   }
 
   public dispose(): void {

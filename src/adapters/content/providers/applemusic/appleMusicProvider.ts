@@ -288,7 +288,12 @@ export class AppleMusicProvider {
       const max = limits.playlist ?? limits.playlists ?? limit;
       result.playlists = data.results.playlists.data.slice(0, max).map((p: unknown) => mapPlaylist(this.providerId, p));
     }
-    return { result, providerId: this.providerId, user: 'applemusic' };
+    // The search `user` must match the account segment in the items' audiopaths
+    // (`spotify@<account>:…`) — the native client browses a searched album via
+    // this user, and a non-account label like 'applemusic' can't be resolved,
+    // leaving the album stuck loading. Mirror the real-Spotify behaviour where
+    // the search user equals the account id.
+    return { result, providerId: this.providerId, user: this.providerId.split('@')[1] || this.providerId };
   }
 
   public dispose(): void {
