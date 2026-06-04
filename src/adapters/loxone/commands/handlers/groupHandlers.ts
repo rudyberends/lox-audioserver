@@ -6,6 +6,7 @@ import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
 const GROUP_ID_LEADER_RE = /^grp-(\d+)-/;
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
+import { normalizeOutputProtocol } from '@/application/zones/outputProtocol';
 import { createLogger } from '@/shared/logging/logger';
 
 function clampVolume(value: unknown): number {
@@ -44,7 +45,10 @@ function resolveOutputProtocol(zoneManager: ZoneManagerFacade, zoneId: number): 
     return 'unknown';
   }
   const fallback = snapshot.transports.find((type) => type !== 'spotify-input') ?? null;
-  return snapshot.activeOutput ?? fallback ?? 'unknown';
+  // Normalize to the protocol family (sendspin-cast/-dlna/-sonos → sendspin) so
+  // the grouping match agrees with what the player shows; otherwise a Cast/DLNA
+  // member is wrongly dropped from a sendspin group.
+  return normalizeOutputProtocol(snapshot.activeOutput ?? fallback) ?? 'unknown';
 }
 
 async function audioCfgDynamicGroup(
