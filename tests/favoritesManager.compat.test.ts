@@ -166,6 +166,78 @@ test('favorites manager omits ownerId for non-spotify-playlist favorites', async
   });
 });
 
+test('favorites manager detects apple-music library kind prefixes', async () => {
+  await withTempCwd(async () => {
+    const favoritesManager = createFavoritesManager({
+      notifier: { notifyRoomFavoritesChanged: () => {} } as any,
+      contentPort: { resolveMetadata: async () => null } as any,
+    });
+    favoritesManager.initOnce({ zoneManager: { getState: () => undefined } as any });
+
+    const artist = await favoritesManager.add(
+      1,
+      'Adele',
+      'spotify@bridge-applemusic-djq5zp:library-artist:b64_ci43Sjd3Y29i',
+    );
+    assert.equal(artist.type, 'spotify_artist');
+
+    const album = await favoritesManager.add(
+      1,
+      'Album',
+      'spotify@bridge-applemusic-djq5zp:library-album:b64_YWxidW0=',
+    );
+    assert.equal(album.type, 'spotify_album');
+
+    const playlist = await favoritesManager.add(
+      1,
+      'Playlist',
+      'spotify@bridge-applemusic-djq5zp:library-playlist:b64_cGxheQ==',
+    );
+    assert.equal(playlist.type, 'spotify_playlist');
+  });
+});
+
+test('favorites manager heals a stale spotify_track type for an apple-music artist', async () => {
+  await withTempCwd(async () => {
+    await fs.mkdir(path.join(process.cwd(), 'data', 'favorites'), { recursive: true });
+    await fs.writeFile(
+      path.join(process.cwd(), 'data', 'favorites', '5.json'),
+      JSON.stringify({
+        id: 5,
+        type: 4,
+        start: 0,
+        totalitems: 1,
+        items: [
+          {
+            id: 5,
+            slot: 5,
+            plus: true,
+            name: 'Adele',
+            title: 'Adele',
+            audiopath: 'spotify:library-artist:b64_ci43Sjd3Y29i',
+            type: 'spotify_track',
+            coverurl: 'https://example.com/adele.jpg',
+            artist: 'Adele',
+            album: '',
+            service: 'spotify',
+            serviceType: 3,
+            owner: 'bridge-applemusic-djq5zp',
+          },
+        ],
+      }),
+    );
+
+    const favoritesManager = createFavoritesManager({
+      notifier: { notifyRoomFavoritesChanged: () => {} } as any,
+      contentPort: { resolveMetadata: async () => null } as any,
+    });
+    favoritesManager.initOnce({ zoneManager: { getState: () => undefined } as any });
+
+    const result = await favoritesManager.get(5);
+    assert.equal(result.items[0]?.type, 'spotify_artist');
+  });
+});
+
 test('favorites manager stores stream favorites as custom_stream', async () => {
   await withTempCwd(async () => {
     const favoritesManager = createFavoritesManager({

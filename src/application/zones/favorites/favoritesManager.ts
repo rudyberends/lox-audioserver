@@ -269,22 +269,24 @@ function detectTypeFromAudiopath(audiopath: string): string {
     return 'library_track';
   }
   if (lower.startsWith('spotify:')) {
+    // Apple Music (bridge) library items carry a `library-` kind prefix
+    // (e.g. `spotify:library-artist:…`); match both the plain and library forms.
     if (lower.includes(':user:collection')) {
       return 'spotify_collection';
     }
-    if (lower.includes(':playlist:')) {
+    if (/:(library-)?playlist:/.test(lower)) {
       return 'spotify_playlist';
     }
-    if (lower.includes(':album:')) {
+    if (/:(library-)?album:/.test(lower)) {
       return 'spotify_album';
     }
-    if (lower.includes(':artist:')) {
+    if (/:(library-)?artist:/.test(lower)) {
       return 'spotify_artist';
     }
-    if (lower.includes(':show:')) {
+    if (/:(library-)?show:/.test(lower)) {
       return 'spotify_show';
     }
-    if (lower.includes(':episode:')) {
+    if (/:(library-)?episode:/.test(lower)) {
       return 'spotify_episode';
     }
     return 'spotify_track';
@@ -370,9 +372,28 @@ const KNOWN_FAVORITE_TYPES = new Set([
   'spotify_episode',
 ]);
 
+// Specific Spotify/Apple item kinds the audiopath can assert authoritatively.
+// `spotify_track` is intentionally excluded: it is the kind-less fallback, so a
+// path without a recognised kind must never downgrade a good stored type.
+const SPECIFIC_SPOTIFY_TYPES = new Set([
+  'spotify_playlist',
+  'spotify_collection',
+  'spotify_album',
+  'spotify_artist',
+  'spotify_show',
+  'spotify_episode',
+]);
+
 function resolveFavoriteType(storedType: unknown, audiopath: string): string {
+  const detected = detectTypeFromAudiopath(audiopath);
+  // The audiopath is authoritative for a Spotify/Apple item's kind: heal stale
+  // mislabels (e.g. an Apple `library-artist` saved as spotify_track before the
+  // kind was recognised) instead of trusting the stored type.
+  if (SPECIFIC_SPOTIFY_TYPES.has(detected)) {
+    return detected;
+  }
   if (typeof storedType === 'string' && KNOWN_FAVORITE_TYPES.has(storedType)) {
     return storedType;
   }
-  return detectTypeFromAudiopath(audiopath);
+  return detected;
 }
