@@ -7,7 +7,7 @@
  */
 
 import type { ContentFolderItem } from '@/ports/ContentTypes';
-import { resizeCoverUrl, COVER_ART_BROWSE_SIZE } from '@/shared/coverArt';
+import { resizeCoverUrl, COVER_ART_NOW_PLAYING_SIZE } from '@/shared/coverArt';
 
 export enum FileType {
   Folder = 1,
@@ -47,10 +47,10 @@ export function decodeId(raw: string): string {
 }
 
 /** Resolve a usable cover URL from an Apple attributes object (artwork template, url100, editorial). */
-export function extractArtwork(attrs: any): string {
+export function extractArtwork(attrs: any, size: number = COVER_ART_NOW_PLAYING_SIZE): string {
   const fromTemplate = (tmpl?: string): string | null => {
     if (typeof tmpl === 'string' && tmpl.includes('{w}') && tmpl.includes('{h}')) {
-      return tmpl.replace('{w}', '256').replace('{h}', '256');
+      return tmpl.replace('{w}', String(size)).replace('{h}', String(size));
     }
     if (typeof tmpl === 'string' && tmpl.startsWith('http')) {
       return tmpl;
@@ -64,7 +64,7 @@ export function extractArtwork(attrs: any): string {
   }
 
   if (typeof attrs?.artworkUrl100 === 'string') {
-    return resizeCoverUrl(attrs.artworkUrl100, COVER_ART_BROWSE_SIZE);
+    return resizeCoverUrl(attrs.artworkUrl100, size);
   }
 
   const editorial = attrs?.editorialArtwork;
