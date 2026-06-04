@@ -260,17 +260,15 @@ export function createFavoritesManager(deps: FavoritesManagerDeps): FavoritesMan
 function detectTypeFromAudiopath(audiopath: string): string {
   const lower = (audiopath || '').toLowerCase();
   if (lower.startsWith('library:') || lower.startsWith('local:')) {
-    if (lower.includes(':folder:')) {
-      return 'library_folder';
-    }
     if (lower.includes(':playlist:')) {
       return 'playlist';
     }
-    if (lower.includes(':album:')) {
-      return 'library_album';
-    }
-    if (lower.includes(':artist:')) {
-      return 'library_artist';
+    // The native client only knows library_track / library_folder / library_playlist
+    // for local items — it has no library_artist/library_album type and silently
+    // drops favorites with an unknown type. Artists and albums are browsable
+    // containers, so map them (and explicit folders) to library_folder.
+    if (lower.includes(':folder:') || lower.includes(':album:') || lower.includes(':artist:')) {
+      return 'library_folder';
     }
     return 'library_track';
   }
@@ -362,8 +360,6 @@ function detectService(
 const KNOWN_FAVORITE_TYPES = new Set([
   'library_track',
   'library_folder',
-  'library_album',
-  'library_artist',
   'playlist',
   'linein',
   'tunein',
@@ -390,8 +386,6 @@ const AUTHORITATIVE_ITEM_TYPES = new Set([
   'spotify_artist',
   'spotify_show',
   'spotify_episode',
-  'library_album',
-  'library_artist',
 ]);
 
 function resolveFavoriteType(storedType: unknown, audiopath: string): string {
