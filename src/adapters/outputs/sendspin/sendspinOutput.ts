@@ -672,8 +672,16 @@ export class SendspinOutput implements ZoneOutput {
         });
         return;
       }
-      const chosenFormat = this.normalizeFormat(options.formatOverride ?? this.negotiatedFormat);
+      let chosenFormat = this.normalizeFormat(options.formatOverride ?? this.negotiatedFormat);
       this.negotiatedFormat = chosenFormat;
+      // A group leader streams PCM so every member can decode the shared audio
+      // regardless of its own preferred codec (PCM is the universal sendspin
+      // baseline; mirroring an OPUS/FLAC stream to a PCM-only member breaks it).
+      // The client's real preference stays in negotiatedFormat and is restored
+      // on the next stream start once the group dissolves.
+      if (this.isGroupLeaderWithMembers() && chosenFormat.codec !== AudioCodec.PCM) {
+        chosenFormat = { ...chosenFormat, codec: AudioCodec.PCM };
+      }
       const prebufferBytes = this.computePrebufferBytes(chosenFormat);
       this.log.debug('Sendspin stream prebuffer config', {
         zoneId: this.zoneId,
@@ -1347,6 +1355,23 @@ export class SendspinOutput implements ZoneOutput {
     }
   }
 
+  /** Switch the leader's live stream to PCM when it now drives a group, before
+   *  members are fed. No-op if not the playing owner, not a group leader, or
+   *  already PCM. Called by the group controller on membership changes so a
+   *  solo OPUS/FLAC stream becomes decodable for every (incl. PCM-only) member. */
+  public async ensureGroupCodec(): Promise<void> {
+    if (!this.isOwner() || !this.clientConnected || this.playbackState !== 'playing') {
+      return;
+    }
+    if (!this.isGroupLeaderWithMembers()) {
+      return;
+    }
+    if (this.activeOutputFormat?.codec === AudioCodec.PCM) {
+      return;
+    }
+    await this.startStream({ preserveAnchor: false });
+  }
+
   public async reanchorForGroup(): Promise<void> {
     // Hard restart stream with fresh anchor so grouped members can align to leader.
     this.teardown({ preserveAnchor: false });
@@ -1756,6 +1781,13 @@ export class SendspinOutput implements ZoneOutput {
 
   private activeClientId(): string {
     return this.resolvedClientId || this.clientId;
+  }
+
+  /** True when this zone leads a group that has at least one other member.
+   *  (`members` always includes the leader, so length > 1 means real members.) */
+  private isGroupLeaderWithMembers(): boolean {
+    const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
+    return !!group && group.leader === this.zoneId && group.members.length > 1;
   }
 
   private getGroupInfo(): { groupId: string; groupName: string } {

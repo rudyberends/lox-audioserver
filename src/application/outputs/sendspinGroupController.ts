@@ -15,6 +15,9 @@ export type SendspinGroupParticipant = {
   getBufferedFrames?(): Array<{ data: Buffer; timestampUs: number }>;
   getFutureFrames?(minFutureMs?: number): Array<{ data: Buffer; timestampUs: number }>;
   ensureClientReady?(): Promise<void> | void;
+  /** Leader hook: switch the shared stream to PCM now that it drives a group,
+   *  so members on any codec can decode it. No-op if already PCM. */
+  ensureGroupCodec?(): Promise<void> | void;
 };
 
 type PlayerStreamFormat = PlayerFormat;
@@ -209,6 +212,10 @@ class SendspinGroupController {
     if (!leaderParticipant || !leaderParticipant.isClientConnected()) {
       return;
     }
+
+    // Make the leader stream PCM before feeding members, so a member on any
+    // codec can decode the shared audio. No-op if the leader is already PCM.
+    await leaderParticipant.ensureGroupCodec?.();
 
     const snapshotTargets: SendspinGroupParticipant[] = [];
     for (const memberId of members) {
