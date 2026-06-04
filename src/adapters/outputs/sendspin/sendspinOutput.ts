@@ -224,7 +224,14 @@ export class SendspinOutput implements ZoneOutput {
       },
       onPlayerState: (_session: SendspinSession, update: SendspinPlayerStateUpdate) => this.handleClientState(update),
       onGroupCommand: (_session: SendspinSession, command: SendspinGroupCommand) => this.handleGroupCommand(command),
-      onDisconnected: () => {
+      onDisconnected: (sendspinSession: SendspinSession) => {
+        // A stale/superseded session can close long after a newer one took over
+        // (e.g. an unclean drop the heartbeat only reaps ~30-60s later). React
+        // only to the session we currently consider active, otherwise that late
+        // close would tear down the live client's state.
+        if (this.activeSession !== sendspinSession) {
+          return;
+        }
         this.clientConnected = false;
         this.activeSession = null;
         this.initialClientStateSkipped = false;
