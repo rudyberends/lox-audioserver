@@ -246,15 +246,17 @@ test('favorites manager types local library artist/album containers', async () =
     });
     favoritesManager.initOnce({ zoneManager: { getState: () => undefined } as any });
 
+    // The native client has no library_artist/library_album type, so local
+    // artist/album containers are typed as library_folder.
     const artist = await favoritesManager.add(
       1,
       'Queen',
       'library:artist:eyJzdG9yYWdlSWQiOiJsb2NhbCIsImFydGlzdCI6IlF1ZWVuIn0',
     );
-    assert.equal(artist.type, 'library_artist');
+    assert.equal(artist.type, 'library_folder');
 
     const album = await favoritesManager.add(1, 'Some Album', 'library:album:abc');
-    assert.equal(album.type, 'library_album');
+    assert.equal(album.type, 'library_folder');
   });
 });
 
@@ -295,7 +297,7 @@ test('favorites manager heals a stale library_track type for a local artist', as
     favoritesManager.initOnce({ zoneManager: { getState: () => undefined } as any });
 
     const result = await favoritesManager.get(8);
-    assert.equal(result.items[0]?.type, 'library_artist');
+    assert.equal(result.items[0]?.type, 'library_folder');
   });
 });
 

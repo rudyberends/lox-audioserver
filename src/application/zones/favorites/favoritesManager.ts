@@ -386,6 +386,9 @@ const AUTHORITATIVE_ITEM_TYPES = new Set([
   'spotify_artist',
   'spotify_show',
   'spotify_episode',
+  // Local artist/album containers detect as library_folder; heal a stale
+  // library_track favorite (saved before the container kinds were recognised).
+  'library_folder',
 ]);
 
 function resolveFavoriteType(storedType: unknown, audiopath: string): string {
