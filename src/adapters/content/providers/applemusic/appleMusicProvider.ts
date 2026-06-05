@@ -702,11 +702,15 @@ export class AppleMusicProvider {
     allowedTypes?: Set<string>,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
     const url = new URL(`${APPLE_MUSIC_API_BASE}/me/recommendations`);
-    url.searchParams.set('limit', String(limit));
-    url.searchParams.set('offset', String(offset));
+    // `limit`/`offset` on /me/recommendations page the recommendation GROUPS,
+    // not the items inside them — and Apple returns an empty payload when the
+    // limit exceeds its (~30) maximum. So fetch the groups with a safe fixed
+    // limit, flatten + filter their contents, then page the flattened items
+    // client-side. (Previously the caller's limit≥50 hit the cap → no content.)
+    url.searchParams.set('limit', '30');
     const data = await this.fetchJson<any>(url.toString());
     const groups = Array.isArray(data?.data) ? data.data : [];
-    const items: ContentFolderItem[] = [];
+    const all: ContentFolderItem[] = [];
     for (const group of groups) {
       const contents = group?.relationships?.contents?.data;
       if (!Array.isArray(contents)) {
@@ -719,13 +723,15 @@ export class AppleMusicProvider {
         }
         const mapped = mapRecommendationItem(this.providerId, entry);
         if (mapped) {
-          items.push(mapped);
+          all.push(mapped);
         }
       }
     }
+    const start = Math.max(0, offset);
+    const items = limit > 0 ? all.slice(start, start + limit) : all.slice(start);
     return {
       items,
-      total: items.length,
+      total: all.length,
     };
   }
 
