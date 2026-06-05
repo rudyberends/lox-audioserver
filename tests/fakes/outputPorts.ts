@@ -157,6 +157,7 @@ const noopSendspinConnector: OutputPorts['sendspinConnector'] = {
   stopAdvertising: () => {},
   markInboundConnected: () => {},
   markInboundDisconnected: () => {},
+  onClientResolved: () => () => {},
 } as any;
 
 const noopZoneManager: OutputPorts['zoneManager'] = {

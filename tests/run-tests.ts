@@ -22,6 +22,7 @@ import './adminApiJsonBody.test';
 import './lineInAdminRoutes.test';
 import './audioServersAndBearer.test';
 import './outputFactory.airplay.test';
+import './outputFactory.sendspin.test';
 import './airplayPcmStream.test';
 import './airplayStreamSession.test';
 import './airplaySenderDiscovery.test';

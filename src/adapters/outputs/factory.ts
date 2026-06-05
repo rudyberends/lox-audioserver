@@ -399,10 +399,38 @@ function createSendspinOutput(
   zone: ZoneConfig,
   ports: OutputPorts,
 ): ZoneOutput | null {
-  const rawClientId = (config as Record<string, unknown>).clientId;
-  const rawEndpointUrl = (config as Record<string, unknown>).endpointUrl;
-  const rawLatency = (config as Record<string, unknown>).latencyMs;
-  const clientId = typeof rawClientId === 'string' ? rawClientId.trim() : '';
+  const raw = config as Record<string, unknown>;
+  // Accept either the new `clientIds` (array OR comma-separated string) or the
+  // legacy single `clientId`. Mirrors the Snapcast parsing pattern so a 2.1
+  // setup (stereo + sub) can be expressed as one zone with two clients.
+  const rawClientIds = raw.clientIds;
+  let clientIds: string[] = [];
+  if (Array.isArray(rawClientIds)) {
+    clientIds = rawClientIds
+      .filter((c): c is string => typeof c === 'string' && c.trim() !== '')
+      .map((c) => c.trim());
+  } else if (typeof rawClientIds === 'string' && rawClientIds.trim() !== '') {
+    clientIds = rawClientIds
+      .split(',')
+      .map((c) => c.trim())
+      .filter(Boolean);
+  }
+  // Legacy `clientId`: only used when `clientIds` was not supplied at all.
+  if (clientIds.length === 0) {
+    const rawClientId = raw.clientId;
+    if (typeof rawClientId === 'string' && rawClientId.trim() !== '') {
+      clientIds = [rawClientId.trim()];
+    }
+  }
+  if (clientIds.length === 0) {
+    log.warn('Sendspin output skipped; missing clientId(s)', { zoneId: zone.id });
+    return null;
+  }
+  // De-duplicate (a misconfiguration that would otherwise double-send to one client).
+  clientIds = Array.from(new Set(clientIds));
+
+  const rawEndpointUrl = raw.endpointUrl;
+  const rawLatency = raw.latencyMs;
   const endpointUrl = typeof rawEndpointUrl === 'string' ? rawEndpointUrl.trim() : '';
   const parsedLatency =
     typeof rawLatency === 'number'
@@ -410,12 +438,8 @@ function createSendspinOutput(
       : typeof rawLatency === 'string' && rawLatency.trim() !== ''
         ? Number(rawLatency)
         : undefined;
-  if (!clientId) {
-    log.warn('Sendspin output skipped; missing clientId', { zoneId: zone.id });
-    return null;
-  }
   const sendspinConfig: SendspinOutputConfig = {
-    clientId,
+    clientIds,
     ...(endpointUrl ? { endpointUrl } : {}),
     ...(typeof parsedLatency === 'number' && Number.isFinite(parsedLatency)
       ? { latencyMs: parsedLatency }
@@ -423,7 +447,7 @@ function createSendspinOutput(
   };
   log.info('Sendspin output registered', {
     zoneId: zone.id,
-    clientId,
+    clientIds,
     endpointUrl: endpointUrl || undefined,
     latencyMs: sendspinConfig.latencyMs,
   });
