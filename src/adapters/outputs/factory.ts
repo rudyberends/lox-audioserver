@@ -309,7 +309,9 @@ function createAirplayOutput(
   const name = extras?.name as string | undefined;
   const password = extras?.password as string | undefined;
   const debug = extras?.debug;
-  const forceAp2 = extras?.forceAp2;
+  const et = extras?.et;
+  const md = extras?.md;
+  const latencyMs = extras?.latencyMs;
   const port = Number(rawPort);
   const initialVolume = clampVolume(zone.volumes?.default);
   return new AirPlayOutput(
@@ -321,7 +323,9 @@ function createAirplayOutput(
       password,
       port: Number.isFinite(port) ? port : undefined,
       debug: typeof debug === 'boolean' ? debug : undefined,
-      forceAp2: typeof forceAp2 === 'boolean' ? forceAp2 : undefined,
+      et: typeof et === 'string' ? et : undefined,
+      md: typeof md === 'string' ? md : undefined,
+      latencyMs: typeof latencyMs === 'number' ? latencyMs : undefined,
     },
     ports,
     initialVolume,

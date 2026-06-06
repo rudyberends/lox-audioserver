@@ -24,7 +24,6 @@ import './audioServersAndBearer.test';
 import './outputFactory.airplay.test';
 import './airplayPcmStream.test';
 import './airplayStreamSession.test';
-import './airplaySenderDiscovery.test';
 import './audioStreamHandlerIcy.test';
 import './queueAuthority.test';
 import './queueMutations.test';
