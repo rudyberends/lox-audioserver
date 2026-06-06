@@ -2,7 +2,7 @@ import { createLogger } from '@/shared/logging/logger';
 import type { PassThrough } from 'node:stream';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
-import { RaopSender } from '@/adapters/outputs/airplay/raopSender';
+import { RaopSender, computeGroupAnchorNtp } from '@/adapters/outputs/airplay/raopSender';
 import { AirplayStreamSession } from '@/adapters/outputs/airplay/airplayStreamSession';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import { waitForReadableStream } from '@/shared/audio/streamReadiness';
@@ -82,6 +82,7 @@ export class AirPlayOutput implements ZoneOutput {
   private paused = false;
   private lastSession: PlaybackSession | null = null;
   private attachedLeaderId: number | null = null;
+  private groupSource: PassThrough | null = null;
 
   private retryTimer: NodeJS.Timeout | null = null;
   private retryAttempt = 0;
@@ -144,7 +145,27 @@ export class AirPlayOutput implements ZoneOutput {
     if (isNewTrack && this.sender.isRunning()) {
       this.running = true;
       this.clearRetry();
-      this.streamSession.switchTrack();
+      // Grouped leader: re-batch identical fresh subscribers for the new track so
+      // members stay frame-locked (senders stay connected, just re-attach). Falls
+      // through to the solo switchTrack when not a leader-with-members.
+      if (await this.ports.airplayGroup.startSyncedGroup(this.zoneId, false)) {
+        void this.updateMetadata(session);
+        return;
+      }
+      if (this.groupSource) {
+        // We were a group leader but the group is gone (ungrouped). Leave group
+        // mode: drop the group subscriber and re-feed the sender from a fresh solo
+        // streamSession (which was disposed on group entry). Without this the
+        // disposed streamSession's switchTrack() is a no-op and the next track is
+        // silent.
+        this.destroyGroupSource();
+        const stream = this.streamSession.getStream();
+        if (stream) {
+          this.sender.rebind(stream);
+        }
+      } else {
+        this.streamSession.switchTrack();
+      }
       void this.updateMetadata(session);
       return;
     }
@@ -170,6 +191,16 @@ export class AirPlayOutput implements ZoneOutput {
     if (!engineReady) {
       this.log.warn('AirPlay output skipped; no active audio engine session', { zoneId: this.zoneId });
       this.ports.outputHandlers.onOutputError(this.zoneId, 'airplay engine not ready');
+      return;
+    }
+
+    // If we lead a group with members, start every member sample-accurately from a
+    // shared NTP anchor instead of a solo start. Falls through to solo when we are
+    // not a leader-with-members (or the synced start could not be set up).
+    if (await this.ports.airplayGroup.startSyncedGroup(this.zoneId, true)) {
+      this.running = true;
+      this.clearRetry();
+      void this.updateMetadata(session);
       return;
     }
 
@@ -261,6 +292,7 @@ export class AirPlayOutput implements ZoneOutput {
     }
 
     this.sender.stop();
+    this.destroyGroupSource();
     this.running = false;
     this.starting = false;
     this.paused = false;
@@ -334,6 +366,66 @@ export class AirPlayOutput implements ZoneOutput {
     return this.streamSession.getStream();
   }
 
+  /**
+   * Synced multiroom: open this output's own engine subscriber to the LEADER's
+   * zone session (primeWithBuffer so it starts from the same rolling-buffer
+   * snapshot as the other members). Must be called for every member in one
+   * synchronous batch by the group controller so the snapshots are identical
+   * (= same frame 0). Returns false if the engine stream is unavailable.
+   */
+  /** Shared NTP playback anchor for synced multiroom (delegated to the RAOP layer). */
+  public computeGroupAnchor(prebufferMs: number): bigint {
+    return computeGroupAnchorNtp(prebufferMs);
+  }
+
+  public createGroupSubscriber(leaderZoneId: number): boolean {
+    this.destroyGroupSource();
+    // We feed the sender from the group subscriber now, not the solo streamSession.
+    // Dispose the latter so its (now unread) engine subscriber doesn't fill up and
+    // backpressure-stall the whole engine session — which would silence every
+    // member a couple seconds after the group starts. Recreated on solo return.
+    this.streamSession.dispose();
+    const stream = this.ports.engine.createStream(leaderZoneId, 'pcm', {
+      label: `airplay-group-${this.zoneId}`,
+      primeWithBuffer: true,
+    });
+    this.groupSource = stream;
+    return Boolean(stream);
+  }
+
+  /**
+   * Start this output's sender from the batched group subscriber, anchored to the
+   * shared NTP start so it plays frame-locked with the other members.
+   */
+  public async startGroupedSender(anchorNtp: bigint, reAnchor: boolean): Promise<boolean> {
+    if (!this.groupSource) {
+      return false;
+    }
+    const started = await this.sender.startForGroup(
+      this.groupSource,
+      this.currentVolume,
+      anchorNtp,
+      reAnchor,
+    );
+    this.running = started;
+    this.starting = false;
+    if (started) {
+      this.startProgressTimer();
+    }
+    return started;
+  }
+
+  private destroyGroupSource(): void {
+    if (this.groupSource && !this.groupSource.destroyed) {
+      try {
+        this.groupSource.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.groupSource = null;
+  }
+
   /** Start this output's sender from a leader's shared PCM stream (grouped member). */
   public async startFromLeaderStream(stream: NodeJS.ReadableStream, volume: number): Promise<void> {
     this.currentVolume = Math.min(100, Math.max(0, Math.round(volume)));
@@ -347,6 +439,7 @@ export class AirPlayOutput implements ZoneOutput {
   public async stopLocal(): Promise<void> {
     this.stopProgressTimer();
     this.sender.stop();
+    this.destroyGroupSource();
     this.running = false;
     this.starting = false;
   }

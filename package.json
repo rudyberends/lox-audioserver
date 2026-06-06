@@ -62,7 +62,7 @@
   },
   "dependencies": {
     "@lox-audioserver/node-googlecast": "^0.1.1",
-    "@lox-audioserver/node-libraop": "^0.3.4",
+    "@lox-audioserver/node-libraop": "^0.3.5",
     "@lox-audioserver/node-librespot": "^0.4.2",
     "@lox-audioserver/node-sendspin": "^0.3.2",
     "@lox-audioserver/node-slimproto": "0.1.2",

@@ -5,6 +5,9 @@ import {
   stopSender,
   sendChunk,
   senderControl,
+  senderStartAt,
+  getNtp,
+  getSenderState,
   setSenderVolume,
   setSenderMetadata,
   setSenderProgress,
@@ -15,6 +18,27 @@ import { discoverAirplayDevices } from '@/adapters/outputs/airplay/airplayDiscov
 import { findAirplayQuirkWarning } from '@/adapters/outputs/airplay/airplayQuirks';
 
 let nativeLogWired = false;
+
+/**
+ * Compute a shared playback anchor `prebufferMs` in the future, in NTP units
+ * (seconds<<32 | fraction). Every member of a sync group passes the SAME value
+ * to `startForGroup` so identical frames play at the same wall-clock time across
+ * devices. The prebuffer must exceed the time to connect all members + the
+ * device read-ahead latency. BigInt throughout to keep sub-millisecond accuracy.
+ */
+export function computeGroupAnchorNtp(prebufferMs: number): bigint {
+  return getNtp() + msToNtp(Math.max(0, prebufferMs));
+}
+
+/** Convert milliseconds to NTP fraction units (1s = 2^32). Signed (offsets may be negative). */
+function msToNtp(ms: number): bigint {
+  return (BigInt(Math.round(ms)) * (1n << 32n)) / 1000n;
+}
+
+/** Convert a frame count to NTP fraction units (1s = 2^32). For latency math. */
+function framesToNtp(frames: number): bigint {
+  return (BigInt(Math.max(0, Math.round(frames))) * (1n << 32n)) / BigInt(SAMPLE_RATE);
+}
 
 /** Route libraop's native RTSP/RAOP logs into our logger (once, when debug is on). */
 function ensureNativeLogging(): void {
@@ -87,8 +111,11 @@ export interface RaopSenderConfig {
   /** Device metadata capabilities (mDNS TXT `md`, e.g. "0,1,2"). */
   md?: string;
   /**
-   * Requested read-ahead latency in milliseconds. Lower = snappier start/skip,
-   * higher = more jitter resilience. Defaults to ~500ms when unset.
+   * Multiroom sync offset in milliseconds (per zone). Shifts this device's
+   * playback anchor relative to the group so a fixed hardware offset between
+   * grouped AirPlay devices can be tuned out — positive = this device plays
+   * later. Default 0 = rely on automatic per-device latency compensation. The
+   * RAOP read-ahead buffer itself is a fixed internal default (DEFAULT_LATENCY_FRAMES).
    */
   latencyMs?: number;
   /** Forward libraop native logs at debug level. */
@@ -131,16 +158,20 @@ export class RaopSender {
   private readonly maxReconnectAttempts = 10;
   private stopped = false;
   private starting = false;
-  private readonly latencyFrames: number;
+  // Fixed RAOP read-ahead buffer (the device largely dictates this via its
+  // Audio-Latency override anyway). Kept internal so the per-zone latencyMs is
+  // free to act as the multiroom sync offset instead.
+  private readonly latencyFrames: number = DEFAULT_LATENCY_FRAMES;
+  // Per-zone multiroom sync offset (ms): shifts this device's playback anchor so
+  // a fixed hardware offset between grouped devices can be tuned out. Positive =
+  // this device plays later. Default 0 = pure auto-sync.
+  private readonly syncOffsetMs: number;
 
   constructor(
     private readonly config: RaopSenderConfig,
     private readonly context: { zoneId: number; zoneName: string },
   ) {
-    this.latencyFrames =
-      Number.isFinite(config.latencyMs) && (config.latencyMs as number) > 0
-        ? Math.round(((config.latencyMs as number) / 1000) * SAMPLE_RATE)
-        : DEFAULT_LATENCY_FRAMES;
+    this.syncOffsetMs = Number.isFinite(config.latencyMs) ? (config.latencyMs as number) : 0;
   }
 
   public isRunning(): boolean {
@@ -171,80 +202,173 @@ export class RaopSender {
     }
     this.starting = true;
     try {
-      if (this.config.debug) {
-        ensureNativeLogging();
-      }
-      const target = await this.resolveTarget();
-      if (!target) {
-        this.log.warn('raop sender: could not resolve target address', {
-          ...this.context,
-          host: this.config.host,
-        });
+      if (!(await this.connect())) {
         return false;
       }
-      // Only include OPTIONAL fields when actually defined. Passing
-      // `{ passwd: undefined }` is NOT a no-op: the addon's N-API layer sees the
-      // key, coerces undefined via ToString() to the literal "undefined", and
-      // libraop then thinks a password is set — triggering a digest-auth double
-      // ANNOUNCE that the device rejects with RTSP 455.
-      const opts: {
-        target: string;
-        port: number;
-        codec: 'alac';
-        sampleRate: number;
-        channels: number;
-        sampleSize: number;
-        frameLength: number;
-        latencyFrames: number;
-        volume: number;
-        et?: string;
-        md?: string;
-        passwd?: string;
-      } = {
-        target: target.address,
-        port: target.port,
-        // Real AirPlay/RAOP devices require ALAC (they 406 raw PCM).
-        codec: 'alac',
-        sampleRate: SAMPLE_RATE,
-        channels: CHANNELS,
-        sampleSize: SAMPLE_SIZE,
-        frameLength: CHUNK_FRAMES,
-        latencyFrames: this.latencyFrames,
-        volume: this.currentVolume,
-      };
-      // Forward the device's advertised encryption types verbatim: when it
-      // includes '4' (MFiSAP), libraop performs the auth-setup the device
-      // requires before SETUP. Do NOT strip it.
-      if (target.et) opts.et = target.et;
-      if (target.md) opts.md = target.md;
-      if (this.config.password) opts.passwd = this.config.password;
-      let handle: number;
-      try {
-        handle = startSender(opts);
-      } catch (err) {
-        this.log.warn('raop sender: startSender failed', {
-          ...this.context,
-          address: target.address,
-          port: target.port,
-          message: err instanceof Error ? err.message : String(err),
-        });
-        return false;
-      }
-      this.handle = handle;
-      // Anchor the RTP start clock; after this libraop accepts frames.
-      senderControl(handle, 'play');
+      // Anchor the RTP start clock to now; after this libraop accepts frames.
+      senderControl(this.handle!, 'play');
       this.reconnectAttempts = 0;
       this.attachSource(source);
       this.log.info('raop sender started', {
         ...this.context,
-        address: target.address,
-        port: target.port,
         latencyMs: this.getLatencyMs(),
       });
       return true;
     } finally {
       this.starting = false;
     }
+  }
+
+  /**
+   * Start as a member of a sync group. Identical to {@link start} except the RTP
+   * clock is anchored to a SHARED NTP time (the same `anchorNtp` is passed to
+   * every group member) instead of "now", so frame 0 — and every frame after —
+   * plays at the same wall-clock moment on all devices. The caller must feed all
+   * members identical PCM from frame 0 (batched engine subscribers).
+   */
+  public async startForGroup(
+    source: NodeJS.ReadableStream,
+    volume: number,
+    basePlayNtp: bigint,
+    reAnchor: boolean,
+  ): Promise<boolean> {
+    this.stopped = false;
+    this.currentVolume = clampVolume(volume, this.currentVolume);
+    const connected = this.handle !== null;
+    // Track change within a synced group: the sender stays connected and keeps its
+    // RTP timeline, so just re-attach the (identical, new-track) subscriber — no
+    // re-anchor, or we'd add a gap every track.
+    if (connected && !reAnchor) {
+      this.attachSource(source);
+      return true;
+    }
+    if (this.starting) {
+      return false;
+    }
+    this.starting = true;
+    try {
+      if (connected) {
+        // Re-sync of an already-connected sender (leader was solo, or a member
+        // joined). Tear the RTSP session down and fresh-connect so every member
+        // takes the SAME clean start path: connect -> start_at -> accept/send.
+        // (Flush-re-anchoring a live stream to a future anchor starts it LATE and
+        // breaks sync; cliraop only ever fresh-starts or unpauses to now+200ms.)
+        this.detachSource();
+        this.clearDrainTimer();
+        this.clearRing();
+        const stale = this.handle;
+        this.handle = null;
+        if (stale !== null) {
+          try {
+            stopSender(stale);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      if (!(await this.connect())) {
+        return false;
+      }
+      // Per-device latency compensation. The device announces its own buffer
+      // latency (Audio-Latency override), and a frame at start_ts plays at
+      // start_ts + deviceLatency. To make frame 0 play at the SAME wall time
+      // (basePlayNtp) on every member regardless of its latency, anchor each
+      // sender at basePlayNtp - deviceLatency. The per-zone syncOffsetMs is added
+      // on top to tune out any residual fixed hardware offset (positive = later).
+      const deviceLatencyFrames = this.deviceLatencyFrames();
+      const anchorNtp = basePlayNtp - framesToNtp(deviceLatencyFrames) + msToNtp(this.syncOffsetMs);
+      senderStartAt(this.handle!, anchorNtp);
+      this.reconnectAttempts = 0;
+      this.attachSource(source);
+      this.log.info('raop sender started (group)', {
+        ...this.context,
+        reAnchor,
+        deviceLatencyFrames,
+        syncOffsetMs: this.syncOffsetMs,
+      });
+      return true;
+    } finally {
+      this.starting = false;
+    }
+  }
+
+  /** Device-effective playback latency (frames) — the device's Audio-Latency
+   * override if any, else our configured value. Used for group sync compensation. */
+  private deviceLatencyFrames(): number {
+    if (this.handle !== null) {
+      try {
+        const reported = getSenderState(this.handle).latencyFrames;
+        if (typeof reported === 'number' && reported > 0) {
+          return reported;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    return this.latencyFrames + RAOP_LATENCY_MIN_FRAMES;
+  }
+
+  /** Resolve the target and open the RAOP connection (ANNOUNCE/SETUP/RECORD). */
+  private async connect(): Promise<boolean> {
+    if (this.config.debug) {
+      ensureNativeLogging();
+    }
+    const target = await this.resolveTarget();
+    if (!target) {
+      this.log.warn('raop sender: could not resolve target address', {
+        ...this.context,
+        host: this.config.host,
+      });
+      return false;
+    }
+    // Only include OPTIONAL fields when actually defined. Passing
+    // `{ passwd: undefined }` is NOT a no-op: the addon's N-API layer sees the
+    // key, coerces undefined via ToString() to the literal "undefined", and
+    // libraop then thinks a password is set — triggering a digest-auth double
+    // ANNOUNCE that the device rejects with RTSP 455.
+    const opts: {
+      target: string;
+      port: number;
+      codec: 'alac';
+      sampleRate: number;
+      channels: number;
+      sampleSize: number;
+      frameLength: number;
+      latencyFrames: number;
+      volume: number;
+      et?: string;
+      md?: string;
+      passwd?: string;
+    } = {
+      target: target.address,
+      port: target.port,
+      // Real AirPlay/RAOP devices require ALAC (they 406 raw PCM).
+      codec: 'alac',
+      sampleRate: SAMPLE_RATE,
+      channels: CHANNELS,
+      sampleSize: SAMPLE_SIZE,
+      frameLength: CHUNK_FRAMES,
+      latencyFrames: this.latencyFrames,
+      volume: this.currentVolume,
+    };
+    // Forward the device's advertised encryption types verbatim: when it
+    // includes '4' (MFiSAP), libraop performs the auth-setup the device
+    // requires before SETUP. Do NOT strip it.
+    if (target.et) opts.et = target.et;
+    if (target.md) opts.md = target.md;
+    if (this.config.password) opts.passwd = this.config.password;
+    try {
+      this.handle = startSender(opts);
+    } catch (err) {
+      this.log.warn('raop sender: startSender failed', {
+        ...this.context,
+        address: target.address,
+        port: target.port,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+    return true;
   }
 
   public async setVolume(volume: number): Promise<void> {

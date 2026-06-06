@@ -2,6 +2,12 @@ import { getGroupByZone } from '@/application/groups/groupTracker';
 import { createLogger } from '@/shared/logging/logger';
 import type { AudioManager } from '@/application/playback/audioManager';
 
+// How far in the future the shared playback anchor is set. Must exceed the time
+// to connect every member (RTSP ANNOUNCE/SETUP/RECORD, run in parallel) so they
+// are all anchored and buffered before the common start. ~2s is comfortable for
+// a handful of devices on a LAN.
+const GROUP_PREBUFFER_MS = 3000;
+
 /**
  * A grouped AirPlay output. With node-libraop every device is an independent
  * RAOP sender, so multiroom is "one shared PCM stream, N senders": the leader
@@ -15,6 +21,14 @@ export type AirplayGroupParticipant = {
   isRunning(): boolean;
   getSharedStream(): NodeJS.ReadableStream | null;
   startFromLeaderStream(stream: NodeJS.ReadableStream, volume: number): Promise<void>;
+  /** Compute the shared NTP playback anchor (delegated to the RAOP adapter). */
+  computeGroupAnchor(prebufferMs: number): bigint;
+  /** Open an engine subscriber to the leader's zone (synchronous, for batched alignment). */
+  createGroupSubscriber(leaderZoneId: number): boolean;
+  /** Start this member's sender from its group subscriber, anchored to the shared NTP start.
+   * reAnchor re-anchors an already-streaming sender (leader was solo / member joined);
+   * false just re-attaches (track change, stays synced). */
+  startGroupedSender(anchorNtp: bigint, reAnchor: boolean): Promise<boolean>;
   stopLocal(): Promise<void>;
   markAttachedToLeader(leaderId: number): void;
   clearLeaderAttachment(): void;
@@ -25,6 +39,7 @@ export type AirplayGroupParticipant = {
 export type AirplayGroupCoordinator = {
   register: (zoneId: number, output: AirplayGroupParticipant) => void;
   unregister: (zoneId: number) => void;
+  startSyncedGroup: (leaderZoneId: number, reAnchor: boolean) => Promise<boolean>;
   tryJoinLeader: (output: AirplayGroupParticipant) => Promise<boolean>;
   syncGroupMembers: (leader: AirplayGroupParticipant) => Promise<void>;
   stopGroupMembers: (leaderZoneId: number, members: number[]) => Promise<void>;
@@ -36,6 +51,10 @@ export type AirplayGroupCoordinator = {
 class AirplayGroupController {
   private readonly log = createLogger('Output', 'AirPlayGroups');
   private readonly outputs = new Map<number, AirplayGroupParticipant>();
+  // Membership signature of the currently-synced group per leader. Lets a
+  // redundant re-sync (group 'update' events fire on volume/state changes during
+  // playback) be a no-op instead of tearing the whole group down and back up.
+  private readonly syncedSignature = new Map<number, string>();
 
   public register(zoneId: number, output: AirplayGroupParticipant): void {
     this.outputs.set(zoneId, output);
@@ -59,14 +78,91 @@ class AirplayGroupController {
     if (!leader) {
       return false;
     }
-    if (output.isAttachedToLeader(group.leader) && output.isRunning()) {
+    // Already part of the (synced) group — the leader drives our sender, so don't
+    // start a competing one. Also closes the race where startSyncedGroup has
+    // marked us attached but our sender hasn't finished starting yet.
+    if (output.isAttachedToLeader(group.leader)) {
       return true;
     }
     output.markAttachedToLeader(group.leader);
     if (leader.isRunning()) {
-      await this.attachMemberToLeader(leader, output);
+      // Joined a group that is already playing: re-sync the whole group from a
+      // fresh shared anchor (re-anchors the running leader via flush, connects the
+      // new member). Brief gap, but everyone ends up frame-locked.
+      await this.startSyncedGroup(group.leader, true);
     }
     return true; // always skip local playback for non-leaders
+  }
+
+  /**
+   * Sample-accurate group start. Subscribes every participant (leader + members)
+   * to the LEADER's zone session in one synchronous batch — so each gets an
+   * identical rolling-buffer snapshot (same frame 0) — then starts every sender
+   * anchored to a single shared NTP time. Identical frames + identical anchor =
+   * frame-locked playback across devices. Returns false (caller falls back to a
+   * solo start) when this output is not a leader with members, or the engine
+   * stream is unavailable. Re-invoking on the leader's track change re-batches
+   * fresh subscribers and re-attaches (senders stay connected), keeping sync.
+   */
+  public async startSyncedGroup(leaderZoneId: number, reAnchor: boolean): Promise<boolean> {
+    const group = getGroupByZone(leaderZoneId);
+    if (!group || group.leader !== leaderZoneId || group.members.length === 0) {
+      return false;
+    }
+    const leader = this.outputs.get(leaderZoneId);
+    if (!leader) {
+      return false;
+    }
+    const ids = [...new Set([leaderZoneId, ...group.members])];
+    const participants = ids
+      .map((id) => this.outputs.get(id))
+      .filter((o): o is AirplayGroupParticipant => Boolean(o));
+    if (participants.length === 0) {
+      return false;
+    }
+    const signature = [...ids].sort((a, b) => a - b).join(',');
+    const allRunning =
+      participants.length === ids.length && participants.every((p) => p.isRunning());
+    if (reAnchor && allRunning && this.syncedSignature.get(leaderZoneId) === signature) {
+      // Already synced with this exact membership and all senders running. This is
+      // a redundant re-sync (group 'update' events fire on volume/state changes
+      // mid-playback); tearing the group down + back up here would drop audio.
+      this.log.debug('airplay synced group already established; skipping re-sync', {
+        leader: leaderZoneId,
+        members: ids,
+      });
+      return true;
+    }
+    // Synchronous batch: every subscriber is created in the same tick, so the
+    // engine's rolling-buffer snapshot is identical across members (same frame 0).
+    const ok = participants.map((p) => p.createGroupSubscriber(leaderZoneId));
+    if (ok.some((x) => !x)) {
+      // Engine stream momentarily unavailable (e.g. mid-handoff on a track change).
+      // Do NOT tear the senders down — that would drop audio on a transient miss.
+      // Leave them as-is; the next sync/track event re-batches.
+      this.log.warn('airplay synced group: engine stream unavailable, leaving senders intact', {
+        leader: leaderZoneId,
+      });
+      return false;
+    }
+    // Mark members attached before the async starts so a racing member play() is a no-op.
+    for (const p of participants) {
+      if (p.getZoneId() !== leaderZoneId) {
+        p.markAttachedToLeader(leaderZoneId);
+      }
+    }
+    const anchor = leader.computeGroupAnchor(GROUP_PREBUFFER_MS);
+    const results = await Promise.all(participants.map((p) => p.startGroupedSender(anchor, reAnchor)));
+    const started = results.some(Boolean);
+    if (started) {
+      this.syncedSignature.set(leaderZoneId, signature);
+    }
+    this.log.info('airplay synced group started', {
+      leader: leaderZoneId,
+      members: ids,
+      started: results.filter(Boolean).length,
+    });
+    return started;
   }
 
   /** After the leader starts, attach every grouped member to its shared stream. */
@@ -90,6 +186,7 @@ class AirplayGroupController {
   }
 
   public onLeaderStopped(leaderZoneId: number): void {
+    this.syncedSignature.delete(leaderZoneId);
     for (const output of this.outputs.values()) {
       if (output.isAttachedToLeader(leaderZoneId)) {
         output.clearLeaderAttachment();
@@ -142,7 +239,10 @@ class AirplayGroupController {
     if (!leader || !leader.isRunning()) {
       return;
     }
-    await this.syncGroupMembers(leader);
+    // Group created/updated while the leader is already playing → re-sync the
+    // whole group from a fresh shared anchor (frame-locked), rather than the
+    // unsynced best-effort attach.
+    await this.startSyncedGroup(leaderZoneId, true);
   }
 
   private async attachMemberToLeader(
