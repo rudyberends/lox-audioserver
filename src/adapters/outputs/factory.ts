@@ -23,6 +23,7 @@ import {
   SendspinOutput,
   SENDSPIN_OUTPUT_DEFINITION,
   type SendspinOutputConfig,
+  type SendspinSatelliteConfig,
 } from '@/adapters/outputs/sendspin/sendspinOutput';
 import {
   GoogleCastOutput,
@@ -418,20 +419,67 @@ function createSendspinOutput(
     log.warn('Sendspin output skipped; missing clientId', { zoneId: zone.id });
     return null;
   }
+  const satellites = parseSendspinSatellites((config as Record<string, unknown>).satellites, clientId);
   const sendspinConfig: SendspinOutputConfig = {
     clientId,
     ...(endpointUrl ? { endpointUrl } : {}),
     ...(typeof parsedLatency === 'number' && Number.isFinite(parsedLatency)
       ? { latencyMs: parsedLatency }
       : {}),
+    ...(satellites.length ? { satellites } : {}),
   };
   log.info('Sendspin output registered', {
     zoneId: zone.id,
     clientId,
     endpointUrl: endpointUrl || undefined,
     latencyMs: sendspinConfig.latencyMs,
+    satellites: satellites.map((s) => s.clientId),
   });
   return new SendspinOutput(zone.id, zone.name, sendspinConfig, undefined, ports);
+}
+
+/**
+ * Parse the optional `satellites` field. Accepts a rich array (`[{ clientId, latencyMs?,
+ * endpointUrl? }]`), a comma-separated string, or a string[]. Trims, drops empties, dedupes,
+ * and excludes the primary clientId so a zone never double-drives one client.
+ */
+export function parseSendspinSatellites(raw: unknown, primaryClientId: string): SendspinSatelliteConfig[] {
+  const out: SendspinSatelliteConfig[] = [];
+  const seen = new Set<string>([primaryClientId]);
+  const pushClient = (clientId: string, latencyMs?: number, endpointUrl?: string): void => {
+    const id = clientId.trim();
+    if (!id || seen.has(id)) {
+      return;
+    }
+    seen.add(id);
+    out.push({
+      clientId: id,
+      ...(typeof latencyMs === 'number' && Number.isFinite(latencyMs) ? { latencyMs } : {}),
+      ...(endpointUrl && endpointUrl.trim() ? { endpointUrl: endpointUrl.trim() } : {}),
+    });
+  };
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (typeof entry === 'string') {
+        pushClient(entry);
+      } else if (entry && typeof entry === 'object') {
+        const e = entry as Record<string, unknown>;
+        const id = typeof e.clientId === 'string' ? e.clientId : '';
+        const latency =
+          typeof e.latencyMs === 'number'
+            ? e.latencyMs
+            : typeof e.latencyMs === 'string' && e.latencyMs.trim() !== ''
+              ? Number(e.latencyMs)
+              : undefined;
+        pushClient(id, latency, typeof e.endpointUrl === 'string' ? e.endpointUrl : undefined);
+      }
+    }
+  } else if (typeof raw === 'string') {
+    for (const part of raw.split(',')) {
+      pushClient(part);
+    }
+  }
+  return out;
 }
 
 function createGoogleCastOutput(
@@ -461,14 +509,20 @@ function createGoogleCastOutput(
         : undefined;
     const syncDelayRaw = cfg.sendspinSyncDelayMs;
     const syncDelayMs = Number(syncDelayRaw);
+    const satellites = parseSendspinSatellites((cfg as Record<string, unknown>).satellites, playerId ?? '');
     const sendspinCastConfig: SendspinCastOutputConfig = {
       host,
       name,
       namespace,
       playerId,
       syncDelayMs: Number.isFinite(syncDelayMs) ? syncDelayMs : undefined,
+      ...(satellites.length ? { satellites } : {}),
     };
-    log.info('Sendspin Cast output registered', { zoneId: zone.id, host });
+    log.info('Sendspin Cast output registered', {
+      zoneId: zone.id,
+      host,
+      satellites: satellites.map((s) => s.clientId),
+    });
     return new SendspinCastOutput(zone.id, zone.name, sendspinCastConfig, ports);
   }
   const googleCastConfig: GoogleCastOutputConfig = { host, name };
@@ -494,14 +548,20 @@ function createSendspinCastOutput(
     typeof cfg.playerId === 'string' ? cfg.playerId : undefined;
   const syncDelayRaw = cfg.syncDelayMs;
   const syncDelayMs = Number(syncDelayRaw);
+  const satellites = parseSendspinSatellites(cfg.satellites, playerId ?? '');
   const sendspinCastConfig: SendspinCastOutputConfig = {
     host,
     name,
     namespace,
     playerId,
     syncDelayMs: Number.isFinite(syncDelayMs) ? syncDelayMs : undefined,
+    ...(satellites.length ? { satellites } : {}),
   };
-  log.info('Sendspin Cast output registered', { zoneId: zone.id, host });
+  log.info('Sendspin Cast output registered', {
+    zoneId: zone.id,
+    host,
+    satellites: satellites.map((s) => s.clientId),
+  });
   return new SendspinCastOutput(zone.id, zone.name, sendspinCastConfig, ports);
 }
 

@@ -23,6 +23,7 @@ import {
 import type { PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import type { SendspinSession } from '@lox-audioserver/node-sendspin';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
+import { SendspinClientSender } from '@/adapters/outputs/sendspin/sendspinClientSender';
 
 type SendspinFormat = PlayerFormatWithBitDepth<PcmBitDepth>;
 
@@ -35,6 +36,14 @@ const sendspinClientOwners = new Map<string, number>(); // clientId -> zoneId
 const sendspinOutputsByZoneId = new Map<number, SendspinOutput>();
 const STREAM_PLAYER_ROLE = 'player';
 
+/** A listen-only satellite client fed the same audio as the zone (e.g. a subwoofer). */
+export interface SendspinSatelliteConfig {
+  clientId: string;
+  endpointUrl?: string;
+  /** Per-satellite static delay (ms); a subwoofer often needs its own phase trim. */
+  latencyMs?: number;
+}
+
 /** Minimal Sendspin output configuration. */
 export interface SendspinOutputConfig {
   clientId: string;
@@ -44,6 +53,12 @@ export interface SendspinOutputConfig {
    * `set_static_delay` PlayerCommand. Clamped to 0-5000 ms by the protocol.
    */
   latencyMs?: number;
+  /**
+   * Extra listen-only clients (subwoofer, visualizer, …) that receive the same timestamped
+   * PCM as the primary client, synced via the shared timestamps. Best-effort: a satellite
+   * never throttles the primary and a disconnect leaves the zone playing.
+   */
+  satellites?: SendspinSatelliteConfig[];
 }
 
 const SENDSPIN_MAX_STATIC_DELAY_MS = 5000;
@@ -96,6 +111,15 @@ export const SENDSPIN_OUTPUT_DEFINITION: OutputConfigDefinition = {
       placeholder: '0',
       description: 'Optional client-side static playback delay (0-5000 ms). Higher = sound is later.',
     },
+    {
+      id: 'satellites',
+      label: 'Satellite client IDs',
+      type: 'text',
+      required: false,
+      placeholder: 'subwoofer-wohnzimmer, ledfx-wohnzimmer',
+      description:
+        'Optional listen-only clients fed the same audio, time-synced (e.g. a subwoofer or visualizer). Comma-separated; per-satellite latency requires manual config.',
+    },
   ],
 };
 
@@ -103,8 +127,14 @@ export const SENDSPIN_OUTPUT_DEFINITION: OutputConfigDefinition = {
 export class SendspinOutput implements ZoneOutput {
   public readonly type = 'sendspin';
   private readonly log = createLogger('Output', 'Sendspin');
-  private readonly clientId: string;
-  private resolvedClientId: string;
+  /**
+   * The configured Sendspin client, driven through a dedicated sender. The accessors below
+   * forward the legacy per-client field names to `primary` so existing call sites are
+   * unchanged; satellite clients (added in a later step) get their own senders.
+   */
+  private readonly primary: SendspinClientSender;
+  /** Listen-only satellite clients (subwoofer, visualizer) fed the same audio as `primary`. */
+  private readonly satellites: SendspinClientSender[];
   private readonly options: SendspinOutputOptions;
   private readonly unwatchClient: (() => void) | null;
   private readonly unwatchResolvedClient: (() => void) | null;
@@ -113,16 +143,8 @@ export class SendspinOutput implements ZoneOutput {
   private lastProgressPayload: SendspinMetadataProgress | null = null;
   private playbackState: 'playing' | 'paused' | 'stopped' = 'stopped';
   private lastSentPlaybackState: 'playing' | 'paused' | 'stopped' | null = null;
-  private lastKnownVolume = 50;
-  private lastClientStateSignature: string | null = null;
-  private lastLoggedClientState: string | null = null;
-  private lastLoggedMuted: boolean | null = null;
-  private initialClientStateSkipped = false;
   private clientState: 'synchronized' | 'error' | 'external_source' | null = null;
   private externalSourceActive = false;
-  private lastOutboundVolume: number | null = null;
-  private lastOutboundVolumeAt: number | null = null;
-  private clientConnected = false;
   private restartTimer: NodeJS.Timeout | null = null;
   private bufferedChunks: Array<{ data: Buffer; timestampUs: number }> = [];
   private bufferedBytes = 0;
@@ -138,7 +160,6 @@ export class SendspinOutput implements ZoneOutput {
   private lastChunkWallUs: number | null = null;
   private lastRestartMs = 0;
   private streamStarting = false;
-  private activeSession: SendspinSession | null = null;
   private negotiatedFormat: SendspinFormat = {
     codec: AudioCodec.PCM,
     sampleRate: audioOutputSettings.sampleRate,
@@ -152,8 +173,6 @@ export class SendspinOutput implements ZoneOutput {
   private anchorLeadUs = SendspinOutput.resolveAnchorLeadUs();
   // Keep target lead aligned with the configured anchor for low-latency playback.
   private readonly targetLeadUs = this.anchorLeadUs;
-  /** Configured client-side static playback delay (ms), pushed via `set_static_delay`. */
-  private configuredLatencyMs: number;
   private lastMetadataSignature: string | null = null;
   private lastStreamSignature: string | null = null;
   private pcmRemainder: Buffer | null = null;
@@ -174,9 +193,11 @@ export class SendspinOutput implements ZoneOutput {
     options: SendspinOutputOptions = {},
     private readonly ports: OutputPorts,
   ) {
-    this.clientId = config.clientId;
-    this.resolvedClientId = config.clientId;
-    this.configuredLatencyMs = normalizeSendspinLatencyMs(config.latencyMs);
+    this.primary = new SendspinClientSender(
+      config.clientId,
+      normalizeSendspinLatencyMs(config.latencyMs),
+      zoneId,
+    );
     this.options = { ignoreVolumeUpdates: true, ...options };
     this.unwatchClient = this.ports.sendspinConnector.watchClient(this.clientId, config.endpointUrl);
     sendspinOutputsByZoneId.set(this.zoneId, this);
@@ -264,6 +285,131 @@ export class SendspinOutput implements ZoneOutput {
       }
       this.resolvedHooksStop = this.ports.sendspinHooks.register(resolvedClientId, hooks);
     });
+    this.satellites = (config.satellites ?? []).map((satellite) => {
+      const sender = new SendspinClientSender(
+        satellite.clientId,
+        normalizeSendspinLatencyMs(satellite.latencyMs),
+        zoneId,
+      );
+      sender.startSatellite(this.ports, satellite.endpointUrl, {
+        isPlaying: () => this.playbackState === 'playing' && this.isOwner(),
+        currentStreamFormat: () => this.currentStreamStartParams(),
+        futureFrames: () => this.getFutureFrames(),
+        currentVolume: () => this.lastKnownVolume,
+      });
+      this.log.info('Sendspin satellite registered', {
+        zoneId: this.zoneId,
+        clientId: satellite.clientId,
+        latencyMs: normalizeSendspinLatencyMs(satellite.latencyMs),
+      });
+      return sender;
+    });
+  }
+
+  /** Snapshot of the current stream format for a satellite late-join, or null if idle. */
+  private currentStreamStartParams(): Parameters<SendspinClientSender['sendStreamStart']>[0] | null {
+    const format = this.activeOutputFormat;
+    if (!format) {
+      return null;
+    }
+    const codecHeader = this.activeCodecHeader ?? undefined;
+    return {
+      codec: format.codec,
+      sampleRate: format.sampleRate,
+      channels: format.channels,
+      bitDepth: format.bitDepth,
+      ...(codecHeader ? { codecHeader } : {}),
+    };
+  }
+
+  /** Run `fn` for each connected satellite, isolating per-satellite send failures. */
+  private forEachConnectedSatellite(fn: (satellite: SendspinClientSender) => void): void {
+    for (const satellite of this.satellites) {
+      if (!satellite.isConnected()) {
+        continue;
+      }
+      try {
+        fn(satellite);
+      } catch (err) {
+        this.log.debug('Sendspin satellite send failed', {
+          zoneId: this.zoneId,
+          clientId: satellite.clientId,
+          message: (err as Error).message,
+        });
+      }
+    }
+  }
+
+  // Legacy per-client field names, forwarded to the primary sender. These keep the existing
+  // call sites unchanged while the per-client state lives on `primary`.
+  private get clientId(): string {
+    return this.primary.clientId;
+  }
+  private get resolvedClientId(): string {
+    return this.primary.resolvedClientId;
+  }
+  private set resolvedClientId(value: string) {
+    this.primary.resolvedClientId = value;
+  }
+  private get activeSession(): SendspinSession | null {
+    return this.primary.session;
+  }
+  private set activeSession(value: SendspinSession | null) {
+    this.primary.session = value;
+  }
+  private get clientConnected(): boolean {
+    return this.primary.connected;
+  }
+  private set clientConnected(value: boolean) {
+    this.primary.connected = value;
+  }
+  private get configuredLatencyMs(): number {
+    return this.primary.configuredLatencyMs;
+  }
+  private set configuredLatencyMs(value: number) {
+    this.primary.configuredLatencyMs = value;
+  }
+  private get lastKnownVolume(): number {
+    return this.primary.lastKnownVolume;
+  }
+  private set lastKnownVolume(value: number) {
+    this.primary.lastKnownVolume = value;
+  }
+  private get lastOutboundVolume(): number | null {
+    return this.primary.lastOutboundVolume;
+  }
+  private set lastOutboundVolume(value: number | null) {
+    this.primary.lastOutboundVolume = value;
+  }
+  private get lastOutboundVolumeAt(): number | null {
+    return this.primary.lastOutboundVolumeAt;
+  }
+  private set lastOutboundVolumeAt(value: number | null) {
+    this.primary.lastOutboundVolumeAt = value;
+  }
+  private get lastClientStateSignature(): string | null {
+    return this.primary.lastClientStateSignature;
+  }
+  private set lastClientStateSignature(value: string | null) {
+    this.primary.lastClientStateSignature = value;
+  }
+  private get initialClientStateSkipped(): boolean {
+    return this.primary.initialClientStateSkipped;
+  }
+  private set initialClientStateSkipped(value: boolean) {
+    this.primary.initialClientStateSkipped = value;
+  }
+  private get lastLoggedClientState(): string | null {
+    return this.primary.lastLoggedClientState;
+  }
+  private set lastLoggedClientState(value: string | null) {
+    this.primary.lastLoggedClientState = value;
+  }
+  private get lastLoggedMuted(): boolean | null {
+    return this.primary.lastLoggedMuted;
+  }
+  private set lastLoggedMuted(value: boolean | null) {
+    this.primary.lastLoggedMuted = value;
   }
 
   /** Whether there is a client connected and ready to receive PCM. */
@@ -308,23 +454,7 @@ export class SendspinOutput implements ZoneOutput {
    * latest configured value regardless of which zone currently "owns" the client.
    */
   private sendStaticDelay(): void {
-    const session =
-      this.activeSession ?? sendspinCore.getSessionByClientId?.(this.activeClientId()) ?? null;
-    if (!session) {
-      this.log.debug('Sendspin set_static_delay skipped; no live session', {
-        zoneId: this.zoneId,
-        clientId: this.activeClientId(),
-      });
-      return;
-    }
-    session.sendServerCommand(PlayerCommand.SET_STATIC_DELAY, {
-      static_delay_ms: this.configuredLatencyMs,
-    });
-    this.log.info('Sendspin set_static_delay sent', {
-      zoneId: this.zoneId,
-      clientId: this.activeClientId(),
-      staticDelayMs: this.configuredLatencyMs,
-    });
+    this.primary.sendStaticDelay();
   }
 
   /** Push a volume change down to the client (used by zone manager). */
@@ -340,6 +470,8 @@ export class SendspinOutput implements ZoneOutput {
     } else {
       this.lastKnownVolume = vol;
     }
+    // Keep connected satellites (e.g. a subwoofer) in step with the zone volume.
+    this.forEachConnectedSatellite((satellite) => satellite.pushVolume(vol));
   }
 
   /** Start playback for this zone on the Sendspin client. */
@@ -632,6 +764,9 @@ export class SendspinOutput implements ZoneOutput {
       this.resolvedHooksStop = null;
     }
     sendspinCore.clearLeadStats(this.activeClientId());
+    for (const satellite of this.satellites) {
+      satellite.disposeSatellite();
+    }
     this.ports.sendspinGroup.unregister(this.zoneId);
     if (this.unwatchClient) {
       this.unwatchClient();
@@ -763,20 +898,16 @@ export class SendspinOutput implements ZoneOutput {
         });
         const { sampleRate, channels, pcmBitDepth } = sendspinOutputSettings;
         const codecHeader = this.activeCodecHeader ?? undefined;
-        sendspinCore.sendStreamStart(this.activeClientId(), {
+        const reuseStreamParams = {
           codec: chosenFormat.codec,
           sampleRate,
           channels,
           bitDepth: pcmBitDepth,
           ...(codecHeader ? { codecHeader } : {}),
-        });
-        this.ports.sendspinGroup.notifyStreamStart(this.zoneId, {
-          codec: chosenFormat.codec,
-          sampleRate,
-          channels,
-          bitDepth: pcmBitDepth,
-          ...(codecHeader ? { codecHeader } : {}),
-        });
+        };
+        this.primary.sendStreamStart(reuseStreamParams);
+        this.ports.sendspinGroup.notifyStreamStart(this.zoneId, reuseStreamParams);
+        this.forEachConnectedSatellite((satellite) => satellite.sendStreamStart(reuseStreamParams));
         // Reaffirm playback state to the client when reusing a stream.
         this.pushPlaybackState(this.playbackState);
         this.sendCurrentSnapshot();
@@ -896,63 +1027,9 @@ export class SendspinOutput implements ZoneOutput {
       const prepareBufferMarginUs = Math.max(500_000, Math.min(2_500_000, this.targetLeadUs));
       const sendTransmissionMarginUs = 100_000; // align with MA send margin (network + client processing)
       const targetBufferUs = this.targetLeadUs;
-      const backpressureCapacityBytes =
-        sendspinCore.getPlayerBufferCapacity(this.activeClientId()) || this.maxBufferedBytes || 0;
-      const bufferedForCapacity: Array<{ endUs: number; byteCount: number }> = [];
-      let bufferedCapacityBytes = 0;
-
-      const pruneCapacity = (nowUs: number): void => {
-        while (bufferedForCapacity.length && bufferedForCapacity[0]!.endUs <= nowUs) {
-          const removed = bufferedForCapacity.shift();
-          if (removed) {
-            bufferedCapacityBytes -= removed.byteCount;
-          }
-        }
-        if (bufferedCapacityBytes < 0) {
-          bufferedCapacityBytes = 0;
-        }
-      };
-
-      const timeUntilCapacityUs = (bytesNeeded: number): number => {
-        if (backpressureCapacityBytes <= 0 || bytesNeeded <= 0 || bytesNeeded >= backpressureCapacityBytes) {
-          return 0;
-        }
-        const nowUs = serverNowUs();
-        pruneCapacity(nowUs);
-        let virtualBytes = bufferedCapacityBytes;
-        let cursorTimeUs = nowUs;
-        let waitUs = 0;
-        for (const chunk of bufferedForCapacity) {
-          if (virtualBytes + bytesNeeded <= backpressureCapacityBytes) {
-            break;
-          }
-          waitUs += Math.max(0, chunk.endUs - cursorTimeUs);
-          cursorTimeUs = chunk.endUs;
-          virtualBytes = Math.max(0, virtualBytes - chunk.byteCount);
-        }
-        return waitUs;
-      };
-
-      const waitForCapacity = async (bytesNeeded: number): Promise<void> => {
-        if (backpressureCapacityBytes <= 0 || bytesNeeded <= 0) {
-          return;
-        }
-        while (true) {
-          const waitUs = timeUntilCapacityUs(bytesNeeded);
-          if (waitUs <= 0) {
-            return;
-          }
-          await new Promise((resolve) => setTimeout(resolve, Math.min(50, Math.ceil(waitUs / 1000))));
-        }
-      };
-
-      const registerCapacity = (endUs: number, byteCount: number): void => {
-        if (backpressureCapacityBytes <= 0 || byteCount <= 0) {
-          return;
-        }
-        bufferedForCapacity.push({ endUs, byteCount });
-        bufferedCapacityBytes += byteCount;
-      };
+      this.primary.beginStream(
+        sendspinCore.getPlayerBufferCapacity(this.activeClientId()) || this.maxBufferedBytes || 0,
+      );
 
       const shiftTimeline = (deltaUs: number): void => {
         if (this.playStartUs !== null) {
@@ -965,13 +1042,7 @@ export class SendspinOutput implements ZoneOutput {
           data: f.data,
           timestampUs: f.timestampUs + deltaUs,
         }));
-        for (let i = 0; i < bufferedForCapacity.length; i += 1) {
-          const entry = bufferedForCapacity[i]!;
-          bufferedForCapacity[i] = {
-            endUs: entry.endUs + deltaUs,
-            byteCount: entry.byteCount,
-          };
-        }
+        this.primary.shiftCapacity(deltaUs);
       };
 
       const computeAdjustForStale = (tsUs: number, durationUs: number): number => {
@@ -1028,20 +1099,22 @@ export class SendspinOutput implements ZoneOutput {
         lastSendWallUs = serverNowUs();
         const targetLeadUs = this.targetLeadUs;
         const lead = frameTsUs - serverNowUs();
-        if (canSendToClient) {
-          sendspinCore.setLeadStats(this.activeClientId(), {
+        const frame = { data: frameData, timestampUs: frameTsUs };
+        this.primary.deliverFrame(frame, durationUs, {
+          canSend: canSendToClient,
+          leadUs: lead,
+          targetLeadUs,
+          bufferedBytes: this.bufferedBytes,
+        });
+        this.ports.sendspinGroup.broadcastFrame(this.zoneId, frame);
+        this.forEachConnectedSatellite((satellite) =>
+          satellite.deliverFrame(frame, durationUs, {
+            canSend: true,
             leadUs: lead,
             targetLeadUs,
             bufferedBytes: this.bufferedBytes,
-          });
-        }
-
-        const frame = { data: frameData, timestampUs: frameTsUs };
-        if (canSendToClient) {
-          sendspinCore.sendPcmFrameToClient(this.activeClientId(), frame);
-        }
-        this.ports.sendspinGroup.broadcastFrame(this.zoneId, frame);
-        registerCapacity(frameTsUs + durationUs, frameData.length);
+          }),
+        );
 
         this.bufferedChunks.push(frame);
         this.bufferedBytes += frameData.length;
@@ -1084,22 +1157,18 @@ export class SendspinOutput implements ZoneOutput {
         if (streamStartSent) {
           return;
         }
-        if (!this.externalSourceActive) {
-          sendspinCore.sendStreamStart(this.activeClientId(), {
-            codec: chosenFormat.codec,
-            sampleRate,
-            channels,
-            bitDepth: pcmBitDepth,
-            ...(codecHeader ? { codecHeader } : {}),
-          });
-        }
-        this.ports.sendspinGroup.notifyStreamStart(this.zoneId, {
+        const streamParams = {
           codec: chosenFormat.codec,
           sampleRate,
           channels,
           bitDepth: pcmBitDepth,
           ...(codecHeader ? { codecHeader } : {}),
-        });
+        };
+        if (!this.externalSourceActive) {
+          this.primary.sendStreamStart(streamParams);
+        }
+        this.ports.sendspinGroup.notifyStreamStart(this.zoneId, streamParams);
+        this.forEachConnectedSatellite((satellite) => satellite.sendStreamStart(streamParams));
         streamStartSent = true;
         this.lastStreamStartSentAtMs = Date.now();
       };
@@ -1143,7 +1212,7 @@ export class SendspinOutput implements ZoneOutput {
           waitLeadUs += Math.max(0, serverNowUs() - before);
         }
         const capBefore = serverNowUs();
-        await waitForCapacity(frameData.length);
+        await this.primary.waitForCapacity(frameData.length);
         waitCapacityUs += Math.max(0, serverNowUs() - capBefore);
         ensureStreamStart();
         emitFrame(timestampUs, frameData, durationUs);
@@ -1355,9 +1424,9 @@ export class SendspinOutput implements ZoneOutput {
     this.stopProgressUpdates();
     // Notify client to clear/end only when we are really stopping; skip during keep-alive restarts.
     if (!preserveAnchor) {
-      sendspinCore.sendStreamEnd(this.activeClientId());
-      sendspinCore.sendStreamClear(this.activeClientId(), [STREAM_PLAYER_ROLE]);
+      this.primary.endStream();
       this.ports.sendspinGroup.notifyStreamEnd(this.zoneId);
+      this.forEachConnectedSatellite((satellite) => satellite.endStream());
       this.lastStreamSignature = null;
     }
   }
@@ -1781,13 +1850,18 @@ export class SendspinOutput implements ZoneOutput {
     return this.activeClientId();
   }
 
+  /** Configured satellite client IDs fed the same audio as the primary (empty if none). */
+  public getSatelliteClientIds(): string[] {
+    return this.satellites.map((satellite) => satellite.clientId);
+  }
+
   /** Indicates whether the configured Sendspin client is currently connected. */
   public isClientConnected(): boolean {
     return this.clientConnected;
   }
 
   private activeClientId(): string {
-    return this.resolvedClientId || this.clientId;
+    return this.primary.activeClientId();
   }
 
   /** True when this zone leads a group that has at least one other member.

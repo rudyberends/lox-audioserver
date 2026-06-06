@@ -6,6 +6,7 @@ import { buildBaseUrl } from '@/shared/streamUrl';
 import {
   SendspinOutput,
   type SendspinMetadataPayload,
+  type SendspinSatelliteConfig,
 } from '@/adapters/outputs/sendspin/sendspinOutput';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import type { CastDevice, DiscoveredDevice } from '@lox-audioserver/node-googlecast';
@@ -24,6 +25,8 @@ export interface SendspinCastOutputConfig {
   namespace?: string;
   playerId?: string;
   syncDelayMs?: number;
+  /** Listen-only sendspin satellites fed the same audio as the cast primary. */
+  satellites?: SendspinSatelliteConfig[];
 }
 
 export const SENDSPIN_CAST_OUTPUT_DEFINITION: OutputConfigDefinition = {
@@ -68,7 +71,10 @@ export class SendspinCastOutput implements ZoneOutput {
     this.base = new SendspinOutput(
       zoneId,
       zoneName,
-      { clientId: this.clientId },
+      {
+        clientId: this.clientId,
+        ...(config.satellites?.length ? { satellites: config.satellites } : {}),
+      },
       {
         onMetadata: (payload) => this.handleMetadataUpdate(payload),
         ignoreVolumeUpdates: true,
@@ -110,6 +116,11 @@ export class SendspinCastOutput implements ZoneOutput {
 
   public getClientId(): string {
     return this.clientId;
+  }
+
+  /** Satellite client IDs the wrapped sendspin pipeline fans audio out to. */
+  public getSatelliteClientIds(): string[] {
+    return this.base.getSatelliteClientIds();
   }
 
   public setVolume(level: number): void {

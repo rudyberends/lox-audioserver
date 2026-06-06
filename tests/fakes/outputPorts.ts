@@ -152,6 +152,7 @@ const noopSendspinHooks: SendspinHookRegistryPort = {
 
 const noopSendspinConnector: OutputPorts['sendspinConnector'] = {
   watchClient: () => () => {},
+  onClientResolved: () => () => {},
   requestPlaybackPriority: () => {},
   advertiseServer: () => {},
   stopAdvertising: () => {},
