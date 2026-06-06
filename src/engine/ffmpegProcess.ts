@@ -27,6 +27,7 @@ export class FfmpegProcess {
   private readonly proc: ChildProcessWithoutNullStreams;
   private killTimer?: NodeJS.Timeout;
   private readonly killTimeoutMs: number;
+  private exited = false;
 
   constructor(
     args: string[],
@@ -48,7 +49,11 @@ export class FfmpegProcess {
       const message = chunk.toString().trim();
       if (message) handlers.onStderr(message);
     });
-    this.proc.on('exit', (code, signal) => handlers.onExit(code, signal));
+    this.proc.on('exit', (code, signal) => {
+      this.exited = true;
+      this.clearKillTimer();
+      handlers.onExit(code, signal);
+    });
     this.proc.on('error', (err) => handlers.onError(err as NodeJS.ErrnoException));
   }
 
@@ -89,7 +94,11 @@ export class FfmpegProcess {
   private armKillTimer(): void {
     this.clearKillTimer();
     this.killTimer = setTimeout(() => {
-      if (!this.proc.killed) this.proc.kill('SIGKILL');
+      // NB: proc.killed only means "a signal was delivered", not "the process
+      // exited" — so it is true right after the SIGTERM above and must NOT gate
+      // the escalation. Track real exit instead, otherwise an ffmpeg wedged in
+      // its -reconnect loop on a slow input never gets SIGKILLed and leaks.
+      if (!this.exited) this.proc.kill('SIGKILL');
     }, this.killTimeoutMs);
   }
 

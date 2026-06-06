@@ -64,10 +64,17 @@ export class TwoStagePipeline {
   }
 
   public terminateDecoder(): void {
-    if (this.decoder) {
-      this.decoder.stdout.removeAllListeners();
-      this.decoder.kill('SIGTERM');
-      this.decoder = undefined;
-    }
+    const proc = this.decoder;
+    if (!proc) return;
+    proc.stdout.removeAllListeners();
+    this.decoder = undefined;
+    proc.kill('SIGTERM');
+    // Escalate to SIGKILL if it does not exit (e.g. wedged in an -reconnect loop
+    // on a slow input). Gate on real exit, not proc.killed (which is already true
+    // after the SIGTERM above), or a stuck decoder leaks.
+    const killTimer = setTimeout(() => {
+      if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
+    }, 2000);
+    proc.once('exit', () => clearTimeout(killTimer));
   }
 }

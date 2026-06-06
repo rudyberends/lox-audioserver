@@ -138,6 +138,17 @@ export class AudioStreamEngine {
     void (async () => {
       const ready = await waitSession.waitForFirstChunk(timeoutMs);
       if (this.handoffTokens.get(zoneId) !== handoffToken) {
+        // Superseded by a newer handoff before our session became ready. The
+        // newer handoff captured a *different* `existing`, so it will never stop
+        // the session we were going to replace — stop it here so its ffmpeg does
+        // not leak. (Rapid track skips otherwise pile up orphaned ffmpeg
+        // processes, exhausting the upstream segment proxy until playback stalls.)
+        // Our own profileMap is the next handoff's `existing`, so that handoff
+        // cleans it up. Guard against stopping whatever is active now.
+        if (!skipHandoff && existing && this.sessions.get(zoneId) !== existing) {
+          this.stopReasonByProfileMap.set(existing, 'switch');
+          existing.forEach((session) => session.stop(true));
+        }
         return;
       }
       if (!ready) {
