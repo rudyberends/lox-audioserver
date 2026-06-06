@@ -25,6 +25,15 @@ export type { OutputProfile };
 import type { PlaybackSource } from '@/engine/playbackSource';
 export type { PlaybackSource };
 
+// Internal restart-on-failure backoff. The counter tracks *consecutive* failed
+// restarts and is reset to 0 once the restarted ffmpeg produces its first chunk
+// (i.e. it actually recovered). Without that reset a transient failure would
+// permanently consume the budget; without the cap a persistently failing source
+// would hot-loop forever.
+const MAX_RESTART_ATTEMPTS = 5;
+const RESTART_BACKOFF_STEP_MS = 100;
+const RESTART_BACKOFF_MAX_MS = 500;
+
 export class AudioSession {
   // ─── Internals exposed for SessionStarter and Crossfader ─────────────────
   // The fields and helpers below carry `@internal` semantics: they are public
@@ -45,7 +54,10 @@ export class AudioSession {
   private totalBytes = 0;
   private lastBps = 0;
   private lastBpsTs = 0;
-  /** @internal */ public restartAttempts = 0;
+  // Consecutive failed restarts (backoff budget); reset to 0 on first chunk after recovery.
+  private restartAttempts = 0;
+  // Lifetime restart count for stats; never reset on recovery (unlike restartAttempts).
+  private totalRestarts = 0;
   private readonly targetLeadMs: number;
   private lastStderrLine: string | null = null;
   private lastStderrAt: number | null = null;
@@ -275,6 +287,8 @@ export class AudioSession {
             return;
           }
           if (this.firstChunk.signal()) {
+            // Restarted ffmpeg produced output → it recovered; reset the backoff budget.
+            this.restartAttempts = 0;
             if (options.logFirstChunk !== false) {
               const now = Date.now();
               this.log.info('ffmpeg first chunk', {
@@ -322,8 +336,12 @@ export class AudioSession {
           });
           options.onExit?.();
           const shouldRestartForEq = this.restartingForEq && !this.ending;
-          const shouldRestart =
+          const wantsRestart =
             !shouldRestartForEq && options.restartOnFailure === true && !this.ending && code !== 0;
+          const restartBudgetExhausted = this.restartAttempts >= MAX_RESTART_ATTEMPTS;
+          const shouldRestart = wantsRestart && !restartBudgetExhausted;
+          // When we give up (budget exhausted), suppressTermination=false so cleanup
+          // fully tears the session down instead of leaving it in limbo.
           this.cleanup({ suppressTermination: shouldRestart || shouldRestartForEq });
           if (shouldRestartForEq) {
             this.restartingForEq = false;
@@ -332,7 +350,20 @@ export class AudioSession {
           }
           if (shouldRestart) {
             this.restartAttempts += 1;
-            setTimeout(() => this.start(), Math.min(500, 100 * this.restartAttempts));
+            this.totalRestarts += 1;
+            const delayMs = Math.min(
+              RESTART_BACKOFF_MAX_MS,
+              RESTART_BACKOFF_STEP_MS * this.restartAttempts,
+            );
+            setTimeout(() => this.start(), delayMs);
+            return;
+          }
+          if (wantsRestart && restartBudgetExhausted) {
+            this.log.error('ffmpeg restart budget exhausted; giving up', {
+              zoneId: this.zoneId,
+              profile: this.profile,
+              attempts: this.restartAttempts,
+            });
           }
         },
         onError: (error: NodeJS.ErrnoException) => {
@@ -550,7 +581,7 @@ export class AudioSession {
       totalBytes: this.totalBytes,
       lastUpdated: this.lastBpsTs || null,
       subscribers: this.fanout.size,
-      restarts: this.restartAttempts,
+      restarts: this.totalRestarts,
       lastError: this.lastErrorMessage,
       lastErrorAt: this.lastErrorAt,
       lastStderr: this.lastStderrLine,

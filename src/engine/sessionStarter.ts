@@ -99,7 +99,6 @@ export class SessionStarter {
         s.cleanup();
       }
     });
-    s.restartAttempts = 0;
   }
 
   /**
@@ -229,7 +228,6 @@ export class SessionStarter {
     });
 
     s.process = proc;
-    s.restartAttempts = 0;
   }
 
   /**
@@ -259,7 +257,6 @@ export class SessionStarter {
       restartOnFailure: s.source.kind === 'pipe',
       logFirstChunk: true,
     });
-    s.restartAttempts = 0;
   }
 
   /**
@@ -280,6 +277,5 @@ export class SessionStarter {
       logFirstChunk: true,
       stdinStream: s.pipeline.encoderInput,
     });
-    s.restartAttempts = 0;
   }
 }
