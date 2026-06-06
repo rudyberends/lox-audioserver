@@ -170,6 +170,15 @@ export class SendspinClientSender {
     this.session?.sendServerCommand(PlayerCommand.VOLUME, { volume: level });
   }
 
+  /** Hot-update this client's static delay (no stream restart) and push it to the live session. */
+  public setLatencyMs(ms: number): void {
+    if (ms === this.configuredLatencyMs) {
+      return;
+    }
+    this.configuredLatencyMs = ms;
+    this.sendStaticDelay();
+  }
+
   /**
    * Push the configured client-side static delay to the connected client. Not gated by
    * ownership — the static delay is benign per-client config that should reflect the latest

@@ -17,6 +17,7 @@ import { audioResampler } from '@/ports/types/audioFormat';
 import { sendspinCore } from '@lox-audioserver/node-sendspin';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 import { getZoneOutputConfig } from '@/adapters/http/adminApi/config/configHandlers';
+import { parseSendspinSatellites } from '@/adapters/outputs/factory';
 
 export const STATE_CONTROLLER_DEFINITIONS = [
   { id: 'internal', label: 'Internal', description: 'Use internal playback state only.' },
@@ -135,7 +136,7 @@ async function handleZoneOutputLatency(
   res: ServerResponse,
   deps: ZonesHandlerDeps,
 ): Promise<void> {
-  const body = (await deps.readJsonBody(req, res)) as { latencyMs?: unknown } | null;
+  const body = (await deps.readJsonBody(req, res)) as { latencyMs?: unknown; clientId?: unknown } | null;
   if (!body) return;
   const raw = body.latencyMs;
   const num = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
@@ -144,27 +145,34 @@ async function handleZoneOutputLatency(
     return;
   }
   const clamped = Math.max(0, Math.min(10_000, Math.round(num)));
+  // A clientId targets a specific Sendspin satellite's delay; otherwise the primary output.
+  const clientId = typeof body.clientId === 'string' && body.clientId.trim() ? body.clientId.trim() : null;
 
-  // Persist to zone-config without triggering replaceZones.
+  // Persist to zone-config without triggering replaceZones — latency is a live, benign tweak.
   await deps.configPort.updateConfig((cfg) => {
     const zone = cfg.zones?.find((z) => z.id === zoneId);
     if (!zone) return;
     const primary = getZoneOutputConfig(zone) as Record<string, unknown> | null;
     if (!primary) return;
-    primary.latencyMs = clamped;
-    if (Array.isArray((zone as { transports?: unknown[] }).transports)) {
-      const transports = (zone as { transports?: Record<string, unknown>[] }).transports;
-      if (transports && transports[0]) {
-        transports[0].latencyMs = clamped;
-      }
-    }
-    if ((zone as { output?: Record<string, unknown> }).output) {
-      (zone as { output?: Record<string, unknown> }).output!.latencyMs = clamped;
+    const mirrors: Record<string, unknown>[] = [primary];
+    const transports = (zone as { transports?: Record<string, unknown>[] }).transports;
+    if (Array.isArray(transports) && transports[0]) mirrors.push(transports[0]);
+    const output = (zone as { output?: Record<string, unknown> }).output;
+    if (output) mirrors.push(output);
+
+    if (clientId) {
+      // Update just this satellite's latency in the rich array (normalised across mirrors).
+      const primaryClientId = typeof primary.clientId === 'string' ? primary.clientId : '';
+      const sats = parseSendspinSatellites(primary.satellites, primaryClientId);
+      const next = sats.map((s) => (s.clientId === clientId ? { ...s, latencyMs: clamped } : s));
+      for (const m of mirrors) m.satellites = next;
+    } else {
+      for (const m of mirrors) m.latencyMs = clamped;
     }
   });
 
-  const applied = deps.zoneManager.setOutputLatency(zoneId, clamped);
-  deps.sendJson(res, 200, { latencyMs: clamped, applied });
+  const applied = deps.zoneManager.setOutputLatency(zoneId, clamped, clientId ?? undefined);
+  deps.sendJson(res, 200, { latencyMs: clamped, clientId, applied });
 }
 
 function handleZoneStateControllerDefinitions(

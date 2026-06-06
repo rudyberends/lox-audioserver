@@ -438,7 +438,7 @@ export class SendspinOutput implements ZoneOutput {
     return leadMs + this.configuredLatencyMs;
   }
 
-  /** Hot-update the static delay; pushes the new value to the live client. */
+  /** Hot-update the primary static delay; pushes the new value to the live client. */
   public setLatencyMs(ms: number): void {
     const next = normalizeSendspinLatencyMs(ms);
     if (next === this.configuredLatencyMs) {
@@ -446,6 +446,20 @@ export class SendspinOutput implements ZoneOutput {
     }
     this.configuredLatencyMs = next;
     this.sendStaticDelay();
+  }
+
+  /**
+   * Hot-update one satellite's static delay (no stream restart). Returns true when the satellite
+   * exists in this output. Adding/removing satellites still needs a rebuild; only the delay value
+   * is live here.
+   */
+  public setSatelliteLatencyMs(clientId: string, ms: number): boolean {
+    const satellite = this.satellites.find((sat) => sat.clientId === clientId);
+    if (!satellite) {
+      return false;
+    }
+    satellite.setLatencyMs(normalizeSendspinLatencyMs(ms));
+    return true;
   }
 
   /**

@@ -536,25 +536,32 @@ export class ZoneManager {
    * Hot-update the configured output latency for a zone. Calls `setLatencyMs` on each
    * live output that supports it. Returns true if at least one output applied the value.
    */
-  public setOutputLatency(zoneId: number, latencyMs: number): boolean {
+  public setOutputLatency(zoneId: number, latencyMs: number, clientId?: string): boolean {
     const ctx = this.zoneRepo.get(zoneId);
     if (!ctx) {
       return false;
     }
     let applied = false;
     for (const output of ctx.outputs) {
-      if (typeof output.setLatencyMs === 'function') {
-        try {
+      try {
+        // A clientId targets a specific Sendspin satellite; otherwise the primary output.
+        if (clientId) {
+          const setSatellite = (output as { setSatelliteLatencyMs?: (id: string, ms: number) => boolean })
+            .setSatelliteLatencyMs;
+          if (typeof setSatellite === 'function') {
+            applied = setSatellite.call(output, clientId, latencyMs) || applied;
+          }
+        } else if (typeof output.setLatencyMs === 'function') {
           void output.setLatencyMs(latencyMs);
           applied = true;
-        } catch (err) {
-          // Keep going; one output failing shouldn't prevent the others.
-          this.log.warn('setOutputLatency failed for output', {
-            zoneId,
-            outputType: output.type,
-            message: err instanceof Error ? err.message : String(err),
-          });
         }
+      } catch (err) {
+        // Keep going; one output failing shouldn't prevent the others.
+        this.log.warn('setOutputLatency failed for output', {
+          zoneId,
+          outputType: output.type,
+          message: err instanceof Error ? err.message : String(err),
+        });
       }
     }
     return applied;
