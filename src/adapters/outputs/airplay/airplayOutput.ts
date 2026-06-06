@@ -110,6 +110,7 @@ export class AirPlayOutput implements ZoneOutput {
         latencyMs: typeof config.latencyMs === 'number' ? config.latencyMs : undefined,
         debug: config.debug === true,
         onUnavailable: (reason) => this.handleSenderUnavailable(reason),
+        onDeviceResolved: (info) => this.persistResolvedConfig(info),
       },
       { zoneId, zoneName },
     );
@@ -464,6 +465,40 @@ export class AirPlayOutput implements ZoneOutput {
 
   private async waitForPcmStream(stream: PassThrough, timeoutMs: number): Promise<boolean> {
     return waitForReadableStream(stream, { timeoutMs });
+  }
+
+  /**
+   * Persist `et/md/port` discovered via runtime mDNS back into this zone's output
+   * config, so a legacy config (saved before the device picker stored `et`) is
+   * upgraded on first successful connect. After this the server uses the stored
+   * values directly and no longer depends on runtime discovery (which matters for
+   * MFi devices whose `et` is required for auth-setup).
+   */
+  private persistResolvedConfig(info: { et?: string; md?: string; port: number }): void {
+    void this.ports.config
+      .updateConfig((cfg) => {
+        const output = cfg.zones.find((z) => z.id === this.zoneId)?.output;
+        if (!output || output.id !== 'airplay') {
+          return;
+        }
+        if (info.et !== undefined) output.et = info.et;
+        if (info.md !== undefined) output.md = info.md;
+        if (info.port) output.port = info.port;
+      })
+      .then(() => {
+        this.log.info('AirPlay config self-healed from discovery', {
+          zoneId: this.zoneId,
+          et: info.et,
+          md: info.md,
+          port: info.port,
+        });
+      })
+      .catch((err) => {
+        this.log.warn('AirPlay config self-heal failed', {
+          zoneId: this.zoneId,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      });
   }
 
   private async waitForEngine(retries = 5, delayMs = 150): Promise<boolean> {

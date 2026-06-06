@@ -122,6 +122,14 @@ export interface RaopSenderConfig {
   debug?: boolean;
   /** Invoked when the device is lost and reconnect attempts are exhausted. */
   onUnavailable?: (reason: string) => void;
+  /**
+   * Invoked once when a legacy config (no stored `et`) is resolved via runtime
+   * mDNS discovery, so the caller can persist the discovered `et/md/port` back
+   * into the zone config (self-heal). Removes the runtime-discovery dependency on
+   * subsequent connects — important for MFi devices, whose `et` (with a `4`) is
+   * required for auth-setup and would otherwise be lost if mDNS is unavailable.
+   */
+  onDeviceResolved?: (info: { et?: string; md?: string; port: number }) => void;
 }
 
 interface ResolvedTarget {
@@ -784,6 +792,16 @@ export class RaopSender {
             et: typeof raop.txt?.et === 'string' ? (raop.txt.et as string) : undefined,
             md: typeof raop.txt?.md === 'string' ? (raop.txt.md as string) : undefined,
           };
+          // Self-heal a legacy config: we only reach this discovery path when the
+          // stored config had no `et`. Persist what we found so future connects use
+          // it directly (no runtime mDNS dependency).
+          if (this.resolved.et !== undefined) {
+            this.config.onDeviceResolved?.({
+              et: this.resolved.et,
+              md: this.resolved.md,
+              port: this.resolved.port,
+            });
+          }
           return this.resolved;
         }
       }
