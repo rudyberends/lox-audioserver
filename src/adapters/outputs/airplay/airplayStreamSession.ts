@@ -33,6 +33,46 @@ export class AirplayStreamSession {
   }
 
   /**
+   * Re-acquire a FRESH LIVE subscriber + fresh shared stream for resume, and
+   * return the stream (the caller re-anchors the sender with `play`). Unlike
+   * switchTrack this does NOT flush/rebind the device — resume wants the fast
+   * `play` anchor (now+200ms), not the slow flush path (now+latency).
+   *
+   * Subscribes LIVE (primeWithBuffer:false), NOT with a buffer snapshot: a primed
+   * snapshot replays buffered audio ON TOP of the device's own backlog replay and
+   * is heard as a stutter. Destroying the old (backpressured) subscriber releases
+   * the engine stall so ffmpeg resumes feeding the live one.
+   */
+  public reacquireLive(): PassThrough | null {
+    if (!this.stream || this.stream.destroyed) {
+      return null;
+    }
+    const next = this.createSourceStream(false);
+    if (!next) {
+      return null;
+    }
+    const oldSource = this.source;
+    const oldStream = this.stream;
+    this.stream = this.createGuardedStream();
+    this.attachSource(next);
+    if (oldSource && !oldSource.destroyed) {
+      try {
+        oldSource.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (oldStream && !oldStream.destroyed) {
+      try {
+        oldStream.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
+    return this.stream;
+  }
+
+  /**
    * Obtain a PCM PassThrough for this zone. Keeps a persistent stream open so
    * AirPlay does not see end-of-stream on track switches.
    */

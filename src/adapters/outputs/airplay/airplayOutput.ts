@@ -264,11 +264,16 @@ export class AirPlayOutput implements ZoneOutput {
     // The sender connection is kept across pause; re-anchor the RTP clock and
     // re-bind the source explicitly (sender.resume → senderControl('play'))
     // instead of relying on libraop's implicit accept-frames unpause.
-    if (this.sender.isRunning()) {
-      const stream = this.streamSession.getStream();
+    if (this.sender.isRunning() && !this.attachedLeaderId) {
+      // Resume: re-acquire a FRESH LIVE subscriber (reusing the paused subscriber
+      // deadlocks — it waits for live while ffmpeg waits for the buffer to drain),
+      // then re-anchor the device with `play` (now+200ms) for a snappy resume
+      // rather than the slow flush path (now+device-latency).
+      const stream = this.streamSession.reacquireLive();
       if (stream) {
         this.sender.resume(stream);
         this.running = true;
+        this.clearRetry();
         this.startProgressTimer();
         void this.updateMetadata(session);
         return;
