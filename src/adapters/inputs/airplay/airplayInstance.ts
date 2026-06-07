@@ -397,10 +397,17 @@ export class AirplayInstance {
   private stopHttpStream(): void {
     if (this.httpResponse) {
       this.httpResponse.removeAllListeners();
+      // Re-attach a no-op error handler BEFORE destroy(): destroying the socket
+      // emits a final 'error' ("socket hang up"). Without a listener Node treats
+      // an 'error' event as fatal — an unhandled exception that crashes the whole
+      // server. This happens on resume when the sender re-opens the HTTP audio
+      // stream (a brief double-connect) and we tear the old one down.
+      this.httpResponse.on('error', () => {});
       this.httpResponse.destroy();
     }
     if (this.httpRequest) {
       this.httpRequest.removeAllListeners();
+      this.httpRequest.on('error', () => {});
       this.httpRequest.destroy();
     }
     this.httpResponse = null;
