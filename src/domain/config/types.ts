@@ -193,6 +193,7 @@ export interface ZoneConfig {
   output?: ZoneOutputConfig | null;
   transports?: ZoneTransportConfig[];
   equalizer?: ZoneEqualizerConfig | null;
+  playback?: ZonePlaybackConfig | null;
   powerManager?: ZonePowerManagerConfig | null;
   state?: ZoneStateConfig;
   volumes: ZoneVolumesConfig;
@@ -215,9 +216,16 @@ export interface ZoneEqualizerConfig {
 
 export type ZoneEqualizerProvider = 'off' | 'builtin' | 'squeezelite-mr';
 
+export interface ZonePlaybackConfig {
+  /**
+   * When true, pausing the zone immediately resets the runtime volume to the
+   * configured default volume (matches the reference Loxone Audio Server's
+   * behavior). Defaults to false.
+   */
+  resetVolumeOnPause?: boolean;
+}
+
 export interface ZonePowerManagerConfig {
-  /** Legacy master toggle. Power state tracking remains active even when this is false. */
-  enabled?: boolean;
   /** Optional shared power group id for aggregate amp/PSU switching across zones. */
   powerGroupId?: string;
   /**
@@ -236,13 +244,6 @@ export interface ZonePowerManagerConfig {
   offDelayEnabled?: boolean;
   /** Delay before applying OFF actions (zone exits play mode). Defaults to 300000 ms. */
   offDelayMs?: number;
-  /**
-   * When true, pausing the zone immediately resets the runtime volume to the
-   * configured default volume (matches the reference Loxone Audio Server's
-   * behavior). Independent of offDelayMs, so the amp can stay powered on while
-   * the volume reverts. Defaults to false.
-   */
-  resetVolumeOnPause?: boolean;
   gpio?: ZoneGpioPowerConfig | null;
   url?: ZoneUrlPowerConfig | null;
   udp?: ZoneUdpPowerConfig | null;

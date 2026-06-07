@@ -160,6 +160,9 @@ async function handleZonesUpdate(
         if (incoming.powerManager !== undefined) {
           target.powerManager = incoming.powerManager;
         }
+        if (incoming.playback !== undefined) {
+          target.playback = incoming.playback;
+        }
         if (incoming.equalizer !== undefined) {
           target.equalizer = normalizeEqualizerPayload(target.equalizer, incoming.equalizer);
         }
@@ -195,6 +198,9 @@ async function handleZonesUpdate(
         nextZone.state = enforceStateControllerForOutput(nextZone.state, nextZone.output);
         if (incoming.powerManager !== undefined) {
           nextZone.powerManager = incoming.powerManager;
+        }
+        if (incoming.playback !== undefined) {
+          nextZone.playback = incoming.playback;
         }
         if (incoming.equalizer !== undefined) {
           nextZone.equalizer = normalizeEqualizerPayload(undefined, incoming.equalizer);

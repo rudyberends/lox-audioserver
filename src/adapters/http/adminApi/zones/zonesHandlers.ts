@@ -298,7 +298,6 @@ async function handleZoneStates(res: ServerResponse, deps: ZonesHandlerDeps): Pr
         sourceName: state?.sourceName ?? '',
         station: state?.station ?? '',
         state: state?.mode ?? '',
-        powerState: state?.powerState ?? 'off',
         coverurl: state?.coverurl ?? '',
         coverUrl: state?.coverurl ?? '',
         transport: configuredTransports[0] ?? null,

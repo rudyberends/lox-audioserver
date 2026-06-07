@@ -100,7 +100,7 @@ function onPlayerPaused(
   }
   coordinator.applyPatch(zoneId, { mode: 'pause', clientState: 'on', power: 'on' });
   const ctx = coordinator.getZone(zoneId);
-  if (ctx && !ctx.alert && ctx.config.powerManager?.resetVolumeOnPause === true) {
+  if (ctx && !ctx.alert && ctx.config.playback?.resetVolumeOnPause === true) {
     scheduleResetVolumeOnPause(coordinator, ctx);
   }
 }
@@ -132,7 +132,7 @@ function onPlayerStarted(
     // per-event volume (e.g. the TTS slider value). Don't replace it.
     const isFreshStart =
       !ctx.alert &&
-      (ctx.state.mode === 'stop' || ctx.state.powerState === 'off' || hadPendingReset);
+      (ctx.state.mode === 'stop' || hadPendingReset);
     const volume = isFreshStart
       ? getZoneDefaultVolume(ctx.config)
       : clampVolumeForZone(ctx.config, ctx.state.volume);
