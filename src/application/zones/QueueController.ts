@@ -458,8 +458,12 @@ export class QueueController {
     const isYtMusic = !forceSpotify && (service === 'ytmusic' || /ytmusic/i.test(rawPath));
     const defaultSpotifyUserId = this.contentPort.getDefaultSpotifyAccountId();
 
-    // Local library content
-    if (!forceSpotify && (decoded.startsWith('library:') || decoded.startsWith('library-'))) {
+    // Local library content. Guard against bridge-routed content whose inner
+    // (decoded) URI happens to use the `library:` scheme — Music Assistant's
+    // native item URIs literally look like `library://album/713`, so without
+    // this guard MA/bridge plays get swallowed here instead of falling through
+    // to their proper bridge branch below.
+    if (!forceSpotify && !bridgeProvider && !isMusicAssistant && (decoded.startsWith('library:') || decoded.startsWith('library-'))) {
       const folder = await this.contentPort.getMediaFolder(decoded, 0, 500);
       if (folder?.items?.length) {
         // local library items are not radio; do not propagate station
@@ -476,7 +480,15 @@ export class QueueController {
     // Music Assistant bridge content
     if (!forceSpotify && (isMusicAssistant || service === 'musicassistant' || /musicassistant/i.test(rawPath))) {
       const user = this.deps.getMusicAssistantUserId();
-      const sourcePath = pickSourcePath();
+      // MA's folder resolver decodes the b64 payload itself and keys off the
+      // `:<type>:` segment, so it needs the prefixed Loxone audiopath
+      // (`spotify@bridge-…:album:b64_…`) — NOT a decoded bare MA URI like
+      // `library://album/713`, which it mis-parses (713 → "recommendation"
+      // instead of album 713). Prefer the resolved target (honours
+      // parentContext, e.g. play-track-within-playlist), else the raw path;
+      // pick whichever is still in prefixed form, falling back to pickSourcePath.
+      const sourcePath =
+        [uri, rawClean].find((p) => p && p.includes(':') && !p.includes('://')) ?? pickSourcePath();
       const folderId = sourcePath
         .replace(/^spotify@[^:]+:/i, '')
         .replace(/^musicassistant@[^:]+:/i, '')
