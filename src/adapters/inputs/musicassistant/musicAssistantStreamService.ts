@@ -16,7 +16,13 @@ import {
 import { resolveActiveMaPlayerId } from '@/shared/musicassistant/maPlayerResolver';
 
 type StreamEntry = {
+  // The sendspin client_id we register the WebSocket player under (e.g. `lox-audio-player-2`).
   playerId: string;
+  // The player_id Music Assistant actually exposes for this player via its API. MA's
+  // universal_player provider can re-id our sendspin player (e.g. `uploxaudioplayer2`,
+  // keeping `lox-audio-player-2` only as the display name), so every player_queues/* and
+  // players/cmd/* RPC must target this id, not `playerId`. Resolved lazily from players/all.
+  maPlayerId?: string;
 };
 
 type MusicAssistantPlaybackResult = {
@@ -41,6 +47,35 @@ function toPlayerId(zoneName: string, fallbackId: number): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
   return `lox-${normalized || fallbackId}`;
+}
+
+// Collapse a player id to its alphanumeric slug for matching across MA's id transforms.
+// `lox-audio-player-2` -> `loxaudioplayer2`; MA's universal_player wraps it as
+// `up` + slug -> `uploxaudioplayer2`.
+function playerIdSlug(value: string): string {
+  return (value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+// Find the real MA player_id for our sendspin client among the players reported by
+// players/all. Matches on the alphanumeric slug (identical, or `up`-prefixed by the
+// universal_player provider, or a suffix), then falls back to the display name.
+function matchMaPlayerId(players: MusicAssistantPlayer[], sendspinClientId: string): string | null {
+  const want = playerIdSlug(sendspinClientId);
+  if (!want) {
+    return null;
+  }
+  for (const p of players ?? []) {
+    const id = String(p?.player_id ?? p?.id ?? '');
+    if (!id) {
+      continue;
+    }
+    const slug = playerIdSlug(id);
+    if (slug === want || slug === `up${want}` || slug.endsWith(want)) {
+      return id;
+    }
+  }
+  const byName = (players ?? []).find((p) => (p?.name ?? '').trim() === sendspinClientId);
+  return byName ? String(byName.player_id ?? byName.id ?? '') || null : null;
 }
 
 export class MusicAssistantStreamService {
@@ -105,14 +140,16 @@ export class MusicAssistantStreamService {
     if (!api) {
       return;
     }
-    const playerId =
+    const localPlayerId =
       this.zonePlayers.get(zoneId) ??
       this.streams.get(zoneId)?.playerId ??
       Array.from(this.playerToZone.entries()).find(([, zid]) => zid === zoneId)?.[0] ??
       '';
-    if (!playerId) {
+    if (!localPlayerId) {
       return;
     }
+    // Use MA's real player id for queue/command RPCs (see resolveMaPlayerId).
+    const playerId = (await this.resolveMaPlayerId(zoneId)) || localPlayerId;
     try {
       this.log.info('music assistant switch away: stopping and clearing queue', { zoneId, playerId });
       await api.playerCommand(playerId, 'stop');
@@ -330,29 +367,70 @@ export class MusicAssistantStreamService {
       }
     }
 
+    // Ensure the stream entry exists before resolving so the resolved MA id can be cached on it.
+    const entry: StreamEntry = existingEntry ?? { playerId };
+    this.streams.set(zoneId, entry);
+
     const api = this.getApi();
     // We no longer rely on builtin_player/register; still set up subscription to catch PLAY_MEDIA events.
     try {
       await api?.connect();
       if (api) {
-        this.ensureSubscription(zoneId, playerId);
+        // Re-resolve on every (re)registration: the universal_player wrapping may have changed.
+        entry.maPlayerId = undefined;
+        const maPlayerId = await this.resolveMaPlayerId(zoneId);
+        // Subscribe under MA's real player id so we receive events for this player.
+        this.ensureSubscription(zoneId, maPlayerId);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.warn('music assistant subscription setup failed', { zoneId, message });
     }
 
-    if (existingEntry) {
-      // Ensure keepalive/subscription/sendspin are refreshed even when the stream entry already existed.
-      this.streams.set(zoneId, existingEntry);
-      this.startKeepAlive(zoneId, playerId);
-      return existingEntry;
-    }
-
-    const entry: StreamEntry = { playerId };
-    this.streams.set(zoneId, entry);
     this.startKeepAlive(zoneId, playerId);
     return entry;
+  }
+
+  /**
+   * Resolve the player_id Music Assistant actually exposes for our sendspin client and
+   * cache it on the zone's StreamEntry. MA's universal_player provider can re-id the player
+   * (e.g. `lox-audio-player-2` -> `uploxaudioplayer2`), so all player_queues/* and players/cmd/*
+   * RPCs must use this id. Falls back to the sendspin client_id when nothing matches.
+   */
+  private async resolveMaPlayerId(zoneId: number): Promise<string> {
+    const entry = this.streams.get(zoneId);
+    const fallback = entry?.playerId ?? this.zonePlayers.get(zoneId) ?? '';
+    if (entry?.maPlayerId) {
+      return entry.maPlayerId;
+    }
+    const api = this.getApi();
+    if (!api || !fallback) {
+      return fallback;
+    }
+    try {
+      const players = (await api.getAllPlayers()) ?? [];
+      const matched = matchMaPlayerId(players, fallback);
+      if (matched) {
+        if (entry) {
+          entry.maPlayerId = matched;
+        }
+        if (matched !== fallback) {
+          this.log.info('music assistant player id resolved', {
+            zoneId,
+            sendspinClientId: fallback,
+            maPlayerId: matched,
+          });
+        }
+        return matched;
+      }
+      this.log.debug('music assistant player id not found in players/all', { zoneId, sendspinClientId: fallback });
+    } catch (err) {
+      this.log.debug('music assistant player id resolve failed', {
+        zoneId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return fallback;
   }
 
   public getPlaybackSource(zoneId: number): PlaybackSource | null {
@@ -516,15 +594,17 @@ export class MusicAssistantStreamService {
     const requestToken = this.markPendingStreamRequest(zoneId);
     const playMedia = async () => {
       try {
+        await api.connect();
+        const queueId = await this.resolveMaPlayerId(zoneId);
         this.log.info('music assistant play_media', {
           zoneId,
           playerId: entry.playerId,
+          queueId,
           audiopath: mediaId,
           parent: parentMediaId || null,
           startIndex: options?.startIndex ?? null,
         });
-        await api.connect();
-        await api.playMedia(entry.playerId, playTarget, playOpts);
+        await api.playMedia(queueId, playTarget, playOpts);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.log.warn('music assistant play_media failed', { zoneId, message });
@@ -840,17 +920,19 @@ export class MusicAssistantStreamService {
     if (!api) {
       return false;
     }
-    const playerId =
+    const localPlayerId =
       this.zonePlayers.get(zoneId) ??
       this.streams.get(zoneId)?.playerId ??
       Array.from(this.playerToZone.entries()).find(([, zid]) => zid === zoneId)?.[0] ??
       '';
-    if (!playerId) {
+    if (!localPlayerId) {
       return false;
     }
     if (command.toLowerCase() === 'pause') {
       this.markPaused(zoneId);
     }
+    // Use MA's real player id for command RPCs (see resolveMaPlayerId).
+    const playerId = (await this.resolveMaPlayerId(zoneId)) || localPlayerId;
     return api.playerCommand(playerId, command, args);
   }
 
