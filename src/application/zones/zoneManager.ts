@@ -146,6 +146,11 @@ export class ZoneManager {
   private readonly inputConfigurator: InputSourceConfigurator;
   private initialized = false;
   private notifier: NotifierPort;
+  // Last full input config seen via replaceAll. Partial re-syncs (replaceZones,
+  // e.g. when a dynamic browser/sendspin zone registers) don't carry the global
+  // input config; without this fallback they would pass null and disable global
+  // inputs like AirPlay/Spotify, tearing down every receiver.
+  private lastInputs: InputConfig | null = null;
 
   /** Read-only snapshot of the current zone state for external consumers (e.g. outputs). */
   public getZoneState(zoneId: number): LoxoneZoneState | null {
@@ -360,6 +365,7 @@ export class ZoneManager {
     inputs?: InputConfig | null,
     groups?: GroupConfig | null,
   ): Promise<void> {
+    this.lastInputs = inputs ?? null;
     this.powerManager.clearAll();
     this.sharedPowerGroupManager.clearAll();
     this.disposeAllOutputs();
@@ -423,9 +429,13 @@ export class ZoneManager {
     const allZones = this.zoneRepo.list().map((ctx) => ctx.config);
     this.sharedPowerGroupManager.configure(groups?.powerGroups, allZones);
     this.inputConfigurator.configure();
+    // Partial re-syncs (e.g. dynamic browser zone registration) call this without
+    // the global input config; fall back to the last full config so we don't
+    // disable AirPlay/Spotify globally.
+    const effectiveInputs = inputs ?? this.lastInputs;
     const inputsPort = this.inputsPort;
-    inputsPort.syncAirplayZones(allZones, inputs?.airplay ?? null);
-    inputsPort.syncSpotifyZones(allZones, inputs?.spotify ?? null);
+    inputsPort.syncAirplayZones(allZones, effectiveInputs?.airplay ?? null);
+    inputsPort.syncSpotifyZones(allZones, effectiveInputs?.spotify ?? null);
     inputsPort.configureMusicAssistant(this.playbackCoordinator.getMusicAssistantInputHandlers());
     const contentPort = this.contentPort;
     contentPort.configureAppleMusic();
