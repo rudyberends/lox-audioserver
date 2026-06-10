@@ -4,7 +4,9 @@ import type { ConfigPort } from '@/ports/ConfigPort';
 import type { SpotifyBridgeConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { type IncomingMessage, type ServerResponse } from 'node:http';
+import { resolveProxyHost, resolveProxyPort } from '@/shared/urlProxy';
+import { pruneExpiredSessions, type StreamProxyRoute } from '@/shared/streamProxyRoute';
 import { randomUUID, createCipheriv, createHash } from 'node:crypto';
 import { Transform, Readable, PassThrough } from 'node:stream';
 import { once } from 'node:events';
@@ -147,9 +149,6 @@ export class DeezerStreamService {
   private readonly bridgesByProvider = new Map<string, SpotifyBridgeConfig>();
   private readonly bridgesById = new Map<string, SpotifyBridgeConfig>();
   private readonly proxySessions = new Map<string, DeezerProxySession>();
-  private proxyServer?: ReturnType<typeof createServer>;
-  private proxyPort?: number;
-  private readonly proxyHost = '127.0.0.1';
   private readonly configPort: ConfigPort;
 
   constructor(private readonly notifyOutputError: OutputErrorHandler, configPort: ConfigPort) {
@@ -247,6 +246,11 @@ export class DeezerStreamService {
     }
     const sessionId = randomUUID();
     const headers = this.buildHeaders(request.bridge);
+    // Primary cleanup is per-request (req.on('close') in handleProxyRequest);
+    // this prunes sessions that were created but never connected (aborted before
+    // ffmpeg pulled the stream). Safe here because the handler reads the map only
+    // once at connect, so an in-flight stream is never evicted from under itself.
+    pruneExpiredSessions(this.proxySessions);
     this.proxySessions.set(sessionId, {
       id: sessionId,
       urls,
@@ -257,8 +261,7 @@ export class DeezerStreamService {
       estimatedSize: gwStream?.size,
     });
 
-    const proxy = await this.ensureProxyServer();
-    const streamUrl = `http://${proxy.host}:${proxy.port}/deezer/${sessionId}/stream`;
+    const streamUrl = `http://${resolveProxyHost()}:${resolveProxyPort()}/deezer/${sessionId}/stream`;
     this.log.info('deezer stream ready', {
       zoneId,
       trackId: request.trackId,
@@ -599,32 +602,15 @@ export class DeezerStreamService {
     }
   }
 
-  private async ensureProxyServer(): Promise<{ host: string; port: number }> {
-    if (this.proxyServer && this.proxyPort) {
-      return { host: this.proxyHost, port: this.proxyPort };
-    }
-    this.proxyServer = createServer((req, res) => {
-      void this.handleProxyRequest(req, res).catch((err) => {
-        const message = err instanceof Error ? err.message : String(err);
-        this.log.warn('deezer proxy request failed', { message });
-        try {
-          res.writeHead(500);
-          res.end();
-        } catch {
-          /* ignore */
-        }
-      });
-    });
-    await new Promise<void>((resolve) => {
-      this.proxyServer!.listen(0, this.proxyHost, () => {
-        const address = this.proxyServer?.address();
-        if (address && typeof address === 'object') {
-          this.proxyPort = address.port;
-        }
-        resolve();
-      });
-    });
-    return { host: this.proxyHost, port: this.proxyPort ?? 0 };
+  /**
+   * Route served on the shared HTTP gateway (:7090) instead of a per-service
+   * ephemeral server. Streams Blowfish-decrypted audio for ffmpeg to pull.
+   */
+  public getProxyRoute(): StreamProxyRoute {
+    return {
+      matches: (pathname) => pathname.startsWith('/deezer/'),
+      handle: (req, res) => this.handleProxyRequest(req, res),
+    };
   }
 
   private async handleProxyRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {

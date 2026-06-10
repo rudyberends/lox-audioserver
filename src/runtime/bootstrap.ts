@@ -422,6 +422,11 @@ export function createRuntime(): Runtime {
       loxoneProcessor,
       connectionRegistry,
       browserZoneRegistry,
+      streamProxyRoutes: [
+        tidalStreamService.getProxyRoute(),
+        deezerStreamService.getProxyRoute(),
+        appleMusicStreamService.getProxyRoute(),
+      ],
     });
     networkService = new NetworkService({
       lineInRegistry,

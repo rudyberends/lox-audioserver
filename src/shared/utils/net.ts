@@ -1,4 +1,34 @@
 import { networkInterfaces } from 'node:os';
+import type { IncomingMessage } from 'node:http';
+
+/**
+ * True when the request originates from this host — loopback or one of our own
+ * non-loopback interface addresses. Used to keep localhost-only proxy routes
+ * unreachable from the LAN even though the gateway binds on 0.0.0.0.
+ */
+export function isLocalRequest(req: IncomingMessage): boolean {
+  const remote = req.socket?.remoteAddress ?? '';
+  if (remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1') {
+    return true;
+  }
+  let nets: ReturnType<typeof networkInterfaces>;
+  try {
+    nets = networkInterfaces();
+  } catch {
+    return false;
+  }
+  for (const entries of Object.values(nets)) {
+    for (const net of entries ?? []) {
+      if (!net?.address || net.internal) {
+        continue;
+      }
+      if (remote === net.address || remote === `::ffff:${net.address}`) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 export function defaultLocalIp(): string {
   let nets: ReturnType<typeof networkInterfaces>;

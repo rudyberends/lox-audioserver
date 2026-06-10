@@ -26,7 +26,9 @@ import {
 import { getShippedDeveloperToken, buildBaseHeaders, scrapeBearerToken } from './appleMusicAuth';
 import { gunzipSync } from 'zlib';
 import { Agent } from 'undici';
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { type IncomingMessage, type ServerResponse } from 'node:http';
+import { resolveProxyHost, resolveProxyPort } from '@/shared/urlProxy';
+import { pruneExpiredSessions, type StreamProxyRoute } from '@/shared/streamProxyRoute';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 
@@ -102,9 +104,8 @@ export class AppleMusicStreamService {
   private readonly bearerTokens = new Map<string, BearerState>();
   private readonly proxySessions = new Map<string, AppleMusicProxySession>();
   private readonly drmKeyCache = new Map<string, AppleMusicDrmKeyCacheEntry>();
-  private proxyServer?: ReturnType<typeof createServer>;
-  private proxyPort?: number;
-  private readonly proxyHost = '127.0.0.1';
+  private readonly proxyHost = resolveProxyHost();
+  private readonly proxyPort = resolveProxyPort();
   private readonly configPort: ConfigPort;
 
   constructor(private readonly notifyOutputError: OutputErrorHandler, configPort: ConfigPort) {
@@ -888,7 +889,8 @@ export class AppleMusicStreamService {
     headers: Record<string, string> | undefined,
     decryptionKey?: string,
   ): Promise<{ host: string; port: number; sessionId: string }> {
-    const { host, port } = await this.ensureProxyServer();
+    const host = this.proxyHost;
+    const port = this.proxyPort;
     this.pruneProxySessions();
     this.pruneDrmKeyCache();
     const sessionId = randomUUID();
@@ -903,32 +905,16 @@ export class AppleMusicStreamService {
     return { host, port, sessionId };
   }
 
-  private async ensureProxyServer(): Promise<{ host: string; port: number }> {
-    if (this.proxyServer && this.proxyPort) {
-      return { host: this.proxyHost, port: this.proxyPort };
-    }
-    this.proxyServer = createServer((req, res) => {
-      this.handleProxyRequest(req, res).catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        this.log.warn('Apple Music proxy request failed', { message });
-        if (!res.headersSent) {
-          res.writeHead(500, { 'Content-Type': 'text/plain' });
-        }
-        res.end();
-      });
-    });
-    await new Promise<void>((resolve, reject) => {
-      this.proxyServer!
-        .listen(0, this.proxyHost, () => {
-          const address = this.proxyServer?.address();
-          if (address && typeof address === 'object') {
-            this.proxyPort = address.port;
-          }
-          resolve();
-        })
-        .on('error', reject);
-    });
-    return { host: this.proxyHost, port: this.proxyPort ?? 0 };
+  /**
+   * Route served on the shared HTTP gateway (:7090) instead of a per-service
+   * ephemeral server. Rewrites HLS playlists and proxies DRM keys / MP4
+   * segments for ffmpeg to pull.
+   */
+  public getProxyRoute(): StreamProxyRoute {
+    return {
+      matches: (pathname) => pathname.startsWith('/applemusic/'),
+      handle: (req, res) => this.handleProxyRequest(req, res),
+    };
   }
 
   private async handleProxyRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1292,13 +1278,8 @@ export class AppleMusicStreamService {
     return sanitized;
   }
 
-  private pruneProxySessions(maxAgeMs = 10 * 60 * 1000): void {
-    const cutoff = Date.now() - maxAgeMs;
-    for (const [id, session] of this.proxySessions) {
-      if (session.createdAt < cutoff) {
-        this.proxySessions.delete(id);
-      }
-    }
+  private pruneProxySessions(): void {
+    pruneExpiredSessions(this.proxySessions);
   }
 
   /** Drop expired DRM key cache entries (those without an in-flight fetch). */

@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
-import { networkInterfaces } from 'node:os';
 import { createLogger } from '@/shared/logging/logger';
+import { isLocalRequest } from '@/shared/utils/net';
 import { bestEffort } from '@/shared/bestEffort';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import {
@@ -28,7 +28,7 @@ export class AudioProxyHandler {
       res.end(JSON.stringify({ error: 'method-not-allowed' }));
       return;
     }
-    if (!this.isLocalClient(req)) {
+    if (!isLocalRequest(req)) {
       res.writeHead(403, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'forbidden' }));
       return;
@@ -379,22 +379,4 @@ export class AudioProxyHandler {
     }
   }
 
-  private isLocalClient(req: IncomingMessage): boolean {
-    const remote = req.socket?.remoteAddress ?? '';
-    if (remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1') {
-      return true;
-    }
-    const nets = networkInterfaces();
-    for (const entries of Object.values(nets)) {
-      for (const net of entries ?? []) {
-        if (!net?.address || net.internal) {
-          continue;
-        }
-        if (remote === net.address || remote === `::ffff:${net.address}`) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
 }

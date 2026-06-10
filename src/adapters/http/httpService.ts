@@ -12,6 +12,8 @@ import { AudioStreamHandler } from '@/adapters/http/streams/audioStreamHandler';
 import { AudioProxyHandler } from '@/adapters/http/streams/audioProxyHandler';
 import { LineInIngestWebSocket } from '@/adapters/http/streams/lineInIngestWs';
 import { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
+import { isLocalRequest } from '@/shared/utils/net';
+import type { StreamProxyRoute } from '@/shared/streamProxyRoute';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
@@ -55,6 +57,7 @@ export class HttpService {
   private readonly staticFiles: StaticFileHandler;
   private readonly audioStream: AudioStreamHandler;
   private readonly audioProxy: AudioProxyHandler;
+  private readonly streamProxyRoutes: StreamProxyRoute[];
   private readonly lineInIngestWs: LineInIngestWebSocket;
   private readonly lineInApi: LineInApiHandler;
   private readonly sendspin: SendspinGateway;
@@ -98,6 +101,7 @@ export class HttpService {
       loxoneProcessor: LoxoneCommandProcessor;
       connectionRegistry: ConnectionRegistry;
       browserZoneRegistry: BrowserZoneRegistry;
+      streamProxyRoutes: StreamProxyRoute[];
     },
   ) {
     this.lineInApi = new LineInApiHandler(options.configPort, options.lineInMetadataService);
@@ -135,6 +139,7 @@ export class HttpService {
       options.zoneAudioPrefs,
     );
     this.audioProxy = new AudioProxyHandler(options.zoneManager);
+    this.streamProxyRoutes = options.streamProxyRoutes;
     this.lineInIngestWs = new LineInIngestWebSocket(options.lineInRegistry);
     this.sendspin = new SendspinGateway(options.browserZoneRegistry);
     this.snapcast = new SnapcastGateway(options.snapcastCore);
@@ -300,6 +305,40 @@ export class HttpService {
 
     if (this.audioProxy.matches(pathname)) {
       await this.audioProxy.handle(req, res);
+      return;
+    }
+
+    // Per-provider stream proxies (Tidal/Deezer/Apple Music) registered by the
+    // content services. These replace per-service ephemeral http.Servers; they
+    // are consumed only by local ffmpeg, so reject non-local clients even though
+    // the gateway binds 0.0.0.0.
+    for (const route of this.streamProxyRoutes) {
+      if (!route.matches(pathname)) {
+        continue;
+      }
+      if (!isLocalRequest(req)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
+        res.end();
+        return;
+      }
+      try {
+        await route.handle(req, res);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.warn('stream proxy request failed', { pathname, message });
+        if (!res.headersSent) {
+          try {
+            res.writeHead(500);
+          } catch {
+            /* ignore */
+          }
+        }
+        try {
+          res.end();
+        } catch {
+          /* ignore */
+        }
+      }
       return;
     }
 
