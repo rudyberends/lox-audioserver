@@ -95,13 +95,24 @@ class SpotifyConnectInstance {
    * On Spotify Connect activation (transfer-to-device) librespot fires a `volume`
    * event reflecting the picker slider — often 100% on a fresh app session.
    * Forwarding it clobbers the zone's `volumes.default`, which the regular play-start
-   * path applies in onPlayerStarted. We swallow connect volume events for a short
-   * window after the session bootstraps so the zone default wins on activation;
-   * later slider movements propagate normally. A window (not a strict one-shot)
-   * covers clients that emit more than one VolumeChanged during the handshake.
+   * path applies in onPlayerStarted.
+   *
+   * The arrival time of that event relative to the session bootstrap is not stable
+   * (it can lag several seconds behind the transfer), so a fixed time window alone is
+   * unreliable. We combine two guards, armed when a session bootstraps:
+   *   1. A short guard window during which ALL connect volume events are dropped,
+   *      regardless of value or count — this covers the whole activation handshake
+   *      burst (the transfer may push several values).
+   *   2. After the window, a value latch: keep suppressing the picker's activation
+   *      value (and repeats of it) and only start forwarding once the user moves the
+   *      slider to a *different* value.
+   * Together volumes.default wins on activation regardless of timing or how many
+   * values the handshake emits, while genuine later slider movements still propagate.
    */
-  private suppressConnectVolumeUntil = 0;
-  private readonly connectActivationVolumeSuppressMs = 1500;
+  private connectActivationVolumePending = false;
+  private connectActivationVolumeRaw: number | null = null;
+  private connectActivationVolumeGuardUntil = 0;
+  private readonly connectActivationVolumeGuardMs = 4000;
 
   constructor(
     private readonly controller: SpotifyConnectController,
@@ -575,17 +586,29 @@ class SpotifyConnectInstance {
       // update the zone so the Loxone UI reflects changes made in the Spotify app.
       const rawVolume = typeof ev.volume === 'number' ? ev.volume : -1;
       if (rawVolume >= 0 && this.hasActiveSession) {
-        // Suppress the picker-slider volume that librespot reports right after a
-        // Connect transfer so the zone's volumes.default wins on activation.
-        if (Date.now() < this.suppressConnectVolumeUntil) {
-          this.log.debug('suppressing connect activation volume; zone default wins', {
-            zoneId: this.zoneId,
-            rawVolume,
-          });
-        } else {
-          const volumePercent = Math.round((rawVolume / 65535) * 100);
-          this.controller.updateVolume(this.zoneId, volumePercent);
+        // Drop the picker-slider volume reported around a Connect transfer so the
+        // zone's volumes.default wins on activation. During the guard window every
+        // connect volume event is dropped (covers the multi-value handshake burst);
+        // after it, keep dropping the activation value and repeats of it, and release
+        // only when the user moves the slider to a different value.
+        if (this.connectActivationVolumePending) {
+          if (this.connectActivationVolumeRaw === null) {
+            this.connectActivationVolumeRaw = rawVolume;
+          }
+          const withinGuard = Date.now() < this.connectActivationVolumeGuardUntil;
+          if (withinGuard || rawVolume === this.connectActivationVolumeRaw) {
+            this.log.debug('suppressing connect activation volume; zone default wins', {
+              zoneId: this.zoneId,
+              rawVolume,
+              withinGuard,
+            });
+            return;
+          }
+          // User moved the slider to a new value — stop latching and forward from here on.
+          this.connectActivationVolumePending = false;
         }
+        const volumePercent = Math.round((rawVolume / 65535) * 100);
+        this.controller.updateVolume(this.zoneId, volumePercent);
       }
     }
   }
@@ -1118,10 +1141,13 @@ class SpotifyConnectInstance {
 
   private startControllerPlayback(metadata: PlaybackMetadata): void {
     this.isActive = true;
-    // Arm the activation window so the picker-slider volume librespot reports during
-    // the Connect handshake is ignored and the zone's volumes.default (applied by the
-    // play-start path) wins. Subsequent slider movements propagate after the window.
-    this.suppressConnectVolumeUntil = Date.now() + this.connectActivationVolumeSuppressMs;
+    // Arm the activation guard + latch so the picker-slider volume librespot reports
+    // during the Connect handshake is ignored and the zone's volumes.default (applied by
+    // the play-start path) wins. Released on the first slider move to a different value
+    // after the guard window.
+    this.connectActivationVolumePending = true;
+    this.connectActivationVolumeRaw = null;
+    this.connectActivationVolumeGuardUntil = Date.now() + this.connectActivationVolumeGuardMs;
     try {
       this.stopAirplaySession(this.zoneId, 'switch_to_spotify');
     } catch {
