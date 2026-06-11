@@ -159,6 +159,11 @@ export class RaopSender {
   private sourcePaused = false;
   private droppedBytes = 0;
   private lastDropLogAt = 0;
+  // Wall-clock of the last frame actually accepted by the device, and whether the
+  // device is currently paused. Used by rebind() to decide between a seamless bare
+  // flush (live timeline) and a re-anchor (paused or drained timeline).
+  private lastSentAt = 0;
+  private playoutPaused = false;
 
   private drainTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -199,6 +204,7 @@ export class RaopSender {
    */
   public async start(source: NodeJS.ReadableStream, volume: number): Promise<boolean> {
     this.stopped = false;
+    this.playoutPaused = false;
     this.currentVolume = clampVolume(volume, this.currentVolume);
     if (this.handle !== null) {
       // Already connected; just (re)bind the source.
@@ -241,6 +247,7 @@ export class RaopSender {
     reAnchor: boolean,
   ): Promise<boolean> {
     this.stopped = false;
+    this.playoutPaused = false;
     this.currentVolume = clampVolume(volume, this.currentVolume);
     const connected = this.handle !== null;
     // Track change within a synced group: the sender stays connected and keeps its
@@ -453,6 +460,7 @@ export class RaopSender {
     } catch {
       /* ignore */
     }
+    this.playoutPaused = true;
     this.detachSource();
     this.clearRing();
   }
@@ -463,6 +471,7 @@ export class RaopSender {
       return;
     }
     this.stopped = false;
+    this.playoutPaused = false;
     try {
       senderControl(this.handle, 'play');
     } catch {
@@ -484,11 +493,26 @@ export class RaopSender {
     if (this.handle === null) {
       return;
     }
+    // A bare flush keeps the device's RTP timeline and resumes on the next frames —
+    // correct for a skip mid-playback, where the device buffer is live. But when the
+    // device is paused (skip while paused) or has drained during a fetch gap (natural
+    // track advance after the old session ended seconds before the next one is ready),
+    // the timeline is stale: a bare flush leaves new frames anchored in the past, so
+    // the device either leaks a sliver of the old buffered tail or stays silent until
+    // a manual pause/unpause. In those cases re-anchor with `play` (now+200ms), like
+    // resume(), so the new track starts cleanly. Solo path only; grouped sync
+    // re-anchors via startForGroup()'s shared NTP anchor.
+    const idleMs = this.lastSentAt === 0 ? Infinity : Date.now() - this.lastSentAt;
+    const timelineStale = this.playoutPaused || idleMs > this.getLatencyMs();
     try {
       senderControl(this.handle, 'flush');
+      if (timelineStale) {
+        senderControl(this.handle, 'play');
+      }
     } catch {
       /* ignore */
     }
+    this.playoutPaused = false;
     this.clearDrainTimer();
     this.clearRing();
     this.attachSource(source);
@@ -620,6 +644,7 @@ export class RaopSender {
       }
       if (result.sent) {
         this.pending = null;
+        this.lastSentAt = Date.now();
         this.updateBackpressure(); // ring shrank — maybe resume source
         continue;
       }
