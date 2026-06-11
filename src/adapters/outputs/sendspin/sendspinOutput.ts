@@ -167,6 +167,18 @@ export class SendspinOutput implements ZoneOutput {
     bitDepth: audioOutputSettings.pcmBitDepth,
   };
 
+  /**
+   * Last format the *client* explicitly negotiated (via onFormatChanged).
+   * `negotiatedFormat` gets reset to the stream default (often the 44.1 kHz engine
+   * default) by onIdentified on every (re)connect, so reading it at play time can
+   * report 44.1 kHz even though the client really wants e.g. 48 kHz/24-bit. The
+   * engine then starts at 44.1 kHz and immediately restarts (reason=replace) when
+   * the client renegotiates — that mid-stream restart races the source and can
+   * leave a started-but-starved stream (audible dmix loop / noise). This value
+   * survives reconnects so getPreferredOutput() advertises the real rate and the
+   * engine starts aligned. See PR description.
+   */
+  private lastClientNegotiatedFormat: SendspinFormat | null = null;
   /** Actual output format of the current ffmpeg pipeline. */
   private activeOutputFormat: SendspinFormat | null = null;
   private activeCodecHeader: string | null = null;
@@ -218,7 +230,11 @@ export class SendspinOutput implements ZoneOutput {
         this.clientConnected = true;
         this.clientState = null;
         this.externalSourceActive = false;
-        this.negotiatedFormat = this.normalizeFormat(sendspinSession.getStreamFormat());
+        // Reconnect (e.g. Connect churn on track change) seeds the stream default,
+        // but if the client already negotiated a real format keep that — otherwise we
+        // start the pipeline at 44.1k here and restart once onFormatChanged re-fires.
+        this.negotiatedFormat =
+          this.lastClientNegotiatedFormat ?? this.normalizeFormat(sendspinSession.getStreamFormat());
         if (!this.isOwner()) {
           // Avoid multiple zones fighting over the same Sendspin client.
           return;
@@ -269,6 +285,9 @@ export class SendspinOutput implements ZoneOutput {
       },
       onFormatChanged: (_session: SendspinSession, format: PlayerFormat) => {
         this.negotiatedFormat = this.normalizeFormat(format);
+        // Remember the client's explicitly-requested format so it survives a later
+        // onIdentified reset and getPreferredOutput() can advertise the real rate.
+        this.lastClientNegotiatedFormat = this.negotiatedFormat;
         // Restart stream with the newly requested format.
         void this.startStream({ preserveAnchor: false, formatOverride: this.negotiatedFormat });
       },
@@ -418,17 +437,23 @@ export class SendspinOutput implements ZoneOutput {
   }
 
   public getPreferredOutput(): PreferredOutput {
-    const preferredPrebuffer = this.computePrebufferBytes(this.negotiatedFormat);
+    // Prefer the client's last explicitly-negotiated format. negotiatedFormat is
+    // reset to the stream default by onIdentified on (re)connect, so relying on it
+    // here makes the engine start at the default rate and then restart on the
+    // format mismatch (reason=replace) — which can starve the stream into an
+    // audible dmix loop. lastClientNegotiatedFormat survives reconnects.
+    const fmt = this.lastClientNegotiatedFormat ?? this.negotiatedFormat;
+    const preferredPrebuffer = this.computePrebufferBytes(fmt);
     return {
       profile:
-        this.negotiatedFormat.codec === AudioCodec.OPUS
+        fmt.codec === AudioCodec.OPUS
           ? 'opus'
-          : this.negotiatedFormat.codec === AudioCodec.FLAC
+          : fmt.codec === AudioCodec.FLAC
             ? 'flac'
             : 'pcm',
-      sampleRate: this.negotiatedFormat.sampleRate,
-      channels: this.negotiatedFormat.channels,
-      bitDepth: this.negotiatedFormat.bitDepth,
+      sampleRate: fmt.sampleRate,
+      channels: fmt.channels,
+      bitDepth: fmt.bitDepth,
       prebufferBytes: preferredPrebuffer,
     };
   }
