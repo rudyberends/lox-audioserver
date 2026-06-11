@@ -52,6 +52,8 @@ export class SonosStateController implements ZoneStateController {
   private coverRevision = 0;
   private lastTrackSignature = '';
   private lastLoggedSnapshotSignature = '';
+  private lastTrackMediaUrl: string | null = null;
+  private lastTrackTitle: string | null = null;
 
   constructor(options: SonosControllerOptions) {
     this.zone = options.zone;
@@ -324,6 +326,12 @@ export class SonosStateController implements ZoneStateController {
     const track = metadata?.currentItem?.track;
     const container = metadata?.container;
 
+    const trackMediaUrl = cleanString(track?.mediaUrl);
+    if (trackMediaUrl) {
+      this.lastTrackMediaUrl = trackMediaUrl;
+      this.lastTrackTitle = cleanString(track?.name) || cleanString(container?.name) || null;
+    }
+
     const mode = mapPlaybackState(group.playbackState);
     const audiotype = resolveAudiotype(group, track?.mediaUrl ?? '', container?.type ?? '');
     const sourceName = resolveSourceName(audiotype, container?.name ?? '', group.name, this.zone.name);
@@ -396,8 +404,9 @@ export class SonosStateController implements ZoneStateController {
     }
 
     try {
-      if (action === 'play') await group.play();
-      else if (action === 'pause') await group.pause();
+      if (action === 'play') {
+        await this.dispatchPlay(group);
+      } else if (action === 'pause') await group.pause();
       else if (action === 'stop') await group.stop();
       else if (action === 'next') await group.skipToNextTrack();
       else await group.skipToPreviousTrack();
@@ -410,6 +419,32 @@ export class SonosStateController implements ZoneStateController {
         message: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  // For Sonos S2 a bare group.play() relies on the device's internal queue,
+  // which decays after idle (radio stream sessions expire, container becomes
+  // stale). The device then flips to PLAYING for ~200ms and drops back to
+  // STOPPED. Re-issuing playStreamUrl with the cached media URL forces Sonos
+  // to reload the source instead. Falls back to group.play() when paused
+  // (resume should keep position) or when we have no cached URL / no
+  // playStreamUrl (e.g. S1).
+  private async dispatchPlay(group: AnySonosGroup): Promise<void> {
+    const isPaused = String(group.playbackState ?? '').toUpperCase().includes('PAUSED');
+    const canReload =
+      !isPaused &&
+      this.lastTrackMediaUrl != null &&
+      'playStreamUrl' in group &&
+      typeof (group as SonosGroup).playStreamUrl === 'function';
+    if (canReload) {
+      const container = {
+        _objectType: 'container' as const,
+        name: this.lastTrackTitle ?? this.zone.name,
+        type: 'trackList',
+      };
+      await (group as SonosGroup).playStreamUrl(this.lastTrackMediaUrl!, container);
+      return;
+    }
+    await group.play();
   }
 }
 
