@@ -230,7 +230,11 @@ export class SendspinOutput implements ZoneOutput {
         this.clientConnected = true;
         this.clientState = null;
         this.externalSourceActive = false;
-        this.negotiatedFormat = this.normalizeFormat(sendspinSession.getStreamFormat());
+        // Reconnect (e.g. Connect churn on track change) seeds the stream default,
+        // but if the client already negotiated a real format keep that — otherwise we
+        // start the pipeline at 44.1k here and restart once onFormatChanged re-fires.
+        this.negotiatedFormat =
+          this.lastClientNegotiatedFormat ?? this.normalizeFormat(sendspinSession.getStreamFormat());
         if (!this.isOwner()) {
           // Avoid multiple zones fighting over the same Sendspin client.
           return;
