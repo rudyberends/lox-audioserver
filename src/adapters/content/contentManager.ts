@@ -202,6 +202,21 @@ export class ContentManager {
     return [...entries, this.radioParadise.getMenuEntry()];
   }
 
+  /** Add a manually-defined custom radio stream (native `audio/cfg/radios/add`). */
+  public async addCustomRadio(
+    name: string,
+    stream: string,
+    coverurl?: string,
+  ): Promise<{ id: string; name: string; stream: string }> {
+    const entry = await this.customRadioStore.add({ name, stream, coverurl: coverurl || undefined });
+    return { id: entry.id, name: entry.name, stream: entry.stream };
+  }
+
+  /** Remove a custom radio stream by id (native `audio/cfg/radios/del`). */
+  public async removeCustomRadio(id: string): Promise<boolean> {
+    return this.customRadioStore.remove(id);
+  }
+
   public getPlaylists(
     service: string,
     user: string,

@@ -46,6 +46,41 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
       const radios = await contentManager.getRadios();
       return buildResponse(command, 'getradios', radios);
     },
+    // audio/cfg/radios/add/<name>/<url>[/<auth>] — add a custom stream.
+    audioCfgRadiosAdd: async (command: string) => {
+      const parts = splitCommand(command);
+      // params are [name, url, auth?]; the url contains slashes, so once the
+      // command path is decoded it spans several segments — rejoin everything
+      // after the name back into the url (the player never sends the auth part).
+      const name = parts[4] ? decodeURIComponent(parts[4]) : '';
+      const url = parts.length > 5 ? decodeURIComponent(parts.slice(5).join('/')) : '';
+      // CustomRadioError: NONE=0, INVALID_URL=-1, MISSING_PAYLOAD=-4.
+      if (!name || !url) {
+        return buildResponse(command, 'radios', { action: 'add', name, url, error: -4 });
+      }
+      if (!/^https?:\/\//i.test(url)) {
+        return buildResponse(command, 'radios', { action: 'add', name, url, error: -1 });
+      }
+      try {
+        const entry = await contentManager.addCustomRadio(name, url);
+        return buildResponse(command, 'radios', {
+          action: 'add',
+          id: entry.id,
+          name: entry.name,
+          url: entry.stream,
+          error: 0,
+        });
+      } catch {
+        return buildResponse(command, 'radios', { action: 'add', name, url, error: 1 });
+      }
+    },
+    // audio/cfg/radios/del/<id> — remove a custom stream.
+    audioCfgRadiosDel: async (command: string) => {
+      const parts = splitCommand(command);
+      const id = parts[4] ? decodeURIComponent(parts[4]) : '';
+      const removed = id ? await contentManager.removeCustomRadio(id) : false;
+      return buildResponse(command, 'radios', { action: 'del', id, error: removed ? 0 : -3 });
+    },
     audioCfgGetPlaylists: async (command: string) => {
       const parts = splitCommand(command);
       const service = parts[3] ?? '';

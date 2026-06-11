@@ -113,8 +113,9 @@ export function registerRoutes(
   router.registerPrefix('audio', 'audio/cfg/storage/del', providerHandlers.audioCfgStorageDel);
   router.registerPrefix('audio', 'audio/cfg/getavailableservices', providerHandlers.audioCfgGetAvailableServices);
   router.registerPrefix('audio', 'audio/cfg/getservices', providerHandlers.audioCfgGetServices);
-  router.registerPrefix('audio', 'audio/cfg/radios/add', placeholder('radios/add'));
-  router.registerPrefix('audio', 'audio/cfg/radios/delete', placeholder('radios/delete'));
+  router.registerPrefix('audio', 'audio/cfg/radios/add', providerHandlers.audioCfgRadiosAdd);
+  router.registerPrefix('audio', 'audio/cfg/radios/del', providerHandlers.audioCfgRadiosDel);
+  router.registerPrefix('audio', 'audio/cfg/radios/delete', providerHandlers.audioCfgRadiosDel);
   router.registerPrefix('audio', 'audio/cfg/getradios', providerHandlers.audioCfgGetRadios);
   router.registerPrefix('audio', 'audio/cfg/getinputs', inputHandlers.audioCfgGetInputs);
   router.registerRegex('audio', /^audio\/cfg\/input\/[^/]+\/rename\//, inputHandlers.audioCfgInputRename);
