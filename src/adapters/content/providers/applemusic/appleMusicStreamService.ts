@@ -104,6 +104,7 @@ export class AppleMusicStreamService {
   private readonly bearerTokens = new Map<string, BearerState>();
   private readonly proxySessions = new Map<string, AppleMusicProxySession>();
   private readonly drmKeyCache = new Map<string, AppleMusicDrmKeyCacheEntry>();
+  private readonly storefrontByBridge = new Map<string, string>();
   private readonly proxyHost = resolveProxyHost();
   private readonly proxyPort = resolveProxyPort();
   private readonly configPort: ConfigPort;
@@ -182,43 +183,27 @@ export class AppleMusicStreamService {
     }
 
     if (request.isLibrary) {
-      const catalogId = await this.fetchCatalogIdForLibraryTrack(headers, request.trackId);
-      if (catalogId) {
-        const catalogPlayback = await this.fetchWebPlayback(headers, catalogId, false);
-        const catalogUrl = this.extractStreamUrl(catalogPlayback);
-        if (catalogPlayback && catalogUrl) {
-          this.log.info('apple music library using catalog playback for drm', {
-            zoneId,
-            trackId: request.trackId,
-            catalogId,
-          });
-          webPlayback = catalogPlayback;
-          streamUrl = catalogUrl;
-          drmTrackId = catalogId;
-          drmIsLibrary = false;
-        }
-      } else {
-        failureReason = 'apple music library catalog unresolved';
-      }
-    }
-
-    if (!streamUrl && request.isLibrary) {
-      const catalogId = await this.fetchCatalogIdForLibraryTrack(headers, request.trackId);
-      if (catalogId) {
-        this.log.info('apple music library fallback to catalog id', {
+      // Prefer a catalog stream for library tracks: catalog assets get DRM licenses where the
+      // library asset often does not. resolvePlayableCatalog walks the stored catalogId, the live
+      // catalog relationship, and finally an exact metadata search (music-assistant #4109) so a
+      // deprecated/pulled catalog version is transparently replaced by the current one.
+      const librarySongId = webPlayback && !webPlayback.__error ? this.asId(webPlayback.songId) : undefined;
+      const resolved = await this.resolvePlayableCatalog(headers, request.bridge, request.trackId, librarySongId);
+      if (resolved) {
+        this.log.info('apple music library using catalog playback for drm', {
           zoneId,
           trackId: request.trackId,
-          catalogId,
+          catalogId: resolved.catalogId,
+          via: resolved.via,
         });
-        webPlayback = await this.fetchWebPlayback(headers, catalogId, false);
-        streamUrl = this.extractStreamUrl(webPlayback);
-        if (streamUrl) {
-          drmTrackId = catalogId;
-          drmIsLibrary = false;
-        }
-      } else if (!failureReason) {
-        failureReason = 'apple music library catalog unresolved';
+        webPlayback = resolved.webPlayback;
+        streamUrl = resolved.streamUrl;
+        drmTrackId = resolved.catalogId;
+        drmIsLibrary = false;
       }
+      // If resolve failed but the library webPlayback yielded an HLS streamUrl, we keep it and let
+      // the DRM path below try the library asset (unchanged). If there is no streamUrl at all, the
+      // !streamUrl block below reports the underlying webPlayback error (e.g. 3076 unavailable).
     }
 
     if (!streamUrl) {
@@ -419,6 +404,7 @@ export class AppleMusicStreamService {
     const match = candidates.find((value) => typeof value === 'string' && value.length > 0);
     return match ?? null;
   }
+
 
   private async detectDrm(streamUrl: string, headers: Record<string, string>): Promise<boolean> {
     const playlist = await this.fetchText(streamUrl, headers);
@@ -792,15 +778,20 @@ export class AppleMusicStreamService {
   ): Promise<PlaybackSource> {
     const { host, port, sessionId } = await this.ensureProxySession(streamUrl, headers, decryptionKey);
     const url = `http://${host}:${port}/applemusic/${sessionId}/segment?u=${encodeURIComponent(streamUrl)}`;
-    await this.logInputDetails('proxy', streamUrl, headers, 'mov', sessionId);
+    // DRM-decrypted assets are always fragmented MP4, so pin -f mov for stable probing.
+    // Plain library direct assets (no DRM) can be audio/mpeg (matched/uploaded content)
+    // as well as mp4 — forcing mov there makes ffmpeg fail with "moov atom not found",
+    // so leave the format unset and let ffmpeg auto-detect the container.
+    const inputFormat = decryptionKey ? 'mov' : undefined;
+    await this.logInputDetails('proxy', streamUrl, headers, inputFormat, sessionId);
     const realTime = this.resolvePaceInput(bridge);
     if (!realTime) {
-      this.log.info('Apple Music pacing disabled (proxy direct)', { inputFormat: 'mov', sessionId });
+      this.log.info('Apple Music pacing disabled (proxy direct)', { inputFormat, sessionId });
     }
     return {
       kind: 'url',
       url,
-      inputFormat: 'mov',
+      inputFormat,
       realTime,
       // Apple Music fragmented MP4 streams are finite and DRM-decrypted; avoid
       // aggressive low-latency probing to reduce premature EOF/truncation.
@@ -1371,13 +1362,159 @@ export class AppleMusicStreamService {
     }
   }
 
-  private async fetchCatalogIdForLibraryTrack(headers: Record<string, string>, trackId: string): Promise<string | null> {
-    const url = `${APPLE_MUSIC_API_BASE}/me/library/songs/${encodeURIComponent(trackId)}`;
+  /**
+   * Resolve a catalog webPlayback for a library track. Tries, in order: the catalogId stored on the
+   * library song, the live catalog relationship, and an exact metadata search. Returns the first
+   * candidate whose webPlayback yields a stream URL, or null when none are playable.
+   */
+  private async resolvePlayableCatalog(
+    headers: Record<string, string>,
+    bridge: SpotifyBridgeConfig,
+    libraryTrackId: string,
+    songId?: string,
+  ): Promise<{ catalogId: string; webPlayback: any; streamUrl: string; via: 'songId' | 'playParams' | 'relationship' | 'search' } | null> {
+    const info = await this.fetchLibraryTrackCatalogInfo(headers, libraryTrackId);
+    if (!info) return null;
+
+    const tryCatalog = async (
+      catalogId: string,
+      via: 'songId' | 'playParams' | 'relationship' | 'search',
+    ): Promise<{ catalogId: string; webPlayback: any; streamUrl: string; via: typeof via } | null> => {
+      const playback = await this.fetchWebPlayback(headers, catalogId, false);
+      const streamUrl = this.extractStreamUrl(playback);
+      if (playback && streamUrl) return { catalogId, webPlayback: playback, streamUrl, via };
+      return null;
+    };
+
+    // Catalog ids Apple already associates with the library track, in priority order: the webPlayback
+    // songId (Apple's live mapping), then the stored playParams id, then the catalog relationship
+    // (often the current id after Apple replaces a deprecated album version).
+    const sources: Array<['songId' | 'playParams' | 'relationship', string | undefined]> = [
+      ['songId', songId],
+      ['playParams', info.playParamsCatalogId],
+      ['relationship', info.relationshipCatalogId],
+    ];
+    const seen = new Set<string>();
+    for (const [via, id] of sources) {
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const hit = await tryCatalog(id, via);
+      if (hit) return hit;
+    }
+    const known = [...seen];
+
+    // Stored ids are unavailable (deprecated/pulled). Apple still serves a current version under a
+    // new catalog id; find it by exact metadata match (music-assistant #4109).
+    const replacement = await this.findReplacementCatalogId(headers, bridge, info);
+    if (replacement && !known.includes(replacement)) {
+      const hit = await tryCatalog(replacement, 'search');
+      if (hit) {
+        this.log.info('apple music deprecated catalog replaced via search', {
+          libraryTrackId,
+          deprecatedCatalogId: known[0],
+          replacementCatalogId: replacement,
+        });
+        return hit;
+      }
+    }
+    return null;
+  }
+
+  private async fetchLibraryTrackCatalogInfo(
+    headers: Record<string, string>,
+    trackId: string,
+  ): Promise<{ playParamsCatalogId?: string; relationshipCatalogId?: string; name?: string; artistName?: string; albumName?: string } | null> {
+    const url = `${APPLE_MUSIC_API_BASE}/me/library/songs/${encodeURIComponent(trackId)}?include=catalog`;
     const data = await this.fetchJson<any>(url, headers);
-    const attrs = data?.data?.[0]?.attributes;
-    const playParams = attrs?.playParams;
-    const catalogId = playParams?.catalogId || attrs?.catalogId;
-    return catalogId ? String(catalogId) : null;
+    const item = data?.data?.[0];
+    if (!item) return null;
+    const attrs = item.attributes ?? {};
+    const playParamsCatalogId = attrs.playParams?.catalogId ?? attrs.catalogId;
+    const relationshipCatalogId = item.relationships?.catalog?.data?.[0]?.id;
+    const asStr = (v: unknown): string | undefined =>
+      v === undefined || v === null ? undefined : String(v);
+    return {
+      playParamsCatalogId: asStr(playParamsCatalogId),
+      relationshipCatalogId: asStr(relationshipCatalogId),
+      name: typeof attrs.name === 'string' ? attrs.name : undefined,
+      artistName: typeof attrs.artistName === 'string' ? attrs.artistName : undefined,
+      albumName: typeof attrs.albumName === 'string' ? attrs.albumName : undefined,
+    };
+  }
+
+  /**
+   * Find the current catalog id for a track whose stored catalog version is gone, by searching the
+   * catalog and requiring an exact name + artist (+ album, when known) match — conservative on
+   * purpose so we never silently swap in the wrong song.
+   */
+  private async findReplacementCatalogId(
+    headers: Record<string, string>,
+    bridge: SpotifyBridgeConfig,
+    info: { name?: string; artistName?: string; albumName?: string },
+  ): Promise<string | null> {
+    if (!info.name || !info.artistName) return null;
+    const storefront = await this.ensureStorefront(headers, bridge);
+    if (!storefront) {
+      this.log.debug('apple music replacement search skipped: no storefront');
+      return null;
+    }
+    // Keep the term lean — name + artist. Folding the album in too made Apple's search return zero
+    // hits for some tracks; the album is still enforced in the match filter below. Strip apostrophes
+    // (Apple's search chokes on them) like the provider does.
+    const term = [info.name, info.artistName].filter(Boolean).join(' ').replace(/'/g, '');
+    const url = new URL(`${APPLE_MUSIC_API_BASE}/catalog/${storefront}/search`);
+    url.searchParams.set('term', term);
+    url.searchParams.set('types', 'songs');
+    url.searchParams.set('limit', '25');
+    const data = await this.fetchJson<any>(url.toString(), headers);
+    const norm = (s?: string): string => (s ?? '').normalize('NFC').trim().toLowerCase();
+    // Distinguish a failed request (fetchJson null) from a genuine empty result set — they need
+    // very different follow-up, and conflating them hid whether search even works for this account.
+    if (data === null) {
+      this.log.warn('apple music replacement search request failed', { storefront, term });
+      return null;
+    }
+    const songs = data?.results?.songs?.data;
+    if (!Array.isArray(songs) || songs.length === 0) {
+      this.log.debug('apple music replacement search: zero hits', { storefront, term });
+      return null;
+    }
+    const wantName = norm(info.name);
+    const wantArtist = norm(info.artistName);
+    const wantAlbum = norm(info.albumName);
+    const match = songs.find((s: any) => {
+      const a = s?.attributes ?? {};
+      if (norm(a.name) !== wantName) return false;
+      if (norm(a.artistName) !== wantArtist) return false;
+      if (wantAlbum && norm(a.albumName) !== wantAlbum) return false;
+      return true;
+    });
+    this.log.debug('apple music replacement search', {
+      term,
+      candidates: songs.length,
+      matched: match ? String(match.id) : null,
+    });
+    return match?.id ? String(match.id) : null;
+  }
+
+  /** Coerce an Apple id (number or string) to a non-empty string, or undefined. */
+  private asId(value: unknown): string | undefined {
+    if (value === undefined || value === null) return undefined;
+    const s = String(value).trim();
+    return s.length ? s : undefined;
+  }
+
+  private async ensureStorefront(
+    headers: Record<string, string>,
+    bridge: SpotifyBridgeConfig,
+  ): Promise<string | null> {
+    const cached = this.storefrontByBridge.get(bridge.id);
+    if (cached) return cached;
+    const account = await this.fetchJson<any>(`${APPLE_MUSIC_API_BASE}/me/account?meta=subscription`, headers);
+    const storefront = account?.meta?.subscription?.storefront;
+    const resolved = storefront ? String(storefront).toLowerCase() : null;
+    if (resolved) this.storefrontByBridge.set(bridge.id, resolved);
+    return resolved;
   }
 
   private async buildAuthHeaders(bridge: SpotifyBridgeConfig): Promise<Record<string, string>> {
