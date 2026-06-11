@@ -511,43 +511,74 @@ export class PlayRequestService {
     buildResult: QueueBuildResult,
     startAtSec?: number,
   ): Promise<void> {
-    const current = ctx.queueController.current();
+    let current = ctx.queueController.current();
     if (!current) {
       this.deps.log.warn('playback skipped; empty queue after build', { zoneId: ctx.id, uri: req.uri });
       this.deps.audioManager.clearPlayRequest(ctx.id);
       return;
     }
 
-    const stationForPlayback =
-      req.isMusicAssistant && current.station ? current.station : req.stationValue;
     const enrichedMetadata = buildResult.metadata;
-    // Now-playing must describe the item actually being started (`current`), not
-    // the play-request seed (which for a container favourite is the container).
-    const nowPlaying = selectQueuePlaybackMetadata(current, enrichedMetadata, {
-      itemFirst: !req.isYoutube && !req.isYtMusic,
-      fallbackTitle: ctx.name,
-    });
-    const session = await this.deps.startQueuePlayback(
-      ctx,
-      current.audiopath,
-      {
-        ...nowPlaying,
-        audiopath: enrichedMetadata?.audiopath,
-        trackId: enrichedMetadata?.trackId,
-        station: stationForPlayback,
-        stationIndex: ctx.queueController.currentIndex(),
-        isRadio: req.isRadio,
-      },
-      { skipExternalStop: true, startAtSec },
-    );
-    if (session) {
-      void this.deps.recentsManager.record(ctx.id, current);
-      if (!req.isRadio) {
-        this.deps.notifier.notifyQueueUpdated(ctx.id, ctx.queue.items.length);
+    // Auto-advance past unplayable items applies only to queues we drive locally; external
+    // authorities (Spotify offload, Music Assistant) own their own advance. `visited` bounds the
+    // walk so repeat-one/repeat-all can't spin forever.
+    const canAutoAdvance = this.deps.queueController.isLocalQueueAuthority(ctx.queue.authority);
+    const visited = new Set<number>();
+    let firstAttempt = true;
+
+    for (;;) {
+      visited.add(ctx.queueController.currentIndex());
+      const stationForPlayback =
+        req.isMusicAssistant && current.station ? current.station : req.stationValue;
+      // Now-playing must describe the item actually being started (`current`), not
+      // the play-request seed (which for a container favourite is the container).
+      const nowPlaying = selectQueuePlaybackMetadata(current, enrichedMetadata, {
+        itemFirst: !req.isYoutube && !req.isYtMusic,
+        fallbackTitle: ctx.name,
+      });
+      const session = await this.deps.startQueuePlayback(
+        ctx,
+        current.audiopath,
+        {
+          ...nowPlaying,
+          // Seed enrichment only describes the originally requested item; a track we auto-advanced
+          // to carries its own audiopath and no seed trackId.
+          audiopath: firstAttempt ? enrichedMetadata?.audiopath : current.audiopath,
+          trackId: firstAttempt ? enrichedMetadata?.trackId : undefined,
+          station: stationForPlayback,
+          stationIndex: ctx.queueController.currentIndex(),
+          isRadio: req.isRadio,
+        },
+        { skipExternalStop: true, startAtSec: firstAttempt ? startAtSec : undefined },
+      );
+      if (session) {
+        void this.deps.recentsManager.record(ctx.id, current);
+        if (!req.isRadio) {
+          this.deps.notifier.notifyQueueUpdated(ctx.id, ctx.queue.items.length);
+        }
+        return;
       }
-    } else {
+
       this.deps.audioManager.clearPlayRequest(ctx.id);
-      this.handleUnplayableSource(ctx, current.audiopath);
+
+      const nextIndex = canAutoAdvance ? ctx.queueController.nextIndex() : -1;
+      if (nextIndex < 0 || visited.has(nextIndex)) {
+        this.handleUnplayableSource(ctx, current.audiopath);
+        return;
+      }
+      this.deps.log.info('skipping unplayable queue item; advancing to next', {
+        zoneId: ctx.id,
+        audiopath: current.audiopath,
+        fromIndex: ctx.queueController.currentIndex(),
+        nextIndex,
+      });
+      const next = ctx.queueController.setCurrentIndex(nextIndex);
+      if (!next) {
+        this.handleUnplayableSource(ctx, current.audiopath);
+        return;
+      }
+      current = next;
+      firstAttempt = false;
     }
   }
 

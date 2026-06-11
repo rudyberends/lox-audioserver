@@ -91,49 +91,59 @@ export async function handleEndOfTrack(args: {
     return;
   }
 
-  const nextIndex = ctx.queueController.nextIndex();
-
+  let nextIndex = ctx.queueController.nextIndex();
   if (nextIndex < 0) {
     const stopped = ctx.player.stop('queue_end');
     coordinator.dispatchOutputs(ctx, ctx.outputs, 'stop', stopped);
     return;
   }
 
-  ctx.queueController.setCurrentIndex(nextIndex);
-  const next = ctx.queueController.current();
-  if (!next) {
-    const stopped = ctx.player.stop('queue_invalid_next');
-    coordinator.dispatchOutputs(ctx, ctx.outputs, 'stop', stopped);
-    return;
-  }
-  const session = await coordinator.startQueuePlayback(ctx, next.audiopath, {
-    title: next.title,
-    artist: next.artist,
-    album: next.album,
-    coverurl: next.coverurl,
-    audiopath: next.audiopath,
-    duration: next.duration,
-    station: next.station,
-  });
-  if (session) {
-    const basePatch = buildQueueItemPlaybackPatch(
-      ctx,
-      next,
-      ctx.queueController.currentIndex(),
-      coordinator.audioHelpers,
-    );
-    coordinator.applyPatch(ctx.id, {
-      ...basePatch,
-      mode: 'play',
-      clientState: 'on',
-      power: 'on',
-      time: 0,
+  // Walk forward until a track actually starts, skipping past unplayable ones (e.g. a track Apple
+  // pulled from the storefront) instead of stopping the zone dead. `visited` bounds the walk so
+  // repeat-one/repeat-all can't loop forever, and we dispatch a single stop only once exhausted.
+  const visited = new Set<number>();
+  let attemptedStart = false;
+  while (nextIndex >= 0 && !visited.has(nextIndex)) {
+    visited.add(nextIndex);
+    ctx.queueController.setCurrentIndex(nextIndex);
+    const next = ctx.queueController.current();
+    if (!next) {
+      const stopped = ctx.player.stop('queue_invalid_next');
+      coordinator.dispatchOutputs(ctx, ctx.outputs, 'stop', stopped);
+      return;
+    }
+    const session = await coordinator.startQueuePlayback(ctx, next.audiopath, {
+      title: next.title,
+      artist: next.artist,
+      album: next.album,
+      coverurl: next.coverurl,
+      audiopath: next.audiopath,
+      duration: next.duration,
+      station: next.station,
     });
-    void coordinator.recentsRecord(ctx.id, next);
-    return;
+    attemptedStart = true;
+    if (session) {
+      const basePatch = buildQueueItemPlaybackPatch(
+        ctx,
+        next,
+        ctx.queueController.currentIndex(),
+        coordinator.audioHelpers,
+      );
+      coordinator.applyPatch(ctx.id, {
+        ...basePatch,
+        mode: 'play',
+        clientState: 'on',
+        power: 'on',
+        time: 0,
+      });
+      void coordinator.recentsRecord(ctx.id, next);
+      return;
+    }
+    nextIndex = ctx.queueController.nextIndex();
   }
 
-  // If we failed to start the next track, stop cleanly.
-  const stopped = ctx.player.stop('queue_next_failed');
+  // No track in the queue could be started. Preserve the distinct stop reason: a genuine start
+  // attempt that failed is queue_next_failed, otherwise we simply ran off the end.
+  const stopped = ctx.player.stop(attemptedStart ? 'queue_next_failed' : 'queue_end');
   coordinator.dispatchOutputs(ctx, ctx.outputs, 'stop', stopped);
 }
