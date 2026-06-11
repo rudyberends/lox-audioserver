@@ -504,6 +504,13 @@ export class RaopSender {
     // re-anchors via startForGroup()'s shared NTP anchor.
     const idleMs = this.lastSentAt === 0 ? Infinity : Date.now() - this.lastSentAt;
     const timelineStale = this.playoutPaused || idleMs > this.getLatencyMs();
+    this.log.debug('raop rebind', {
+      ...this.context,
+      reAnchored: timelineStale,
+      paused: this.playoutPaused,
+      idleMs: Number.isFinite(idleMs) ? Math.round(idleMs) : null,
+      latencyMs: this.getLatencyMs(),
+    });
     try {
       senderControl(this.handle, 'flush');
       if (timelineStale) {
