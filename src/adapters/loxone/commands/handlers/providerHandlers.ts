@@ -46,14 +46,29 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
       const radios = await contentManager.getRadios();
       return buildResponse(command, 'getradios', radios);
     },
-    // audio/cfg/radios/add/<name>/<url>[/<auth>] — add a custom stream.
+    // audio/cfg/radios/add — add a custom stream. Two encodings:
+    //  - native client: /<name>/<url>[/<auth>] path params (the url spans several
+    //    decoded segments, so rejoin everything after the name);
+    //  - our player: a single base64url JSON blob {name,url,cover} (lets it carry
+    //    a cover, which the path form can't).
     audioCfgRadiosAdd: async (command: string) => {
       const parts = splitCommand(command);
-      // params are [name, url, auth?]; the url contains slashes, so once the
-      // command path is decoded it spans several segments — rejoin everything
-      // after the name back into the url (the player never sends the auth part).
-      const name = parts[4] ? decodeURIComponent(parts[4]) : '';
-      const url = parts.length > 5 ? decodeURIComponent(parts.slice(5).join('/')) : '';
+      let name = '';
+      let url = '';
+      let cover: string | undefined;
+      const blob = parts[4]
+        ? safeJsonParse<{ name?: string; url?: string; cover?: string }>(
+            decodeBase64Segment(decodeURIComponent(parts[4])),
+          )
+        : null;
+      if (blob && typeof blob === 'object' && (blob.name || blob.url)) {
+        name = (blob.name ?? '').trim();
+        url = (blob.url ?? '').trim();
+        cover = blob.cover?.trim() || undefined;
+      } else {
+        name = parts[4] ? decodeURIComponent(parts[4]) : '';
+        url = parts.length > 5 ? decodeURIComponent(parts.slice(5).join('/')) : '';
+      }
       // CustomRadioError: NONE=0, INVALID_URL=-1, MISSING_PAYLOAD=-4.
       if (!name || !url) {
         return buildResponse(command, 'radios', { action: 'add', name, url, error: -4 });
@@ -62,7 +77,7 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
         return buildResponse(command, 'radios', { action: 'add', name, url, error: -1 });
       }
       try {
-        const entry = await contentManager.addCustomRadio(name, url);
+        const entry = await contentManager.addCustomRadio(name, url, cover);
         return buildResponse(command, 'radios', {
           action: 'add',
           id: entry.id,
