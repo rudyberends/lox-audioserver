@@ -14,39 +14,31 @@ const IGNORED_PLAYER_ERROR_REASONS = new Set([
   'airplay_stop',
 ]);
 
-const PLAYBACK_ERROR_ALIASES: Record<string, string> = {
-  uri: 'invalid or missing playback URI',
-  auth: 'authentication required',
-  device: 'playback device unavailable',
-  error: 'transport error',
-  queue_invalid_next: 'next queue item unavailable',
-  queue_next_failed: 'failed to start next queue item',
-  'airplay no source': 'AirPlay source missing',
-  'airplay engine not ready': 'AirPlay engine not ready',
-  'airplay pcm not ready': 'AirPlay not ready',
-  'airplay pcm stream unavailable': 'AirPlay stream unavailable',
-  'airplay stream not ready': 'AirPlay stream not ready',
-  'spotify audio stream unavailable': 'Spotify audio stream unavailable',
-  'spotify audio_key_error': 'Spotify audio stream unavailable',
-};
+// User-facing, non-technical titles shown in the zone's now-playing metadata.
+// The raw technical reason is never surfaced here — it only goes to the log.
+const DEFAULT_ERROR_TITLE = 'Playback unavailable';
 
-const MAX_ERROR_TITLE_LENGTH = 140;
-const URL_PATTERN = /\bhttps?:\/\/[^\s)]+/gi;
+const PLAYBACK_ERROR_TITLES: Record<string, string> = {
+  uri: DEFAULT_ERROR_TITLE,
+  auth: 'Sign-in required',
+  device: 'Output unavailable',
+  error: DEFAULT_ERROR_TITLE,
+  queue_invalid_next: "Couldn't play next track",
+  queue_next_failed: "Couldn't play next track",
+  'airplay no source': 'AirPlay unavailable',
+  'airplay engine not ready': 'AirPlay unavailable',
+  'airplay pcm not ready': 'AirPlay unavailable',
+  'airplay pcm stream unavailable': 'AirPlay unavailable',
+  'airplay stream not ready': 'AirPlay unavailable',
+  'spotify audio stream unavailable': 'Spotify unavailable',
+  'spotify audio_key_error': 'Spotify unavailable',
+};
 
 type PlaybackErrorCoordinator = {
   getZone: (zoneId: number) => ZoneContext | undefined;
   applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
   log: ComponentLogger;
 };
-
-function sanitizeErrorReason(reason: string): string {
-  let sanitized = reason.replace(URL_PATTERN, 'url');
-  sanitized = sanitized.replace(/\s+/g, ' ').trim();
-  if (sanitized.length > MAX_ERROR_TITLE_LENGTH) {
-    sanitized = `${sanitized.slice(0, MAX_ERROR_TITLE_LENGTH - 3)}...`;
-  }
-  return sanitized;
-}
 
 export function handlePlaybackError(args: {
   coordinator: PlaybackErrorCoordinator;
@@ -65,9 +57,8 @@ export function handlePlaybackError(args: {
     return;
   }
   const cleaned = normalized ? normalized.replace(/\s+/g, ' ') : '';
-  const alias = cleaned ? PLAYBACK_ERROR_ALIASES[cleaned.toLowerCase()] : undefined;
-  const detail = alias ?? (cleaned ? sanitizeErrorReason(cleaned) : '');
-  const title = detail ? `Playback error: ${detail}` : 'Playback error';
+  const title =
+    (cleaned ? PLAYBACK_ERROR_TITLES[cleaned.toLowerCase()] : undefined) ?? DEFAULT_ERROR_TITLE;
   coordinator.applyPatch(zoneId, {
     title,
     artist: '',
@@ -85,5 +76,5 @@ export function handlePlaybackError(args: {
   if (ctx.player.getState().mode !== 'stopped') {
     ctx.player.stop();
   }
-  coordinator.log.warn('playback error', { zoneId, reason: cleaned || undefined, source, ...extraLog });
+  coordinator.log.warn('playback error', { zoneId, reason: cleaned || undefined, title, source, ...extraLog });
 }
