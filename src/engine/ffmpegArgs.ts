@@ -268,6 +268,12 @@ export class FfmpegArgBuilder {
     if (this.sourcePreDelayMs && this.sourcePreDelayMs > 0) {
       filters.push(`adelay=delays=${Math.max(0, Math.round(this.sourcePreDelayMs))}:all=1`);
     }
+    // Source-level loudness gain (e.g. Spotify volume normalisation). Composes
+    // with the per-output fixedGainDb below rather than replacing it.
+    const sourceGainDb = this.source.kind === 'url' ? this.source.gainDb : undefined;
+    if (typeof sourceGainDb === 'number' && Number.isFinite(sourceGainDb) && sourceGainDb !== 0) {
+      filters.push(`volume=${sourceGainDb.toFixed(2)}dB`);
+    }
     if (Number.isFinite(fixedGainDb) && fixedGainDb !== 0) {
       filters.push(`volume=${fixedGainDb}dB`);
     }

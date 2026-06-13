@@ -23,6 +23,25 @@ const SPOTIFY_OGG_HEADER_END = 0xa7;
 // Past this many bytes without finding the real page, the key/IV assumption is
 // wrong; stop buffering and fall back rather than scanning/OOMing forever.
 const MAX_OGG_HEADER_SCAN = 16 * 1024;
+// Spotify's loudness-normalisation block: 16 bytes (4 little-endian f32 —
+// track gain dB, track peak, album gain dB, album peak) at a fixed offset of
+// 144 in the decrypted file (librespot's SPOTIFY_NORMALIZATION_HEADER_START).
+// 144 is 16-byte aligned, so it maps cleanly to AES-CTR counter block 9.
+const SPOTIFY_NORMALIZATION_OFFSET = 144;
+
+/**
+ * AES-128-CTR counter for a given 16-byte block index: the fixed IV treated as a
+ * 128-bit big-endian integer, plus the block index. Lets us decrypt a slice of
+ * the file from an arbitrary block without decrypting everything before it.
+ */
+function ctrIvForBlock(baseIv: Buffer, blockIndex: number): Buffer {
+  if (blockIndex <= 0) {
+    return Buffer.from(baseIv);
+  }
+  const mask = (1n << 128n) - 1n;
+  const v = (BigInt('0x' + baseIv.toString('hex')) + BigInt(blockIndex)) & mask;
+  return Buffer.from(v.toString(16).padStart(32, '0'), 'hex');
+}
 
 /** Result of node-librespot's `session.resolveAudioFile()`. */
 export type SpotifyResolvedAudio = {
@@ -126,6 +145,55 @@ export class SpotifyStreamProxyService {
     });
     const url = `http://${resolveProxyHost()}:${resolveProxyPort()}/spotify/${sessionId}/stream`;
     return { url };
+  }
+
+  /**
+   * Resolve the clip-safe loudness-normalisation gain (in dB) for a track, to be
+   * applied as an ffmpeg `volume` filter so direct playback matches Spotify's own
+   * volume normalisation. Reads the 16-byte normalisation block at offset 144 via
+   * a tiny CDN Range request + AES-CTR decrypt — no full download. Returns null if
+   * unavailable (then no gain is applied). Mirrors librespot's ReplayGain logic:
+   * allow attenuation freely, but cap boost at the track peak's headroom so we
+   * never exceed 0 dBFS.
+   */
+  public async resolveNormalizationGainDb(resolved: SpotifyResolvedAudio): Promise<number | null> {
+    if (!/OGG/i.test(resolved.format)) {
+      return null;
+    }
+    const key = Buffer.from(resolved.keyHex, 'hex');
+    if (key.length !== 16) {
+      return null;
+    }
+    try {
+      const resp = await fetch(resolved.cdnUrl, {
+        redirect: 'follow',
+        headers: { Range: `bytes=${SPOTIFY_NORMALIZATION_OFFSET}-${SPOTIFY_NORMALIZATION_OFFSET + 15}` },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!resp.ok || !resp.body) {
+        return null;
+      }
+      const enc = Buffer.from(await resp.arrayBuffer());
+      if (enc.length < 16) {
+        return null;
+      }
+      const decipher = createDecipheriv(
+        'aes-128-ctr',
+        key,
+        ctrIvForBlock(SPOTIFY_AUDIO_AES_IV, SPOTIFY_NORMALIZATION_OFFSET / 16),
+      );
+      const dec = Buffer.concat([decipher.update(enc), decipher.final()]);
+      const trackGainDb = dec.readFloatLE(0);
+      const trackPeak = dec.readFloatLE(4);
+      if (!Number.isFinite(trackGainDb)) {
+        return null;
+      }
+      // Clip-safe: never boost past the headroom implied by the track's peak.
+      const clipHeadroomDb = trackPeak > 0 ? -20 * Math.log10(trackPeak) : 0;
+      return Math.min(trackGainDb, clipHeadroomDb);
+    } catch {
+      return null;
+    }
   }
 
   public getProxyRoute(): StreamProxyRoute {

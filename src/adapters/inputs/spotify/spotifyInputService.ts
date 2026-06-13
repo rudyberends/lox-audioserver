@@ -960,10 +960,19 @@ class SpotifyConnectInstance {
     try {
       const { url } = this.streamProxy.registerSession(resolved);
       const startAtSec = seekPositionMs > 0 ? seekPositionMs / 1000 : undefined;
+      // Loudness normalisation (always on, matching Spotify's default): resolve the
+      // clip-safe gain (tiny ranged CDN read) and apply it as an ffmpeg volume
+      // filter. Skip negligible gains.
+      let gainDb: number | undefined;
+      const resolvedGain = await this.streamProxy.resolveNormalizationGainDb(resolved);
+      if (resolvedGain !== null && Math.abs(resolvedGain) >= 0.1) {
+        gainDb = Number(resolvedGain.toFixed(2));
+      }
       this.log.info('spotify direct-proxy source ready', {
         zoneId: this.zoneId,
         format: resolved.format,
         startAtSec,
+        gainDb,
       });
       const isOgg = /OGG/i.test(resolved.format);
       return {
@@ -973,6 +982,7 @@ class SpotifyConnectInstance {
         realTime: false,
         lowLatency: false,
         startAtSec,
+        gainDb,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

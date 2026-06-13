@@ -20,6 +20,8 @@ export type PlaybackSource =
       logLevel?: string;
       /** Optional start offset in seconds. */
       startAtSec?: number;
+      /** Optional loudness gain in dB applied via an ffmpeg volume filter (e.g. Spotify normalisation). */
+      gainDb?: number;
       realTime?: boolean;
       lowLatency?: boolean;
       restartOnFailure?: boolean;
@@ -62,6 +64,8 @@ export type EngineInputSpec =
       logLevel?: string;
       /** Optional start offset in seconds. */
       startAtSec?: number;
+      /** Optional loudness gain in dB applied via an ffmpeg volume filter (e.g. Spotify normalisation). */
+      gainDb?: number;
       realTime?: boolean;
       lowLatency?: boolean;
       restartOnFailure?: boolean;
