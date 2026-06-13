@@ -783,9 +783,11 @@ class SpotifyConnectInstance {
     // decode/buffering), instead of librespot pushing PCM into a pipe. Falls back
     // to the proven pipe path below if anything fails.
     if (SPOTIFY_DIRECT_PROXY_ENABLED) {
+      // A prefetched source is only used for a seek-0 natural advance; a seek
+      // always resolves fresh with the start offset.
       const proxySource =
         this.consumePrefetchedDirect(spotifyUri, seekPositionMs) ??
-        (await this.getDirectProxyPlaybackSource(session, spotifyUri));
+        (await this.getDirectProxyPlaybackSource(session, spotifyUri, seekPositionMs));
       if (proxySource) {
         return proxySource;
       }
@@ -937,13 +939,19 @@ class SpotifyConnectInstance {
    *
    * Unlike the pipe path this is stateless here: there is no librespot stream
    * handle to track, timing comes from the engine clock (as for the other URL
-   * providers), and end-of-track is signalled by ffmpeg EOF. Seeking within a
-   * track is not yet supported (resolveAudioFile has no start offset); ffmpeg
-   * -ss on the proxy url is the follow-up.
+   * providers), and end-of-track is signalled by ffmpeg EOF.
+   *
+   * Seek: a non-zero seekPositionMs is passed through as startAtSec, which the
+   * engine turns into ffmpeg `-ss` on the proxy url — the same seek path the
+   * other URL providers use. ffmpeg locates the target via the Ogg granule
+   * positions, so no byte-offset math is needed. (The proxy doesn't yet serve
+   * HTTP Range, so ffmpeg reads+discards up to the seek point; efficient ranged
+   * seek is a later optimisation.)
    */
   private async getDirectProxyPlaybackSource(
     session: LibrespotSession,
     spotifyUri: string,
+    seekPositionMs = 0,
   ): Promise<PlaybackSource | null> {
     const resolved = await resolveSpotifyAudioFile(session, spotifyUri, 320);
     if (!resolved) {
@@ -951,9 +959,11 @@ class SpotifyConnectInstance {
     }
     try {
       const { url } = this.streamProxy.registerSession(resolved);
+      const startAtSec = seekPositionMs > 0 ? seekPositionMs / 1000 : undefined;
       this.log.info('spotify direct-proxy source ready', {
         zoneId: this.zoneId,
         format: resolved.format,
+        startAtSec,
       });
       const isOgg = /OGG/i.test(resolved.format);
       return {
@@ -962,6 +972,7 @@ class SpotifyConnectInstance {
         inputFormat: isOgg ? 'ogg' : 'mp3',
         realTime: false,
         lowLatency: false,
+        startAtSec,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
