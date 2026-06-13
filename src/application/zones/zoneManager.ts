@@ -283,6 +283,7 @@ export class ZoneManager {
       log: this.log,
       audioHelpers,
       zoneAudioPrefs: this.zoneAudioPrefs,
+      configPort: this.configPort,
     });
     this.heartbeat = new ZoneHeartbeatService({
       listZones: () => this.zoneRepo.list(),

@@ -10,6 +10,22 @@ export type PreferredOutput = {
   prebufferBytes?: number;
 };
 
+/**
+ * A request to play an alert as a native overlay on an output (e.g. Sonos AudioClip).
+ * The output ducks the current playback, plays the clip, and restores playback itself —
+ * the engine stream is never stopped. Only non-looping alerts are offered this way.
+ */
+export type NativeAlertRequest = {
+  /** Absolute http(s) URL the device can fetch directly (reachable on the LAN). */
+  url: string;
+  /** Clip playback volume (0..100), already clamped for the zone. */
+  volume: number;
+  /** Human-friendly label for the clip. */
+  title: string;
+  /** Alert type ('bell', 'tts', ...). */
+  type: string;
+};
+
 export type HttpPreferences = {
   httpProfile?: HttpProfile;
   icyEnabled?: boolean;
@@ -71,6 +87,15 @@ export interface ZoneOutput {
   setLatencyMs?(ms: number): Promise<void> | void;
   /** Optional HTTP streaming preferences for outputs that pull via HTTP (e.g. DLNA/Cast). */
   getHttpPreferences?(): HttpPreferences | null;
+  /**
+   * Optional native (overlay) alert playback. When present, the alert coordinator
+   * offers non-looping alerts here instead of the snapshot/replace/resume fallback:
+   * the output ducks the current playback, plays the clip, and restores it itself,
+   * leaving the engine stream untouched. Returns true when the alert was handled
+   * natively; return false (or throw) to make the coordinator fall back to the
+   * engine-stream path. Mirrors MA's PlayerFeature.PLAY_ANNOUNCEMENT dispatch.
+   */
+  playNativeAlert?(request: NativeAlertRequest): Promise<boolean>;
   dispose(): Promise<void> | void;
 }
 

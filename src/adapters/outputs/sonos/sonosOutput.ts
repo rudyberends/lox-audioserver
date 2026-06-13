@@ -4,6 +4,7 @@ import { safeReadText } from '@/shared/bestEffort';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type {
   HttpPreferences,
+  NativeAlertRequest,
   PreferredOutput,
   OutputConfigDefinition,
   ZoneOutput,
@@ -406,6 +407,50 @@ export class SonosOutput implements ZoneOutput {
     await this.invokeAction('BecomeCoordinatorOfStandaloneGroup', this.buildStandaloneBody(), {
       optional: true,
     });
+  }
+
+  /**
+   * Play an alert as a native overlay via the S2 AudioClip API. Sonos ducks whatever the
+   * player is currently rendering, plays the clip on top, and restores playback itself — so
+   * the engine stream is never swapped and the alert coordinator skips its snapshot/drain/
+   * resume dance (which otherwise clips short alert tails, issues #262/#276/#279).
+   *
+   * Requires the modern S2 (websocket) API; returns false on S1 or when the clip cannot be
+   * loaded so the coordinator falls back to the engine-stream path.
+   */
+  public async playNativeAlert(request: NativeAlertRequest): Promise<boolean> {
+    const client = await this.ensureS2Client();
+    if (!client?.player) {
+      return false;
+    }
+    const playerId = client.playerId || client.player.id;
+    if (!playerId) {
+      return false;
+    }
+    try {
+      // A custom stream URL requires clipType CUSTOM (CHIME plays a built-in sound and
+      // ignores streamUrl); HIGH priority makes Sonos duck current playback immediately.
+      await client.api.audioClip.loadAudioClip(playerId, {
+        name: request.title || 'Alert',
+        appId: 'lox-sonos',
+        streamUrl: request.url,
+        clipType: 'CUSTOM',
+        priority: 'HIGH',
+        volume: request.volume,
+      });
+      this.log.info('Sonos native alert played', {
+        zoneId: this.zoneId,
+        type: request.type,
+        url: request.url,
+      });
+      return true;
+    } catch (err) {
+      this.log.debug('sonos native alert failed; falling back to stream path', {
+        zoneId: this.zoneId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
   }
 
   public dispose(): void {

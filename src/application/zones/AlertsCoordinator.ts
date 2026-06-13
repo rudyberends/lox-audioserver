@@ -4,8 +4,11 @@ import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPrefe
 import type { AlertMediaResource } from '@/application/alerts/types';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import type { AlertSnapshot, ZoneContext } from '@/application/zones/internal/zoneTypes';
+import type { ConfigPort } from '@/ports/ConfigPort';
+import type { NativeAlertRequest, ZoneOutput } from '@/ports/OutputsTypes';
 import { AudioType } from '@/domain/loxone/enums';
 import { cloneQueueState, clampVolumeForZone } from '@/application/zones/helpers/stateHelpers';
+import { buildBaseUrl } from '@/shared/streamUrl';
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
 import { PlaybackCoordinator } from '@/application/zones/PlaybackCoordinator';
 import { ZoneRepository } from '@/application/zones/ZoneRepository';
@@ -24,6 +27,11 @@ type AlertsCoordinatorDeps = {
   log: ComponentLogger;
   audioHelpers: ZoneAudioHelpers;
   zoneAudioPrefs: ZoneAudioPreferences;
+  configPort: ConfigPort;
+};
+
+type NativeAlertOutput = ZoneOutput & {
+  playNativeAlert: (request: NativeAlertRequest) => Promise<boolean>;
 };
 
 export class AlertsCoordinator {
@@ -37,6 +45,7 @@ export class AlertsCoordinator {
   private readonly log: ComponentLogger;
   private readonly audioHelpers: ZoneAudioHelpers;
   private readonly zoneAudioPrefs: ZoneAudioPreferences;
+  private readonly configPort: ConfigPort;
   // Per-zone serialization. Concurrent start/stop calls used to corrupt the
   // restore snapshot — caller B could capture state mid-flight from caller A
   // and on stopAlert restore to A's alert metadata instead of the original
@@ -51,6 +60,7 @@ export class AlertsCoordinator {
     this.log = deps.log;
     this.audioHelpers = deps.audioHelpers;
     this.zoneAudioPrefs = deps.zoneAudioPrefs;
+    this.configPort = deps.configPort;
   }
 
   public startAlert(
@@ -95,6 +105,16 @@ export class AlertsCoordinator {
     await this.stopAlertLocked(zoneId);
 
     await this.waitForOutputReady(ctx);
+
+    // Native overlay path (e.g. Sonos AudioClip): for non-looping alerts on outputs that
+    // support it, duck-and-overlay instead of stopping the music. This leaves the engine
+    // stream and zone state untouched (the music keeps playing under the announcement) and
+    // sidesteps the transport-swap tail-clipping the fallback path has to drain around
+    // (issues #262/#276/#279). Looping alerts (alarm/firealarm) never take this path —
+    // AudioClip cannot loop indefinitely.
+    if (!media.loop && (await this.tryNativeAlert(zoneId, ctx, type, media, volume))) {
+      return;
+    }
 
     const snapshot = this.createAlertSnapshot(ctx);
     const rawDurationMs =
@@ -181,6 +201,81 @@ export class AlertsCoordinator {
       sourceName: ctx.name,
     });
 	  }
+
+  /**
+   * Try to play the alert as a native overlay on the zone's output(s). Mirrors MA's
+   * native-vs-fallback announcement dispatch: only used when EVERY real output supports
+   * native alerts (otherwise some output would miss the alert), and falls back on any
+   * failure. Returns true when the alert was fully handled natively.
+   */
+  private async tryNativeAlert(
+    zoneId: number,
+    ctx: ZoneContext,
+    type: string,
+    media: AlertMediaResource,
+    volume: number,
+  ): Promise<boolean> {
+    const realOutputs = ctx.outputs.filter((o) => o.type !== 'spotify-input');
+    if (realOutputs.length === 0) {
+      return false;
+    }
+    const nativeOutputs = realOutputs.filter(
+      (o): o is NativeAlertOutput =>
+        typeof (o as Partial<NativeAlertOutput>).playNativeAlert === 'function',
+    );
+    if (nativeOutputs.length !== realOutputs.length) {
+      // At least one output cannot overlay — use the engine-stream fallback for all of them.
+      return false;
+    }
+
+    const url = this.resolveAlertHttpUrl(media);
+    if (!url) {
+      return false;
+    }
+    const request: NativeAlertRequest = {
+      url,
+      volume: clampVolumeForZone(ctx.config, volume),
+      title: media.title ?? type,
+      type,
+    };
+
+    try {
+      const results = await Promise.all(nativeOutputs.map((o) => o.playNativeAlert(request)));
+      if (results.every((handled) => handled === true)) {
+        this.log.debug('alert played as native overlay', { zoneId, type });
+        return true;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.debug('native alert failed; using fallback', { zoneId, message });
+    }
+    return false;
+  }
+
+  /**
+   * Resolve an alert media resource to an absolute http(s) URL the renderer can fetch
+   * directly. Custom/event alerts may already be absolute; alerts:// / alerts-loop://
+   * resources are served as static files under /alerts on the audioserver. Returns null
+   * when no LAN-reachable host is configured (the device could not fetch a loopback URL).
+   */
+  private resolveAlertHttpUrl(media: AlertMediaResource): string | null {
+    if (/^https?:\/\//i.test(media.url)) {
+      return media.url;
+    }
+    if (!media.relativePath) {
+      return null;
+    }
+    const host = this.configPort.getSystemConfig().audioserver.ip?.trim();
+    if (!host) {
+      return null;
+    }
+    const baseUrl = buildBaseUrl({ host });
+    const encoded = media.relativePath
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/');
+    return `${baseUrl}/alerts/${encoded}`;
+  }
 
   private resolveHandoffDrainMs(ctx: ZoneContext): number {
     const outputs = ctx.outputs ?? [];
