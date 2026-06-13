@@ -40,6 +40,8 @@ export interface QueueAdvanceControllerDeps {
     metadata?: PlaybackMetadata,
     options?: { skipExternalStop?: boolean; startAtSec?: number },
   ) => Promise<PlaybackSession | null>;
+  /** Warm the next track's input-resolved source ahead of time (e.g. Spotify direct-proxy). */
+  prefetchInputSource?: (zoneId: number, audiopath: string) => void;
   /** Updates radio-style metadata after a Radio Paradise block resolution. */
   updateRadioMetadata: (
     zoneId: number,
@@ -147,6 +149,14 @@ export class QueueAdvanceController {
         return;
       }
       if (this.deps.audioHelpers.isRadioAudiopath(item.audiopath, item.audiotype)) {
+        return;
+      }
+      // Spotify direct-proxy is resolved by the input service, not the content
+      // port, so it has its own warm-ahead path.
+      if (this.deps.audioHelpers.isSpotifyAudiopath(item.audiopath)) {
+        if (isTrackAudiopath(item.audiopath)) {
+          this.deps.prefetchInputSource?.(ctx.id, item.audiopath);
+        }
         return;
       }
       const isAppleMusic = this.deps.audioHelpers.isAppleMusicAudiopath(item.audiopath);

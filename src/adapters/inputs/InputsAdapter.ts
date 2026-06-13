@@ -81,6 +81,10 @@ export class InputsAdapter implements InputsPort {
     return this.deps.spotify.getPlaybackSourceForUri(...args);
   }
 
+  public prefetchPlaybackSourceForUri(...args: Parameters<InputsPort['prefetchPlaybackSourceForUri']>): ReturnType<InputsPort['prefetchPlaybackSourceForUri']> {
+    return this.deps.spotify.prefetchPlaybackSourceForUri(...args);
+  }
+
   public getPlaybackSource(...args: Parameters<InputsPort['getPlaybackSource']>): ReturnType<InputsPort['getPlaybackSource']> {
     return this.deps.spotify.getPlaybackSource(...args);
   }

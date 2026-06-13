@@ -20,8 +20,10 @@ import type { PlayerRegistryPort } from '@/ports/PlayerRegistryPort';
 import {
   createNativeLibrespotSession,
   getNativeLibrespotStream,
+  resolveSpotifyAudioFile,
   startNativeConnectHost,
 } from '@/adapters/inputs/spotify/spotifyStreamingService';
+import type { SpotifyStreamProxyService } from '@/adapters/inputs/spotify/spotifyStreamProxyService';
 import { SpotifyUnavailableLoopGuard } from '@/adapters/inputs/spotify/spotifyRecoveryPolicy';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
@@ -29,6 +31,19 @@ import type { LibrespotSession } from '@lox-audioserver/node-librespot';
 
 type AirplaySessionStopper = (zoneId: number, reason?: string) => void;
 type OutputErrorHandler = (zoneId: number, reason?: string) => void;
+
+// Route direct/Loxone playback through the HTTP stream proxy (resolveAudioFile ->
+// CDN fetch -> decrypt -> ffmpeg) instead of the librespot PCM pipe. This is the
+// default on the testing branch; set SPOTIFY_DIRECT_PROXY=0 to force the legacy
+// PCM pipe (useful for A/B when diagnosing audio issues). On resolve failure it
+// also falls back to the pipe automatically. The Connect-receiver path is unaffected.
+const SPOTIFY_DIRECT_PROXY_ENABLED = process.env.SPOTIFY_DIRECT_PROXY !== '0';
+
+// How long a prefetched direct-proxy source stays usable. Kept comfortably under
+// the proxy session's 10-min TTL (PROXY_SESSION_MAX_AGE_MS) so we never hand
+// ffmpeg a session that's about to be pruned; longer-running tracks just
+// re-resolve at advance time.
+const PREFETCH_MAX_AGE_MS = 8 * 60 * 1000;
 
 function isValidSpotifyDeviceId(deviceId: string): boolean {
   return /^[0-9a-f]{40}$/i.test((deviceId || '').trim());
@@ -55,6 +70,10 @@ class SpotifyConnectInstance {
   private nativeStreamStop?: () => void;
   // Set during getDirectPlaybackSource() to protect against concurrent Connect stop events.
   private directPlaybackPending = false;
+  // Single-slot gapless prefetch: the next track's direct-proxy source, resolved
+  // and registered during the current track's playback so advance has no startup
+  // gap. Consumed once, only for an exact-uri natural advance (seek 0).
+  private prefetchedDirect: { uri: string; source: PlaybackSource; at: number } | null = null;
   private nativeSession: LibrespotSession | null = null;
   private nativeSessionAccessToken: string | null = null;
   private nativeSessionClientId: string | null = null;
@@ -129,6 +148,7 @@ class SpotifyConnectInstance {
     stopAirplaySession: AirplaySessionStopper,
     notifyOutputError: OutputErrorHandler,
     private readonly playerRegistry: PlayerRegistryPort,
+    private readonly streamProxy: SpotifyStreamProxyService,
   ) {
     const cacheRoot = path.join('/tmp', 'lox-librespot');
     this.cacheDir = cacheDirOverride ?? path.join(cacheRoot, String(zoneId), 'cache');
@@ -758,6 +778,22 @@ class SpotifyConnectInstance {
       return null;
     }
 
+    // Prototype path: resolve the track to a CDN url + key and serve it through
+    // the HTTP stream proxy so ffmpeg pulls a normal Ogg url (full control over
+    // decode/buffering), instead of librespot pushing PCM into a pipe. Falls back
+    // to the proven pipe path below if anything fails.
+    if (SPOTIFY_DIRECT_PROXY_ENABLED) {
+      const proxySource =
+        this.consumePrefetchedDirect(spotifyUri, seekPositionMs) ??
+        (await this.getDirectProxyPlaybackSource(session, spotifyUri));
+      if (proxySource) {
+        return proxySource;
+      }
+      this.log.warn('spotify direct-proxy path failed; falling back to PCM pipe', {
+        zoneId: this.zoneId,
+      });
+    }
+
     // Save the old handle's stop function. We defer calling it until the new track's
     // HTTP streaming connection is established (~700ms), because calling stop() on
     // a librespot handle disrupts the shared Tokio runtime, causing DispatchGone
@@ -892,6 +928,100 @@ class SpotifyConnectInstance {
       realTime: false,
       stream: this.nativeStream,
     };
+  }
+
+  /**
+   * Direct playback via the HTTP stream proxy (prototype). Resolves the track to
+   * a CDN url + key through node-librespot and hands ffmpeg a normal Ogg url.
+   * Returns null on any failure so the caller can fall back to the PCM pipe.
+   *
+   * Unlike the pipe path this is stateless here: there is no librespot stream
+   * handle to track, timing comes from the engine clock (as for the other URL
+   * providers), and end-of-track is signalled by ffmpeg EOF. Seeking within a
+   * track is not yet supported (resolveAudioFile has no start offset); ffmpeg
+   * -ss on the proxy url is the follow-up.
+   */
+  private async getDirectProxyPlaybackSource(
+    session: LibrespotSession,
+    spotifyUri: string,
+  ): Promise<PlaybackSource | null> {
+    const resolved = await resolveSpotifyAudioFile(session, spotifyUri, 320);
+    if (!resolved) {
+      return null;
+    }
+    try {
+      const { url } = this.streamProxy.registerSession(resolved);
+      this.log.info('spotify direct-proxy source ready', {
+        zoneId: this.zoneId,
+        format: resolved.format,
+      });
+      const isOgg = /OGG/i.test(resolved.format);
+      return {
+        kind: 'url',
+        url,
+        inputFormat: isOgg ? 'ogg' : 'mp3',
+        realTime: false,
+        lowLatency: false,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.warn('spotify direct-proxy register failed', { zoneId: this.zoneId, message });
+      return null;
+    }
+  }
+
+  /**
+   * Resolve + register the upcoming track's direct-proxy source while the current
+   * track is still playing, so a natural advance starts with no resolve/fetch gap
+   * (gapless). Best-effort: reuses the warm librespot session, skips if there's no
+   * session yet or the proxy path is disabled. The result is consumed once by
+   * getDirectPlaybackSource() for an exact-uri, seek-0 start.
+   */
+  public async prefetchDirect(spotifyUri: string): Promise<void> {
+    if (!SPOTIFY_DIRECT_PROXY_ENABLED || !spotifyUri) {
+      return;
+    }
+    if (this.prefetchedDirect?.uri === spotifyUri) {
+      return; // already warmed
+    }
+    const session = this.nativeSession;
+    if (!session) {
+      return; // no warm session; the normal start path will create one
+    }
+    try {
+      const source = await this.getDirectProxyPlaybackSource(session, spotifyUri);
+      if (source) {
+        this.prefetchedDirect = { uri: spotifyUri, source, at: Date.now() };
+        this.log.debug('spotify direct-proxy prefetched next track', {
+          zoneId: this.zoneId,
+          uri: spotifyUri,
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.debug('spotify direct-proxy prefetch failed', { zoneId: this.zoneId, message });
+    }
+  }
+
+  /**
+   * Return and clear a previously prefetched direct-proxy source, but only for an
+   * exact-uri natural advance (no seek) that's still well within the proxy
+   * session TTL. Single-shot: always clears the slot so a stale/mismatched warm
+   * entry can't be reused.
+   */
+  private consumePrefetchedDirect(uri: string, seekPositionMs: number): PlaybackSource | null {
+    const cached = this.prefetchedDirect;
+    this.prefetchedDirect = null;
+    if (!cached || seekPositionMs !== 0 || cached.uri !== uri) {
+      return null;
+    }
+    if (Date.now() - cached.at > PREFETCH_MAX_AGE_MS) {
+      return null;
+    }
+    this.log.info('spotify direct-proxy source ready (prefetched)', {
+      zoneId: this.zoneId,
+    });
+    return cached.source;
   }
 
   public stopCrossfadeStream(): void {
@@ -1307,6 +1437,7 @@ export class SpotifyInputService {
     private readonly deviceRegistry: SpotifyDeviceRegistry,
     private readonly airplaySessionStopper: AirplaySessionStopper,
     private readonly playerRegistry: PlayerRegistryPort,
+    private readonly streamProxy: SpotifyStreamProxyService,
   ) {}
 
   public stopActiveSession(zoneId: number, reason?: string): void {
@@ -1533,6 +1664,7 @@ export class SpotifyInputService {
         this.airplaySessionStopper,
         this.notifyOutputError,
         this.playerRegistry,
+        this.streamProxy,
       );
       this.instances.set(zone.id, instance);
       if (connectEnabled) {
@@ -1713,6 +1845,25 @@ export class SpotifyInputService {
       instance.setAccount(accountId);
     }
     return instance.getDirectPlaybackSource(spotifyUri, seekPositionMs);
+  }
+
+  /**
+   * Warm the next track's direct-proxy source ahead of time (gapless). Mirrors
+   * getPlaybackSourceForUri's account handling; best-effort and never throws.
+   */
+  public async prefetchPlaybackSourceForUri(
+    zoneId: number,
+    spotifyUri: string,
+    accountId?: string,
+  ): Promise<void> {
+    const instance = this.instances.get(zoneId);
+    if (!instance) {
+      return;
+    }
+    if (accountId) {
+      instance.setAccount(accountId);
+    }
+    await instance.prefetchDirect(spotifyUri);
   }
 
   private ensureDeviceId(zone: ZoneConfig, existing?: string): string {

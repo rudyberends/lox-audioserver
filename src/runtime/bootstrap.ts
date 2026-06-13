@@ -34,6 +34,7 @@ import { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInSe
 import { MusicAssistantStreamService } from '@/adapters/inputs/musicassistant/musicAssistantStreamService';
 import { MusicAssistantInputService } from '@/adapters/inputs/musicassistant/musicAssistantInputService';
 import { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
+import { SpotifyStreamProxyService } from '@/adapters/inputs/spotify/spotifyStreamProxyService';
 import { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import { SendspinHookRegistry } from '@/adapters/outputs/sendspin/sendspinHookRegistry';
 import { SpotifyDeviceRegistry } from '@/adapters/outputs/spotify/deviceRegistry';
@@ -167,6 +168,7 @@ export function createRuntime(): Runtime {
     }
     airplayInputService.stopActiveSession(zoneId, reason);
   };
+  const spotifyStreamProxyService = new SpotifyStreamProxyService();
   const spotifyInputService = new SpotifyInputService(
     outputHandlersProxy.onOutputError,
     configPort,
@@ -174,6 +176,7 @@ export function createRuntime(): Runtime {
     spotifyDeviceRegistry,
     stopAirplaySession,
     playerRegistry,
+    spotifyStreamProxyService,
   );
   airplayInputService = new AirplayInputService((zoneId, reason) => {
     spotifyInputService.stopActiveSession(zoneId, reason);
@@ -426,6 +429,7 @@ export function createRuntime(): Runtime {
         tidalStreamService.getProxyRoute(),
         deezerStreamService.getProxyRoute(),
         appleMusicStreamService.getProxyRoute(),
+        spotifyStreamProxyService.getProxyRoute(),
       ],
     });
     networkService = new NetworkService({

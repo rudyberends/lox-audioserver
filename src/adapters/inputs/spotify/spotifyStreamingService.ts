@@ -11,6 +11,8 @@ import type {
   LibrespotErrorCode,
 } from '@lox-audioserver/node-librespot';
 
+import type { SpotifyResolvedAudio } from './spotifyStreamProxyService';
+
 const log = createLogger('Audio', '@lox-audioserver/node-librespot');
 type NativeAddon = typeof import('@lox-audioserver/node-librespot') & {
   loginWithAccessToken: (
@@ -100,6 +102,42 @@ async function getSession(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.warn('failed to create native librespot session', { message });
+    return null;
+  }
+}
+
+/**
+ * Resolve a track's signed CDN URL + AES key via node-librespot WITHOUT
+ * downloading audio. The caller (the Spotify stream proxy) fetches and decrypts
+ * itself, so playback runs through ffmpeg like the other URL providers instead
+ * of a PCM pipe. Returns null when the native module is too old or resolve fails.
+ *
+ * Prefers the async binding (`resolveAudioFileAsync`, ^0.4.5+), which runs the
+ * blocking CDN/key lookup on the libuv threadpool so it never stalls the Node
+ * event loop (measured: ~150-500ms main-thread stall on every track start with
+ * the sync call). Falls back to the sync `resolveAudioFile` on older modules.
+ */
+export async function resolveSpotifyAudioFile(
+  session: LibrespotSession,
+  uri: string,
+  bitrate = 320,
+): Promise<SpotifyResolvedAudio | null> {
+  const native = session as Partial<{
+    resolveAudioFileAsync: (opts: { uri: string; bitrate?: number }) => Promise<SpotifyResolvedAudio>;
+    resolveAudioFile: (opts: { uri: string; bitrate?: number }) => SpotifyResolvedAudio;
+  }>;
+  try {
+    if (typeof native.resolveAudioFileAsync === 'function') {
+      return await native.resolveAudioFileAsync.call(session, { uri, bitrate });
+    }
+    if (typeof native.resolveAudioFile === 'function') {
+      return native.resolveAudioFile.call(session, { uri, bitrate });
+    }
+    log.warn('node-librespot session lacks resolveAudioFile; update the native module');
+    return null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn('spotify resolveAudioFile failed', { uri, message });
     return null;
   }
 }

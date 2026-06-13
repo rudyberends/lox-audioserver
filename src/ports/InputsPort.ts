@@ -108,6 +108,8 @@ export interface InputsPort {
     seekPositionMs?: number,
     accountId?: string,
   ): Promise<PlaybackSource | null>;
+  /** Warm the next track's playback source ahead of time (gapless prefetch). Best-effort. */
+  prefetchPlaybackSourceForUri(zoneId: number, uri: string, accountId?: string): Promise<void>;
   getPlaybackSource(zoneId: number): PlaybackSource | null;
   markSessionActive(zoneId: number, metadata?: PlaybackMetadata | null): void;
   stopAirplaySession(zoneId: number, reason?: string): void;
