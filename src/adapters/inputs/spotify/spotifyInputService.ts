@@ -32,13 +32,6 @@ import type { LibrespotSession } from '@lox-audioserver/node-librespot';
 type AirplaySessionStopper = (zoneId: number, reason?: string) => void;
 type OutputErrorHandler = (zoneId: number, reason?: string) => void;
 
-// Route direct/Loxone playback through the HTTP stream proxy (resolveAudioFile ->
-// CDN fetch -> decrypt -> ffmpeg) instead of the librespot PCM pipe. This is the
-// default on the testing branch; set SPOTIFY_DIRECT_PROXY=0 to force the legacy
-// PCM pipe (useful for A/B when diagnosing audio issues). On resolve failure it
-// also falls back to the pipe automatically. The Connect-receiver path is unaffected.
-const SPOTIFY_DIRECT_PROXY_ENABLED = process.env.SPOTIFY_DIRECT_PROXY !== '0';
-
 // How long a prefetched direct-proxy source stays usable. Kept comfortably under
 // the proxy session's 10-min TTL (PROXY_SESSION_MAX_AGE_MS) so we never hand
 // ffmpeg a session that's about to be pruned; longer-running tracks just
@@ -778,11 +771,11 @@ class SpotifyConnectInstance {
       return null;
     }
 
-    // Prototype path: resolve the track to a CDN url + key and serve it through
-    // the HTTP stream proxy so ffmpeg pulls a normal Ogg url (full control over
-    // decode/buffering), instead of librespot pushing PCM into a pipe. Falls back
-    // to the proven pipe path below if anything fails.
-    if (SPOTIFY_DIRECT_PROXY_ENABLED) {
+    // Resolve the track to a CDN url + key and serve it through the HTTP stream
+    // proxy so ffmpeg pulls a normal Ogg url (full control over decode/buffering),
+    // instead of librespot pushing PCM into a pipe. Falls back to the proven pipe
+    // path below if anything fails. The Connect-receiver path is unaffected.
+    {
       // A prefetched source is only used for a seek-0 natural advance; a seek
       // always resolves fresh with the start offset.
       const proxySource =
@@ -999,7 +992,7 @@ class SpotifyConnectInstance {
    * getDirectPlaybackSource() for an exact-uri, seek-0 start.
    */
   public async prefetchDirect(spotifyUri: string): Promise<void> {
-    if (!SPOTIFY_DIRECT_PROXY_ENABLED || !spotifyUri) {
+    if (!spotifyUri) {
       return;
     }
     if (this.prefetchedDirect?.uri === spotifyUri) {
