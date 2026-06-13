@@ -511,15 +511,43 @@ export class RaopSender {
       idleMs: Number.isFinite(idleMs) ? Math.round(idleMs) : null,
       latencyMs: this.getLatencyMs(),
     });
+
+    if (timelineStale) {
+      // The timeline drained (paused, or the device emptied during a fetch gap on a
+      // natural track advance). A flush on the LIVE connection keeps the old head_ts,
+      // so re-anchoring with `play` leaves new frames stamped in the PAST — the device
+      // drops them (raopcl_send_chunk "begining to stream (LATE)") and stays silent
+      // until a manual pause/play. (Same finding as the group re-sync: flush-re-anchor
+      // starts LATE.) Tear the RTSP session down and fresh-start instead: that resets
+      // head_ts and takes the clean connect -> `play` (now+200ms) path that start()
+      // uses, so the new track actually plays.
+      this.detachSource();
+      this.clearDrainTimer();
+      this.clearRing();
+      this.playoutPaused = false;
+      const stale = this.handle;
+      this.handle = null;
+      try {
+        stopSender(stale);
+      } catch {
+        /* ignore */
+      }
+      void this.start(source, this.currentVolume).catch((err) => {
+        this.log.warn('raop rebind reconnect failed', {
+          ...this.context,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      });
+      return;
+    }
+
+    // Live timeline (skip mid-playback): a bare flush drops the old track's buffered
+    // tail but keeps the RTP clock, so the new frames resume seamlessly.
     try {
       senderControl(this.handle, 'flush');
-      if (timelineStale) {
-        senderControl(this.handle, 'play');
-      }
     } catch {
       /* ignore */
     }
-    this.playoutPaused = false;
     this.clearDrainTimer();
     this.clearRing();
     this.attachSource(source);
