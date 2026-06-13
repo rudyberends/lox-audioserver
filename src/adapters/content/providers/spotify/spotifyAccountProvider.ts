@@ -5,9 +5,19 @@ import type {
   ContentServiceAccount,
   PlaylistEntry,
 } from '@/ports/ContentTypes';
+import { createHash } from 'node:crypto';
 import { createLogger, type ComponentLogger } from '@/shared/logging/logger';
 import { safeReadText } from '@/shared/bestEffort';
 import { resolveSpotifyClientId } from '@/adapters/content/providers/spotify/utils';
+
+/** Short, non-reversible fingerprint of a refresh token, for tracking its
+ *  identity across refresh/rotation/restart in logs without leaking the token. */
+function tokenFingerprint(token: string | undefined | null): string {
+  if (!token) {
+    return 'none';
+  }
+  return createHash('sha1').update(token).digest('hex').slice(0, 8);
+}
 
 const enum FileType {
   Folder = 1,
@@ -1273,8 +1283,20 @@ export class SpotifyAccountProvider {
           let parsedError: Record<string, unknown> = {};
           try { parsedError = JSON.parse(text); } catch { /* ignore */ }
           if (res.status === 400 && parsedError['error'] === 'invalid_grant') {
-            await this.persistAccountPatch({ refreshToken: '' });
-            this.log.error('spotify refresh token revoked; remove the account in the admin UI and re-add it to restore access');
+            // Do NOT wipe the stored refresh token here. Spotify rotates refresh
+            // tokens on every refresh (PKCE), so a stale/duplicate use — e.g. a
+            // freshly reloaded provider refreshing with a token a sibling already
+            // rotated — also returns invalid_grant. Wiping on that false positive
+            // destroyed the just-rotated valid token and forced a re-link on every
+            // restart. Keep the token: persistAccountState propagates the rotated
+            // value to this provider, so the next attempt self-heals. A genuinely
+            // revoked token simply keeps failing (clear log) until a manual re-link.
+            this.authError = true;
+            this.log.warn('spotify token refresh rejected (invalid_grant); keeping stored token', {
+              refreshTokenFp: tokenFingerprint(refreshToken),
+              body: text.slice(0, 200),
+              attempt,
+            });
             break;
           }
           if (attempt < maxAttempts && res.status >= 500) {
@@ -1300,11 +1322,15 @@ export class SpotifyAccountProvider {
         this.accessToken = accessToken;
         this.tokenExpiresAt = Date.now() + expiresIn * 1000;
         this.authError = false;
-        if (scope) {
-          this.log.debug('spotify token refreshed', { scope });
-        }
+        const rotated = Boolean(rotatedRefreshToken && rotatedRefreshToken !== refreshToken);
+        this.log.debug('spotify token refreshed', {
+          scope: scope || undefined,
+          usedRefreshTokenFp: tokenFingerprint(refreshToken),
+          rotated,
+          newRefreshTokenFp: rotated ? tokenFingerprint(rotatedRefreshToken) : undefined,
+        });
 
-        if (rotatedRefreshToken && rotatedRefreshToken !== refreshToken) {
+        if (rotated) {
           await this.persistAccountPatch({ refreshToken: rotatedRefreshToken });
         }
 
