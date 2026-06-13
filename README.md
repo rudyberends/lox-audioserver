@@ -4,22 +4,38 @@ Modern TypeScript implementation of the **Loxone Audio Server**, providing a ful
 
 ## Core Features
 
-- **Radio support** backed by TuneIn  
+- **Radio support** backed by TuneIn and Radio Paradise
 - **Custom radio stream management**
 - **Local music library**
   - File storage
   - Shared network drives
 - **Per-zone recents and favorites**
+- **Per-zone equalizer**
 - **Multi-account Spotify support**
 - **Alert engine**
   - Native Loxone alerts
-  - Text-to-Speech (TTS)
+  - Text-to-Speech (TTS), including LoxBerry TTS over MQTT
 
 ## Audio Inputs
 
 - Spotify Connect
 - AirPlay
-- Line-in
+- Line-in (with optional Shazam track recognition)
+- Music Assistant
+
+## Audio Outputs
+
+Zones can stream to a range of network and local playback targets:
+
+- Google Cast (Chromecast)
+- Sonos
+- Snapcast
+- Sendspin
+- AirPlay
+- DLNA / UPnP
+- Squeezelite
+- Music Assistant
+- Spotify Connect
 
 ## Bridge Providers
 
@@ -92,7 +108,7 @@ If you prefer to run the server directly on the host without Docker, follow thes
 
 Prerequisites
 
-- Node.js 20 or newer
+- Node.js 20 or newer (Docker images and CI build on Node 24)
 - npm (comes with Node)
 - Ports `7090`, `7091` and `7095` available on the host
 
