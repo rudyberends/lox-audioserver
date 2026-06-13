@@ -756,23 +756,80 @@ export class SpotifyServiceManager {
     service: string,
     user: string,
   ): SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider | TidalProvider | YtMusicProvider | YoutubeProvider | null {
-    const candidateIds: ProviderId[] = [];
-    if (service) {
-      candidateIds.push(this.normalizeServiceId(service));
-    }
-    if (user) {
-      candidateIds.push(this.providerIdFor(user));
+    const id = this.resolveProviderId(service, user);
+    if (id) {
+      return this.providers.get(id)!;
     }
 
-    for (const id of candidateIds) {
-      if (this.providers.has(id)) {
-        return this.providers.get(id)!;
+    // No explicit match. With a single configured provider, defaulting to it is
+    // safe and keeps nouser/empty-user commands working. With several providers,
+    // returning an arbitrary one would leak another account's library (the old
+    // "first provider" fallback), so refuse and let the caller serve empty.
+    if (this.providers.size === 1) {
+      return this.providers.values().next().value ?? null;
+    }
+    this.log.warn('no spotify provider matched request; refusing to guess', {
+      service,
+      user,
+      providerCount: this.providers.size,
+    });
+    return null;
+  }
+
+  /**
+   * Map a (service, user) request to a configured provider id.
+   *
+   * The Loxone client echoes back the advertised `user` label (the account's
+   * displayName or a bridge label) — not our internal account id — so a direct
+   * `spotify@<label>` lookup misses. Resolve the label back to the real account
+   * or bridge id before giving up.
+   */
+  private resolveProviderId(service: string, user: string): ProviderId | null {
+    if (service) {
+      const serviceId = this.normalizeServiceId(service);
+      if (this.providers.has(serviceId)) {
+        return serviceId;
       }
     }
+    if (user) {
+      const direct = this.providerIdFor(user);
+      if (this.providers.has(direct)) {
+        return direct;
+      }
+      const accountId = this.findAccountIdByUsername(user);
+      if (accountId) {
+        const accountProviderId = this.providerIdFor(accountId);
+        if (this.providers.has(accountProviderId)) {
+          return accountProviderId;
+        }
+      }
+      const bridgeId = this.findBridgeIdByLabel(user);
+      if (bridgeId) {
+        const bridgeProviderId = this.providerIdFor(bridgeId);
+        if (this.providers.has(bridgeProviderId)) {
+          return bridgeProviderId;
+        }
+      }
+    }
+    return null;
+  }
 
-    // fallback to first provider
-    const first = this.providers.values().next();
-    return first.done ? null : first.value;
+  /**
+   * Resolve a bridge id by matching its id or label (case-insensitive).
+   */
+  private findBridgeIdByLabel(value: string): string | null {
+    if (!value) return null;
+    const target = value.trim().toLowerCase();
+    const match = (this.bridges ?? []).find((bridge) => {
+      if (!bridge || bridge.enabled === false) {
+        return false;
+      }
+      return [bridge.id, bridge.label]
+        .filter(Boolean)
+        .map((v) => v!.toString().trim().toLowerCase())
+        .includes(target);
+    });
+    return match?.id ?? null;
   }
 
   private isRealSpotifyProvider(
