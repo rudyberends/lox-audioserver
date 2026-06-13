@@ -234,7 +234,8 @@ export class MusicAssistantBridgeProvider extends SpotifyAccountProvider {
     return { result, providerId: this.providerId, user: this.accountId };
   }
 
-  public dispose(): void {
+  public override dispose(): void {
+    super.dispose();
     this.api.release();
   }
 

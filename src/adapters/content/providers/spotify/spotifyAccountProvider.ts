@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { createLogger, type ComponentLogger } from '@/shared/logging/logger';
 import { safeReadText } from '@/shared/bestEffort';
 import { resolveSpotifyClientId } from '@/adapters/content/providers/spotify/utils';
+import type { LibrespotSession, TrackMetadata } from '@lox-audioserver/node-librespot';
 
 /** Short, non-reversible fingerprint of a refresh token, for tracking its
  *  identity across refresh/rotation/restart in logs without leaking the token. */
@@ -97,6 +98,10 @@ export class SpotifyAccountProvider {
   private tokenExpiresAt = 0;
   private authError = false;
   private refreshPromise: Promise<string | null> | null = null;
+  // Lazily-created librespot session for protocol browsing (playlists/tracks that
+  // the Feb-2026 Web API restricts). One per account, reused; closed on dispose.
+  private librespotSession: LibrespotSession | null = null;
+  private librespotSessionPromise: Promise<LibrespotSession | null> | null = null;
 
   constructor(options: SpotifyAccountProviderOptions) {
     this.providerId = options.providerId;
@@ -509,6 +514,32 @@ export class SpotifyAccountProvider {
     }
     const safeOffset = Math.max(0, offset || 0);
     const safeLimit = Math.max(1, limit || 50);
+
+    // Primary path: fetch via the Spotify protocol (librespot). Unlike the Web API
+    // (Feb 2026: only the owner's playlists return items), this works for any
+    // playlist the account can see — including other users' public playlists.
+    const session = await this.getLibrespotSession();
+    if (session) {
+      try {
+        const uris = await session.getPlaylistTracks(`spotify:playlist:${playlistId}`);
+        const pageUris = uris.slice(safeOffset, safeOffset + safeLimit);
+        const meta = pageUris.length ? await session.getTracksMetadata(pageUris) : [];
+        const byUri = new Map(meta.map((m) => [m.uri, m]));
+        // Preserve playlist order; drop any track that failed to hydrate.
+        const items = pageUris
+          .map((uri) => byUri.get(uri))
+          .filter((m): m is TrackMetadata => Boolean(m))
+          .map((m) => this.mapTrackMetadata(m));
+        return { items, total: uris.length };
+      } catch (error) {
+        this.log.warn('librespot playlist fetch failed; falling back to web api', {
+          playlistId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // Fallback: Web API /items (owner-only since Feb 2026).
     // Spotify caps /playlists/{id}/items at 50 items per request; chunk larger windows.
     const SPOTIFY_PAGE_MAX = 50;
     const mapped: ContentFolderItem[] = [];
@@ -1364,6 +1395,79 @@ export class SpotifyAccountProvider {
       this.account = { ...this.account, ...updated } as SpotifyAccountState;
     } else {
       this.account = { ...this.account, ...patch } as SpotifyAccountState;
+    }
+  }
+
+  /**
+   * Lazily create (and cache) a librespot session from the account's stored
+   * credentials, used for protocol-level browsing that the Web API now restricts.
+   * Returns null when credentials/native module are unavailable (caller falls
+   * back to the Web API).
+   */
+  private async getLibrespotSession(): Promise<LibrespotSession | null> {
+    if (this.librespotSession) {
+      return this.librespotSession;
+    }
+    if (this.librespotSessionPromise) {
+      return this.librespotSessionPromise;
+    }
+    const creds = (this.account as { librespotCredentials?: unknown }).librespotCredentials;
+    if (!creds) {
+      return null;
+    }
+    this.librespotSessionPromise = (async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const addon = require('@lox-audioserver/node-librespot');
+        const credsJson = typeof creds === 'string' ? creds : JSON.stringify(creds);
+        const session: LibrespotSession | null = await addon.createSessionWithCredentials(
+          credsJson,
+          `lox-content-${this.account.id}`,
+          null,
+          null,
+        );
+        this.librespotSession = session;
+        return session;
+      } catch (error) {
+        this.log.warn('librespot content session unavailable', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      } finally {
+        this.librespotSessionPromise = null;
+      }
+    })();
+    return this.librespotSessionPromise;
+  }
+
+  /** Map librespot protocol track metadata to a content folder item. */
+  private mapTrackMetadata(meta: TrackMetadata): ContentFolderItem {
+    const id = meta.uri.split(':').pop() ?? '';
+    const durationSec = Number.isFinite(meta.durationMs)
+      ? Math.max(1, Math.round(meta.durationMs / 1000))
+      : 120;
+    const cover = meta.coverUrl || undefined;
+    return {
+      id: this.makeUri('track', id),
+      name: meta.name || 'Track',
+      title: meta.name || 'Track',
+      type: FileType.File,
+      coverurl: cover,
+      thumbnail: cover,
+      audiopath: this.makeUri('track', id),
+      artist: meta.artists,
+      album: meta.album,
+      duration: durationSec,
+      tag: 'track',
+    } as ContentFolderItem;
+  }
+
+  /** Close the librespot browsing session, if any. Called on reload/dispose. */
+  public dispose(): void {
+    const session = this.librespotSession;
+    this.librespotSession = null;
+    if (session) {
+      void session.close().catch(() => { /* ignore */ });
     }
   }
 }
