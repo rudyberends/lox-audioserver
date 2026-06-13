@@ -44,19 +44,25 @@ export function getShippedDeveloperToken(): string | null {
   return token && isJwtUnexpired(token) ? token : null;
 }
 
-/** True when a JWT's `exp` is absent or still in the future (i.e. the token is usable). */
-function isJwtUnexpired(token: string): boolean {
+/** Decode a JWT's payload claims, or null if it isn't a well-formed three-segment JWT. */
+function decodeJwtPayload(token: string): { iss?: string; exp?: number } | null {
   try {
     const parts = token.split('.');
     const payloadPart = parts[1];
-    if (parts.length !== 3 || !payloadPart) return false;
+    if (parts.length !== 3 || !payloadPart) return null;
     const normalized = payloadPart.replace(/-/g, '+').replace(/_/g, '/');
-    const payload = JSON.parse(Buffer.from(normalized, 'base64').toString('utf-8')) as { exp?: number };
-    if (typeof payload.exp !== 'number') return true;
-    return payload.exp > Math.floor(Date.now() / 1000);
+    return JSON.parse(Buffer.from(normalized, 'base64').toString('utf-8')) as { iss?: string; exp?: number };
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** True when a JWT's `exp` is absent or still in the future (i.e. the token is usable). */
+function isJwtUnexpired(token: string): boolean {
+  const payload = decodeJwtPayload(token);
+  if (!payload) return false;
+  if (typeof payload.exp !== 'number') return true;
+  return payload.exp > Math.floor(Date.now() / 1000);
 }
 
 /** Browser-like base headers Apple's web endpoints expect; adds user-token headers when present. */
@@ -97,14 +103,45 @@ export async function scrapeBearerToken(headers: Record<string, string>): Promis
     signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
   });
   const homeText = await homeRes.text();
-  const match = homeText.match(/\/(assets\/index-legacy[~-][^/"]+\.js)/i);
-  if (!match) return null;
+  // Apple relocated the token from the `index-legacy` bundle to the main `index` bundle and ships
+  // both during the rollout, so match either (drop the `-legacy` requirement) and try each in the
+  // order they appear until one yields the web-player bearer.
+  const bundles = [...new Set([...homeText.matchAll(/\/(assets\/index[~-][^/"]+\.js)/gi)].map((m) => m[1]))];
+  let fallback: string | null = null;
+  for (const bundle of bundles) {
+    const jsRes = await fetch(`${APPLE_MUSIC_WEB_BASE}/${bundle}`, {
+      headers,
+      signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
+    });
+    const { webToken, anyToken } = selectWebPlayerToken(await jsRes.text());
+    if (webToken) return webToken;
+    fallback ??= anyToken;
+  }
+  return fallback;
+}
 
-  const jsRes = await fetch(`${APPLE_MUSIC_WEB_BASE}/${match[1]}`, {
-    headers,
-    signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
-  });
-  const jsText = await jsRes.text();
-  const tokenMatch = jsText.match(/eyJh[^"]+/);
-  return tokenMatch ? tokenMatch[0] : null;
+/**
+ * Find the Apple Music web-player bearer in a web-player JS bundle.
+ *
+ * The bundle embeds two ES256 JWTs: the `AMPWebPlay`-issued web-player token and a MusicKit
+ * developer token (whose `iss` is the 10-char Apple team id). We talk to `amp-api.music.apple.com`,
+ * which ONLY accepts the `AMPWebPlay` token — the team-id developer token 401s there (it's for the
+ * public `api.music.apple.com`). So `webToken` is the `AMPWebPlay` one; `anyToken` is the first
+ * unexpired JWT, a last-resort fallback used only if no `AMPWebPlay` token is found.
+ *
+ * We match every full three-segment JWT — not a fixed header prefix, since Apple has reordered the
+ * header claims (the old `eyJh` `{"alg",…}`-first prefix became `{"typ":"JWT",…}` → `eyJ0…`).
+ */
+function selectWebPlayerToken(jsText: string): { webToken: string | null; anyToken: string | null } {
+  const candidates = jsText.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g) ?? [];
+  let webToken: string | null = null;
+  let anyToken: string | null = null;
+  for (const token of candidates) {
+    const payload = decodeJwtPayload(token);
+    if (!payload || !isJwtUnexpired(token)) continue;
+    anyToken ??= token;
+    if (!webToken && payload.iss === 'AMPWebPlay') webToken = token;
+    if (webToken && anyToken) break;
+  }
+  return { webToken, anyToken };
 }
