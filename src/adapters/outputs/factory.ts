@@ -313,6 +313,11 @@ function createAirplayOutput(
   const et = extras?.et;
   const md = extras?.md;
   const latencyMs = extras?.latencyMs;
+  const rawBufferMs = extras?.bufferMs;
+  const bufferMs =
+    rawBufferMs === undefined || rawBufferMs === null || rawBufferMs === ''
+      ? NaN
+      : Number(rawBufferMs);
   const port = Number(rawPort);
   const initialVolume = clampVolume(zone.volumes?.default);
   return new AirPlayOutput(
@@ -327,6 +332,7 @@ function createAirplayOutput(
       et: typeof et === 'string' ? et : undefined,
       md: typeof md === 'string' ? md : undefined,
       latencyMs: typeof latencyMs === 'number' ? latencyMs : undefined,
+      bufferMs: Number.isFinite(bufferMs) ? bufferMs : undefined,
     },
     ports,
     initialVolume,

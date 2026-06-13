@@ -63,18 +63,25 @@ function ensureNativeLogging(): void {
 }
 
 /**
- * Read-ahead requested from libraop, in frames. This is the dominant component
- * of start/resume latency and the skip "tail": the device buffers this much
- * before the first sample is heard. Lower = snappier start and skip; higher =
- * more resilience to network jitter / packet loss. ~0.5s is a responsive
- * default for a healthy LAN (libraop's own retransmit covers minor loss);
- * jittery setups can raise it via `latencyMs`. (MA's conservative default is 1s.)
+ * Read-ahead requested from libraop, in frames. This is the device's playback
+ * buffer: it holds this much audio before the first sample is heard. Lower =
+ * snappier start and skip "tail"; higher = more resilience to network jitter /
+ * packet loss (stutter / buffer-underrun on slower devices). ~0.5s requested
+ * (≈750ms total with the libraop minimum below) is a responsive default for a
+ * healthy LAN; stutter-prone devices can raise it per-output via `bufferMs`.
+ * (MA's conservative default is 1.5s.)
  */
-const DEFAULT_LATENCY_FRAMES = 22_050; // ~500ms
+const DEFAULT_LATENCY_FRAMES = 22_050; // ~500ms requested
 // libraop adds this fixed minimum to the requested latency (raopcl_latency), so
 // the real end-to-end playout delay is DEFAULT_LATENCY_FRAMES + this.
 const RAOP_LATENCY_MIN_FRAMES = 11_025;
 const SAMPLE_RATE = 44_100;
+// Per-output device-buffer override (`bufferMs` = total read-ahead the device
+// holds, i.e. what getLatencyMs() reports). Default keeps the snappy 750ms; the
+// range mirrors Music Assistant's RAOP buffer bounds.
+const DEFAULT_BUFFER_MS = 750;
+const MIN_BUFFER_MS = 250;
+const MAX_BUFFER_MS = 5_000;
 const CHANNELS = 2;
 const SAMPLE_SIZE = 2; // s16le
 const FRAME_BYTES = CHANNELS * SAMPLE_SIZE;
@@ -118,6 +125,14 @@ export interface RaopSenderConfig {
    * RAOP read-ahead buffer itself is a fixed internal default (DEFAULT_LATENCY_FRAMES).
    */
   latencyMs?: number;
+  /**
+   * Per-output device read-ahead BUFFER in milliseconds (distinct from the sync
+   * offset `latencyMs`). Total audio the device buffers before playout — higher
+   * trades start/skip snappiness for resilience against stutter / buffer underrun
+   * on slower or jittery devices. Default {@link DEFAULT_BUFFER_MS} (750ms),
+   * clamped to [{@link MIN_BUFFER_MS}, {@link MAX_BUFFER_MS}].
+   */
+  bufferMs?: number;
   /** Forward libraop native logs at debug level. */
   debug?: boolean;
   /** Invoked when the device is lost and reconnect attempts are exhausted. */
@@ -171,10 +186,10 @@ export class RaopSender {
   private readonly maxReconnectAttempts = 10;
   private stopped = false;
   private starting = false;
-  // Fixed RAOP read-ahead buffer (the device largely dictates this via its
-  // Audio-Latency override anyway). Kept internal so the per-zone latencyMs is
-  // free to act as the multiroom sync offset instead.
-  private readonly latencyFrames: number = DEFAULT_LATENCY_FRAMES;
+  // RAOP read-ahead buffer in frames, requested from libraop. Defaults to a snappy
+  // 750ms total; raised per-output via `bufferMs` for stutter-prone devices. The
+  // per-zone `latencyMs` is reserved for the multiroom sync offset, not this.
+  private readonly latencyFrames: number;
   // Per-zone multiroom sync offset (ms): shifts this device's playback anchor so
   // a fixed hardware offset between grouped devices can be tuned out. Positive =
   // this device plays later. Default 0 = pure auto-sync.
@@ -185,6 +200,15 @@ export class RaopSender {
     private readonly context: { zoneId: number; zoneName: string },
   ) {
     this.syncOffsetMs = Number.isFinite(config.latencyMs) ? (config.latencyMs as number) : 0;
+    // `bufferMs` is the TOTAL device read-ahead; libraop adds RAOP_LATENCY_MIN_FRAMES
+    // on top of what we request, so subtract it back out. Unset → the 750ms default.
+    if (Number.isFinite(config.bufferMs)) {
+      const clampedMs = Math.min(MAX_BUFFER_MS, Math.max(MIN_BUFFER_MS, config.bufferMs as number));
+      const totalFrames = Math.round((clampedMs / 1000) * SAMPLE_RATE);
+      this.latencyFrames = Math.max(0, totalFrames - RAOP_LATENCY_MIN_FRAMES);
+    } else {
+      this.latencyFrames = DEFAULT_LATENCY_FRAMES;
+    }
   }
 
   public isRunning(): boolean {
@@ -450,7 +474,14 @@ export class RaopSender {
     }
   }
 
-  /** Pause playout (flushes the device buffer). The connection is kept. */
+  /**
+   * Pause playout, sendspin/snapcast-style: hold position, don't tear down. The
+   * device keeps its buffer (`raopcl_pause`, no flush) and we FREEZE the feed at the
+   * exact sample — pause the source and stop the pump — instead of detaching and
+   * clearing the ring. The engine subscriber backpressure-stalls upstream, so on
+   * resume the SAME source + ring continue from the same position (no fresh
+   * subscriber, no skip). The RTSP connection is kept.
+   */
   public pause(): void {
     if (this.handle === null) {
       return;
@@ -461,11 +492,23 @@ export class RaopSender {
       /* ignore */
     }
     this.playoutPaused = true;
-    this.detachSource();
-    this.clearRing();
+    // Stop the not-ready retry loop and freeze the feed. Pausing the source keeps
+    // the ring holding the pause-point audio (otherwise trimRing would drop it for
+    // newer PCM) and backpressures the engine subscriber to a stall — position held.
+    this.clearDrainTimer();
+    if (this.source && !this.sourcePaused) {
+      this.source.pause();
+      this.sourcePaused = true;
+    }
   }
 
-  /** Resume after a pause by re-anchoring the start clock and re-binding the source. */
+  /**
+   * Resume after a pause. Re-anchor the device clock with `play` (it replays its
+   * retained backlog from the pause point via "restarting w/ pause") and un-gate
+   * the SAME source + ring, so playback continues from the exact sample with no
+   * fresh-subscriber skip. `source` is the reused shared stream — attachSource is a
+   * no-op when it is unchanged.
+   */
   public resume(source: NodeJS.ReadableStream): void {
     if (this.handle === null) {
       return;
@@ -478,6 +521,11 @@ export class RaopSender {
       /* ignore */
     }
     this.attachSource(source);
+    if (this.source && this.sourcePaused) {
+      this.source.resume();
+      this.sourcePaused = false;
+    }
+    this.pump();
   }
 
   /**

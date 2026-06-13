@@ -17,8 +17,13 @@ export interface AirPlayOutputConfig {
   et?: string;
   /** Device metadata capabilities (mDNS TXT `md`), resolved by the AdminUI picker. */
   md?: string;
-  /** Requested read-ahead latency (ms). Lower = snappier start/skip. Default ~500. */
+  /** Multiroom sync offset (ms) for this output; positive = plays later. NOT the buffer. */
   latencyMs?: number;
+  /**
+   * Per-output device read-ahead buffer (ms). Default 750; raise for stutter-prone
+   * devices (more resilience to jitter/underrun) at the cost of start/skip snappiness.
+   */
+  bufferMs?: number;
 }
 
 export const AIRPLAY_OUTPUT_DEFINITION: OutputConfigDefinition = {
@@ -54,6 +59,14 @@ export const AIRPLAY_OUTPUT_DEFINITION: OutputConfigDefinition = {
       type: 'text',
       placeholder: 'Optional password',
       description: 'Only needed for protected AirPlay devices.',
+    },
+    {
+      id: 'bufferMs',
+      label: 'Buffer (ms)',
+      type: 'text',
+      placeholder: '750',
+      description:
+        'Device read-ahead buffer in ms (default 750). Raise (e.g. 1500) for devices that stutter or underrun; higher = more resilient but slower start/skip. Range 250–5000.',
     },
     {
       id: 'debug',
@@ -108,6 +121,7 @@ export class AirPlayOutput implements ZoneOutput {
         et: typeof config.et === 'string' ? config.et : undefined,
         md: typeof config.md === 'string' ? config.md : undefined,
         latencyMs: typeof config.latencyMs === 'number' ? config.latencyMs : undefined,
+        bufferMs: typeof config.bufferMs === 'number' ? config.bufferMs : undefined,
         debug: config.debug === true,
         onUnavailable: (reason) => this.handleSenderUnavailable(reason),
         onDeviceResolved: (info) => this.persistResolvedConfig(info),
@@ -265,11 +279,12 @@ export class AirPlayOutput implements ZoneOutput {
     // re-bind the source explicitly (sender.resume → senderControl('play'))
     // instead of relying on libraop's implicit accept-frames unpause.
     if (this.sender.isRunning() && !this.attachedLeaderId) {
-      // Resume: re-acquire a FRESH LIVE subscriber (reusing the paused subscriber
-      // deadlocks — it waits for live while ffmpeg waits for the buffer to drain),
-      // then re-anchor the device with `play` (now+200ms) for a snappy resume
-      // rather than the slow flush path (now+device-latency).
-      const stream = this.streamSession.reacquireLive();
+      // Resume sendspin/snapcast-style: REUSE the existing subscriber + shared
+      // stream (held at the pause position via backpressure during pause) instead
+      // of re-subscribing fresh. getStream() returns that same paused subscriber;
+      // sender.resume() re-anchors the device with `play` and un-gates the feed, so
+      // playback continues from the exact sample — no fresh-subscriber skip.
+      const stream = this.streamSession.getStream();
       if (stream) {
         this.sender.resume(stream);
         this.running = true;
