@@ -295,7 +295,12 @@ export class ZonePlayer {
     if (deltaSeconds <= 0) {
       return;
     }
-    this.lastTickAt = now;
+    // Advance the baseline by the whole seconds we consumed, NOT to `now`.
+    // Setting it to `now` discarded the sub-second remainder every tick, so
+    // under timer jitter (heaviest with PCM/AirPlay output) the clock lost time
+    // and the progress bar drifted behind real playback (#291). Carrying the
+    // remainder forward keeps it aligned.
+    this.lastTickAt += deltaSeconds * 1000;
     // Allow the internal clock to advance beyond `duration` by `endGuardSec`.
     // Player listeners clamp the exposed position to `duration`, but `ended` needs
     // to be able to fire when an output latency guard is configured.
