@@ -10,6 +10,14 @@ import type { PlayerEvent, PlayerEventMap, PlayerState } from '@/application/pla
 
 type Listener<T> = (payload: T) => void;
 
+// Sample the position clock several times per second. tick() only emits when the
+// whole-second value changes, so the broadcast rate stays ~1/sec — but sampling
+// faster than 1s means each second boundary is detected within ~250ms instead of
+// up to ~1s late. That removes the occasional "text skips a second then jumps by
+// two" stutter, which happened when a 1s sampler stepped over a boundary and
+// caught up with a +2 on the next tick.
+const TICK_INTERVAL_MS = 250;
+
 export class ZonePlayer {
   private readonly log = createLogger('Audio', `Player:${this.zoneId}`);
   private readonly listeners = new Map<PlayerEvent, Set<Listener<any>>>();
@@ -230,7 +238,7 @@ export class ZonePlayer {
   private startTicker(): void {
     this.stopTicker();
     this.lastTickAt = Date.now();
-    this.tickTimer = setInterval(() => this.tick(), 1000);
+    this.tickTimer = setInterval(() => this.tick(), TICK_INTERVAL_MS);
   }
 
   private startTickerWhenReady(session: PlaybackSession | null, startAtSec = 0): void {
@@ -274,7 +282,7 @@ export class ZonePlayer {
       if (!ready) {
         this.log.debug('ticker started without first chunk', { zoneId: this.zoneId, timeoutMs });
       }
-      this.tickTimer = setInterval(() => this.tick(), 1000);
+      this.tickTimer = setInterval(() => this.tick(), TICK_INTERVAL_MS);
     });
   }
 
