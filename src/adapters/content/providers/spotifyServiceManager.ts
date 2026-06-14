@@ -91,9 +91,12 @@ export class SpotifyServiceManager {
     clientId?: string,
     bridges: SpotifyBridgeConfig[] = [],
   ): void {
-    for (const provider of this.providers.values()) {
-      (provider as { dispose?: () => void })?.dispose?.();
-    }
+    // Keep the previous instances so unchanged accounts can be REUSED rather than
+    // recreated. Recreating a Spotify provider mid-startup spawns a second token
+    // refresh with the same refresh token; Spotify's rotation reuse-detection then
+    // treats it as a replay and revokes the whole token family — which forced a
+    // re-link on (almost) every restart, since the manager reloads twice on boot.
+    const previous = new Map(this.providers);
     this.providers.clear();
     this.clientId = resolveSpotifyClientId({ clientId });
     this.bridges = Array.isArray(bridges) ? [...bridges] : [];
@@ -106,6 +109,18 @@ export class SpotifyServiceManager {
 
     for (const account of this.accounts) {
       const providerId = this.providerIdFor(account.id);
+      const existing = previous.get(providerId);
+      // Reuse only when the account is genuinely unchanged (same refresh token):
+      // that preserves the in-flight refresh / single-flight and rotated token.
+      // A different token means a fresh link → recreate.
+      if (
+        existing instanceof SpotifyAccountProvider &&
+        existing.configuredRefreshToken === (account.refreshToken ?? undefined)
+      ) {
+        this.providers.set(providerId, existing);
+        previous.delete(providerId); // reused → don't dispose below
+        continue;
+      }
       const provider = new SpotifyAccountProvider({
         providerId,
         account,
@@ -113,6 +128,11 @@ export class SpotifyServiceManager {
         persistAccount: this.persistAccountState,
       });
       this.providers.set(providerId, provider);
+    }
+
+    // Dispose providers that were not reused (removed/relinked accounts, old bridges).
+    for (const provider of previous.values()) {
+      (provider as { dispose?: () => void })?.dispose?.();
     }
 
     this.registerBridgeProviders();
@@ -364,6 +384,15 @@ export class SpotifyServiceManager {
         maxLimit,
       );
       return { result: result as unknown as Record<string, ContentFolderItem[]> & { _totals?: Record<string, number> }, user: bridgeUser, providerId };
+    }
+
+    // Primary path: pathfinder search (track/album/artist/playlist). Falls back
+    // to the Web API below when pathfinder is unavailable.
+    const pf = await provider.searchPathfinder(query, limits, maxLimit);
+    if (pf && Object.keys(pf.result).length) {
+      const merged: Record<string, ContentFolderItem[]> & { _totals?: Record<string, number> } = pf.result;
+      merged._totals = pf.totals;
+      return { result: merged, user: provider.accountId, providerId: provider.providerId };
     }
 
     const accessToken = await provider.fetchAccessToken();

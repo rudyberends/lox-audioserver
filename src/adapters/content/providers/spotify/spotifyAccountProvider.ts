@@ -9,7 +9,19 @@ import { createHash } from 'node:crypto';
 import { createLogger, type ComponentLogger } from '@/shared/logging/logger';
 import { safeReadText } from '@/shared/bestEffort';
 import { resolveSpotifyClientId } from '@/adapters/content/providers/spotify/utils';
-import type { LibrespotSession, TrackMetadata } from '@lox-audioserver/node-librespot';
+import {
+  supportsPathfinder,
+  fetchBrowseCategories as pfBrowseCategories,
+  fetchCategoryEntries as pfCategoryEntries,
+  fetchPlaylistTracks as pfPlaylistTracks,
+  fetchAlbumTracks as pfAlbumTracks,
+  fetchArtistTopTracks as pfArtistTopTracks,
+  search as pfSearch,
+  setPathfinderLocale,
+  type BrowseCategory,
+  type MediaEntry,
+} from '@/adapters/content/providers/spotify/spotifyPathfinder';
+import type { LibrespotSession } from '@lox-audioserver/node-librespot';
 
 /** Short, non-reversible fingerprint of a refresh token, for tracking its
  *  identity across refresh/rotation/restart in logs without leaking the token. */
@@ -26,10 +38,72 @@ const enum FileType {
   PlaylistBrowsable = 7,
 }
 
+/**
+ * Decode a pathfinder browse URI from a category folder id. Pathfinder
+ * categories store their `spotify:page:...` URI base64url-encoded (see
+ * mapBrowseCategory); legacy/hardcoded category ids decode to non-URIs and
+ * return null (those fallback categories have no drillable contents).
+ */
+function decodeBrowseUri(categoryId: string): string | null {
+  try {
+    const decoded = Buffer.from(categoryId, 'base64url').toString('utf8');
+    return decoded.startsWith('spotify:') ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Search result types pathfinder (searchDesktop) covers; podcasts go via Web API. */
+const PATHFINDER_SEARCH_TYPES = new Set(['track', 'album', 'artist', 'playlist']);
+
+/**
+ * Spotify service root folders, indexed by the Loxone app's fixed `SpotifyFolder`
+ * enum (Features=0, NewReleases=1, Categories=2, MyPlaylists=3, LikedSongs=4,
+ * Albums=5, Artists=6, Podcasts=7). The app requests each section by this numeric
+ * index, so this single list — in ENUM ORDER — drives the numeric folder routing
+ * (normalizeFolderId) and the fallback root listing (buildRootFolder). The order
+ * MUST match the enum or labels and content scramble (e.g. "Genres & Moods"
+ * returning artists). Section titles in the app come from each folder response's
+ * name (see the getFolder switch), not from these names.
+ */
+const SPOTIFY_ROOT_FOLDERS: ReadonlyArray<{
+  type: 'popular' | 'new' | 'genres' | 'playlists' | 'liked' | 'albums' | 'artists' | 'podcasts';
+  name: string;
+}> = [
+  { type: 'popular', name: 'Popular Playlists' }, // 0 Features
+  { type: 'new', name: 'New Releases' }, //          1 NewReleases
+  { type: 'genres', name: 'Genres & Moods' }, //     2 Categories
+  { type: 'playlists', name: 'My Playlists' }, //    3 MyPlaylists
+  { type: 'liked', name: 'Liked Songs' }, //         4 LikedSongs
+  { type: 'albums', name: 'Albums' }, //             5 Albums
+  { type: 'artists', name: 'Artists' }, //           6 Artists
+  { type: 'podcasts', name: 'Podcasts' }, //         7 Podcasts
+];
+
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
-const SPOTIFY_SEARCH_MAX_LIMIT = 10;
 const SPOTIFY_HTTP_TIMEOUT_MS = 10_000;
-const SPOTIFY_ENABLE_POPULAR_CATEGORY = false;
+/** Spotify's stable "Music" browse hub: the source for "Popular Playlists" (the
+ *  Features section). Its editorial playlists (New Music Friday NL, Hot Hits NL,
+ *  …) match what the real audioserver shows there. */
+const SPOTIFY_POPULAR_BROWSE_URI = 'spotify:page:0JQ5DAqbMKFSi39LMRT0Cy';
+
+/** Spotify's stable "New Releases" browse page: editorial new-release albums,
+ *  matching the real audioserver's "New Releases" section. */
+const SPOTIFY_NEW_RELEASES_BROWSE_URI = 'spotify:page:0JQ5DAqbMKFz6FAsUtgAab';
+
+/** Map a Spotify account country to an Accept-Language locale so pathfinder
+ *  localizes content names (e.g. "Top 50 - Nederland"). Covers the common
+ *  markets where language != country code; falls back to English. */
+const COUNTRY_LOCALE: Record<string, string> = {
+  NL: 'nl-NL', BE: 'nl-BE', DE: 'de-DE', AT: 'de-AT', CH: 'de-CH', FR: 'fr-FR',
+  ES: 'es-ES', IT: 'it-IT', PT: 'pt-PT', BR: 'pt-BR', GB: 'en-GB', US: 'en-US',
+  IE: 'en-IE', SE: 'sv-SE', NO: 'nb-NO', DK: 'da-DK', FI: 'fi-FI', PL: 'pl-PL',
+  CZ: 'cs-CZ', GR: 'el-GR', HU: 'hu-HU', RO: 'ro-RO', TR: 'tr-TR', MX: 'es-MX',
+};
+function localeForCountry(country: string | undefined): string {
+  const cc = (country || '').trim().toUpperCase();
+  return COUNTRY_LOCALE[cc] ?? 'en';
+}
 const SPOTIFY_FALLBACK_CATEGORIES: Array<{ id: string; name: string }> = [
   { id: 'pop', name: 'Pop' },
   { id: 'rock', name: 'Rock' },
@@ -157,6 +231,16 @@ export class SpotifyAccountProvider {
     this.account = { ...this.account, ...newState } as SpotifyAccountState;
   }
 
+  /** Current refresh token (possibly rotated in-memory). Used to decide whether
+   *  a manager reload can reuse this provider instead of recreating it. */
+  public get configuredRefreshToken(): string | undefined {
+    return (
+      this.account.refreshToken?.trim() ||
+      (this.account as { refresh_token?: string }).refresh_token?.toString().trim() ||
+      undefined
+    );
+  }
+
   /**
    * Resolve a single track by id.
    */
@@ -205,7 +289,7 @@ export class SpotifyAccountProvider {
       case 'playlists':
         return this.buildFolder(
           folderId,
-          'Playlists',
+          'My Playlists',
           await this.fetchUserPlaylists(offset, limit),
           offset,
         );
@@ -237,27 +321,53 @@ export class SpotifyAccountProvider {
           await this.fetchUserPodcasts(offset, limit || 20),
           offset,
         );
-      case 'popular':
-        if (!SPOTIFY_ENABLE_POPULAR_CATEGORY) {
-          return this.buildFolder(folderId, 'Popular Playlists', { items: [], total: 0 }, offset);
+      case 'popular': {
+        // Popular Playlists = the editorial playlists from Spotify's Music browse
+        // hub (New Music Friday NL, Hot Hits NL, …) — matches the real audioserver.
+        const session = await this.getLibrespotSession();
+        if (session && supportsPathfinder(session)) {
+          const playlists = (await pfCategoryEntries(session, SPOTIFY_POPULAR_BROWSE_URI)).filter(
+            (e) => e.kind === 'playlist',
+          );
+          if (playlists.length) {
+            const safeOffset = Math.max(0, offset || 0);
+            const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
+            const sliced = playlists.slice(safeOffset, safeOffset + safeLimit);
+            return this.buildFolder(
+              folderId,
+              'Popular Playlists',
+              { items: sliced.map((e) => this.mapMediaEntry(e)), total: playlists.length },
+              offset,
+            );
+          }
         }
-        return this.buildFolder(
-          folderId,
-          'Popular Playlists',
-          await this.fetchPopularPlaylists(limit || 20),
-          offset,
-        );
-      case 'new':
-        return this.buildFolder(
-          folderId,
-          'New Releases',
-          await this.fetchNewReleases(limit || 20),
-          offset,
-        );
+        return this.buildFolder(folderId, 'Popular Playlists', { items: [], total: 0 }, offset);
+      }
+      case 'new': {
+        // Editorial new-release albums via the New Releases browse page.
+        const session = await this.getLibrespotSession();
+        if (session && supportsPathfinder(session)) {
+          const albums = (await pfCategoryEntries(session, SPOTIFY_NEW_RELEASES_BROWSE_URI)).filter(
+            (e) => e.kind === 'album',
+          );
+          if (albums.length) {
+            const safeOffset = Math.max(0, offset || 0);
+            const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
+            const sliced = albums.slice(safeOffset, safeOffset + safeLimit);
+            return this.buildFolder(
+              folderId,
+              'New Releases',
+              { items: sliced.map((e) => this.mapMediaEntry(e)), total: albums.length },
+              offset,
+            );
+          }
+        }
+        return this.buildFolder(folderId, 'New Releases', { items: [], total: 0 }, offset);
+      }
       case 'genres':
         return this.buildFolder(
           folderId,
-          'Genres',
+          'Genres & Moods',
           await this.fetchBrowseCategories(offset, limit || 20),
           offset,
         );
@@ -326,16 +436,10 @@ export class SpotifyAccountProvider {
       name: this.displayLabel,
       service: 'spotify',
       start: offset,
-      totalitems: 7,
-      items: [
-        this.folderLink('playlists', 'Playlists'),
-        this.folderLink('albums', 'Albums'),
-        this.folderLink('artists', 'Artists'),
-        this.folderLink('liked-songs', 'Liked Songs'),
-        this.folderLink('podcasts', 'Podcasts'),
-        this.folderLink('new-releases', 'New Releases'),
-        this.folderLink('genres', 'Genres & Moods'),
-      ],
+      totalitems: SPOTIFY_ROOT_FOLDERS.length,
+      // The Loxone app re-requests each child by its numeric index, so the id
+      // here MUST be that index (see SPOTIFY_ROOT_FOLDERS / normalizeFolderId).
+      items: SPOTIFY_ROOT_FOLDERS.map((folder, index) => this.folderLink(String(index), folder.name)),
     };
   }
 
@@ -403,34 +507,41 @@ export class SpotifyAccountProvider {
     if (key.startsWith('category:') || key.startsWith('spotify:category:')) {
       return { type: 'category', id: tail };
     }
-    if (key === 'playlist' || key === 'playlists' || key === '3') {
+    // Numeric root-folder index from the Loxone app → resolve via the single
+    // ordered list, so index, label and content always line up.
+    if (/^\d+$/.test(key)) {
+      const folder = SPOTIFY_ROOT_FOLDERS[Number(key)];
+      if (folder) {
+        return { type: folder.type };
+      }
+    }
+    if (key === 'playlist' || key === 'playlists') {
       return { type: 'playlists' };
     }
-    if (key === 'album' || key === 'albums' || key === '5') {
+    if (key === 'album' || key === 'albums') {
       return { type: 'albums' };
     }
-    if (key === 'artist' || key === 'artists' || key === '6') {
+    if (key === 'artist' || key === 'artists') {
       return { type: 'artists' };
     }
-    if (key === 'liked' || key.includes('liked-songs') || key.includes('favorites') || key === '4' || key === 'user:collection') {
+    if (key === 'liked' || key.includes('liked-songs') || key.includes('favorites') || key === 'user:collection') {
       return { type: 'liked' };
     }
-    if (key === 'podcasts' || key === 'podcast' || key.includes('shows') || key === '7') {
+    if (key === 'podcasts' || key === 'podcast' || key.includes('shows')) {
       return { type: 'podcasts' };
     }
     if (
       key === 'popular' ||
       key.includes('popular-playlists') ||
-      key === '0' ||
       key.includes('recommend') ||
       key.includes('aanbevel')
     ) {
       return { type: 'popular' };
     }
-    if (key === 'new' || key.includes('new-releases') || key === '1') {
+    if (key === 'new' || key.includes('new-releases')) {
       return { type: 'new' };
     }
-    if (key === 'genres' || key.includes('genres-moods') || key === '2') {
+    if (key === 'genres' || key.includes('genres-moods')) {
       return { type: 'genres' };
     }
     return { type: 'unknown' };
@@ -515,27 +626,19 @@ export class SpotifyAccountProvider {
     const safeOffset = Math.max(0, offset || 0);
     const safeLimit = Math.max(1, limit || 50);
 
-    // Primary path: fetch via the Spotify protocol (librespot). Unlike the Web API
+    // Primary path: pathfinder (one call, fully hydrated). Unlike the Web API
     // (Feb 2026: only the owner's playlists return items), this works for any
     // playlist the account can see — including other users' public playlists.
     const session = await this.getLibrespotSession();
-    if (session) {
-      try {
-        const uris = await session.getPlaylistTracks(`spotify:playlist:${playlistId}`);
-        const pageUris = uris.slice(safeOffset, safeOffset + safeLimit);
-        const meta = pageUris.length ? await session.getTracksMetadata(pageUris) : [];
-        const byUri = new Map(meta.map((m) => [m.uri, m]));
-        // Preserve playlist order; drop any track that failed to hydrate.
-        const items = pageUris
-          .map((uri) => byUri.get(uri))
-          .filter((m): m is TrackMetadata => Boolean(m))
-          .map((m) => this.mapTrackMetadata(m));
-        return { items, total: uris.length };
-      } catch (error) {
-        this.log.warn('librespot playlist fetch failed; falling back to web api', {
-          playlistId,
-          message: error instanceof Error ? error.message : String(error),
-        });
+    if (session && supportsPathfinder(session)) {
+      const result = await pfPlaylistTracks(
+        session,
+        `spotify:playlist:${playlistId}`,
+        safeOffset,
+        safeLimit,
+      );
+      if (result) {
+        return { items: result.items.map((e) => this.mapMediaEntry(e)), total: result.total };
       }
     }
 
@@ -587,7 +690,16 @@ export class SpotifyAccountProvider {
       return { items: [], total: 0 };
     }
 
-    // Fetch album metadata once so we can enrich track rows with album/cover info.
+    // Primary path: pathfinder (tracks hydrated with album/cover/artist).
+    const session = await this.getLibrespotSession();
+    if (session && supportsPathfinder(session)) {
+      const result = await pfAlbumTracks(session, `spotify:album:${albumId}`, offset, limit || 50);
+      if (result) {
+        return { items: result.items.map((e) => this.mapMediaEntry(e)), total: result.total };
+      }
+    }
+
+    // Fallback: Web API. Fetch album metadata once to enrich track rows.
     const albumMeta = await this.request<{ name?: string; images?: any[] }>(
       `${SPOTIFY_API_BASE}/albums/${encodeURIComponent(albumId)}`,
     );
@@ -722,60 +834,6 @@ export class SpotifyAccountProvider {
     return { items: mappedShows, total: shows?.total ?? mappedShows.length };
   }
 
-  private async fetchPopularPlaylists(
-    limit: number,
-  ): Promise<{ items: ContentFolderItem[]; total?: number }> {
-    const cappedLimit = Math.min(Math.max(limit || 20, 1), 50);
-    const userPlaylists = await this.fetchUserPlaylists(0, cappedLimit);
-    if (userPlaylists.items.length >= Math.min(cappedLimit, 5)) {
-      return userPlaylists;
-    }
-
-    const searchTerms = ['today top hits', 'top hits', 'viral hits'];
-    const searched: any[] = [];
-    for (const query of searchTerms) {
-      const results = await this.searchPlaylistsRaw(query, cappedLimit, 0, true);
-      if (results.length) {
-        searched.push(...results);
-      }
-    }
-    const uniqueSearched = this.dedupeById(searched);
-    if (uniqueSearched.length) {
-      return {
-        items: uniqueSearched.slice(0, cappedLimit).map((pl) => this.mapPlaylist(pl)),
-        total: uniqueSearched.length,
-      };
-    }
-
-    // Final fallback: curated known global playlists (e.g., Today's Top Hits).
-    const curatedIds = ['37i9dQZF1DXcBWIGoYBM5M', '37i9dQZF1DX4JAvHpjipBk'];
-    const curated: ContentFolderItem[] = [];
-    for (const pid of curatedIds) {
-      const pl = await this.fetchPlaylistMeta(pid);
-      if (pl) curated.push(pl);
-      if (curated.length >= cappedLimit) break;
-    }
-    if (curated.length) {
-      return { items: curated, total: curated.length };
-    }
-
-    if (userPlaylists.items.length) {
-      return userPlaylists;
-    }
-
-    return { items: [], total: 0 };
-  }
-
-  private async fetchPlaylistMeta(playlistId: string): Promise<ContentFolderItem | null> {
-    if (!playlistId) return null;
-    const data = await this.request<any>(`${SPOTIFY_API_BASE}/playlists/${encodeURIComponent(playlistId)}`, {
-      suppressWarn: true,
-      params: { fields: 'id,name,images,owner(display_name,id),tracks.total,is_following' },
-    });
-    if (!data) return null;
-    return this.mapPlaylist(data);
-  }
-
   private dedupeById(items: any[]): any[] {
     const seen = new Set<string>();
     const result: any[] = [];
@@ -788,38 +846,30 @@ export class SpotifyAccountProvider {
     return result;
   }
 
-  private async fetchNewReleases(
-    limit: number,
-  ): Promise<{ items: ContentFolderItem[]; total?: number }> {
-    const cappedLimit = Math.min(Math.max(limit || 20, 1), 50);
-    const searchItems = await this.searchAlbumsRaw('tag:new', cappedLimit, 0, true);
-    if (searchItems.length) {
-      const unique = this.dedupeById(searchItems);
-      return {
-        items: unique.slice(0, cappedLimit).map((album) => this.mapAlbum(album)),
-        total: unique.length,
-      };
-    }
-
-    // Dev-mode compatible fallback to user's recently saved albums.
-    const saved = await this.request<{ items?: any[]; total?: number }>(`${SPOTIFY_API_BASE}/me/albums`, {
-      params: { offset: '0', limit: String(cappedLimit) },
-      suppressWarn: true,
-    });
-    const items = Array.isArray(saved?.items) ? saved.items : [];
-    const mapped = items
-      .map((entry) => entry?.album)
-      .filter(Boolean)
-      .map((album) => this.mapAlbum(album, true));
-    return { items: mapped, total: saved?.total ?? mapped.length };
-  }
-
   private async fetchBrowseCategories(
     offset: number,
     limit: number,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
     const safeOffset = Math.max(0, offset || 0);
     const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
+
+    // Primary path: real editorial Genres & Moods via pathfinder (browsePage).
+    // The Web API browse routes are dead since Feb 2026; pathfinder needs the
+    // librespot session token, available only when the native module exposes it.
+    const session = await this.getLibrespotSession();
+    if (session && supportsPathfinder(session)) {
+      const categories = await pfBrowseCategories(session);
+      if (categories.length) {
+        const sliced = categories.slice(safeOffset, safeOffset + safeLimit);
+        return {
+          items: sliced.map((cat) => this.mapBrowseCategory(cat)),
+          total: categories.length,
+        };
+      }
+    }
+
+    // Fallback when pathfinder is unavailable: a small static category list so the
+    // section isn't empty. (These open empty — drill-in needs pathfinder.)
     const total = SPOTIFY_FALLBACK_CATEGORIES.length;
     const sliced = SPOTIFY_FALLBACK_CATEGORIES.slice(safeOffset, safeOffset + safeLimit);
     return {
@@ -836,23 +886,29 @@ export class SpotifyAccountProvider {
     if (!categoryId) {
       return { items: [], total: 0 };
     }
-    const query = this.resolveCategoryName(categoryId);
-    const raw = await this.searchPlaylistsRaw(query, limit || 20, offset || 0, true);
-    const unique = this.dedupeById(raw);
-    if (unique.length) {
-      return {
-        items: unique.map((pl) => this.mapPlaylist(pl)),
-        total: unique.length,
-      };
+
+    // Pathfinder categories carry their browse URI base64url-encoded in the id
+    // (see mapBrowseCategory). When present, drill in over the protocol.
+    const browseUri = decodeBrowseUri(categoryId);
+    if (browseUri) {
+      const session = await this.getLibrespotSession();
+      if (session && supportsPathfinder(session)) {
+        const entries = await pfCategoryEntries(session, browseUri);
+        if (entries.length) {
+          const safeOffset = Math.max(0, offset || 0);
+          const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
+          const sliced = entries.slice(safeOffset, safeOffset + safeLimit);
+          return {
+            items: sliced.map((entry) => this.mapMediaEntry(entry)),
+            total: entries.length,
+          };
+        }
+      }
+      return { items: [], total: 0 };
     }
 
-    const fallback = await this.fetchUserPlaylists(offset, limit || 20);
-    if (fallback.items.length) {
-      this.log.debug('spotify category fallback to user playlists', { categoryId, query });
-      return fallback;
-    }
-
-    this.log.warn('spotify category playlists unavailable after fallbacks', { categoryId, query });
+    // Non-pathfinder category id (only the hardcoded fallback list when pathfinder
+    // is unavailable): no clean way to resolve its contents, so return empty.
     return { items: [], total: 0 };
   }
 
@@ -862,31 +918,16 @@ export class SpotifyAccountProvider {
     if (!artistId) {
       return { items: [], total: 0 };
     }
-    const artist = await this.request<{ id?: string; name?: string }>(
-      `${SPOTIFY_API_BASE}/artists/${encodeURIComponent(artistId)}`,
-      { suppressWarn: true },
-    );
-    const artistName = (artist?.name || '').trim();
-    if (!artistName) {
-      return { items: [], total: 0 };
-    }
 
-    const query = `artist:\"${artistName}\"`;
-    const data = await this.request<{ tracks?: { items?: any[]; total?: number } }>(
-      `${SPOTIFY_API_BASE}/search`,
-      {
-        params: {
-          q: query,
-          type: 'track',
-          limit: String(SPOTIFY_SEARCH_MAX_LIMIT),
-          offset: '0',
-        },
-        suppressWarn: true,
-      },
-    );
-    const items = Array.isArray(data?.tracks?.items) ? data.tracks.items : [];
-    const mapped = this.dedupeById(items).map((track) => this.mapTrack(track));
-    return { items: mapped, total: mapped.length };
+    // Artist top tracks via pathfinder artist overview.
+    const session = await this.getLibrespotSession();
+    if (session && supportsPathfinder(session)) {
+      const tracks = await pfArtistTopTracks(session, `spotify:artist:${artistId}`);
+      if (tracks && tracks.length) {
+        return { items: tracks.map((e) => this.mapMediaEntry(e)), total: tracks.length };
+      }
+    }
+    return { items: [], total: 0 };
   }
 
   private async fetchShowEpisodes(
@@ -910,53 +951,86 @@ export class SpotifyAccountProvider {
     return { items: mapped, total: data?.total ?? mapped.length };
   }
 
-  private resolveCategoryName(categoryId: string): string {
-    const normalizedId = categoryId.trim().toLowerCase();
-    const known = SPOTIFY_FALLBACK_CATEGORIES.find((entry) => entry.id.toLowerCase() === normalizedId);
-    if (known) {
-      return known.name;
+  /**
+   * Multi-type search via pathfinder (track/album/artist/playlist). Returns the
+   * serviceManager search shape, or null when pathfinder is unavailable (caller
+   * falls back to the Web API). Shows/episodes are not covered here yet.
+   */
+  public async searchPathfinder(
+    query: string,
+    limits: Record<string, number>,
+    maxLimit: number,
+  ): Promise<{ result: Record<string, ContentFolderItem[]>; totals: Record<string, number> } | null> {
+    // Pathfinder search covers music types only. If shows/episodes are requested
+    // — including an unfiltered all-types search — defer to the Web API, which
+    // serves every type, so podcast results are not silently dropped.
+    const requestedTypes = Object.keys(limits);
+    const musicOnly =
+      requestedTypes.length > 0 && requestedTypes.every((t) => PATHFINDER_SEARCH_TYPES.has(t));
+    if (!musicOnly) {
+      return null;
     }
-    return categoryId.replace(/[-_]+/g, ' ').trim() || 'music';
+    const session = await this.getLibrespotSession();
+    if (!session || !supportsPathfinder(session)) {
+      return null;
+    }
+    const limit = Math.min(Math.max(maxLimit || 20, 1), 20);
+    const sr = await pfSearch(session, query, limit);
+    if (!sr) {
+      return null;
+    }
+    const result: Record<string, ContentFolderItem[]> = {};
+    const totals: Record<string, number> = {};
+    const sections: Array<{ key: string; kind: 'track' | 'album' | 'artist' | 'playlist'; entries: MediaEntry[] }> = [
+      { key: 'tracks', kind: 'track', entries: sr.tracks },
+      { key: 'albums', kind: 'album', entries: sr.albums },
+      { key: 'artists', kind: 'artist', entries: sr.artists },
+      { key: 'playlists', kind: 'playlist', entries: sr.playlists },
+    ];
+    for (const { key, kind, entries } of sections) {
+      const requested = Object.keys(limits).length === 0 || kind in limits;
+      if (!requested || !entries.length) {
+        continue;
+      }
+      const max = limits[kind] ?? maxLimit;
+      result[key] = entries.slice(0, max).map((e) => this.mapSearchEntry(e));
+      totals[key] = entries.length;
+    }
+    return { result, totals };
   }
 
-  private async searchPlaylistsRaw(
-    query: string,
-    limit: number,
-    offset: number,
-    suppressWarn = false,
-  ): Promise<any[]> {
-    const safeLimit = Math.min(Math.max(limit || 20, 1), SPOTIFY_SEARCH_MAX_LIMIT);
-    const safeOffset = Math.max(0, offset || 0);
-    const data = await this.request<{ playlists?: { items?: any[] } }>(`${SPOTIFY_API_BASE}/search`, {
-      params: {
-        q: query,
-        type: 'playlist',
-        limit: String(safeLimit),
-        offset: String(safeOffset),
-      },
-      suppressWarn,
-    });
-    return Array.isArray(data?.playlists?.items) ? data.playlists.items : [];
-  }
-
-  private async searchAlbumsRaw(
-    query: string,
-    limit: number,
-    offset: number,
-    suppressWarn = false,
-  ): Promise<any[]> {
-    const safeLimit = Math.min(Math.max(limit || 20, 1), SPOTIFY_SEARCH_MAX_LIMIT);
-    const safeOffset = Math.max(0, offset || 0);
-    const data = await this.request<{ albums?: { items?: any[] } }>(`${SPOTIFY_API_BASE}/search`, {
-      params: {
-        q: query,
-        type: 'album',
-        limit: String(safeLimit),
-        offset: String(safeOffset),
-      },
-      suppressWarn,
-    });
-    return Array.isArray(data?.albums?.items) ? data.albums.items : [];
+  /** Map a pathfinder search entry to the search-result item shape (type 2/7). */
+  private mapSearchEntry(entry: MediaEntry): ContentFolderItem {
+    const id = entry.uri.split(':').pop() ?? '';
+    const uri = this.makeUri(entry.kind, id);
+    const cover = entry.cover || '';
+    const base = {
+      id: uri,
+      name: entry.name,
+      title: entry.name,
+      audiopath: uri,
+      coverurl: cover,
+      thumbnail: cover,
+      hasCover: Boolean(cover),
+    };
+    if (entry.kind === 'track') {
+      return {
+        ...base,
+        artist: entry.owner ?? '',
+        album: entry.album ?? '',
+        duration: entry.durationSec,
+        owner: entry.album || undefined,
+        type: 2,
+        tag: 'track',
+      } as ContentFolderItem;
+    }
+    if (entry.kind === 'artist') {
+      return { ...base, artist: entry.name, type: 7, tag: 'artist' };
+    }
+    if (entry.kind === 'album') {
+      return { ...base, artist: entry.owner ?? '', type: 7, tag: 'album' };
+    }
+    return { ...base, artist: '', owner: entry.owner ?? '', type: 7, tag: 'playlist' };
   }
 
   private mapPlaylist(playlist: any): ContentFolderItem {
@@ -1070,11 +1144,55 @@ export class SpotifyAccountProvider {
       id: this.makeUri('category', id),
       name: String(category?.name ?? 'Category'),
       title: String(category?.name ?? 'Category'),
-      type: 12,
+      type: FileType.Folder,
       coverurl: cover,
       thumbnail: this.extractImage(icons, 1) ?? cover,
       tag: 'category',
     };
+  }
+
+  /** Map a pathfinder Genres & Moods category card to a (drillable) folder.
+   *  Categories are FOLDERS (not directly playable): the Loxone app validates
+   *  category items as tag "category" + type Folder and drills in on tap. */
+  private mapBrowseCategory(cat: BrowseCategory): ContentFolderItem {
+    const encoded = Buffer.from(cat.uri, 'utf8').toString('base64url');
+    return {
+      id: this.makeUri('category', encoded),
+      name: cat.title,
+      title: cat.title,
+      type: FileType.Folder,
+      coverurl: cat.cover,
+      thumbnail: cat.cover,
+      tag: 'category',
+    };
+  }
+
+  /** Map a normalized pathfinder entry (track/playlist/album/artist) to a folder item. */
+  private mapMediaEntry(entry: MediaEntry): ContentFolderItem {
+    const id = entry.uri.split(':').pop() ?? '';
+    const uri = this.makeUri(entry.kind, id);
+    const base = {
+      id: uri,
+      name: entry.name,
+      title: entry.name,
+      coverurl: entry.cover,
+      thumbnail: entry.cover,
+      audiopath: uri,
+    };
+    if (entry.kind === 'track') {
+      return {
+        ...base,
+        type: FileType.File,
+        artist: entry.owner ?? '',
+        album: entry.album ?? '',
+        duration: entry.durationSec ?? 120,
+        tag: 'track',
+      } as ContentFolderItem;
+    }
+    if (entry.kind === 'artist') {
+      return { ...base, type: 12, tag: 'artist' };
+    }
+    return { ...base, type: 12, owner: entry.owner ?? '', tag: entry.kind };
   }
 
   private mapTrack(track: any, albumContext?: { name?: string; images?: any[] }): ContentFolderItem {
@@ -1415,6 +1533,8 @@ export class SpotifyAccountProvider {
     if (!creds) {
       return null;
     }
+    // Localize pathfinder content (e.g. "Top 50 - Nederland") to the account market.
+    setPathfinderLocale(localeForCountry(this.account.country));
     this.librespotSessionPromise = (async () => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1438,28 +1558,6 @@ export class SpotifyAccountProvider {
       }
     })();
     return this.librespotSessionPromise;
-  }
-
-  /** Map librespot protocol track metadata to a content folder item. */
-  private mapTrackMetadata(meta: TrackMetadata): ContentFolderItem {
-    const id = meta.uri.split(':').pop() ?? '';
-    const durationSec = Number.isFinite(meta.durationMs)
-      ? Math.max(1, Math.round(meta.durationMs / 1000))
-      : 120;
-    const cover = meta.coverUrl || undefined;
-    return {
-      id: this.makeUri('track', id),
-      name: meta.name || 'Track',
-      title: meta.name || 'Track',
-      type: FileType.File,
-      coverurl: cover,
-      thumbnail: cover,
-      audiopath: this.makeUri('track', id),
-      artist: meta.artists,
-      album: meta.album,
-      duration: durationSec,
-      tag: 'track',
-    } as ContentFolderItem;
   }
 
   /** Close the librespot browsing session, if any. Called on reload/dispose. */
