@@ -244,10 +244,11 @@ export interface BrowseCategory {
   cover?: string;
 }
 
-/** A playable entry (container or track). */
+/** A playable entry (container or track), a podcast/audiobook, or a drillable
+ *  sub-category (e.g. the cards inside the Podcasts/Audiobooks browse pages). */
 export interface MediaEntry {
   uri: string;
-  kind: 'playlist' | 'album' | 'artist' | 'track' | 'show' | 'episode';
+  kind: 'playlist' | 'album' | 'artist' | 'track' | 'show' | 'episode' | 'category';
   name: string;
   cover?: string;
   owner?: string; // playlist owner / album+track artists
@@ -292,6 +293,12 @@ const KIND_BY_TYPENAME: Record<string, MediaEntry['kind']> = {
   Playlist: 'playlist',
   Album: 'album',
   Artist: 'artist',
+  Podcast: 'show',
+  PodcastShow: 'show',
+  Show: 'show',
+  Audiobook: 'show',
+  Episode: 'episode',
+  PodcastEpisode: 'episode',
 };
 
 async function browse(session: PathfinderSession, uri: string, pageLimit = 20, sectionLimit = 50): Promise<BrowseNode | null> {
@@ -327,7 +334,9 @@ export async function fetchBrowseCategories(session: PathfinderSession): Promise
   return out;
 }
 
-/** Fetch the playlists/albums/artists inside a category (by its browse URI). */
+/** Fetch the entries inside a category (by its browse URI): playlists/albums/
+ *  artists/shows, or — for hub categories like Podcasts/Audiobooks — drillable
+ *  sub-category folders. */
 export async function fetchCategoryEntries(session: PathfinderSession, browseUri: string): Promise<MediaEntry[]> {
   const node = await browse(session, browseUri, 20, 50);
   if (!node) {
@@ -336,9 +345,22 @@ export async function fetchCategoryEntries(session: PathfinderSession, browseUri
   const out: MediaEntry[] = [];
   for (const item of browseItems(node)) {
     const data = item.content?.data;
-    const kind = data?.__typename ? KIND_BY_TYPENAME[data.__typename] : undefined;
     const uri = item.uri || data?.uri;
-    if (!kind || !uri) {
+    if (!uri) {
+      continue;
+    }
+    // Sub-category card (a folder of folders, e.g. inside the Podcasts/Audiobooks
+    // hubs): surface it as a drillable category, like the top-level cards.
+    if (data?.__typename === 'BrowseSectionContainer' && uri.startsWith('spotify:page:')) {
+      const card = data.data?.cardRepresentation;
+      const title = card?.title?.transformedLabel;
+      if (title) {
+        out.push({ uri, kind: 'category', name: title, cover: firstSource(card?.artwork?.sources) });
+      }
+      continue;
+    }
+    const kind = data?.__typename ? KIND_BY_TYPENAME[data.__typename] : undefined;
+    if (!kind) {
       continue;
     }
     const name = typeof data?.name === 'string' ? data.name : data?.name?.transformedLabel ?? '';

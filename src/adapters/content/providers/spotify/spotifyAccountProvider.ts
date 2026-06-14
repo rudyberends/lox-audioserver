@@ -1169,6 +1169,11 @@ export class SpotifyAccountProvider {
 
   /** Map a normalized pathfinder entry (track/playlist/album/artist) to a folder item. */
   private mapMediaEntry(entry: MediaEntry): ContentFolderItem {
+    // A sub-category (e.g. inside the Podcasts/Audiobooks hubs) is a drillable
+    // folder, mapped exactly like a top-level Genres & Moods card.
+    if (entry.kind === 'category') {
+      return this.mapBrowseCategory({ uri: entry.uri, title: entry.name, cover: entry.cover });
+    }
     const id = entry.uri.split(':').pop() ?? '';
     const uri = this.makeUri(entry.kind, id);
     const base = {
@@ -1179,19 +1184,21 @@ export class SpotifyAccountProvider {
       thumbnail: entry.cover,
       audiopath: uri,
     };
-    if (entry.kind === 'track') {
+    // Tracks and podcast episodes are leaf/playable items (FileType.File).
+    if (entry.kind === 'track' || entry.kind === 'episode') {
       return {
         ...base,
         type: FileType.File,
         artist: entry.owner ?? '',
         album: entry.album ?? '',
         duration: entry.durationSec ?? 120,
-        tag: 'track',
+        tag: entry.kind,
       } as ContentFolderItem;
     }
     if (entry.kind === 'artist') {
       return { ...base, type: 12, tag: 'artist' };
     }
+    // playlist / album / show: navigable containers.
     return { ...base, type: 12, owner: entry.owner ?? '', tag: entry.kind };
   }
 
