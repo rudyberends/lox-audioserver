@@ -80,10 +80,23 @@ export async function handleEndOfTrack(args: {
   ctx: ZoneContext;
 }): Promise<void> {
   const { coordinator, ctx } = args;
+
+  // Stop at a real end-of-track (nothing more to play), keeping the just-ended
+  // track's duration in the stopped state. buildStoppedPatch zeroes duration,
+  // and the Loxone app renders a stopped zone with duration 0 as a "LIVE" bar.
+  // Capture the duration before stop() (which resets it via buildStoppedPatch).
+  const stopAtEnd = (reason: string): void => {
+    const endedDuration = Math.max(0, Math.round(ctx.state.duration ?? 0));
+    const stopped = ctx.player.stop(reason);
+    coordinator.dispatchOutputs(ctx, ctx.outputs, 'stop', stopped);
+    if (endedDuration > 0) {
+      coordinator.applyPatch(ctx.id, { duration: endedDuration });
+    }
+  };
+
   const queueSize = ctx.queue.items.length;
   if (queueSize === 0) {
-    const stopped = ctx.player.stop('queue_empty');
-    coordinator.dispatchOutputs(ctx, ctx.outputs, 'stop', stopped);
+    stopAtEnd('queue_empty');
     return;
   }
 
@@ -93,8 +106,7 @@ export async function handleEndOfTrack(args: {
 
   let nextIndex = ctx.queueController.nextIndex();
   if (nextIndex < 0) {
-    const stopped = ctx.player.stop('queue_end');
-    coordinator.dispatchOutputs(ctx, ctx.outputs, 'stop', stopped);
+    stopAtEnd('queue_end');
     return;
   }
 
@@ -108,8 +120,7 @@ export async function handleEndOfTrack(args: {
     ctx.queueController.setCurrentIndex(nextIndex);
     const next = ctx.queueController.current();
     if (!next) {
-      const stopped = ctx.player.stop('queue_invalid_next');
-      coordinator.dispatchOutputs(ctx, ctx.outputs, 'stop', stopped);
+      stopAtEnd('queue_invalid_next');
       return;
     }
     const session = await coordinator.startQueuePlayback(ctx, next.audiopath, {
@@ -144,6 +155,5 @@ export async function handleEndOfTrack(args: {
 
   // No track in the queue could be started. Preserve the distinct stop reason: a genuine start
   // attempt that failed is queue_next_failed, otherwise we simply ran off the end.
-  const stopped = ctx.player.stop(attemptedStart ? 'queue_next_failed' : 'queue_end');
-  coordinator.dispatchOutputs(ctx, ctx.outputs, 'stop', stopped);
+  stopAtEnd(attemptedStart ? 'queue_next_failed' : 'queue_end');
 }
