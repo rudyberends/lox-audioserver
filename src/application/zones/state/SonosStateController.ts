@@ -328,8 +328,16 @@ export class SonosStateController implements ZoneStateController {
 
     const trackMediaUrl = cleanString(track?.mediaUrl);
     if (trackMediaUrl) {
+      const isNew = this.lastTrackMediaUrl !== trackMediaUrl;
       this.lastTrackMediaUrl = trackMediaUrl;
       this.lastTrackTitle = cleanString(track?.name) || cleanString(container?.name) || null;
+      if (isNew) {
+        this.log.debug('sonos play-cache updated', {
+          zoneId: this.zone.id,
+          mediaUrl: trackMediaUrl,
+          title: this.lastTrackTitle,
+        });
+      }
     }
 
     const mode = mapPlaybackState(group.playbackState);
@@ -428,22 +436,67 @@ export class SonosStateController implements ZoneStateController {
   // to reload the source instead. Falls back to group.play() when paused
   // (resume should keep position) or when we have no cached URL / no
   // playStreamUrl (e.g. S1).
+  //
+  // Diagnostic logging is intentionally verbose: when this code misbehaves
+  // we want a single SPAM log to tell us exactly which branch ran, why, and
+  // with what cached state. Tune down once the path is proven reliable.
   private async dispatchPlay(group: AnySonosGroup): Promise<void> {
-    const isPaused = String(group.playbackState ?? '').toUpperCase().includes('PAUSED');
-    const canReload =
-      !isPaused &&
-      this.lastTrackMediaUrl != null &&
-      'playStreamUrl' in group &&
-      typeof (group as SonosGroup).playStreamUrl === 'function';
-    if (canReload) {
+    const metadata = group.playbackMetadataStatus;
+    const currentTrack = metadata?.currentItem?.track;
+    const currentContainer = metadata?.container;
+    const rawState = String(group.playbackState ?? '');
+    const isPaused = rawState.toUpperCase().includes('PAUSED');
+    const hasPlayStreamUrl =
+      'playStreamUrl' in group && typeof (group as SonosGroup).playStreamUrl === 'function';
+
+    this.log.debug('sonos dispatch play: entry', {
+      zoneId: this.zone.id,
+      playbackState: rawState,
+      isPaused,
+      hasS2PlayStreamUrl: hasPlayStreamUrl,
+      observedTrackMediaUrl: currentTrack?.mediaUrl ?? null,
+      observedTrackName: currentTrack?.name ?? null,
+      cachedMediaUrl: this.lastTrackMediaUrl,
+      cachedTitle: this.lastTrackTitle,
+      containerName: currentContainer?.name ?? null,
+      containerType: currentContainer?.type ?? null,
+      containerServiceId: currentContainer?.id?.serviceId ?? null,
+      containerObjectId: currentContainer?.id?.objectId ?? null,
+      containerAccountId: currentContainer?.id?.accountId ?? null,
+    });
+
+    if (isPaused) {
+      this.log.debug('sonos dispatch play: branch=resume (paused → group.play)', {
+        zoneId: this.zone.id,
+      });
+      await group.play();
+      return;
+    }
+
+    if (this.lastTrackMediaUrl && hasPlayStreamUrl) {
       const container = {
         _objectType: 'container' as const,
         name: this.lastTrackTitle ?? this.zone.name,
         type: 'trackList',
       };
-      await (group as SonosGroup).playStreamUrl(this.lastTrackMediaUrl!, container);
+      this.log.debug('sonos dispatch play: branch=playStreamUrl', {
+        zoneId: this.zone.id,
+        url: this.lastTrackMediaUrl,
+        containerName: container.name,
+      });
+      await (group as SonosGroup).playStreamUrl(this.lastTrackMediaUrl, container);
       return;
     }
+
+    const fallbackReason = !this.lastTrackMediaUrl
+      ? 'no-cached-media-url'
+      : !hasPlayStreamUrl
+        ? 'no-s2-playStreamUrl (S1 or unsupported client)'
+        : 'unknown';
+    this.log.debug('sonos dispatch play: branch=group.play (fallback)', {
+      zoneId: this.zone.id,
+      reason: fallbackReason,
+    });
     await group.play();
   }
 }
