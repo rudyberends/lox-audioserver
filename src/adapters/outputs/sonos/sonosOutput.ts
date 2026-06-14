@@ -1074,8 +1074,18 @@ export class SonosOutput implements ZoneOutput {
     if (!coverSource) {
       return '';
     }
-    const proxied = resolveAbsoluteUrl(this.buildBaseUrl(), session.stream.coverUrl);
-    return proxied ?? coverSource;
+    // Embed the real, externally-fetchable cover when we have one. The Sonos
+    // state controller reflects whatever albumArtURI we put here straight back
+    // as the zone cover, so a real URL works both in the Sonos app and on the
+    // round-trip. Forcing everything through our own /streams/<id>/cover proxy
+    // made that reflection point back at us and self-fetch (#167). Only fall
+    // back to the proxy for embedded-byte art with no public URL — there
+    // resolveSessionCover returns the relative /cover path, which the proxy
+    // serves directly from session.cover (no round-trip).
+    if (isHttpUrl(coverSource)) {
+      return coverSource;
+    }
+    return resolveAbsoluteUrl(this.buildBaseUrl(), session.stream.coverUrl) ?? coverSource;
   }
 
   private resolveStreamUri(session: PlaybackSession): string | null {
