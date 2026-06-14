@@ -1,5 +1,4 @@
 import type { QueueItem, ZoneContext } from '@/application/zones/internal/zoneTypes';
-import { normalizeSpotifyAudiopath, parseSpotifyUser } from '@/application/zones/helpers/queueHelpers';
 import { AudioEventType, AudioType, FileType } from '@/domain/loxone/enums';
 import { decodeAudiopath, detectServiceFromAudiopath, encodeAudiopath } from '@/domain/loxone/audiopath';
 import { RADIO_PARADISE_LABELS as RADIO_PARADISE_ID_LABELS, RADIO_PARADISE_PATH_LABELS } from '@/domain/radioparadise/stations';
@@ -454,7 +453,7 @@ export function isLikelyHostLabel(value: string): boolean {
 export function resolveSourceName(
   audiotype: number | null | undefined,
   ctx: ZoneContext,
-  current?: QueueItem | null,
+  _current?: QueueItem | null,
 ): string | undefined {
   if (audiotype === null) {
     return undefined;
@@ -463,30 +462,13 @@ export function resolveSourceName(
     return ctx.name;
   }
   if (audiotype === 5) {
-    const raw =
-      current?.audiopath ??
-      ctx.queueController.current()?.audiopath ??
-      ctx.state.audiopath ??
-      '';
     if (ctx.inputMode === 'musicassistant') {
       return stripSpotifyPrefix(getMusicAssistantProviderId()) || 'musicassistant';
     }
-    if (ctx.inputMode === 'spotify') {
-      return 'Spotify Connect';
-    }
-    const user =
-      (current?.user && current.user !== 'nouser' ? current.user : undefined) ??
-      (() => {
-        const parsed = parseSpotifyUser(normalizeSpotifyAudiopath(raw));
-        return parsed && parsed !== 'nouser' ? parsed : undefined;
-      })();
-    if (user) {
-      return user;
-    }
-    // No Spotify user could be derived. Returning undefined preserves the
-    // existing sourceName instead of overwriting it with the literal 'nouser',
-    // which surfaces in the Loxone app during transitions away from Spotify.
-    return undefined;
+    // Spotify reports simply as "Spotify" (direct playback and Connect alike),
+    // matching the stock Loxone audioserver — not "Spotify Connect" or the bare
+    // account username.
+    return 'Spotify';
   }
   return ctx.sourceMac;
 }
