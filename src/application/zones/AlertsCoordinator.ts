@@ -171,6 +171,12 @@ export class AlertsCoordinator {
     // delay is forced on this zone too, so warm and cold zones start together.
     this.zoneAudioPrefs.setAlertPreDelayFloorMs(zoneId, preDelayFloorMs > 0 ? preDelayFloorMs : null);
 
+    // Align the engine to the sink's preferred format (e.g. a 48 kHz/24-bit sendspin
+    // client) BEFORE playing the alert. The bell/TTS file is 44.1 kHz; without this the
+    // engine starts at 44.1 kHz and restarts mid-clip to 48 kHz — that race renders the
+    // short alert as noise (the "doorbell noise" report).
+    this.playbackCoordinator.alignOutputFormat(zoneId, playUrl);
+
     const session = ctx.player.playUri(playUrl, metadata);
     if (!session) {
       this.log.warn('alert playback skipped; no session', { zoneId, type });

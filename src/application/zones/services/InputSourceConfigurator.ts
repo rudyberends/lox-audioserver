@@ -24,6 +24,7 @@ export type InputSourceConfiguratorDeps = {
     | 'updateInputVolume'
     | 'updateInputTiming'
     | 'setInputMode'
+    | 'alignOutputFormat'
   >;
   outputRouter: Pick<OutputRouter, 'dispatchVolume'>;
   stateStore: Pick<ZoneStateStore, 'applyPatch'>;
@@ -111,6 +112,13 @@ export class InputSourceConfigurator {
           const initialVolume = ctx.state.volume ?? getZoneDefaultVolume(ctx.config);
           outputRouter.dispatchVolume(ctx, ctx.outputs, initialVolume);
         }
+        // Align the engine to the sink's preferred format (e.g. a 48 kHz/24-bit sendspin
+        // client) BEFORE the play. Both the Connect pipe (spotify-connect://) and the
+        // direct stream-proxy (spotify:track:) start here; without this the engine starts
+        // at the source's 44.1 kHz and either restarts mid-stream (Connect) or, on the
+        // direct-pipe-passthrough path (resume after pause), never restarts and plays
+        // 44.1 kHz into a 48 kHz client → noise.
+        playback.alignOutputFormat(zoneId, metadata?.audiopath ?? label);
         ctx.spotifyAdapter.start(label, source, metadata);
       },
       updateMetadata: (zoneId, metadata) => {
