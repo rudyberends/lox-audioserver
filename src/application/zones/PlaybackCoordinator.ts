@@ -256,25 +256,7 @@ export class PlaybackCoordinator {
     metadata?: PlaybackMetadata,
   ): void {
     // Align the engine output format with the target output's preferred format BEFORE starting.
-    // The queue path does this via computePreferredPlaybackSettings; the input/connect path
-    // (e.g. Spotify Connect) skipped it, so the engine started at the default rate and then
-    // restarted mid-stream to match the sink (e.g. a sendspin client at 48 kHz/24-bit). That
-    // format-mismatch restart (reason=replace) races with source churn and can leave the sink
-    // with a started-but-starved stream — an audible dmix loop / noise.
-    const ctx = this.zoneRepo.get(zoneId);
-    if (ctx) {
-      const settings = computePreferredPlaybackSettings({
-        zoneId,
-        zoneName: ctx.name,
-        audiopath: metadata?.audiopath ?? label,
-        isRadio: false,
-        queueAuthority: ctx.queue?.authority,
-        outputs: ctx.outputs,
-        activeOutputType: ctx.activeOutput,
-        defaults: audioOutputSettings,
-      });
-      applyPreferredPlaybackSettings(this.zoneAudioPrefs, zoneId, settings);
-    }
+    this.alignOutputFormat(zoneId, metadata?.audiopath ?? label);
     handlePlayInputSource({
       coordinator: this.buildInputCoordinator(),
       zoneId,
@@ -282,6 +264,34 @@ export class PlaybackCoordinator {
       playbackSource,
       metadata,
     });
+  }
+
+  /**
+   * Align the zone's effective output settings with the target output's preferred
+   * format BEFORE the engine session is created. The queue path does this; paths
+   * that go straight through playUri/startPlayback (Spotify Connect, and ALERTS like
+   * the doorbell bell) skipped it, so the engine started at the default 44.1 kHz and
+   * then restarted mid-stream to match the sink (e.g. a sendspin client at 48 kHz/
+   * 24-bit). That format-mismatch restart races the source and can leave a
+   * started-but-starved stream — an audible dmix loop / noise. Call this just before
+   * playing so ffmpeg spawns at the sink's rate the first time, no restart.
+   */
+  public alignOutputFormat(zoneId: number, audiopath: string): void {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx) {
+      return;
+    }
+    const settings = computePreferredPlaybackSettings({
+      zoneId,
+      zoneName: ctx.name,
+      audiopath,
+      isRadio: false,
+      queueAuthority: ctx.queue?.authority,
+      outputs: ctx.outputs,
+      activeOutputType: ctx.activeOutput,
+      defaults: audioOutputSettings,
+    });
+    applyPreferredPlaybackSettings(this.zoneAudioPrefs, zoneId, settings);
   }
 
   public stopInputSource(zoneId: number): void {

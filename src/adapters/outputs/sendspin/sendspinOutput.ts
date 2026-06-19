@@ -24,6 +24,10 @@ import type { PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/port
 import type { SendspinSession } from '@lox-audioserver/node-sendspin';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import { SendspinClientSender } from '@/adapters/outputs/sendspin/sendspinClientSender';
+import {
+  getStoredClientFormat,
+  rememberClientFormat,
+} from '@/adapters/outputs/sendspin/sendspinFormatStore';
 
 type SendspinFormat = PlayerFormatWithBitDepth<PcmBitDepth>;
 
@@ -231,8 +235,12 @@ export class SendspinOutput implements ZoneOutput {
         this.clientState = null;
         this.externalSourceActive = false;
         // Reconnect (e.g. Connect churn on track change) seeds the stream default,
-        // but if the client already negotiated a real format keep that — otherwise we
-        // start the pipeline at 44.1k here and restart once onFormatChanged re-fires.
+        // but if the client already negotiated a real format keep that. After a lox
+        // restart the in-memory value is gone, so fall back to the per-client format
+        // persisted on disk — otherwise the first play advertises 44.1k, the engine
+        // starts there and (on a 48k-only sink) renders noise / restarts mid-stream.
+        this.lastClientNegotiatedFormat =
+          this.lastClientNegotiatedFormat ?? getStoredClientFormat(this.clientId);
         this.negotiatedFormat =
           this.lastClientNegotiatedFormat ?? this.normalizeFormat(sendspinSession.getStreamFormat());
         if (!this.isOwner()) {
@@ -287,7 +295,9 @@ export class SendspinOutput implements ZoneOutput {
         this.negotiatedFormat = this.normalizeFormat(format);
         // Remember the client's explicitly-requested format so it survives a later
         // onIdentified reset and getPreferredOutput() can advertise the real rate.
+        // Persist it so it also survives a lox restart (first-play-after-restart fix).
         this.lastClientNegotiatedFormat = this.negotiatedFormat;
+        rememberClientFormat(this.clientId, this.negotiatedFormat);
         // Restart stream with the newly requested format.
         void this.startStream({ preserveAnchor: false, formatOverride: this.negotiatedFormat });
       },
@@ -441,7 +451,11 @@ export class SendspinOutput implements ZoneOutput {
     // reset to the stream default by onIdentified on (re)connect, so relying on it
     // here makes the engine start at the default rate and then restart on the
     // format mismatch (reason=replace) — which can starve the stream into an
-    // audible dmix loop. lastClientNegotiatedFormat survives reconnects.
+    // audible dmix loop. lastClientNegotiatedFormat survives reconnects; the
+    // persisted store survives lox restarts (first-play-after-restart fix).
+    if (!this.lastClientNegotiatedFormat) {
+      this.lastClientNegotiatedFormat = getStoredClientFormat(this.clientId);
+    }
     const fmt = this.lastClientNegotiatedFormat ?? this.negotiatedFormat;
     const preferredPrebuffer = this.computePrebufferBytes(fmt);
     return {
