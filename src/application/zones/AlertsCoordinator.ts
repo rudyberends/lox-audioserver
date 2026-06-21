@@ -356,6 +356,7 @@ export class AlertsCoordinator {
 
     if (activeAlert.snapshot.mode === 'play') {
       const current = ctx.queueController.current();
+      let resumed = false;
       if (current) {
         const resumeAtSecRaw = Number(activeAlert.snapshot.statePatch.time ?? 0);
         const resumeAtSec =
@@ -373,6 +374,7 @@ export class AlertsCoordinator {
           startAtSec: resumeAtSec,
         });
         if (session) {
+          resumed = true;
           const resumedAudiotype = this.audioHelpers.getStateAudiotype(ctx, current);
           const sourceName = this.audioHelpers.resolveSourceName(resumedAudiotype, ctx, current);
           this.applyPatch(zoneId, {
@@ -392,6 +394,14 @@ export class AlertsCoordinator {
             ...(sourceName ? { sourceName } : {}),
           });
         }
+      }
+      if (!resumed) {
+        // Could not actually resume playback (empty queue or failed start).
+        // Leaving the zone in the optimistic 'play' restored above would keep a
+        // shared power-group relay energized with nothing playing (#293), so
+        // fall back to a stopped state that releases the relay.
+        this.log.debug('alert restore could not resume playback; settling to stop', { zoneId });
+        this.applyPatch(zoneId, { mode: 'stop', clientState: 'on', power: 'on' });
       }
     } else if (activeAlert.snapshot.mode === 'pause') {
       this.applyPatch(zoneId, { mode: 'pause', clientState: 'on', power: 'on' });
