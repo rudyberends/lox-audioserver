@@ -13,6 +13,9 @@ import {
   buildVolumePatch,
 } from '@/application/zones/playback/patchBuilder';
 import { resolveZoneStateControllerId } from '@/application/zones/state/authorityPolicies';
+import { createLogger } from '@/shared/logging/logger';
+
+const log = createLogger('Zones', 'PlayerListeners');
 
 type PlayerListenerCoordinator = {
   getZone: (zoneId: number) => ZoneContext | undefined;
@@ -139,6 +142,19 @@ function onPlayerStarted(
     if (isFreshStart) {
       ctx.player.setVolume(volume);
     }
+    // [#287] Trace the start-volume decision so we can see, on Spotify Connect
+    // activation, whether the zone default is applied and dispatched to outputs.
+    log.debug('player started: start-volume decision', {
+      zoneId,
+      activeInput: ctx.activeInput,
+      isFreshStart,
+      hadPendingReset,
+      mode: ctx.state.mode,
+      stateVolume: ctx.state.volume,
+      defaultVolume: getZoneDefaultVolume(ctx.config),
+      dispatchedVolume: volume,
+      outputs: outputs.map((o) => o.type),
+    });
     coordinator.dispatchVolume(ctx, outputs, volume);
     const patch = {
       ...buildStartedPatch({ ctx, session, audioHelpers: coordinator.audioHelpers }),

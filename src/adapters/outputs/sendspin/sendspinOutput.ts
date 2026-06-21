@@ -499,15 +499,39 @@ export class SendspinOutput implements ZoneOutput {
   /** Push a volume change down to the client (used by zone manager). */
   public setVolume(level: number): void {
     const vol = Math.min(100, Math.max(0, Math.round(level)));
+    // [#287] Only trace on an actual change, so a slider drag (a burst of equal
+    // or stepped values) doesn't spam the debug log; the volume path stays
+    // observable for activation without noise. Compare against lastKnownVolume,
+    // which is maintained in both the active and no-session branches.
+    const changed = vol !== this.lastKnownVolume;
     if (this.activeSession) {
       this.lastKnownVolume = vol;
       this.lastOutboundVolume = vol;
       this.lastOutboundVolumeAt = Date.now();
-      if (this.isOwner()) {
+      const owner = this.isOwner();
+      if (owner) {
         this.activeSession.sendServerCommand(PlayerCommand.VOLUME, { volume: vol });
+      }
+      if (changed) {
+        this.log.debug('Sendspin setVolume', {
+          zoneId: this.zoneId,
+          clientId: this.clientId,
+          vol,
+          sent: owner,
+          reason: owner ? 'sent' : 'not owner; remembered only',
+        });
       }
     } else {
       this.lastKnownVolume = vol;
+      if (changed) {
+        this.log.debug('Sendspin setVolume', {
+          zoneId: this.zoneId,
+          clientId: this.clientId,
+          vol,
+          sent: false,
+          reason: 'no active session; remembered only',
+        });
+      }
     }
     // Keep connected satellites (e.g. a subwoofer) in step with the zone volume.
     this.forEachConnectedSatellite((satellite) => satellite.pushVolume(vol));
