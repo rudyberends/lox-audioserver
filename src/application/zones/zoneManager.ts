@@ -609,8 +609,29 @@ export class ZoneManager {
     type: string,
     media: AlertMediaResource,
     volume: number,
+    preDelayFloorMs = 0,
   ): Promise<void> {
-    return this.alertsCoordinator.startAlert(zoneId, type, media, volume);
+    return this.alertsCoordinator.startAlert(zoneId, type, media, volume, preDelayFloorMs);
+  }
+
+  /**
+   * Wake-up delay (ms) that should be forced on every zone of a multi-zone
+   * alert so they start in sync. It is the largest configured playback
+   * pre-delay among the target zones whose amp is currently cold; returns 0
+   * when every target is already warm (no alignment needed).
+   */
+  public getAlertPreDelayFloorMs(zoneIds: number[]): number {
+    let floor = 0;
+    for (const zoneId of zoneIds) {
+      if (this.powerManager.isSignalOn(zoneId)) {
+        continue;
+      }
+      const delay = this.zoneAudioPrefs.getPlaybackPreDelayMs(zoneId) ?? 0;
+      if (Number.isFinite(delay) && delay > floor) {
+        floor = Math.max(0, Math.round(delay));
+      }
+    }
+    return floor;
   }
 
   public async stopAlert(zoneId: number): Promise<void> {

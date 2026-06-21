@@ -165,20 +165,22 @@ export class AudioManager {
     if (!source) {
       return source;
     }
-    const zoneDelay = this.prefs.getPlaybackPreDelayMs(zoneId);
-    if (!Number.isFinite(zoneDelay) || (zoneDelay ?? 0) <= 0) {
-      return source;
-    }
-    const normalizedZoneDelay = Math.max(0, Math.round(zoneDelay ?? 0));
+    const rawZoneDelay = this.prefs.getPlaybackPreDelayMs(zoneId);
+    const zoneDelay =
+      Number.isFinite(rawZoneDelay) && (rawZoneDelay ?? 0) > 0 ? Math.max(0, Math.round(rawZoneDelay ?? 0)) : 0;
+    // The zone's own wake-up delay is skipped when its amp is already on, but a
+    // forced floor (set for a multi-zone alert) always applies so every target
+    // zone starts together even when some amps were already warm.
+    let powerOn = false;
     try {
-      if (this.prefs.getPowerStateResolver()?.(zoneId) === true) {
-        return source;
-      }
+      powerOn = this.prefs.getPowerStateResolver()?.(zoneId) === true;
     } catch {
       // Ignore resolver failures and keep safe fallback behavior.
     }
+    const rawFloor = this.prefs.getAlertPreDelayFloorMs(zoneId);
+    const floor = Number.isFinite(rawFloor) && (rawFloor ?? 0) > 0 ? Math.max(0, Math.round(rawFloor ?? 0)) : 0;
     const sourceDelay = Number.isFinite(source.preDelayMs) ? Math.max(0, Math.round(source.preDelayMs ?? 0)) : 0;
-    const effectiveDelay = Math.max(sourceDelay, normalizedZoneDelay);
+    const effectiveDelay = Math.max(sourceDelay, floor, powerOn ? 0 : zoneDelay);
     if (effectiveDelay <= 0 || sourceDelay === effectiveDelay) {
       return source;
     }

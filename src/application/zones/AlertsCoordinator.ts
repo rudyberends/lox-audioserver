@@ -68,8 +68,11 @@ export class AlertsCoordinator {
     type: string,
     media: AlertMediaResource,
     volume: number,
+    preDelayFloorMs = 0,
   ): Promise<void> {
-    return this.runSerialized(zoneId, () => this.startAlertLocked(zoneId, type, media, volume));
+    return this.runSerialized(zoneId, () =>
+      this.startAlertLocked(zoneId, type, media, volume, preDelayFloorMs),
+    );
   }
 
   public stopAlert(zoneId: number): Promise<void> {
@@ -96,6 +99,7 @@ export class AlertsCoordinator {
     type: string,
     media: AlertMediaResource,
     volume: number,
+    preDelayFloorMs = 0,
   ): Promise<void> {
     const ctx = this.zoneRepo.get(zoneId);
     if (!ctx) {
@@ -162,6 +166,10 @@ export class AlertsCoordinator {
     if (/tts/i.test(type)) {
       this.zoneAudioPrefs.setTransientGainDb(zoneId, TTS_FIXED_GAIN_DB);
     }
+
+    // Keep multi-zone alerts in sync: when a sibling zone is cold its wake-up
+    // delay is forced on this zone too, so warm and cold zones start together.
+    this.zoneAudioPrefs.setAlertPreDelayFloorMs(zoneId, preDelayFloorMs > 0 ? preDelayFloorMs : null);
 
     const session = ctx.player.playUri(playUrl, metadata);
     if (!session) {
@@ -305,6 +313,7 @@ export class AlertsCoordinator {
       clearTimeout(activeAlert.stopTimer);
     }
     this.zoneAudioPrefs.setTransientGainDb(zoneId, null);
+    this.zoneAudioPrefs.setAlertPreDelayFloorMs(zoneId, null);
     ctx.alert = undefined;
 
     try {

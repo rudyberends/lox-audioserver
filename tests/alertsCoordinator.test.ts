@@ -99,6 +99,7 @@ test('startAlert applies alert volume after switching to the alert source', asyn
     } as any,
     zoneAudioPrefs: {
       setTransientGainDb: () => {},
+      setAlertPreDelayFloorMs: () => {},
     } as any,
   });
 

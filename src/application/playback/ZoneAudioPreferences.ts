@@ -26,6 +26,7 @@ export class ZoneAudioPreferences {
   private readonly profileOverrides = new Map<number, OutputProfile>();
   private readonly inputPreferences = new Map<number, ZoneInputPreferences>();
   private readonly playbackPreDelayMs = new Map<number, number>();
+  private readonly alertPreDelayFloorMs = new Map<number, number>();
   private readonly transientGainDb = new Map<number, number>();
   private readonly httpPreferences = new Map<number, ZoneHttpPreferences>();
   private powerStateResolver: ZonePowerStateResolver | null = null;
@@ -66,6 +67,20 @@ export class ZoneAudioPreferences {
 
   public setZonePowerStateResolver(resolver: ZonePowerStateResolver | null): void {
     this.powerStateResolver = resolver;
+  }
+
+  /**
+   * Transient minimum playback pre-delay for a zone, used to keep a multi-zone
+   * alert in sync: when one target zone is cold (amp asleep) every target waits
+   * the same wake-up delay so they start together. Applies regardless of the
+   * zone's own power state and is cleared when the alert ends.
+   */
+  public setAlertPreDelayFloorMs(zoneId: number, delayMs: number | null): void {
+    if (!Number.isFinite(delayMs) || (delayMs ?? 0) <= 0) {
+      this.alertPreDelayFloorMs.delete(zoneId);
+      return;
+    }
+    this.alertPreDelayFloorMs.set(zoneId, Math.max(0, Math.round(delayMs ?? 0)));
   }
 
   /**
@@ -135,6 +150,10 @@ export class ZoneAudioPreferences {
 
   public getPlaybackPreDelayMs(zoneId: number): number | undefined {
     return this.playbackPreDelayMs.get(zoneId);
+  }
+
+  public getAlertPreDelayFloorMs(zoneId: number): number | undefined {
+    return this.alertPreDelayFloorMs.get(zoneId);
   }
 
   public getTransientGainDb(zoneId: number): number | undefined {

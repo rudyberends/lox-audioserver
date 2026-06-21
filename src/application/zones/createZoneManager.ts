@@ -32,6 +32,7 @@ export type ZoneManagerFacade = Pick<
   | 'renameZone'
   | 'setOutputLatency'
   | 'startAlert'
+  | 'getAlertPreDelayFloorMs'
   | 'stopAlert'
   | 'syncGroupMembersToLeader'
   | 'refreshContentProviders'

@@ -104,3 +104,19 @@ test('audio manager skips zone playback pre-delay when zone power is already on'
   assert.equal(engine.lastStartOptions?.input.kind, 'url');
   assert.equal((engine.lastStartOptions?.input as any).preDelayMs, undefined);
 });
+
+test('audio manager forces alert pre-delay floor even when zone power is already on', () => {
+  const engine = new EngineSpy();
+  const service = new PlaybackService(engine);
+  const prefs = new ZoneAudioPreferences();
+  const manager = new AudioManager(service, outputNotifier, prefs);
+  // Amp is warm (would normally skip the delay), but a sibling cold zone forces
+  // an alignment floor so this zone waits the same wake-up delay.
+  prefs.setZonePowerStateResolver((zoneId) => zoneId === 1);
+  prefs.setAlertPreDelayFloorMs(1, 2000);
+
+  manager.startExternalPlayback(1, 'custom', { kind: 'url', url: 'https://example.com/stream.mp3' }, undefined, true);
+
+  assert.equal(engine.lastStartOptions?.input.kind, 'url');
+  assert.equal((engine.lastStartOptions?.input as any).preDelayMs, 2000);
+});
