@@ -584,7 +584,7 @@ export class SendspinOutput implements ZoneOutput {
     this.pushPlaybackState('playing');
   }
 
-  /** Pause playback without tearing down the stream. */
+  /** Pause playback. End the client stream so it drains its device (no beep). */
   public async pause(_session: PlaybackSession | null): Promise<void> {
     this.log.info('Sendspin pause', {
       zoneId: this.zoneId,
@@ -594,6 +594,24 @@ export class SendspinOutput implements ZoneOutput {
     this.paused = true;
     this.sendProgressUpdate();
     this.pushPlaybackState('paused');
+    // End the client stream(s) on pause. Keeping the stream open (the old behaviour)
+    // leaves the client's ALSA device RUNNING but unfed, so on a shared dmix it loops
+    // the residual ring-buffer = an audible beep while paused. Ending the stream makes
+    // the client drain/close the device; resume() re-announces it. Mirrors the
+    // external_source enter/return handling above.
+    if (this.isOwner()) {
+      this.endClientStreams();
+    }
+  }
+
+  /** Tell the primary client (and satellites) to end + clear the current stream. */
+  private endClientStreams(): void {
+    sendspinCore.sendStreamEnd(this.activeClientId());
+    sendspinCore.sendStreamClear(this.activeClientId(), [STREAM_PLAYER_ROLE]);
+    this.forEachConnectedSatellite((satellite) => {
+      sendspinCore.sendStreamEnd(satellite.activeClientId());
+      sendspinCore.sendStreamClear(satellite.activeClientId(), [STREAM_PLAYER_ROLE]);
+    });
   }
 
   /** Resume playback; if a session is provided, restart as play. */
@@ -611,6 +629,10 @@ export class SendspinOutput implements ZoneOutput {
       this.resumeGateResolve = null;
       this.resumeGate = null;
       this.sendProgressUpdate();
+      // The client stream was ended on pause to stop the device looping, so re-announce
+      // and restart it (fresh anchor) — releasing the gate alone would feed frames the
+      // client no longer has an open stream for.
+      await this.startStream({ preserveAnchor: false });
       this.pushPlaybackState('playing');
       return;
     }
