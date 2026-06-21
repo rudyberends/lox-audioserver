@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createWriteStream, promises as fs, existsSync, readFileSync } from 'node:fs';
 import https from 'node:https';
 import os from 'node:os';
@@ -26,6 +27,23 @@ type AdminUiUpdateResult = {
   release: string;
   distUrl: string;
   targetDir: string;
+  updatedAt?: string;
+  error?: string;
+};
+
+/** Result of a server-core update. Extends the web-bundle shape with the
+ *  dependency-sync + restart signals that only apply to the backend. */
+type ServerUpdateResult = {
+  ok: boolean;
+  release: string;
+  distUrl: string;
+  targetDir: string;
+  /** True when the lockfile changed and `npm ci` was run. */
+  depsChanged?: boolean;
+  /** New code is staged but only takes effect after a process restart. */
+  restartRequired?: boolean;
+  /** Whether this deployment will restart itself (containerized/supervised). */
+  willRestart?: boolean;
   updatedAt?: string;
   error?: string;
 };
@@ -68,6 +86,7 @@ export function buildMiscRoutes(deps: MiscHandlerDeps): Route[] {
   // /components/update reject overlapping requests with 409.
   let adminUiUpdateInFlight: Promise<AdminUiUpdateResult> | null = null;
   let playerUpdateInFlight: Promise<AdminUiUpdateResult> | null = null;
+  let serverUpdateInFlight: Promise<ServerUpdateResult> | null = null;
   let componentPackageUpdateInFlight: Promise<ComponentPackageUpdateResult> | null = null;
   const containerized = detectContainerized();
 
@@ -149,6 +168,42 @@ export function buildMiscRoutes(deps: MiscHandlerDeps): Route[] {
         } finally {
           if (playerUpdateInFlight === task) {
             playerUpdateInFlight = null;
+          }
+        }
+      },
+    },
+    {
+      method: 'POST',
+      pattern: /^\/server\/update$/,
+      handler: async (req, res) => {
+        if (serverUpdateInFlight) {
+          deps.sendJson(res, 409, { error: 'server-update-in-progress' });
+          return;
+        }
+        const body = (await deps.readJsonBody(req, res)) as AdminUiUpdateRequest | null;
+        if (res.writableEnded) {
+          return;
+        }
+        const release = typeof body?.release === 'string' ? body.release.trim() : '';
+        // Containerized deployments are brought back by the restart policy; native
+        // installs only auto-restart when a supervisor (systemd/pm2) is signalled.
+        const willRestart = containerized || isRestartSupervised();
+        const task = performServerUpdate(release || undefined, willRestart, deps);
+        serverUpdateInFlight = task;
+        try {
+          const result = await task;
+          if (!result.ok) {
+            deps.sendJson(res, 500, result);
+            return;
+          }
+          deps.sendJson(res, 200, result);
+          if (result.willRestart) {
+            deps.log.info('server update: restarting to apply new code', {});
+            scheduleRestart();
+          }
+        } finally {
+          if (serverUpdateInFlight === task) {
+            serverUpdateInFlight = null;
           }
         }
       },
@@ -250,6 +305,9 @@ function handleInfo(res: ServerResponse, deps: MiscHandlerDeps, containerized: b
       packages,
       player,
       containerized,
+      // Whether a server-core update will auto-restart, so the UI can either
+      // promise a reboot or tell the user to restart the service manually.
+      restartSupervised: containerized || isRestartSupervised(),
     };
 
     deps.sendJson(res, 200, payload);
@@ -707,6 +765,298 @@ async function performWebBundleUpdate(
     }
 
     return { ok: false, error: message, ...baseResult };
+  }
+}
+
+const SERVER_REPO = 'lox-audioserver/lox-audioserver';
+const SERVER_ASSET = 'server-dist.tgz';
+const SERVER_MANIFESTS = ['package.json', 'package-lock.json'] as const;
+
+/** True when a native (non-container) deployment runs under a supervisor that
+ *  restarts the process on exit (systemd `Restart=`, pm2, …). Set explicitly so
+ *  we never kill a bare `npm start` that would not come back. */
+function isRestartSupervised(): boolean {
+  const v = (process.env.LOX_RESTART_SUPERVISED ?? '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
+/** Exit shortly after the response has flushed so the supervisor/restart policy
+ *  starts a fresh process against the freshly-swapped dist. */
+function scheduleRestart(): void {
+  setTimeout(() => process.exit(0), 500).unref();
+}
+
+function fileSha256(path: string): string | null {
+  try {
+    return createHash('sha256').update(readFileSync(path)).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+type ReleaseChannel = 'stable' | 'beta';
+type ResolvedRelease = { release: string; distUrl: string; channel: ReleaseChannel | 'pinned' };
+
+/** Determines the release channel from the running version: a SemVer prerelease
+ *  suffix (e.g. `4.0.0-beta.15`) means the beta channel. Override with
+ *  SERVER_RELEASE_CHANNEL. Mirrors the Docker `:latest` vs `:beta` tag split. */
+function detectReleaseChannel(): ReleaseChannel {
+  const forced = (process.env.SERVER_RELEASE_CHANNEL ?? '').trim().toLowerCase();
+  if (forced === 'beta' || forced === 'prerelease') return 'beta';
+  if (forced === 'stable' || forced === 'latest') return 'stable';
+  return readPackageVersion().includes('-') ? 'beta' : 'stable';
+}
+
+/** Fetches and parses JSON over HTTPS, following redirects. */
+async function fetchJson(url: string, redirects = 0): Promise<unknown> {
+  if (redirects > 5) {
+    throw new Error(`Too many redirects while fetching ${url}`);
+  }
+  return new Promise((resolveOuter, rejectOuter) => {
+    const request = https.get(
+      url,
+      { headers: { 'User-Agent': 'lox-audioserver-bundle-fetch', Accept: 'application/vnd.github+json' } },
+      (response) => {
+        const status = response.statusCode ?? 0;
+        if ([301, 302, 303, 307, 308].includes(status) && response.headers.location) {
+          response.resume();
+          resolveOuter(fetchJson(response.headers.location, redirects + 1));
+          return;
+        }
+        if (status !== 200) {
+          response.resume();
+          rejectOuter(new Error(`GitHub API request failed (${status}) for ${url}`));
+          return;
+        }
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+          body += chunk;
+        });
+        response.on('end', () => {
+          try {
+            resolveOuter(JSON.parse(body));
+          } catch (err) {
+            rejectOuter(err instanceof Error ? err : new Error(String(err)));
+          }
+        });
+      },
+    );
+    request.on('error', rejectOuter);
+  });
+}
+
+/** Newest prerelease tag that actually carries a server-dist asset — older betas
+ *  predating this feature are skipped so we never resolve to a 404. */
+async function fetchLatestPrereleaseTag(): Promise<string | null> {
+  const data = await fetchJson(`https://api.github.com/repos/${SERVER_REPO}/releases?per_page=30`);
+  if (!Array.isArray(data)) return null;
+  for (const entry of data) {
+    if (!entry || typeof entry !== 'object') continue;
+    const rel = entry as {
+      tag_name?: string;
+      prerelease?: boolean;
+      draft?: boolean;
+      assets?: Array<{ name?: string }>;
+    };
+    if (rel.draft || !rel.prerelease) continue;
+    if (!Array.isArray(rel.assets) || !rel.assets.some((a) => a?.name === SERVER_ASSET)) continue;
+    const tag = typeof rel.tag_name === 'string' ? rel.tag_name.trim() : '';
+    if (tag) return tag;
+  }
+  return null;
+}
+
+/**
+ * Resolves which release the server should update to. An explicit tag or a
+ * SERVER_DIST_URL override is honoured verbatim ('pinned'). Otherwise the
+ * channel is derived from the running version: stable uses the fast static
+ * `releases/latest` URL; beta queries the releases API for the newest
+ * prerelease, since `releases/latest` never resolves to a prerelease.
+ */
+async function resolveServerRelease(releaseOverride: string | undefined): Promise<ResolvedRelease> {
+  const urlOverride = process.env.SERVER_DIST_URL?.trim();
+  const explicit = (releaseOverride ?? process.env.SERVER_RELEASE ?? '').trim();
+
+  if (explicit && explicit !== 'latest') {
+    return {
+      release: explicit,
+      distUrl:
+        urlOverride ||
+        `https://github.com/${SERVER_REPO}/releases/download/${encodeURIComponent(explicit)}/${SERVER_ASSET}`,
+      channel: 'pinned',
+    };
+  }
+  if (urlOverride) {
+    return { release: explicit || 'latest', distUrl: urlOverride, channel: 'pinned' };
+  }
+
+  const channel = detectReleaseChannel();
+  if (channel === 'stable') {
+    return {
+      release: 'latest',
+      distUrl: `https://github.com/${SERVER_REPO}/releases/latest/download/${SERVER_ASSET}`,
+      channel,
+    };
+  }
+
+  const tag = await fetchLatestPrereleaseTag();
+  if (!tag) {
+    throw new Error('no beta release with a server-dist asset found');
+  }
+  return {
+    release: tag,
+    distUrl: `https://github.com/${SERVER_REPO}/releases/download/${encodeURIComponent(tag)}/${SERVER_ASSET}`,
+    channel,
+  };
+}
+
+/**
+ * Updates the server core in place: downloads server-dist.tgz (dist/ + manifests),
+ * atomically swaps dist/, overwrites the package manifests, and — only when the
+ * lockfile changed — runs `npm ci --omit=dev` to resync node_modules. On any
+ * failure it rolls dist/ and the manifests back. The running process keeps its
+ * in-memory code; the new code only loads after the restart signalled by the
+ * caller. Mirrors the web-bundle swap (performWebBundleUpdate) but placement
+ * differs: the tarball carries files at two levels (dist/ + root manifests), so
+ * it gets its own orchestration rather than the generic whole-dir move.
+ */
+async function performServerUpdate(
+  releaseOverride: string | undefined,
+  willRestart: boolean,
+  deps: MiscHandlerDeps,
+): Promise<ServerUpdateResult> {
+  const root = process.cwd();
+  const targetDir = join(root, 'dist');
+  const stagingDir = join(root, `server-staging-${Date.now()}`);
+  const backupDir = join(root, `server-backup-${Date.now()}`);
+  const manifestBackup = join(root, `server-manifest-backup-${Date.now()}`);
+  const archivePath = join(os.tmpdir(), `server-dist-${Date.now()}.tgz`);
+
+  // Resolved inside the try so a failed channel lookup yields a clean error result.
+  let release = (releaseOverride ?? process.env.SERVER_RELEASE ?? 'latest').trim() || 'latest';
+  let distUrl = '';
+  let distBackupCreated = false;
+  let manifestBackupCreated = false;
+
+  // Capture the deployed lockfile hash before anything is overwritten, so we can
+  // tell afterwards whether dependencies actually changed.
+  const prevLockHash = fileSha256(join(root, 'package-lock.json'));
+
+  try {
+    const resolved = await resolveServerRelease(releaseOverride);
+    release = resolved.release;
+    distUrl = resolved.distUrl;
+    deps.log.info('server update started', { release, distUrl, channel: resolved.channel, targetDir });
+
+    await fs.rm(archivePath, { force: true }).catch(() => {});
+    await fs.rm(stagingDir, { recursive: true, force: true });
+    await fs.mkdir(stagingDir, { recursive: true });
+
+    await downloadBundle(distUrl, archivePath);
+    await extractBundle(archivePath, stagingDir);
+    await fs.rm(archivePath, { force: true }).catch(() => {});
+
+    const stagedDist = join(stagingDir, 'dist');
+    if (!(await pathExists(stagedDist))) {
+      throw new Error('server bundle missing dist/ directory');
+    }
+
+    // 1. Atomic dist swap with backup.
+    if (await pathExists(targetDir)) {
+      await fs.rm(backupDir, { recursive: true, force: true });
+      await moveDir(targetDir, backupDir);
+      distBackupCreated = true;
+    }
+    await moveDir(stagedDist, targetDir);
+
+    // 2. Overwrite the package manifests, backing up the current ones first.
+    await fs.mkdir(manifestBackup, { recursive: true });
+    for (const file of SERVER_MANIFESTS) {
+      const staged = join(stagingDir, file);
+      if (!(await pathExists(staged))) continue;
+      const current = join(root, file);
+      if (await pathExists(current)) {
+        await fs.cp(current, join(manifestBackup, file));
+        manifestBackupCreated = true;
+      }
+      await fs.cp(staged, current);
+    }
+
+    // 3. Resync node_modules only when the lockfile actually changed.
+    const newLockHash = fileSha256(join(root, 'package-lock.json'));
+    const depsChanged = !!newLockHash && newLockHash !== prevLockHash;
+    if (depsChanged) {
+      deps.log.info('server update: lockfile changed, running npm ci', {});
+      const { code, stderr } = await spawnForCompletion(
+        'npm',
+        ['ci', '--omit=dev', '--no-audit', '--no-fund'],
+        root,
+      );
+      if (code !== 0) {
+        throw new Error(stderr.trim() || `npm ci exited with code ${code}`);
+      }
+    }
+
+    await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+    if (distBackupCreated) {
+      await fs.rm(backupDir, { recursive: true, force: true }).catch(() => {});
+    }
+    if (manifestBackupCreated) {
+      await fs.rm(manifestBackup, { recursive: true, force: true }).catch(() => {});
+    }
+
+    deps.log.info('server update finished', { release, depsChanged, willRestart });
+    return {
+      ok: true,
+      updatedAt: new Date().toISOString(),
+      depsChanged,
+      restartRequired: true,
+      willRestart,
+      release,
+      distUrl,
+      targetDir,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    deps.log.warn('server update failed', { release, distUrl, message });
+
+    await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(archivePath, { force: true }).catch(() => {});
+
+    if (distBackupCreated) {
+      try {
+        await fs.rm(targetDir, { recursive: true, force: true });
+        await moveDir(backupDir, targetDir);
+      } catch (rollbackErr) {
+        const rollbackMessage =
+          rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+        deps.log.warn('server dist rollback failed', { rollbackMessage });
+      }
+    }
+    if (manifestBackupCreated) {
+      try {
+        for (const file of SERVER_MANIFESTS) {
+          const bak = join(manifestBackup, file);
+          if (await pathExists(bak)) await fs.cp(bak, join(root, file));
+        }
+        await fs.rm(manifestBackup, { recursive: true, force: true });
+      } catch (rollbackErr) {
+        const rollbackMessage =
+          rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+        deps.log.warn('server manifest rollback failed', { rollbackMessage });
+      }
+    }
+
+    return {
+      ok: false,
+      error: message,
+      restartRequired: false,
+      willRestart: false,
+      release,
+      distUrl,
+      targetDir,
+    };
   }
 }
 
