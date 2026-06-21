@@ -238,8 +238,6 @@ export interface ZonePowerManagerConfig {
    * Useful to let amplifiers/speakers wake up before audible content begins.
    */
   playbackPreDelayMs?: number;
-  /** Delay before applying ON actions (zone enters play mode). */
-  onDelayMs?: number;
   /** Enable delayed OFF behavior; when false, OFF is immediate. */
   offDelayEnabled?: boolean;
   /** Delay before applying OFF actions (zone exits play mode). Defaults to 300000 ms. */
@@ -255,10 +253,6 @@ export interface ZoneGpioPowerConfig {
   enabled?: boolean;
   /** GPIO line offset within the selected gpiochip. */
   pin?: number;
-  /** Delay before applying ON signal. */
-  onDelayMs?: number;
-  /** Delay before applying OFF signal. */
-  offDelayMs?: number;
   /** true => ON writes 1, false => ON writes 0. */
   activeHigh?: boolean;
   /** GPIO line-based backend (libgpiod). */

@@ -116,7 +116,6 @@ test('shared power group applies offDelayMs only to the final OFF transition', a
       {
         id: 'amp-living',
         powerManager: {
-          onDelayMs: 5_000,
           offDelayMs: 40,
           gpio: { enabled: true, pin: 22 },
         },

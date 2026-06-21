@@ -23,7 +23,6 @@ type TimerHandle = ReturnType<typeof setTimeout>;
 
 export type NormalizedPowerConfig = {
   activeModes: ReadonlySet<'play' | 'pause'>;
-  onDelayMs: number;
   offDelayMs: number;
   actions: NormalizedPowerAction[];
 };
@@ -62,7 +61,6 @@ export type NormalizedCrelayConfig = {
 type ZoneRuntime = {
   desiredSignal: PowerSignal;
   currentSignal: PowerSignal | null;
-  onTimer: TimerHandle | null;
   offTimer: TimerHandle | null;
   inflight: Promise<void>;
   config: NormalizedPowerConfig;
@@ -98,7 +96,6 @@ export class PowerManager {
       mode: nextState.mode,
       desiredSignal: desired,
       actions: normalized.actions.map((action) => action.type),
-      onDelayMs: normalized.onDelayMs,
       offDelayMs: normalized.offDelayMs,
     });
     this.setDesired(zoneId, normalized, desired);
@@ -108,10 +105,6 @@ export class PowerManager {
     const runtime = this.zones.get(zoneId);
     if (!runtime) {
       return;
-    }
-    if (runtime.onTimer) {
-      clearTimeout(runtime.onTimer);
-      runtime.onTimer = null;
     }
     if (runtime.offTimer) {
       clearTimeout(runtime.offTimer);
@@ -147,20 +140,17 @@ export class PowerManager {
       });
     }
     if (desiredSignal === 1) {
+      // Power on immediately; amp warm-up is compensated via playbackPreDelayMs
+      // (silence prepended to the audio), not by delaying the relay.
       if (runtime.offTimer) {
         clearTimeout(runtime.offTimer);
         runtime.offTimer = null;
         this.log.spam('zone power manager cancelled pending off timer', { zoneId });
       }
-      this.scheduleSignal(zoneId, runtime, 1, config.onDelayMs, 'onTimer');
+      this.scheduleSignal(zoneId, runtime, 1, 0);
       return;
     }
-    if (runtime.onTimer) {
-      clearTimeout(runtime.onTimer);
-      runtime.onTimer = null;
-      this.log.spam('zone power manager cancelled pending on timer', { zoneId });
-    }
-    this.scheduleSignal(zoneId, runtime, 0, config.offDelayMs, 'offTimer');
+    this.scheduleSignal(zoneId, runtime, 0, config.offDelayMs);
   }
 
   private ensureRuntime(zoneId: number, config: NormalizedPowerConfig): ZoneRuntime {
@@ -171,7 +161,6 @@ export class PowerManager {
     const runtime: ZoneRuntime = {
       desiredSignal: 0,
       currentSignal: null,
-      onTimer: null,
       offTimer: null,
       inflight: Promise.resolve(),
       config,
@@ -185,17 +174,10 @@ export class PowerManager {
     runtime: ZoneRuntime,
     signal: PowerSignal,
     delayMs: number,
-    timerKey: 'onTimer' | 'offTimer',
   ): void {
-    if (runtime[timerKey]) {
-      clearTimeout(runtime[timerKey]!);
-      runtime[timerKey] = null;
-      this.log.spam('zone power manager replaced pending timer', {
-        zoneId,
-        timerKey,
-        signal,
-        delayMs,
-      });
+    if (runtime.offTimer) {
+      clearTimeout(runtime.offTimer);
+      runtime.offTimer = null;
     }
     if (runtime.currentSignal === signal) {
       this.log.spam('zone power manager skipped schedule; signal already applied', {
@@ -216,13 +198,12 @@ export class PowerManager {
       zoneId,
       signal,
       delayMs,
-      timerKey,
     });
-    runtime[timerKey] = setTimeout(() => {
-      runtime[timerKey] = null;
+    runtime.offTimer = setTimeout(() => {
+      runtime.offTimer = null;
       this.applySignal(zoneId, signal);
     }, delayMs);
-    runtime[timerKey]?.unref?.();
+    runtime.offTimer?.unref?.();
   }
 
   private applySignal(zoneId: number, signal: PowerSignal): void {
@@ -360,7 +341,6 @@ export function normalizePowerManagerConfig(raw: ZonePowerManagerConfig | null):
   }
   return {
     activeModes: normalizeActiveModes(config.activeModes),
-    onDelayMs: toDelay(config.onDelayMs),
     offDelayMs:
       config.offDelayEnabled === false ? 0 : toDelay(config.offDelayMs, DEFAULT_OFF_DELAY_MS),
     actions,
