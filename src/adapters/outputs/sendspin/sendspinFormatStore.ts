@@ -36,7 +36,10 @@ export function getStoredClientFormat(clientId: string): SendspinFormat | null {
   if (!clientId) {
     return null;
   }
-  return load()[clientId] ?? null;
+  const fmt = load()[clientId];
+  // Return a copy: the cache is shared across all SendspinOutput instances and the
+  // caller stores this into a mutable per-instance field.
+  return fmt ? { ...fmt } : null;
 }
 
 export function rememberClientFormat(clientId: string, fmt: SendspinFormat): void {

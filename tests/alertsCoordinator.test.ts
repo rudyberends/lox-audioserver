@@ -84,6 +84,7 @@ test('startAlert applies alert volume after switching to the alert source', asyn
         inputModes.push(mode);
         _ctx.inputMode = mode;
       },
+      alignOutputFormat: () => {},
     } as any,
     applyPatch: (zoneId, patch) => {
       assert.equal(zoneId, zone.id);
@@ -201,6 +202,7 @@ test('alert restore settles to stop when playback cannot resume (releases power-
       setInputMode: (_ctx: ZoneContext, mode: ZoneContext['inputMode']) => {
         _ctx.inputMode = mode;
       },
+      alignOutputFormat: () => {},
       // Resume fails: no session is returned.
       startQueuePlayback: async () => null,
     } as any,

@@ -80,6 +80,7 @@ function buildConfigurator(opts: { activeInput?: ZoneContext['activeInput'] } = 
       updateInputVolume: (zoneId, volume) => fakes.playbackCalls.push(`updateVol:${zoneId}:${volume}`),
       updateInputTiming: (zoneId) => fakes.playbackCalls.push(`updateTiming:${zoneId}`),
       setInputMode: (_ctx, mode) => fakes.playbackCalls.push(`setInputMode:${mode}`),
+      alignOutputFormat: (zoneId) => fakes.playbackCalls.push(`alignFormat:${zoneId}`),
     } as never,
     outputRouter: {
       dispatchVolume: (ctx, outputs, level) =>

@@ -453,10 +453,8 @@ export class SendspinOutput implements ZoneOutput {
     // format mismatch (reason=replace) — which can starve the stream into an
     // audible dmix loop. lastClientNegotiatedFormat survives reconnects; the
     // persisted store survives lox restarts (first-play-after-restart fix).
-    if (!this.lastClientNegotiatedFormat) {
-      this.lastClientNegotiatedFormat = getStoredClientFormat(this.clientId);
-    }
-    const fmt = this.lastClientNegotiatedFormat ?? this.negotiatedFormat;
+    const fmt =
+      this.lastClientNegotiatedFormat ?? getStoredClientFormat(this.clientId) ?? this.negotiatedFormat;
     const preferredPrebuffer = this.computePrebufferBytes(fmt);
     return {
       profile:
