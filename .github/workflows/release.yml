@@ -89,6 +89,21 @@ jobs:
           build-args: |
             BUILD_VERSION=${{ steps.release_meta.outputs.version }}
 
+      # Server-core self-update bundle consumed by POST /admin/api/server/update.
+      # dist/ is pure JS (arch-agnostic); node_modules is rebuilt on the target via
+      # npm ci, so a single tarball + the manifests is enough. public/ is excluded —
+      # the admin UI and player ship as their own bundles.
+      - name: Package server-dist bundle
+        shell: bash
+        run: |
+          tar -czf server-dist.tgz dist package.json package-lock.json
+          ls -lh server-dist.tgz
+
+      - name: Attach server-dist bundle to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.release_meta.outputs.tag }}" server-dist.tgz --clobber
+
   dev:
     if: ${{ github.ref_name == 'dev' }}
     runs-on: ubuntu-latest
