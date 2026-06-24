@@ -1890,8 +1890,9 @@ export class SendspinOutput implements ZoneOutput {
 
   /**
    * Stand up the visualizer@v1 DSP for this stream. Only runs for PCM output
-   * (option A: tap the frames already flowing, no extra decode) and only when
-   * the client negotiated visualizer@v1 and supports loudness and/or spectrum.
+   * (option A: tap the frames already flowing, no extra decode) and only for
+   * the types the client negotiated that we can compute from the audio
+   * (loudness, spectrum, f_peak, peak, pitch — beat has no source, so skipped).
    */
   private setupVisualizer(isPcm: boolean, sampleRate: number, channels: number, bitDepth: number): void {
     this.visualizerDsp = null;
@@ -1905,12 +1906,18 @@ export class SendspinOutput implements ZoneOutput {
     }
     const wantLoudness = support.types.includes('loudness');
     const spectrumSupport = support.types.includes('spectrum') ? support.spectrum : undefined;
-    if (!wantLoudness && !spectrumSupport) {
+    const wantFpeak = support.types.includes('f_peak');
+    const wantPeak = support.types.includes('peak');
+    const wantPitch = support.types.includes('pitch');
+    if (!wantLoudness && !spectrumSupport && !wantFpeak && !wantPeak && !wantPitch) {
       return;
     }
-    const types: Array<'loudness' | 'spectrum'> = [];
+    const types: Array<'loudness' | 'spectrum' | 'f_peak' | 'peak' | 'pitch'> = [];
     if (wantLoudness) types.push('loudness');
     if (spectrumSupport) types.push('spectrum');
+    if (wantFpeak) types.push('f_peak');
+    if (wantPeak) types.push('peak');
+    if (wantPitch) types.push('pitch');
 
     sendspinCore.sendVisualizerStreamStartV1(clientId, {
       types,
@@ -1924,6 +1931,9 @@ export class SendspinOutput implements ZoneOutput {
       bitDepth,
       rateMax: support.rate_max,
       emitLoudness: wantLoudness,
+      emitFpeak: wantFpeak,
+      emitPeak: wantPeak,
+      emitPitch: wantPitch,
       spectrum: spectrumSupport
         ? {
             n_disp_bins: spectrumSupport.n_disp_bins,
@@ -1934,6 +1944,9 @@ export class SendspinOutput implements ZoneOutput {
         : undefined,
       onLoudness: (value, ts) => sendspinCore.sendVisualizerLoudness(clientId, value, ts),
       onSpectrum: (bins, ts) => sendspinCore.sendVisualizerSpectrum(clientId, bins, ts),
+      onFpeak: (freqHz, amp, ts) => sendspinCore.sendVisualizerFpeak(clientId, freqHz, amp, ts),
+      onPeak: (strength, ts) => sendspinCore.sendVisualizerPeak(clientId, strength, ts),
+      onPitch: (midiQ88, confidence, ts) => sendspinCore.sendVisualizerPitch(clientId, midiQ88, confidence, ts),
     });
     this.log.debug('Sendspin visualizer@v1 active', {
       zoneId: this.zoneId,
