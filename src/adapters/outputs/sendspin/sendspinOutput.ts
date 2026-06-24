@@ -26,6 +26,7 @@ import type { SendspinSession } from '@lox-audioserver/node-sendspin';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import { SendspinClientSender } from '@/adapters/outputs/sendspin/sendspinClientSender';
 import { derivePalette } from '@/adapters/outputs/sendspin/artworkPalette';
+import { SendspinVisualizer, type SpectrumScale } from '@/adapters/outputs/sendspin/sendspinVisualizer';
 import {
   getStoredClientFormat,
   rememberClientFormat,
@@ -146,6 +147,8 @@ export class SendspinOutput implements ZoneOutput {
   private readonly unwatchResolvedClient: (() => void) | null;
   private currentStream: NodeJS.ReadableStream | null = null;
   private currentCoverUrl: string | null = null;
+  /** Active visualizer@v1 DSP for this stream (PCM output only); null otherwise. */
+  private visualizerDsp: SendspinVisualizer | null = null;
   private lastProgressPayload: SendspinMetadataProgress | null = null;
   private playbackState: 'playing' | 'paused' | 'stopped' = 'stopped';
   private lastSentPlaybackState: 'playing' | 'paused' | 'stopped' | null = null;
@@ -1196,6 +1199,11 @@ export class SendspinOutput implements ZoneOutput {
           jitterSamples += 1;
         }
         lastSendWallUs = serverNowUs();
+        // Feed the visualizer DSP from the same PCM frame + playhead timestamp
+        // so its frames schedule in sync with the audio (PCM output only).
+        if (isPcm && this.visualizerDsp && canSendToClient) {
+          this.visualizerDsp.push(frameData, frameTsUs);
+        }
         const targetLeadUs = this.targetLeadUs;
         const lead = frameTsUs - serverNowUs();
         const frame = { data: frameData, timestampUs: frameTsUs };
@@ -1474,6 +1482,8 @@ export class SendspinOutput implements ZoneOutput {
         bitDepth: pcmBitDepth,
       };
 
+      this.setupVisualizer(isPcm, sampleRate, channels, pcmBitDepth);
+
       // Reaffirm playback state to the client when (re)starting a stream.
       this.pushPlaybackState(this.playbackState);
       this.sendCurrentSnapshot();
@@ -1498,6 +1508,7 @@ export class SendspinOutput implements ZoneOutput {
     this.maxBufferedBytes = audioOutputSettings.prebufferBytes;
     this.activeOutputFormat = null;
     this.activeCodecHeader = null;
+    this.visualizerDsp = null;
     if (!preserveAnchor) {
       this.playStartUs = null;
       this.wallClockAnchorUs = null;
@@ -1875,6 +1886,62 @@ export class SendspinOutput implements ZoneOutput {
     const streamId = session.stream?.id ?? '';
     const pcmId = session.pcmStream?.id ?? '';
     return `${base}|${profile}|${streamId}|${pcmId}`;
+  }
+
+  /**
+   * Stand up the visualizer@v1 DSP for this stream. Only runs for PCM output
+   * (option A: tap the frames already flowing, no extra decode) and only when
+   * the client negotiated visualizer@v1 and supports loudness and/or spectrum.
+   */
+  private setupVisualizer(isPcm: boolean, sampleRate: number, channels: number, bitDepth: number): void {
+    this.visualizerDsp = null;
+    if (!isPcm) {
+      return;
+    }
+    const clientId = this.activeClientId();
+    const support = sendspinCore.getVisualizerSupport(clientId);
+    if (!support) {
+      return;
+    }
+    const wantLoudness = support.types.includes('loudness');
+    const spectrumSupport = support.types.includes('spectrum') ? support.spectrum : undefined;
+    if (!wantLoudness && !spectrumSupport) {
+      return;
+    }
+    const types: Array<'loudness' | 'spectrum'> = [];
+    if (wantLoudness) types.push('loudness');
+    if (spectrumSupport) types.push('spectrum');
+
+    sendspinCore.sendVisualizerStreamStartV1(clientId, {
+      types,
+      rate_max: support.rate_max,
+      spectrum: spectrumSupport,
+    });
+
+    this.visualizerDsp = new SendspinVisualizer({
+      sampleRate,
+      channels,
+      bitDepth,
+      rateMax: support.rate_max,
+      emitLoudness: wantLoudness,
+      spectrum: spectrumSupport
+        ? {
+            n_disp_bins: spectrumSupport.n_disp_bins,
+            scale: spectrumSupport.scale as SpectrumScale,
+            f_min: spectrumSupport.f_min,
+            f_max: spectrumSupport.f_max,
+          }
+        : undefined,
+      onLoudness: (value, ts) => sendspinCore.sendVisualizerLoudness(clientId, value, ts),
+      onSpectrum: (bins, ts) => sendspinCore.sendVisualizerSpectrum(clientId, bins, ts),
+    });
+    this.log.debug('Sendspin visualizer@v1 active', {
+      zoneId: this.zoneId,
+      clientId,
+      types,
+      rateMax: support.rate_max,
+      bins: spectrumSupport?.n_disp_bins ?? 0,
+    });
   }
 
   // eslint-disable-next-line max-len
