@@ -1,5 +1,6 @@
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { Jimp, JimpMime } from 'jimp';
 import { createLogger } from '@/shared/logging/logger';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import {
@@ -1877,48 +1878,70 @@ export class SendspinOutput implements ZoneOutput {
 
   // eslint-disable-next-line max-len
   private async fetchAndSendArtwork(session?: { metadata?: PlaybackSession['metadata']; stream?: PlaybackSession['stream'] }): Promise<void> {
+    const clientId = this.activeClientId();
     const preferredChannels: ArtworkChannel[] =
-      sendspinCore.getArtworkChannels(this.activeClientId()) ??
+      sendspinCore.getArtworkChannels(clientId) ??
       [
         { source: 'album', format: 'jpeg', width: 800, height: 800 },
       ];
+    // Clear every channel: stream/start re-arms the client's artwork stream, then a
+    // header-only frame per channel collapses to "no image" on the receiver.
+    const clearAll = (): void => {
+      sendspinCore.sendArtworkStreamStart(clientId, preferredChannels);
+      preferredChannels.forEach((_channel, idx) => {
+        sendspinCore.sendArtwork(clientId, idx as 0 | 1 | 2 | 3, null);
+      });
+    };
     try {
       const coverUrl =
         session?.metadata?.coverurl ??
         session?.stream?.coverUrl ??
         null;
       if (!coverUrl) {
-        sendspinCore.sendArtworkStreamStart(this.activeClientId(), preferredChannels);
-        preferredChannels.forEach((_channel, idx) => {
-          sendspinCore.sendArtwork(this.activeClientId(), idx as 0 | 1 | 2 | 3, null);
-        });
+        clearAll();
         return;
       }
       // Skip invalid/non-http URLs to avoid noisy errors.
       try {
         const parsed = new URL(coverUrl);
         if (!/^https?:$/.test(parsed.protocol)) {
-          sendspinCore.sendArtworkStreamStart(this.activeClientId(), preferredChannels);
-          preferredChannels.forEach((_channel, idx) => {
-            sendspinCore.sendArtwork(this.activeClientId(), idx as 0 | 1 | 2 | 3, null);
-          });
+          clearAll();
           return;
         }
       } catch {
-        sendspinCore.sendArtworkStreamStart(this.activeClientId(), preferredChannels);
-        preferredChannels.forEach((_channel, idx) => {
-          sendspinCore.sendArtwork(this.activeClientId(), idx as 0 | 1 | 2 | 3, null);
-        });
+        clearAll();
         return;
       }
       const buf = await this.fetchBuffer(coverUrl);
-      if (!buf) {
+      if (!buf || buf.length === 0) {
+        clearAll();
         return;
       }
-      sendspinCore.sendArtworkStreamStart(this.activeClientId(), preferredChannels);
-      preferredChannels.forEach((_channel, idx) => {
-        sendspinCore.sendArtwork(this.activeClientId(), idx as 0 | 1 | 2 | 3, buf);
-      });
+      // The artwork@v1 spec has the server deliver each channel an image in the
+      // requested format at the requested dimensions, not the raw origin bytes.
+      // Decode once, then letterbox + re-encode per channel so clients (which only
+      // decode known formats) always receive something they can render.
+      let source: Awaited<ReturnType<typeof Jimp.read>>;
+      try {
+        source = await Jimp.read(buf);
+      } catch (decodeError) {
+        this.log.debug('Sendspin artwork decode failed', {
+          zoneId: this.zoneId,
+          bytes: buf.length,
+          message: (decodeError as Error).message,
+        });
+        clearAll();
+        return;
+      }
+      sendspinCore.sendArtworkStreamStart(clientId, preferredChannels);
+      for (const [idx, channel] of preferredChannels.entries()) {
+        if (channel.source === 'none') {
+          sendspinCore.sendArtwork(clientId, idx as 0 | 1 | 2 | 3, null);
+          continue;
+        }
+        const encoded = await this.encodeArtwork(source, channel);
+        sendspinCore.sendArtwork(clientId, idx as 0 | 1 | 2 | 3, encoded);
+      }
     } catch (error) {
       this.log.debug('Sendspin artwork fetch failed', {
         zoneId: this.zoneId,
@@ -1927,9 +1950,59 @@ export class SendspinOutput implements ZoneOutput {
     }
   }
 
-  private async fetchBuffer(url: string): Promise<Buffer | null> {
+  /**
+   * Letterbox + re-encode a decoded image to a single artwork channel's spec.
+   * Mirrors the reference server's _letterbox_image / _process_and_encode_image:
+   * scale to fit while preserving aspect ratio, center on a black canvas at the
+   * requested dimensions, then encode to the requested format.
+   */
+  private async encodeArtwork(
+    source: Awaited<ReturnType<typeof Jimp.read>>,
+    channel: ArtworkChannel,
+  ): Promise<Buffer> {
+    const width = channel.width > 0 ? channel.width : source.width;
+    const height = channel.height > 0 ? channel.height : source.height;
+    const fitted = source.clone().scaleToFit({ w: width, h: height });
+    const canvas = new Jimp({ width, height, color: 0x000000ff });
+    const x = Math.floor((width - fitted.width) / 2);
+    const y = Math.floor((height - fitted.height) / 2);
+    canvas.composite(fitted, x, y);
+    if (channel.format === 'png') {
+      return canvas.getBuffer(JimpMime.png, { deflateLevel: 6 });
+    }
+    if (channel.format === 'bmp') {
+      return canvas.getBuffer(JimpMime.bmp);
+    }
+    return canvas.getBuffer(JimpMime.jpeg, { quality: 85 });
+  }
+
+  private async fetchBuffer(url: string, redirectsLeft = 5): Promise<Buffer | null> {
     return new Promise<Buffer | null>((resolve) => {
       const handler = (res: any) => {
+        const status = res.statusCode ?? 0;
+        // Follow redirects: cover CDNs routinely 30x, and the redirect body is not
+        // an image. Without this the receiver would get HTML/empty bytes.
+        if (status >= 300 && status < 400 && res.headers?.location) {
+          res.resume();
+          if (redirectsLeft <= 0) {
+            resolve(null);
+            return;
+          }
+          let next: string;
+          try {
+            next = new URL(res.headers.location, url).toString();
+          } catch {
+            resolve(null);
+            return;
+          }
+          this.fetchBuffer(next, redirectsLeft - 1).then(resolve, () => resolve(null));
+          return;
+        }
+        if (status < 200 || status >= 300) {
+          res.resume();
+          resolve(null);
+          return;
+        }
         const chunks: Buffer[] = [];
         res.on('data', (chunk: Buffer) => chunks.push(chunk));
         res.on('end', () => resolve(Buffer.concat(chunks)));
