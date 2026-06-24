@@ -64,7 +64,7 @@
     "@lox-audioserver/node-googlecast": "^0.1.1",
     "@lox-audioserver/node-libraop": "^0.3.6",
     "@lox-audioserver/node-librespot": "^0.5.0",
-    "@lox-audioserver/node-sendspin": "^0.3.2",
+    "@lox-audioserver/node-sendspin": "^0.3.4",
     "@lox-audioserver/node-slimproto": "0.1.2",
     "@lox-audioserver/node-snapcast": "^0.2.0",
     "@lox-audioserver/node-sonos": "^0.2.2",
