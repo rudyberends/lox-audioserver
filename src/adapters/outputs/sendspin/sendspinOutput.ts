@@ -25,6 +25,7 @@ import type { PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/port
 import type { SendspinSession } from '@lox-audioserver/node-sendspin';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import { SendspinClientSender } from '@/adapters/outputs/sendspin/sendspinClientSender';
+import { derivePalette } from '@/adapters/outputs/sendspin/artworkPalette';
 import {
   getStoredClientFormat,
   rememberClientFormat,
@@ -1885,11 +1886,21 @@ export class SendspinOutput implements ZoneOutput {
         { source: 'album', format: 'jpeg', width: 800, height: 800 },
       ];
     // Clear every channel: stream/start re-arms the client's artwork stream, then a
-    // header-only frame per channel collapses to "no image" on the receiver.
+    // header-only frame per channel collapses to "no image" on the receiver. The
+    // color@v1 palette is derived from the same artwork, so clear it in lockstep
+    // (no-op for clients that did not negotiate the color role).
     const clearAll = (): void => {
       sendspinCore.sendArtworkStreamStart(clientId, preferredChannels);
       preferredChannels.forEach((_channel, idx) => {
         sendspinCore.sendArtwork(clientId, idx as 0 | 1 | 2 | 3, null);
+      });
+      sendspinCore.sendColor(clientId, {
+        background_dark: null,
+        background_light: null,
+        primary: null,
+        accent: null,
+        on_dark: null,
+        on_light: null,
       });
     };
     try {
@@ -1942,6 +1953,9 @@ export class SendspinOutput implements ZoneOutput {
         const encoded = await this.encodeArtwork(source, channel);
         sendspinCore.sendArtwork(clientId, idx as 0 | 1 | 2 | 3, encoded);
       }
+      // color@v1: push a palette derived from the same artwork so display
+      // clients can theme their UI. No-op for clients without the color role.
+      sendspinCore.sendColor(clientId, derivePalette(source));
     } catch (error) {
       this.log.debug('Sendspin artwork fetch failed', {
         zoneId: this.zoneId,
