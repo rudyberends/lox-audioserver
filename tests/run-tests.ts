@@ -51,6 +51,7 @@ import './inferAudiotype.test';
 import './playlistTrackParentContext.test';
 import './audioManager.playbackPreDelay.test';
 import './sendspinLineInService.test';
+import './sendspinVisualizer.test';
 import './powerManager.test';
 import './sharedPowerGroupManager.test';
 import './configHandlers.volume.test';
