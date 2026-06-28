@@ -148,6 +148,60 @@ test('shared power group applies offDelayMs only to the final OFF transition', a
   ]);
 });
 
+test('shared power group does not latch a failed OFF and retries it (#293)', async () => {
+  // The relay card open can fail intermittently; a failed OFF must leave the group marked ON
+  // so a later OFF transition retries instead of leaving the amp stuck energized.
+  class FlakyOffExecutor implements PowerManagerExecutor {
+    public calls: Call[] = [];
+    private offAttempts = 0;
+    public async execute(action: { type: string }, signal: 0 | 1): Promise<void> {
+      this.calls.push({ type: action.type, signal });
+      if (signal === 0) {
+        this.offAttempts += 1;
+        if (this.offAttempts === 1) {
+          throw new Error('unable to open HID API device');
+        }
+      }
+    }
+  }
+
+  const executor = new FlakyOffExecutor();
+  const manager = new SharedPowerGroupManager(noopLogger, executor);
+  manager.configure(
+    [
+      {
+        id: 'amp-living',
+        powerManager: { offDelayMs: 0, crelay: { enabled: true, relay: '1' } },
+      },
+    ],
+    [
+      {
+        id: 1,
+        name: 'Living',
+        sourceMac: '00:00:00:00:00:01',
+        volumes: {} as any,
+        powerManager: { powerGroupId: 'amp-living' },
+      } as any,
+    ],
+  );
+
+  manager.onStatePatch(1, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(10);
+  manager.onStatePatch(1, { mode: 'stop' } as any, { ...baseState, mode: 'stop' } as any);
+  await wait(10);
+  // OFF failed; turning on then off again must re-attempt the OFF.
+  manager.onStatePatch(1, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(10);
+  manager.onStatePatch(1, { mode: 'stop' } as any, { ...baseState, mode: 'stop' } as any);
+  await wait(10);
+
+  assert.deepEqual(executor.calls, [
+    { type: 'crelay', signal: 1 },
+    { type: 'crelay', signal: 0 },
+    { type: 'crelay', signal: 0 },
+  ]);
+});
+
 test('shared power group cancels pending offDelayMs when another zone becomes active again', async () => {
   const executor = new FakeExecutor();
   const manager = new SharedPowerGroupManager(noopLogger, executor);

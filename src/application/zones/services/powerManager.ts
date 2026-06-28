@@ -229,10 +229,12 @@ export class PowerManager {
           signal,
           actions: fresh.config.actions.map((action) => action.type),
         });
+        let allSucceeded = true;
         for (const action of fresh.config.actions) {
           try {
             await this.executor.execute(action, signal);
           } catch (error: unknown) {
+            allSucceeded = false;
             const message = error instanceof Error ? error.message : String(error);
             this.log.warn('zone power manager action failed', {
               zoneId,
@@ -243,7 +245,10 @@ export class PowerManager {
           }
         }
         const active = this.zones.get(zoneId);
-        if (active && active.desiredSignal === signal) {
+        // Only record the signal as applied when every action succeeded. Latching
+        // currentSignal after a failed switch would make a stuck relay look settled,
+        // and the desired/current equality guards would never retry it (#293).
+        if (active && active.desiredSignal === signal && allSucceeded) {
           const previous = active.currentSignal;
           active.currentSignal = signal;
           if (previous !== signal) {
@@ -254,6 +259,12 @@ export class PowerManager {
             });
             this.onSignalChanged?.(zoneId, signal);
           }
+        } else if (active && !allSucceeded) {
+          this.log.debug('zone power manager leaving signal unconfirmed after failure', {
+            zoneId,
+            signal,
+            currentSignal: active.currentSignal,
+          });
         }
       })
       .catch((error: unknown) => {
@@ -263,8 +274,29 @@ export class PowerManager {
   }
 }
 
+export type PowerCommandRunner = (file: string, args: string[]) => Promise<unknown>;
+
 export class SystemPowerManagerExecutor implements PowerManagerExecutor {
-  public async execute(action: NormalizedPowerAction, signal: PowerSignal): Promise<void> {
+  // Serialize execution per physical device. A crelay/USB-HID relay card can only be opened
+  // by one process at a time; when an alert hits zones on multiple amps the managers would
+  // otherwise spawn concurrent `crelay` processes against the same card and all but one fail
+  // with "unable to open HID API device" (#293). One executor instance is shared across the
+  // per-zone and shared-group managers, so this chain serializes access across both of them.
+  private readonly deviceChains = new Map<string, Promise<void>>();
+
+  // Injectable command runner (defaults to execFile); overridable so the crelay retry path
+  // can be unit-tested without spawning a real subprocess.
+  constructor(private readonly runCommand: PowerCommandRunner = (file, args) => execFileAsync(file, args)) {}
+
+  public execute(action: NormalizedPowerAction, signal: PowerSignal): Promise<void> {
+    const key = deviceKey(action);
+    const previous = this.deviceChains.get(key) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(() => this.run(action, signal));
+    this.deviceChains.set(key, next.catch(() => undefined));
+    return next;
+  }
+
+  private async run(action: NormalizedPowerAction, signal: PowerSignal): Promise<void> {
     if (action.type === 'gpio') {
       await this.writeGpio(action.config, signal);
       return;
@@ -283,7 +315,7 @@ export class SystemPowerManagerExecutor implements PowerManagerExecutor {
   private async writeGpio(config: NormalizedGpioConfig, signal: PowerSignal): Promise<void> {
     const value = resolvePhysicalValue(signal, config.activeHigh);
     const chipRef = config.chip.includes('/') ? config.chip : `/dev/${config.chip}`;
-    await execFileAsync(config.gpiosetPath, [chipRef, `${config.pin}=${value}`]);
+    await this.runCommand(config.gpiosetPath, [chipRef, `${config.pin}=${value}`]);
   }
 
   private async callUrl(config: NormalizedUrlConfig, signal: PowerSignal): Promise<void> {
@@ -316,8 +348,48 @@ export class SystemPowerManagerExecutor implements PowerManagerExecutor {
   private async callCrelay(config: NormalizedCrelayConfig, signal: PowerSignal): Promise<void> {
     const state = signal === 1 ? 'ON' : 'OFF';
     const args = config.serial ? ['-s', config.serial, config.relay, state] : [config.relay, state];
-    await execFileAsync(config.binaryPath, args);
+    // Even with per-device serialization the HID handle can briefly be unavailable (the
+    // previous open is still being torn down, or another process touched the card), so retry
+    // the transient "unable to open HID API device" failure a couple of times before giving up.
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        await this.runCommand(config.binaryPath, args);
+        return;
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        const transient = /unable to open HID API device|resource busy|device or resource busy/i.test(message);
+        if (attempt < maxAttempts && transient) {
+          await sleep(80 * attempt);
+          continue;
+        }
+        throw error;
+      }
+    }
   }
+}
+
+function deviceKey(action: NormalizedPowerAction): string {
+  switch (action.type) {
+    case 'crelay':
+      // Channels on the same card share a single HID device, so key by the card
+      // (binary + serial) rather than the relay channel to serialize all channels.
+      return `crelay:${action.config.binaryPath}:${action.config.serial ?? ''}`;
+    case 'gpio':
+      return `gpio:${action.config.chip}`;
+    case 'url':
+      return `url:${action.config.onUrl || action.config.offUrl}`;
+    case 'udp':
+      return `udp:${action.config.host}:${action.config.port}`;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  // Not unref'd: this short retry backoff must keep the event loop alive until it resolves,
+  // unlike the long-lived OFF timers which are unref'd so they never block shutdown.
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export function normalizePowerManagerConfig(raw: ZonePowerManagerConfig | null): NormalizedPowerConfig {

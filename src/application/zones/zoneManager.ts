@@ -40,7 +40,7 @@ import {
   isVolumeOwnedByStateController,
 } from '@/application/zones/state/authorityPolicies';
 import type { AlertMediaResource } from '@/application/alerts/types';
-import { PowerManager } from '@/application/zones/services/powerManager';
+import { PowerManager, SystemPowerManagerExecutor } from '@/application/zones/services/powerManager';
 import { SharedPowerGroupManager } from '@/application/zones/services/sharedPowerGroupManager';
 import { ZoneHeartbeatService } from '@/application/zones/services/ZoneHeartbeatService';
 import { InputSourceConfigurator } from '@/application/zones/services/InputSourceConfigurator';
@@ -196,8 +196,12 @@ export class ZoneManager {
       configPort,
     });
     this.zoneAudioPrefs = zoneAudioPrefs;
-    this.powerManager = new PowerManager(this.log);
-    this.sharedPowerGroupManager = new SharedPowerGroupManager(this.log);
+    // Share one executor so crelay/HID access is serialized across both the per-zone and
+    // shared-group managers — two managers driving channels on the same relay card must not
+    // open the device concurrently (#293).
+    const powerExecutor = new SystemPowerManagerExecutor();
+    this.powerManager = new PowerManager(this.log, powerExecutor);
+    this.sharedPowerGroupManager = new SharedPowerGroupManager(this.log, powerExecutor);
     this.zoneAudioPrefs.setZonePowerStateResolver((zoneId) => this.powerManager.isSignalOn(zoneId));
     this.zoneAudioPrefs.setZoneEqualizerResolver((zoneId) => this.resolveBuiltinEqualizerBands(zoneId));
     this.audioHelpers = createZoneAudioHelpers(contentPort, configPort);

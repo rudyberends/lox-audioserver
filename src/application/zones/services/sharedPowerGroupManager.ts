@@ -185,10 +185,12 @@ export class SharedPowerGroupManager {
           signal,
           actions: fresh.config.actions.map((action) => action.type),
         });
+        let allSucceeded = true;
         for (const action of fresh.config.actions) {
           try {
             await this.executor.execute(action, signal);
           } catch (error: unknown) {
+            allSucceeded = false;
             const message = error instanceof Error ? error.message : String(error);
             this.log.warn('shared power group action failed', {
               groupId: fresh.id,
@@ -199,8 +201,17 @@ export class SharedPowerGroupManager {
           }
         }
         const active = this.groups.get(runtime.id);
-        if (active && active.desiredSignal === signal) {
+        // Only mark the group as switched when every action succeeded. Latching
+        // currentSignal after a failed crelay call would leave a physically energized
+        // relay looking off, and the desired/current guards would never retry it (#293).
+        if (active && active.desiredSignal === signal && allSucceeded) {
           active.currentSignal = signal;
+        } else if (active && !allSucceeded) {
+          this.log.debug('shared power group leaving signal unconfirmed after failure', {
+            groupId: active.id,
+            signal,
+            currentSignal: active.currentSignal,
+          });
         }
       })
       .catch((error: unknown) => {

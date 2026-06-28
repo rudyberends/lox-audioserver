@@ -5,6 +5,7 @@ import {
   PowerManager,
   SystemPowerManagerExecutor,
   normalizePowerManagerConfig,
+  type PowerCommandRunner,
   type PowerManagerExecutor,
 } from '../src/application/zones/services/powerManager';
 
@@ -318,6 +319,143 @@ test('power manager can stay on during pause via activeModes', async () => {
     { type: 'gpio', signal: 1 },
     { type: 'gpio', signal: 0 },
   ]);
+});
+
+test('power manager does not latch a failed switch and retries on the next OFF (#293)', async () => {
+  // A crelay OFF that fails (e.g. "unable to open HID API device") must not be recorded as
+  // applied; otherwise the relay stays physically energized while the manager thinks it is off
+  // and never retries. The signal stays unconfirmed so the next OFF transition tries again.
+  class FlakyOffExecutor implements PowerManagerExecutor {
+    public calls: Call[] = [];
+    private offAttempts = 0;
+    public async execute(action: { type: string }, signal: 0 | 1): Promise<void> {
+      this.calls.push({ type: action.type, signal });
+      if (signal === 0) {
+        this.offAttempts += 1;
+        if (this.offAttempts === 1) {
+          throw new Error('unable to open HID API device');
+        }
+      }
+    }
+  }
+
+  const executor = new FlakyOffExecutor();
+  const pm = new PowerManager(noopLogger, executor);
+  const zoneConfig = {
+    id: 1,
+    name: 'Living',
+    sourceMac: '00:00:00:00:00:01',
+    volumes: {} as any,
+    powerManager: {
+      offDelayMs: 0,
+      crelay: { enabled: true, relay: '1' },
+    },
+  } as any;
+
+  pm.onStatePatch(1, zoneConfig, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(10);
+  assert.equal(pm.isSignalOn(1), true);
+
+  // OFF fails: relay must still be considered ON so a later OFF retries.
+  pm.onStatePatch(1, zoneConfig, { mode: 'stop' } as any, { ...baseState, mode: 'stop' } as any);
+  await wait(10);
+  assert.equal(pm.isSignalOn(1), true);
+
+  // Play again (relay already on → no redundant ON), then stop again → OFF retried, succeeds.
+  pm.onStatePatch(1, zoneConfig, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(10);
+  pm.onStatePatch(1, zoneConfig, { mode: 'stop' } as any, { ...baseState, mode: 'stop' } as any);
+  await wait(10);
+
+  assert.deepEqual(executor.calls, [
+    { type: 'crelay', signal: 1 },
+    { type: 'crelay', signal: 0 },
+    { type: 'crelay', signal: 0 },
+  ]);
+  assert.equal(pm.isSignalOn(1), false);
+  pm.clearAll();
+});
+
+test('system power manager serializes concurrent calls to the same device (#293)', async () => {
+  // Two managers driving channels on the same relay card share one executor; concurrent
+  // opens of the same HID device collide. The executor must serialize per device so at most
+  // one call runs at a time.
+  const executor = new SystemPowerManagerExecutor();
+  let active = 0;
+  let maxActive = 0;
+  await withHttpServer(
+    (_req, res) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      setTimeout(() => {
+        active -= 1;
+        res.writeHead(200);
+        res.end('ok');
+      }, 40);
+    },
+    async (baseUrl) => {
+      const action = { type: 'url', config: { onUrl: `${baseUrl}/on`, offUrl: '' } } as const;
+      await Promise.all([
+        executor.execute(action as any, 1),
+        executor.execute(action as any, 1),
+        executor.execute(action as any, 1),
+      ]);
+    },
+  );
+  assert.equal(maxActive, 1);
+});
+
+test('system power manager retries crelay on transient HID errors (#293)', async () => {
+  let attempts = 0;
+  const runner: PowerCommandRunner = async (_file, _args) => {
+    attempts += 1;
+    if (attempts === 1) {
+      throw new Error('Command failed: crelay 1 ON\nunable to open HID API device');
+    }
+    return undefined;
+  };
+  const executor = new SystemPowerManagerExecutor(runner);
+  await executor.execute(
+    { type: 'crelay', config: { serial: null, relay: '1', binaryPath: '/usr/local/bin/crelay' } } as any,
+    1,
+  );
+  // One transient failure + one success = two attempts.
+  assert.equal(attempts, 2);
+});
+
+test('system power manager gives up crelay after the retry budget (#293)', async () => {
+  let attempts = 0;
+  const runner: PowerCommandRunner = async () => {
+    attempts += 1;
+    throw new Error('unable to open HID API device');
+  };
+  const executor = new SystemPowerManagerExecutor(runner);
+  await assert.rejects(
+    () =>
+      executor.execute(
+        { type: 'crelay', config: { serial: null, relay: '1', binaryPath: '/usr/local/bin/crelay' } } as any,
+        0,
+      ),
+    /unable to open HID API device/,
+  );
+  // Bounded to three attempts total.
+  assert.equal(attempts, 3);
+});
+
+test('system power manager does not retry crelay on a non-transient error (#293)', async () => {
+  let attempts = 0;
+  const runner: PowerCommandRunner = async () => {
+    attempts += 1;
+    throw new Error('crelay: invalid relay number');
+  };
+  const executor = new SystemPowerManagerExecutor(runner);
+  await assert.rejects(() =>
+    executor.execute(
+      { type: 'crelay', config: { serial: null, relay: '9', binaryPath: '/usr/local/bin/crelay' } } as any,
+      1,
+    ),
+  );
+  assert.equal(attempts, 1);
 });
 
 test('power manager ignores offDelayMs when offDelayEnabled is false', async () => {
