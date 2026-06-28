@@ -16,6 +16,7 @@ import type { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { LoxAudioPeerRegistry } from '@/adapters/discovery/loxAudioPeerRegistry';
+import { buildAudioServersList } from '@/adapters/discovery/audioServersList';
 import { defaultConfig } from '@/adapters/http/adminApi/config/configHandlers';
 
 const ADDON_PACKAGE_PREFIX = '@lox-audioserver/node-';
@@ -338,91 +339,19 @@ function handleInfo(res: ServerResponse, deps: MiscHandlerDeps, containerized: b
   }
 }
 
-type AudioServerEntry = {
-  macId: string;
-  name: string | null;
-  host: string | null;
-  ip: string | null;
-  port: number | null;
-  uuid: string | null;
-  master: string | null;
-  isSelf: boolean;
-  // True when this server advertises itself as lox-audioserver over mDNS (i.e. runs our admin).
-  // Real Loxone audioservers share the protocol but lack the service, so they come through false —
-  // the player still lists them, the admin UI uses this to offer only switchable servers.
-  isLoxAudioserver: boolean;
-};
-
 /**
- * Lists every audioserver the Miniserver knows about, parsed from rawAudioConfig.raw (an array of
- * objects keyed by MAC). The Miniserver pushes the whole site's config to each server, so this
- * includes peers, not just self. Used by the admin UI to offer a "switch audioserver" control —
- * the browser then re-points at the chosen server's /admin/ (each runs its own UI on the HTTP port).
+ * Lists every audioserver the Miniserver knows about (see buildAudioServersList). Used by the admin
+ * UI to offer a "switch audioserver" control — the browser then re-points at the chosen server's
+ * /admin/. The player gets the same list over the `sonn/audioservers` command instead.
  */
 function handleAudioServers(res: ServerResponse, deps: MiscHandlerDeps): void {
   try {
-    const cfg = deps.configPort.getConfig();
-    const selfMacId = cfg.system?.audioserver?.macId?.trim().toUpperCase() ?? null;
-    const isLoxAudioserver = (macId: string): boolean =>
-      (selfMacId != null && macId === selfMacId) || deps.loxAudioPeers.has(macId);
-    const servers = parseAudioServers(
-      cfg.rawAudioConfig?.raw ?? cfg.rawAudioConfig?.rawString,
-      selfMacId,
-      isLoxAudioserver,
-    );
-    deps.sendJson(res, 200, { self: selfMacId, servers });
+    const { self, servers } = buildAudioServersList(deps.configPort, deps.loxAudioPeers);
+    deps.sendJson(res, 200, { self, servers });
   } catch (err) {
     deps.log.warn('audioservers list failed', { err });
     deps.sendJson(res, 500, { error: 'audioservers-unavailable' });
   }
-}
-
-/** Parses rawAudioConfig.raw (array of single-key {<MAC>: section} objects) into a flat list. */
-function parseAudioServers(
-  raw: unknown,
-  selfMacId: string | null,
-  isLoxAudioserver: (macId: string) => boolean,
-): AudioServerEntry[] {
-  let parsed = raw;
-  if (typeof parsed === 'string') {
-    const trimmed = parsed.trim();
-    if (!trimmed) return [];
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      return [];
-    }
-  }
-  if (!Array.isArray(parsed)) return [];
-
-  const servers: AudioServerEntry[] = [];
-  for (const entry of parsed) {
-    if (!entry || typeof entry !== 'object') continue;
-    for (const [key, value] of Object.entries(entry as Record<string, unknown>)) {
-      if (!value || typeof value !== 'object') continue;
-      const macId = key.trim().toUpperCase();
-      if (!macId) continue;
-      const section = value as Record<string, unknown>;
-      servers.push({
-        macId,
-        name: normalizeString(section.name) ?? null,
-        host: normalizeString(section.host) ?? null,
-        ip: normalizeString(section.ip) ?? null,
-        port: typeof section.port === 'number' ? section.port : Number(section.port) || null,
-        uuid: normalizeString(section.uuid) ?? null,
-        master: normalizeString(section.master)?.toUpperCase() ?? null,
-        isSelf: selfMacId != null && macId === selfMacId,
-        isLoxAudioserver: isLoxAudioserver(macId),
-      });
-    }
-  }
-  return servers;
-}
-
-function normalizeString(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 async function handleReinitialize(res: ServerResponse, deps: MiscHandlerDeps): Promise<void> {

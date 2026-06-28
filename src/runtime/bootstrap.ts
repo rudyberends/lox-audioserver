@@ -391,6 +391,7 @@ export function createRuntime(): Runtime {
       fadeController: fadeControllerPort,
       alerts: alertsPort,
       contentManager,
+      loxAudioPeers,
     });
 
     browserZoneRegistry = new BrowserZoneRegistry(zoneManager);

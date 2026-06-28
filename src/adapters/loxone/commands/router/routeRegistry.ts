@@ -12,6 +12,8 @@ import { createAlertHandlers } from '@/adapters/loxone/commands/handlers/alertHa
 import { createInputHandlers } from '@/adapters/loxone/commands/handlers/inputHandlers';
 import { createPlaylistEditHandlers } from '@/adapters/loxone/commands/handlers/playlistEditHandlers';
 import { createQueueEditHandlers } from '@/adapters/loxone/commands/handlers/queueEditHandlers';
+import { createSonnHandlers } from '@/adapters/loxone/commands/handlers/sonnHandlers';
+import type { LoxAudioPeerRegistry } from '@/adapters/discovery/loxAudioPeerRegistry';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
@@ -45,6 +47,7 @@ export interface RouteDependencies {
   fadeController: FadeControllerPort;
   alerts: AlertsPort;
   contentManager: ContentManager;
+  loxAudioPeers: LoxAudioPeerRegistry;
 }
 
 /**
@@ -96,11 +99,19 @@ export function registerRoutes(
     dependencies.contentManager,
     dependencies.loxoneNotifier,
   );
+  const sonnHandlers = createSonnHandlers({
+    configPort: dependencies.configPort,
+    loxAudioPeers: dependencies.loxAudioPeers,
+  });
 
   router.registerPrefix('secure', 'secure/info/pairing', secure.infoPairing);
   router.registerPrefix('secure', 'secure/hello', secure.hello);
   router.registerPrefix('secure', 'secure/authenticate', secure.authenticate);
   router.registerPrefix('secure', 'secure/init', secure.init);
+
+  // sonn-core extensions — a dedicated top-level bucket, explicitly NOT part of
+  // the Loxone command surface (`audio/*`, `secure/*`).
+  router.registerPrefix('sonn', 'sonn/audioservers', sonnHandlers.audioServers);
 
   router.registerPrefix('audio', 'audio/cfg/globalsearch/describe', globalSearchHandlers.audioCfgGlobalSearchDescribe);
   router.registerPrefix('audio', 'audio/cfg/globalsearch', globalSearchHandlers.audioCfgGlobalSearch);
