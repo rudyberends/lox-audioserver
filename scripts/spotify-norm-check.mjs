@@ -5,7 +5,7 @@
 //
 // Usage: node scripts/spotify-norm-check.mjs spotify:track:<id>
 
-import pkg from '@lox-audioserver/node-librespot';
+import pkg from '@sonn-audio/node-librespot';
 import { createDecipheriv } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 

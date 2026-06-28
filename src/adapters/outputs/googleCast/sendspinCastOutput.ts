@@ -9,7 +9,7 @@ import {
   type SendspinSatelliteConfig,
 } from '@/adapters/outputs/sendspin/sendspinOutput';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
-import type { CastDevice, DiscoveredDevice } from '@lox-audioserver/node-googlecast';
+import type { CastDevice, DiscoveredDevice } from '@sonn-audio/node-googlecast';
 import { loadGoogleCastModule } from '@/adapters/outputs/googleCast/googlecastLoader';
 import {
   createJsonNamespaceControllerFactory,

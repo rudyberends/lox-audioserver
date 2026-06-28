@@ -27,7 +27,7 @@ import type { SpotifyStreamProxyService } from '@/adapters/inputs/spotify/spotif
 import { SpotifyUnavailableLoopGuard } from '@/adapters/inputs/spotify/spotifyRecoveryPolicy';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
-import type { LibrespotSession } from '@lox-audioserver/node-librespot';
+import type { LibrespotSession } from '@sonn-audio/node-librespot';
 
 type AirplaySessionStopper = (zoneId: number, reason?: string) => void;
 type OutputErrorHandler = (zoneId: number, reason?: string) => void;

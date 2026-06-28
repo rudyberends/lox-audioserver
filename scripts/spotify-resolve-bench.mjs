@@ -9,7 +9,7 @@
 //
 // Usage: node scripts/spotify-resolve-bench.mjs spotify:track:<id> [iterations]
 
-import pkg from '@lox-audioserver/node-librespot';
+import pkg from '@sonn-audio/node-librespot';
 import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 

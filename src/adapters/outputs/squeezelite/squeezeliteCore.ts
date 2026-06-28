@@ -1,6 +1,6 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
-import { SlimServer, EventType, type SlimEvent, type SlimClient } from '@lox-audioserver/node-slimproto';
+import { SlimServer, EventType, type SlimEvent, type SlimClient } from '@sonn-audio/node-slimproto';
 
 type PlayerSnapshot = {
   name?: string;

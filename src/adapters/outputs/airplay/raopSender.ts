@@ -13,7 +13,7 @@ import {
   setSenderProgress,
   setSenderArtwork,
   setLogHandler,
-} from '@lox-audioserver/node-libraop';
+} from '@sonn-audio/node-libraop';
 import { discoverAirplayDevices } from '@/adapters/outputs/airplay/airplayDiscovery';
 import { findAirplayQuirkWarning } from '@/adapters/outputs/airplay/airplayQuirks';
 

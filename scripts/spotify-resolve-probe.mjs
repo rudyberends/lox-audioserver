@@ -13,7 +13,7 @@
 // logged in yet, so we pass one explicitly). clientId is read from data/config.json.
 // Writes /tmp/spotify-probe.ogg and runs ffprobe to confirm it decodes.
 
-import { createSession, setLogLevel } from '@lox-audioserver/node-librespot';
+import { createSession, setLogLevel } from '@sonn-audio/node-librespot';
 import { createDecipheriv } from 'node:crypto';
 import { writeFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';

@@ -1,4 +1,4 @@
-import { serverNowUs } from '@lox-audioserver/node-sendspin';
+import { serverNowUs } from '@sonn-audio/node-sendspin';
 
 /**
  * Per-client send-ahead backpressure model.

@@ -4,7 +4,7 @@ import {
   sendspinCore,
   type SendspinSession,
   type SendspinSessionHooks,
-} from '@lox-audioserver/node-sendspin';
+} from '@sonn-audio/node-sendspin';
 import { ClientCapacityGate } from '@/adapters/outputs/sendspin/clientCapacityGate';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 

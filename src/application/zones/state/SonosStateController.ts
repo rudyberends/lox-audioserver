@@ -5,7 +5,7 @@ import {
   detectGeneration,
   type S1SonosGroup,
   type SonosGroup,
-} from '@lox-audioserver/node-sonos';
+} from '@sonn-audio/node-sonos';
 
 // Either backend exposes the same `player.group.*` shape that the snapshot
 // builder consumes; the union here keeps the dispatcher type-safe without

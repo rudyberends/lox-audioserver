@@ -2,7 +2,7 @@ import type { IncomingMessage } from 'node:http';
 import WebSocket from 'ws';
 import type { RawData } from 'ws';
 import { createLogger } from '@/shared/logging/logger';
-import { ConnectionReason, sendspinCore } from '@lox-audioserver/node-sendspin';
+import { ConnectionReason, sendspinCore } from '@sonn-audio/node-sendspin';
 import type { MdnsBrowser, MdnsPort, MdnsRegistration, MdnsServiceRecord } from '@/ports/MdnsPort';
 
 interface Endpoint {

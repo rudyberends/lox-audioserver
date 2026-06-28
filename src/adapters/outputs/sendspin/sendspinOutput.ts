@@ -20,9 +20,9 @@ import {
   type PlayerFormatWithBitDepth,
   type SendspinGroupCommand,
   type SendspinPlayerStateUpdate,
-} from '@lox-audioserver/node-sendspin';
+} from '@sonn-audio/node-sendspin';
 import type { PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
-import type { SendspinSession } from '@lox-audioserver/node-sendspin';
+import type { SendspinSession } from '@sonn-audio/node-sendspin';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import { SendspinClientSender } from '@/adapters/outputs/sendspin/sendspinClientSender';
 import { derivePalette } from '@/adapters/outputs/sendspin/artworkPalette';

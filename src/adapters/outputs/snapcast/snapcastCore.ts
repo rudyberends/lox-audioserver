@@ -6,7 +6,7 @@ import {
   type SnapcastHooks,
   type SnapcastStreamContext,
   type SnapcastStreamProperties,
-} from '@lox-audioserver/node-snapcast';
+} from '@sonn-audio/node-snapcast';
 import { createLogger } from '@/shared/logging/logger';
 import { audioOutputSettings, type AudioOutputSettings } from '@/ports/types/audioFormat';
 import type { AudioManager } from '@/application/playback/audioManager';

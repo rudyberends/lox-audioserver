@@ -2,7 +2,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { createLogger } from '@/shared/logging/logger';
-import { ConnectionReason, GoodbyeReason, sendspinCore } from '@lox-audioserver/node-sendspin';
+import { ConnectionReason, GoodbyeReason, sendspinCore } from '@sonn-audio/node-sendspin';
 import type { BrowserZoneRegistry } from '@/application/zones/browserZoneRegistry';
 
 /** Sendspin clientIds the player webapp uses are prefixed so we can recognise a

@@ -21,7 +21,7 @@ import {
   type BrowseCategory,
   type MediaEntry,
 } from '@/adapters/content/providers/spotify/spotifyPathfinder';
-import type { LibrespotSession } from '@lox-audioserver/node-librespot';
+import type { LibrespotSession } from '@sonn-audio/node-librespot';
 
 /** Short, non-reversible fingerprint of a refresh token, for tracking its
  *  identity across refresh/rotation/restart in logs without leaking the token. */
@@ -1545,7 +1545,7 @@ export class SpotifyAccountProvider {
     this.librespotSessionPromise = (async () => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const addon = require('@lox-audioserver/node-librespot');
+        const addon = require('@sonn-audio/node-librespot');
         const credsJson = typeof creds === 'string' ? creds : JSON.stringify(creds);
         const session: LibrespotSession | null = await addon.createSessionWithCredentials(
           credsJson,

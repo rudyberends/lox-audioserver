@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { test } from './testHarness';
 import { SendspinLineInService } from '../src/adapters/inputs/linein/sendspinLineInService';
-import { sendspinCore, SourceControl } from '@lox-audioserver/node-sendspin';
+import { sendspinCore, SourceControl } from '@sonn-audio/node-sendspin';
 import type { ConfigPort } from '../src/ports/ConfigPort';
 import type { AudioServerConfig, RawAudioConfig } from '../src/domain/config/types';
 

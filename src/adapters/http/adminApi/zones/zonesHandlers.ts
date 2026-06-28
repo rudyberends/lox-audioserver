@@ -14,7 +14,7 @@ import {
   normalizeEqualizerBands,
 } from '@/domain/zones/equalizer';
 import { audioResampler } from '@/ports/types/audioFormat';
-import { sendspinCore } from '@lox-audioserver/node-sendspin';
+import { sendspinCore } from '@sonn-audio/node-sendspin';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 import { getZoneOutputConfig } from '@/adapters/http/adminApi/config/configHandlers';
 import { parseSendspinSatellites } from '@/adapters/outputs/factory';

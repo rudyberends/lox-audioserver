@@ -5,9 +5,9 @@ import type { PlayerRegistryPort } from '@/ports/PlayerRegistryPort';
 import os from 'node:os';
 import http from 'node:http';
 import { PassThrough } from 'stream';
-import * as libraop from '@lox-audioserver/node-libraop';
-import { startReceiver, stopReceiver } from '@lox-audioserver/node-libraop';
-import type { RaopEvent, ReceiverOptions } from '@lox-audioserver/node-libraop/dist/types';
+import * as libraop from '@sonn-audio/node-libraop';
+import { startReceiver, stopReceiver } from '@sonn-audio/node-libraop';
+import type { RaopEvent, ReceiverOptions } from '@sonn-audio/node-libraop/dist/types';
 
 export interface AirplayInstanceController {
   startPlayback(

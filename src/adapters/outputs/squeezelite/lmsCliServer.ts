@@ -3,7 +3,7 @@ import net from 'node:net';
 import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
-import { PlayerState, type SlimClient, type MediaDetails } from '@lox-audioserver/node-slimproto';
+import { PlayerState, type SlimClient, type MediaDetails } from '@sonn-audio/node-slimproto';
 
 type JsonRpcRequest = {
   id?: string | number | null;

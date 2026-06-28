@@ -3,8 +3,8 @@ import {
   PlaybackStateType,
   sendspinCore,
   type PlayerFormat,
-} from '@lox-audioserver/node-sendspin';
-import type { SendspinSession } from '@lox-audioserver/node-sendspin';
+} from '@sonn-audio/node-sendspin';
+import type { SendspinSession } from '@sonn-audio/node-sendspin';
 import { getGroupByZone, onGroupChanged } from '@/application/groups/groupTracker';
 import type { GroupRecord } from '@/application/groups/types/groupRecord';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';

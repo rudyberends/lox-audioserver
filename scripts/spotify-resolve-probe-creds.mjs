@@ -10,7 +10,7 @@
 // Writes /tmp/spotify-probe.ogg, prints the first 64 decrypted bytes as hex,
 // and runs ffprobe to confirm it decodes.
 
-import pkg from '@lox-audioserver/node-librespot';
+import pkg from '@sonn-audio/node-librespot';
 import { createDecipheriv } from 'node:crypto';
 import { writeFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';

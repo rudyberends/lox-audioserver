@@ -9,7 +9,7 @@ import type {
   OutputConfigDefinition,
   ZoneOutput,
 } from '@/ports/OutputsTypes';
-import { SonosClient } from '@lox-audioserver/node-sonos';
+import { SonosClient } from '@sonn-audio/node-sonos';
 import { resolveDlnaEndpoints } from '@/adapters/outputs/dlna/dlnaDiscovery';
 import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
 import { buildBaseUrl, normalizeStreamUrl, resolveAbsoluteUrl, upsertQueryParam } from '@/shared/streamUrl';

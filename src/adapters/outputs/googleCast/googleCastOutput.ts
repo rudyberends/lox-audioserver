@@ -6,7 +6,7 @@ import type { HttpPreferences, PreferredOutput, OutputConfigDefinition, ZoneOutp
 import { isHttpUrl } from '@/shared/coverArt';
 import { buildBaseUrl, resolveStreamUrl } from '@/shared/streamUrl';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
-import type { CastDevice, DiscoveredDevice, MediaStatusModel } from '@lox-audioserver/node-googlecast';
+import type { CastDevice, DiscoveredDevice, MediaStatusModel } from '@sonn-audio/node-googlecast';
 import { loadGoogleCastModule } from '@/adapters/outputs/googleCast/googlecastLoader';
 
 const DEFAULT_MEDIA_RECEIVER_APP_ID = 'CC1AD845';

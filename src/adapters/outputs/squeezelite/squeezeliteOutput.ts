@@ -4,8 +4,8 @@ import { buildBaseUrl, resolveAbsoluteUrl, resolveStreamUrl, ensureQueryParam } 
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { HttpPreferences, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
-import type { SlimClient, SlimEvent } from '@lox-audioserver/node-slimproto';
-import { EventType, PlayerState, TransitionType } from '@lox-audioserver/node-slimproto';
+import type { SlimClient, SlimEvent } from '@sonn-audio/node-slimproto';
+import { EventType, PlayerState, TransitionType } from '@sonn-audio/node-slimproto';
 
 export interface SqueezeliteOutputConfig {
   playerId?: string;

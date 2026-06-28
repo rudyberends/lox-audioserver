@@ -1,6 +1,6 @@
 import { createLogger } from '@/shared/logging/logger';
-import { sendspinCore } from '@lox-audioserver/node-sendspin';
-import type { SendspinSessionHooks } from '@lox-audioserver/node-sendspin';
+import { sendspinCore } from '@sonn-audio/node-sendspin';
+import type { SendspinSessionHooks } from '@sonn-audio/node-sendspin';
 
 type HookEntry = {
   hooks: Set<SendspinSessionHooks>;

@@ -11,7 +11,7 @@ import {
   findMusicAssistantBridge,
 } from '@/shared/musicassistant/maBridgeResolver';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
-import { sendspinCore } from '@lox-audioserver/node-sendspin';
+import { sendspinCore } from '@sonn-audio/node-sendspin';
 import { OUTPUT_DEFINITIONS } from '@/adapters/outputs';
 import { discoverAirplayDevices } from '@/adapters/outputs/airplay/airplayDiscovery';
 import { discoverGoogleCastDevices } from '@/adapters/outputs/googleCast/googleCastDiscovery';

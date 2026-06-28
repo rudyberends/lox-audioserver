@@ -19,7 +19,7 @@ import type { LoxAudioPeerRegistry } from '@/adapters/discovery/loxAudioPeerRegi
 import { buildAudioServersList } from '@/adapters/discovery/audioServersList';
 import { defaultConfig } from '@/adapters/http/adminApi/config/configHandlers';
 
-const ADDON_PACKAGE_PREFIX = '@lox-audioserver/node-';
+const ADDON_PACKAGE_PREFIX = '@sonn-audio/node-';
 
 type AdminUiUpdateRequest = { release?: string };
 
