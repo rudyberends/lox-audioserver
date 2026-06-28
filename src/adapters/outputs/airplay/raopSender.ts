@@ -179,6 +179,10 @@ export class RaopSender {
   // flush (live timeline) and a re-anchor (paused or drained timeline).
   private lastSentAt = 0;
   private playoutPaused = false;
+  // Set by rebind()'s bare-flush path: the staleness check runs again when the
+  // first frame of the new source actually arrives (the refill gap — e.g. a new
+  // ffmpeg spawn on a station change — isn't visible at rebind time).
+  private rebindAwaitingFirstFrame = false;
 
   private drainTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -229,6 +233,7 @@ export class RaopSender {
   public async start(source: NodeJS.ReadableStream, volume: number): Promise<boolean> {
     this.stopped = false;
     this.playoutPaused = false;
+    this.rebindAwaitingFirstFrame = false;
     this.currentVolume = clampVolume(volume, this.currentVolume);
     if (this.handle !== null) {
       // Already connected; just (re)bind the source.
@@ -492,6 +497,8 @@ export class RaopSender {
       /* ignore */
     }
     this.playoutPaused = true;
+    // A pause mid-refill supersedes the deferred rebind check; resume() re-anchors.
+    this.rebindAwaitingFirstFrame = false;
     // Stop the not-ready retry loop and freeze the feed. Pausing the source keeps
     // the ring holding the pause-point audio (otherwise trimRing would drop it for
     // newer PCM) and backpressures the engine subscriber to a stall — position held.
@@ -561,36 +568,16 @@ export class RaopSender {
     });
 
     if (timelineStale) {
-      // The timeline drained (paused, or the device emptied during a fetch gap on a
-      // natural track advance). A flush on the LIVE connection keeps the old head_ts,
-      // so re-anchoring with `play` leaves new frames stamped in the PAST — the device
-      // drops them (raopcl_send_chunk "begining to stream (LATE)") and stays silent
-      // until a manual pause/play. (Same finding as the group re-sync: flush-re-anchor
-      // starts LATE.) Tear the RTSP session down and fresh-start instead: that resets
-      // head_ts and takes the clean connect -> `play` (now+200ms) path that start()
-      // uses, so the new track actually plays.
-      this.detachSource();
-      this.clearDrainTimer();
-      this.clearRing();
-      this.playoutPaused = false;
-      const stale = this.handle;
-      this.handle = null;
-      try {
-        stopSender(stale);
-      } catch {
-        /* ignore */
-      }
-      void this.start(source, this.currentVolume).catch((err) => {
-        this.log.warn('raop rebind reconnect failed', {
-          ...this.context,
-          message: err instanceof Error ? err.message : String(err),
-        });
-      });
+      this.reanchorWithFreshStart(source);
       return;
     }
 
     // Live timeline (skip mid-playback): a bare flush drops the old track's buffered
-    // tail but keeps the RTP clock, so the new frames resume seamlessly.
+    // tail but keeps the RTP clock, so the new frames resume seamlessly — IF the new
+    // source delivers promptly. But idleMs only sees the gap so far; a station change
+    // respawns ffmpeg, so the real gap is the refill ahead (~1s) which underruns the
+    // device and lands the kept-timeline frames LATE → silent. We can't see that gap
+    // yet, so flush now and re-check staleness when the first new frame arrives.
     try {
       senderControl(this.handle, 'flush');
     } catch {
@@ -599,11 +586,45 @@ export class RaopSender {
     this.clearDrainTimer();
     this.clearRing();
     this.attachSource(source);
+    this.rebindAwaitingFirstFrame = true;
     this.pump();
+  }
+
+  /**
+   * Tear the RTSP session down and fresh-start on the same source. A flush on the
+   * LIVE connection keeps the old head_ts, so re-anchoring with `play` leaves new
+   * frames stamped in the PAST — the device drops them (raopcl_send_chunk "begining
+   * to stream (LATE)") and stays silent until a manual pause/play. (Same finding as
+   * the group re-sync: flush-re-anchor starts LATE.) A fresh start resets head_ts and
+   * takes the clean connect -> `play` (now+200ms) path that start() uses, so the new
+   * track actually plays.
+   */
+  private reanchorWithFreshStart(source: NodeJS.ReadableStream): void {
+    this.rebindAwaitingFirstFrame = false;
+    this.detachSource();
+    this.clearDrainTimer();
+    this.clearRing();
+    this.playoutPaused = false;
+    const stale = this.handle;
+    this.handle = null;
+    if (stale !== null) {
+      try {
+        stopSender(stale);
+      } catch {
+        /* ignore */
+      }
+    }
+    void this.start(source, this.currentVolume).catch((err) => {
+      this.log.warn('raop rebind reconnect failed', {
+        ...this.context,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
 
   public stop(): void {
     this.stopped = true;
+    this.rebindAwaitingFirstFrame = false;
     this.clearReconnect();
     this.clearDrainTimer();
     this.detachSource();
@@ -705,6 +726,24 @@ export class RaopSender {
     }
     this.clearDrainTimer();
     for (;;) {
+      // First frame after a bare-flush rebind: now that real new-source PCM has
+      // arrived we can measure the actual refill gap. If it exceeded the device
+      // buffer, the kept RTP timeline would stamp these frames in the past (LATE →
+      // silent), so re-anchor with a fresh start instead. Within budget = seamless
+      // skip, keep the bare flush.
+      if (this.rebindAwaitingFirstFrame && this.ringBytes >= CHUNK_BYTES) {
+        this.rebindAwaitingFirstFrame = false;
+        const gapMs = this.lastSentAt === 0 ? Infinity : Date.now() - this.lastSentAt;
+        if (gapMs > this.getLatencyMs() && this.source) {
+          this.log.debug('raop rebind re-anchor on refill gap', {
+            ...this.context,
+            gapMs: Number.isFinite(gapMs) ? Math.round(gapMs) : null,
+            latencyMs: this.getLatencyMs(),
+          });
+          this.reanchorWithFreshStart(this.source);
+          return;
+        }
+      }
       // Assemble exactly one CHUNK_BYTES packet (libraop requires fixed-size
       // chunks). Hold it in `pending` so a not-ready retry doesn't re-pull/lose it.
       if (!this.pending) {
