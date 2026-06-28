@@ -192,7 +192,13 @@ export class AlertsCoordinator {
     this.applyPatch(zoneId, { volume: clampedVolume });
 
     if (durationMs && durationMs > 0) {
-      const clampedMs = Math.min(durationMs + 150, 2147483647);
+      // The auto-stop timer starts now, but audible content does not begin until the
+      // engine has emitted the prepended wake-up silence (playbackPreDelayMs / the
+      // multi-zone floor). Without accounting for it the timer fires preDelay-too-early
+      // and clips the tail of every alert (the duration timer "starts on click" while
+      // sound starts late) — issue #293. Add the effective pre-delay to the window.
+      const preDelayMs = this.resolveEffectivePreDelayMs(zoneId, preDelayFloorMs);
+      const clampedMs = Math.min(preDelayMs + durationMs + 150, 2147483647);
       ctx.alert.stopTimer = setTimeout(() => {
         // Timer fires after we release the lock, so go through the public
         // path so a concurrent caller cannot race the auto-stop.
@@ -289,6 +295,28 @@ export class AlertsCoordinator {
       .map((segment) => encodeURIComponent(segment))
       .join('/');
     return `${baseUrl}/alerts/${encoded}`;
+  }
+
+  /**
+   * Mirror the effective pre-delay audioManager will prepend for this alert so the
+   * auto-stop timer waits for the silence too. Matches audioManager.applyZonePlaybackPreDelay:
+   * the zone's own wake-up delay is skipped when its amp is already on, but the multi-zone
+   * floor always applies. Computed before the mode→play patch flips power, so a cold zone
+   * still counts its own delay — consistent with what the engine actually inserts.
+   */
+  private resolveEffectivePreDelayMs(zoneId: number, preDelayFloorMs: number): number {
+    const floor = preDelayFloorMs > 0 ? Math.max(0, Math.round(preDelayFloorMs)) : 0;
+    let zoneDelay = 0;
+    let powerOn = false;
+    try {
+      const rawZoneDelay = this.zoneAudioPrefs.getPlaybackPreDelayMs?.(zoneId);
+      zoneDelay =
+        Number.isFinite(rawZoneDelay) && (rawZoneDelay ?? 0) > 0 ? Math.max(0, Math.round(rawZoneDelay ?? 0)) : 0;
+      powerOn = this.zoneAudioPrefs.getPowerStateResolver?.()?.(zoneId) === true;
+    } catch {
+      // Prefs lookups are best-effort; never let pre-delay accounting fail an alert.
+    }
+    return Math.max(floor, powerOn ? 0 : zoneDelay);
   }
 
   private resolveHandoffDrainMs(ctx: ZoneContext): number {

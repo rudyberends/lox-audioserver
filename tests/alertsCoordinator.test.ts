@@ -129,6 +129,100 @@ test('startAlert applies alert volume after switching to the alert source', asyn
   assert.equal(playedMetadata?.isAlert, true);
 });
 
+test('startAlert stop timer waits for the playback pre-delay so the tail is not clipped (#293)', async () => {
+  const zone: ZoneConfig = {
+    id: 1,
+    name: 'Living',
+    sourceMac: '00:00:00:00:00:01',
+    volumes: {
+      default: 20,
+      alarm: 20,
+      fire: 20,
+      bell: 55,
+      buzzer: 20,
+      tts: 20,
+      volstep: 1,
+      fading: 0,
+      maxVolume: 100,
+    },
+  };
+
+  const zoneRepo = new ZoneRepository();
+  const ctx = {
+    id: zone.id,
+    name: zone.name,
+    sourceMac: zone.sourceMac,
+    config: zone,
+    state: buildInitialState(zone),
+    queue: { items: [], shuffle: false, repeat: 0, currentIndex: 0, authority: 'local' },
+    queueController: { setItems: () => {}, currentIndex: () => 0, current: () => null },
+    inputAdapter: {},
+    spotifyAdapter: {},
+    metadata: {},
+    outputs: [],
+    player: { setVolume: () => {}, playUri: () => ({}) as any },
+    outputTimingActive: false,
+    lastOutputTimingAt: 0,
+    lastZoneBroadcastAt: 0,
+    lastPositionUpdateAt: 0,
+    lastPositionValue: 0,
+    lastPlaybackErrorAt: 0,
+    activeOutputTypes: new Set<string>(),
+    activeOutput: 'squeezelite',
+    activeInput: null,
+    lastMetadataDispatchAt: 0,
+    inputMode: 'queue',
+  } as unknown as ZoneContext;
+  zoneRepo.set(zone.id, ctx);
+
+  const coordinator = new AlertsCoordinator({
+    zones: zoneRepo,
+    playbackCoordinator: {
+      setInputMode: (_ctx: ZoneContext, mode: ZoneContext['inputMode']) => {
+        _ctx.inputMode = mode;
+      },
+      alignOutputFormat: () => {},
+    } as any,
+    applyPatch: (_zoneId, patch) => {
+      ctx.state = { ...ctx.state, ...(patch as Record<string, unknown>) };
+    },
+    log: { warn: () => {}, debug: () => {} } as any,
+    audioHelpers: { resolveAlertEventType: () => 0 } as any,
+    zoneAudioPrefs: {
+      setTransientGainDb: () => {},
+      setAlertPreDelayFloorMs: () => {},
+      // Cold zone with a 3 s wake-up delay: the engine prepends 3 s of silence, so the
+      // auto-stop timer must wait that long extra or it clips the tail (the user-reported bug).
+      getPlaybackPreDelayMs: () => 3000,
+      getPowerStateResolver: () => () => false,
+    } as any,
+  });
+
+  // Capture the scheduled stop-timer delay without actually firing it.
+  const delays: number[] = [];
+  const realSetTimeout = global.setTimeout;
+  (global as any).setTimeout = (fn: (...a: unknown[]) => void, ms?: number, ...rest: unknown[]) => {
+    delays.push(ms ?? 0);
+    const handle = realSetTimeout(() => {}, 1_000_000, ...(rest as []));
+    handle.unref?.();
+    return handle;
+  };
+  try {
+    await coordinator.startAlert(
+      zone.id,
+      'bell',
+      { title: 'bell', url: 'alerts://bell.mp3', relativePath: 'bell.mp3', duration: 4 },
+      55,
+    );
+  } finally {
+    (global as any).setTimeout = realSetTimeout;
+  }
+
+  // duration 4 s → durationMs = max(4000 + 750, 2500) = 4750; window = preDelay 3000 + 4750 + 150.
+  const stopDelay = Math.max(...delays);
+  assert.equal(stopDelay, 3000 + 4750 + 150);
+});
+
 test('alert restore settles to stop when playback cannot resume (releases power-group relay)', async () => {
   const zone: ZoneConfig = {
     id: 1,
