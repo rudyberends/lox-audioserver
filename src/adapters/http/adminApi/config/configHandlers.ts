@@ -11,6 +11,7 @@ import type {
   ZoneEqualizerConfig,
   ZoneStateConfig,
   ZoneTransportConfig,
+  ZoneVolumesConfig,
 } from '@/domain/config/types';
 import { defaultMacId, normalizeMacId } from '@/shared/utils/mac';
 import { defaultLocalIp } from '@/shared/utils/net';
@@ -101,6 +102,8 @@ export function buildConfigRoutes(deps: ConfigHandlerDeps): Route[] {
     { method: 'GET', pattern: /^\/config\/?$/, handler: (_req, res) => handleGetConfig(res, deps) },
     { method: 'POST', pattern: /^\/config\/clear$/, handler: async (_req, res) => handleClear(res, deps) },
     { method: 'POST', pattern: /^\/config\/zones$/, handler: async (req, res) => handleZonesUpdate(req, res, deps) },
+    { method: 'POST', pattern: /^\/config\/zones\/create$/, handler: async (req, res) => handleZoneCreate(req, res, deps) },
+    { method: 'DELETE', pattern: /^\/config\/zones\/(\d+)$/, handler: async (_req, res, match) => handleZoneDelete(Number(match[1]), res, deps) },
     { method: 'POST', pattern: /^\/config\/inputs$/, handler: async (req, res) => handleInputsUpdate(req, res, deps) },
     { method: 'POST', pattern: /^\/config\/system$/, handler: async (req, res) => handleSystemUpdate(req, res, deps) },
     { method: 'POST', pattern: /^\/config\/groups$/, handler: async (req, res) => handleGroupsUpdate(req, res, deps) },
@@ -210,6 +213,116 @@ async function handleZonesUpdate(
     });
   });
   await reloadZones(deps, updatedIds);
+  deps.sendJson(res, 204, {});
+}
+
+/** Unique default name for a standalone server, derived from its macId (e.g. "sonn core 0E5497"). */
+function standaloneDefaultName(macId: string | undefined): string {
+  const hex = (macId ?? '').replace(/[^0-9a-fA-F]/g, '');
+  const suffix = hex.slice(-6).toUpperCase() || 'SETUP';
+  return `sonn core ${suffix}`;
+}
+
+/** Default volumes for a freshly created zone (mirrors the Loxone extractor). */
+function defaultZoneVolumes(): ZoneVolumesConfig {
+  return {
+    default: 30,
+    alarm: 40,
+    fire: 50,
+    bell: 35,
+    buzzer: 35,
+    tts: 40,
+    volstep: 2,
+    fading: 5,
+    maxVolume: 80,
+  };
+}
+
+/** Max zones in standalone mode — matches the Loxone audioserver ceiling. */
+const STANDALONE_MAX_ZONES = 24;
+
+/** Lowest free zone id in the config range (1..8999); 9000+ is reserved for browser zones. */
+function nextZoneId(zones: ZoneConfig[]): number {
+  const used = new Set(zones.map((z) => z.id));
+  let id = 1;
+  while (used.has(id) && id < 9000) id += 1;
+  return id;
+}
+
+/**
+ * Standalone-only: create a new zone with just a name. Output, inputs and other
+ * settings are configured afterwards via the normal /config/zones path. The zone
+ * is sourced from the audioserver itself (no Miniserver / extension in standalone).
+ */
+async function handleZoneCreate(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: ConfigHandlerDeps,
+): Promise<void> {
+  if (deps.configPort.getConfig().system?.audioserver?.mode !== 'standalone') {
+    deps.sendJson(res, 409, { error: 'not-standalone' });
+    return;
+  }
+  const body = (await deps.readJsonBody(req, res)) as { name?: string } | null;
+  if (res.writableEnded) {
+    return;
+  }
+  const name = typeof body?.name === 'string' ? body.name.trim() : '';
+  if (!name) {
+    deps.sendJson(res, 400, { error: 'invalid-zone-name' });
+    return;
+  }
+  if ((deps.configPort.getConfig().zones?.length ?? 0) >= STANDALONE_MAX_ZONES) {
+    deps.sendJson(res, 409, { error: 'zone-limit-reached', max: STANDALONE_MAX_ZONES });
+    return;
+  }
+  let created: ZoneConfig | undefined;
+  await deps.configPort.updateConfig((cfg) => {
+    if (!cfg.zones) cfg.zones = [];
+    created = {
+      id: nextZoneId(cfg.zones),
+      name,
+      sourceMac: cfg.system.audioserver.macId,
+      inputs: { airplay: { enabled: true, model: 'generic' } },
+      volumes: defaultZoneVolumes(),
+    };
+    cfg.zones.push(created);
+  });
+  if (!created) {
+    deps.sendJson(res, 500, { error: 'zone-create-failed' });
+    return;
+  }
+  await reloadZones(deps, [created.id]);
+  deps.sendJson(res, 201, { zone: created });
+}
+
+/** Standalone-only: delete a config zone and rebuild the running zone set. */
+async function handleZoneDelete(
+  zoneId: number,
+  res: ServerResponse,
+  deps: ConfigHandlerDeps,
+): Promise<void> {
+  if (deps.configPort.getConfig().system?.audioserver?.mode !== 'standalone') {
+    deps.sendJson(res, 409, { error: 'not-standalone' });
+    return;
+  }
+  let existed = false;
+  await deps.configPort.updateConfig((cfg) => {
+    if (!cfg.zones) {
+      cfg.zones = [];
+      return;
+    }
+    const before = cfg.zones.length;
+    cfg.zones = cfg.zones.filter((z) => z.id !== zoneId);
+    existed = cfg.zones.length !== before;
+  });
+  if (!existed) {
+    deps.sendJson(res, 404, { error: 'zone-not-found' });
+    return;
+  }
+  // Full rebuild tears down every zone and re-registers the remaining set,
+  // so the deleted zone's player/outputs/power are disposed.
+  await reloadZones(deps);
   deps.sendJson(res, 204, {});
 }
 
@@ -400,6 +513,14 @@ async function handleSystemUpdate(
     }
     if (normalizedMode) {
       cfg.system.audioserver.mode = normalizedMode;
+      // Standalone has no Miniserver to supply a name; seed a unique default
+      // derived from the (unique) macId, unless the user already named it.
+      if (
+        normalizedMode === 'standalone' &&
+        (!cfg.system.audioserver.name || cfg.system.audioserver.name === 'Unconfigured')
+      ) {
+        cfg.system.audioserver.name = standaloneDefaultName(cfg.system.audioserver.macId);
+      }
     }
     if (normalizedMiniserverIp) {
       cfg.system.miniserver.ip = normalizedMiniserverIp;
