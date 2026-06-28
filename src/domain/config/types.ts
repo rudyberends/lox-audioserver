@@ -28,6 +28,12 @@ export interface AudioserverConfig {
   uuid: string;
   macId: string;
   paired: boolean;
+  /**
+   * Deployment mode chosen during first-run setup. Absent = not yet chosen, so the
+   * admin UI shows the welcome/mode-selection screen. 'loxone' keeps the Miniserver
+   * pairing flow; 'standalone' runs without a Miniserver.
+   */
+  mode?: 'loxone' | 'standalone';
   /** When false, admin UI is accessible without authentication even if paired (default true). */
   authEnabled?: boolean;
   extensions: AudioserverExtensionConfig[];

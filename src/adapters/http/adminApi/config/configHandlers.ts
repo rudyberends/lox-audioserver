@@ -277,7 +277,12 @@ async function handleSystemUpdate(
 ): Promise<void> {
   const body = (await deps.readJsonBody(req, res)) as
     | {
-        audioserver?: { macId?: string; ip?: string; authEnabled?: boolean };
+        audioserver?: {
+          macId?: string;
+          ip?: string;
+          authEnabled?: boolean;
+          mode?: 'loxone' | 'standalone';
+        };
         miniserver?: { ip?: string; port?: number; protocol?: 'http' | 'https' };
       }
     | null;
@@ -298,6 +303,7 @@ async function handleSystemUpdate(
   const rawMac = hasAudioserver ? body.audioserver!.macId : undefined;
   const rawIp = hasAudioserver ? body.audioserver!.ip : undefined;
   const rawAuthEnabled = hasAudioserver ? body.audioserver!.authEnabled : undefined;
+  const rawMode = hasAudioserver ? body.audioserver!.mode : undefined;
   const rawMiniserverIp = hasMiniserver ? body.miniserver!.ip : undefined;
   const rawMiniserverPort = hasMiniserver ? body.miniserver!.port : undefined;
   const rawMiniserverProtocol = hasMiniserver ? body.miniserver!.protocol : undefined;
@@ -305,6 +311,7 @@ async function handleSystemUpdate(
     typeof rawMac !== 'string' &&
     typeof rawIp !== 'string' &&
     typeof rawAuthEnabled !== 'boolean' &&
+    typeof rawMode !== 'string' &&
     typeof rawMiniserverIp !== 'string' &&
     typeof rawMiniserverPort !== 'number' &&
     typeof rawMiniserverProtocol !== 'string'
@@ -366,6 +373,14 @@ async function handleSystemUpdate(
     }
     normalizedMiniserverProtocol = value;
   }
+  let normalizedMode: 'loxone' | 'standalone' | null = null;
+  if (typeof rawMode === 'string') {
+    if (rawMode !== 'loxone' && rawMode !== 'standalone') {
+      deps.sendJson(res, 400, { error: 'invalid-mode' });
+      return;
+    }
+    normalizedMode = rawMode;
+  }
   await deps.configPort.updateConfig((cfg) => {
     if (!cfg.system) cfg.system = defaultConfig().system;
     if (!cfg.system.audioserver) {
@@ -382,6 +397,9 @@ async function handleSystemUpdate(
     }
     if (typeof rawAuthEnabled === 'boolean') {
       cfg.system.audioserver.authEnabled = rawAuthEnabled;
+    }
+    if (normalizedMode) {
+      cfg.system.audioserver.mode = normalizedMode;
     }
     if (normalizedMiniserverIp) {
       cfg.system.miniserver.ip = normalizedMiniserverIp;

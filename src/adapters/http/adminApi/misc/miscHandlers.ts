@@ -323,6 +323,7 @@ function handleInfo(res: ServerResponse, deps: MiscHandlerDeps, containerized: b
       zones: cfg.zones?.length ?? 0,
       activeAdapters: cfg.system.audioserver.extensions?.length ?? 0,
       paired: !!cfg.system.audioserver.paired,
+      mode: cfg.system.audioserver.mode,
       authEnabled: cfg.system.audioserver.authEnabled !== false,
       packages,
       player,
