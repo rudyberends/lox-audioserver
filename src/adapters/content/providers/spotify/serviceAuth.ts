@@ -20,7 +20,7 @@ import { pushLibrespotCredentials } from '@/adapters/inputs/spotify/spotifyInput
 import type { ConfigPort } from '@/ports/ConfigPort';
 
 const SPOTIFY_PUBLIC_REDIRECT_URI =
-  'https://lox-audioserver.github.io/lox-audioserver/spotify-callback/';
+  'https://lox-audioserver.github.io/core/spotify-callback/';
 
 const log = createLogger('Content', 'SpotifyAuth');
 

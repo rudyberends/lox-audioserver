@@ -718,7 +718,7 @@ async function performWebBundleUpdate(
   }
 }
 
-const SERVER_REPO = 'lox-audioserver/lox-audioserver';
+const SERVER_REPO = 'lox-audioserver/core';
 const SERVER_ASSET = 'server-dist.tgz';
 const SERVER_MANIFESTS = ['package.json', 'package-lock.json'] as const;
 
@@ -888,8 +888,8 @@ async function fetchNpmLatest(name: string): Promise<{ version: string | null; d
 /** GitHub release tags for core/UI/player. Each lookup fails soft (null). */
 async function fetchGithubPart(): Promise<GithubPart> {
   const [coreTag, corePrereleaseTag, uiTag, playerTag] = await Promise.all([
-    fetchRepoLatestTag('lox-audioserver/lox-audioserver'),
-    fetchRepoLatestPrerelease('lox-audioserver/lox-audioserver'),
+    fetchRepoLatestTag('lox-audioserver/core'),
+    fetchRepoLatestPrerelease('lox-audioserver/core'),
     fetchRepoLatestTag('lox-audioserver/adminui'),
     fetchRepoLatestTag('lox-audioserver/player'),
   ]);
