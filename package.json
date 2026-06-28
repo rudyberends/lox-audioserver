@@ -1,11 +1,11 @@
 {
-  "name": "lox-audioserver",
+  "name": "sonn-core",
   "version": "4.0.0-beta.16",
   "description": "Modern TypeScript implementation of the Loxone Audio Server",
   "private": false,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lox-audioserver/lox-audioserver.git"
+    "url": "git+https://github.com/lox-audioserver/core.git"
   },
   "main": "dist/server.js",
   "_moduleAliases": {

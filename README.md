@@ -75,7 +75,7 @@ If you have Docker and docker-compose installed you can use the included `docker
 docker compose up -d
 ```
 
-This starts a container named `lox-audioserver` in **host network mode**, which is the simplest way to allow mDNS/UPnP/Snapcast discovery without extra flags. Because host mode bypasses port publishing, make sure ports `7090`, `7091`, and `7095` are free on the host. To persist configuration and library data, add a bind mount to the service in `docker-compose.yml`:
+This starts a container named `sonn-core` in **host network mode**, which is the simplest way to allow mDNS/UPnP/Snapcast discovery without extra flags. Because host mode bypasses port publishing, make sure ports `7090`, `7091`, and `7095` are free on the host. To persist configuration and library data, add a bind mount to the service in `docker-compose.yml`:
 
 ```yaml
     volumes:
@@ -94,10 +94,10 @@ If you prefer `docker run`, host networking is recommended:
 
 ```bash
 docker run -d \
-  --name lox-audioserver \
+  --name sonn-core \
   --network host \
   -v $(pwd)/data:/app/data \
-  ghcr.io/lox-audioserver/lox-audioserver:latest
+  ghcr.io/lox-audioserver/core:latest
 ```
 
 If you must use bridge networking instead, remove `--network host` and add port mappings `-p 7090:7090 -p 7091:7091 -p 7095:7095`.
@@ -117,8 +117,8 @@ Step-by-step
 1. Clone the repository and change directory:
 
 ```bash
-git clone https://github.com/lox-audioserver/lox-audioserver.git
-cd lox-audioserver
+git clone https://github.com/lox-audioserver/core.git
+cd core
 ```
 
 2. Create a persistent data folder (used for config, logs, and cache):

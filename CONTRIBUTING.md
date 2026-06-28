@@ -12,7 +12,7 @@ We use Conventional Commits (enforced by commitlint on every PR). Some examples:
 - `refactor!: change API contract` (the `!` marks a breaking change)
 
 ## Branch strategy
-- `dev`: integration branch. All PRs target `dev`. Every push to `dev` builds and publishes the `ghcr.io/.../lox-audioserver:dev` and `:dev-latest` Docker images.
+- `dev`: integration branch. All PRs target `dev`. Every push to `dev` builds and publishes the `ghcr.io/.../core:dev` and `:dev-latest` Docker images.
 - `beta`: prerelease channel. Promoted from `dev` when a prerelease is cut.
 - `main`: stable channel. Promoted from `beta` (or `dev`) when a stable release is cut.
 
