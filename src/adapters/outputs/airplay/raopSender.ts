@@ -103,6 +103,14 @@ const PAUSE_RING_BYTES = Math.round(SAMPLE_RATE * FRAME_BYTES * 0.5); // ~0.5s
 const RESUME_RING_BYTES = Math.round(SAMPLE_RATE * FRAME_BYTES * 0.15); // ~0.15s
 const MAX_RING_BYTES = SAMPLE_RATE * FRAME_BYTES * 3; // ~3s hard cap
 const DRAIN_RETRY_MS = 25;
+// Max refill gap a bare-flush rebind tolerates before re-anchoring. A bare flush
+// empties the device buffer, so unlike a non-flushing gap (covered by latencyMs of
+// buffer) the device has ZERO headroom afterwards: any real refill stall leaves the
+// kept RTP timeline behind the playout clock and the new frames land LATE → silent.
+// Track changes routinely refill in ~400ms-1s (ffmpeg respawn / librespot load),
+// while a genuine seamless skip continues within the normal send cadence (<100ms),
+// so this grace cleanly separates "re-anchor" from "keep the seamless flush".
+const REBIND_REFILL_GRACE_MS = 250;
 
 export interface RaopSenderConfig {
   host: string;
@@ -727,14 +735,14 @@ export class RaopSender {
     this.clearDrainTimer();
     for (;;) {
       // First frame after a bare-flush rebind: now that real new-source PCM has
-      // arrived we can measure the actual refill gap. If it exceeded the device
-      // buffer, the kept RTP timeline would stamp these frames in the past (LATE →
-      // silent), so re-anchor with a fresh start instead. Within budget = seamless
-      // skip, keep the bare flush.
+      // arrived we can measure the actual refill gap. The bare flush emptied the
+      // device buffer, so any stall beyond the seamless-skip cadence stamps these
+      // frames in the past (LATE → silent) — re-anchor with a fresh start instead.
+      // Within the grace = genuine seamless skip, keep the bare flush.
       if (this.rebindAwaitingFirstFrame && this.ringBytes >= CHUNK_BYTES) {
         this.rebindAwaitingFirstFrame = false;
         const gapMs = this.lastSentAt === 0 ? Infinity : Date.now() - this.lastSentAt;
-        if (gapMs > this.getLatencyMs() && this.source) {
+        if (gapMs > REBIND_REFILL_GRACE_MS && this.source) {
           this.log.debug('raop rebind re-anchor on refill gap', {
             ...this.context,
             gapMs: Number.isFinite(gapMs) ? Math.round(gapMs) : null,
