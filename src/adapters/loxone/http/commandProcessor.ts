@@ -19,7 +19,7 @@ import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLin
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { LoxoneConfigService } from '@/adapters/loxone/services/loxoneConfigService';
-import type { LoxAudioPeerRegistry } from '@/adapters/discovery/loxAudioPeerRegistry';
+import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
 
 export interface LoxoneCommandProcessorOptions {
   onRestart?: () => Promise<boolean>;
@@ -38,7 +38,7 @@ export interface LoxoneCommandProcessorOptions {
   fadeController: FadeControllerPort;
   alerts: AlertsPort;
   contentManager: ContentManager;
-  loxAudioPeers: LoxAudioPeerRegistry;
+  sonnCorePeers: SonnCorePeerRegistry;
 }
 
 /**
@@ -68,7 +68,7 @@ export class LoxoneCommandProcessor {
       fadeController: options.fadeController,
       alerts: options.alerts,
       contentManager: options.contentManager,
-      loxAudioPeers: options.loxAudioPeers,
+      sonnCorePeers: options.sonnCorePeers,
     });
   }
 

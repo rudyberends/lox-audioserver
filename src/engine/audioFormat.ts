@@ -44,7 +44,7 @@ const DEFAULT_HTTP_FALLBACK_SECONDS = 12 * 3600; // 12h
 const DEFAULT_FIXED_GAIN_DB = 0;
 const DEFAULT_HTTP_ICY_ENABLED = false;
 const DEFAULT_HTTP_ICY_INTERVAL = 16384;
-const DEFAULT_HTTP_ICY_NAME = 'lox-audioserver';
+const DEFAULT_HTTP_ICY_NAME = 'sonn-core';
 
 export function loadAudioOutputSettings(): AudioOutputSettings {
   return {

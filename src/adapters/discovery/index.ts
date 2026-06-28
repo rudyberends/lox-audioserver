@@ -1,2 +1,2 @@
 export { MdnsService } from '@/adapters/discovery/mdnsService';
-export { LoxAudioMdnsAdvertiser } from '@/adapters/discovery/loxAudioMdnsAdvertiser';
+export { SonnCoreMdnsAdvertiser } from '@/adapters/discovery/sonnCoreMdnsAdvertiser';

@@ -123,7 +123,7 @@ export class AirplayInstance {
     const host = this.resolveHostAddress();
     const options: ReceiverOptions = {
       name: this.zoneName,
-      model: this.config.model || 'LoxAudioAirplay',
+      model: this.config.model || 'SonnCoreAirplay',
       mac: this.hardwareAddress,
       metadata: true,
       portBase,

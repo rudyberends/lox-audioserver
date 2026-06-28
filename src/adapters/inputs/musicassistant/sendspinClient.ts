@@ -277,7 +277,7 @@ export class SendspinClient {
         supported_roles: ['player@v1'],
         device_info: {
           product_name: 'Loxone AudioServer',
-          manufacturer: 'Lox-audioserver',
+          manufacturer: 'Sonn Core',
           software_version: '3.0.1',
         },
         player_support: {

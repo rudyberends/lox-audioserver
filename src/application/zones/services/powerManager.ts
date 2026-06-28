@@ -496,7 +496,7 @@ async function requestUrl(rawTarget: string, redirects = 0): Promise<void> {
         rejectUnauthorized: isHttps ? false : undefined,
         headers: {
           accept: '*/*',
-          'user-agent': 'lox-audioserver-power-manager',
+          'user-agent': 'sonn-core-power-manager',
           ...(authorization ? { authorization } : {}),
         },
       },

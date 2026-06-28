@@ -26,7 +26,7 @@ export class TuneInClient {
 
     const res = await fetch(url, {
       headers: {
-        'User-Agent': 'lox-audioserver/1.0 (+https://github.com/loxone-audioserver)',
+        'User-Agent': 'sonn-core/1.0 (+https://github.com/sonn-audio/core)',
         'Accept-Language': 'nl-NL,nl;q=0.9,*;q=0.5',
       },
       signal: AbortSignal.timeout(10_000),

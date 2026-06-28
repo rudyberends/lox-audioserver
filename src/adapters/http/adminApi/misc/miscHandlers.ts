@@ -15,7 +15,7 @@ import type { GroupManagerReadPort } from '@/application/groups/groupManager';
 import type { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
-import type { LoxAudioPeerRegistry } from '@/adapters/discovery/loxAudioPeerRegistry';
+import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
 import { buildAudioServersList } from '@/adapters/discovery/audioServersList';
 import { defaultConfig } from '@/adapters/http/adminApi/config/configHandlers';
 
@@ -77,7 +77,7 @@ export type MiscHandlerDeps = {
   runtimeConfig: RuntimeConfigSlice;
   onReinitialize?: () => Promise<boolean>;
   loxoneNotifier?: LoxoneWsNotifier;
-  loxAudioPeers: LoxAudioPeerRegistry;
+  sonnCorePeers: SonnCorePeerRegistry;
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
 };
@@ -347,7 +347,7 @@ function handleInfo(res: ServerResponse, deps: MiscHandlerDeps, containerized: b
  */
 function handleAudioServers(res: ServerResponse, deps: MiscHandlerDeps): void {
   try {
-    const { self, servers } = buildAudioServersList(deps.configPort, deps.loxAudioPeers);
+    const { self, servers } = buildAudioServersList(deps.configPort, deps.sonnCorePeers);
     deps.sendJson(res, 200, { self, servers });
   } catch (err) {
     deps.log.warn('audioservers list failed', { err });
@@ -766,7 +766,7 @@ async function fetchJson(url: string, redirects = 0): Promise<unknown> {
   return new Promise((resolveOuter, rejectOuter) => {
     const request = https.get(
       url,
-      { headers: { 'User-Agent': 'lox-audioserver-bundle-fetch', Accept: 'application/vnd.github+json' } },
+      { headers: { 'User-Agent': 'sonn-core-bundle-fetch', Accept: 'application/vnd.github+json' } },
       (response) => {
         const status = response.statusCode ?? 0;
         if ([301, 302, 303, 307, 308].includes(status) && response.headers.location) {
@@ -1249,7 +1249,7 @@ async function downloadBundle(url: string, dest: string, redirects = 0): Promise
   await new Promise<void>((resolveOuter, rejectOuter) => {
     const request = https.get(
       url,
-      { headers: { 'User-Agent': 'lox-audioserver-bundle-fetch' } },
+      { headers: { 'User-Agent': 'sonn-core-bundle-fetch' } },
       (response) => {
         const status = response.statusCode ?? 0;
         if ([301, 302, 303, 307, 308].includes(status) && response.headers.location) {

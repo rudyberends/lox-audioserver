@@ -191,7 +191,7 @@ export class SpotifyServiceManager {
       const providerId = this.bridgeProviderId(bridge);
       const provider = this.providers.get(providerId);
       const providerType = (bridge.provider || 'spotify').toLowerCase();
-      const email = `${(bridge.id || '').trim()}@lox-audioserver.io`;
+      const email = `${(bridge.id || '').trim()}@sonn-core.io`;
       entries.push({
         cmd: 'spotify',
         // For bridges, omit the friendly name; clients can display sourceName/provider instead.

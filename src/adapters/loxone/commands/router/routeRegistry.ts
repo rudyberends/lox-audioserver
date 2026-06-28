@@ -13,7 +13,7 @@ import { createInputHandlers } from '@/adapters/loxone/commands/handlers/inputHa
 import { createPlaylistEditHandlers } from '@/adapters/loxone/commands/handlers/playlistEditHandlers';
 import { createQueueEditHandlers } from '@/adapters/loxone/commands/handlers/queueEditHandlers';
 import { createSonnHandlers } from '@/adapters/loxone/commands/handlers/sonnHandlers';
-import type { LoxAudioPeerRegistry } from '@/adapters/discovery/loxAudioPeerRegistry';
+import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
@@ -47,7 +47,7 @@ export interface RouteDependencies {
   fadeController: FadeControllerPort;
   alerts: AlertsPort;
   contentManager: ContentManager;
-  loxAudioPeers: LoxAudioPeerRegistry;
+  sonnCorePeers: SonnCorePeerRegistry;
 }
 
 /**
@@ -101,7 +101,7 @@ export function registerRoutes(
   );
   const sonnHandlers = createSonnHandlers({
     configPort: dependencies.configPort,
-    loxAudioPeers: dependencies.loxAudioPeers,
+    sonnCorePeers: dependencies.sonnCorePeers,
   });
 
   router.registerPrefix('secure', 'secure/info/pairing', secure.infoPairing);

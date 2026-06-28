@@ -93,7 +93,7 @@ export class LoxoneUdpDiscovery {
     const friendlyName =
       configuredName && configuredName.toLowerCase() !== 'unconfigured'
         ? configuredName
-        : config.mdns.name || 'lox-audioserver';
+        : config.mdns.name || 'sonn-core';
     const hostname = this.sanitizeHostname(config.mdns.hostname || friendlyName);
     const macId = systemConfig?.audioserver?.macId?.trim();
 

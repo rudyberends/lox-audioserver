@@ -1,13 +1,13 @@
 import { buildResponse } from '@/adapters/loxone/commands/responses';
 import type { HandlerFn } from '@/adapters/loxone/commands/types';
 import type { ConfigPort } from '@/ports/ConfigPort';
-import type { LoxAudioPeerRegistry } from '@/adapters/discovery/loxAudioPeerRegistry';
+import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
 import { buildAudioServersList } from '@/adapters/discovery/audioServersList';
 import { createLogger } from '@/shared/logging/logger';
 
 export interface SonnHandlerDeps {
   configPort: ConfigPort;
-  loxAudioPeers: LoxAudioPeerRegistry;
+  sonnCorePeers: SonnCorePeerRegistry;
 }
 
 /**
@@ -30,7 +30,7 @@ export function createSonnHandlers(deps: SonnHandlerDeps) {
      */
     audioServers: ((command) => {
       try {
-        const list = buildAudioServersList(deps.configPort, deps.loxAudioPeers);
+        const list = buildAudioServersList(deps.configPort, deps.sonnCorePeers);
         return buildResponse(command, 'audioservers', list);
       } catch (err) {
         log.warn('sonn/audioservers failed', { err });

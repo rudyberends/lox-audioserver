@@ -1790,7 +1790,7 @@ export class SpotifyInputService {
       deviceName:
         baseDeviceId && isValidSpotifyDeviceId(baseDeviceId)
           ? baseDeviceId
-          : stableSpotifyDeviceId(`lox-audioserver:spotify:stream:${options.zoneId ?? 'global'}`),
+          : stableSpotifyDeviceId(`sonn-core:spotify:stream:${options.zoneId ?? 'global'}`),
       bitrate: 320,
       startPositionMs: startPosition,
     });
@@ -1886,7 +1886,7 @@ export class SpotifyInputService {
     }
     const cfg = this.configPort.getConfig() as { system?: { audioserver?: { uuid?: string; macId?: string } } };
     const aud = cfg?.system?.audioserver ?? {};
-    const serverSeed = (aud?.uuid || aud?.macId || 'lox-audioserver').toString();
+    const serverSeed = (aud?.uuid || aud?.macId || 'sonn-core').toString();
     const generated = stableSpotifyDeviceId(`${serverSeed}:spotify:zone:${zone.id}`);
     void this.configPort.updateConfig((cfg) => {
       const target = cfg.zones.find((z) => z.id === zone.id);

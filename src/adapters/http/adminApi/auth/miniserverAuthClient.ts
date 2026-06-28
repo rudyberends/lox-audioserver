@@ -141,7 +141,7 @@ export class MiniserverAuthClient {
 
   private buildTokenCommands(username: string, authHash: string): { jwtCmd: string; tokenCmd: string } {
     const deviceUuid = randomUUID();
-    const deviceInfo = encodeURIComponent('Lox-AudioServer Admin UI').replace(/\//g, ' ');
+    const deviceInfo = encodeURIComponent('Sonn Core Admin UI').replace(/\//g, ' ');
     const suffix = `${authHash}/${encodeURIComponent(username)}/${MINISERVER_ADMIN_PERMISSION}/${deviceUuid}/${deviceInfo}`;
     return {
       jwtCmd: `jdev/sys/getjwt/${suffix}`,

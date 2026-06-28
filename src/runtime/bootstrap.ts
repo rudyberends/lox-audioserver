@@ -47,8 +47,8 @@ import { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore'
 import { LmsCliServer } from '@/adapters/outputs/squeezelite/lmsCliServer';
 import { NetworkService } from '@/adapters/network';
 import { MdnsService } from '@/adapters/discovery';
-import { LoxAudioMdnsService } from '@/adapters/discovery/loxAudioMdnsService';
-import { LoxAudioPeerRegistry } from '@/adapters/discovery/loxAudioPeerRegistry';
+import { SonnCoreMdnsService } from '@/adapters/discovery/sonnCoreMdnsService';
+import { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
 import { SnapcastMdnsService } from '@/adapters/outputs/snapcast/snapcastMdnsService';
 import { SendspinServerAdvertiser } from '@/adapters/outputs/sendspin/sendspinServerAdvertiser';
 import type { MdnsLifecycleService } from '@/adapters/discovery/mdnsLifecycle';
@@ -147,11 +147,11 @@ export function createRuntime(): Runtime {
   const engine = new EngineAdapter(audioStreamEngine);
   const lineInRegistry = new LineInIngestRegistry();
   const mdnsService = new MdnsService();
-  const loxAudioPeers = new LoxAudioPeerRegistry(mdnsService);
-  loxAudioPeers.start();
+  const sonnCorePeers = new SonnCorePeerRegistry(mdnsService);
+  sonnCorePeers.start();
   const sendspinConnector = new SendspinClientConnector(mdnsService);
   let sendspinServerAdvertiser: SendspinServerAdvertiser | null = null;
-  let loxAudioMdnsService: LoxAudioMdnsService | null = null;
+  let sonnCoreMdnsService: SonnCoreMdnsService | null = null;
   let snapcastMdnsService: SnapcastMdnsService | null = null;
   const mdnsServices: MdnsLifecycleService[] = [];
   const streamEvents = new StreamEvents();
@@ -391,7 +391,7 @@ export function createRuntime(): Runtime {
       fadeController: fadeControllerPort,
       alerts: alertsPort,
       contentManager,
-      loxAudioPeers,
+      sonnCorePeers,
     });
 
     browserZoneRegistry = new BrowserZoneRegistry(zoneManager);
@@ -421,7 +421,7 @@ export function createRuntime(): Runtime {
       audioManager,
       zoneAudioPrefs,
       mdnsPort: mdnsService,
-      loxAudioPeers,
+      sonnCorePeers,
       alertFiles: alertFilesPort,
       loxoneProcessor,
       connectionRegistry,
@@ -454,7 +454,7 @@ export function createRuntime(): Runtime {
       configPort,
       sendspinConnector,
     );
-    loxAudioMdnsService = new LoxAudioMdnsService(config.http, configPort, mdnsService);
+    sonnCoreMdnsService = new SonnCoreMdnsService(config.http, configPort, mdnsService);
     snapcastMdnsService = new SnapcastMdnsService(
       config.http,
       configPort,
@@ -463,7 +463,7 @@ export function createRuntime(): Runtime {
     );
 
     mdnsServices.length = 0;
-    mdnsServices.push(sendspinServerAdvertiser, loxAudioMdnsService, snapcastMdnsService);
+    mdnsServices.push(sendspinServerAdvertiser, sonnCoreMdnsService, snapcastMdnsService);
     mdnsServices.forEach((service) => service.start());
     await loxoneService.start();
     await notifyMiniserverStartup(storedConfig);
@@ -492,7 +492,7 @@ export function createRuntime(): Runtime {
       stop: async () => {
         mdnsServices.forEach((service) => service.stop());
         mdnsServices.length = 0;
-        loxAudioPeers.stop();
+        sonnCorePeers.stop();
         mdnsService.shutdown();
       },
     });
@@ -512,7 +512,7 @@ export function createRuntime(): Runtime {
     httpService = null;
     networkService = null;
     sendspinServerAdvertiser = null;
-    loxAudioMdnsService = null;
+    sonnCoreMdnsService = null;
     snapcastMdnsService = null;
     loxoneService = null;
   }

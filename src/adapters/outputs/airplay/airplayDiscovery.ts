@@ -45,7 +45,7 @@ export async function discoverAirplayDevices(timeoutMs = 5000): Promise<AirplayD
     const handleService = (service: any, advertisedProtocol: 'airplay' | 'raop'): void => {
       const txt = service.txt as Record<string, unknown> | undefined;
       const model = typeof txt?.model === 'string' ? txt.model.toLowerCase() : '';
-      if (model === 'loxaudioairplay') {
+      if (model === 'sonncoreairplay') {
         return;
       }
       const protocol =

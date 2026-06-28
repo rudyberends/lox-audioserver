@@ -68,7 +68,7 @@ function audioServersRoute() {
       fake.end(JSON.stringify(body));
     },
     // Fake mDNS peer registry: the peer .252 advertises lox-audioserver, an unrelated mac doesn't.
-    loxAudioPeers: { has: (mac: string) => mac === '000C29678C56' },
+    sonnCorePeers: { has: (mac: string) => mac === '000C29678C56' },
   } as unknown as MiscHandlerDeps;
   const routes = buildMiscRoutes(deps);
   const route = routes.find((r) => r.method === 'GET' && r.pattern.test('/audioservers'));
@@ -83,7 +83,7 @@ test('GET /audioservers lists every peer and flags self by macId', async () => {
   assert.equal(res.statusCode, 200);
   const payload = JSON.parse(res.body) as {
     self: string;
-    servers: Array<{ macId: string; name: string; host: string; isSelf: boolean; isLoxAudioserver: boolean }>;
+    servers: Array<{ macId: string; name: string; host: string; isSelf: boolean; isSonnCore: boolean }>;
   };
   assert.equal(payload.self, '000C290E5497');
   assert.equal(payload.servers.length, 2);
@@ -94,8 +94,8 @@ test('GET /audioservers lists every peer and flags self by macId', async () => {
   assert.equal(peer?.isSelf, false);
   assert.equal(peer?.host, '192.168.1.252');
   // Self is always ours; the peer is flagged from the mDNS registry.
-  assert.equal(self?.isLoxAudioserver, true);
-  assert.equal(peer?.isLoxAudioserver, true);
+  assert.equal(self?.isSonnCore, true);
+  assert.equal(peer?.isSonnCore, true);
 });
 
 test('GET /audioservers flags a non-advertising server (real Loxone) as not lox-audioserver', async () => {
@@ -113,16 +113,16 @@ test('GET /audioservers flags a non-advertising server (real Loxone) as not lox-
       fake.statusCode = status;
       fake.end(JSON.stringify(body));
     },
-    loxAudioPeers: { has: () => false },
+    sonnCorePeers: { has: () => false },
   } as unknown as MiscHandlerDeps;
   const route = buildMiscRoutes(deps).find((r) => r.method === 'GET' && r.pattern.test('/audioservers'))!;
   const res = new FakeResponse();
   await route.handler({ headers: {} } as IncomingMessage, res as unknown as ServerResponse, '/audioservers'.match(route.pattern)!, '/audioservers');
   const payload = JSON.parse(res.body) as {
-    servers: Array<{ macId: string; isLoxAudioserver: boolean }>;
+    servers: Array<{ macId: string; isSonnCore: boolean }>;
   };
   const self = payload.servers.find((s) => s.macId === '000C290E5497');
   const peer = payload.servers.find((s) => s.macId === '000C29678C56');
-  assert.equal(self?.isLoxAudioserver, true);
-  assert.equal(peer?.isLoxAudioserver, false);
+  assert.equal(self?.isSonnCore, true);
+  assert.equal(peer?.isSonnCore, false);
 });

@@ -17,7 +17,7 @@ const log = createLogger('LoxoneHttp', 'TLS');
  *
  * v2 Miniservers connect to the Audioserver upstream over TLS even when the
  * audioserver is on the local network. Without a TLS listener on the same
- * port, the Miniserver's ClientHello is rejected (lox-audioserver answers
+ * port, the Miniserver's ClientHello is rejected (sonn-core answers
  * 400 Bad Request) and the cloud-proxy hop fails. The cert is generated
  * once and cached under `data/loxone/`; the Miniserver does not appear to
  * pin the issuer, so a self-signed cert is enough to complete the handshake.
@@ -55,8 +55,8 @@ export async function loadOrGenerateSelfSignedTls(): Promise<TlsContext | null> 
     cert.validity.notAfter = new Date();
     cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 10);
     const attrs = [
-      { name: 'commonName', value: 'lox-audioserver' },
-      { name: 'organizationName', value: 'lox-audioserver' },
+      { name: 'commonName', value: 'sonn-core' },
+      { name: 'organizationName', value: 'sonn-core' },
     ];
     cert.setSubject(attrs);
     cert.setIssuer(attrs);

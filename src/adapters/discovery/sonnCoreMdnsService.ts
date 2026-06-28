@@ -2,11 +2,11 @@ import type { HttpServerConfig } from '@/config/http';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { MdnsPort } from '@/ports/MdnsPort';
 import { resolveMdnsHost } from '@/shared/utils/net';
-import { LoxAudioMdnsAdvertiser } from '@/adapters/discovery/loxAudioMdnsAdvertiser';
+import { SonnCoreMdnsAdvertiser } from '@/adapters/discovery/sonnCoreMdnsAdvertiser';
 import type { MdnsLifecycleService } from '@/adapters/discovery/mdnsLifecycle';
 
-export class LoxAudioMdnsService implements MdnsLifecycleService {
-  private readonly advertiser: LoxAudioMdnsAdvertiser;
+export class SonnCoreMdnsService implements MdnsLifecycleService {
+  private readonly advertiser: SonnCoreMdnsAdvertiser;
   private started = false;
 
   constructor(
@@ -14,7 +14,7 @@ export class LoxAudioMdnsService implements MdnsLifecycleService {
     private readonly configPort: ConfigPort,
     mdns: MdnsPort,
   ) {
-    this.advertiser = new LoxAudioMdnsAdvertiser(mdns);
+    this.advertiser = new SonnCoreMdnsAdvertiser(mdns);
   }
 
   public start(): void {

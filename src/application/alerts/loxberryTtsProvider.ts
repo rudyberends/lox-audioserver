@@ -12,7 +12,7 @@ const CACHE_DIR = path.resolve(process.cwd(), 'public', 'alerts', 'cache');
 const DEFAULT_MQTT_PORT = 1883;
 const DEFAULT_MQTTS_PORT = 8883;
 const DEFAULT_TIMEOUT_MS = 12_000;
-const DEFAULT_CLIENT_ID = 'lox-audioserver';
+const DEFAULT_CLIENT_ID = 'sonn-core';
 
 type LoxBerryTtsResponse = {
   status?: string;

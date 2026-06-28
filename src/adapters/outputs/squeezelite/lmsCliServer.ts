@@ -256,7 +256,7 @@ export class LmsCliServer {
       httpport: httpPort,
       ip,
       version: '7.999.999',
-      uuid: 'lox-audioserver',
+      uuid: 'sonn-core',
       'info total duration': 0,
       'info total genres': 0,
       'sn player count': 0,

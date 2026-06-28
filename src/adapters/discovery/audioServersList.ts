@@ -1,5 +1,5 @@
 import type { ConfigPort } from '@/ports/ConfigPort';
-import type { LoxAudioPeerRegistry } from '@/adapters/discovery/loxAudioPeerRegistry';
+import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
 
 export type AudioServerEntry = {
   macId: string;
@@ -10,10 +10,10 @@ export type AudioServerEntry = {
   uuid: string | null;
   master: string | null;
   isSelf: boolean;
-  // True when this server advertises itself as lox-audioserver over mDNS (i.e. runs our admin).
+  // True when this server advertises itself as sonn-core over mDNS (i.e. runs our admin).
   // Real Loxone audioservers share the protocol but lack the service, so they come through false —
   // the player still lists them, the admin UI uses this to offer only switchable servers.
-  isLoxAudioserver: boolean;
+  isSonnCore: boolean;
 };
 
 export type AudioServersList = {
@@ -24,22 +24,22 @@ export type AudioServersList = {
 /**
  * Lists every audioserver the Miniserver knows about, parsed from rawAudioConfig.raw (an array of
  * objects keyed by MAC). The Miniserver pushes the whole site's config to each server, so this
- * includes peers, not just self. The `isLoxAudioserver` flag is enriched from the mDNS peer
+ * includes peers, not just self. The `isSonnCore` flag is enriched from the mDNS peer
  * registry (which works independently of the Miniserver). Shared by the admin HTTP route and the
  * `sonn/audioservers` command surface so both expose an identical list.
  */
 export function buildAudioServersList(
   configPort: ConfigPort,
-  loxAudioPeers: LoxAudioPeerRegistry,
+  sonnCorePeers: SonnCorePeerRegistry,
 ): AudioServersList {
   const cfg = configPort.getConfig();
   const selfMacId = cfg.system?.audioserver?.macId?.trim().toUpperCase() ?? null;
-  const isLoxAudioserver = (macId: string): boolean =>
-    (selfMacId != null && macId === selfMacId) || loxAudioPeers.has(macId);
+  const isSonnCore = (macId: string): boolean =>
+    (selfMacId != null && macId === selfMacId) || sonnCorePeers.has(macId);
   const servers = parseAudioServers(
     cfg.rawAudioConfig?.raw ?? cfg.rawAudioConfig?.rawString,
     selfMacId,
-    isLoxAudioserver,
+    isSonnCore,
   );
   return { self: selfMacId, servers };
 }
@@ -48,7 +48,7 @@ export function buildAudioServersList(
 function parseAudioServers(
   raw: unknown,
   selfMacId: string | null,
-  isLoxAudioserver: (macId: string) => boolean,
+  isSonnCore: (macId: string) => boolean,
 ): AudioServerEntry[] {
   let parsed = raw;
   if (typeof parsed === 'string') {
@@ -79,7 +79,7 @@ function parseAudioServers(
         uuid: normalizeString(section.uuid) ?? null,
         master: normalizeString(section.master)?.toUpperCase() ?? null,
         isSelf: selfMacId != null && macId === selfMacId,
-        isLoxAudioserver: isLoxAudioserver(macId),
+        isSonnCore: isSonnCore(macId),
       });
     }
   }

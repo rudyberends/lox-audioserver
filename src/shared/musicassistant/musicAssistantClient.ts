@@ -282,7 +282,7 @@ export class MusicAssistantClient {
   private async authenticate(): Promise<void> {
     if (!this.authToken) return;
     try {
-      await this.rpc('auth', { token: this.authToken, device_name: 'lox-audioserver' });
+      await this.rpc('auth', { token: this.authToken, device_name: 'sonn-core' });
       this.authenticated = true;
     } catch (err) {
       this.authenticated = false;

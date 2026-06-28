@@ -1,17 +1,17 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { MdnsBrowser, MdnsPort, MdnsServiceRecord } from '@/ports/MdnsPort';
 
-const LOX_AUDIO_MDNS_TYPE = 'loxaudio';
+const LOX_AUDIO_MDNS_TYPE = 'sonncore';
 
 /**
- * Tracks the lox-audioserver instances seen on the LAN via mDNS (_loxaudio._tcp), keyed by the
+ * Tracks the sonn-core instances seen on the LAN via mDNS (_sonncore._tcp), keyed by the
  * macId each advertises in its TXT records. Real Loxone audioservers share the protocol but do not
  * advertise this service, so this is how we tell our own implementations apart — letting the admin
  * UI offer only servers it can actually administer. Grow-only: it identifies a server's TYPE, not
- * its liveness (a peer going offline is still a lox-audioserver; switching to a dead one just fails).
+ * its liveness (a peer going offline is still a sonn-core; switching to a dead one just fails).
  */
-export class LoxAudioPeerRegistry {
-  private readonly log = createLogger('Http', 'LoxAudioPeers');
+export class SonnCorePeerRegistry {
+  private readonly log = createLogger('Http', 'SonnCorePeers');
   private readonly macs = new Set<string>();
   private browser: MdnsBrowser | null = null;
 
@@ -23,7 +23,7 @@ export class LoxAudioPeerRegistry {
       const mac = this.readMac(service);
       if (mac && !this.macs.has(mac)) {
         this.macs.add(mac);
-        this.log.debug('discovered lox-audioserver peer', { mac, host: service.host });
+        this.log.debug('discovered sonn-core peer', { mac, host: service.host });
       }
     });
   }
@@ -33,7 +33,7 @@ export class LoxAudioPeerRegistry {
     this.browser = null;
   }
 
-  /** True when an audioserver with this macId advertises itself as lox-audioserver over mDNS. */
+  /** True when an audioserver with this macId advertises itself as sonn-core over mDNS. */
   public has(macId: string): boolean {
     return this.macs.has(macId.trim().toUpperCase());
   }

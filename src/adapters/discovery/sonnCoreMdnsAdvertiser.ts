@@ -8,8 +8,8 @@ type AdvertiseOptions = {
   txt?: Record<string, string | undefined>;
 };
 
-export class LoxAudioMdnsAdvertiser {
-  private readonly log = createLogger('Http', 'LoxAudioMdns');
+export class SonnCoreMdnsAdvertiser {
+  private readonly log = createLogger('Http', 'SonnCoreMdns');
   private registration: MdnsRegistration | null = null;
 
   constructor(private readonly mdns: MdnsPort) {}
@@ -19,7 +19,7 @@ export class LoxAudioMdnsAdvertiser {
     const txt = this.cleanTxt(options.txt);
     this.registration = this.mdns.publish({
       name: options.name,
-      type: 'loxaudio',
+      type: 'sonncore',
       protocol: 'tcp',
       port: options.port,
       host: options.host,
