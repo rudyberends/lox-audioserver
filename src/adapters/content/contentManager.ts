@@ -336,6 +336,12 @@ export class ContentManager {
       folder = await this.tunein.getFolder(service, folderId, offset, limit);
     } else if (service.toLowerCase() === 'radioparadise') {
       folder = await this.radioParadise.getFolder(folderId, offset, limit);
+    } else if (service.toLowerCase() === 'loxoneradio') {
+      // Loxone Radio streams are gated behind Loxone's mTLS device certificate, so a
+      // software audioserver can't play them. Return an empty root (the client tile is
+      // built-in and can't be hidden) rather than falling through to the Spotify branch,
+      // which would surface another service's folders.
+      folder = { id: '0', name: '/', service: 'loxoneradio', start: offset, totalitems: 0, items: [] };
     } else {
       folder = await this.requireSpotify().getFolder(service, user, folderId, offset, limit);
     }
