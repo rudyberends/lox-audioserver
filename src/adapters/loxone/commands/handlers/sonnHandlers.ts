@@ -2,12 +2,14 @@ import { buildResponse } from '@/adapters/loxone/commands/responses';
 import type { HandlerFn } from '@/adapters/loxone/commands/types';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
+import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import { buildAudioServersList } from '@/adapters/discovery/audioServersList';
 import { createLogger } from '@/shared/logging/logger';
 
 export interface SonnHandlerDeps {
   configPort: ConfigPort;
   sonnCorePeers: SonnCorePeerRegistry;
+  zoneManager: ZoneManagerFacade;
 }
 
 /**
@@ -35,6 +37,28 @@ export function createSonnHandlers(deps: SonnHandlerDeps) {
       } catch (err) {
         log.warn('sonn/audioservers failed', { err });
         return buildResponse(command, 'audioservers', { self: null, servers: [] });
+      }
+    }) satisfies HandlerFn,
+
+    /**
+     * sonn/handoff/<sourceZoneId>/<targetZoneId> — atomically transfer playback
+     * (queue + current track + position) from the source zone to the target, then
+     * stop and clear the source. Server-side so the queue/position move exactly,
+     * unlike a client-side rebuild.
+     */
+    handoff: (async (command) => {
+      const parts = command.split('/');
+      const sourceId = Number(parts[2]);
+      const targetId = Number(parts[3]);
+      if (!Number.isFinite(sourceId) || !Number.isFinite(targetId)) {
+        return buildResponse(command, 'handoff', { ok: false, error: 'invalid-zones' });
+      }
+      try {
+        const ok = await deps.zoneManager.handoff(sourceId, targetId);
+        return buildResponse(command, 'handoff', { ok });
+      } catch (err) {
+        log.warn('sonn/handoff failed', { err });
+        return buildResponse(command, 'handoff', { ok: false });
       }
     }) satisfies HandlerFn,
   };

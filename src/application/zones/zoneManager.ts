@@ -526,6 +526,54 @@ export class ZoneManager {
   }
 
   /**
+   * Hand off playback from one zone to another: move the full queue (order +
+   * current index) to the target, resume it at the source's elapsed position,
+   * then stop and clear the source. Returns false if either zone is unknown,
+   * they are the same, or the source has nothing queued.
+   */
+  public async handoff(sourceId: number, targetId: number): Promise<boolean> {
+    if (sourceId === targetId) return false;
+    const src = this.zoneRepo.get(sourceId);
+    const tgt = this.zoneRepo.get(targetId);
+    if (!src || !tgt) return false;
+    const items = src.queue.items.slice();
+    if (items.length === 0) return false;
+    const startIndex = Math.min(Math.max(0, src.queue.currentIndex ?? 0), items.length - 1);
+    const startAtSec = Math.max(0, src.state.time ?? 0);
+    const cur = items[startIndex];
+    if (!cur) return false;
+
+    // Carry the queue + playback flags to the target.
+    tgt.queue.shuffle = src.queue.shuffle;
+    tgt.queue.repeat = src.queue.repeat;
+    tgt.queue.authority = src.queue.authority;
+    tgt.queueController.setItems(items, startIndex);
+
+    // Empty the source — silent, queue-less and with a clean now-playing state.
+    src.player.stop('handoff');
+    src.queueController.setItems([], 0);
+    this.applyPatch(
+      sourceId,
+      { mode: 'stop', title: '', artist: '', album: '', coverurl: '', station: '', duration: 0, time: 0 },
+      true,
+    );
+
+    // Resume the current track on the target at the same position.
+    const metadata: PlaybackMetadata = {
+      title: cur.title,
+      artist: cur.artist,
+      album: cur.album,
+      coverurl: cur.coverurl,
+      duration: cur.duration,
+      audiopath: cur.audiopath,
+      station: cur.station,
+    };
+    await this.playbackCoordinator.startQueuePlayback(tgt, cur.audiopath, metadata, { startAtSec });
+    this.log.info('handoff', { from: sourceId, to: targetId, items: items.length, startIndex, startAtSec });
+    return true;
+  }
+
+  /**
    * Hot-update the configured output latency for a zone. Calls `setLatencyMs` on each
    * live output that supports it. Returns true if at least one output applied the value.
    */

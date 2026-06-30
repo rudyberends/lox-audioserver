@@ -102,6 +102,7 @@ export function registerRoutes(
   const sonnHandlers = createSonnHandlers({
     configPort: dependencies.configPort,
     sonnCorePeers: dependencies.sonnCorePeers,
+    zoneManager: dependencies.zoneManager,
   });
 
   router.registerPrefix('secure', 'secure/info/pairing', secure.infoPairing);
@@ -112,6 +113,7 @@ export function registerRoutes(
   // sonn-core extensions — a dedicated top-level bucket, explicitly NOT part of
   // the Loxone command surface (`audio/*`, `secure/*`).
   router.registerPrefix('sonn', 'sonn/audioservers', sonnHandlers.audioServers);
+  router.registerRegex('sonn', /^sonn\/handoff\/\d+\/\d+\/?$/, sonnHandlers.handoff);
 
   router.registerPrefix('audio', 'audio/cfg/globalsearch/describe', globalSearchHandlers.audioCfgGlobalSearchDescribe);
   router.registerPrefix('audio', 'audio/cfg/globalsearch', globalSearchHandlers.audioCfgGlobalSearch);
