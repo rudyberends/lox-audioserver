@@ -190,6 +190,29 @@ function handlePause(
     coordinator.applyPatch(zoneId, { mode: 'pause', clientState: 'on', power: 'on' });
     return;
   }
+  // Live radio has no resumable position, so "pause" tears the stream down instead
+  // of freezing it: keeping the stalled engine + the output's retained buffer around
+  // only replays stale pause-point audio on resume (#299). Play restarts the station
+  // live via the fresh-play fallback in handlePlayResume — a radio start is fast. Only
+  // do this when the local queue can actually restart it; otherwise pause normally.
+  const pauseCurrent = ctx.queueController.current();
+  const pauseAudiopath = pauseCurrent?.audiopath ?? ctx.state.audiopath ?? '';
+  const isLiveRadio =
+    isQueueDrivenInput(mode) &&
+    coordinator.isLocalQueueAuthority(ctx.queue.authority) &&
+    Boolean(pauseAudiopath) &&
+    (pauseCurrent
+      ? coordinator.audioHelpers.isRadioAudiopath(pauseCurrent.audiopath, pauseCurrent.audiotype)
+      : coordinator.audioHelpers.isRadioAudiopath(pauseAudiopath, ctx.state.audiotype));
+  if (isLiveRadio) {
+    // Stop the engine and tear down the output (RTSP), but keep the input + queue so
+    // play can restart the station. Report 'pause' to the client so the play/pause
+    // toggle keeps working normally.
+    const stopped = ctx.player.stop('command_stop');
+    coordinator.dispatchOutputs(ctx, ctx.outputs, 'stop', stopped ?? ctx.player.getSession());
+    coordinator.applyPatch(zoneId, { mode: 'pause', clientState: 'on', power: 'on' });
+    return;
+  }
   const session = ctx.player.pause();
   coordinator.dispatchOutputs(ctx, ctx.outputs, 'pause', session ?? ctx.player.getSession());
   coordinator.applyPatch(zoneId, { mode: 'pause', clientState: 'on', power: 'on' });
