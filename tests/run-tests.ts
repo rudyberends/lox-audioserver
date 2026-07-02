@@ -134,7 +134,7 @@ function freshRequire<T>(modulePath: string): T {
 
 async function createZoneHarness(): Promise<ZoneHarness> {
   const originalCwd = process.cwd();
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lox-audioserver-tests-'));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sonn-core-tests-'));
   process.chdir(tempDir);
   try {
     purgeModule('../src/application/config/configRepository');
@@ -356,7 +356,7 @@ function makeQueueItem(overrides: Partial<QueueItem>): QueueItem {
 
 async function withTempCwd<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const originalCwd = process.cwd();
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lox-audioserver-tests-'));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sonn-core-tests-'));
   process.chdir(tempDir);
   try {
     return await fn(tempDir);

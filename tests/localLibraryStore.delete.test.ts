@@ -6,7 +6,7 @@ import { test } from './testHarness';
 import { LocalLibraryStore } from '../src/adapters/content/providers/localLibraryStore';
 
 async function seedStore(): Promise<{ store: LocalLibraryStore; tempDir: string }> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lox-audioserver-libstore-delete-'));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sonn-core-libstore-delete-'));
   const dbPath = path.join(tempDir, 'library.db');
   const store = new LocalLibraryStore({ dbPath });
   await store.init();

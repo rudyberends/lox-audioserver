@@ -7,7 +7,7 @@ import { test } from './testHarness';
 import { LocalLibraryStore } from '../src/adapters/content/providers/localLibraryStore';
 
 test('local library store: search finds tracks/albums/artists', async () => {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lox-audioserver-libstore-'));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sonn-core-libstore-'));
   const dbPath = path.join(tempDir, 'library.db');
 
   const store = new LocalLibraryStore({ dbPath });
@@ -49,7 +49,7 @@ test('local library store: search finds tracks/albums/artists', async () => {
 });
 
 test('local library store: groups albums by album artist', async () => {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lox-audioserver-libstore-album-artist-'));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sonn-core-libstore-album-artist-'));
   const dbPath = path.join(tempDir, 'library.db');
 
   const store = new LocalLibraryStore({ dbPath });
@@ -105,7 +105,7 @@ test('local library store: groups albums by album artist', async () => {
 });
 
 test('local library store: migrates legacy database before creating album artist index', async () => {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lox-audioserver-libstore-legacy-'));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sonn-core-libstore-legacy-'));
   const dbPath = path.join(tempDir, 'library.db');
 
   try {

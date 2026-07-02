@@ -1,7 +1,7 @@
 services:
-  loxoneaudioserver:
+  sonn-core:
     container_name: sonn-core
-    image: ghcr.io/lox-audioserver/core:latest
+    image: ghcr.io/sonn-audio/core:latest
     hostname: sonn-core
     build:
       context: .

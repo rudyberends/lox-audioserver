@@ -29,7 +29,7 @@ async function download(url, dest, redirects = 0) {
   await new Promise((resolve, reject) => {
     const request = https.get(
       url,
-      { headers: { 'User-Agent': 'lox-audioserver-admin-fetch' } },
+      { headers: { 'User-Agent': 'sonn-core-admin-fetch' } },
       (response) => {
         const status = response.statusCode ?? 0;
         if ([301, 302, 303, 307, 308].includes(status) && response.headers.location) {

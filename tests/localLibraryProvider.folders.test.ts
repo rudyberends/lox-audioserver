@@ -26,7 +26,7 @@ const configPort: ConfigPort = {
 
 test('local library provider: exposes a drive-style folder view', async () => {
   const originalCwd = process.cwd();
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lox-audioserver-library-folders-'));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sonn-core-library-folders-'));
   try {
     process.chdir(tempDir);
     await fs.mkdir(path.join(tempDir, 'data', 'music', 'local', 'Various Artists', 'Sampler'), {

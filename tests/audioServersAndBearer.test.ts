@@ -67,7 +67,7 @@ function audioServersRoute() {
       fake.statusCode = status;
       fake.end(JSON.stringify(body));
     },
-    // Fake mDNS peer registry: the peer .252 advertises lox-audioserver, an unrelated mac doesn't.
+    // Fake mDNS peer registry: the peer .252 advertises sonn-core, an unrelated mac doesn't.
     sonnCorePeers: { has: (mac: string) => mac === '000C29678C56' },
   } as unknown as MiscHandlerDeps;
   const routes = buildMiscRoutes(deps);
@@ -98,7 +98,7 @@ test('GET /audioservers lists every peer and flags self by macId', async () => {
   assert.equal(peer?.isSonnCore, true);
 });
 
-test('GET /audioservers flags a non-advertising server (real Loxone) as not lox-audioserver', async () => {
+test('GET /audioservers flags a non-advertising server (real Loxone) as not sonn-core', async () => {
   // Same config, but the registry knows of no peers — only self should be flagged ours.
   const deps = {
     log: { warn: () => {}, info: () => {}, error: () => {}, debug: () => {}, spam: () => {} },

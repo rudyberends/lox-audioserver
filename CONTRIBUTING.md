@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for contributing to lox-audioserver! Below are short guidelines to keep contributions consistent with our branch flow, Docker builds and commit linting.
+Thanks for contributing to sonn core! Below are short guidelines to keep contributions consistent with our branch flow, Docker builds and commit linting.
 
 ## Commit messages
 We use Conventional Commits (enforced by commitlint on every PR). Some examples:

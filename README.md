@@ -1,6 +1,13 @@
-# lox-audioserver
+# sonn core
 
-Modern TypeScript implementation of the **Loxone Audio Server**, providing a full functional emulation with extended capabilities and external service bridging.
+sonn core is a complete **multiroom audio solution** — a modern TypeScript audio server that streams to zones across your home, with a wide range of sources, inputs, outputs, and external service bridging. It can run entirely on its own, or integrate with Loxone as a full functional emulation of the **Loxone Audio Server**.
+
+sonn core runs in two modes:
+
+- **Standalone** — runs on its own, with no Loxone hardware required. You configure zones and sources directly in the Admin UI.
+- **Loxone integrated** — pairs with a Loxone Miniserver and stays fully compatible with Loxone Audio Servers; zones and configuration come from your Loxone project.
+
+You choose the mode on first launch and can switch later by resetting the server configuration.
 
 ## Core Features
 
@@ -39,7 +46,7 @@ Zones can stream to a range of network and local playback targets:
 
 ## Bridge Providers
 
-To expose unsupported services to Loxone, *lox-audioserver* introduces **bridge providers**.
+To expose unsupported services to Loxone, *sonn core* introduces **bridge providers**.
 
 A bridge provider acts as a proxy layer that exposes a non-Spotify service as a **virtual Spotify account**.  
 Each bridge maps **one external service to one virtual Spotify account**, allowing Loxone to list and use multiple unsupported sources side by side without conflicts.
@@ -97,7 +104,7 @@ docker run -d \
   --name sonn-core \
   --network host \
   -v $(pwd)/data:/app/data \
-  ghcr.io/lox-audioserver/core:latest
+  ghcr.io/sonn-audio/core:latest
 ```
 
 If you must use bridge networking instead, remove `--network host` and add port mappings `-p 7090:7090 -p 7091:7091 -p 7095:7095`.
@@ -117,7 +124,7 @@ Step-by-step
 1. Clone the repository and change directory:
 
 ```bash
-git clone https://github.com/lox-audioserver/core.git
+git clone https://github.com/sonn-audio/core.git
 cd core
 ```
 
@@ -142,9 +149,13 @@ npm start
 
 ### Configuring
 
-Open the admin UI at http://lox-audioserver-ip:7090 and follow the guided steps. It walks you through adding the Audio Server in Loxone Config, rebooting the Miniserver, pairing, and assigning zones/providers once the MiniServer reconnects.
+Open the admin UI at http://sonn-core-ip:7090. On first launch it asks how the server should run:
 
-When the lox-audioserver starts successfully and the Miniserver pairs successfully with the lox-audioserver, the Audio Server icon in Loxone Config turns green.
+**Standalone** — no Miniserver required. Add your zones directly in the Admin UI (up to 24) and assign sources and outputs to each. This is the quickest way to get playback running without any Loxone hardware.
+
+**Loxone integrated** — the guided steps walk you through adding the Audio Server in Loxone Config, rebooting the Miniserver, pairing, and assigning zones/providers once the Miniserver reconnects. Zones and their configuration are taken from your Loxone project. When sonn core starts successfully and the Miniserver pairs successfully with it, the Audio Server icon in Loxone Config turns green.
+
+You can change the mode later by resetting the server configuration.
 
 ---
 
