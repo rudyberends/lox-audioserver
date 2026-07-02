@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
 import https from 'node:https';
 
-const repo = 'lox-audioserver/player';
+const repo = 'sonn-audio/player';
 const assetName = 'player-dist.tgz';
 const release = process.env.PLAYER_RELEASE ?? 'latest';
 const distUrl =

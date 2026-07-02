@@ -616,7 +616,7 @@ const ADMINUI_BUNDLE: WebBundleSpec = {
 
 const PLAYER_BUNDLE: WebBundleSpec = {
   label: 'player',
-  repo: 'lox-audioserver/player',
+  repo: 'sonn-audio/player',
   assetName: 'player-dist.tgz',
   publicSubdir: 'player',
   workPrefix: 'player',
@@ -892,7 +892,7 @@ async function fetchGithubPart(): Promise<GithubPart> {
     fetchRepoLatestTag('lox-audioserver/core'),
     fetchRepoLatestPrerelease('lox-audioserver/core'),
     fetchRepoLatestTag('lox-audioserver/adminui'),
-    fetchRepoLatestTag('lox-audioserver/player'),
+    fetchRepoLatestTag('sonn-audio/player'),
   ]);
   return {
     core: stripV(coreTag),
