@@ -97,7 +97,16 @@ await fs.mkdir(targetDir, { recursive: true });
 if (await hasLocalPlayer()) {
   await buildLocalPlayer(targetDir);
 } else {
-  await download(distUrl, archivePath);
-  await extract(archivePath, targetDir);
-  await fs.rm(archivePath, { force: true });
+  try {
+    await download(distUrl, archivePath);
+    await extract(archivePath, targetDir);
+    await fs.rm(archivePath, { force: true });
+  } catch (err) {
+    // The player UI is an optional bundle. When no release is available (e.g.
+    // during the sonn-audio move, before player publishes releases there),
+    // don't fail the build — ship without it and leave public/player empty.
+    // The server and admin UI still work; /player just 404s until a dist lands.
+    console.warn(`[fetch:player] skipping player dist: ${err instanceof Error ? err.message : err}`);
+    await fs.rm(archivePath, { force: true }).catch(() => {});
+  }
 }
