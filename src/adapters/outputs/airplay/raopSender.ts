@@ -737,29 +737,26 @@ export class RaopSender {
       // First frame after a bare-flush rebind: now that real new-source PCM has
       // arrived we can measure the actual refill gap. The bare flush emptied the
       // device buffer, so any stall beyond the seamless-skip cadence stamps these
-      // frames in the past (LATE → silent). Re-anchor on the LIVE connection the
-      // same way the manual pause/play recovery does — `pause` freezes the clock
-      // (pause_ts = head_ts), then `play` restarts via libraop's "restarting w/
-      // pause" branch at now+200ms, so the fresh frames stream from a clean anchor.
-      // No RTSP teardown, so recovery is immediate instead of a ~2s reconnect; the
-      // frames still in the ring then pump out below. Within the grace = genuine
-      // seamless skip, keep the bare flush.
+      // frames in the past (LATE → silent), so re-anchor now — crucially only now
+      // that PCM is flowing, so the anchor lands with audio ready rather than on an
+      // empty stream. Within the grace = genuine seamless skip, keep the bare flush.
       if (this.rebindAwaitingFirstFrame && this.ringBytes >= CHUNK_BYTES) {
         this.rebindAwaitingFirstFrame = false;
         const gapMs = this.lastSentAt === 0 ? Infinity : Date.now() - this.lastSentAt;
-        if (gapMs > REBIND_REFILL_GRACE_MS && this.handle !== null) {
-          this.log.debug('raop rebind live re-anchor on refill gap', {
+        if (gapMs > REBIND_REFILL_GRACE_MS && this.source && this.handle !== null) {
+          // The device buffer drained during the refill; the kept RTP timeline would
+          // stamp these frames in the past (LATE → silent). Re-anchor with a clean
+          // RTSP teardown+reconnect — we are at the first frame, so the reconnect's
+          // `play` anchor lands with PCM ready. (An in-session pause/play re-anchor is
+          // faster but some receivers ignore it and stay silent until a manual
+          // pause/play, so the clean restart is the reliable universal path.)
+          this.log.debug('raop rebind clean-restart on refill gap', {
             ...this.context,
             gapMs: Number.isFinite(gapMs) ? Math.round(gapMs) : null,
             latencyMs: this.getLatencyMs(),
           });
-          try {
-            senderControl(this.handle, 'pause');
-            senderControl(this.handle, 'play');
-          } catch {
-            /* ignore */
-          }
-          this.playoutPaused = false;
+          this.reanchorWithFreshStart(this.source);
+          return;
         }
       }
       // Assemble exactly one CHUNK_BYTES packet (libraop requires fixed-size
