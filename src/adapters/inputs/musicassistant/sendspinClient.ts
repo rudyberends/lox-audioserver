@@ -283,7 +283,7 @@ export class SendspinClient {
         player_support: {
           supported_formats: this.supportedFormats,
           buffer_capacity: 1024 * 1024 * 5,
-          supported_commands: ['volume', 'mute'],
+          supported_commands: ['volume', 'mute', 'play_pause'],
         },
       },
     };

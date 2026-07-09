@@ -113,6 +113,8 @@ export class MusicAssistantStreamService {
   private inputHandlers: {
     startPlayback?: (zoneId: number, label: string, source: PlaybackSource, metadata?: PlaybackMetadata) => void;
     stopPlayback?: (zoneId: number) => void;
+    pausePlayback?: (zoneId: number) => void;
+    resumePlayback?: (zoneId: number) => void;
     updateVolume?: (zoneId: number, volume: number) => void;
     updateMetadata?: (zoneId: number, metadata: Partial<PlaybackMetadata>) => void;
     updateTiming?: (zoneId: number, elapsed: number, duration: number) => void;
@@ -1406,14 +1408,28 @@ export class MusicAssistantStreamService {
       // Fallback: treat mute as volume 0 when explicit level is missing.
       this.inputHandlers?.updateVolume?.(zoneId, 0);
     }
+    if (cmd === 'play_pause') {
+      // MA sends a single toggle command; derive intent from the last known state.
+      const playing = this.playingState.get(zoneId) ?? true;
+      if (playing) {
+        this.playingState.set(zoneId, false);
+        this.markPaused(zoneId);
+        this.inputHandlers?.pausePlayback?.(zoneId);
+      } else {
+        this.playingState.set(zoneId, true);
+        this.inputHandlers?.resumePlayback?.(zoneId);
+      }
+    }
     if (cmd === 'pause' || cmd === 'stop') {
       this.playingState.set(zoneId, false);
       if (cmd === 'pause') {
         this.markPaused(zoneId);
+        this.inputHandlers?.pausePlayback?.(zoneId);
       }
     }
     if (cmd === 'play' || cmd === 'resume') {
       this.playingState.set(zoneId, true);
+      this.inputHandlers?.resumePlayback?.(zoneId);
     }
     this.log.debug('music assistant command (sendspin)', {
       zoneId,

@@ -102,6 +102,20 @@ export class PlaybackCoordinator {
       }
       this.stopInputSource(zoneId);
     },
+    pausePlayback: (zoneId: number) => {
+      const ctx = this.zoneRepo.get(zoneId);
+      if (!ctx || (ctx.activeInput && ctx.activeInput !== 'musicassistant')) {
+        return;
+      }
+      this.pauseInputSource(zoneId);
+    },
+    resumePlayback: (zoneId: number) => {
+      const ctx = this.zoneRepo.get(zoneId);
+      if (!ctx || (ctx.activeInput && ctx.activeInput !== 'musicassistant')) {
+        return;
+      }
+      this.resumeInputSource(zoneId);
+    },
     updateMetadata: (zoneId: number, metadata: Partial<PlaybackMetadata>) => {
       const ctx = this.zoneRepo.get(zoneId);
       if (!ctx || (ctx.activeInput && ctx.activeInput !== 'musicassistant')) {
