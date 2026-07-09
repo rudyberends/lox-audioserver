@@ -49,6 +49,12 @@ function toPlayerId(zoneName: string, fallbackId: number): string {
   return `lox-${normalized || fallbackId}`;
 }
 
+// MA ends the stream both to pause/stop and on a track change. On a track change a
+// new stream/start follows almost immediately, so wait this long before treating a
+// stream end as a real stop. Long enough to bridge a gapless transition, short enough
+// that a pause feels immediate.
+const MA_STREAM_STOP_DEBOUNCE_MS = 1000;
+
 // Collapse a player id to its alphanumeric slug for matching across MA's id transforms.
 // `lox-audio-player-2` -> `loxaudioplayer2`; MA's universal_player wraps it as
 // `up` + slug -> `uploxaudioplayer2`.
@@ -106,6 +112,8 @@ export class MusicAssistantStreamService {
     onSwitchAway?: (zoneId: number) => void;
   } = {};
   private lastPlayIntentAt = new Map<number, number>();
+  /** Debounced stop-on-stream-end timers, cancelled when a new stream/start arrives. */
+  private pendingStreamStopTimers = new Map<number, NodeJS.Timeout>();
   // Tracks in-flight serviceplay requests so sendspin doesn't double-start playback.
   private pendingStreamRequests = new Map<number, number>();
   private streamRequestSeq = 0;
@@ -1280,6 +1288,8 @@ export class MusicAssistantStreamService {
     if (!this.inputHandlers?.startPlayback) {
       return;
     }
+    // A stream is (re)starting: this was a track change or a resume, not a pause.
+    this.cancelPendingStreamStop(zoneId);
     this.lastStreamStartAt.set(zoneId, Date.now());
     const meta = this.lastMetadata.get(zoneId);
     const source: PlaybackSource = {
@@ -1329,26 +1339,45 @@ export class MusicAssistantStreamService {
     this.inputHandlers.startPlayback(zoneId, 'musicassistant', source, metadata);
   }
 
+  /**
+   * MA has no player pause command: it pauses/stops by ending the stream. A track
+   * change ends the stream too, but a fresh `stream/start` follows within
+   * milliseconds — so debounce and only stop when nothing resumes.
+   *
+   * Deliberately does NOT gate on `playingState` / `recentPlayIntent`: MA never
+   * reports a paused state to us, so `playingState` stays `true` forever and would
+   * block every stop, and `recentPlayIntent` would swallow a pause pressed shortly
+   * after play. The debounce is the reliable discriminator.
+   */
   private handleInputStreamStop(zoneId: number, playerId: string): void {
     if (!this.inputHandlers?.stopPlayback) {
       return;
     }
-    if (this.playingState.get(zoneId) === true) {
-      this.log.debug('music assistant stream stop ignored; MA still playing', {
-        zoneId,
-        playerId,
-      });
-      return;
+    this.cancelPendingStreamStop(zoneId);
+    const timer = setTimeout(() => {
+      this.pendingStreamStopTimers.delete(zoneId);
+      this.playingState.set(zoneId, false);
+      this.log.info('music assistant input stream stop', { zoneId, playerId });
+      this.inputHandlers?.stopPlayback?.(zoneId);
+    }, MA_STREAM_STOP_DEBOUNCE_MS);
+    if (typeof timer.unref === 'function') {
+      timer.unref();
     }
-    if (this.recentPlayIntent(zoneId, 6000)) {
-      this.log.debug('music assistant stream stop ignored; recent play intent', {
-        zoneId,
-        playerId,
-      });
-      return;
+    this.pendingStreamStopTimers.set(zoneId, timer);
+    this.log.debug('music assistant stream end; stop scheduled', {
+      zoneId,
+      playerId,
+      delayMs: MA_STREAM_STOP_DEBOUNCE_MS,
+    });
+  }
+
+  /** A new stream started (resume or next track) — abort a scheduled stop. */
+  private cancelPendingStreamStop(zoneId: number): void {
+    const pending = this.pendingStreamStopTimers.get(zoneId);
+    if (pending) {
+      clearTimeout(pending);
+      this.pendingStreamStopTimers.delete(zoneId);
     }
-    this.log.info('music assistant input stream stop', { zoneId, playerId });
-    this.inputHandlers?.stopPlayback?.(zoneId);
   }
 
   private handleInputMetadata(zoneId: number, playerId: string, metadata: PlaybackMetadata): void {

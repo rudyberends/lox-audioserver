@@ -355,6 +355,18 @@ export class SendspinClient {
       this.resetStreamState();
       this.streamFormat = null;
       this.log.info('sendspin stream cleared', { playerId: this.playerId, type: msg.type });
+      // MA signals pause/stop by ending the stream (there is no player pause command).
+      // Propagate it so the zone's playback is actually stopped — without this the
+      // input stream is cleared but the zone keeps playing. handleInputStreamStop
+      // guards against a track-change stream/end (recent play intent / MA still playing).
+      try {
+        this.onStream?.stop?.(this.zoneId, this.playerId);
+      } catch (err) {
+        this.log.debug('sendspin stream stop dispatch failed', {
+          playerId: this.playerId,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
       return;
     }
     if (msg.type === 'metadata') {
