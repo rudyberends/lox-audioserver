@@ -198,8 +198,9 @@ export class ContentManager {
   }
 
   public async getRadios(): Promise<RadioMenuEntry[]> {
-    const entries = await this.tunein.getMenuEntries();
-    return [...entries, this.radioParadise.getMenuEntry()];
+    // Radio Paradise now lives under the built-in Loxone Radio tile (the
+    // `loxoneradio` service folder), so it is intentionally absent here.
+    return this.tunein.getMenuEntries();
   }
 
   /** Add a manually-defined custom radio stream (native `audio/cfg/radios/add`). */
@@ -337,11 +338,13 @@ export class ContentManager {
     } else if (service.toLowerCase() === 'radioparadise') {
       folder = await this.radioParadise.getFolder(folderId, offset, limit);
     } else if (service.toLowerCase() === 'loxoneradio') {
-      // Loxone Radio streams are gated behind Loxone's mTLS device certificate, so a
-      // software audioserver can't play them. Return an empty root (the client tile is
-      // built-in and can't be hidden) rather than falling through to the Spotify branch,
-      // which would surface another service's folders.
-      folder = { id: '0', name: '/', service: 'loxoneradio', start: offset, totalitems: 0, items: [] };
+      // The V17 client ships a built-in Loxone Radio tile and browses it via
+      // getservicefolder/loxoneradio. Loxone's own streams are gated behind an mTLS
+      // device certificate a software audioserver can't present, so instead of leaving
+      // the tile empty (which makes the app error out) we surface the Radio Paradise
+      // stations here. Their audiopath stays `radioparadise:<id>`, so playback and
+      // metadata resolution are unaffected by which folder listed them.
+      folder = await this.radioParadise.getFolder(folderId === 'root' ? 'start' : folderId, offset, limit);
     } else {
       folder = await this.requireSpotify().getFolder(service, user, folderId, offset, limit);
     }
