@@ -9,7 +9,7 @@
       'use strict';
       const urlParams = new URLSearchParams(window.location.search);
       const stateFromQuery = urlParams.get('state') || '';
-      const callbackBase = '/lox-audioserver/spotify-callback/';
+      const callbackBase = '/core/spotify-callback/';
       const pathAfterCallback = window.location.pathname.startsWith(callbackBase)
         ? window.location.pathname.slice(callbackBase.length)
         : '';

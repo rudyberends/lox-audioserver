@@ -7,7 +7,7 @@
   <body>
     <script>
       'use strict';
-      const callbackBase = '/lox-audioserver/spotify-callback/';
+      const callbackBase = '/core/spotify-callback/';
       const { pathname, search } = window.location;
 
       if (pathname.startsWith(callbackBase) && pathname.length > callbackBase.length) {
