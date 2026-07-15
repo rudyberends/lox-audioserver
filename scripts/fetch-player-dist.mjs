@@ -1,10 +1,13 @@
 import { createWriteStream } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
 import https from 'node:https';
+
+const comingSoonHtml = join(dirname(fileURLToPath(import.meta.url)), 'player-coming-soon.html');
 
 const repo = 'sonn-audio/player';
 const assetName = 'player-dist.tgz';
@@ -104,9 +107,10 @@ if (await hasLocalPlayer()) {
   } catch (err) {
     // The player UI is an optional bundle. When no release is available (e.g.
     // during the sonn-audio move, before player publishes releases there),
-    // don't fail the build — ship without it and leave public/player empty.
-    // The server and admin UI still work; /player just 404s until a dist lands.
-    console.warn(`[fetch:player] skipping player dist: ${err instanceof Error ? err.message : err}`);
+    // don't fail the build — drop a "coming soon" placeholder so /player renders
+    // something instead of 404ing. A real release/self-update overwrites it.
+    console.warn(`[fetch:player] no player dist, using coming-soon placeholder: ${err instanceof Error ? err.message : err}`);
     await fs.rm(archivePath, { force: true }).catch(() => {});
+    await fs.copyFile(comingSoonHtml, join(targetDir, 'index.html'));
   }
 }

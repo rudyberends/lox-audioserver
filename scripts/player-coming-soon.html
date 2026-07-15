@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>sonn player — coming soon</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: grid; place-items: center; min-height: 100dvh;
+    padding: max(24px, env(safe-area-inset-top)) 24px;
+    font: 400 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #0b0b0c; color: #f4f4f5; text-align: center;
+  }
+  @media (prefers-color-scheme: light) {
+    body { background: #fafafa; color: #18181b; }
+    .sub { color: #52525b; }
+    .dot { background: #16a34a; }
+  }
+  .wrap { max-width: 30rem; }
+  .mark { display: inline-flex; align-items: center; gap: .55rem; font-weight: 600; letter-spacing: .02em; }
+  .dot { width: .5rem; height: .5rem; border-radius: 50%; background: #22c55e; }
+  h1 { margin: 1.4rem 0 .5rem; font-size: clamp(1.6rem, 6vw, 2.2rem); font-weight: 650; letter-spacing: -.01em; }
+  .sub { margin: 0; color: #a1a1aa; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <span class="mark"><span class="dot"></span>sonn player</span>
+    <h1>Coming soon</h1>
+    <p class="sub">The web player is on its way. Check back after the next update.</p>
+  </div>
+</body>
+</html>
