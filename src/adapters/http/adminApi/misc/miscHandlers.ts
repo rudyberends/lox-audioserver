@@ -606,7 +606,7 @@ type WebBundleSpec = {
 
 const ADMINUI_BUNDLE: WebBundleSpec = {
   label: 'admin ui',
-  repo: 'lox-audioserver/adminui',
+  repo: 'sonn-audio/adminui',
   assetName: 'admin-dist.tgz',
   publicSubdir: 'admin',
   workPrefix: 'admin',
@@ -891,7 +891,7 @@ async function fetchGithubPart(): Promise<GithubPart> {
   const [coreTag, corePrereleaseTag, uiTag, playerTag] = await Promise.all([
     fetchRepoLatestTag('sonn-audio/core'),
     fetchRepoLatestPrerelease('sonn-audio/core'),
-    fetchRepoLatestTag('lox-audioserver/adminui'),
+    fetchRepoLatestTag('sonn-audio/adminui'),
     fetchRepoLatestTag('sonn-audio/player'),
   ]);
   return {

@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
 import https from 'node:https';
 
-const repo = 'lox-audioserver/adminui';
+const repo = 'sonn-audio/adminui';
 const assetName = 'admin-dist.tgz';
 const release = process.env.ADMINUI_RELEASE ?? 'latest';
 const distUrl =
