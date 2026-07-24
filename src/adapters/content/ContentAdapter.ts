@@ -4,6 +4,7 @@ import type { DeezerStreamResolver } from '@/adapters/content/providers/deezer/d
 import type { TidalStreamResolver } from '@/adapters/content/providers/tidal/tidalStreamResolver';
 import type { YtMusicStreamResolver } from '@/adapters/content/providers/ytmusic/ytmusicStreamResolver';
 import type { YoutubeStreamResolver } from '@/adapters/content/providers/youtube/youtubeStreamResolver';
+import type { SoundCloudStreamResolver } from '@/adapters/content/providers/soundcloud/soundcloudStreamResolver';
 import type { ContentPort, BuildQueueOptions } from '@/ports/ContentPort';
 import type { ContentFolder, ContentFolderItem, ContentItemMetadata } from '@/ports/ContentTypes';
 import type { PlaybackSourceResolveArgs, StreamResolution } from '@/ports/types/StreamResolution';
@@ -16,6 +17,7 @@ type ContentStreamResolvers = {
   tidal: TidalStreamResolver;
   ytmusic: YtMusicStreamResolver;
   youtube: YoutubeStreamResolver;
+  soundcloud: SoundCloudStreamResolver;
 };
 
 export class ContentAdapter implements ContentPort {
@@ -84,6 +86,7 @@ export class ContentAdapter implements ContentPort {
     const { appleMusic, deezer, tidal } = this.streamResolvers;
     const ytmusic = this.streamResolvers.ytmusic;
     const youtube = this.streamResolvers.youtube;
+    const soundcloud = this.streamResolvers.soundcloud;
     if (providerSegment && appleMusic.isAppleMusicProvider(providerSegment)) {
       const result = await appleMusic.startStreamForAudiopath(
         zoneId,
@@ -129,6 +132,15 @@ export class ContentAdapter implements ContentPort {
       );
       return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'youtube' };
     }
+    if (providerSegment && soundcloud.isSoundcloudProvider(providerSegment)) {
+      const result = await soundcloud.startStreamForAudiopath(
+        zoneId,
+        zoneName,
+        audiopath,
+        { suppressErrors },
+      );
+      return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'soundcloud' };
+    }
     if (detectedService === 'applemusic') {
       const result = await appleMusic.startStreamForAudiopath(
         zoneId,
@@ -165,6 +177,15 @@ export class ContentAdapter implements ContentPort {
       );
       return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'ytmusic' };
     }
+    if (detectedService === 'soundcloud') {
+      const result = await soundcloud.startStreamForAudiopath(
+        zoneId,
+        zoneName,
+        audiopath,
+        { suppressErrors },
+      );
+      return { playbackSource: result.playbackSource, outputOnly: result.outputOnly, provider: 'soundcloud' };
+    }
     return { playbackSource: null, provider: providerSegment || detectedService };
   }
 
@@ -188,6 +209,10 @@ export class ContentAdapter implements ContentPort {
     this.streamResolvers.youtube.configure();
   }
 
+  public configureSoundcloud(): void {
+    this.streamResolvers.soundcloud.configure();
+  }
+
   public isAppleMusicProvider(providerId: string): boolean {
     return this.streamResolvers.appleMusic.isAppleMusicProvider(providerId);
   }
@@ -206,6 +231,10 @@ export class ContentAdapter implements ContentPort {
 
   public isYoutubeProvider(providerId: string): boolean {
     return this.streamResolvers.youtube.isYoutubeProvider(providerId);
+  }
+
+  public isSoundcloudProvider(providerId: string): boolean {
+    return this.streamResolvers.soundcloud.isSoundcloudProvider(providerId);
   }
 
   public getMediaFolder(

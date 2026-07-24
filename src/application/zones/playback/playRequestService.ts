@@ -105,6 +105,7 @@ export class PlayRequestService {
         isAppleMusicProvider: (providerId: string) => this.deps.contentPort.isAppleMusicProvider(providerId),
         isDeezerProvider: (providerId: string) => this.deps.contentPort.isDeezerProvider(providerId),
         isTidalProvider: (providerId: string) => this.deps.contentPort.isTidalProvider(providerId),
+        isSoundcloudProvider: (providerId: string) => this.deps.contentPort.isSoundcloudProvider(providerId),
         getMusicAssistantProviderId,
       },
     });
@@ -185,7 +186,7 @@ export class PlayRequestService {
     if (req.isRadio || req.isLineIn || req.isMusicAssistant) {
       return;
     }
-    if (!req.isAppleMusic && !req.isDeezer && !req.isTidal && !req.isYtMusic) {
+    if (!req.isAppleMusic && !req.isDeezer && !req.isTidal && !req.isYtMusic && !req.isSoundcloud) {
       return;
     }
     const audiopath = req.parentContext?.startItem ?? req.queueAudiopath;
@@ -288,6 +289,7 @@ export class PlayRequestService {
         isDeezer: req.isDeezer,
         isTidal: req.isTidal,
         isYtMusic: req.isYtMusic,
+        isSoundcloud: req.isSoundcloud,
         isMusicAssistant: req.isMusicAssistant,
         isLineIn: req.isLineIn,
         queueBuildLimit: req.queueBuildLimit,
@@ -398,7 +400,7 @@ export class PlayRequestService {
     // take 4-5 s before audio starts in sink mode.
     const hasMaOutput = ctx.outputs.some((output) => output.type === 'musicassistant');
     const maSinkFastPath = req.isMusicAssistant && hasMaOutput;
-    if (!maSinkFastPath && !req.isAppleMusic && !req.isDeezer && !req.isTidal && !req.isYtMusic) {
+    if (!maSinkFastPath && !req.isAppleMusic && !req.isDeezer && !req.isTidal && !req.isYtMusic && !req.isSoundcloud) {
       return false;
     }
     if (requestType !== 'serviceplay') {
@@ -497,6 +499,7 @@ export class PlayRequestService {
       isAppleMusic: req.isAppleMusic,
       isDeezer: req.isDeezer,
       isTidal: req.isTidal,
+      isSoundcloud: req.isSoundcloud,
       isSpotify: req.isSpotify,
       bridgeProvider,
     });

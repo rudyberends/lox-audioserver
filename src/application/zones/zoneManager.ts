@@ -254,6 +254,7 @@ export class ZoneManager {
       isTidalAudiopath: audioHelpers.isTidalAudiopath,
       isYtMusicAudiopath: audioHelpers.isYtMusicAudiopath,
       isYoutubeAudiopath: audioHelpers.isYoutubeAudiopath,
+      isSoundcloudAudiopath: audioHelpers.isSoundcloudAudiopath,
       resolveBridgeProvider: audioHelpers.resolveBridgeProvider,
       getMusicAssistantUserId,
       getStateAudiotype: audioHelpers.getStateAudiotype,
@@ -330,6 +331,7 @@ export class ZoneManager {
     contentPort.configureTidal();
     contentPort.configureYtMusic();
     contentPort.configureYoutube();
+    contentPort.configureSoundcloud();
     this.playbackCoordinator.refreshMusicAssistantProviderId();
   }
 
@@ -367,6 +369,7 @@ export class ZoneManager {
     contentPort.configureTidal();
     contentPort.configureYtMusic();
     contentPort.configureYoutube();
+    contentPort.configureSoundcloud();
     this.playbackCoordinator.refreshMusicAssistantProviderId();
     await inputsPort.syncMusicAssistantZones(zoneConfigs);
     await this.stateControllers.replaceAll(zoneConfigs);
@@ -424,6 +427,7 @@ export class ZoneManager {
     contentPort.configureAppleMusic();
     contentPort.configureDeezer();
     contentPort.configureTidal();
+    contentPort.configureSoundcloud();
     this.playbackCoordinator.refreshMusicAssistantProviderId();
     await inputsPort.syncMusicAssistantZones(allZones);
 

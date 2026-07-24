@@ -9,6 +9,7 @@ export type ResolvePlayRequestDeps = {
     isAppleMusicProvider: (providerId: string) => boolean;
     isDeezerProvider: (providerId: string) => boolean;
     isTidalProvider: (providerId: string) => boolean;
+    isSoundcloudProvider: (providerId: string) => boolean;
   }) => ParentContext | null;
   classifyIsRadio: (args: {
     uri: string;
@@ -22,6 +23,7 @@ export type ResolvePlayRequestDeps = {
   isAppleMusicProvider: (providerId: string) => boolean;
   isDeezerProvider: (providerId: string) => boolean;
   isTidalProvider: (providerId: string) => boolean;
+  isSoundcloudProvider: (providerId: string) => boolean;
   getMusicAssistantProviderId: () => string;
 };
 
@@ -43,21 +45,24 @@ export function resolvePlayRequest(args: {
     isAppleMusicProvider,
     isDeezerProvider,
     isTidalProvider,
+    isSoundcloudProvider,
   } = deps;
 
   const parentContext = parseParentContext(uri, {
     isAppleMusicProvider,
     isDeezerProvider,
     isTidalProvider,
+    isSoundcloudProvider,
   });
   const isAppleMusicUri = audioHelpers.isAppleMusicAudiopath(uri);
   const isDeezerUri = audioHelpers.isDeezerAudiopath(uri);
   const isTidalUri = audioHelpers.isTidalAudiopath(uri);
   const isYtMusicUri = audioHelpers.isYtMusicAudiopath(uri);
   const isYoutubeUri = audioHelpers.isYoutubeAudiopath(uri);
+  const isSoundcloudUri = audioHelpers.isSoundcloudAudiopath(uri);
   let resolvedTarget =
     parentContext?.parent ??
-    (isAppleMusicUri || isDeezerUri || isTidalUri || isYtMusicUri || isYoutubeUri ? uri : decodeAudiopath(uri));
+    (isAppleMusicUri || isDeezerUri || isTidalUri || isYtMusicUri || isYoutubeUri || isSoundcloudUri ? uri : decodeAudiopath(uri));
   let stationUri = parentContext?.parent ? normalizeSpotifyAudiopath(parentContext.parent) : '';
   let normalizedTarget = normalizeSpotifyAudiopath(resolvedTarget);
   const isMusicAssistantInitial = audioHelpers.isMusicAssistantAudiopath(uri) ||
@@ -90,6 +95,8 @@ export function resolvePlayRequest(args: {
     audioHelpers.isYtMusicAudiopath(resolvedTarget);
   const isYoutube = audioHelpers.isYoutubeAudiopath(queueAudiopath) ||
     audioHelpers.isYoutubeAudiopath(resolvedTarget);
+  const isSoundcloud = audioHelpers.isSoundcloudAudiopath(queueAudiopath) ||
+    audioHelpers.isSoundcloudAudiopath(resolvedTarget);
   const isSpotify = audioHelpers.isSpotifyAudiopath(queueAudiopath);
   const nextInput = isSpotify
     ? 'spotify'
@@ -151,6 +158,7 @@ export function resolvePlayRequest(args: {
     isTidal,
     isYtMusic,
     isYoutube,
+    isSoundcloud,
     isSpotify,
     nextInput,
     stationValue,
@@ -165,5 +173,6 @@ export function resolvePlayRequest(args: {
     isTidalUri,
     isYtMusicUri,
     isYoutubeUri,
+    isSoundcloudUri,
   };
 }

@@ -20,6 +20,7 @@ import { TidalProvider } from '@/adapters/content/providers/tidal/tidalProvider'
 import { MusicAssistantBridgeProvider } from '@/adapters/content/providers/musicassistant/musicAssistantBridgeProvider';
 import { YtMusicProvider } from '@/adapters/content/providers/ytmusic/ytmusicProvider';
 import { YoutubeProvider } from '@/adapters/content/providers/youtube/youtubeProvider';
+import { SoundCloudProvider } from '@/adapters/content/providers/soundcloud/soundcloudProvider';
 import { resolveSpotifyClientId } from '@/adapters/content/providers/spotify/utils';
 import { parseSearchLimits } from '@/adapters/content/utils/searchLimits';
 import { resolveCoverHost } from '@/shared/utils/net';
@@ -35,6 +36,7 @@ const PROVIDER_ICONS: Record<string, string> = {
   tidal: 'https://extended-app-content.s3.eu-central-1.amazonaws.com/audioZone/services/Icon-Tidal.svg',
   ytmusic: '/admin/providers/youtube-music.svg',
   youtube: '/admin/providers/youtube.svg',
+  soundcloud: '/admin/providers/soundcloud.svg',
 };
 const PROVIDER_NAMES: Record<string, string> = {
   spotify: 'Spotify',
@@ -44,6 +46,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   tidal: 'Tidal',
   ytmusic: 'YouTube Music',
   youtube: 'YouTube',
+  soundcloud: 'SoundCloud',
 };
 
 export interface SpotifyServiceDevice {
@@ -67,7 +70,7 @@ export class SpotifyServiceManager {
 
   private providers = new Map<
     ProviderId,
-    SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider | TidalProvider | YtMusicProvider | YoutubeProvider
+    SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider | TidalProvider | YtMusicProvider | YoutubeProvider | SoundCloudProvider
   >();
   private accounts: SpotifyAccountState[] = [];
   private bridges: SpotifyBridgeConfig[] = [];
@@ -360,6 +363,15 @@ export class SpotifyServiceManager {
     }
 
     if (provider instanceof TidalProvider) {
+      const { result, user: bridgeUser, providerId } = await provider.search(
+        query,
+        limits,
+        maxLimit,
+      );
+      return { result, user: bridgeUser, providerId };
+    }
+
+    if (provider instanceof SoundCloudProvider) {
       const { result, user: bridgeUser, providerId } = await provider.search(
         query,
         limits,
@@ -784,7 +796,7 @@ export class SpotifyServiceManager {
   private resolveProvider(
     service: string,
     user: string,
-  ): SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider | TidalProvider | YtMusicProvider | YoutubeProvider | null {
+  ): SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider | TidalProvider | YtMusicProvider | YoutubeProvider | SoundCloudProvider | null {
     const id = this.resolveProviderId(service, user);
     if (id) {
       return this.providers.get(id)!;
@@ -862,7 +874,7 @@ export class SpotifyServiceManager {
   }
 
   private isRealSpotifyProvider(
-    provider: SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider | TidalProvider | YtMusicProvider | YoutubeProvider | null | undefined,
+    provider: SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider | TidalProvider | YtMusicProvider | YoutubeProvider | SoundCloudProvider | null | undefined,
   ): provider is SpotifyAccountProvider {
     if (!provider || !(provider instanceof SpotifyAccountProvider)) {
       return false;
@@ -1004,6 +1016,17 @@ export class SpotifyServiceManager {
           providerId,
           label: labelOverride,
           bridge,
+        });
+        this.providers.set(providerId, provider);
+        continue;
+      }
+
+      if (providerType === 'soundcloud') {
+        const provider = new SoundCloudProvider({
+          providerId,
+          label: labelOverride,
+          oauthToken: bridge.soundcloudOauthToken,
+          clientId: bridge.soundcloudClientId,
         });
         this.providers.set(providerId, provider);
         continue;

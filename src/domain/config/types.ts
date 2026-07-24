@@ -170,6 +170,17 @@ export interface SpotifyBridgeConfig {
   tidalAccessToken?: string;
   /** Optional Tidal country code if provider === 'tidal' */
   tidalCountryCode?: string;
+  /**
+   * Optional SoundCloud OAuth token if provider === 'soundcloud'. Public
+   * browse/search/charts and preview playback work without it; a token unlocks
+   * full-length tracks plus the user's likes, followings and playlists.
+   */
+  soundcloudOauthToken?: string;
+  /**
+   * Optional pre-scraped SoundCloud web client_id. Normally resolved and cached
+   * automatically from the public web player; set this only to pin a value.
+   */
+  soundcloudClientId?: string;
   /** Optional Apple Music input pacing toggle (true keeps ffmpeg -re; false disables pacing). */
   appleMusicPaceInput?: boolean;
   /** When true, register all zones as players up front; otherwise register on-demand. */

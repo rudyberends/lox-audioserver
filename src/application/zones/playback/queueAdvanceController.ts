@@ -163,7 +163,8 @@ export class QueueAdvanceController {
       const isDeezer = this.deps.audioHelpers.isDeezerAudiopath(item.audiopath);
       const isTidal = this.deps.audioHelpers.isTidalAudiopath(item.audiopath);
       const isYtMusic = this.deps.audioHelpers.isYtMusicAudiopath(item.audiopath);
-      if (!isAppleMusic && !isDeezer && !isTidal && !isYtMusic) {
+      const isSoundcloud = this.deps.audioHelpers.isSoundcloudAudiopath(item.audiopath);
+      if (!isAppleMusic && !isDeezer && !isTidal && !isYtMusic && !isSoundcloud) {
         return;
       }
       if (!isTrackAudiopath(item.audiopath)) {

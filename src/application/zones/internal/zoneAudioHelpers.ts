@@ -13,6 +13,7 @@ export type ZoneAudioHelpers = {
   isTidalAudiopath: (audiopath: string | null | undefined) => boolean;
   isYtMusicAudiopath: (audiopath: string | null | undefined) => boolean;
   isYoutubeAudiopath: (audiopath: string | null | undefined) => boolean;
+  isSoundcloudAudiopath: (audiopath: string | null | undefined) => boolean;
   isMusicAssistantAudiopath: (audiopath: string | null | undefined) => boolean;
   resolveBridgeProvider: (rawAudiopath: string | undefined | null) => string | null;
   getInputAudioType: (ctx: ZoneContext, audiopathOverride?: string) => number | null;
@@ -43,6 +44,7 @@ export function createZoneAudioHelpers(
     isTidalAudiopath: (audiopath) => isTidalAudiopath(audiopath, contentPort),
     isYtMusicAudiopath: (audiopath) => isYtMusicAudiopath(audiopath, contentPort),
     isYoutubeAudiopath: (audiopath) => isYoutubeAudiopath(audiopath, contentPort),
+    isSoundcloudAudiopath: (audiopath) => isSoundcloudAudiopath(audiopath, contentPort),
     isMusicAssistantAudiopath,
     resolveBridgeProvider: (rawAudiopath) => resolveBridgeProvider(rawAudiopath, configPort),
     getInputAudioType,
@@ -84,6 +86,9 @@ export function isSpotifyAudiopath(
     return false;
   }
   if (isYoutubeAudiopath(decoded, contentPort)) {
+    return false;
+  }
+  if (isSoundcloudAudiopath(decoded, contentPort)) {
     return false;
   }
   return lower.includes('spotify:') || lower.startsWith('spotify@');
@@ -193,6 +198,29 @@ export function isYoutubeAudiopath(
   const providerSegment = decoded.split(':')[0] ?? '';
   if (providerSegment && contentPort.isYoutubeProvider(providerSegment)) return true;
   return false;
+}
+
+export function isSoundcloudAudiopath(
+  audiopath: string | null | undefined,
+  contentPort: ContentPort,
+): boolean {
+  if (!audiopath) {
+    return false;
+  }
+  const raw = String(audiopath);
+  const rawProvider = raw.split(':')[0] ?? '';
+  if (rawProvider && contentPort.isSoundcloudProvider(rawProvider)) {
+    return true;
+  }
+  if (raw.toLowerCase().includes('soundcloud')) {
+    return true;
+  }
+  const decoded = decodeAudiopath(raw) || raw;
+  const providerSegment = decoded.split(':')[0] ?? '';
+  if (providerSegment && contentPort.isSoundcloudProvider(providerSegment)) {
+    return true;
+  }
+  return decoded.toLowerCase().includes('soundcloud');
 }
 
 export function isMusicAssistantAudiopath(audiopath: string | null | undefined): boolean {

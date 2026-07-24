@@ -52,6 +52,7 @@ export type ResolvedPlayRequest = {
   isTidal: boolean;
   isYtMusic: boolean;
   isYoutube: boolean;
+  isSoundcloud: boolean;
   isSpotify: boolean;
   nextInput: ZoneContext['inputMode'];
   stationValue: string;
@@ -66,4 +67,5 @@ export type ResolvedPlayRequest = {
   isTidalUri: boolean;
   isYtMusicUri: boolean;
   isYoutubeUri: boolean;
+  isSoundcloudUri: boolean;
 };

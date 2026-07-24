@@ -538,6 +538,16 @@ export class PlaybackCoordinator {
       } else if (plan.provider === 'youtube') {
         this.handlePlaybackError(ctx.id, 'youtube stream unavailable', 'output');
         this.log.warn('youtube stream not ready; skipping playback', { zoneId: ctx.id });
+      } else if (plan.provider === 'soundcloud') {
+        // The stream service already reports a specific reason (e.g. "soundcloud
+        // track is DRM protected"); only emit the generic error when it didn't,
+        // so a single track produces one playback error, not two.
+        const soundcloudReasonRecorded =
+          this.hasRecentPlaybackError(ctx) && lastError?.startsWith('soundcloud');
+        if (!soundcloudReasonRecorded) {
+          this.handlePlaybackError(ctx.id, 'soundcloud stream unavailable', 'output');
+        }
+        this.log.warn('soundcloud stream not ready; skipping playback', { zoneId: ctx.id });
       }
       return null;
     }
@@ -575,6 +585,7 @@ export class PlaybackCoordinator {
     isTidal: boolean;
     isYtMusic: boolean;
     isYoutube: boolean;
+    isSoundcloud: boolean;
     provider: ProviderKind;
     nextInput: ZoneContext['inputMode'];
   } {
@@ -585,6 +596,7 @@ export class PlaybackCoordinator {
     const isTidal = this.audioHelpers.isTidalAudiopath(audiopath);
     const isYtMusic = this.audioHelpers.isYtMusicAudiopath(audiopath);
     const isYoutube = this.audioHelpers.isYoutubeAudiopath(audiopath);
+    const isSoundcloud = this.audioHelpers.isSoundcloudAudiopath(audiopath);
     const nextInput: ZoneContext['inputMode'] =
       isSpotify
         ? 'spotify'
@@ -601,6 +613,8 @@ export class PlaybackCoordinator {
             ? 'ytmusic'
           : isYoutube
             ? 'youtube'
+          : isSoundcloud
+            ? 'soundcloud'
           : null;
     return {
       isSpotify,
@@ -610,6 +624,7 @@ export class PlaybackCoordinator {
       isTidal,
       isYtMusic,
       isYoutube,
+      isSoundcloud,
       provider,
       nextInput,
     };

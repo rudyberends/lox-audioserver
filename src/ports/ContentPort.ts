@@ -15,11 +15,13 @@ export interface ContentPort {
   configureTidal(): void;
   configureYtMusic(): void;
   configureYoutube(): void;
+  configureSoundcloud(): void;
   isAppleMusicProvider(providerId: string): boolean;
   isDeezerProvider(providerId: string): boolean;
   isTidalProvider(providerId: string): boolean;
   isYtMusicProvider(providerId: string): boolean;
   isYoutubeProvider(providerId: string): boolean;
+  isSoundcloudProvider(providerId: string): boolean;
   getMediaFolder(folderId: string, offset: number, limit: number): Promise<ContentFolder | null>;
   getServiceTrack(
     service: string,

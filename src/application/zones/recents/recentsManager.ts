@@ -291,6 +291,10 @@ export class RecentsManager {
       const type = lower.includes('album') ? 7 : 2;
       return { service: 'spotify', serviceType: 3, type };
     }
+    if (detectedService === 'soundcloud') {
+      const type = lower.includes('playlist') || lower.includes('artist') ? 7 : 2;
+      return { service: 'spotify', serviceType: 3, type };
+    }
     return { service: 'custom', serviceType: 3, type: 3 };
   }
 

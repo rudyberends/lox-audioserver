@@ -284,6 +284,14 @@ async function handleSpotifyBridgeCreate(
       typeof body?.youtubeApiKey === 'string' && body.youtubeApiKey.trim()
         ? body.youtubeApiKey.trim()
         : undefined,
+    soundcloudOauthToken:
+      typeof body?.soundcloudOauthToken === 'string' && body.soundcloudOauthToken.trim()
+        ? body.soundcloudOauthToken.trim()
+        : undefined,
+    soundcloudClientId:
+      typeof body?.soundcloudClientId === 'string' && body.soundcloudClientId.trim()
+        ? body.soundcloudClientId.trim()
+        : undefined,
   };
 
   try {
@@ -306,7 +314,13 @@ async function handleSpotifyBridgeCreate(
       }
     });
     deps.contentManager.refreshFromConfig();
-    if (provider === 'applemusic' || provider === 'deezer' || provider === 'tidal' || provider === 'ytmusic') {
+    if (
+      provider === 'applemusic' ||
+      provider === 'deezer' ||
+      provider === 'tidal' ||
+      provider === 'ytmusic' ||
+      provider === 'soundcloud'
+    ) {
       deps.zoneManager.refreshContentProviders();
     }
     deps.musicAssistantStreamService.configureFromConfig();

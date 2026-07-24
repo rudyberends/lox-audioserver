@@ -783,6 +783,34 @@ export class ContentManager {
       }
     }
 
+    if (detectedService === 'soundcloud') {
+      const providerSegment = (audiopath.split(':')[0] ?? '').trim();
+      const trackMatch = audiopath.match(/^([^:]+):track:(.+)$/i);
+      if (trackMatch) {
+        const rawId = trackMatch[2] ?? '';
+        const providerId = providerSegment || 'soundcloud';
+        const track = await this.getServiceTrack(
+          providerId,
+          providerId.split('@')[1] ?? '',
+          `track:${rawId}`,
+        );
+        if (track) {
+          return {
+            title: track.title ?? track.name ?? '',
+            artist: track.artist ?? '',
+            album: track.album ?? '',
+            coverurl: track.coverurl ?? '',
+            duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
+          };
+        }
+        this.log.debug('soundcloud metadata unresolved', {
+          audiopath,
+          providerId,
+          trackId: rawId,
+        });
+      }
+    }
+
     if (audiopath.startsWith('library:')) {
       return this.library.resolveItem(audiopath);
     }

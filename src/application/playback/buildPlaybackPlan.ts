@@ -32,6 +32,9 @@ const mapProvider = (service: string): ProviderKind => {
   if (service === 'ytmusic') {
     return 'ytmusic';
   }
+  if (service === 'soundcloud') {
+    return 'soundcloud';
+  }
   return null;
 };
 

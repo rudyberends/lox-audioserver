@@ -186,8 +186,9 @@ export class CrossfadeController {
         const isDeezer = this.deps.audioHelpers.isDeezerAudiopath(nextItem.audiopath);
         const isTidal = this.deps.audioHelpers.isTidalAudiopath(nextItem.audiopath);
         const isYtMusic = this.deps.audioHelpers.isYtMusicAudiopath(nextItem.audiopath);
+        const isSoundcloud = this.deps.audioHelpers.isSoundcloudAudiopath(nextItem.audiopath);
 
-        if (isAppleMusic || isDeezer || isTidal || isYtMusic) {
+        if (isAppleMusic || isDeezer || isTidal || isYtMusic || isSoundcloud) {
           const resolution = await this.deps.contentPort
             .resolvePlaybackSource({ zoneId, zoneName: ctx.name, audiopath: nextItem.audiopath })
             .catch(() => null);

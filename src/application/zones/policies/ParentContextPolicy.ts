@@ -11,6 +11,7 @@ type ProviderChecks = {
   isAppleMusicProvider?: (providerId: string) => boolean;
   isDeezerProvider?: (providerId: string) => boolean;
   isTidalProvider?: (providerId: string) => boolean;
+  isSoundcloudProvider?: (providerId: string) => boolean;
 };
 
 export function parseParentContext(raw: string): ParentContext | null;
@@ -45,8 +46,11 @@ export function parseParentContext(raw: string, providers?: ProviderChecks): Par
   const isTidalParent =
     Boolean(parentProvider && providers?.isTidalProvider?.(parentProvider)) ||
     /tidal/i.test(parentRaw);
+  const isSoundcloudParent =
+    Boolean(parentProvider && providers?.isSoundcloudProvider?.(parentProvider)) ||
+    /soundcloud/i.test(parentRaw);
   return {
-    parent: (isAppleMusicParent || isDeezerParent || isTidalParent)
+    parent: (isAppleMusicParent || isDeezerParent || isTidalParent || isSoundcloudParent)
       ? normalizeSpotifyAudiopath(parentRaw)
       : decodeAudiopath(parentRaw),
     // Keep the original provider wrapper (e.g., spotify@bridge:track:...) for the item so routing stays intact.

@@ -57,6 +57,7 @@ Each bridge maps **one external service to one virtual Spotify account**, allowi
 - Deezer
 - Tidal
 - Youtube Music
+- SoundCloud
 - Music Assistant
 
 ## Configuration

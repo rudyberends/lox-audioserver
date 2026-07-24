@@ -114,7 +114,7 @@ export function metadataKeyVariants(audiopath: string): string[] {
  */
 export function detectServiceFromAudiopath(
   p: string,
-): 'spotify' | 'radio' | 'library' | 'musicassistant' | 'applemusic' | 'deezer' | 'tidal' | 'ytmusic' {
+): 'spotify' | 'radio' | 'library' | 'musicassistant' | 'applemusic' | 'deezer' | 'tidal' | 'ytmusic' | 'soundcloud' {
   const raw = (p || '').toLowerCase();
   if (
     raw.includes('musicassistant') ||
@@ -131,6 +131,9 @@ export function detectServiceFromAudiopath(
   }
   if (raw.includes('tidal')) {
     return 'tidal';
+  }
+  if (raw.includes('soundcloud')) {
+    return 'soundcloud';
   }
   if (raw.includes('ytmusic') || raw.includes('youtube music') || raw.includes('bridge-ytmusic')) {
     return 'ytmusic';
@@ -151,6 +154,9 @@ export function detectServiceFromAudiopath(
   }
   if (lower.includes('tidal')) {
     return 'tidal';
+  }
+  if (lower.includes('soundcloud')) {
+    return 'soundcloud';
   }
   if (lower.includes('ytmusic') || lower.includes('youtube music') || lower.includes('bridge-ytmusic')) {
     return 'ytmusic';
@@ -195,6 +201,7 @@ export function inferAudiotype(uri: string): number {
     lower.includes('applemusic') ||
     lower.includes('deezer') ||
     lower.includes('tidal') ||
+    lower.includes('soundcloud') ||
     lower.startsWith('spotify:') ||
     lower.startsWith('spotify@')
   ) {

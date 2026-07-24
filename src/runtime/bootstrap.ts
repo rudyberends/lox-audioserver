@@ -15,6 +15,8 @@ import { YtMusicStreamService } from '@/adapters/content/providers/ytmusic/ytmus
 import { YtMusicStreamResolver } from '@/adapters/content/providers/ytmusic/ytmusicStreamResolver';
 import { YoutubeStreamService } from '@/adapters/content/providers/youtube/youtubeStreamService';
 import { YoutubeStreamResolver } from '@/adapters/content/providers/youtube/youtubeStreamResolver';
+import { SoundCloudStreamService } from '@/adapters/content/providers/soundcloud/soundcloudStreamService';
+import { SoundCloudStreamResolver } from '@/adapters/content/providers/soundcloud/soundcloudStreamResolver';
 import { HttpService } from '@/adapters/http';
 import { LoxoneHttpService } from '@/adapters/loxone/http';
 import { LoxoneCommandProcessor } from '@/adapters/loxone/http/commandProcessor';
@@ -139,11 +141,13 @@ export function createRuntime(): Runtime {
   const tidalStreamService = new TidalStreamService(outputHandlersProxy.onOutputError, configPort);
   const ytmusicStreamService = new YtMusicStreamService(outputHandlersProxy.onOutputError, configPort);
   const youtubeStreamService = new YoutubeStreamService(outputHandlersProxy.onOutputError, configPort);
+  const soundcloudStreamService = new SoundCloudStreamService(outputHandlersProxy.onOutputError, configPort);
   const appleMusicStreamResolver = new AppleMusicStreamResolver(appleMusicStreamService);
   const deezerStreamResolver = new DeezerStreamResolver(deezerStreamService);
   const tidalStreamResolver = new TidalStreamResolver(tidalStreamService);
   const ytmusicStreamResolver = new YtMusicStreamResolver(ytmusicStreamService);
   const youtubeStreamResolver = new YoutubeStreamResolver(youtubeStreamService);
+  const soundcloudStreamResolver = new SoundCloudStreamResolver(soundcloudStreamService);
   const engine = new EngineAdapter(audioStreamEngine);
   const lineInRegistry = new LineInIngestRegistry();
   const mdnsService = new MdnsService();
@@ -210,6 +214,7 @@ export function createRuntime(): Runtime {
     tidal: tidalStreamResolver,
     ytmusic: ytmusicStreamResolver,
     youtube: youtubeStreamResolver,
+    soundcloud: soundcloudStreamResolver,
   });
   const groupManager = createGroupManager({ notifier: ports.notifier, airplayGroup: airplayGroupController, configPort });
   const mixedGroupController = createMixedGroupController(configPort, audioManager);
