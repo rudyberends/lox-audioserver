@@ -183,23 +183,42 @@ function createDlnaOutput(
   zone: ZoneConfig,
   ports: OutputPorts,
 ): ZoneOutput | null {
-  const rawHost = (config as Record<string, unknown>).host;
-  const rawControlUrl = (config as Record<string, unknown>).controlUrl;
+  const raw = config as Record<string, unknown>;
+  const rawHost = raw.host;
+  const rawControlUrl = raw.controlUrl;
   const host = typeof rawHost === 'string' ? rawHost.trim() : '';
   const controlUrl = typeof rawControlUrl === 'string' ? rawControlUrl.trim() : '';
+  const autoDiscover =
+    typeof raw.autoDiscover === 'boolean' || typeof raw.autoDiscover === 'string'
+      ? raw.autoDiscover
+      : undefined;
+  const deviceName = typeof raw.deviceName === 'string' ? raw.deviceName.trim() : '';
+  // autoDiscover defaults to on, so a config with neither host nor controlUrl can still
+  // self-resolve via SSDP. Only skip when discovery is explicitly turned off.
+  const autoDiscoverEnabled =
+    autoDiscover === undefined ||
+    autoDiscover === true ||
+    (typeof autoDiscover === 'string' &&
+      !['false', '0', 'no', 'off'].includes(autoDiscover.trim().toLowerCase()));
 
-  if (!host && !controlUrl) {
-    log.warn('DLNA output skipped (missing host and control URL)', { zoneId: zone.id });
+  if (!host && !controlUrl && !autoDiscoverEnabled) {
+    log.warn('DLNA output skipped (no host, control URL, or auto-discovery)', { zoneId: zone.id });
     return null;
   }
 
   log.info('DLNA output registered', {
     zoneId: zone.id,
-    host,
+    host: host || undefined,
     controlUrl: controlUrl || undefined,
+    autoDiscover: autoDiscoverEnabled,
   });
 
-  return new DlnaOutput(zone.id, zone.name, { host, controlUrl }, ports);
+  return new DlnaOutput(
+    zone.id,
+    zone.name,
+    { host, controlUrl, autoDiscover, deviceName: deviceName || undefined },
+    ports,
+  );
 }
 
 function createSpotifyController(

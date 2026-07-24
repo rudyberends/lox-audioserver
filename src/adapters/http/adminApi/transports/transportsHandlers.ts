@@ -20,7 +20,7 @@ import { discoverSonosDevices } from '@/adapters/outputs/sonos/sonosDiscovery';
 import { discoverSpotifyConnectDevices } from '@/adapters/content/providers/spotify/spotifyConnectDiscovery';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 
-const HIDDEN_TRANSPORT_IDS = new Set(['spotify', 'sendspin-cast', 'dlna']);
+const HIDDEN_TRANSPORT_IDS = new Set(['spotify', 'sendspin-cast']);
 
 export type StateControllerDefinition = {
   id: string;

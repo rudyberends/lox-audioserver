@@ -91,6 +91,25 @@ export class AudioStreamHandler {
       return;
     }
 
+    // DLNA renderers (measured: B&O) probe with a HEAD before the real GET. Answer it
+    // immediately with the streaming headers and no body — do NOT spin up the transcode
+    // engine for a probe that's about to be discarded, and don't make the renderer wait on
+    // engine startup just to see the content type. Blocking here delayed audible start.
+    if ((req.method ?? 'GET').toUpperCase() === 'HEAD') {
+      const headContentType = isWav
+        ? 'audio/wav'
+        : isPcm
+          ? this.buildPcmContentType(this.zoneAudioPrefs.getEffectiveOutputSettings(zoneId))
+          : isAac
+            ? 'audio/aac'
+            : isFlac
+              ? 'audio/flac'
+              : 'audio/mpeg';
+      this.writeHeaders(res, headContentType, { chunked: true });
+      res.end();
+      return;
+    }
+
     const outputSettings = this.zoneAudioPrefs.getEffectiveOutputSettings(zoneId);
     const httpPrefs = this.zoneAudioPrefs.getHttpPreferences(zoneId);
     const httpProfile = httpPrefs?.httpProfile ?? audioOutputSettings.httpProfile;
@@ -325,8 +344,13 @@ export class AudioStreamHandler {
       'Accept-Ranges': 'none',
       Connection: 'close',
       'transferMode.dlna.org': 'Streaming',
+      // Live, non-seekable transcode: advertise no seek ops (OP=00) so renderers don't probe
+      // for range support we don't offer (Accept-Ranges: none). Previously we sent OP=01
+      // (range-seek supported) alongside Accept-Ranges: none — a contradiction that made
+      // strict renderers (B&O) stall on a HEAD/range probe before committing to the GET.
+      // FLAGS 8D500000 = sender-paced + streaming-transfer + no-full-clear + background-ok.
       'contentFeatures.dlna.org':
-        'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01500000000000000000000000000000',
+        'DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=8D500000000000000000000000000000',
     };
     if (options.chunked) {
       headers['Transfer-Encoding'] = 'chunked';

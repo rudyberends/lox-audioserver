@@ -6,6 +6,10 @@ import { createLogger } from '@/shared/logging/logger';
 export interface DlnaEndpointInfo {
   controlUrl?: string;
   renderingControlUrl?: string;
+  /** GENA event subscription endpoint for AVTransport (transport state / track changes). */
+  avTransportEventUrl?: string;
+  /** GENA event subscription endpoint for RenderingControl (volume / mute). */
+  renderingControlEventUrl?: string;
   friendlyName?: string;
   descriptionUrl?: string;
 }
@@ -54,6 +58,20 @@ export function resolveDlnaEndpoints(options: DiscoveryOptions = {}): Promise<Dl
   });
   endpointCache.set(key, promise);
   return promise;
+}
+
+// Some renderers (notably a few B&O/Samsung models) answer SSDP unreliably, so a single scan
+// randomly misses them. We remember devices seen recently and merge them back in, so a device
+// that was visible moments ago doesn't flicker out of the list on one dropped burst.
+const RECENT_DEVICE_TTL_MS = 90_000;
+const recentDevices = new Map<string, { device: DlnaDiscoveredDevice; lastSeen: number }>();
+
+function pruneRecentDevices(now: number): void {
+  for (const [id, entry] of recentDevices) {
+    if (now - entry.lastSeen > RECENT_DEVICE_TTL_MS) {
+      recentDevices.delete(id);
+    }
+  }
 }
 
 export async function discoverDlnaDevices(
@@ -117,6 +135,26 @@ export async function discoverDlnaDevices(
       });
     }
   }
+
+  // A host-scoped probe is a targeted lookup, not a "browse everything" — don't let it
+  // touch the recent-device cache (it would only ever hold the one device).
+  if (hostFilter) {
+    return devices;
+  }
+
+  const now = Date.now();
+  pruneRecentDevices(now);
+  // Refresh the cache with everything we saw this round.
+  for (const device of devices) {
+    recentDevices.set(device.id, { device, lastSeen: now });
+  }
+  // Merge back any recently-seen device that this particular scan happened to miss.
+  for (const [id, entry] of recentDevices) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      devices.push(entry.device);
+    }
+  }
   return devices;
 }
 
@@ -147,28 +185,16 @@ async function discover(options: DiscoveryOptions): Promise<DlnaEndpointInfo | n
 
 async function searchSsdp(options: DiscoveryOptions): Promise<SsdpResponse[]> {
   const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
-  const timeout = options.timeoutMs ?? 1500;
+  // SSDP over UDP multicast is lossy and renderers answer spread randomly across the MX
+  // window, so a single burst reliably misses devices (and misses different ones each run).
+  // We keep the socket open for the whole window, re-send the M-SEARCH bursts a few times,
+  // and only close once the window has fully elapsed (>= MX so late responders still land).
   const mx = Math.max(1, Math.min(5, options.mx ?? 2));
+  const totalWindowMs = Math.max(options.timeoutMs ?? 4000, mx * 1000 + 500);
   const responses: SsdpResponse[] = [];
   const seen = new Set<string>();
 
-  await new Promise<void>((resolve, reject) => {
-    socket.once('error', reject);
-    socket.bind(() => resolve());
-  });
-
-  const requests = SEARCH_TARGETS.map((target) => buildSearchRequest(mx, target));
-  for (const request of requests) {
-    socket.send(request, 0, request.length, SSDP_PORT, SSDP_ADDRESS);
-  }
-
-  const hostFilter = options.host?.trim();
-  if (hostFilter) {
-    for (const request of requests) {
-      socket.send(request, 0, request.length, SSDP_PORT, hostFilter);
-    }
-  }
-
+  // Register the listener BEFORE binding/sending so fast responders can't answer into a void.
   socket.on('message', (msg, rinfo) => {
     try {
       const headers = parseSsdpResponse(msg.toString());
@@ -199,7 +225,33 @@ async function searchSsdp(options: DiscoveryOptions): Promise<SsdpResponse[]> {
     }
   });
 
-  await delay(timeout);
+  await new Promise<void>((resolve, reject) => {
+    socket.once('error', reject);
+    socket.bind(() => resolve());
+  });
+
+  const requests = SEARCH_TARGETS.map((target) => buildSearchRequest(mx, target));
+  const hostFilter = options.host?.trim();
+  const sendBurst = (): void => {
+    for (const request of requests) {
+      socket.send(request, 0, request.length, SSDP_PORT, SSDP_ADDRESS);
+      if (hostFilter) {
+        socket.send(request, 0, request.length, SSDP_PORT, hostFilter);
+      }
+    }
+  };
+
+  // Repeat the burst roughly every second so a dropped packet gets another chance and slow
+  // renderers still get pinged; the loop naturally stops when the window elapses.
+  const burstIntervalMs = 1000;
+  let elapsed = 0;
+  sendBurst();
+  while (elapsed + burstIntervalMs < totalWindowMs) {
+    await delay(burstIntervalMs);
+    elapsed += burstIntervalMs;
+    sendBurst();
+  }
+  await delay(Math.max(0, totalWindowMs - elapsed));
   socket.close();
   return responses;
 }
@@ -300,12 +352,15 @@ function parseDeviceDescription(xml: string, location: string): DlnaEndpointInfo
     friendlyName: extractTag(xml, 'friendlyName'),
     controlUrl: getUrl(avTransport?.controlUrl),
     renderingControlUrl: getUrl(rendering?.controlUrl),
+    avTransportEventUrl: getUrl(avTransport?.eventSubUrl),
+    renderingControlEventUrl: getUrl(rendering?.eventSubUrl),
   };
 }
 
 interface ServiceEntry {
   type: string;
   controlUrl: string;
+  eventSubUrl?: string;
 }
 
 function extractServices(xml: string): ServiceEntry[] {
@@ -316,8 +371,13 @@ function extractServices(xml: string): ServiceEntry[] {
     const block = match[1] ?? '';
     const type = extractTag(block, 'serviceType');
     const control = extractTag(block, 'controlURL');
+    const eventSub = extractTag(block, 'eventSubURL');
     if (type && control) {
-      map.push({ type: type.trim(), controlUrl: control.trim() });
+      map.push({
+        type: type.trim(),
+        controlUrl: control.trim(),
+        eventSubUrl: eventSub?.trim() || undefined,
+      });
     }
   }
   return map;
