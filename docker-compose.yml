@@ -3,9 +3,6 @@ services:
     container_name: sonn-core
     image: ghcr.io/sonn-audio/core:latest
     hostname: sonn-core
-    build:
-      context: .
-      dockerfile: ./Dockerfile
     restart: unless-stopped
     network_mode: host
     # privileged caps (and security-opt) needed to mount smb folders within the container

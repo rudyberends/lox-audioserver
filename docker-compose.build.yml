@@ -1,0 +1,17 @@
+# Build-from-source override for docker-compose.yml.
+#
+# The base docker-compose.yml only pulls the published image, so
+# `docker compose up -d` never tries to build (and never fails on a host
+# without the source checkout). To build the image locally from this repo
+# instead, layer this file on top:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml build
+#   docker compose up -d
+#
+# The build tags the image as ghcr.io/sonn-audio/core:latest (the `image:` in
+# the base file), so a subsequent `up -d` uses your freshly built image.
+services:
+  sonn-core:
+    build:
+      context: .
+      dockerfile: ./Dockerfile

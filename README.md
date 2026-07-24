@@ -90,6 +90,13 @@ This starts a container named `sonn-core` in **host network mode**, which is the
       - ./data:/app/data
 ```
 
+`docker compose up -d` always pulls the published image and never builds, so it works on a host without the source checkout. If you have this repository checked out and want to build the image locally instead, layer the build override on top:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml build
+docker compose up -d
+```
+
 If you want to use the Power Manager with `gpioset` or USB HID relay boards from inside Docker, the container also needs access to the host devices. Expose the relevant `/dev/gpiochip*` and/or `/dev/hidraw*` entries, or run the container with elevated device access. Without that, GPIO and CRelay calls can succeed on the host shell but still fail in the container.
 
 For `gpioset`, configure the `chip` and the line offset within that chip. On a Raspberry Pi 4, header GPIO22 is typically line `22` on `/dev/gpiochip0`; the old sysfs-style global number like `534` is not the value `gpioset` expects.
