@@ -149,6 +149,14 @@ export interface SpotifyAccountProviderOptions {
   clientId?: string;
   persistAccount: PersistAccountCallback;
   persistLibrespotCredentials?: CredentialLoginCallback;
+  /**
+   * Service-native audiopath prefix for the items this provider emits, e.g.
+   * `applemusic:p0gngd` or (single-account) `applemusic`. Bridge providers set
+   * this so browse/track ids are service-native (`applemusic:p0gngd:track:X`)
+   * instead of the Loxone-disguised `spotify@bridge-...` form. When absent (real
+   * Spotify accounts), makeUri falls back to `providerId` — unchanged behaviour.
+   */
+  serviceNativePrefix?: string;
 }
 
 interface SpotifyApiResult<T> {
@@ -162,6 +170,8 @@ interface SpotifyApiResult<T> {
  */
 export class SpotifyAccountProvider {
   public readonly providerId: string;
+  /** Service-native audiopath prefix; see SpotifyAccountProviderOptions. */
+  protected readonly audiopathPrefix: string;
 
   private readonly log: ComponentLogger;
   private readonly persistAccountState: PersistAccountCallback;
@@ -179,6 +189,9 @@ export class SpotifyAccountProvider {
 
   constructor(options: SpotifyAccountProviderOptions) {
     this.providerId = options.providerId;
+    // Emit service-native ids when a bridge prefix is supplied; real Spotify
+    // accounts fall back to providerId (spotify@<account>) — unchanged.
+    this.audiopathPrefix = options.serviceNativePrefix ?? options.providerId;
     this.account = { ...options.account };
     this.persistAccountState = options.persistAccount;
     this.clientId = resolveSpotifyClientId({ clientId: this.account.clientId ?? options.clientId });
@@ -260,9 +273,10 @@ export class SpotifyAccountProvider {
     return this.account.user || this.account.displayName || this.account.name || this.account.id;
   }
 
-  private makeUri(type: string, id: string): string {
-    // Single provider prefix, no double user segment to keep IDs stable.
-    return `${this.providerId}:${type}:${id}`;
+  protected makeUri(type: string, id: string): string {
+    // Service-native prefix for bridge providers (applemusic:slug:...), else the
+    // provider id for real Spotify (spotify@account:...). No double user segment.
+    return `${this.audiopathPrefix}:${type}:${id}`;
   }
 
   public async getPlaylists(offset: number, limit: number): Promise<PlaylistEntry[]> {

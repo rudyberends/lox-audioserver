@@ -2,7 +2,8 @@ import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { SpotifyBridgeConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
-import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath, parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
+import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
 import { buildProxyUrl } from '@/shared/urlProxy';
 import {
   extractVideoId,
@@ -52,11 +53,19 @@ export class YoutubeStreamService {
     this.bridgesByProvider.clear();
     this.bridgesById.clear();
     const bridges = this.configPort.getConfig().content?.spotify?.bridges ?? [];
-    for (const bridge of bridges) {
-      if ((bridge.provider || '').toLowerCase() !== 'youtube') continue;
+    const youtubeBridges = bridges.filter((b) => (b.provider || '').toLowerCase() === 'youtube');
+    const single = youtubeBridges.length <= 1;
+    for (const bridge of youtubeBridges) {
       const providerId = `spotify@${bridge.id}`;
       this.bridgesByProvider.set(providerId, bridge);
       this.bridgesById.set(bridge.id, bridge);
+      // Also index under the SERVICE-NATIVE prefix the provider now emits, so a
+      // `youtube[:<slug>]:track:...` audiopath resolves to its bridge.
+      const slug = slugFromBridgeId(bridge.id, 'youtube');
+      this.bridgesByProvider.set(`youtube:${slug}`, bridge);
+      if (single) {
+        this.bridgesByProvider.set('youtube', bridge);
+      }
     }
     if (this.bridgesByProvider.size > 0 && !this.warmupDone) {
       this.scheduleWarmup();
@@ -151,21 +160,29 @@ export class YoutubeStreamService {
 
   private parseTrackRequest(audiopath: string): YoutubeTrackRequest | null {
     const raw = String(audiopath || '');
-    const parts = raw.split(':');
-    if (parts.length < 3) return null;
-    const providerId = parts[0] ?? '';
-    const type = (parts[1] ?? '').toLowerCase();
-    const rawId = parts.slice(2).join(':').trim();
+    const native = parseServiceNativeAudiopath(raw);
+    let providerKey: string; let type: string; let rawId: string;
+    if (native) {
+      providerKey = native.slug ? `${native.service}:${native.slug}` : native.service;
+      type = native.isLibrary ? `library-${native.kind}` : native.kind;
+      rawId = native.id;
+    } else {
+      const parts = raw.split(':');
+      if (parts.length < 3) return null;
+      providerKey = parts[0] ?? '';
+      type = (parts[1] ?? '').toLowerCase();
+      rawId = parts.slice(2).join(':').trim();
+    }
     const idValue = decodeAudiopath(rawId) || rawId;
-    if (!providerId || !idValue || type !== 'track') return null;
+    if (!providerKey || !idValue || type !== 'track') return null;
     const bridge =
-      this.bridgesByProvider.get(providerId) ??
-      this.bridgesById.get(providerId.split('@')[1] ?? '') ??
+      this.bridgesByProvider.get(providerKey) ??
+      this.bridgesById.get(providerKey.split('@')[1] ?? '') ??
       null;
     if (!bridge) return null;
     const videoId = extractVideoId(idValue);
     if (!videoId) return null;
-    return { providerId, videoId, bridge };
+    return { providerId: providerKey, videoId, bridge };
   }
 
   private execOptions(): YtDlpExecOptions {

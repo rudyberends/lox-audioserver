@@ -24,6 +24,7 @@ type SearchResult = {
 
 interface SoundCloudProviderOptions {
   providerId: string;
+  serviceNativePrefix?: string;
   label?: string;
   oauthToken?: string;
   clientId?: string;
@@ -37,12 +38,14 @@ interface SoundCloudProviderOptions {
  */
 export class SoundCloudProvider {
   public readonly providerId: string;
+  private readonly audiopathPrefix: string;
   private readonly label: string;
   private readonly client: SoundCloudClient;
   private readonly hasToken: boolean;
 
   constructor(options: SoundCloudProviderOptions) {
     this.providerId = options.providerId;
+    this.audiopathPrefix = options.serviceNativePrefix ?? options.providerId;
     this.label = options.label || 'SoundCloud';
     this.client = new SoundCloudClient({
       oauthToken: options.oauthToken,
@@ -119,7 +122,7 @@ export class SoundCloudProvider {
     if (!track?.id) {
       return null;
     }
-    return mapTrack(this.providerId, track);
+    return mapTrack(this.audiopathPrefix, track);
   }
 
   public async search(
@@ -152,7 +155,7 @@ export class SoundCloudProvider {
         this.client
           .apiGet<SoundCloudCollection<SoundCloudUser>>('/search/users', { q: query, limit: limits.artist ?? limit })
           .then((data) => {
-            result.artists = (data?.collection ?? []).filter((u) => u?.id).map((u) => mapArtist(this.providerId, u));
+            result.artists = (data?.collection ?? []).filter((u) => u?.id).map((u) => mapArtist(this.audiopathPrefix, u));
           })
           .catch(() => {
             result.artists = [];
@@ -164,7 +167,7 @@ export class SoundCloudProvider {
         this.client
           .apiGet<SoundCloudCollection<SoundCloudPlaylist>>('/search/playlists', { q: query, limit: limits.playlist ?? limit })
           .then((data) => {
-            result.playlists = (data?.collection ?? []).filter((p) => p?.id).map((p) => mapPlaylist(this.providerId, p));
+            result.playlists = (data?.collection ?? []).filter((p) => p?.id).map((p) => mapPlaylist(this.audiopathPrefix, p));
           })
           .catch(() => {
             result.playlists = [];
@@ -198,7 +201,7 @@ export class SoundCloudProvider {
       if (Math.abs(duration - fullDuration) >= SEARCH_DURATION_TOLERANCE_MS) {
         continue;
       }
-      tracks.push(mapTrack(this.providerId, item));
+      tracks.push(mapTrack(this.audiopathPrefix, item));
     }
     return tracks;
   }
@@ -215,7 +218,7 @@ export class SoundCloudProvider {
     for (const entry of data?.collection ?? []) {
       const track = entry?.track;
       if (track?.id) {
-        tracks.push(mapTrack(this.providerId, track));
+        tracks.push(mapTrack(this.audiopathPrefix, track));
       }
     }
     return tracks;
@@ -237,7 +240,7 @@ export class SoundCloudProvider {
     for (const entry of data?.collection ?? []) {
       const track = entry?.track;
       if (track?.id) {
-        tracks.push(mapTrack(this.providerId, track));
+        tracks.push(mapTrack(this.audiopathPrefix, track));
       }
     }
     return tracks;
@@ -276,7 +279,7 @@ export class SoundCloudProvider {
         byId.set(playlist.id, playlist);
       }
     }
-    return [...byId.values()].map((p) => mapPlaylist(this.providerId, p));
+    return [...byId.values()].map((p) => mapPlaylist(this.audiopathPrefix, p));
   }
 
   private async fetchPlaylistTracks(playlistId: string, limit: number, offset: number): Promise<ContentFolderItem[]> {
@@ -287,11 +290,11 @@ export class SoundCloudProvider {
     for (const item of page) {
       // Playlist entries may be stubs (id only); hydrate those on demand.
       if (item?.title) {
-        tracks.push(mapTrack(this.providerId, item));
+        tracks.push(mapTrack(this.audiopathPrefix, item));
       } else if (item?.id) {
         const full = await this.client.apiGet<SoundCloudTrack>(`/tracks/${encodeURIComponent(String(item.id))}`);
         if (full?.id) {
-          tracks.push(mapTrack(this.providerId, full));
+          tracks.push(mapTrack(this.audiopathPrefix, full));
         }
       }
     }
@@ -303,7 +306,7 @@ export class SoundCloudProvider {
       `/users/${encodeURIComponent(artistId)}/tracks`,
       { limit, offset },
     );
-    return (data?.collection ?? []).filter((t) => t?.id).map((t) => mapTrack(this.providerId, t));
+    return (data?.collection ?? []).filter((t) => t?.id).map((t) => mapTrack(this.audiopathPrefix, t));
   }
 
   private cachedUserId: string | null = null;

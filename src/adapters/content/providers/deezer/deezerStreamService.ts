@@ -3,7 +3,8 @@ import { safeReadText } from '@/shared/bestEffort';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { SpotifyBridgeConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
-import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath, parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
+import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
 import { type IncomingMessage, type ServerResponse } from 'node:http';
 import { resolveProxyHost, resolveProxyPort } from '@/shared/urlProxy';
 import { pruneExpiredSessions, type StreamProxyRoute } from '@/shared/streamProxyRoute';
@@ -159,12 +160,15 @@ export class DeezerStreamService {
     this.bridgesByProvider.clear();
     this.bridgesById.clear();
     const bridges = this.configPort.getConfig().content?.spotify?.bridges ?? [];
-    for (const bridge of bridges) {
-      const provider = (bridge.provider || '').toLowerCase();
-      if (provider !== 'deezer') continue;
+    const deezerBridges = bridges.filter((b) => (b.provider || '').toLowerCase() === 'deezer');
+    const single = deezerBridges.length <= 1;
+    for (const bridge of deezerBridges) {
       const providerId = `spotify@${bridge.id}`;
       this.bridgesByProvider.set(providerId, bridge);
       this.bridgesById.set(bridge.id, bridge);
+      const slug = slugFromBridgeId(bridge.id, 'deezer');
+      this.bridgesByProvider.set(`deezer:${slug}`, bridge);
+      if (single) { this.bridgesByProvider.set('deezer', bridge); }
     }
   }
 
@@ -288,23 +292,33 @@ export class DeezerStreamService {
 
   private parseTrackRequest(audiopath: string): DeezerTrackRequest | null {
     const raw = String(audiopath || '');
-    const parts = raw.split(':');
-    if (parts.length < 3) return null;
-    const providerId = parts[0] ?? '';
-    const type = (parts[1] ?? '').toLowerCase();
-    const rawId = parts.slice(2).join(':').trim();
+    const native = parseServiceNativeAudiopath(raw);
+    let providerKey: string;
+    let type: string;
+    let rawId: string;
+    if (native) {
+      providerKey = native.slug ? `${native.service}:${native.slug}` : native.service;
+      type = native.isLibrary ? `library-${native.kind}` : native.kind;
+      rawId = native.id;
+    } else {
+      const parts = raw.split(':');
+      if (parts.length < 3) return null;
+      providerKey = parts[0] ?? '';
+      type = (parts[1] ?? '').toLowerCase();
+      rawId = parts.slice(2).join(':').trim();
+    }
     const decodedId = decodeAudiopath(rawId);
     const trackId = decodedId || rawId;
-    if (!providerId || !trackId) return null;
+    if (!providerKey || !trackId) return null;
     if (type !== 'track') return null;
 
     const bridge =
-      this.bridgesByProvider.get(providerId) ??
-      this.bridgesById.get(providerId.split('@')[1] ?? '') ??
+      this.bridgesByProvider.get(providerKey) ??
+      this.bridgesById.get(providerKey.split('@')[1] ?? '') ??
       null;
     if (!bridge) return null;
 
-    return { providerId, trackId, bridge };
+    return { providerId: providerKey, trackId, bridge };
   }
 
   private buildHeaders(bridge: SpotifyBridgeConfig): Record<string, string> {

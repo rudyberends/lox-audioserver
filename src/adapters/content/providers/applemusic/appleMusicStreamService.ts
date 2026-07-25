@@ -3,7 +3,8 @@ import { safeReadText } from '@/shared/bestEffort';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { SpotifyBridgeConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
-import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath, parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
+import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
 import Widevine, { LicenseType as WvLicenseType } from 'widevine';
 import {
   loadWidevineArtifacts,
@@ -117,12 +118,19 @@ export class AppleMusicStreamService {
     this.bridgesByProvider.clear();
     this.bridgesById.clear();
     const bridges = this.configPort.getConfig().content?.spotify?.bridges ?? [];
-    for (const bridge of bridges) {
-      const provider = (bridge.provider || '').toLowerCase();
-      if (provider !== 'applemusic') continue;
+    const appleBridges = bridges.filter((b) => (b.provider || '').toLowerCase() === 'applemusic');
+    const single = appleBridges.length <= 1;
+    for (const bridge of appleBridges) {
       const providerId = `spotify@${bridge.id}`;
       this.bridgesByProvider.set(providerId, bridge);
       this.bridgesById.set(bridge.id, bridge);
+      // Also index under the SERVICE-NATIVE prefix the provider now emits, so a
+      // `applemusic[:<slug>]:track:...` audiopath resolves to its bridge.
+      const slug = slugFromBridgeId(bridge.id, 'applemusic');
+      this.bridgesByProvider.set(`applemusic:${slug}`, bridge);
+      if (single) {
+        this.bridgesByProvider.set('applemusic', bridge);
+      }
     }
   }
 
@@ -271,14 +279,28 @@ export class AppleMusicStreamService {
 
   private parseTrackRequest(audiopath: string): AppleMusicTrackRequest | null {
     const raw = String(audiopath || '');
-    const parts = raw.split(':');
-    if (parts.length < 3) return null;
-    const providerId = parts[0] ?? '';
-    const type = (parts[1] ?? '').toLowerCase();
-    const rawId = parts.slice(2).join(':').trim();
-    const decodedId = decodeAudiopath(rawId);
-    const trackId = decodedId || rawId;
-    if (!providerId || !trackId) return null;
+    // Service-native form: `applemusic:track:X` or `applemusic:<slug>:track:X`
+    // (and library- aliases). The parser peels the optional slug so the kind is
+    // read correctly even in the multi-account form.
+    const native = parseServiceNativeAudiopath(raw);
+    let providerKey: string;
+    let type: string;
+    let rawId: string;
+    if (native) {
+      providerKey = native.slug ? `${native.service}:${native.slug}` : native.service;
+      type = native.isLibrary ? `library-${native.kind}` : native.kind;
+      rawId = native.id;
+    } else {
+      // Legacy Loxone form `spotify@<bridgeId>:<kind>:<id>`.
+      const parts = raw.split(':');
+      if (parts.length < 3) return null;
+      providerKey = parts[0] ?? '';
+      type = (parts[1] ?? '').toLowerCase();
+      rawId = parts.slice(2).join(':').trim();
+    }
+    const decodedId = decodeAudiopath(rawId.trim());
+    const trackId = decodedId || rawId.trim();
+    if (!providerKey || !trackId) return null;
     // Apple library IDs are prefixed a./i./l./p. (artist/item/album/playlist).
     const looksLikeLibraryId = /^[ailp]\./i.test(trackId);
     const isLibrary = type.startsWith('library-') || looksLikeLibraryId;
@@ -286,12 +308,14 @@ export class AppleMusicStreamService {
     if (normalized !== 'track') return null;
 
     const bridge =
-      this.bridgesByProvider.get(providerId) ??
-      this.bridgesById.get(providerId.split('@')[1] ?? '') ??
+      // Service-native prefix (`applemusic` / `applemusic:<slug>`, indexed in
+      // configureFromConfig) or the legacy `spotify@<bridgeId>` map key.
+      this.bridgesByProvider.get(providerKey) ??
+      this.bridgesById.get(providerKey.split('@')[1] ?? '') ??
       null;
     if (!bridge) return null;
 
-    return { providerId, trackId, isLibrary, bridge };
+    return { providerId: providerKey, trackId, isLibrary, bridge };
   }
 
   private async fetchWebPlayback(

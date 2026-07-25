@@ -2,7 +2,8 @@ import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { SpotifyBridgeConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
-import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath, parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
+import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -54,12 +55,20 @@ export class YtMusicStreamService {
     // Cookie files and cache entries are keyed by bridge id; keep them so playback isn't disrupted
     // across config refreshes (cookie updates will rewrite the file on demand).
     const bridges = this.configPort.getConfig().content?.spotify?.bridges ?? [];
-    for (const bridge of bridges) {
-      const provider = (bridge.provider || '').toLowerCase();
-      if (provider !== 'ytmusic') continue;
+    const ytmusicBridges = bridges.filter((b) => (b.provider || '').toLowerCase() === 'ytmusic');
+    const single = ytmusicBridges.length <= 1;
+    for (const bridge of ytmusicBridges) {
       const providerId = `spotify@${bridge.id}`;
       this.bridgesByProvider.set(providerId, bridge);
       this.bridgesById.set(bridge.id, bridge);
+      // Also index under the SERVICE-NATIVE prefix the provider now emits, so a
+      // `ytmusic[:<slug>]:track:...` audiopath resolves to its bridge. Cookie files and
+      // cache stay keyed by bridge.id (below/elsewhere); this only adds provider-map keys.
+      const slug = slugFromBridgeId(bridge.id, 'ytmusic');
+      this.bridgesByProvider.set(`ytmusic:${slug}`, bridge);
+      if (single) {
+        this.bridgesByProvider.set('ytmusic', bridge);
+      }
       this.scheduleWarmup(bridge);
     }
   }
@@ -184,25 +193,35 @@ export class YtMusicStreamService {
 
   private async parseTrackRequest(audiopath: string): Promise<YtMusicTrackRequest | null> {
     const raw = String(audiopath || '');
-    const parts = raw.split(':');
-    if (parts.length < 3) return null;
-    const providerId = parts[0] ?? '';
-    const type = (parts[1] ?? '').toLowerCase();
-    const rawId = parts.slice(2).join(':').trim();
+    const native = parseServiceNativeAudiopath(raw);
+    let providerKey: string;
+    let type: string;
+    let rawId: string;
+    if (native) {
+      providerKey = native.slug ? `${native.service}:${native.slug}` : native.service;
+      type = native.isLibrary ? `library-${native.kind}` : native.kind;
+      rawId = native.id;
+    } else {
+      const parts = raw.split(':');
+      if (parts.length < 3) return null;
+      providerKey = parts[0] ?? '';
+      type = (parts[1] ?? '').toLowerCase();
+      rawId = parts.slice(2).join(':').trim();
+    }
     const decodedId = decodeAudiopath(rawId);
     const idValue = decodedId || rawId;
-    if (!providerId || !idValue) return null;
+    if (!providerKey || !idValue) return null;
     if (type !== 'track') return null;
 
     const bridge =
-      this.bridgesByProvider.get(providerId) ??
-      this.bridgesById.get(providerId.split('@')[1] ?? '') ??
+      this.bridgesByProvider.get(providerKey) ??
+      this.bridgesById.get(providerKey.split('@')[1] ?? '') ??
       null;
     if (!bridge) return null;
 
     const videoId = extractVideoId(idValue);
     if (!videoId) return null;
-    return { providerId, videoId, bridge };
+    return { providerId: providerKey, videoId, bridge };
   }
 
   private execOptions(): YtDlpExecOptions {

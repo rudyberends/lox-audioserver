@@ -31,6 +31,7 @@ type SearchResult = {
 
 interface AppleMusicProviderOptions {
   providerId: string;
+  serviceNativePrefix?: string;
   label?: string;
   storefront?: string;
   developerToken?: string;
@@ -45,6 +46,7 @@ interface AppleMusicProviderOptions {
  */
 export class AppleMusicProvider {
   public readonly providerId: string;
+  private readonly audiopathPrefix: string;
   private readonly log = createLogger('Content', 'AppleMusic');
   private readonly label: string;
   private storefront: string;
@@ -59,6 +61,7 @@ export class AppleMusicProvider {
 
   constructor(options: AppleMusicProviderOptions) {
     this.providerId = options.providerId;
+    this.audiopathPrefix = options.serviceNativePrefix ?? options.providerId;
     this.label = options.label || 'Apple Music';
     this.storefront = (options.storefront || 'us').toLowerCase();
     this.developerToken = options.developerToken;
@@ -249,7 +252,7 @@ export class AppleMusicProvider {
     if (!item) {
       return null;
     }
-    return normalized.source === 'library' ? mapLibraryTrack(this.providerId, item) : mapTrack(this.providerId, item);
+    return normalized.source === 'library' ? mapLibraryTrack(this.audiopathPrefix, item) : mapTrack(this.audiopathPrefix, item);
   }
 
   public async search(query: string, limits: Record<string, number>, maxLimit: number): Promise<{ result: SearchResult; providerId: string; user: string }> {
@@ -279,19 +282,19 @@ export class AppleMusicProvider {
     const result: SearchResult = {};
     if (data?.results?.songs?.data) {
       const max = limits.track ?? limits.tracks ?? limit;
-      result.tracks = data.results.songs.data.slice(0, max).map((t: unknown) => mapTrack(this.providerId, t));
+      result.tracks = data.results.songs.data.slice(0, max).map((t: unknown) => mapTrack(this.audiopathPrefix, t));
     }
     if (data?.results?.albums?.data) {
       const max = limits.album ?? limits.albums ?? limit;
-      result.albums = data.results.albums.data.slice(0, max).map((a: unknown) => mapAlbum(this.providerId, a));
+      result.albums = data.results.albums.data.slice(0, max).map((a: unknown) => mapAlbum(this.audiopathPrefix, a));
     }
     if (data?.results?.artists?.data) {
       const max = limits.artist ?? limits.artists ?? limit;
-      result.artists = data.results.artists.data.slice(0, max).map((a: unknown) => mapArtist(this.providerId, a));
+      result.artists = data.results.artists.data.slice(0, max).map((a: unknown) => mapArtist(this.audiopathPrefix, a));
     }
     if (data?.results?.playlists?.data) {
       const max = limits.playlist ?? limits.playlists ?? limit;
-      result.playlists = data.results.playlists.data.slice(0, max).map((p: unknown) => mapPlaylist(this.providerId, p));
+      result.playlists = data.results.playlists.data.slice(0, max).map((p: unknown) => mapPlaylist(this.audiopathPrefix, p));
     }
     // The search `user` must match the account segment in the items' audiopaths
     // (`spotify@<account>:…`) — the native client browses a searched album via
@@ -521,7 +524,7 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((t: any) => mapTrack(this.providerId, t)),
+      items: items.map((t: any) => mapTrack(this.audiopathPrefix, t)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -536,7 +539,7 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((t: any) => mapTrack(this.providerId, t)),
+      items: items.map((t: any) => mapTrack(this.audiopathPrefix, t)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -551,7 +554,7 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((t: any) => mapTrack(this.providerId, t)),
+      items: items.map((t: any) => mapTrack(this.audiopathPrefix, t)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -564,7 +567,7 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((entry: any) => mapLibraryAlbum(this.providerId, entry)),
+      items: items.map((entry: any) => mapLibraryAlbum(this.audiopathPrefix, entry)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -577,7 +580,7 @@ export class AppleMusicProvider {
     const url = `${APPLE_MUSIC_API_BASE}/me/library/artists?limit=${limit}&offset=${offset}&include=catalog`;
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
-    const mapped: ContentFolderItem[] = items.map((entry: any) => mapLibraryArtist(this.providerId, entry));
+    const mapped: ContentFolderItem[] = items.map((entry: any) => mapLibraryArtist(this.audiopathPrefix, entry));
     return {
       items: mapped,
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
@@ -591,7 +594,7 @@ export class AppleMusicProvider {
     const url = `${APPLE_MUSIC_API_BASE}/me/library/playlists?limit=${limit}&offset=${offset}`;
     const data = await this.fetchJson<any>(url);
     const raw: any[] = Array.isArray(data?.data) ? data.data : [];
-    const items: ContentFolderItem[] = raw.map((entry: any) => mapLibraryPlaylist(this.providerId, entry));
+    const items: ContentFolderItem[] = raw.map((entry: any) => mapLibraryPlaylist(this.audiopathPrefix, entry));
     // Apple exposes no artwork for many user playlists — the app builds a mosaic
     // from the tracks, which the API doesn't return. Mirror Music Assistant: tile
     // the track covers into a server-side mosaic. Generation is lazy + cached, so
@@ -603,7 +606,7 @@ export class AppleMusicProvider {
       .slice(0, 16);
     await Promise.all(
       coverless.map(async ({ it, id }) => {
-        const key = collageKey(this.providerId, 'playlist', String(id));
+        const key = collageKey(this.audiopathPrefix, 'playlist', String(id));
         const cached = await collageCachedUrl(this.coverHost, key);
         if (cached) {
           it.coverurl = cached;
@@ -636,7 +639,7 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((entry: any) => mapLibraryTrack(this.providerId, entry)),
+      items: items.map((entry: any) => mapLibraryTrack(this.audiopathPrefix, entry)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -649,7 +652,7 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((entry: any) => mapLibraryAlbum(this.providerId, entry)),
+      items: items.map((entry: any) => mapLibraryAlbum(this.audiopathPrefix, entry)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -663,7 +666,7 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((t: any) => mapLibraryTrack(this.providerId, t)),
+      items: items.map((t: any) => mapLibraryTrack(this.audiopathPrefix, t)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -677,7 +680,7 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((t: any) => mapLibraryTrack(this.providerId, t)),
+      items: items.map((t: any) => mapLibraryTrack(this.audiopathPrefix, t)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -691,7 +694,7 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((entry: any) => mapLibraryAlbum(this.providerId, entry)),
+      items: items.map((entry: any) => mapLibraryAlbum(this.audiopathPrefix, entry)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }
@@ -721,7 +724,7 @@ export class AppleMusicProvider {
         if (allowedTypes && (!type || !allowedTypes.has(type))) {
           continue;
         }
-        const mapped = mapRecommendationItem(this.providerId, entry);
+        const mapped = mapRecommendationItem(this.audiopathPrefix, entry);
         if (mapped) {
           all.push(mapped);
         }
@@ -746,7 +749,7 @@ export class AppleMusicProvider {
     const data = await this.fetchJson<any>(url.toString());
     const items = Array.isArray(data?.data) ? data.data : [];
     return {
-      items: items.map((entry: any) => mapAlbum(this.providerId, entry)),
+      items: items.map((entry: any) => mapAlbum(this.audiopathPrefix, entry)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
   }

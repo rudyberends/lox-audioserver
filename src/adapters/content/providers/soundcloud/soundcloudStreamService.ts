@@ -2,7 +2,8 @@ import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { SpotifyBridgeConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
-import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath, parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
+import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
 import { buildProxyUrl } from '@/shared/urlProxy';
 import {
   SoundCloudClient,
@@ -48,12 +49,21 @@ export class SoundCloudStreamService {
     this.bridgesById.clear();
     this.clients.clear();
     const bridges = this.configPort.getConfig().content?.spotify?.bridges ?? [];
-    for (const bridge of bridges) {
-      const provider = (bridge.provider || '').toLowerCase();
-      if (provider !== 'soundcloud') continue;
+    const soundcloudBridges = bridges.filter(
+      (b) => (b.provider || '').toLowerCase() === 'soundcloud',
+    );
+    const single = soundcloudBridges.length <= 1;
+    for (const bridge of soundcloudBridges) {
       const providerId = `spotify@${bridge.id}`;
       this.bridgesByProvider.set(providerId, bridge);
       this.bridgesById.set(bridge.id, bridge);
+      // Also index under the SERVICE-NATIVE prefix the provider now emits, so a
+      // `soundcloud[:<slug>]:track:...` audiopath resolves to its bridge.
+      const slug = slugFromBridgeId(bridge.id, 'soundcloud');
+      this.bridgesByProvider.set(`soundcloud:${slug}`, bridge);
+      if (single) {
+        this.bridgesByProvider.set('soundcloud', bridge);
+      }
     }
   }
 
@@ -179,23 +189,38 @@ export class SoundCloudStreamService {
 
   private parseTrackRequest(audiopath: string): SoundCloudTrackRequest | null {
     const raw = String(audiopath || '');
-    const parts = raw.split(':');
-    if (parts.length < 3) return null;
-    const providerId = parts[0] ?? '';
-    const type = (parts[1] ?? '').toLowerCase();
-    const rawId = parts.slice(2).join(':').trim();
+    // Service-native form: `soundcloud:track:X` or `soundcloud:<slug>:track:X`.
+    // The parser peels the optional account slug so the kind is read correctly
+    // even in the multi-account form (a naive `:` split would treat the slug as
+    // the type and reject it).
+    const native = parseServiceNativeAudiopath(raw);
+    let providerKey: string;
+    let type: string;
+    let rawId: string;
+    if (native) {
+      providerKey = native.slug ? `${native.service}:${native.slug}` : native.service;
+      type = native.isLibrary ? `library-${native.kind}` : native.kind;
+      rawId = native.id;
+    } else {
+      // Legacy Loxone form `spotify@<bridgeId>:<kind>:<id>`.
+      const parts = raw.split(':');
+      if (parts.length < 3) return null;
+      providerKey = parts[0] ?? '';
+      type = (parts[1] ?? '').toLowerCase();
+      rawId = parts.slice(2).join(':').trim();
+    }
     const decodedId = decodeAudiopath(rawId);
     const trackId = decodedId || rawId;
-    if (!providerId || !trackId) return null;
+    if (!providerKey || !trackId) return null;
     if (type !== 'track') return null;
 
     const bridge =
-      this.bridgesByProvider.get(providerId) ??
-      this.bridgesById.get(providerId.split('@')[1] ?? '') ??
+      this.bridgesByProvider.get(providerKey) ??
+      this.bridgesById.get(providerKey.split('@')[1] ?? '') ??
       null;
     if (!bridge) return null;
 
-    return { providerId, trackId, bridge };
+    return { providerId: providerKey, trackId, bridge };
   }
 
   private clientFor(request: SoundCloudTrackRequest): SoundCloudClient {

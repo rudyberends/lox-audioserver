@@ -24,6 +24,7 @@ import { SoundCloudProvider } from '@/adapters/content/providers/soundcloud/soun
 import { resolveSpotifyClientId } from '@/adapters/content/providers/spotify/utils';
 import { parseSearchLimits } from '@/adapters/content/utils/searchLimits';
 import { resolveCoverHost } from '@/shared/utils/net';
+import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
 
 type ProviderId = string;
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
@@ -897,7 +898,37 @@ export class SpotifyServiceManager {
     if (trimmed.toLowerCase().startsWith('spotify@')) {
       return trimmed;
     }
+    // Service-native form: a real service name (`applemusic`) or `service:slug`.
+    // Resolve it to the internal bridge provider-map key (spotify@<bridgeId>).
+    const bridgeProviderId = this.bridgeProviderIdForServiceNative(trimmed);
+    if (bridgeProviderId) {
+      return bridgeProviderId;
+    }
     return this.providerIdFor(trimmed);
+  }
+
+  /**
+   * Map a service-native identity — a bare service name (`applemusic`, sole
+   * account) or `service:slug` (multi-account) — to the internal bridge
+   * provider-map key `spotify@<bridgeId>`. Returns null when it is not a
+   * configured bridge service (e.g. real Spotify).
+   */
+  private bridgeProviderIdForServiceNative(serviceNative: string): ProviderId | null {
+    const raw = serviceNative.trim().toLowerCase();
+    if (!raw || raw === 'spotify') {
+      return null;
+    }
+    const [service, slug] = raw.split(':');
+    const candidates = (this.bridges ?? []).filter(
+      (b) => b && b.enabled !== false && (b.provider || '').toLowerCase() === service,
+    );
+    if (candidates.length === 0) {
+      return null;
+    }
+    const match = slug
+      ? candidates.find((b) => slugFromBridgeId(b.id, service!).toLowerCase() === slug)
+      : candidates[0];
+    return match ? this.providerIdFor(match.id) : null;
   }
 
   /**
@@ -942,12 +973,33 @@ export class SpotifyServiceManager {
     return this.providerIdFor(bridge.id);
   }
 
+  /**
+   * The SERVICE-NATIVE audiopath prefix a bridge provider should emit, e.g.
+   * `applemusic` (single account) or `applemusic:p0gngd` (multiple accounts of
+   * that service). This is the core identity — the internal provider-map key
+   * stays `spotify@<bridgeId>` (see bridgeProviderId). The Loxone adapter
+   * translates between the two at the protocol boundary.
+   */
+  private serviceNativePrefixFor(bridge: SpotifyBridgeConfig): string {
+    const service = (bridge.provider || 'spotify').toLowerCase();
+    const sameServiceCount = (this.bridges ?? []).filter(
+      (b) => b && b.enabled !== false && (b.provider || '').toLowerCase() === service,
+    ).length;
+    if (sameServiceCount <= 1) {
+      return service;
+    }
+    return `${service}:${slugFromBridgeId(bridge.id, service)}`;
+  }
+
   private registerBridgeProviders(): void {
     if (!Array.isArray(this.bridges) || this.bridges.length === 0) return;
 
     for (const bridge of this.bridges) {
       if (!bridge || bridge.enabled === false) continue;
       const providerId = this.bridgeProviderId(bridge);
+      // Internal provider-map key stays `spotify@<bridgeId>` (providerId); the
+      // service-native prefix is what the provider emits into audiopaths.
+      const serviceNativePrefix = this.serviceNativePrefixFor(bridge);
       const providerType = (bridge.provider || 'spotify').toLowerCase();
       const labelOverride = bridge.label || bridge.id;
       if (this.providers.has(providerId)) {
@@ -958,6 +1010,7 @@ export class SpotifyServiceManager {
       if (providerType === 'musicassistant') {
         const provider = new MusicAssistantBridgeProvider({
           providerId,
+          serviceNativePrefix,
           label: labelOverride,
           host: bridge.host,
           port: bridge.port,
@@ -971,6 +1024,7 @@ export class SpotifyServiceManager {
       if (providerType === 'applemusic') {
         const provider = new AppleMusicProvider({
           providerId,
+          serviceNativePrefix,
           label: labelOverride,
           developerToken: bridge.developerToken,
           userToken: bridge.userToken,
@@ -983,6 +1037,7 @@ export class SpotifyServiceManager {
       if (providerType === 'deezer') {
         const provider = new DeezerProvider({
           providerId,
+          serviceNativePrefix,
           label: labelOverride,
           arl: bridge.deezerArl,
         });
@@ -993,6 +1048,7 @@ export class SpotifyServiceManager {
       if (providerType === 'tidal') {
         const provider = new TidalProvider({
           providerId,
+          serviceNativePrefix,
           label: labelOverride,
           accessToken: bridge.tidalAccessToken,
           countryCode: bridge.tidalCountryCode,
@@ -1004,6 +1060,7 @@ export class SpotifyServiceManager {
       if (providerType === 'ytmusic') {
         const provider = new YtMusicProvider({
           providerId,
+          serviceNativePrefix,
           label: labelOverride,
           bridge,
         });
@@ -1014,6 +1071,7 @@ export class SpotifyServiceManager {
       if (providerType === 'youtube') {
         const provider = new YoutubeProvider({
           providerId,
+          serviceNativePrefix,
           label: labelOverride,
           bridge,
         });
@@ -1024,6 +1082,7 @@ export class SpotifyServiceManager {
       if (providerType === 'soundcloud') {
         const provider = new SoundCloudProvider({
           providerId,
+          serviceNativePrefix,
           label: labelOverride,
           oauthToken: bridge.soundcloudOauthToken,
           clientId: bridge.soundcloudClientId,
@@ -1036,6 +1095,7 @@ export class SpotifyServiceManager {
       if (!account) continue;
       const provider = new FakeSpotifyAccountProvider(providerType, labelOverride, {
         providerId,
+        serviceNativePrefix,
         account,
         clientId: account.clientId ?? this.clientId,
         persistAccount: this.persistAccountState,

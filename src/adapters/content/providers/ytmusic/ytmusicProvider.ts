@@ -33,6 +33,7 @@ type SearchResult = {
 
 interface YtMusicProviderOptions {
   providerId: string;
+  serviceNativePrefix?: string;
   label?: string;
   bridge: SpotifyBridgeConfig;
   browse?: (browseId: string, options: YtMusicInnertubeClientOptions) => Promise<any>;
@@ -56,6 +57,7 @@ type FolderKind =
 
 export class YtMusicProvider {
   public readonly providerId: string;
+  private readonly audiopathPrefix: string;
   private readonly log = createLogger('Content', 'YTMusic');
   private readonly label: string;
   private bridge: SpotifyBridgeConfig;
@@ -76,6 +78,7 @@ export class YtMusicProvider {
 
   constructor(options: YtMusicProviderOptions) {
     this.providerId = options.providerId;
+    this.audiopathPrefix = options.serviceNativePrefix ?? options.providerId;
     this.label = options.label || 'YouTube Music';
     this.bridge = options.bridge;
     this.browse = options.browse ?? ytmBrowse;
@@ -582,7 +585,7 @@ export class YtMusicProvider {
   }
 
   private makeUri(type: 'track' | 'playlist' | 'album' | 'artist', id: string): string {
-    return `${this.providerId}:${type}:${id}`;
+    return `${this.audiopathPrefix}:${type}:${id}`;
   }
 
   private pickThumb(value: any): string {
@@ -713,7 +716,7 @@ export class YtMusicProvider {
     const duration = typeof data?.duration === 'number' ? Math.round(data.duration) : undefined;
     const thumb = (typeof data?.thumbnail === 'string' ? data.thumbnail : '') || fallbackVideoThumb(id);
     const uploader = String(data?.uploader ?? data?.channel ?? '');
-    const audiopath = `${this.providerId}:track:${id}`;
+    const audiopath = `${this.audiopathPrefix}:track:${id}`;
     return {
       id: audiopath,
       audiopath,
@@ -880,7 +883,7 @@ export class YtMusicProvider {
       const json = await this.browse(albumBrowseId, { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
       const listItems = extractResponsiveListItems(json);
       const tracks = listItems
-        .map((it) => mapResponsiveToTrack(this.providerId, it))
+        .map((it) => mapResponsiveToTrack(this.audiopathPrefix, it))
         .filter(Boolean) as ContentFolderItem[];
       this.albumTracksCache.set(albumBrowseId, { items: tracks, fetchedAt: Date.now() });
       return tracks.slice(offset, offset + limit);
@@ -903,7 +906,7 @@ export class YtMusicProvider {
       const json = await this.browse(artistBrowseId, { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
       const listItems = extractResponsiveListItems(json);
       const tracks = listItems
-        .map((it) => mapResponsiveToTrack(this.providerId, it))
+        .map((it) => mapResponsiveToTrack(this.audiopathPrefix, it))
         .filter(Boolean) as ContentFolderItem[];
       this.artistTracksCache.set(artistBrowseId, { items: tracks, fetchedAt: Date.now() });
       return tracks.slice(offset, offset + limit);

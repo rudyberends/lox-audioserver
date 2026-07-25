@@ -19,6 +19,7 @@ type SearchResult = {
 
 interface TidalProviderOptions {
   providerId: string;
+  serviceNativePrefix?: string;
   label?: string;
   accessToken?: string;
   countryCode?: string;
@@ -30,6 +31,7 @@ interface TidalProviderOptions {
  */
 export class TidalProvider {
   public readonly providerId: string;
+  private readonly audiopathPrefix: string;
   private readonly log = createLogger('Content', 'Tidal');
   private readonly label: string;
   private readonly accessToken?: string;
@@ -37,6 +39,7 @@ export class TidalProvider {
 
   constructor(options: TidalProviderOptions) {
     this.providerId = options.providerId;
+    this.audiopathPrefix = options.serviceNativePrefix ?? options.providerId;
     this.label = options.label || 'Tidal';
     this.accessToken = options.accessToken;
     this.countryCode = options.countryCode || 'US';
@@ -183,7 +186,7 @@ export class TidalProvider {
   }
 
   private makeUri(type: string, id: string): string {
-    return `${this.providerId}:${type}:${id}`;
+    return `${this.audiopathPrefix}:${type}:${id}`;
   }
 
   private stripProviderPrefix(value: string): string {

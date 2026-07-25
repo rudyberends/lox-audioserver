@@ -14,6 +14,8 @@ const enum FileType {
 
 interface MusicAssistantBridgeOptions {
   providerId: string;
+  /** Service-native audiopath prefix (e.g. `musicassistant` or `...:slug`). */
+  serviceNativePrefix?: string;
   label?: string;
   host?: string;
   port?: number;
@@ -57,6 +59,7 @@ export class MusicAssistantBridgeProvider extends SpotifyAccountProvider {
     } as SpotifyAccountState;
     const providerOptions: SpotifyAccountProviderOptions = {
       providerId: options.providerId,
+      serviceNativePrefix: options.serviceNativePrefix,
       account,
       clientId: '',
       // Music Assistant does not need Spotify persistence; stub out.
@@ -488,11 +491,11 @@ export class MusicAssistantBridgeProvider extends SpotifyAccountProvider {
 
   private makeMaUri(type: string, rawId: string, item?: any): string {
     const encoded = this.encodeMaId(type, rawId, item);
-    return `${this.providerId}:${type}:${encoded}`;
+    return `${this.audiopathPrefix}:${type}:${encoded}`;
   }
 
   private makeMaRecommendationId(itemId: string): string {
-    return `${this.providerId}:recommendation:${itemId}`;
+    return `${this.audiopathPrefix}:recommendation:${itemId}`;
   }
 
   private encodeMaId(type: string, rawId: string, item?: any): string {

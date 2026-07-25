@@ -19,6 +19,7 @@ type SearchResult = {
 
 interface DeezerProviderOptions {
   providerId: string;
+  serviceNativePrefix?: string;
   label?: string;
   arl?: string;
 }
@@ -29,6 +30,7 @@ interface DeezerProviderOptions {
  */
 export class DeezerProvider {
   public readonly providerId: string;
+  private readonly audiopathPrefix: string;
   private readonly log = createLogger('Content', 'Deezer');
   private readonly label: string;
   private readonly arl?: string;
@@ -36,6 +38,7 @@ export class DeezerProvider {
 
   constructor(options: DeezerProviderOptions) {
     this.providerId = options.providerId;
+    this.audiopathPrefix = options.serviceNativePrefix ?? options.providerId;
     this.label = options.label || 'Deezer';
     this.arl = options.arl;
   }
@@ -272,7 +275,7 @@ export class DeezerProvider {
   }
 
   private makeUri(type: string, id: string): string {
-    return `${this.providerId}:${type}:${id}`;
+    return `${this.audiopathPrefix}:${type}:${id}`;
   }
 
   private stripProviderPrefix(value: string): string {

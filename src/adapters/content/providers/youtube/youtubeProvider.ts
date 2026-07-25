@@ -26,6 +26,7 @@ type SearchResult = {
 
 interface YoutubeProviderOptions {
   providerId: string;
+  serviceNativePrefix?: string;
   label?: string;
   bridge: SpotifyBridgeConfig;
 }
@@ -45,6 +46,7 @@ type FolderKind =
 
 export class YoutubeProvider {
   public readonly providerId: string;
+  private readonly audiopathPrefix: string;
   private readonly log = createLogger('Content', 'YouTube');
   private readonly label: string;
   private readonly apiClient: YoutubeApiClient | null;
@@ -54,6 +56,7 @@ export class YoutubeProvider {
 
   constructor(options: YoutubeProviderOptions) {
     this.providerId = options.providerId;
+    this.audiopathPrefix = options.serviceNativePrefix ?? options.providerId;
     this.label = options.label || 'YouTube';
     this.apiClient = options.bridge.youtubeApiKey
       ? new YoutubeApiClient(options.bridge.youtubeApiKey)
@@ -357,7 +360,7 @@ export class YoutubeProvider {
   }
 
   private makeUri(type: 'track' | 'playlist' | 'channel', id: string): string {
-    return `${this.providerId}:${type}:${id}`;
+    return `${this.audiopathPrefix}:${type}:${id}`;
   }
 
   private mapYtDlpEntryToTrack(entry: any): ContentFolderItem | null {
@@ -382,7 +385,7 @@ export class YoutubeProvider {
     const title = String(data?.title ?? id);
     const duration = typeof data?.duration === 'number' ? Math.round(data.duration) : undefined;
     const thumb = (typeof data?.thumbnail === 'string' ? data.thumbnail : '') || fallbackVideoThumb(id);
-    const audiopath = `${this.providerId}:track:${id}`;
+    const audiopath = `${this.audiopathPrefix}:track:${id}`;
     return {
       id: audiopath, audiopath, name: title, title,
       artist: String(data?.uploader ?? data?.channel ?? ''),
