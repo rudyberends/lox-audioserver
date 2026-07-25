@@ -360,6 +360,14 @@ export class AudioStreamHandler {
       icyName?: string;
     } = {},
   ): void {
+    // DLNA.ORG_PN names the media profile. Advertising the MP3 profile makes the
+    // stream a recognised, conformant DLNA resource rather than an unnamed one —
+    // the correct value to send for an MP3 body. (Note: it does NOT make a B&O
+    // renderer show a timeline; B&O only shows a seekbar for items in its own
+    // native play queue and treats any UPnP push as a live DLNA_DMR stream. That
+    // is a renderer-side limitation, not something the stream headers can change.)
+    // Only add it for audio/mpeg; other content types keep their working headers.
+    const dlnaPn = contentType === 'audio/mpeg' ? 'DLNA.ORG_PN=MP3;' : '';
     const headers: Record<string, string | number> = {
       'Content-Type': contentType,
       'Cache-Control': 'no-cache',
@@ -372,7 +380,7 @@ export class AudioStreamHandler {
       // strict renderers (B&O) stall on a HEAD/range probe before committing to the GET.
       // FLAGS 8D500000 = sender-paced + streaming-transfer + no-full-clear + background-ok.
       'contentFeatures.dlna.org':
-        'DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=8D500000000000000000000000000000',
+        `${dlnaPn}DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=8D500000000000000000000000000000`,
     };
     if (options.chunked) {
       headers['Transfer-Encoding'] = 'chunked';
