@@ -191,6 +191,91 @@ export function detectLoxoneItemType(
 }
 
 /**
+ * The closed set of content kinds a service-native audiopath may carry, plus the
+ * Apple `library-*` aliases. Shared by the service-native parser and any caller
+ * that needs to distinguish a `<kind>` segment from an `<acct>` slug.
+ */
+export const KNOWN_KINDS = [
+  'track',
+  'album',
+  'artist',
+  'playlist',
+  'radio',
+  'library-track',
+  'library-album',
+  'library-artist',
+  'library-playlist',
+] as const;
+
+const KNOWN_KIND_SET = new Set<string>(KNOWN_KINDS);
+
+export type ServiceNativeKind =
+  | 'track'
+  | 'album'
+  | 'artist'
+  | 'playlist'
+  | 'radio';
+
+export interface ServiceNativeAudiopath {
+  /** Real service, e.g. 'applemusic' | 'tidal' | 'spotify'. */
+  service: string;
+  /** Account slug; undefined when omitted (single-account services). */
+  slug?: string;
+  /** Base kind with the `library-` prefix stripped. */
+  kind: ServiceNativeKind;
+  /** True when the source kind carried the Apple `library-` prefix. */
+  isLibrary: boolean;
+  /** Greedy remainder after the kind segment (still possibly `b64_`-wrapped). */
+  id: string;
+}
+
+/**
+ * Parse a service-native audiopath `<service>[:<acct>]:<kind>:<id>`.
+ *
+ * Disambiguation is purely structural: after splitting on `:`, if the second
+ * segment is a KNOWN_KIND there is no account (implicit default); otherwise the
+ * second segment is the account slug and the third is the kind. Slugs are never
+ * members of the closed kind vocabulary, so this is unambiguous. The id is the
+ * greedy remainder (rejoined with `:`) so base64 payloads survive.
+ *
+ * Returns null for anything that is not a well-formed service-native path (e.g.
+ * the legacy `spotify@bridge-...` form, or non-conforming input), so callers can
+ * fall back to legacy handling during the transition.
+ */
+export function parseServiceNativeAudiopath(
+  audiopath: string,
+): ServiceNativeAudiopath | null {
+  const raw = (audiopath || '').trim();
+  if (!raw || raw.includes('@') || raw.includes('://')) {
+    // `@` is the legacy Loxone/account form; `://` is a scheme URI. Neither is
+    // service-native.
+    return null;
+  }
+  const parts = raw.split(':');
+  if (parts.length < 3) {
+    return null;
+  }
+  const service = (parts[0] ?? '').toLowerCase();
+  if (!service) {
+    return null;
+  }
+  const secondIsKind = KNOWN_KIND_SET.has((parts[1] ?? '').toLowerCase());
+  const slug = secondIsKind ? undefined : parts[1];
+  const kindIdx = secondIsKind ? 1 : 2;
+  const kindRaw = (parts[kindIdx] ?? '').toLowerCase();
+  if (!KNOWN_KIND_SET.has(kindRaw)) {
+    return null;
+  }
+  const id = parts.slice(kindIdx + 1).join(':');
+  if (!id) {
+    return null;
+  }
+  const isLibrary = kindRaw.startsWith('library-');
+  const kind = (isLibrary ? kindRaw.slice('library-'.length) : kindRaw) as ServiceNativeKind;
+  return { service, slug: slug || undefined, kind, isLibrary, id };
+}
+
+/**
  * Small heuristic to infer audiotype from a URI. Returns values from the
  * Loxone `AudioType` enum (File=0, Radio=1, LineIn=3, Spotify=5).
  */

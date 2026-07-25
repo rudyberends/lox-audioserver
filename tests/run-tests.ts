@@ -8,6 +8,7 @@ import path from 'node:path';
 import { test, tests } from './testHarness';
 import './architecture/importBoundaries.test';
 import './sessionKey.test';
+import './serviceNativeIdentity.test';
 import './engine/rollingBuffer.test';
 import './engine/pcmFrameAligner.test';
 import './engine/codecPolicy.test';
