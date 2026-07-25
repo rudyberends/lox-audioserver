@@ -586,7 +586,7 @@ async function handleContentUpdate(
 ): Promise<void> {
   const body = (await deps.readJsonBody(req, res)) as
     | {
-        radio?: { tuneInUsername?: string | null };
+        radio?: { tuneInUsername?: string | null; radioParadise?: { enabled?: boolean } };
         spotify?: { clientId?: string | null; cacheEnabled?: boolean; cacheSizeMb?: number };
         library?: { enabled?: boolean; autoScan?: boolean };
         tts?: AudioServerConfig['content']['tts'];
@@ -604,13 +604,18 @@ async function handleContentUpdate(
   await deps.configPort.updateConfig((cfg) => {
     if (!cfg.content) cfg.content = defaultConfig().content;
     if (body.radio) {
-      cfg.content.radio = {
-        ...(cfg.content.radio ?? {}),
-        tuneInUsername:
-          typeof body.radio.tuneInUsername === 'string'
-            ? body.radio.tuneInUsername.trim()
-            : '',
-      };
+      const radio = { ...(cfg.content.radio ?? {}) };
+      // Update only the fields present so an RP-only toggle doesn't clobber the
+      // TuneIn username and vice versa.
+      if (typeof body.radio.tuneInUsername === 'string') {
+        radio.tuneInUsername = body.radio.tuneInUsername.trim();
+      } else if (body.radio.tuneInUsername === null) {
+        radio.tuneInUsername = '';
+      }
+      if (body.radio.radioParadise && typeof body.radio.radioParadise.enabled === 'boolean') {
+        radio.radioParadise = { enabled: body.radio.radioParadise.enabled };
+      }
+      cfg.content.radio = radio;
     }
     if (body.spotify) {
       cfg.content.spotify = {

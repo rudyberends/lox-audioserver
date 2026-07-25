@@ -201,6 +201,12 @@ export interface AppleMusicContentConfig {
 
 export interface RadioContentConfig {
   tuneInUsername?: string | null;
+  /**
+   * Radio Paradise as a toggleable provider (like a streaming service). Absent
+   * or true = available; false = its folders return empty so it disappears from
+   * our own consumers (player/DLNA) and the native Loxone Radio tile alike.
+   */
+  radioParadise?: { enabled?: boolean };
 }
 
 export interface SpotifyContentConfig {

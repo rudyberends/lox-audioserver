@@ -56,6 +56,10 @@ const AVAILABLE_SERVICES = [
   },
 ];
 
+function emptyFolder(id: string, name: string, start: number, service: string): ContentFolder {
+  return { id, name, items: [], totalitems: 0, start, service };
+}
+
 export class ContentManager {
   private readonly log = createLogger('Content', 'Manager');
   private spotify: SpotifyServiceManager | null = null;
@@ -217,6 +221,11 @@ export class ContentManager {
     return this.cache.refresh(cacheKey, fetcher);
   }
 
+  /** Radio Paradise is available unless explicitly disabled in config. */
+  private isRadioParadiseEnabled(): boolean {
+    return this.configPort.getConfig().content?.radio?.radioParadise?.enabled !== false;
+  }
+
   public async getRadios(): Promise<RadioMenuEntry[]> {
     // Radio Paradise now lives under the built-in Loxone Radio tile (the
     // `loxoneradio` service folder), so it is intentionally absent here.
@@ -356,15 +365,20 @@ export class ContentManager {
     if (service === 'local' || service === 'custom') {
       folder = await this.tunein.getFolder(service, folderId, offset, limit);
     } else if (service.toLowerCase() === 'radioparadise') {
-      folder = await this.radioParadise.getFolder(folderId, offset, limit);
+      folder = this.isRadioParadiseEnabled()
+        ? await this.radioParadise.getFolder(folderId, offset, limit)
+        : emptyFolder(folderId, 'Radio Paradise', offset, 'radioparadise');
     } else if (service.toLowerCase() === 'loxoneradio') {
       // The V17 client ships a built-in Loxone Radio tile and browses it via
       // getservicefolder/loxoneradio. Loxone's own streams are gated behind an mTLS
-      // device certificate a software audioserver can't present, so instead of leaving
-      // the tile empty (which makes the app error out) we surface the Radio Paradise
-      // stations here. Their audiopath stays `radioparadise:<id>`, so playback and
-      // metadata resolution are unaffected by which folder listed them.
-      folder = await this.radioParadise.getFolder(folderId === 'root' ? 'start' : folderId, offset, limit);
+      // device certificate a software audioserver can't present, so we surface the
+      // Radio Paradise stations here. Their audiopath stays `radioparadise:<id>`, so
+      // playback and metadata resolution are unaffected by which folder listed them.
+      // When Radio Paradise is disabled this returns an empty folder (the client
+      // handles an empty Radio tile fine).
+      folder = this.isRadioParadiseEnabled()
+        ? await this.radioParadise.getFolder(folderId === 'root' ? 'start' : folderId, offset, limit)
+        : emptyFolder(folderId, 'Radio', offset, 'loxoneradio');
     } else {
       folder = await this.requireSpotify().getFolder(service, user, folderId, offset, limit);
     }

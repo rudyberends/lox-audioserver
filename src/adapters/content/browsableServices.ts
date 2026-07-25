@@ -95,7 +95,9 @@ export function buildBrowsableServices(
     });
   }
 
-  if (permitted('radio')) {
+  // This "radio" browsable service surfaces Radio Paradise; hide it when RP is
+  // disabled so our own player/DLNA root drops the tile (not just its contents).
+  if (permitted('radio') && config.getConfig().content?.radio?.radioParadise?.enabled !== false) {
     services.push({
       key: 'radio',
       provider: 'radio',
