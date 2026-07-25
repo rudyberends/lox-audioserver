@@ -172,10 +172,9 @@ export class QueueAdvanceController {
       }
       void this.deps.contentPort
         .resolvePlaybackSource({
-          zoneId: ctx.id,
-          zoneName: ctx.name,
           audiopath: item.audiopath,
           prefetch: true,
+          requester: { kind: 'zone', zoneId: ctx.id },
         })
         .catch((error) => {
           this.deps.log.debug('next track prefetch failed', {

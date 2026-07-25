@@ -65,9 +65,8 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
 
   if (plan.kind === 'provider-stream' && plan.playExternalLabel) {
     const result = await content.resolvePlaybackSource({
-      zoneId: plan.zoneId,
-      zoneName: plan.zoneName,
       audiopath: plan.audiopath,
+      requester: { kind: 'zone', zoneId: plan.zoneId },
     });
     if (result.playbackSource) {
       return ctx.player.playExternal(

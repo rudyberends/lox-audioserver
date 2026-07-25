@@ -190,7 +190,7 @@ export class CrossfadeController {
 
         if (isAppleMusic || isDeezer || isTidal || isYtMusic || isSoundcloud) {
           const resolution = await this.deps.contentPort
-            .resolvePlaybackSource({ zoneId, zoneName: ctx.name, audiopath: nextItem.audiopath })
+            .resolvePlaybackSource({ audiopath: nextItem.audiopath, requester: { kind: 'zone', zoneId } })
             .catch(() => null);
           resolvedSource = resolution?.playbackSource ?? null;
         } else {

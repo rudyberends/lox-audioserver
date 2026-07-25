@@ -280,13 +280,12 @@ export class TrackStreamHandler {
     if (direct) {
       return direct;
     }
-    // Otherwise ask the content layer (Apple/Deezer/Tidal/YT/SoundCloud). A
-    // synthetic zone id is fine: resolvers key their own proxies, not zone state.
+    // Otherwise ask the content layer (Apple/Deezer/Tidal/YT/SoundCloud) as an
+    // ephemeral (non-zone) requester: no zone to scope the cache or route errors.
     try {
       const resolution = await this.content.resolvePlaybackSource({
-        zoneId: 900_000_000,
-        zoneName: 'dlna',
         audiopath,
+        requester: { kind: 'ephemeral' },
       });
       return resolution.playbackSource ?? null;
     } catch (error) {

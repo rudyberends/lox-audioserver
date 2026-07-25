@@ -41,12 +41,15 @@ export class ContentAdapter implements ContentPort {
   public async resolvePlaybackSource(
     args: PlaybackSourceResolveArgs,
   ): Promise<StreamResolution> {
-    const { audiopath, zoneId } = args;
+    const { audiopath } = args;
+    const zoneId = args.requester?.kind === 'zone' ? args.requester.zoneId : null;
     // YouTube and ytmusic stream URLs are zone-independent; share cache across zones.
     const providerSegment = (audiopath.split(':')[0] ?? '').trim();
     const isYtLike = this.streamResolvers.youtube.isYoutubeProvider(providerSegment) ||
       this.streamResolvers.ytmusic.isYtMusicProvider(providerSegment);
-    const cacheKey = isYtLike ? audiopath : `${zoneId}:${audiopath}`;
+    // Per-zone cache partitioning is incidental (stream URLs are request-scoped),
+    // so an ephemeral requester shares the un-partitioned key — same or better hit rate.
+    const cacheKey = isYtLike || zoneId == null ? audiopath : `${zoneId}:${audiopath}`;
     const now = Date.now();
     const cached = this.resolveCache.get(cacheKey);
     if (cached && cached.expiresAt > now) {
@@ -79,7 +82,10 @@ export class ContentAdapter implements ContentPort {
   private async resolvePlaybackSourceInternal(
     args: PlaybackSourceResolveArgs,
   ): Promise<StreamResolution> {
-    const { audiopath, zoneId, zoneName } = args;
+    const { audiopath } = args;
+    // Only a real zone routes stream-resolution errors; ephemeral requesters
+    // (DLNA) have no zone to notify, so they pass undefined and stay silent.
+    const zoneId = args.requester?.kind === 'zone' ? args.requester.zoneId : undefined;
     const suppressErrors = args.prefetch === true;
     const providerSegment = (audiopath.split(':')[0] ?? '').trim();
     const detectedService = detectServiceFromAudiopath(audiopath);
@@ -90,7 +96,6 @@ export class ContentAdapter implements ContentPort {
     if (providerSegment && appleMusic.isAppleMusicProvider(providerSegment)) {
       const result = await appleMusic.startStreamForAudiopath(
         zoneId,
-        zoneName,
         audiopath,
         { suppressErrors },
       );
@@ -99,7 +104,6 @@ export class ContentAdapter implements ContentPort {
     if (providerSegment && deezer.isDeezerProvider(providerSegment)) {
       const result = await deezer.startStreamForAudiopath(
         zoneId,
-        zoneName,
         audiopath,
         { suppressErrors },
       );
@@ -108,7 +112,6 @@ export class ContentAdapter implements ContentPort {
     if (providerSegment && tidal.isTidalProvider(providerSegment)) {
       const result = await tidal.startStreamForAudiopath(
         zoneId,
-        zoneName,
         audiopath,
         { suppressErrors },
       );
@@ -117,7 +120,6 @@ export class ContentAdapter implements ContentPort {
     if (providerSegment && ytmusic.isYtMusicProvider(providerSegment)) {
       const result = await ytmusic.startStreamForAudiopath(
         zoneId,
-        zoneName,
         audiopath,
         { suppressErrors },
       );
@@ -126,7 +128,6 @@ export class ContentAdapter implements ContentPort {
     if (providerSegment && youtube.isYoutubeProvider(providerSegment)) {
       const result = await youtube.startStreamForAudiopath(
         zoneId,
-        zoneName,
         audiopath,
         { suppressErrors },
       );
@@ -135,7 +136,6 @@ export class ContentAdapter implements ContentPort {
     if (providerSegment && soundcloud.isSoundcloudProvider(providerSegment)) {
       const result = await soundcloud.startStreamForAudiopath(
         zoneId,
-        zoneName,
         audiopath,
         { suppressErrors },
       );
@@ -144,7 +144,6 @@ export class ContentAdapter implements ContentPort {
     if (detectedService === 'applemusic') {
       const result = await appleMusic.startStreamForAudiopath(
         zoneId,
-        zoneName,
         audiopath,
         { suppressErrors },
       );
@@ -153,7 +152,6 @@ export class ContentAdapter implements ContentPort {
     if (detectedService === 'deezer') {
       const result = await deezer.startStreamForAudiopath(
         zoneId,
-        zoneName,
         audiopath,
         { suppressErrors },
       );
@@ -162,7 +160,6 @@ export class ContentAdapter implements ContentPort {
     if (detectedService === 'tidal') {
       const result = await tidal.startStreamForAudiopath(
         zoneId,
-        zoneName,
         audiopath,
         { suppressErrors },
       );
@@ -171,7 +168,6 @@ export class ContentAdapter implements ContentPort {
     if (detectedService === 'ytmusic') {
       const result = await ytmusic.startStreamForAudiopath(
         zoneId,
-        zoneName,
         audiopath,
         { suppressErrors },
       );
@@ -180,7 +176,6 @@ export class ContentAdapter implements ContentPort {
     if (detectedService === 'soundcloud') {
       const result = await soundcloud.startStreamForAudiopath(
         zoneId,
-        zoneName,
         audiopath,
         { suppressErrors },
       );

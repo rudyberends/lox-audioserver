@@ -194,10 +194,9 @@ export class PlayRequestService {
       return;
     }
     void this.deps.contentPort.resolvePlaybackSource({
-      zoneId: ctx.id,
-      zoneName: ctx.name,
       audiopath,
       prefetch: true,
+      requester: { kind: 'zone', zoneId: ctx.id },
     }).catch((error) => {
       this.deps.log.debug('playback source prefetch failed', {
         zoneId: ctx.id,

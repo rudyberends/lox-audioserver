@@ -72,7 +72,7 @@ test('ytmusic native: stream service resolves a direct url via yt-dlp', async ()
   }, configPort);
   streamService.configureFromConfig();
 
-  const res = await streamService.startStreamForAudiopath(1, 'Zone', `${providerId}:track:dQw4w9WgXcQ`);
+  const res = await streamService.startStreamForAudiopath(1, `${providerId}:track:dQw4w9WgXcQ`);
   assert.equal(lastError, undefined);
   assert.ok(res.playbackSource);
   assert.equal(res.playbackSource?.kind, 'url');

@@ -890,10 +890,9 @@ export class PlaybackCoordinator {
       return;
     }
     void this.contentPort.resolvePlaybackSource({
-      zoneId: ctx.id,
-      zoneName: ctx.name,
       audiopath,
       prefetch: true,
+      requester: { kind: 'zone', zoneId: ctx.id },
     }).catch((error) => {
       this.log.debug('step prefetch failed', {
         zoneId: ctx.id,

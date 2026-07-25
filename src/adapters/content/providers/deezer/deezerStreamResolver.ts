@@ -21,11 +21,10 @@ export class DeezerStreamResolver {
   }
 
   public async startStreamForAudiopath(
-    zoneId: number,
-    zoneName: string,
+    zoneId: number | undefined,
     audiopath: string,
     options?: { suppressErrors?: boolean },
   ): Promise<{ playbackSource: PlaybackSource | null; outputOnly?: boolean }> {
-    return this.streamService.startStreamForAudiopath(zoneId, zoneName, audiopath, options);
+    return this.streamService.startStreamForAudiopath(zoneId, audiopath, options);
   }
 }

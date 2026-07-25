@@ -66,8 +66,7 @@ export class SoundCloudStreamService {
   }
 
   public async startStreamForAudiopath(
-    zoneId: number,
-    _zoneName: string,
+    zoneId: number | undefined,
     audiopath: string,
     options?: { suppressErrors?: boolean },
   ): Promise<SoundCloudPlaybackResult> {
@@ -169,8 +168,10 @@ export class SoundCloudStreamService {
     return { url: null, attempted };
   }
 
-  private reportPlaybackError(zoneId: number, reason: string, suppressErrors = false): void {
+  private reportPlaybackError(zoneId: number | undefined, reason: string, suppressErrors = false): void {
     if (suppressErrors) return;
+    // No zone to route the error to (ephemeral/non-zone requester) — stay silent.
+    if (zoneId == null) return;
     const trimmed = reason.trim();
     if (!trimmed) return;
     this.notifyOutputError(zoneId, trimmed);
