@@ -38,6 +38,8 @@ export type ServiceDef = {
   service: MediaServerService;
   title: string;
   rootFolderId: string;
+  /** Optional absolute icon URL shown as the service's root tile. */
+  iconUrl?: string;
   browse: (
     cm: ContentManager,
     folderId: string,
@@ -137,6 +139,7 @@ export class ContentDirectory {
         id: encodeContainerId(def.key, def.rootFolderId),
         parentId: ROOT_OBJECT_ID,
         title: def.title,
+        iconUrl: def.iconUrl,
       }),
     );
     return {

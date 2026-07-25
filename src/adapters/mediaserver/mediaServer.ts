@@ -234,6 +234,10 @@ export class MediaServer {
   private buildServiceDefs(): ServiceDef[] {
     const allow = this.allowedServices();
     const permitted = (provider: string): boolean => !allow || allow.has(provider);
+    // Cache-buster: some controllers (B&O) cache tile icons hard by URL, so a
+    // changed icon at the same path can keep showing the stale image. The version
+    // token forces a fresh fetch when the icon set changes.
+    const icon = (path: string): string => `${this.baseUrl()}${path}?v=${ICON_VERSION}`;
 
     const defs: ServiceDef[] = [];
     if (permitted('library')) {
@@ -242,6 +246,7 @@ export class MediaServer {
         service: 'library',
         title: 'Library',
         rootFolderId: 'root',
+        iconUrl: icon('/dlna-icons/library.png'),
         browse: (cm, folderId, offset, limit) => cm.getMediaFolder(folderId, offset, limit),
       });
     }
@@ -251,6 +256,7 @@ export class MediaServer {
         service: 'radio',
         title: 'Radio',
         rootFolderId: 'start',
+        iconUrl: icon('/dlna-icons/radio.png'),
         browse: (cm, folderId, offset, limit) =>
           cm.getServiceFolder('radioparadise', 'radioparadise', folderId, offset, limit),
       });
@@ -267,11 +273,13 @@ export class MediaServer {
       }
       const bridgeId = bridge.id;
       const service = provider as MediaServerService;
+      const iconPath = PROVIDER_ICON_PATHS[provider];
       defs.push({
         key: bridgeId,
         service,
         title: bridge.label?.trim() || defaultProviderTitle(provider),
         rootFolderId: 'root',
+        iconUrl: iconPath ? icon(iconPath) : undefined,
         // The content layer resolves the bridge from `user === bridgeId`.
         browse: (cm, folderId, offset, limit) =>
           cm.getServiceFolder(provider, bridgeId, folderId, offset, limit),
@@ -372,6 +380,21 @@ const PROVIDER_TITLES: Record<string, string> = {
 function defaultProviderTitle(provider: string): string {
   return PROVIDER_TITLES[provider] ?? provider;
 }
+
+// Per-provider tile icons. These are flat RGB PNGs (rasterised from the provider
+// SVGs) under /dlna-icons/ — a plain raster with no alpha is the most broadly
+// rendered form across DLNA controllers.
+// Bump when the icon set changes so caching controllers refetch.
+const ICON_VERSION = '2';
+
+const PROVIDER_ICON_PATHS: Record<string, string> = {
+  applemusic: '/dlna-icons/apple-music.png',
+  deezer: '/dlna-icons/deezer.png',
+  tidal: '/dlna-icons/tidal.png',
+  soundcloud: '/dlna-icons/soundcloud.png',
+  ytmusic: '/dlna-icons/youtube-music.png',
+  youtube: '/dlna-icons/youtube.png',
+};
 
 const CD_NS = 'urn:schemas-upnp-org:service:ContentDirectory:1';
 

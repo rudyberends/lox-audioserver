@@ -104,15 +104,21 @@ export type DidlContainer = {
   title: string;
   /** Optional child count for controllers that show it. */
   childCount?: number;
+  /** Optional absolute icon URL shown as the folder tile (upnp:albumArtURI). */
+  iconUrl?: string;
 };
 
 export function buildContainerElement(container: DidlContainer): string {
   const childCountAttr =
     typeof container.childCount === 'number' ? ` childCount="${container.childCount}"` : '';
+  const art = container.iconUrl
+    ? `<upnp:albumArtURI>${escapeXml(container.iconUrl)}</upnp:albumArtURI>`
+    : '';
   return (
     `<container id="${escapeXml(container.id)}" parentID="${escapeXml(container.parentId)}" ` +
     `restricted="1"${childCountAttr}>` +
     `<dc:title>${escapeXml(container.title)}</dc:title>` +
+    art +
     '<upnp:class>object.container.storageFolder</upnp:class>' +
     '</container>'
   );
