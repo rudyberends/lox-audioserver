@@ -7,8 +7,8 @@ import { audioOutputSettings, mp3BitrateToBps } from '@/ports/types/audioFormat'
 import { allocateEphemeralSessionKey } from '@/ports/types/SessionKey';
 import { resolvePlaybackSource as resolveDirectSource } from '@/application/playback/sourceResolver';
 import { decodeObjectId } from '@/adapters/mediaserver/objectId';
-import { buildId3v2Tag } from '@/adapters/mediaserver/id3';
-import { AUDIO_DLNA_FEATURES } from '@/adapters/mediaserver/didl';
+import { buildId3v2Tag } from '@sonn-audio/node-upnp';
+import { AUDIO_DLNA_FEATURES } from '@/adapters/mediaserver/mediaContentProvider';
 import type { ContentItemMetadata } from '@/ports/ContentTypes';
 
 /**

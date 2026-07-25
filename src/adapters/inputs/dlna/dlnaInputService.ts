@@ -5,23 +5,38 @@ import type { AirplayController } from '@/ports/InputsPort';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import { buildBaseUrl } from '@/shared/streamUrl';
 import { resolveCoverHost } from '@/shared/utils/net';
-import type { SsdpAdvertiser } from '@/adapters/mediaserver/ssdpAdvertiser';
-import { DlnaRendererInstance } from '@/adapters/inputs/dlna/dlnaRendererInstance';
-import { rendererBasePath } from '@/adapters/inputs/dlna/rendererDescription';
+import { SsdpAdvertiser, UpnpMediaRenderer, RENDERER_PATHS } from '@sonn-audio/node-upnp';
+import { DlnaRendererHandler } from '@/adapters/inputs/dlna/dlnaRendererHandler';
+
+/** Absolute path prefix for one zone's renderer, under the shared HTTP server. */
+function rendererBasePath(zoneId: number): string {
+  return `/dlna-renderer/${zoneId}`;
+}
+
+/** Stable per-zone UDN so control points keep a single renderer entry across restarts. */
+function rendererUdn(zoneId: number): string {
+  return `uuid:sonn-renderer-${String(zoneId).padStart(4, '0')}-0000-0000-000000000000`;
+}
+
+type ZoneRenderer = {
+  renderer: UpnpMediaRenderer;
+  name: string;
+};
 
 /**
  * Per-zone DLNA MediaRenderer input. Mirrors AirplayInputService: it syncs one
- * DlnaRendererInstance per zone that has the DLNA input enabled, registers each
- * as a MediaRenderer device on the shared SSDP advertiser, and dispatches
- * `/dlna-renderer/:zoneId/*` HTTP requests to the right instance.
+ * renderer per zone that has the DLNA input enabled, registers each as a
+ * MediaRenderer device on the shared SSDP advertiser, and dispatches
+ * `/dlna-renderer/:zoneId/*` HTTP requests to the right renderer.
  *
- * The renderer turns a control point's SetAVTransportURI+Play into the zone's
- * playback via the shared input controller (a `{kind:'url'}` engine source), so
+ * The UPnP protocol is owned by the module's {@link UpnpMediaRenderer}; this
+ * service owns lifecycle/wiring and a per-zone {@link DlnaRendererHandler} that
+ * turns a cast into the zone's playback (a `{kind:'url'}` engine source), so
  * casting to a zone works like AirPlay but over open UPnP.
  */
 export class DlnaInputService {
   private readonly log = createLogger('Input', 'DlnaService');
-  private readonly instances = new Map<number, DlnaRendererInstance>();
+  private readonly instances = new Map<number, ZoneRenderer>();
   private controller: AirplayController | null = null;
 
   constructor(
@@ -49,6 +64,7 @@ export class DlnaInputService {
       this.log.debug('dlna input controller not configured; skipping sync');
       return;
     }
+    const controller = this.controller;
     const desired = new Set<number>();
     for (const zone of zones) {
       const dlna = zone.inputs?.dlna;
@@ -60,25 +76,28 @@ export class DlnaInputService {
       const name = dlna.publishName?.trim() || zone.name;
       const existing = this.instances.get(zone.id);
       if (existing) {
-        existing.setName(name);
+        existing.name = name; // friendlyName() closure reads this live
         continue;
       }
-      const instance = new DlnaRendererInstance(
-        zone.id,
-        name,
-        this.controller,
-        () => this.baseUrl(),
-      );
-      this.instances.set(zone.id, instance);
+      const entry: ZoneRenderer = { renderer: null as unknown as UpnpMediaRenderer, name };
+      const renderer = new UpnpMediaRenderer({
+        udn: rendererUdn(zone.id),
+        friendlyName: () => entry.name,
+        baseUrl: () => `${this.baseUrl()}${rendererBasePath(zone.id)}`,
+        handler: new DlnaRendererHandler(zone.id, controller),
+        identity: {
+          manufacturer: 'Sonn Audio',
+          modelName: 'Sonn Audio',
+          modelDescription: 'Sonn Audio DLNA Renderer',
+        },
+        logger: this.log,
+      });
+      entry.renderer = renderer;
+      this.instances.set(zone.id, entry);
       this.ssdp.addDevice({
-        udn: instance.udn(),
-        deviceType: 'urn:schemas-upnp-org:device:MediaRenderer:1',
-        serviceTypes: [
-          'urn:schemas-upnp-org:service:AVTransport:1',
-          'urn:schemas-upnp-org:service:RenderingControl:1',
-          'urn:schemas-upnp-org:service:ConnectionManager:1',
-        ],
-        location: () => `${this.baseUrl()}${rendererBasePath(zone.id)}/device.xml`,
+        udn: renderer.udn,
+        ...renderer.deviceTypeAndServices(),
+        location: () => `${this.baseUrl()}${rendererBasePath(zone.id)}/${RENDERER_PATHS.device}`,
       });
       this.log.info('dlna renderer advertised', { zoneId: zone.id, name });
     }
@@ -94,12 +113,12 @@ export class DlnaInputService {
   }
 
   private removeInstance(zoneId: number): void {
-    const instance = this.instances.get(zoneId);
-    if (!instance) {
+    const entry = this.instances.get(zoneId);
+    if (!entry) {
       return;
     }
-    this.ssdp.removeDevice(instance.udn());
-    instance.dispose();
+    this.ssdp.removeDevice(entry.renderer.udn);
+    entry.renderer.dispose();
     this.instances.delete(zoneId);
   }
 
@@ -111,7 +130,7 @@ export class DlnaInputService {
 
   /** Optionally reflect a zone's volume back to its renderer's RenderingControl. */
   public reflectVolume(zoneId: number, volumePercent: number): void {
-    this.instances.get(zoneId)?.reflectVolume(volumePercent);
+    this.instances.get(zoneId)?.renderer.reflectVolume(volumePercent);
   }
 
   // ── HTTP dispatch (registered on the gateway for /dlna-renderer/*) ────────────
@@ -131,12 +150,12 @@ export class DlnaInputService {
     const zoneStr = slash >= 0 ? rest.slice(0, slash) : rest;
     const sub = slash >= 0 ? rest.slice(slash + 1) : '';
     const zoneId = Number(zoneStr);
-    const instance = Number.isFinite(zoneId) ? this.instances.get(zoneId) : undefined;
-    if (!instance) {
+    const entry = Number.isFinite(zoneId) ? this.instances.get(zoneId) : undefined;
+    if (!entry) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('renderer-not-found');
       return;
     }
-    await instance.handle(req, res, sub);
+    await entry.renderer.handle(req, res, sub);
   }
 }

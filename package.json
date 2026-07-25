@@ -68,6 +68,7 @@
     "@sonn-audio/node-slimproto": "0.1.4",
     "@sonn-audio/node-snapcast": "^0.2.2",
     "@sonn-audio/node-sonos": "^0.2.3",
+    "@sonn-audio/node-upnp": "^0.1.0",
     "better-sqlite3": "^12.6.2",
     "bonjour-service": "^1.3.0",
     "crc": "^4.3.2",

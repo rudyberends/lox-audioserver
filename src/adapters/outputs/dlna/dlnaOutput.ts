@@ -1,14 +1,15 @@
-import { setTimeout as delay } from 'node:timers/promises';
 import { createLogger } from '@/shared/logging/logger';
-import { safeReadText } from '@/shared/bestEffort';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { HttpPreferences, PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import { isHttpUrl, resolveSessionCover } from '@/shared/coverArt';
 import { buildBaseUrl, normalizeStreamUrl, resolveAbsoluteUrl } from '@/shared/streamUrl';
-import { resolveDlnaEndpoints, discoverDlnaDevices } from '@/adapters/outputs/dlna/dlnaDiscovery';
-import { DlnaEventSubscriber } from '@/adapters/outputs/dlna/dlnaEventSubscriber';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
+import {
+  DlnaControlPoint,
+  type DlnaTransportEvent,
+  type DlnaRenderingEvent,
+} from '@sonn-audio/node-upnp';
 
 export interface DlnaOutputConfig {
   host?: string;
@@ -71,23 +72,21 @@ function isAutoDiscoverEnabled(value: boolean | string | undefined): boolean {
   return true;
 }
 
+/**
+ * DLNA push output — a thin app adapter over the module's {@link DlnaControlPoint},
+ * which owns the whole UPnP control-point protocol (endpoint discovery, the
+ * Stop→SetURI→Play sequence with its silent-timeout-as-accepted and 701-retry
+ * quirks, command serialization, and GENA event subscription).
+ *
+ * What stays here is app glue the module deliberately leaves to the host: building
+ * DIDL from a PlaybackSession, resolving the stream URI + cover art, the per-track
+ * dedup, the volume anti-feedback guard, and routing GENA volume events into zone
+ * state. Transport-state is intentionally NOT reflected back (see onRemoteTransport).
+ */
 export class DlnaOutput implements ZoneOutput {
   public readonly type = 'dlna';
   private readonly log = createLogger('Output', 'DLNA');
-  private readonly controllers = new Set<AbortController>();
-  private readonly commandTimeoutMs = 2500;
-  private host: string;
-  private controlUrl?: string;
-  private renderingControlUrl?: string;
-  private discoveryPromise?: Promise<boolean>;
-  private readonly autoDiscover: boolean;
-  private readonly deviceName: string;
-  // DLNA is a stateful push output: every play() sends a full Stop→SetURI→Play sequence to
-  // physical hardware. The coordinator fires play() many times in a burst (e.g. Apple Music
-  // buffer handoff re-spawns ffmpeg), so we serialize commands into a single chain and skip
-  // a redundant re-send when the same URI is already playing — otherwise overlapping
-  // sequences leave the renderer stuck TRANSITIONING and every Play faults with 701.
-  private commandChain: Promise<void> = Promise.resolve();
+  private readonly cp: DlnaControlPoint;
   // Per-track identity of the stream currently pushed to the renderer. Rotates each track
   // (session.stream.id), so it dedups the intra-track play() storm without swallowing the
   // next track (whose normalized URL is identical).
@@ -97,16 +96,12 @@ export class DlnaOutput implements ZoneOutput {
   // after the initial play) and refresh now-playing without restarting playback.
   private lastPushedUri: string | null = null;
   private lastMetadataSignature: string | null = null;
-  // GENA event subscriber for device-side state (play/pause/stop/volume from the renderer).
-  private eventSubscriber?: DlnaEventSubscriber;
-  private avTransportEventUrl?: string;
-  private renderingControlEventUrl?: string;
-  private eventDiscoveryStarted = false;
   // Anti-feedback guard for VOLUME: our own SetVolume must not bounce back as a spurious user
-  // change. (Transport-state is not reflected back — see handleRemoteTransport.)
+  // change. (Transport-state is not reflected back — see onRemoteTransport.)
   private lastOutboundVolume?: number;
   private lastOutboundVolumeAt = 0;
   private lastKnownVolume?: number;
+  private eventsSubscribed = false;
 
   constructor(
     private readonly zoneId: number,
@@ -114,31 +109,38 @@ export class DlnaOutput implements ZoneOutput {
     config: DlnaOutputConfig,
     private readonly ports: OutputPorts,
   ) {
-    this.host = typeof config.host === 'string' ? config.host.trim() : '';
-    this.autoDiscover = isAutoDiscoverEnabled(config.autoDiscover);
-    this.deviceName =
+    const host = typeof config.host === 'string' ? config.host.trim() : '';
+    const autoDiscover = isAutoDiscoverEnabled(config.autoDiscover);
+    // Fall back to the zone name so auto-discovery can match a renderer by friendly name.
+    const deviceName =
       typeof config.deviceName === 'string' && config.deviceName.trim().length > 0
         ? config.deviceName.trim()
         : this.zoneName;
-    if (typeof config.controlUrl === 'string' && config.controlUrl.trim().length > 0) {
-      this.controlUrl = config.controlUrl.trim();
-      this.renderingControlUrl = this.deriveRenderingUrl(this.controlUrl);
+    const controlUrl =
+      typeof config.controlUrl === 'string' && config.controlUrl.trim().length > 0
+        ? config.controlUrl.trim()
+        : undefined;
+    this.cp = new DlnaControlPoint({
+      host,
+      controlUrl,
+      autoDiscover,
+      deviceName,
+      commandTimeoutMs: 2500,
+      logger: this.log,
+    });
+    if (controlUrl) {
       this.log.info('DLNA output configured with manual control URL', {
         zoneId: this.zoneId,
         zone: this.zoneName,
-        controlUrl: this.controlUrl,
+        controlUrl,
       });
-    } else if (this.host) {
-      this.log.info('DLNA output awaiting discovery', {
-        zoneId: this.zoneId,
-        zone: this.zoneName,
-        host: this.host,
-      });
-    } else if (this.autoDiscover) {
+    } else if (host) {
+      this.log.info('DLNA output awaiting discovery', { zoneId: this.zoneId, zone: this.zoneName, host });
+    } else if (autoDiscover) {
       this.log.info('DLNA output awaiting SSDP auto-discovery', {
         zoneId: this.zoneId,
         zone: this.zoneName,
-        deviceName: this.deviceName,
+        deviceName,
       });
     } else {
       this.log.warn('DLNA output has no host or control URL configured', {
@@ -153,29 +155,33 @@ export class DlnaOutput implements ZoneOutput {
       this.log.debug('DLNA output skipped', { zoneId: this.zoneId, source: session.source });
       return;
     }
-    if (!(await this.ensureEndpoints())) {
-      return;
-    }
+    await this.ensureEvents();
     const uri = this.resolveStreamUri(session);
     if (!uri) {
       this.log.warn('no playable URI for session', { zoneId: this.zoneId });
       return;
     }
-    const streamUri = this.normalizeDlnaStreamUri(uri, session);
+    const streamUri = this.normalizeDlnaStreamUri(uri);
     // Coalesce the burst of duplicate play() calls WITHIN one track, but always re-push on a
     // new track. The stream URL normalizes to a stable `current.mp3`, so it can't distinguish
     // tracks — but `session.stream.id` rotates per track while staying constant across a
     // track's ffmpeg re-spawn storm. Dedup on that id, not the URL, or track 2 gets swallowed.
     const streamKey = session.stream.id;
     if (streamKey && streamKey === this.currentStreamKey) {
-      this.log.debug('DLNA play skipped; stream already active', {
-        zoneId: this.zoneId,
-        streamKey,
-      });
+      this.log.debug('DLNA play skipped; stream already active', { zoneId: this.zoneId, streamKey });
       return;
     }
     this.currentStreamKey = streamKey;
-    await this.enqueue(() => this.sendPlaybackWithSoap(streamUri, session));
+    const didl = this.buildDidlMetadata(streamUri, session);
+    // Remember what we pushed so a later metadata update can decide whether to re-push (see
+    // updateMetadata). The initial play() often fires before track metadata/duration has
+    // resolved, so the first DIDL can be a title-less, duration-less audioBroadcast ("live").
+    this.lastPushedUri = streamUri;
+    this.lastMetadataSignature = this.metadataSignature(session);
+    // NOTE: the old adapter had a `waitForStreamRequest` fallback on a hard SetURI fault before
+    // Play. The module's setUri() drops that (it proceeds straight to Play, whose 701-retry is
+    // the real readiness gate) — behavior change to watch on a renderer that hard-faults SetURI.
+    await this.cp.setUri(streamUri, didl);
   }
 
   /**
@@ -184,17 +190,15 @@ export class DlnaOutput implements ZoneOutput {
    * moment later, which flips the item from a duration-less `audioBroadcast`
    * ("live") to a `musicTrack` with a progress bar.
    *
-   * We re-send SetAVTransportURI ONLY (no Stop/Play), so the current playback is
-   * not interrupted — the renderer just adopts the richer metadata. Deduped on a
-   * metadata signature so an unchanged update is a no-op.
+   * Re-sends SetAVTransportURI ONLY (no Stop/Play) so playback isn't interrupted;
+   * deduped on a metadata signature so an unchanged update is a no-op.
    */
   public async updateMetadata(session: PlaybackSession | null): Promise<void> {
     if (!session) {
       return;
     }
-    // Only meaningful while the stream we pushed is still the active one.
     const uri = this.lastPushedUri;
-    if (!uri || !this.controlUrl) {
+    if (!uri) {
       return;
     }
     const signature = this.metadataSignature(session);
@@ -203,51 +207,17 @@ export class DlnaOutput implements ZoneOutput {
     }
     this.lastMetadataSignature = signature;
     const didl = this.buildDidlMetadata(uri, session);
-    await this.enqueue(async () => {
-      await this.invokeActionWithRetry('SetAVTransportURI', this.buildSetUriBody(uri, didl), 1, {
-        timeoutMs: 1500,
-        timeoutOk: true,
-      });
-    });
-  }
-
-  /**
-   * A compact fingerprint of the now-playing-relevant metadata. Changes when the
-   * title/artist/album/duration or the broadcast-vs-track distinction changes, so
-   * updateMetadata re-pushes exactly when the renderer's display would differ.
-   */
-  private metadataSignature(session: PlaybackSession): string {
-    const m = session.metadata;
-    const duration = session.duration || m?.duration || 0;
-    const isStream = m?.isRadio || m?.isAlert || !duration ? 1 : 0;
-    return [m?.title ?? '', m?.artist ?? '', m?.album ?? '', duration, isStream].join('|');
-  }
-
-  /**
-   * Run a SOAP command sequence strictly after any previous one for this output has settled,
-   * so overlapping Stop/SetURI/Play sequences can never interleave on the renderer.
-   */
-  private enqueue(task: () => Promise<void>): Promise<void> {
-    const run = this.commandChain.then(task, task);
-    // Keep the chain alive even if a task throws, but don't leak the rejection.
-    this.commandChain = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
+    await this.cp.updateMetadata(uri, didl);
   }
 
   public async pause(session: PlaybackSession | null): Promise<void> {
     if (!session?.playbackSource) {
       return;
     }
-    if (!(await this.ensureEndpoints())) {
-      return;
-    }
     // Clear the dedup key so a resume/play of the SAME track re-issues transport commands
     // instead of being coalesced away (its stream.id is unchanged across pause→resume).
     this.currentStreamKey = null;
-    await this.enqueue(() => this.runCommand('Pause', this.buildPauseBody()));
+    await this.cp.pause();
   }
 
   public async resume(session: PlaybackSession | null): Promise<void> {
@@ -255,55 +225,30 @@ export class DlnaOutput implements ZoneOutput {
       await this.play(session);
       return;
     }
-    if (!(await this.ensureEndpoints())) {
-      return;
-    }
-    await this.enqueue(() => this.runCommand('Play', this.buildPlayBody()));
+    await this.cp.play();
   }
 
   public async stop(session: PlaybackSession | null): Promise<void> {
     if (!session?.playbackSource) {
       return;
     }
-    if (!(await this.ensureEndpoints())) {
-      return;
-    }
     this.currentStreamKey = null;
-    await this.enqueue(() => this.runCommand('Stop', this.buildStopBody()));
+    await this.cp.stop();
   }
 
   public async setVolume(level: number): Promise<void> {
-    if (!(await this.ensureEndpoints())) {
-      return;
-    }
-    const url = this.renderingControlUrl;
-    if (!url) {
-      this.log.debug('rendering control URL missing; skipping volume update', {
-        zoneId: this.zoneId,
-      });
-      return;
-    }
     const clamped = Math.max(0, Math.min(100, Math.round(level)));
     // Record before sending so a GENA volume echo from this same change is suppressed.
     this.lastOutboundVolume = clamped;
     this.lastOutboundVolumeAt = Date.now();
     this.lastKnownVolume = clamped;
-    if (
-      await this.invokeRenderingAction('SetVolume', this.buildSetVolumeBody(clamped), {
-        optional: true,
-      })
-    ) {
+    if (await this.cp.setVolume(clamped)) {
       this.log.info('DLNA volume set', { zoneId: this.zoneId, volume: clamped });
     }
   }
 
   public dispose(): void {
-    for (const controller of this.controllers) {
-      controller.abort();
-    }
-    this.controllers.clear();
-    this.eventSubscriber?.dispose();
-    this.eventSubscriber = undefined;
+    this.cp.dispose();
     this.log.debug('disposed', { zoneId: this.zoneId });
   }
 
@@ -317,307 +262,39 @@ export class DlnaOutput implements ZoneOutput {
     return { httpProfile: 'forced_content_length', icyEnabled: false };
   }
 
-  private async ensureEndpoints(): Promise<boolean> {
-    if (this.controlUrl) {
-      // Control URL is known (manual config or prior discovery), so playback works. But event
-      // URLs may not be resolved yet — a manually-configured controlUrl skips discovery
-      // entirely. Fetch the device description once in the background to enable GENA eventing
-      // (bidirectional state) without blocking playback.
-      if (
-        this.host &&
-        !this.avTransportEventUrl &&
-        !this.renderingControlEventUrl &&
-        !this.eventDiscoveryStarted
-      ) {
-        this.eventDiscoveryStarted = true;
-        void this.resolveEventEndpoints();
-      }
-      return true;
+  /** Start the GENA event subscription once, so device-side volume flows into zone state. */
+  private async ensureEvents(): Promise<void> {
+    if (this.eventsSubscribed) {
+      return;
     }
-    if (this.discoveryPromise) {
-      return this.discoveryPromise;
-    }
-    if (!this.host && !this.autoDiscover) {
-      this.log.warn('DLNA command skipped; no host or control URL configured', {
-        zoneId: this.zoneId,
-      });
-      return false;
-    }
-    this.discoveryPromise = this.resolveEndpoints().finally(() => {
-      this.discoveryPromise = undefined;
-    });
-    return this.discoveryPromise;
-  }
-
-  private async resolveEndpoints(): Promise<boolean> {
-    // Without an explicit host, browse the network and match a renderer by friendly name.
-    if (!this.host && this.autoDiscover) {
-      const resolvedHost = await this.autoResolveHost();
-      if (!resolvedHost) {
-        return false;
-      }
-      this.host = resolvedHost;
-    }
-    const info = await resolveDlnaEndpoints({ host: this.host });
-    if (info) {
-      this.applyDiscoveredEndpoints(info);
-      return true;
-    }
-    this.log.warn('no DLNA endpoints discovered', { zoneId: this.zoneId, host: this.host });
-    return false;
-  }
-
-  /**
-   * Best-effort background fetch of the renderer's event (GENA) endpoints when only a control
-   * URL was known. Does not affect playback; on success it starts the event subscription.
-   */
-  private async resolveEventEndpoints(): Promise<void> {
+    this.eventsSubscribed = true;
+    const localHost = this.ports.config.getSystemConfig().audioserver?.ip?.trim() || '127.0.0.1';
     try {
-      const info = await resolveDlnaEndpoints({ host: this.host });
-      if (info?.avTransportEventUrl || info?.renderingControlEventUrl) {
-        if (info.avTransportEventUrl) {
-          this.avTransportEventUrl = info.avTransportEventUrl;
-        }
-        if (info.renderingControlEventUrl) {
-          this.renderingControlEventUrl = info.renderingControlEventUrl;
-        }
-        this.ensureEventSubscription();
-      }
+      await this.cp.subscribeEvents(
+        {
+          onTransport: (event) => this.onRemoteTransport(event),
+          onRendering: (event) => this.onRemoteRendering(event),
+        },
+        localHost,
+      );
     } catch (err) {
-      this.log.debug('DLNA event endpoint resolve failed', {
+      this.log.debug('DLNA event subscription failed', {
         zoneId: this.zoneId,
         message: err instanceof Error ? err.message : String(err),
       });
     }
   }
 
-  private async autoResolveHost(): Promise<string> {
-    const devices = await discoverDlnaDevices({});
-    if (!devices.length) {
-      this.log.warn('DLNA auto-discovery found no renderers', {
-        zoneId: this.zoneId,
-        deviceName: this.deviceName,
-      });
-      return '';
-    }
-    const preferred = this.deviceName.toLowerCase();
-    const match =
-      devices.find((device) => (device.name ?? '').toLowerCase() === preferred) ??
-      devices[0];
-    if (!match?.host) {
-      return '';
-    }
-    this.log.info('DLNA renderer auto-discovered', {
-      zoneId: this.zoneId,
-      host: match.host,
-      name: match.name,
-      matchedByName: (match.name ?? '').toLowerCase() === preferred,
-    });
-    return match.host;
-  }
-
-  private async sendPlaybackWithSoap(uri: string, session: PlaybackSession): Promise<void> {
-    this.log.info('sending playback command', { zoneId: this.zoneId, uri });
-    await this.runCommand('Stop', this.buildStopBody(), { optional: true });
-    const didl = this.buildDidlMetadata(uri, session);
-    // Remember what we pushed so a later metadata update can decide whether to
-    // re-push (see updateMetadata). The initial play() often fires before track
-    // metadata/duration has resolved, so the first DIDL can be a title-less,
-    // duration-less audioBroadcast — which the renderer shows as "live".
-    this.lastPushedUri = uri;
-    this.lastMetadataSignature = this.metadataSignature(session);
-
-    // Many renderers (measured: B&O/QPlay) accept SetAVTransportURI but never send a SOAP
-    // reply, so a long timeout just stalls us for the full window before Play — this was the
-    // ~minute start delay. Use a short timeout and treat a timeout as "probably accepted":
-    // the renderer has taken the URI, and the Play step below (with 701 retry) confirms it.
-    // Single attempt: a renderer that replies does so in well under this window, and one that
-    // stays silent won't reply to a retry either — retrying only stacks another stall. The
-    // Play step's 701 retry is the real readiness check, so a slightly-too-short window here
-    // is harmless: Play just retries until the renderer is out of TRANSITIONING.
-    let timedOut = false;
-    const didSetUri = await this.invokeActionWithRetry('SetAVTransportURI', this.buildSetUriBody(uri, didl), 1, {
-      timeoutMs: 1500,
-      timeoutOk: true,
-      onTimeout: () => {
-        timedOut = true;
-      },
-    });
-
-    // Only fall back to waiting on a stream request when SetURI came back with a hard fault
-    // (didSetUri false *without* a timeout). A silent timeout means the URI was likely set,
-    // so we proceed straight to Play instead of burning another 12s+ here.
-    if (!didSetUri && !timedOut) {
-      this.log.warn('DLNA SetAVTransportURI faulted; waiting for stream request before Play', {
-        zoneId: this.zoneId,
-      });
-      const seen = await this.ports.outputStreamEvents.waitForStreamRequest({
-        zoneId: this.zoneId,
-        host: this.host,
-        timeoutMs: 12000,
-      });
-      if (!seen) {
-        this.log.warn('DLNA stream request not observed; skipping Play', { zoneId: this.zoneId });
-        return;
-      }
-    }
-
-    await delay(200);
-    // Retry Play while the renderer may still be TRANSITIONING (701). Renderers that replied
-    // to SetURI are ready almost immediately; silent ones (timedOut) get a touch more slack.
-    const playAttempts = 6;
-    const playDelay = timedOut ? 600 : 300;
-    if (
-      !(await this.invokeActionWithRetry('Play', this.buildPlayBody(), playAttempts, {
-        retryDelayMs: playDelay,
-        retryFaultCodes: ['701'],
-      }))
-    ) {
-      this.log.warn('DLNA Play did not succeed after retries', { zoneId: this.zoneId, uri });
-      return;
-    }
-    this.log.info('DLNA playback started', { zoneId: this.zoneId, uri });
-  }
-
-  private async runCommand(action: string, body: string, options: InvokeOptions = {}): Promise<void> {
-    await this.invokeAction(action, body, options);
-  }
-
-  private async invokeActionWithRetry(
-    action: string,
-    body: string,
-    attempts: number,
-    options: InvokeOptions = {},
-  ): Promise<boolean> {
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      const success = await this.invokeAction(action, body, options);
-      if (success) {
-        return true;
-      }
-      if (attempt < attempts) {
-        await delay(options.retryDelayMs ?? 150);
-      }
-    }
-    return false;
-  }
-
-  private async invokeAction(
-    action: string,
-    body: string,
-    options: InvokeOptions = {},
-  ): Promise<boolean> {
-    if (!this.controlUrl) {
-      this.log.warn('AVTransport command skipped; endpoint unknown', {
-        action,
-        zoneId: this.zoneId,
-      });
-      return false;
-    }
-    return this.invokeServiceAction(this.controlUrl, 'AVTransport', action, body, options);
-  }
-
-  private async invokeRenderingAction(
-    action: string,
-    body: string,
-    options: InvokeOptions = {},
-  ): Promise<boolean> {
-    if (!this.renderingControlUrl) {
-      this.log.debug('RenderingControl command skipped; endpoint unknown', {
-        action,
-        zoneId: this.zoneId,
-      });
-      return false;
-    }
-    return this.invokeServiceAction(
-      this.renderingControlUrl,
-      'RenderingControl',
-      action,
-      body,
-      options,
-    );
-  }
-
-  private async invokeServiceAction(
-    url: string,
-    service: 'AVTransport' | 'RenderingControl',
-    action: string,
-    body: string,
-    options: InvokeOptions = {},
-  ): Promise<boolean> {
-    const controller = new AbortController();
-    this.controllers.add(controller);
-    const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? this.commandTimeoutMs);
-    timeout.unref();
-    try {
-      this.log.debug('DLNA soap request', { action, service, zoneId: this.zoneId });
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'text/xml; charset="utf-8"',
-          SOAPAction: `"urn:schemas-upnp-org:service:${service}:1#${action}"`,
-        },
-        body,
-        signal: controller.signal,
-      });
-
-      const text = await safeReadText(response, '', {
-        onError: 'debug',
-        log: this.log,
-        label: 'dlna output response read failed',
-        context: { status: response.status },
-      });
-      if (!response.ok && response.status !== 500) {
-        throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
-      }
-      if (response.ok) {
-        this.log.info('DLNA action succeeded', { action, service, zoneId: this.zoneId });
-        return true;
-      }
-      const fault = text.slice(0, 2000);
-      // Some renderers (notably B&O/QPlay) briefly sit in TRANSITIONING right after
-      // SetAVTransportURI and reject Play with 701 "Transition not available". That's a
-      // transient we want to *retry*, not soft-accept — soft-accepting reports success while
-      // the renderer never actually started (this was the source of the long start delay).
-      const errorCode = /<errorCode>\s*(\d+)\s*<\/errorCode>/i.exec(fault)?.[1];
-      if (errorCode && options.retryFaultCodes?.includes(errorCode)) {
-        this.log.debug('DLNA action returned retryable SOAP fault', {
-          action,
-          service,
-          errorCode,
-          zoneId: this.zoneId,
-        });
-        return false;
-      }
-      const logPayload = {
-        action,
-        status: response.status,
-        service,
-        zoneId: this.zoneId,
-        body: fault,
-      };
-      this.log.warn('DLNA action returned SOAP fault', logPayload);
-      if (options.softFaultOk) {
-        return true;
-      }
-      return options.optional ?? false;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const isAbort = error instanceof Error && error.name === 'AbortError';
-      if (isAbort && options.timeoutOk) {
-        this.log.debug('DLNA request timed out; continuing', { action, service, zoneId: this.zoneId });
-        options.onTimeout?.();
-        return false;
-      }
-      if (options.optional) {
-        this.log.debug('optional command failed', { action, service, message, zoneId: this.zoneId });
-      } else {
-        this.log.warn('command failed', { action, service, message, zoneId: this.zoneId });
-      }
-      return options.optional ?? false;
-    } finally {
-      clearTimeout(timeout);
-      this.controllers.delete(controller);
-    }
+  /**
+   * A compact fingerprint of the now-playing-relevant metadata. Changes when the
+   * title/artist/album/duration or the broadcast-vs-track distinction changes, so
+   * updateMetadata re-pushes exactly when the renderer's display would differ.
+   */
+  private metadataSignature(session: PlaybackSession): string {
+    const m = session.metadata;
+    const duration = session.duration || m?.duration || 0;
+    const isStream = m?.isRadio || m?.isAlert || !duration ? 1 : 0;
+    return [m?.title ?? '', m?.artist ?? '', m?.album ?? '', duration, isStream].join('|');
   }
 
   private buildDidlMetadata(uri: string, session: PlaybackSession): string {
@@ -671,71 +348,6 @@ export class DlnaOutput implements ZoneOutput {
     return `${pad(h)}:${pad(m)}:${pad(s)}`;
   }
 
-  private buildSetUriBody(uri: string, didl: string): string {
-    return `<?xml version="1.0" encoding="utf-8"?>
-<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
-  s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
-  <s:Body>
-    <u:SetAVTransportURI xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
-      <InstanceID>0</InstanceID>
-      <CurrentURI>${escapeXml(uri)}</CurrentURI>
-      <CurrentURIMetaData>${escapeXml(didl)}</CurrentURIMetaData>
-    </u:SetAVTransportURI>
-  </s:Body>
-</s:Envelope>`;
-  }
-
-  private buildPlayBody(): string {
-    return `<?xml version="1.0" encoding="utf-8"?>
-<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
-  s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
-  <s:Body>
-    <u:Play xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
-      <InstanceID>0</InstanceID>
-      <Speed>1</Speed>
-    </u:Play>
-  </s:Body>
-</s:Envelope>`;
-  }
-
-  private buildPauseBody(): string {
-    return `<?xml version="1.0" encoding="utf-8"?>
-<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
-  s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
-  <s:Body>
-    <u:Pause xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
-      <InstanceID>0</InstanceID>
-    </u:Pause>
-  </s:Body>
-</s:Envelope>`;
-  }
-
-  private buildStopBody(): string {
-    return `<?xml version="1.0" encoding="utf-8"?>
-<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
-  s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
-  <s:Body>
-    <u:Stop xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
-      <InstanceID>0</InstanceID>
-    </u:Stop>
-  </s:Body>
-</s:Envelope>`;
-  }
-
-  private buildSetVolumeBody(volume: number): string {
-    return `<?xml version="1.0" encoding="utf-8"?>
-<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
-  s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
-  <s:Body>
-    <u:SetVolume xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">
-      <InstanceID>0</InstanceID>
-      <Channel>Master</Channel>
-      <DesiredVolume>${volume}</DesiredVolume>
-    </u:SetVolume>
-  </s:Body>
-</s:Envelope>`;
-  }
-
   private resolveStreamUri(session: PlaybackSession): string | null {
     const streamUrl = session.stream.url;
     if (streamUrl) {
@@ -751,7 +363,7 @@ export class DlnaOutput implements ZoneOutput {
     return null;
   }
 
-  private normalizeDlnaStreamUri(uri: string, _session: PlaybackSession): string {
+  private normalizeDlnaStreamUri(uri: string): string {
     return normalizeStreamUrl(uri, this.buildBaseUrl(), ['mp3']);
   }
 
@@ -763,75 +375,7 @@ export class DlnaOutput implements ZoneOutput {
     });
   }
 
-  private deriveRenderingUrl(avTransportUrl: string): string | undefined {
-    try {
-      const parsed = new URL(avTransportUrl);
-      if (parsed.pathname.toLowerCase().includes('avtransport')) {
-        parsed.pathname = parsed.pathname.replace(/AVTransport/gi, 'RenderingControl');
-      } else {
-        parsed.pathname = `${parsed.pathname.replace(/\/$/, '')}/RenderingControl/Control`;
-      }
-      return parsed.toString();
-    } catch {
-      return undefined;
-    }
-  }
-
-  private applyDiscoveredEndpoints(info: {
-    controlUrl?: string;
-    renderingControlUrl?: string;
-    avTransportEventUrl?: string;
-    renderingControlEventUrl?: string;
-  }): void {
-    if (info.controlUrl) {
-      this.controlUrl = info.controlUrl;
-    }
-    if (info.renderingControlUrl) {
-      this.renderingControlUrl = info.renderingControlUrl;
-    } else if (this.controlUrl && !this.renderingControlUrl) {
-      this.renderingControlUrl = this.deriveRenderingUrl(this.controlUrl);
-    }
-    if (info.avTransportEventUrl) {
-      this.avTransportEventUrl = info.avTransportEventUrl;
-    }
-    if (info.renderingControlEventUrl) {
-      this.renderingControlEventUrl = info.renderingControlEventUrl;
-    }
-    this.log.info('DLNA discovery completed', {
-      zoneId: this.zoneId,
-      host: this.host,
-      controlUrl: this.controlUrl,
-    });
-    this.ensureEventSubscription();
-  }
-
-  /**
-   * Start (or refresh) GENA event subscriptions so device-side actions (play/pause/stop on the
-   * renderer, volume knob) flow back into zone state. Only runs when the renderer advertised
-   * event endpoints; manual controlUrl-only configs won't have them.
-   */
-  private ensureEventSubscription(): void {
-    if (!this.avTransportEventUrl && !this.renderingControlEventUrl) {
-      return;
-    }
-    const localHost = this.ports.config.getSystemConfig().audioserver?.ip?.trim() || '127.0.0.1';
-    if (!this.eventSubscriber) {
-      this.eventSubscriber = new DlnaEventSubscriber(this.zoneId, localHost, {
-        onTransport: (event) => this.handleRemoteTransport(event),
-        onRendering: (event) => this.handleRemoteRendering(event),
-      });
-    }
-    void this.eventSubscriber.start({
-      avTransportEventUrl: this.avTransportEventUrl,
-      renderingControlEventUrl: this.renderingControlEventUrl,
-    });
-  }
-
-  private handleRemoteTransport(event: {
-    transportState?: string;
-    currentTrackUri?: string;
-    durationSeconds?: number;
-  }): void {
+  private onRemoteTransport(event: DlnaTransportEvent): void {
     // We subscribe to AVTransport so the renderer keeps sending RenderingControl (volume)
     // events on the same connection, and for future use, but we deliberately do NOT reflect
     // device-side play/pause back into zone state. For a push output feeding a non-resumable
@@ -842,16 +386,14 @@ export class DlnaOutput implements ZoneOutput {
     this.log.debug('DLNA remote transport event (state reflection disabled)', {
       zoneId: this.zoneId,
       transportState: event.transportState,
-      mapped: mapTransportState(event.transportState) ?? '(ignored)',
     });
   }
 
-  private handleRemoteRendering(event: { volume?: number; muted?: boolean }): void {
+  private onRemoteRendering(event: DlnaRenderingEvent): void {
     if (typeof event.volume === 'number' && Number.isFinite(event.volume)) {
       const vol = Math.min(100, Math.max(0, Math.round(event.volume)));
       const now = Date.now();
-      const recentlySent =
-        this.lastOutboundVolumeAt > 0 && now - this.lastOutboundVolumeAt < 1500;
+      const recentlySent = this.lastOutboundVolumeAt > 0 && now - this.lastOutboundVolumeAt < 1500;
       const outboundMatches =
         this.lastOutboundVolume != null && Math.abs(vol - this.lastOutboundVolume) <= 2;
       const suppressed = recentlySent && outboundMatches;
@@ -876,36 +418,6 @@ export class DlnaOutput implements ZoneOutput {
   }
 }
 
-function mapTransportState(state: string | undefined): 'playing' | 'paused' | 'stopped' | undefined {
-  if (!state) {
-    return undefined;
-  }
-  const s = state.toUpperCase();
-  if (s === 'PLAYING') {
-    return 'playing';
-  }
-  if (s === 'PAUSED_PLAYBACK' || s === 'PAUSED') {
-    return 'paused';
-  }
-  if (s === 'STOPPED' || s === 'NO_MEDIA_PRESENT') {
-    return 'stopped';
-  }
-  // TRANSITIONING and others: not a settled state, ignore.
-  return undefined;
-}
-
-interface InvokeOptions {
-  optional?: boolean;
-  retryDelayMs?: number;
-  timeoutMs?: number;
-  timeoutOk?: boolean;
-  softFaultOk?: boolean;
-  onTimeout?: () => void;
-  // SOAP errorCodes that should be treated as a transient failure (retry) rather than a
-  // hard fault or a soft-accept. E.g. 701 "Transition not available" on Play.
-  retryFaultCodes?: string[];
-}
-
 function escapeXml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -914,4 +426,3 @@ function escapeXml(value: string): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
 }
-

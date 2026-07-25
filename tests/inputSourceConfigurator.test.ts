@@ -11,6 +11,7 @@ import type { LoxoneZoneState } from '../src/domain/loxone/types';
 
 type ConfiguratorFakes = {
   airplay: AirplayController | null;
+  dlna: AirplayController | null;
   spotify: SpotifyConnectController | null;
   airplayResolverSet: number;
   ctx: ZoneContext;
@@ -27,6 +28,7 @@ function buildConfigurator(opts: { activeInput?: ZoneContext['activeInput'] } = 
 } {
   const fakes: ConfiguratorFakes = {
     airplay: null,
+    dlna: null,
     spotify: null,
     airplayResolverSet: 0,
     ctx: {
@@ -52,9 +54,15 @@ function buildConfigurator(opts: { activeInput?: ZoneContext['activeInput'] } = 
     spotifyAdapterEvents: [],
   };
 
-  const inputsPort: Pick<InputsPort, 'configureAirplay' | 'configureSpotify' | 'setAirplayPlayerResolver'> = {
+  const inputsPort: Pick<
+    InputsPort,
+    'configureAirplay' | 'configureDlna' | 'configureSpotify' | 'setAirplayPlayerResolver'
+  > = {
     configureAirplay: (controller) => {
       fakes.airplay = controller;
+    },
+    configureDlna: (controller) => {
+      fakes.dlna = controller;
     },
     configureSpotify: (controller) => {
       fakes.spotify = controller;

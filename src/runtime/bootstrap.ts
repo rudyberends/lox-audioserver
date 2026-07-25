@@ -5,7 +5,7 @@ import { createContentManager } from '@/adapters/content/contentManager';
 import { createContentAdapter } from '@/adapters/content/ContentAdapter';
 import { toLoxoneAudiopath } from '@/domain/loxone/bridgeIdentity';
 import { MediaServer } from '@/adapters/mediaserver/mediaServer';
-import { SsdpAdvertiser } from '@/adapters/mediaserver/ssdpAdvertiser';
+import { SsdpAdvertiser } from '@sonn-audio/node-upnp';
 import { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
 import { CustomRadioStore } from '@/adapters/content/providers/customRadioStore';
 import { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
@@ -165,7 +165,7 @@ export function createRuntime(): Runtime {
   let mediaServer: MediaServer | null = null;
   // Shared SSDP advertiser: one UDP socket on :1900 for the MediaServer plus every
   // per-zone DLNA MediaRenderer input. Devices register/deregister themselves.
-  const ssdpAdvertiser = new SsdpAdvertiser();
+  const ssdpAdvertiser = new SsdpAdvertiser({ serverHeader: 'Linux/5 UPnP/1.0 SonnAudio/1.0' });
   const dlnaHttpPort = loadEnvironment().httpPort;
   const dlnaInputService = new DlnaInputService(configPort, ssdpAdvertiser, dlnaHttpPort);
   const mdnsServices: MdnsLifecycleService[] = [];
