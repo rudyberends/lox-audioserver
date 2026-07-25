@@ -67,6 +67,29 @@ export interface ContentConfig {
   library?: LibraryContentConfig | null;
   tts?: TtsContentConfig;
   appleMusic?: AppleMusicContentConfig;
+  mediaServer?: MediaServerContentConfig;
+}
+
+/**
+ * Exposes all browsable content (local library, radio and the streaming bridges)
+ * as a UPnP/DLNA MediaServer so third-party renderers can pull it directly.
+ *
+ * This is the inverse of the per-zone DLNA *output*: instead of pushing a stream
+ * to a renderer we advertise a ContentDirectory and serve tracks statelessly at
+ * `/dlna/track/<id>` off the main gateway.
+ */
+export interface MediaServerContentConfig {
+  /** Master switch. When absent/false the MediaServer is not advertised or served. */
+  enabled?: boolean;
+  /** Friendly name shown to DLNA clients (defaults to the audioserver name). */
+  friendlyName?: string;
+  /**
+   * Optional provider allowlist restricting which top-level services are exposed
+   * (e.g. ['library','radio','soundcloud']). Absent = expose every browsable
+   * service the content layer offers. `outputOnly` providers (pure Spotify
+   * Connect offload) can never be exposed regardless of this list.
+   */
+  providers?: string[];
 }
 
 export interface AppleMusicContentConfig {

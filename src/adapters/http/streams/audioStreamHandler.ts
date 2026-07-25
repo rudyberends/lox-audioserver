@@ -95,17 +95,38 @@ export class AudioStreamHandler {
     // immediately with the streaming headers and no body — do NOT spin up the transcode
     // engine for a probe that's about to be discarded, and don't make the renderer wait on
     // engine startup just to see the content type. Blocking here delayed audible start.
+    //
+    // The HEAD headers must MATCH what the GET will send, or a strict renderer keys on the
+    // probe and gets it wrong. Measured: B&O reads the HEAD's chunked/no-length response as
+    // a LIVE stream and pins now-playing to "live" even though the GET carries a real
+    // Content-Length. So for a forced_content_length zone, compute and advertise the same
+    // Content-Length here.
     if ((req.method ?? 'GET').toUpperCase() === 'HEAD') {
+      const headOutputSettings = this.zoneAudioPrefs.getEffectiveOutputSettings(zoneId);
+      const headOutputProfile: OutputProfile = isWav || isPcm ? 'pcm' : isAac ? 'aac' : isFlac ? 'flac' : 'mp3';
       const headContentType = isWav
         ? 'audio/wav'
         : isPcm
-          ? this.buildPcmContentType(this.zoneAudioPrefs.getEffectiveOutputSettings(zoneId))
+          ? this.buildPcmContentType(headOutputSettings)
           : isAac
             ? 'audio/aac'
             : isFlac
               ? 'audio/flac'
               : 'audio/mpeg';
-      this.writeHeaders(res, headContentType, { chunked: true });
+      const headHttpProfile =
+        this.zoneAudioPrefs.getHttpPreferences(zoneId)?.httpProfile ?? audioOutputSettings.httpProfile;
+      const headContentLength = this.shouldUseIcy(req, false)
+        ? null
+        : this.estimateContentLength(
+          headOutputProfile,
+          this.resolveDurationSeconds(session),
+          headHttpProfile,
+          headOutputSettings,
+        );
+      this.writeHeaders(res, headContentType, {
+        contentLength: headContentLength,
+        chunked: !headContentLength && this.shouldUseChunked(headHttpProfile),
+      });
       res.end();
       return;
     }

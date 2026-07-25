@@ -2,6 +2,7 @@ import { loadConfig } from '@/config';
 import { createLogger, logManager } from '@/shared/logging/logger';
 import { createContentManager } from '@/adapters/content/contentManager';
 import { createContentAdapter } from '@/adapters/content/ContentAdapter';
+import { MediaServer } from '@/adapters/mediaserver/mediaServer';
 import { CustomRadioStore } from '@/adapters/content/providers/customRadioStore';
 import { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import { AppleMusicStreamService } from '@/adapters/content/providers/applemusic/appleMusicStreamService';
@@ -157,6 +158,7 @@ export function createRuntime(): Runtime {
   let sendspinServerAdvertiser: SendspinServerAdvertiser | null = null;
   let sonnCoreMdnsService: SonnCoreMdnsService | null = null;
   let snapcastMdnsService: SnapcastMdnsService | null = null;
+  let mediaServer: MediaServer | null = null;
   const mdnsServices: MdnsLifecycleService[] = [];
   const streamEvents = new StreamEvents();
   const serverHeartbeat = new ServerHeartbeat(connectionRegistry);
@@ -401,6 +403,18 @@ export function createRuntime(): Runtime {
 
     browserZoneRegistry = new BrowserZoneRegistry(zoneManager);
 
+    // DLNA/UPnP MediaServer: exposes all browsable content (library, radio,
+    // bridges) as ContentDirectory and serves tracks statelessly at
+    // /dlna/track/<id>. Gated on content.mediaServer.enabled; its SSDP advertiser
+    // is started/stopped alongside the gateway below.
+    mediaServer = new MediaServer(
+      configPort,
+      contentManager,
+      contentAdapter,
+      engine,
+      config.http.port,
+    );
+
     httpService = new HttpService(config.http, {
       onReinitialize: handleReinitialize,
       notifier: ports.notifier,
@@ -437,6 +451,7 @@ export function createRuntime(): Runtime {
         appleMusicStreamService.getProxyRoute(),
         spotifyStreamProxyService.getProxyRoute(),
       ],
+      mediaServer,
     });
     networkService = new NetworkService({
       lineInRegistry,
@@ -453,6 +468,8 @@ export function createRuntime(): Runtime {
 
     await httpService.start();
     await networkService.start();
+    // Advertise the DLNA MediaServer once the gateway is serving /dlna/*.
+    await mediaServer.start();
 
     sendspinServerAdvertiser = new SendspinServerAdvertiser(
       config.http,
@@ -501,6 +518,9 @@ export function createRuntime(): Runtime {
         mdnsService.shutdown();
       },
     });
+    if (mediaServer) {
+      services.push({ name: 'media-server', stop: () => mediaServer!.stop() });
+    }
     if (networkService) {
       services.push({ name: 'network', stop: () => networkService!.stop() });
     }
@@ -519,6 +539,7 @@ export function createRuntime(): Runtime {
     sendspinServerAdvertiser = null;
     sonnCoreMdnsService = null;
     snapcastMdnsService = null;
+    mediaServer = null;
     loxoneService = null;
   }
 

@@ -92,6 +92,11 @@ export class DlnaOutput implements ZoneOutput {
   // (session.stream.id), so it dedups the intra-track play() storm without swallowing the
   // next track (whose normalized URL is identical).
   private currentStreamKey: string | null = null;
+  // Last URI + metadata signature pushed via SetAVTransportURI, so a later
+  // updateMetadata can detect a meaningful change (e.g. title/duration arriving
+  // after the initial play) and refresh now-playing without restarting playback.
+  private lastPushedUri: string | null = null;
+  private lastMetadataSignature: string | null = null;
   // GENA event subscriber for device-side state (play/pause/stop/volume from the renderer).
   private eventSubscriber?: DlnaEventSubscriber;
   private avTransportEventUrl?: string;
@@ -171,6 +176,51 @@ export class DlnaOutput implements ZoneOutput {
     }
     this.currentStreamKey = streamKey;
     await this.enqueue(() => this.sendPlaybackWithSoap(streamUri, session));
+  }
+
+  /**
+   * Refresh the renderer's now-playing when track metadata arrives after the
+   * initial play() — the common case being title/artist/duration resolving a
+   * moment later, which flips the item from a duration-less `audioBroadcast`
+   * ("live") to a `musicTrack` with a progress bar.
+   *
+   * We re-send SetAVTransportURI ONLY (no Stop/Play), so the current playback is
+   * not interrupted — the renderer just adopts the richer metadata. Deduped on a
+   * metadata signature so an unchanged update is a no-op.
+   */
+  public async updateMetadata(session: PlaybackSession | null): Promise<void> {
+    if (!session) {
+      return;
+    }
+    // Only meaningful while the stream we pushed is still the active one.
+    const uri = this.lastPushedUri;
+    if (!uri || !this.controlUrl) {
+      return;
+    }
+    const signature = this.metadataSignature(session);
+    if (signature === this.lastMetadataSignature) {
+      return;
+    }
+    this.lastMetadataSignature = signature;
+    const didl = this.buildDidlMetadata(uri, session);
+    await this.enqueue(async () => {
+      await this.invokeActionWithRetry('SetAVTransportURI', this.buildSetUriBody(uri, didl), 1, {
+        timeoutMs: 1500,
+        timeoutOk: true,
+      });
+    });
+  }
+
+  /**
+   * A compact fingerprint of the now-playing-relevant metadata. Changes when the
+   * title/artist/album/duration or the broadcast-vs-track distinction changes, so
+   * updateMetadata re-pushes exactly when the renderer's display would differ.
+   */
+  private metadataSignature(session: PlaybackSession): string {
+    const m = session.metadata;
+    const duration = session.duration || m?.duration || 0;
+    const isStream = m?.isRadio || m?.isAlert || !duration ? 1 : 0;
+    return [m?.title ?? '', m?.artist ?? '', m?.album ?? '', duration, isStream].join('|');
   }
 
   /**
@@ -370,6 +420,12 @@ export class DlnaOutput implements ZoneOutput {
     this.log.info('sending playback command', { zoneId: this.zoneId, uri });
     await this.runCommand('Stop', this.buildStopBody(), { optional: true });
     const didl = this.buildDidlMetadata(uri, session);
+    // Remember what we pushed so a later metadata update can decide whether to
+    // re-push (see updateMetadata). The initial play() often fires before track
+    // metadata/duration has resolved, so the first DIDL can be a title-less,
+    // duration-less audioBroadcast — which the renderer shows as "live".
+    this.lastPushedUri = uri;
+    this.lastMetadataSignature = this.metadataSignature(session);
 
     // Many renderers (measured: B&O/QPlay) accept SetAVTransportURI but never send a SOAP
     // reply, so a long timeout just stalls us for the full window before Play — this was the
@@ -580,8 +636,12 @@ export class DlnaOutput implements ZoneOutput {
       ? 'object.item.audioItem.audioBroadcast'
       : 'object.item.audioItem.musicTrack';
     const durationAttr = duration ? ` duration="${duration}"` : '';
+    // DLNA.ORG_PN=MP3 names the profile in the 4th protocolInfo field. Strict sinks
+    // (B&O) validate it and can refuse an item's now-playing metadata when no
+    // recognized profile is present — the same fix applied to the MediaServer's
+    // <res>. OP=00 stays consistent with the stream's Accept-Ranges: none.
     const protocolInfo =
-      'http-get:*:audio/mpeg:DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=8D500000000000000000000000000000';
+      'http-get:*:audio/mpeg:DLNA.ORG_PN=MP3;DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=8D500000000000000000000000000000';
     const art = cover ? `<upnp:albumArtURI>${escapeXml(cover)}</upnp:albumArtURI>` : '';
     return `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="0" parentID="-1" restricted="1"><dc:title>${escapeXml(title)}</dc:title><dc:creator>${escapeXml(artist)}</dc:creator><upnp:artist>${escapeXml(artist)}</upnp:artist><upnp:album>${escapeXml(album)}</upnp:album>${art}<upnp:class>${mediaClass}</upnp:class><res${durationAttr} protocolInfo="${protocolInfo}">${escapeXml(uri)}</res></item></DIDL-Lite>`;
   }

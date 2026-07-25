@@ -46,6 +46,7 @@ import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezelite
 import type { LmsCliServer } from '@/adapters/outputs/squeezelite/lmsCliServer';
 import type { MdnsPort } from '@/ports/MdnsPort';
 import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
+import type { MediaServer } from '@/adapters/mediaserver/mediaServer';
 
 /**
  * Hosts the public HTTP gateway (admin UI, API stub, music streaming, Sendspin).
@@ -57,6 +58,7 @@ export class HttpService {
   private readonly staticFiles: StaticFileHandler;
   private readonly audioStream: AudioStreamHandler;
   private readonly audioProxy: AudioProxyHandler;
+  private readonly mediaServer?: MediaServer;
   private readonly streamProxyRoutes: StreamProxyRoute[];
   private readonly lineInIngestWs: LineInIngestWebSocket;
   private readonly lineInApi: LineInApiHandler;
@@ -102,6 +104,7 @@ export class HttpService {
       connectionRegistry: ConnectionRegistry;
       browserZoneRegistry: BrowserZoneRegistry;
       streamProxyRoutes: StreamProxyRoute[];
+      mediaServer?: MediaServer;
     },
   ) {
     this.lineInApi = new LineInApiHandler(options.configPort, options.lineInMetadataService);
@@ -139,6 +142,7 @@ export class HttpService {
       options.zoneAudioPrefs,
     );
     this.audioProxy = new AudioProxyHandler(options.zoneManager);
+    this.mediaServer = options.mediaServer;
     this.streamProxyRoutes = options.streamProxyRoutes;
     this.lineInIngestWs = new LineInIngestWebSocket(options.lineInRegistry);
     this.sendspin = new SendspinGateway(options.browserZoneRegistry);
@@ -339,6 +343,14 @@ export class HttpService {
           /* ignore */
         }
       }
+      return;
+    }
+
+    // DLNA/UPnP MediaServer: serves the ContentDirectory, description/SCPD XML
+    // and the zone-less `/dlna/track/<id>` stream endpoint. LAN-reachable by
+    // design (renderers pull from it), so no local-only gate here.
+    if (this.mediaServer?.matches(pathname)) {
+      await this.mediaServer.handle(req, res, pathname);
       return;
     }
 
