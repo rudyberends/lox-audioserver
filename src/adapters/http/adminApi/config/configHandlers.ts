@@ -588,6 +588,7 @@ async function handleContentUpdate(
         spotify?: { clientId?: string | null; cacheEnabled?: boolean; cacheSizeMb?: number };
         library?: { enabled?: boolean; autoScan?: boolean };
         tts?: AudioServerConfig['content']['tts'];
+        mediaServer?: { enabled?: boolean; friendlyName?: string };
       }
     | null;
   if (res.writableEnded) {
@@ -632,6 +633,15 @@ async function handleContentUpdate(
       cfg.content.tts = {
         ...(cfg.content.tts ?? { provider: { type: 'internal' }, fallbackToInternal: true }),
         ...body.tts,
+      };
+    }
+    if (body.mediaServer) {
+      cfg.content.mediaServer = {
+        ...(cfg.content.mediaServer ?? {}),
+        ...(typeof body.mediaServer.enabled === 'boolean' && { enabled: body.mediaServer.enabled }),
+        ...(typeof body.mediaServer.friendlyName === 'string' && {
+          friendlyName: body.mediaServer.friendlyName.trim(),
+        }),
       };
     }
   });
