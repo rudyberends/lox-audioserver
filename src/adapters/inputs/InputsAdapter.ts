@@ -2,6 +2,7 @@ import type { AirplayInputService } from '@/adapters/inputs/airplay/airplayInput
 import type { MusicAssistantInputService } from '@/adapters/inputs/musicassistant/musicAssistantInputService';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
+import type { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
 import type { InputsPort } from '@/ports/InputsPort';
 
 type AirplayController = Parameters<InputsPort['configureAirplay']>[0];
@@ -13,6 +14,7 @@ export type InputsAdapterDeps = {
   spotify: SpotifyInputService;
   musicAssistant: MusicAssistantInputService;
   sendspinLineIn: SendspinLineInService;
+  dlna: DlnaInputService;
 };
 
 export class InputsAdapter implements InputsPort {
@@ -36,6 +38,18 @@ export class InputsAdapter implements InputsPort {
 
   public shutdownAirplay(): Promise<void> {
     return this.deps.airplay.shutdown();
+  }
+
+  public configureDlna(controller: AirplayController): void {
+    this.deps.dlna.configure(controller);
+  }
+
+  public syncDlnaZones(...args: Parameters<InputsPort['syncDlnaZones']>): void {
+    this.deps.dlna.syncZones(...args);
+  }
+
+  public shutdownDlna(): void {
+    this.deps.dlna.shutdown();
   }
 
   public configureSpotify(controller: SpotifyConnectController): void {

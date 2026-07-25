@@ -361,6 +361,7 @@ export class ZoneManager {
     this.inputConfigurator.configure();
     const inputsPort = this.inputsPort;
     inputsPort.syncAirplayZones(zoneConfigs, inputs?.airplay ?? null);
+    inputsPort.syncDlnaZones(zoneConfigs, inputs?.dlna ?? null);
     inputsPort.syncSpotifyZones(zoneConfigs, inputs?.spotify ?? null);
     inputsPort.configureMusicAssistant(this.playbackCoordinator.getMusicAssistantInputHandlers());
     const contentPort = this.contentPort;
@@ -421,6 +422,7 @@ export class ZoneManager {
     const effectiveInputs = inputs ?? this.lastInputs;
     const inputsPort = this.inputsPort;
     inputsPort.syncAirplayZones(allZones, effectiveInputs?.airplay ?? null);
+    inputsPort.syncDlnaZones(allZones, effectiveInputs?.dlna ?? null);
     inputsPort.syncSpotifyZones(allZones, effectiveInputs?.spotify ?? null);
     inputsPort.configureMusicAssistant(this.playbackCoordinator.getMusicAssistantInputHandlers());
     const contentPort = this.contentPort;

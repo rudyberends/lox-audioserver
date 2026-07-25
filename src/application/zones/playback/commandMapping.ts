@@ -3,6 +3,7 @@ import { resolveAirplayInputStart } from '@/application/zones/playback/providerH
 import { resolveSpotifyInputStart } from '@/application/zones/playback/providerHandlers/spotify';
 import { resolveMusicAssistantInputStart } from '@/application/zones/playback/providerHandlers/musicAssistant';
 import { resolveLineInInputStart } from '@/application/zones/playback/providerHandlers/linein';
+import { resolveDlnaInputStart } from '@/application/zones/playback/providerHandlers/dlna';
 import { resolveMixedGroupInputStart } from '@/application/zones/playback/providerHandlers/mixedgroup';
 
 export function resolveInputStartDecision(label: string): InputStartDecision | null {
@@ -16,6 +17,8 @@ export function resolveInputStartDecision(label: string): InputStartDecision | n
       return resolveMusicAssistantInputStart();
     case 'linein':
       return resolveLineInInputStart();
+    case 'dlna':
+      return resolveDlnaInputStart();
     case 'mixedgroup':
       return resolveMixedGroupInputStart();
     default:

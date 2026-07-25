@@ -43,7 +43,6 @@ export class MediaServer {
   private readonly log = createLogger('MediaServer');
   private readonly cds: ContentDirectory;
   private readonly track: TrackStreamHandler;
-  private advertiser?: SsdpAdvertiser;
   private started = false;
 
   constructor(
@@ -52,6 +51,8 @@ export class MediaServer {
     content: ContentPort,
     engine: EnginePort,
     private readonly httpPort: number,
+    // Shared SSDP advertiser (one UDP socket on :1900 for all our UPnP devices).
+    private readonly ssdp: SsdpAdvertiser,
   ) {
     this.cds = new ContentDirectory(contentManager, () => this.buildServiceDefs());
     this.track = new TrackStreamHandler(engine, content);
@@ -68,21 +69,21 @@ export class MediaServer {
       return;
     }
     this.started = true;
-    this.advertiser = new SsdpAdvertiser({
+    // Register the MediaServer as a device on the shared SSDP advertiser (the
+    // advertiser itself is started/stopped by the composition root).
+    this.ssdp.addDevice({
       udn: this.udn(),
-      baseUrl: () => this.baseUrl(),
+      deviceType: 'urn:schemas-upnp-org:device:MediaServer:1',
+      serviceTypes: [
+        'urn:schemas-upnp-org:service:ContentDirectory:1',
+        'urn:schemas-upnp-org:service:ConnectionManager:1',
+      ],
+      location: () => `${this.baseUrl()}${DEVICE_DESCRIPTION_PATH}`,
     });
-    try {
-      await this.advertiser.start();
-      this.log.info('media server advertised', {
-        friendlyName: this.friendlyName(),
-        location: `${this.baseUrl()}${DEVICE_DESCRIPTION_PATH}`,
-      });
-    } catch (error) {
-      this.log.warn('failed to start ssdp advertiser', {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
+    this.log.info('media server advertised', {
+      friendlyName: this.friendlyName(),
+      location: `${this.baseUrl()}${DEVICE_DESCRIPTION_PATH}`,
+    });
   }
 
   public async stop(): Promise<void> {
@@ -90,10 +91,7 @@ export class MediaServer {
       return;
     }
     this.started = false;
-    if (this.advertiser) {
-      await this.advertiser.stop();
-      this.advertiser = undefined;
-    }
+    this.ssdp.removeDevice(this.udn());
   }
 
   // ── HTTP dispatch ───────────────────────────────────────────────────────────

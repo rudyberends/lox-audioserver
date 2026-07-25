@@ -359,6 +359,14 @@ export interface ZoneInputConfig {
   spotify?: ZoneSpotifyConfig | null;
   musicassistant?: ZoneMusicAssistantConfig | null;
   lineIn?: ZoneLineInConfig | null;
+  dlna?: ZoneDlnaConfig | null;
+}
+
+export interface ZoneDlnaConfig {
+  /** Expose this zone as a DLNA/UPnP MediaRenderer that apps can cast to. */
+  enabled: boolean;
+  /** Optional friendly name shown to casting apps (defaults to the zone name). */
+  publishName?: string;
 }
 
 export interface InputConfig {
@@ -366,6 +374,11 @@ export interface InputConfig {
   spotify?: GlobalSpotifyConfig | null;
   bluetooth?: GlobalBluetoothConfig | null;
   lineIn?: GlobalLineInConfig | null;
+  dlna?: GlobalDlnaConfig | null;
+}
+
+export interface GlobalDlnaConfig {
+  enabled: boolean;
 }
 
 export interface GroupConfig {

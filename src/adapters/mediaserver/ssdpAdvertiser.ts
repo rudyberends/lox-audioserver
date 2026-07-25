@@ -1,6 +1,5 @@
 import dgram from 'node:dgram';
 import { createLogger } from '@/shared/logging/logger';
-import { DEVICE_DESCRIPTION_PATH } from '@/adapters/mediaserver/deviceDescription';
 
 const SSDP_ADDRESS = '239.255.255.250';
 const SSDP_PORT = 1900;
@@ -8,32 +7,71 @@ const ADVERTISE_INTERVAL_MS = 30_000;
 const MAX_AGE_SECONDS = 1800;
 
 /**
- * SSDP presence for the MediaServer — the responder side that dlnaDiscovery.ts
+ * One SSDP device we announce: a UDN, a device type, its service types, and the
+ * absolute URL of its device description. A single UDP socket on :1900 can only
+ * be bound once, so ALL our UPnP devices (the MediaServer plus one MediaRenderer
+ * per zone) share one advertiser and are registered as devices here.
+ */
+export type SsdpDevice = {
+  /** Stable id, e.g. `uuid:xxxxxxxx-...`. */
+  udn: string;
+  /** e.g. `urn:schemas-upnp-org:device:MediaRenderer:1`. */
+  deviceType: string;
+  /** Full service type URNs, e.g. `urn:schemas-upnp-org:service:AVTransport:1`. */
+  serviceTypes: string[];
+  /** Returns the absolute LOCATION of this device's description (per-call so IP can change). */
+  location: () => string;
+};
+
+/**
+ * SSDP presence for our UPnP devices — the responder side that dlnaDiscovery.ts
  * (a control point) deliberately never implements.
  *
- * It does two things:
- *   - answers M-SEARCH requests targeting our device/service types with unicast
- *     replies carrying the LOCATION of our device description, and
- *   - periodically multicasts NOTIFY ssdp:alive, plus ssdp:byebye on shutdown,
+ *   - answers M-SEARCH requests targeting any registered device/service type with
+ *     unicast replies carrying that device's LOCATION, and
+ *   - periodically multicasts NOTIFY ssdp:alive per registered device, plus
+ *     ssdp:byebye on shutdown / device removal,
  *
  * so controllers (BubbleUPnP, B&O, Samsung, VLC) discover us without a manual
- * poll. USNs follow the standard triple: root device, device type, and each
- * service type, all under one UDN.
+ * poll. USNs follow the standard triple per device: root device, device type,
+ * and each service type, all under that device's UDN.
  */
 export class SsdpAdvertiser {
   private readonly log = createLogger('MediaServer', 'SSDP');
   private socket?: dgram.Socket;
   private timer?: NodeJS.Timeout;
   private running = false;
+  private readonly devices = new Map<string, SsdpDevice>();
 
   constructor(
     private readonly params: {
-      udn: string; // e.g. uuid:xxxxxxxx-...
-      /** Absolute http origin, e.g. http://192.168.1.10:7090 */
-      baseUrl: () => string;
       serverHeader?: string;
-    },
+    } = {},
   ) {}
+
+  /** Register (or replace) a device and announce it immediately if running. */
+  public addDevice(device: SsdpDevice): void {
+    this.devices.set(device.udn, device);
+    if (this.running) {
+      this.sendAliveFor(device);
+    }
+  }
+
+  /** Remove a device and send byebye for it. */
+  public removeDevice(udn: string): void {
+    const device = this.devices.get(udn);
+    if (!device) {
+      return;
+    }
+    this.devices.delete(udn);
+    if (this.running) {
+      this.sendByebyeFor(device);
+    }
+  }
+
+  public hasDevices(): boolean {
+    return this.devices.size > 0;
+  }
 
   public async start(): Promise<void> {
     if (this.running) {
@@ -61,11 +99,11 @@ export class SsdpAdvertiser {
       });
     });
 
-    // Announce presence immediately, then on an interval.
+    // Announce all registered devices immediately, then on an interval.
     this.sendAlive();
     this.timer = setInterval(() => this.sendAlive(), ADVERTISE_INTERVAL_MS);
     this.timer.unref?.();
-    this.log.info('ssdp advertiser started', { udn: this.params.udn });
+    this.log.info('ssdp advertiser started', { devices: this.devices.size });
   }
 
   public async stop(): Promise<void> {
@@ -95,27 +133,14 @@ export class SsdpAdvertiser {
     }
   }
 
-  private notificationTypes(): Array<{ nt: string; usnSuffix: string }> {
+  /** The standard NT/USN pairs a device advertises: root, device type, each service. */
+  private notificationTypes(device: SsdpDevice): Array<{ nt: string; usnSuffix: string }> {
     return [
       { nt: 'upnp:rootdevice', usnSuffix: '::upnp:rootdevice' },
-      { nt: this.params.udn, usnSuffix: '' },
-      {
-        nt: 'urn:schemas-upnp-org:device:MediaServer:1',
-        usnSuffix: '::urn:schemas-upnp-org:device:MediaServer:1',
-      },
-      {
-        nt: 'urn:schemas-upnp-org:service:ContentDirectory:1',
-        usnSuffix: '::urn:schemas-upnp-org:service:ContentDirectory:1',
-      },
-      {
-        nt: 'urn:schemas-upnp-org:service:ConnectionManager:1',
-        usnSuffix: '::urn:schemas-upnp-org:service:ConnectionManager:1',
-      },
+      { nt: device.udn, usnSuffix: '' },
+      { nt: device.deviceType, usnSuffix: `::${device.deviceType}` },
+      ...device.serviceTypes.map((svc) => ({ nt: svc, usnSuffix: `::${svc}` })),
     ];
-  }
-
-  private location(): string {
-    return `${this.params.baseUrl()}${DEVICE_DESCRIPTION_PATH}`;
   }
 
   private serverHeader(): string {
@@ -123,13 +148,19 @@ export class SsdpAdvertiser {
   }
 
   private sendAlive(): void {
+    for (const device of this.devices.values()) {
+      this.sendAliveFor(device);
+    }
+  }
+
+  private sendAliveFor(device: SsdpDevice): void {
     const socket = this.socket;
     if (!socket) {
       return;
     }
-    const location = this.location();
-    for (const { nt, usnSuffix } of this.notificationTypes()) {
-      const usn = `${this.params.udn}${usnSuffix}`;
+    const location = device.location();
+    for (const { nt, usnSuffix } of this.notificationTypes(device)) {
+      const usn = `${device.udn}${usnSuffix}`;
       const message =
         'NOTIFY * HTTP/1.1\r\n' +
         `HOST: ${SSDP_ADDRESS}:${SSDP_PORT}\r\n` +
@@ -146,12 +177,18 @@ export class SsdpAdvertiser {
   }
 
   private sendByebye(): void {
+    for (const device of this.devices.values()) {
+      this.sendByebyeFor(device);
+    }
+  }
+
+  private sendByebyeFor(device: SsdpDevice): void {
     const socket = this.socket;
     if (!socket) {
       return;
     }
-    for (const { nt, usnSuffix } of this.notificationTypes()) {
-      const usn = `${this.params.udn}${usnSuffix}`;
+    for (const { nt, usnSuffix } of this.notificationTypes(device)) {
+      const usn = `${device.udn}${usnSuffix}`;
       const message =
         'NOTIFY * HTTP/1.1\r\n' +
         `HOST: ${SSDP_ADDRESS}:${SSDP_PORT}\r\n` +
@@ -174,18 +211,19 @@ export class SsdpAdvertiser {
       return;
     }
     const st = (headers.st ?? '').trim();
-    const targets = this.matchingTargets(st);
-    if (!targets.length) {
-      return;
-    }
-    // Honour MX (spread replies a little) but keep it simple: reply quickly.
-    for (const { nt, usnSuffix } of targets) {
-      this.sendSearchResponse(nt, usnSuffix, rinfo);
+    // Reply once per matching (device, target).
+    for (const device of this.devices.values()) {
+      for (const { nt, usnSuffix } of this.matchingTargets(device, st)) {
+        this.sendSearchResponse(device, nt, usnSuffix, rinfo);
+      }
     }
   }
 
-  private matchingTargets(st: string): Array<{ nt: string; usnSuffix: string }> {
-    const all = this.notificationTypes();
+  private matchingTargets(
+    device: SsdpDevice,
+    st: string,
+  ): Array<{ nt: string; usnSuffix: string }> {
+    const all = this.notificationTypes(device);
     if (st === 'ssdp:all') {
       return all;
     }
@@ -193,6 +231,7 @@ export class SsdpAdvertiser {
   }
 
   private sendSearchResponse(
+    device: SsdpDevice,
     nt: string,
     usnSuffix: string,
     rinfo: dgram.RemoteInfo,
@@ -201,12 +240,12 @@ export class SsdpAdvertiser {
     if (!socket) {
       return;
     }
-    const usn = `${this.params.udn}${usnSuffix}`;
+    const usn = `${device.udn}${usnSuffix}`;
     const message =
       'HTTP/1.1 200 OK\r\n' +
       `CACHE-CONTROL: max-age=${MAX_AGE_SECONDS}\r\n` +
       'EXT:\r\n' +
-      `LOCATION: ${this.location()}\r\n` +
+      `LOCATION: ${device.location()}\r\n` +
       `SERVER: ${this.serverHeader()}\r\n` +
       `ST: ${nt}\r\n` +
       `USN: ${usn}\r\n` +

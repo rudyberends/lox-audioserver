@@ -1,4 +1,4 @@
-import type { InputsPort } from '@/ports/InputsPort';
+import type { InputsPort, AirplayController } from '@/ports/InputsPort';
 import type { OutputRouter } from '@/application/zones/OutputRouter';
 import type { PlaybackCoordinator } from '@/application/zones/PlaybackCoordinator';
 import type { ZoneStateStore } from '@/application/zones/ZoneStateStore';
@@ -11,7 +11,7 @@ import {
 } from '@/application/zones/helpers/stateHelpers';
 
 export type InputSourceConfiguratorDeps = {
-  inputsPort: Pick<InputsPort, 'configureAirplay' | 'configureSpotify' | 'setAirplayPlayerResolver'>;
+  inputsPort: Pick<InputsPort, 'configureAirplay' | 'configureDlna' | 'configureSpotify' | 'setAirplayPlayerResolver'>;
   zoneRepo: Pick<ZoneRepository, 'get'>;
   playback: Pick<
     PlaybackCoordinator,
@@ -52,6 +52,7 @@ export class InputSourceConfigurator {
       return;
     }
     this.configureAirplay();
+    this.configureDlna();
     this.configureSpotify();
     this.deps.inputsPort.setAirplayPlayerResolver(
       (zoneId) => this.deps.zoneRepo.get(zoneId)?.player ?? null,
@@ -59,9 +60,13 @@ export class InputSourceConfigurator {
     this.configured = true;
   }
 
-  private configureAirplay(): void {
+  /**
+   * The generic input controller: turns an input's callbacks into zone playback.
+   * Shared by AirPlay and the DLNA renderer input — neither is protocol-specific.
+   */
+  private buildInputController(): AirplayController {
     const { playback } = this.deps;
-    this.deps.inputsPort.configureAirplay({
+    return {
       startPlayback: (zoneId, label, source, metadata) => {
         playback.playInputSource(zoneId, label, source, metadata);
       },
@@ -78,7 +83,15 @@ export class InputSourceConfigurator {
       stopPlayback: (zoneId) => {
         playback.stopInputSource(zoneId);
       },
-    });
+    };
+  }
+
+  private configureAirplay(): void {
+    this.deps.inputsPort.configureAirplay(this.buildInputController());
+  }
+
+  private configureDlna(): void {
+    this.deps.inputsPort.configureDlna(this.buildInputController());
   }
 
   private configureSpotify(): void {

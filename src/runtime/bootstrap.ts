@@ -1,8 +1,11 @@
 import { loadConfig } from '@/config';
+import { loadEnvironment } from '@/config/environment';
 import { createLogger, logManager } from '@/shared/logging/logger';
 import { createContentManager } from '@/adapters/content/contentManager';
 import { createContentAdapter } from '@/adapters/content/ContentAdapter';
 import { MediaServer } from '@/adapters/mediaserver/mediaServer';
+import { SsdpAdvertiser } from '@/adapters/mediaserver/ssdpAdvertiser';
+import { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
 import { CustomRadioStore } from '@/adapters/content/providers/customRadioStore';
 import { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import { AppleMusicStreamService } from '@/adapters/content/providers/applemusic/appleMusicStreamService';
@@ -159,6 +162,11 @@ export function createRuntime(): Runtime {
   let sonnCoreMdnsService: SonnCoreMdnsService | null = null;
   let snapcastMdnsService: SnapcastMdnsService | null = null;
   let mediaServer: MediaServer | null = null;
+  // Shared SSDP advertiser: one UDP socket on :1900 for the MediaServer plus every
+  // per-zone DLNA MediaRenderer input. Devices register/deregister themselves.
+  const ssdpAdvertiser = new SsdpAdvertiser();
+  const dlnaHttpPort = loadEnvironment().httpPort;
+  const dlnaInputService = new DlnaInputService(configPort, ssdpAdvertiser, dlnaHttpPort);
   const mdnsServices: MdnsLifecycleService[] = [];
   const streamEvents = new StreamEvents();
   const serverHeartbeat = new ServerHeartbeat(connectionRegistry);
@@ -195,6 +203,7 @@ export function createRuntime(): Runtime {
     spotify: spotifyInputService,
     musicAssistant: musicAssistantInputService,
     sendspinLineIn: sendspinLineInService,
+    dlna: dlnaInputService,
   });
   const zoneAudioPrefs = new ZoneAudioPreferences();
   const audioManager = new AudioManager(new PlaybackService(engine), outputNotifier, zoneAudioPrefs);
@@ -413,6 +422,7 @@ export function createRuntime(): Runtime {
       contentAdapter,
       engine,
       config.http.port,
+      ssdpAdvertiser,
     );
 
     httpService = new HttpService(config.http, {
@@ -452,6 +462,7 @@ export function createRuntime(): Runtime {
         spotifyStreamProxyService.getProxyRoute(),
       ],
       mediaServer,
+      dlnaInput: dlnaInputService,
     });
     networkService = new NetworkService({
       lineInRegistry,
@@ -468,7 +479,10 @@ export function createRuntime(): Runtime {
 
     await httpService.start();
     await networkService.start();
-    // Advertise the DLNA MediaServer once the gateway is serving /dlna/*.
+    // Start the shared SSDP socket, then let the MediaServer register its device.
+    // Per-zone renderer devices register via dlnaInputService.syncZones (driven by
+    // zoneManager). All share this one advertiser / UDP :1900 socket.
+    await ssdpAdvertiser.start();
     await mediaServer.start();
 
     sendspinServerAdvertiser = new SendspinServerAdvertiser(
@@ -521,6 +535,13 @@ export function createRuntime(): Runtime {
     if (mediaServer) {
       services.push({ name: 'media-server', stop: () => mediaServer!.stop() });
     }
+    services.push({
+      name: 'dlna-input',
+      stop: async () => {
+        dlnaInputService.shutdown();
+        await ssdpAdvertiser.stop();
+      },
+    });
     if (networkService) {
       services.push({ name: 'network', stop: () => networkService!.stop() });
     }

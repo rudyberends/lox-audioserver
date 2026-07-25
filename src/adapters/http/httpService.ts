@@ -47,6 +47,7 @@ import type { LmsCliServer } from '@/adapters/outputs/squeezelite/lmsCliServer';
 import type { MdnsPort } from '@/ports/MdnsPort';
 import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
 import type { MediaServer } from '@/adapters/mediaserver/mediaServer';
+import type { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
 
 /**
  * Hosts the public HTTP gateway (admin UI, API stub, music streaming, Sendspin).
@@ -59,6 +60,7 @@ export class HttpService {
   private readonly audioStream: AudioStreamHandler;
   private readonly audioProxy: AudioProxyHandler;
   private readonly mediaServer?: MediaServer;
+  private readonly dlnaInput?: DlnaInputService;
   private readonly streamProxyRoutes: StreamProxyRoute[];
   private readonly lineInIngestWs: LineInIngestWebSocket;
   private readonly lineInApi: LineInApiHandler;
@@ -105,6 +107,7 @@ export class HttpService {
       browserZoneRegistry: BrowserZoneRegistry;
       streamProxyRoutes: StreamProxyRoute[];
       mediaServer?: MediaServer;
+      dlnaInput?: DlnaInputService;
     },
   ) {
     this.lineInApi = new LineInApiHandler(options.configPort, options.lineInMetadataService);
@@ -143,6 +146,7 @@ export class HttpService {
     );
     this.audioProxy = new AudioProxyHandler(options.zoneManager);
     this.mediaServer = options.mediaServer;
+    this.dlnaInput = options.dlnaInput;
     this.streamProxyRoutes = options.streamProxyRoutes;
     this.lineInIngestWs = new LineInIngestWebSocket(options.lineInRegistry);
     this.sendspin = new SendspinGateway(options.browserZoneRegistry);
@@ -349,6 +353,13 @@ export class HttpService {
     // DLNA/UPnP MediaServer: serves the ContentDirectory, description/SCPD XML
     // and the zone-less `/dlna/track/<id>` stream endpoint. LAN-reachable by
     // design (renderers pull from it), so no local-only gate here.
+    // Per-zone DLNA MediaRenderer inputs: SOAP control + device/SCPD XML under
+    // /dlna-renderer/:zoneId/*. LAN-reachable by design (apps cast to it).
+    if (this.dlnaInput?.matches(pathname)) {
+      await this.dlnaInput.handle(req, res, pathname);
+      return;
+    }
+
     if (this.mediaServer?.matches(pathname)) {
       await this.mediaServer.handle(req, res, pathname);
       return;
