@@ -336,6 +336,7 @@ async function handleInputsUpdate(
         airplay?: { enabled?: boolean };
         spotify?: { enabled?: boolean };
         bluetooth?: { enabled?: boolean };
+        dlna?: { enabled?: boolean };
         lineIn?: { inputs?: Array<Record<string, unknown>> | null };
       }
     | null;
@@ -370,6 +371,9 @@ async function handleInputsUpdate(
         ...(cfg.inputs!.bluetooth ?? {}),
         enabled: Boolean(body.bluetooth.enabled),
       };
+    }
+    if (body.dlna && typeof body.dlna === 'object' && 'enabled' in body.dlna) {
+      cfg.inputs!.dlna = { ...(cfg.inputs!.dlna ?? {}), enabled: Boolean(body.dlna.enabled) };
     }
     if (lineInUpdated) {
       cfg.inputs!.lineIn = { ...(cfg.inputs!.lineIn ?? {}), inputs: lineInInputs ?? [] };
