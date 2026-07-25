@@ -1,6 +1,7 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { PassThrough } from 'node:stream';
 import type { PlaybackSession } from '@/application/playback/audioManager';
+import { zoneSessionKey } from '@/ports/types/SessionKey';
 import type { PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import { RaopSender, computeGroupAnchorNtp } from '@/adapters/outputs/airplay/raopSender';
 import { AirplayStreamSession } from '@/adapters/outputs/airplay/airplayStreamSession';
@@ -406,7 +407,7 @@ export class AirPlayOutput implements ZoneOutput {
     // backpressure-stall the whole engine session — which would silence every
     // member a couple seconds after the group starts. Recreated on solo return.
     this.streamSession.dispose();
-    const stream = this.ports.engine.createStream(leaderZoneId, 'pcm', {
+    const stream = this.ports.engine.createStream(zoneSessionKey(leaderZoneId), 'pcm', {
       label: `airplay-group-${this.zoneId}`,
       primeWithBuffer: true,
     });
@@ -524,13 +525,13 @@ export class AirPlayOutput implements ZoneOutput {
   private async waitForEngine(retries = 5, delayMs = 150): Promise<boolean> {
     let attempts = 0;
     while (attempts <= retries) {
-      if (this.ports.engine.hasSession(this.zoneId)) {
+      if (this.ports.engine.hasSession(zoneSessionKey(this.zoneId))) {
         return true;
       }
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       attempts++;
     }
-    return this.ports.engine.hasSession(this.zoneId);
+    return this.ports.engine.hasSession(zoneSessionKey(this.zoneId));
   }
 
   /** Push playback progress to the device periodically so its UI stays in sync. */

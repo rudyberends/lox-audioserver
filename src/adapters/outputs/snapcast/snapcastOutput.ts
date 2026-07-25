@@ -1,6 +1,7 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import { pcmCodecFromBitDepth, audioOutputSettings } from '@/ports/types/audioFormat';
+import { zoneSessionKey } from '@/ports/types/SessionKey';
 import type { PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 
@@ -165,7 +166,7 @@ export class SnapcastOutput implements ZoneOutput {
       return;
     }
 
-    const pcmStream = this.ports.engine.createStream(this.zoneId, 'pcm', {
+    const pcmStream = this.ports.engine.createStream(zoneSessionKey(this.zoneId), 'pcm', {
       label: 'snapcast',
       primeWithBuffer: false,
     });
@@ -176,7 +177,7 @@ export class SnapcastOutput implements ZoneOutput {
     // Snapcast timestamps audio against the server clock. If we register the stream before the first PCM
     // bytes exist, snapclient can briefly see "old" chunks and drop them. Waiting here keeps the initial
     // timeline aligned without delaying the main playback pipeline.
-    const ready = await this.ports.engine.waitForFirstChunk(this.zoneId, 'pcm', 1500);
+    const ready = await this.ports.engine.waitForFirstChunk(zoneSessionKey(this.zoneId), 'pcm', 1500);
     if (!ready) {
       this.log.debug('Snapcast stream started without first chunk', { zoneId: this.zoneId });
     }

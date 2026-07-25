@@ -12,6 +12,7 @@ export type { PlaybackSource, OutputProfile } from '@/ports/EngineTypes';
 import { resolvePlaybackSource } from '@/application/playback/sourceResolver';
 import { decodeAudiopath } from '@/domain/loxone/audiopath';
 import type { AudioOutputSettings } from '@/ports/types/audioFormat';
+import { zoneSessionKey, type SessionKey } from '@/ports/types/SessionKey';
 import type { PlaybackService } from '@/application/playback/PlaybackService';
 import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import { EqualizerRestartScheduler } from '@/application/playback/EqualizerRestartScheduler';
@@ -77,8 +78,8 @@ export class AudioManager {
       getEqualizerBands: (zoneId) => this.prefs.getEqualizerResolver()?.(zoneId) ?? null,
       log: this.log,
     });
-    this.playbackService.setSessionTerminationHandler((zoneId, stats, reason) =>
-      this.handleEngineTermination(zoneId, stats, reason),
+    this.playbackService.setSessionTerminationHandler((key, stats, reason) =>
+      this.handleEngineTermination(key, stats, reason),
     );
   }
 
@@ -314,7 +315,7 @@ export class AudioManager {
       return session;
     }
     // If we never tore down the engine, just flip state.
-    if (this.playbackService.hasSession(zoneId)) {
+    if (this.playbackService.hasSession(zoneSessionKey(zoneId))) {
       session.state = 'playing';
       session.updatedAt = Date.now();
       session.startedAt = Date.now() - (session.elapsed ?? 0) * 1000;
@@ -360,7 +361,7 @@ export class AudioManager {
     if (!session) {
       return null;
     }
-    this.playbackService.stop(zoneId, 'stop', { discardSubscribers: true });
+    this.playbackService.stop(zoneSessionKey(zoneId), 'stop', { discardSubscribers: true });
     this.sessions.delete(zoneId);
     this.log.debug('playback stopped', { zoneId, source: session.source });
     return session;
@@ -376,7 +377,7 @@ export class AudioManager {
    * enqueued next-track `strm` command.
    */
   public softStopPlayback(zoneId: number): void {
-    this.playbackService.stop(zoneId, 'crossfade-native', { discardSubscribers: false });
+    this.playbackService.stop(zoneSessionKey(zoneId), 'crossfade-native', { discardSubscribers: false });
     // Note: sessions.delete() is intentionally NOT called here — the session
     // object is retained so that startWithResolvedSource can inspect it and
     // start the new engine cleanly. The subsequent startPlayback call will
@@ -504,10 +505,10 @@ export class AudioManager {
       // Output-only sessions do not own engine playback and should not block external state.
       return false;
     }
-    if (!this.playbackService.hasSession(zoneId)) {
+    if (!this.playbackService.hasSession(zoneSessionKey(zoneId))) {
       return false;
     }
-    const stats = this.playbackService.getSessionStats(zoneId);
+    const stats = this.playbackService.getSessionStats(zoneSessionKey(zoneId));
     if (!stats.length) {
       return true;
     }
@@ -545,7 +546,7 @@ export class AudioManager {
     if (!session.playbackSource) {
       return false;
     }
-    return this.playbackService.hasSession(zoneId);
+    return this.playbackService.hasSession(zoneSessionKey(zoneId));
   }
 
   public updateSessionCover(zoneId: number, cover?: CoverArtPayload): string | undefined {
@@ -598,7 +599,7 @@ export class AudioManager {
     profile: OutputProfile = 'mp3',
     timeoutMs = 2000,
   ): Promise<boolean> {
-    return this.playbackService.waitForFirstChunk(zoneId, profile, timeoutMs);
+    return this.playbackService.waitForFirstChunk(zoneSessionKey(zoneId), profile, timeoutMs);
   }
 
   public createStream(
@@ -606,7 +607,7 @@ export class AudioManager {
     profile: OutputProfile = 'mp3',
     options?: { primeWithBuffer?: boolean; label?: string },
   ): PassThrough | null {
-    return this.playbackService.createStream(zoneId, profile, options);
+    return this.playbackService.createStream(zoneSessionKey(zoneId), profile, options);
   }
 
   public createLocalPcmTap(
@@ -630,7 +631,7 @@ export class AudioManager {
         ? { ...source, startAtSec: options?.startAtSec }
         : source;
     const local = this.playbackService.createLocalSession(
-      zoneId,
+      zoneSessionKey(zoneId),
       playbackSource,
       'pcm',
       outputSettings,
@@ -761,7 +762,7 @@ export class AudioManager {
     handoff?: EngineStartOptions['handoff'],
   ): EngineStartOptions {
     const options: EngineStartOptions = {
-      zoneId,
+      zoneId: zoneSessionKey(zoneId),
       input: this.toEngineInputSpec(playbackSource),
       outputs: this.buildEngineOutputSpecs(profiles, outputSettings),
     };
@@ -894,8 +895,8 @@ export class AudioManager {
         existing.outputSettings.channels !== outputSignature.channels ||
         existing.outputSettings.pcmBitDepth !== outputSignature.pcmBitDepth;
       // Ensure engine session exists (resume after a pause).
-      if (effectiveSource && (outputChanged || profilesChanged || !this.playbackService.hasSession(zoneId))) {
-        if ((outputChanged || profilesChanged) && this.playbackService.hasSession(zoneId)) {
+      if (effectiveSource && (outputChanged || profilesChanged || !this.playbackService.hasSession(zoneSessionKey(zoneId)))) {
+        if ((outputChanged || profilesChanged) && this.playbackService.hasSession(zoneSessionKey(zoneId))) {
           this.log.info('restarting audio engine to apply output format', {
             zoneId,
             sampleRate: outputSignature.sampleRate,
@@ -903,7 +904,7 @@ export class AudioManager {
             pcmBitDepth: outputSignature.pcmBitDepth,
             profiles,
           });
-          this.playbackService.stop(zoneId, 'reconfigure', { discardSubscribers: true });
+          this.playbackService.stop(zoneSessionKey(zoneId), 'reconfigure', { discardSubscribers: true });
         }
         const startOptions = this.buildEngineStartOptions(zoneId, effectiveSource, profiles, effectiveOutput);
         this.playbackService.start(startOptions);
@@ -922,7 +923,7 @@ export class AudioManager {
       effectiveSource?.kind === 'url' &&
       Boolean(existing);
     if (!wantsHandoff) {
-      this.playbackService.stop(zoneId, 'switch', { discardSubscribers: true });
+      this.playbackService.stop(zoneSessionKey(zoneId), 'switch', { discardSubscribers: true });
     }
     if (!effectiveSource && !outputOnly) {
       this.log.warn('unable to resolve playback source; skipping session', {
@@ -1098,7 +1099,7 @@ export class AudioManager {
   }
 
   private handleEngineTermination(
-    zoneId: number,
+    key: SessionKey,
     stats: {
       profile: OutputProfile;
       bps: number | null;
@@ -1119,6 +1120,9 @@ export class AudioManager {
     } | null,
     reason?: string,
   ): void {
+    // For zone playback the session key IS the zoneId; a non-zone (ephemeral)
+    // key never lands in the zone sessions map, so it falls out here as a no-op.
+    const zoneId = key as number;
     const session = this.sessions.get(zoneId);
     if (!session) return;
     const exitCode = stats?.lastExitCode;
@@ -1259,7 +1263,7 @@ export class AudioManager {
       title: metadata?.title,
     });
 
-    const success = await this.playbackService.inlineCrossfade(zoneId, fadeIn, durationSec);
+    const success = await this.playbackService.inlineCrossfade(zoneSessionKey(zoneId), fadeIn, durationSec);
     if (!success) return null;
 
     // Reset wall-clock anchors AFTER the blend completes — at this moment the new
@@ -1296,6 +1300,6 @@ export class AudioManager {
     subscriberDrops: number;
     lastSubscriberDropAt: number | null;
   }> {
-    return this.playbackService.getSessionStats(zoneId);
+    return this.playbackService.getSessionStats(zoneSessionKey(zoneId));
   }
 }

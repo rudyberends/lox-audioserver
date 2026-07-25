@@ -8,6 +8,7 @@ import {
   type AudioOutputSettings,
   type PcmBitDepth,
 } from '@/ports/types/audioFormat';
+import { zoneSessionKey } from '@/ports/types/SessionKey';
 import {
   AudioCodec,
   MediaCommand,
@@ -1024,23 +1025,23 @@ export class SendspinOutput implements ZoneOutput {
       this.streamToken += 1;
       token = this.streamToken;
 
-      const sessionStats = this.ports.engine.getSessionStats(this.zoneId);
+      const sessionStats = this.ports.engine.getSessionStats(zoneSessionKey(this.zoneId));
       const hasTargetProfile = sessionStats.some((s) => s.profile === profile);
       let startedEngine = false;
       if ((shouldRestartForFormat || !hasTargetProfile) && current?.playbackSource) {
-        this.ports.engine.start(this.zoneId, current.playbackSource, [profile], sendspinOutputSettings);
+        this.ports.engine.start(zoneSessionKey(this.zoneId), current.playbackSource, [profile], sendspinOutputSettings);
         startedEngine = true;
       }
 
-      let pcmStream = this.ports.engine.createStream(this.zoneId, profile, {
+      let pcmStream = this.ports.engine.createStream(zoneSessionKey(this.zoneId), profile, {
         primeWithBuffer: true,
         label: 'sendspin',
       });
       // Fallback: if we expected an existing session but couldn't attach, start a fresh one.
       if (!pcmStream && !startedEngine && current?.playbackSource) {
-        this.ports.engine.start(this.zoneId, current.playbackSource, [profile], sendspinOutputSettings);
+        this.ports.engine.start(zoneSessionKey(this.zoneId), current.playbackSource, [profile], sendspinOutputSettings);
         startedEngine = true;
-        pcmStream = this.ports.engine.createStream(this.zoneId, profile, {
+        pcmStream = this.ports.engine.createStream(zoneSessionKey(this.zoneId), profile, {
           primeWithBuffer: true,
           label: 'sendspin',
         });

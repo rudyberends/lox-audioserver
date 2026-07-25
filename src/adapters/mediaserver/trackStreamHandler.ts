@@ -4,6 +4,7 @@ import type { EnginePort, EngineLocalSession } from '@/ports/EnginePort';
 import type { ContentPort } from '@/ports/ContentPort';
 import type { PlaybackSource } from '@/ports/EngineTypes';
 import { audioOutputSettings, mp3BitrateToBps } from '@/ports/types/audioFormat';
+import { allocateEphemeralSessionKey } from '@/ports/types/SessionKey';
 import { resolvePlaybackSource as resolveDirectSource } from '@/application/playback/sourceResolver';
 import { decodeObjectId } from '@/adapters/mediaserver/objectId';
 import { buildId3v2Tag } from '@/adapters/mediaserver/id3';
@@ -26,7 +27,6 @@ import type { ContentItemMetadata } from '@/ports/ContentTypes';
  */
 export class TrackStreamHandler {
   private readonly log = createLogger('MediaServer', 'Track');
-  private seq = 0;
 
   constructor(
     private readonly engine: EnginePort,
@@ -85,13 +85,14 @@ export class TrackStreamHandler {
       return;
     }
 
-    // Unique synthetic id per request; a local session is self-owned and never
-    // looked up by id, so collisions with real zones are impossible.
-    const sessionId = 900_000_000 + (this.seq++ % 1_000_000);
+    // Ephemeral session key: a non-zone consumer, so it lives in a disjoint key
+    // space that never resolves against zone state. The local session is
+    // self-owned (its own onTerminated below) and never looked up by key.
+    const sessionKey = allocateEphemeralSessionKey();
     let session: EngineLocalSession;
     try {
       session = this.engine.createLocalSession(
-        sessionId,
+        sessionKey,
         source,
         'mp3',
         audioOutputSettings,

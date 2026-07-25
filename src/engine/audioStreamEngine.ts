@@ -6,17 +6,21 @@ import {
   type AudioOutputSettings,
 } from '@/engine/audioFormat';
 import type { EnginePort, EngineSessionStats } from '@/ports/EnginePort';
+import type { SessionKey } from '@/ports/types/SessionKey';
 
 export class AudioStreamEngine {
   private readonly log = createLogger('Audio', 'Engine');
-  private readonly sessions = new Map<number, Map<OutputProfile, AudioSession>>();
-  // Keyed by profileMap (not zoneId) so a handoff/replace can put a reason on
-  // the *outgoing* map without overwriting state for the incoming map under
-  // the same zone. Each session's onTerminated callback reads + deletes its
+  // Keyed by SessionKey. For zone playback the key IS the zoneId; a non-zone
+  // consumer (e.g. DLNA media server) uses an ephemeral key from a disjoint
+  // range. The engine treats it purely as an opaque map key — no zone logic.
+  private readonly sessions = new Map<SessionKey, Map<OutputProfile, AudioSession>>();
+  // Keyed by profileMap (not session key) so a handoff/replace can put a reason
+  // on the *outgoing* map without overwriting state for the incoming map under
+  // the same key. Each session's onTerminated callback reads + deletes its
   // own entry, so the Map stays bounded.
   private readonly stopReasonByProfileMap = new Map<Map<OutputProfile, AudioSession>, string>();
   private readonly outputSettings = audioOutputSettings;
-  private readonly handoffTokens = new Map<number, string>();
+  private readonly handoffTokens = new Map<SessionKey, string>();
 
   /**
    * Snapshot the crossfade-enabled flag each session-start. When the system-wide
@@ -25,14 +29,14 @@ export class AudioStreamEngine {
    */
   constructor(private readonly isCrossfadeEnabled: () => boolean = () => true) {}
   private onSessionTerminated?: (
-    zoneId: number,
+    zoneId: SessionKey,
     stats: EngineSessionStats | null,
     reason?: string,
   ) => void;
 
   public setSessionTerminationHandler(
     handler: (
-      zoneId: number,
+      zoneId: SessionKey,
       stats: EngineSessionStats | null,
       reason?: string,
     ) => void,
@@ -41,7 +45,7 @@ export class AudioStreamEngine {
   }
 
   public start(
-    zoneId: number,
+    zoneId: SessionKey,
     source: PlaybackSource,
     profiles: OutputProfile[] = ['mp3'],
     outputSettings?: AudioOutputSettings,
@@ -76,7 +80,7 @@ export class AudioStreamEngine {
   }
 
   public startWithHandoff(
-    zoneId: number,
+    zoneId: SessionKey,
     source: PlaybackSource,
     profiles: OutputProfile[] = ['mp3'],
     outputSettings?: AudioOutputSettings,
@@ -179,7 +183,7 @@ export class AudioStreamEngine {
   }
 
   public stop(
-    zoneId: number,
+    zoneId: SessionKey,
     reason = 'stop',
     options: { discardSubscribers?: boolean } = {},
   ): void {
@@ -199,7 +203,7 @@ export class AudioStreamEngine {
    * Returns true if at least one running session was restarted.
    */
   public restartZoneForEqualizer(
-    zoneId: number,
+    zoneId: SessionKey,
     bands: ReadonlyArray<number> | null,
   ): boolean {
     const existing = this.sessions.get(zoneId);
@@ -215,7 +219,7 @@ export class AudioStreamEngine {
   }
 
   public createStream(
-    zoneId: number,
+    zoneId: SessionKey,
     profile: OutputProfile = 'mp3',
     options: { primeWithBuffer?: boolean; label?: string } = {},
   ): PassThrough | null {
@@ -223,7 +227,7 @@ export class AudioStreamEngine {
   }
 
   public async waitForFirstChunk(
-    zoneId: number,
+    zoneId: SessionKey,
     profile: OutputProfile = 'mp3',
     timeoutMs = 2000,
   ): Promise<boolean> {
@@ -235,7 +239,7 @@ export class AudioStreamEngine {
   }
 
   public async inlineCrossfade(
-    zoneId: number,
+    zoneId: SessionKey,
     fadeIn: Parameters<EnginePort['inlineCrossfade']>[1],
     durationSec: number,
   ): Promise<boolean> {
@@ -246,11 +250,11 @@ export class AudioStreamEngine {
     return session.inlineCrossfade(fadeIn, durationSec);
   }
 
-  public hasSession(zoneId: number): boolean {
+  public hasSession(zoneId: SessionKey): boolean {
     return this.sessions.has(zoneId);
   }
 
-  public getSessionStats(zoneId: number): EngineSessionStats[] {
+  public getSessionStats(zoneId: SessionKey): EngineSessionStats[] {
     const map = this.sessions.get(zoneId);
     if (!map) return [];
     const stats: EngineSessionStats[] = [];

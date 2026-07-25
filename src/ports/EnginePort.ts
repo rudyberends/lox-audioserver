@@ -1,6 +1,7 @@
 import type { PassThrough } from 'node:stream';
 import type { EngineHandoffSpec, EngineStartOptions, OutputProfile, PlaybackSource } from '@/ports/EngineTypes';
 import type { AudioOutputSettings } from '@/ports/types/audioFormat';
+import type { SessionKey } from '@/ports/types/SessionKey';
 
 export type EngineSessionStats = {
   profile: OutputProfile;
@@ -39,7 +40,7 @@ export type EngineStreamOptions = {
 };
 
 export type EngineSessionTerminationHandler = (
-  zoneId: number,
+  key: SessionKey,
   stats: EngineSessionStats | null,
   reason?: string,
 ) => void;
@@ -47,39 +48,39 @@ export type EngineSessionTerminationHandler = (
 export interface EnginePort {
   start(options: EngineStartOptions): void;
   start(
-    zoneId: number,
+    key: SessionKey,
     source: PlaybackSource,
     profiles?: OutputProfile[],
     outputSettings?: AudioOutputSettings,
   ): void;
   startWithHandoff(options: EngineStartOptions): void;
   startWithHandoff(
-    zoneId: number,
+    key: SessionKey,
     source: PlaybackSource,
     profiles?: OutputProfile[],
     outputSettings?: AudioOutputSettings,
     options?: EngineHandoffOptions,
   ): void;
-  stop(zoneId: number, reason?: string, options?: EngineStopOptions): void;
-  restartZoneForEqualizer(zoneId: number, bands: ReadonlyArray<number> | null): boolean;
-  createStream(zoneId: number, profile?: OutputProfile, options?: EngineStreamOptions): PassThrough | null;
+  stop(key: SessionKey, reason?: string, options?: EngineStopOptions): void;
+  restartZoneForEqualizer(key: SessionKey, bands: ReadonlyArray<number> | null): boolean;
+  createStream(key: SessionKey, profile?: OutputProfile, options?: EngineStreamOptions): PassThrough | null;
   createLocalSession(
-    zoneId: number,
+    key: SessionKey,
     source: PlaybackSource,
     profile: OutputProfile,
     outputSettings: AudioOutputSettings,
     onTerminated: () => void,
   ): EngineLocalSession;
-  waitForFirstChunk(zoneId: number, profile?: OutputProfile, timeoutMs?: number): Promise<boolean>;
+  waitForFirstChunk(key: SessionKey, profile?: OutputProfile, timeoutMs?: number): Promise<boolean>;
   inlineCrossfade(
-    zoneId: number,
+    key: SessionKey,
     fadeIn:
       | { kind: 'file'; path: string }
       | { kind: 'url'; url: string; headers?: Record<string, string>; decryptionKey?: string }
       | { kind: 'pipe'; stream: NodeJS.ReadableStream; sampleRate: number; channels: number },
     durationSec: number,
   ): Promise<boolean>;
-  hasSession(zoneId: number): boolean;
-  getSessionStats(zoneId: number): EngineSessionStats[];
+  hasSession(key: SessionKey): boolean;
+  getSessionStats(key: SessionKey): EngineSessionStats[];
   setSessionTerminationHandler(handler: EngineSessionTerminationHandler): void;
 }

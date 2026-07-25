@@ -5,11 +5,12 @@ import { ZoneAudioPreferences } from '../src/application/playback/ZoneAudioPrefe
 import { PlaybackService } from '../src/application/playback/PlaybackService';
 import type { EnginePort, EngineSessionStats } from '../src/ports/EnginePort';
 import type { EngineStartOptions } from '../src/ports/EngineTypes';
+import type { SessionKey } from '../src/ports/types/SessionKey';
 
 class EngineSpy implements EnginePort {
   public lastStartOptions: EngineStartOptions | null = null;
 
-  public start(...args: [EngineStartOptions] | [number, PlaybackSource, any?, any?]): void {
+  public start(...args: [EngineStartOptions] | [SessionKey, PlaybackSource, any?, any?]): void {
     if (typeof args[0] === 'object' && args[0] !== null && 'zoneId' in args[0]) {
       this.lastStartOptions = args[0] as EngineStartOptions;
       return;
@@ -17,7 +18,7 @@ class EngineSpy implements EnginePort {
     throw new Error('unexpected start signature in test');
   }
 
-  public startWithHandoff(...args: [EngineStartOptions] | [number, PlaybackSource, any?, any?, any?]): void {
+  public startWithHandoff(...args: [EngineStartOptions] | [SessionKey, PlaybackSource, any?, any?, any?]): void {
     this.start(...(args as [EngineStartOptions]));
   }
 

@@ -9,28 +9,29 @@ import type {
   OutputProfile,
 } from '@/ports/EngineTypes';
 import { audioOutputSettings, type AudioOutputSettings } from '@/ports/types/audioFormat';
+import type { SessionKey } from '@/ports/types/SessionKey';
 
 export class EngineAdapter implements EnginePort {
   constructor(private readonly engine: AudioStreamEngine) {}
 
   public start(options: EngineStartOptions): void;
   public start(
-    zoneId: number,
+    key: SessionKey,
     source: PlaybackSource,
     profiles?: OutputProfile[],
     outputSettings?: AudioOutputSettings,
   ): void;
   public start(
-    zoneIdOrOptions: number | EngineStartOptions,
+    keyOrOptions: SessionKey | EngineStartOptions,
     source?: PlaybackSource,
     profiles?: OutputProfile[],
     outputSettings?: AudioOutputSettings,
   ): void {
-    if (typeof zoneIdOrOptions === 'number') {
-      this.engine.start(zoneIdOrOptions, source as PlaybackSource, profiles, outputSettings);
+    if (typeof keyOrOptions === 'number') {
+      this.engine.start(keyOrOptions, source as PlaybackSource, profiles, outputSettings);
       return;
     }
-    const { zoneId, input, outputs, equalizer } = zoneIdOrOptions;
+    const { zoneId, input, outputs, equalizer } = keyOrOptions;
     const playbackSource = this.toPlaybackSource(input);
     const { profiles: resolvedProfiles, outputSettings: resolvedSettings } = this.resolveOutputSpecs(outputs);
     const eqBands = equalizer?.bands ?? null;
@@ -39,22 +40,22 @@ export class EngineAdapter implements EnginePort {
 
   public startWithHandoff(options: EngineStartOptions): void;
   public startWithHandoff(
-    zoneId: number,
+    key: SessionKey,
     source: PlaybackSource,
     profiles?: OutputProfile[],
     outputSettings?: AudioOutputSettings,
     options?: EngineHandoffOptions,
   ): void;
   public startWithHandoff(
-    zoneIdOrOptions: number | EngineStartOptions,
+    keyOrOptions: SessionKey | EngineStartOptions,
     source?: PlaybackSource,
     profiles?: OutputProfile[],
     outputSettings?: AudioOutputSettings,
     options?: EngineHandoffOptions,
   ): void {
-    if (typeof zoneIdOrOptions === 'number') {
+    if (typeof keyOrOptions === 'number') {
       this.engine.startWithHandoff(
-        zoneIdOrOptions,
+        keyOrOptions,
         source as PlaybackSource,
         profiles,
         outputSettings,
@@ -62,7 +63,7 @@ export class EngineAdapter implements EnginePort {
       );
       return;
     }
-    const { zoneId, input, outputs, handoff, equalizer } = zoneIdOrOptions;
+    const { zoneId, input, outputs, handoff, equalizer } = keyOrOptions;
     const playbackSource = this.toPlaybackSource(input);
     const { profiles: resolvedProfiles, outputSettings: resolvedSettings } = this.resolveOutputSpecs(outputs);
     const eqBands = equalizer?.bands ?? null;
@@ -111,13 +112,13 @@ export class EngineAdapter implements EnginePort {
   }
 
   public createLocalSession(
-    zoneId: number,
+    key: SessionKey,
     source: PlaybackSource,
     profile: OutputProfile,
     outputSettings: AudioOutputSettings,
     onTerminated: () => void,
   ): EngineLocalSession {
-    return new AudioSession(zoneId, source, profile, onTerminated, outputSettings);
+    return new AudioSession(key, source, profile, onTerminated, outputSettings);
   }
 
   private toPlaybackSource(input: EngineInputSpec): PlaybackSource {

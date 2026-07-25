@@ -1,6 +1,7 @@
 import type { ComponentLogger } from '@/shared/logging/logger';
 import type { PlaybackService } from '@/application/playback/PlaybackService';
 import type { PlaybackSession } from '@/ports/types/playback';
+import { zoneSessionKey } from '@/ports/types/SessionKey';
 
 export type EqualizerRestartSchedulerDeps = {
   getSession: (zoneId: number) => PlaybackSession | undefined;
@@ -44,7 +45,7 @@ export class EqualizerRestartScheduler {
     if (!session || !session.playbackSource) {
       return;
     }
-    if (!this.deps.playbackService.hasSession(zoneId)) {
+    if (!this.deps.playbackService.hasSession(zoneSessionKey(zoneId))) {
       return;
     }
     if (session.state !== 'playing') {
@@ -56,6 +57,6 @@ export class EqualizerRestartScheduler {
     // PassThrough streams and forces the user to press Play again.
     const bands = this.deps.getEqualizerBands(zoneId);
     this.deps.log.info('restarting audio engine to apply equalizer change', { zoneId });
-    this.deps.playbackService.restartZoneForEqualizer(zoneId, bands);
+    this.deps.playbackService.restartZoneForEqualizer(zoneSessionKey(zoneId), bands);
   }
 }

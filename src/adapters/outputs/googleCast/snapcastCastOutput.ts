@@ -1,6 +1,7 @@
 import { URL } from 'node:url';
 import { createLogger } from '@/shared/logging/logger';
 import { bestEffort } from '@/shared/bestEffort';
+import { zoneSessionKey } from '@/ports/types/SessionKey';
 import type { ZoneConfig, ZoneTransportConfig } from '@/domain/config/types';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import { audioOutputSettings } from '@/ports/types/audioFormat';
@@ -166,7 +167,7 @@ export class SnapcastCastOutput implements ZoneOutput {
       return;
     }
     this.stopStream();
-    const pcmStream = this.ports.engine.createStream(this.zoneId, 'pcm', {
+    const pcmStream = this.ports.engine.createStream(zoneSessionKey(this.zoneId), 'pcm', {
       label: 'snapcast-cast',
       primeWithBuffer: false,
     });
@@ -183,7 +184,7 @@ export class SnapcastCastOutput implements ZoneOutput {
       } catch {
         // ignore
       }
-      const retry = this.ports.engine.createStream(this.zoneId, 'pcm', {
+      const retry = this.ports.engine.createStream(zoneSessionKey(this.zoneId), 'pcm', {
         label: 'snapcast-cast',
         primeWithBuffer: false,
       });

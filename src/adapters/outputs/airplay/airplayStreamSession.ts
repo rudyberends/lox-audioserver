@@ -2,6 +2,7 @@ import { PassThrough } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import type { EnginePort } from '@/ports/EnginePort';
 import type { PlaybackSource } from '@/ports/EngineTypes';
+import { zoneSessionKey } from '@/ports/types/SessionKey';
 import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 
 /**
@@ -154,7 +155,7 @@ export class AirplayStreamSession {
     // the acceptable behaviour). primeWithBuffer is TRUE only for the proactive
     // switchTrack swap (new handoff session → new track from its start, paired with
     // the device flush); FALSE for the reactive reconnect (live-only, no replay).
-    return this.engine.createStream(this.zoneId, 'pcm', { label: 'airplay', primeWithBuffer });
+    return this.engine.createStream(zoneSessionKey(this.zoneId), 'pcm', { label: 'airplay', primeWithBuffer });
   }
 
   private attachSource(next: PassThrough): void {

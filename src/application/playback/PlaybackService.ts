@@ -1,6 +1,7 @@
 import type { EngineHandoffOptions, EnginePort } from '@/ports/EnginePort';
 import type { EngineStartOptions, OutputProfile, PlaybackSource } from '@/ports/EngineTypes';
 import type { AudioOutputSettings } from '@/ports/types/audioFormat';
+import type { SessionKey } from '@/ports/types/SessionKey';
 
 export class PlaybackService {
   private engine: EnginePort;
@@ -11,27 +12,27 @@ export class PlaybackService {
 
   public start(options: EngineStartOptions): void;
   public start(
-    zoneId: number,
+    key: SessionKey,
     source: PlaybackSource,
     profiles?: OutputProfile[],
     outputSettings?: AudioOutputSettings,
   ): void;
   public start(
-    ...args: [EngineStartOptions] | [number, PlaybackSource, OutputProfile[]?, AudioOutputSettings?]
+    ...args: [EngineStartOptions] | [SessionKey, PlaybackSource, OutputProfile[]?, AudioOutputSettings?]
   ): void {
     (this.engine.start as (...args: any[]) => void)(...args);
   }
 
   public startWithHandoff(options: EngineStartOptions): void;
   public startWithHandoff(
-    zoneId: number,
+    key: SessionKey,
     source: PlaybackSource,
     profiles?: OutputProfile[],
     outputSettings?: AudioOutputSettings,
     options?: EngineHandoffOptions,
   ): void;
   public startWithHandoff(
-    ...args: [EngineStartOptions] | [number, PlaybackSource, OutputProfile[]?, AudioOutputSettings?, EngineHandoffOptions?]
+    ...args: [EngineStartOptions] | [SessionKey, PlaybackSource, OutputProfile[]?, AudioOutputSettings?, EngineHandoffOptions?]
   ): void {
     (this.engine.startWithHandoff as (...args: any[]) => void)(...args);
   }

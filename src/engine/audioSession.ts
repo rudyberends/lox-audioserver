@@ -13,6 +13,7 @@ import { PcmFrameAligner } from '@/engine/pcmFrameAligner';
 import { codecPolicyForProfile, type CodecPolicy } from '@/engine/codecPolicy';
 import type { OutputProfile } from '@/ports/EngineTypes';
 import type { EngineSessionStats } from '@/ports/EnginePort';
+import type { SessionKey } from '@/ports/types/SessionKey';
 import { FfmpegArgBuilder } from '@/engine/ffmpegArgs';
 import { PipeSourceAdapter } from '@/engine/pipeSourceAdapter';
 import { TwoStagePipeline } from '@/engine/twoStagePipeline';
@@ -93,7 +94,12 @@ export class AudioSession {
   private readonly crossfader: Crossfader;
 
   constructor(
-    /** @internal */ public readonly zoneId: number,
+    /**
+     * @internal Engine session key. For zone playback this equals the zoneId;
+     * for a non-zone consumer it is an ephemeral key. Used only as a log/label
+     * value here — the session carries no zone semantics.
+     */
+    public readonly zoneId: SessionKey,
     /** @internal */ public readonly source: PlaybackSource,
     /** @internal */ public readonly profile: OutputProfile,
     private readonly onTerminated: () => void,

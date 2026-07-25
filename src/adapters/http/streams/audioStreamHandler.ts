@@ -5,6 +5,7 @@ import type { AudioManager, PlaybackSession } from '@/application/playback/audio
 import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import type { EnginePort } from '@/ports/EnginePort';
 import type { OutputProfile } from '@/ports/EngineTypes';
+import { zoneSessionKey } from '@/ports/types/SessionKey';
 import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
 import {
   audioOutputSettings,
@@ -151,15 +152,15 @@ export class AudioStreamHandler {
     }
     const clientLabel = this.buildClientLabel(req, outputProfile);
     const primeWithBuffer = this.shouldPrimeWithBuffer(req);
-    let audioStream = this.engine.createStream(zoneId, outputProfile, {
+    let audioStream = this.engine.createStream(zoneSessionKey(zoneId), outputProfile, {
       label: clientLabel,
       primeWithBuffer,
     });
     if (!audioStream && session.playbackSource) {
       // Start the engine with the requested profile (plus PCM for local consumers).
       const profiles = Array.from(new Set<OutputProfile>([outputProfile, 'pcm']));
-      this.engine.start(zoneId, session.playbackSource, profiles);
-      audioStream = this.engine.createStream(zoneId, outputProfile, {
+      this.engine.start(zoneSessionKey(zoneId), session.playbackSource, profiles);
+      audioStream = this.engine.createStream(zoneSessionKey(zoneId), outputProfile, {
         label: clientLabel,
         primeWithBuffer,
       });
@@ -777,14 +778,14 @@ export class AudioStreamHandler {
     }
 
     const clientLabel = `sync:${syncId}`;
-    let audioStream = this.engine.createStream(zoneId, outputProfile, {
+    let audioStream = this.engine.createStream(zoneSessionKey(zoneId), outputProfile, {
       label: clientLabel,
       // Avoid priming a backlog for sync groups; it can overwhelm some clients and cause early underruns.
       primeWithBuffer: false,
     });
     if (!audioStream && session.playbackSource) {
-      this.engine.start(zoneId, session.playbackSource, Array.from(new Set<OutputProfile>([outputProfile, 'pcm'])));
-      audioStream = this.engine.createStream(zoneId, outputProfile, {
+      this.engine.start(zoneSessionKey(zoneId), session.playbackSource, Array.from(new Set<OutputProfile>([outputProfile, 'pcm'])));
+      audioStream = this.engine.createStream(zoneSessionKey(zoneId), outputProfile, {
         label: clientLabel,
         primeWithBuffer: false,
       });

@@ -1,3 +1,5 @@
+import type { SessionKey } from '@/ports/types/SessionKey';
+
 export type PlaybackSource =
   | {
       kind: 'file';
@@ -105,7 +107,8 @@ export type EngineEqualizerSpec = {
 };
 
 export type EngineStartOptions = {
-  zoneId: number;
+  /** Engine session key. For zone playback this is the zoneId (see SessionKey). */
+  zoneId: SessionKey;
   input: EngineInputSpec;
   outputs: EngineOutputSpec[];
   handoff?: EngineHandoffSpec | null;
