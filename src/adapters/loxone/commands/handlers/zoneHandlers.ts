@@ -208,6 +208,22 @@ async function audioServicePlay(
         }
         return rest;
       }
+      // The client echoes back a bridged-service item as `<accountId>/<audiopath>`
+      // where audiopath is now SERVICE-NATIVE (`applemusic:library-playlist:...`).
+      // Rebuild the `spotify@<accountId>:` envelope the intake normalizer
+      // (toServiceNative) understands, instead of gluing account+native with a
+      // slash (which would land inside the first colon-token and break service
+      // resolution for album/playlist/artist container playback).
+      if (
+        maybeUser &&
+        /^(?:bridge-)?(?:applemusic|deezer|tidal|soundcloud|ytmusic|youtube|musicassistant)\b/i.test(maybeUser) &&
+        /^(?:applemusic|deezer|tidal|soundcloud|ytmusic|youtube|musicassistant):/i.test(rest)
+      ) {
+        // Strip the service prefix from the native rest so the envelope carries
+        // the kind:id tail, matching the legacy `spotify@<account>:kind:id` shape.
+        const tail = rest.slice(rest.indexOf(':') + 1);
+        return `spotify@${maybeUser}:${tail}`;
+      }
       return `${maybeUser}/${rest}`;
     }
 

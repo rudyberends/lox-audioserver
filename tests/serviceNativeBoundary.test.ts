@@ -74,3 +74,52 @@ test('state emit round-trip: service-native ⇄ spotify@bridge is consistent', (
   // Notifier translates the core form back for the native client.
   assert.equal(toLoxoneAudiopath(native, reg), loxone);
 });
+
+// Container playback (album/playlist/artist "play all") round-trips through the
+// serviceplay payload resolver as `<accountId>/<service-native-audiopath>`. The
+// resolver must rebuild the `spotify@<accountId>:` envelope so toServiceNative
+// yields a service-native container whose `split(':')[0]` is the real service
+// (not the slash-compound `bridge-.../applemusic` that broke container playback).
+// Mirror of the serviceplay payload resolver in zoneHandlers.ts, exercised on
+// the exact payload the native client sends for a container play (measured from
+// a real device log): `<accountId>/<service-native-audiopath>`.
+function resolveServiceplayPayload(decoded: string): string {
+  const withoutNouser = decoded.startsWith('nouser/') ? decoded.slice('nouser/'.length) : decoded;
+  const slashIndex = withoutNouser.indexOf('/');
+  if (slashIndex > 0) {
+    const maybeUser = withoutNouser.slice(0, slashIndex);
+    const rest = withoutNouser.slice(slashIndex + 1);
+    if (rest.startsWith('spotify@') || rest.startsWith('spotify:')) {
+      return rest.startsWith('spotify:') ? `spotify@${maybeUser}:${rest.replace(/^spotify:/i, '')}` : rest;
+    }
+    if (
+      maybeUser &&
+      /^(?:bridge-)?(?:applemusic|deezer|tidal|soundcloud|ytmusic|youtube|musicassistant)\b/i.test(maybeUser) &&
+      /^(?:applemusic|deezer|tidal|soundcloud|ytmusic|youtube|musicassistant):/i.test(rest)
+    ) {
+      return `spotify@${maybeUser}:${rest.slice(rest.indexOf(':') + 1)}`;
+    }
+    return `${maybeUser}/${rest}`;
+  }
+  return withoutNouser;
+}
+
+test('container playback intake: measured device payload resolves to real service', () => {
+  const bridges: SpotifyBridgeConfig[] = [
+    { id: 'bridge-applemusic-p0gngd', label: 'Apple Music', provider: 'applemusic' },
+  ];
+  const reg = buildBridgeRegistry(bridges);
+  for (const kind of ['library-playlist', 'album', 'playlist', 'artist']) {
+    // Exactly what parts.slice(4) yields for the real command
+    // `audio/28/serviceplay/spotify/bridge-applemusic-p0gngd/applemusic:<kind>:b64_X`:
+    const devicePayload = `bridge-applemusic-p0gngd/applemusic:${kind}:b64_X`;
+    // Payload resolver must NOT slash-glue; it must rebuild the spotify@ envelope.
+    const resolved = resolveServiceplayPayload(devicePayload);
+    assert.equal(resolved, `spotify@bridge-applemusic-p0gngd:${kind}:b64_X`, `${kind} resolver`);
+    assert.ok(!resolved.split(':')[0].includes('/'), `${kind} no slash in first token`);
+    // Then the playContent intake normalizes to service-native.
+    const native = toServiceNative(resolved, reg);
+    assert.equal(native, `applemusic:${kind}:b64_X`, `${kind} native`);
+    assert.equal(native.split(':')[0], 'applemusic', `${kind} provider key`);
+  }
+});
