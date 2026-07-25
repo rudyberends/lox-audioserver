@@ -34,7 +34,19 @@ export function readMiniserverBaseUrlFromConfig(cfg: AudioServerConfig): string 
 }
 
 export class MiniserverAuthClient {
-  public async verifyAdminCredentials(
+  /**
+   * Verify a Miniserver user's credentials and return the rights on their token.
+   *
+   * No permission check: callers that need one apply it to `tokenRights`. The
+   * admin UI requires admin rights, but consumers that only gate *content*
+   * (the Subsonic API) should accept any valid Miniserver user — requiring admin
+   * there would mean only one household account could play music.
+   *
+   * Needs the plaintext password: the auth hash is built locally from salts the
+   * Miniserver hands out, so a caller holding only a digest of the password
+   * cannot use this.
+   */
+  public async verifyCredentials(
     baseUrl: string,
     username: string,
     password: string,
@@ -57,6 +69,16 @@ export class MiniserverAuthClient {
       tokenRights = await this.requestAdminTokenPlain(baseUrl, username, authHash);
     }
 
+    return { tokenRights };
+  }
+
+  /** {@link verifyCredentials} plus the admin-rights requirement the admin UI needs. */
+  public async verifyAdminCredentials(
+    baseUrl: string,
+    username: string,
+    password: string,
+  ): Promise<{ tokenRights: number | null }> {
+    const { tokenRights } = await this.verifyCredentials(baseUrl, username, password);
     if (tokenRights !== null && (tokenRights & MINISERVER_ADMIN_PERMISSION) === 0) {
       throw new MiniserverAuthError('insufficient-permissions', 'miniserver user is not admin');
     }

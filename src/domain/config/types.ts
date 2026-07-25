@@ -13,6 +13,46 @@ export interface SystemConfig {
   audioserver: AudioserverConfig;
   logging: LoggingConfig;
   adminHttp: AdminHttpConfig;
+  /** Accounts this server authenticates itself. See {@link UserAccount}. */
+  users?: UserAccount[];
+}
+
+/**
+ * A server-local account.
+ *
+ * This is the server's own user store, used everywhere it authenticates someone:
+ * the admin UI and the Subsonic API. In Loxone-integrated mode it sits alongside
+ * Miniserver accounts (which remain the primary identity); in standalone mode,
+ * where there is no Miniserver to ask, it is the only source of authentication.
+ */
+export interface UserAccount {
+  username: string;
+  /**
+   * Stored in the clear, deliberately.
+   *
+   * Subsonic's salted-token login sends `md5(password + salt)` with a
+   * per-request salt, so the server must be able to compute that same digest —
+   * which means holding the original. A one-way hash would make token
+   * authentication impossible, and that is the form most clients default to.
+   */
+  password: string;
+  /** Grants admin UI access. Absent/false means the account can stream, not configure. */
+  admin?: boolean;
+  /** Optional display name for the admin UI. */
+  label?: string;
+  /**
+   * How this account came to exist.
+   *
+   * `loxone` entries are created automatically when a Miniserver user logs in
+   * and their password is verified — that is the only moment the server ever
+   * sees it, and holding it is what lets salted-token clients authenticate as
+   * them. Such an entry is refreshed on every subsequent login, so it follows a
+   * password change in Loxone. `local` entries were created by hand and are
+   * never overwritten by a Loxone login.
+   */
+  source?: 'local' | 'loxone';
+  /** When the credential was last verified, ISO 8601. Informational. */
+  verifiedAt?: string;
 }
 
 export interface MiniserverConfig {
@@ -68,6 +108,7 @@ export interface ContentConfig {
   tts?: TtsContentConfig;
   appleMusic?: AppleMusicContentConfig;
   mediaServer?: MediaServerContentConfig;
+  subsonic?: SubsonicContentConfig;
 }
 
 /**
@@ -90,6 +131,39 @@ export interface MediaServerContentConfig {
    * Connect offload) can never be exposed regardless of this list.
    */
   providers?: string[];
+}
+
+/**
+ * Exposes the same browsable content as a Subsonic server, so any Subsonic client
+ * (Symfonium, DSub, play:Sub, Amperfy, Feishin, …) can browse and stream it over
+ * `/rest/*`.
+ *
+ * Sits alongside the DLNA MediaServer rather than replacing it: DLNA is pull-based
+ * device discovery on the LAN, Subsonic is an authenticated app-facing API that
+ * also works off-LAN when the gateway is reachable.
+ *
+ * Accounts are deliberately absent here: the API authenticates against the
+ * server's shared user store ({@link SystemConfig.users}) and, in
+ * Loxone-integrated mode, against Miniserver accounts.
+ */
+export interface SubsonicContentConfig {
+  /** Master switch. When absent/false the API answers "not authorized" and nothing else. */
+  enabled?: boolean;
+  /**
+   * Optional provider allowlist restricting which services are exposed
+   * (e.g. ['library','radio','applemusic']). Absent = every browsable service.
+   */
+  providers?: string[];
+  /**
+   * Ceiling on how many children one directory returns.
+   *
+   * `getMusicDirectory` has no paging in the protocol — the whole directory must
+   * fit in a single response — so a huge provider container (a 5000-track
+   * playlist, a full "Liked Songs") is materialised by walking the content
+   * layer's pages. This caps that walk; listings that hit it are logged as
+   * truncated. Defaults to 1000.
+   */
+  directoryLimit?: number;
 }
 
 export interface AppleMusicContentConfig {

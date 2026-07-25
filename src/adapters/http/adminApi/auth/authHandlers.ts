@@ -8,6 +8,7 @@ import {
   readMiniserverBaseUrlFromConfig,
 } from '@/adapters/http/adminApi/auth/miniserverAuthClient';
 import { MiniserverAuthError } from '@/adapters/http/adminApi/auth/types';
+import { rememberLoxoneUser, verifyUser } from '@/application/auth/localUsers';
 
 export type AuthHandlerDeps = {
   configPort: ConfigPort;
@@ -54,6 +55,32 @@ async function handleAuthLogin(
   }
 
   const cfg = deps.configPort.getConfig();
+
+  // Server-local accounts first. They are the only way in for a standalone
+  // deployment, and in integrated mode they work alongside Miniserver users.
+  // Only admin accounts may reach the admin UI; a stream-only account exists for
+  // the Subsonic API and must not become a configuration login.
+  const localUser = verifyUser(deps.configPort, username, password);
+  if (localUser) {
+    if (!localUser.admin) {
+      deps.log.warn('local login refused: not an admin account', { username });
+      deps.sendJson(res, 403, { error: 'insufficient-permissions' });
+      return;
+    }
+    const session = deps.sessionStore.create(username);
+    res.setHeader('Set-Cookie', deps.sessionStore.buildCookie(req, session));
+    deps.sendJson(res, 200, {
+      ok: true,
+      username,
+      source: 'local',
+      tokenRights: null,
+      loginAt: session.createdAt,
+      expiresAt: session.expiresAt,
+      token: session.id,
+    });
+    return;
+  }
+
   if (!cfg.system.audioserver.paired) {
     deps.sendJson(res, 409, { error: 'miniserver-auth-required' });
     return;
@@ -66,6 +93,28 @@ async function handleAuthLogin(
 
   try {
     const result = await deps.miniserverAuthClient.verifyAdminCredentials(miniserverBaseUrl, username, password);
+
+    // This is the only moment the server holds a Miniserver password in the
+    // clear — the Miniserver itself keeps a salted hash and can never hand it
+    // back. Recording it (encrypted) is what lets this Loxone account be used
+    // from a Subsonic client afterwards, including the salted-token form that
+    // most apps default to and that cannot be delegated to the Miniserver.
+    try {
+      const outcome = await rememberLoxoneUser(deps.configPort, username, password, {
+        admin: true,
+        verifiedAt: new Date().toISOString(),
+      });
+      if (outcome !== 'unchanged') {
+        deps.log.info('recorded miniserver account in the user store', { username, outcome });
+      }
+    } catch (storeError) {
+      // Never fail a valid login over bookkeeping.
+      deps.log.warn('could not record miniserver account', {
+        username,
+        message: storeError instanceof Error ? storeError.message : String(storeError),
+      });
+    }
+
     const session = deps.sessionStore.create(username);
     res.setHeader('Set-Cookie', deps.sessionStore.buildCookie(req, session));
     deps.sendJson(res, 200, {
