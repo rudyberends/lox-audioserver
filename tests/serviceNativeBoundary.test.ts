@@ -7,6 +7,8 @@ import {
   toLoxoneAudiopath,
 } from '../src/domain/loxone/bridgeIdentity';
 import type { SpotifyBridgeConfig } from '../src/domain/config/types';
+import { sanitizeTitle, isUriLike } from '../src/application/zones/helpers/stateHelpers';
+import { sanitizeStation } from '../src/application/zones/helpers/queueHelpers';
 
 // The native Loxone getqueue schema is FAIL-HARD: each streaming queue item's
 // audiopath MUST literally start with `spotify:` and its 2nd segment must be
@@ -122,4 +124,53 @@ test('container playback intake: measured device payload resolves to real servic
     assert.equal(native, `applemusic:${kind}:b64_X`, `${kind} native`);
     assert.equal(native.split(':')[0], 'applemusic', `${kind} provider key`);
   }
+});
+
+// Now-playing title must never show a raw service-native audiopath. On the
+// bridge-service fast path the queue-rebuild patch is the last writer, so its
+// title (and the metadata/active-item titles) are sanitized; a service-native
+// audiopath is treated as uri-like and falls back instead of being displayed.
+test('title guards reject service-native audiopaths (title-race fix)', () => {
+  const containers = [
+    'applemusic:playlist:b64_X',
+    'applemusic:library-album:b64_X',
+    'applemusic:track:b64_X',
+    'soundcloud:track:12345',
+    'tidal:album:9',
+  ];
+  for (const ap of containers) {
+    assert.ok(isUriLike(ap), `isUriLike must catch ${ap}`);
+    assert.equal(sanitizeTitle(ap, 'Zone Name'), 'Zone Name', `sanitizeTitle falls back for ${ap}`);
+  }
+  // Real titles pass through untouched.
+  assert.equal(sanitizeTitle('Intro', 'Zone Name'), 'Intro');
+  assert.ok(!isUriLike('Intro'));
+  // Local library is its own native concept — not a bridge service; a real
+  // library TITLE (not audiopath) must still pass.
+  assert.ok(!isUriLike('My Favourite Song'));
+});
+
+// The station line is the source label the native client renders. When you play
+// a container, its audiopath must NOT leak there. Pre-service-native the legacy
+// `spotify@bridge-...:playlist:...` form was blanked; the service-native form
+// (`applemusic:playlist:...`) must be blanked too, else the raw container id
+// shows up as the source line (owner-observed regression).
+test('station guard: service-native container audiopaths are blanked', () => {
+  const trackAudiopath = 'applemusic:track:b64_MTU4NDAzNDU5Mg==';
+  const containers = [
+    'applemusic:playlist:b64_cGwucG0t',
+    'applemusic:library-playlist:b64_cC54cmFlbVdn',
+    'applemusic:album:b64_X',
+    'soundcloud:playlist:12345',
+    'tidal:album:9',
+    'deezer:playlist:7',
+  ];
+  for (const c of containers) {
+    assert.equal(sanitizeStation(c, trackAudiopath), '', `station blanked for ${c}`);
+  }
+  // Legacy Loxone disguise stays blanked (unchanged behaviour).
+  assert.equal(sanitizeStation('spotify@bridge-applemusic-p0gngd:playlist:b64_X', trackAudiopath), '');
+  // A real, human-readable station name must still pass through.
+  assert.equal(sanitizeStation('Radio Paradise', 'tunein:s12345'), 'Radio Paradise');
+  assert.equal(sanitizeStation('BBC Radio 6 Music', 'tunein:s6'), 'BBC Radio 6 Music');
 });

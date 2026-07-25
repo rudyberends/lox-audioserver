@@ -2,6 +2,7 @@ import type { ZoneConfig } from '@/domain/config/types';
 import type { QueueState } from '@/application/zones/zoneManager';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
 import { AudioType } from '@/domain/loxone/enums';
+import { parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
 import { formatEqualizerSettings, getZoneEqualizerBands } from '@/domain/zones/equalizer';
 
 export function clamp(value: number, min: number, max: number): number {
@@ -50,6 +51,11 @@ export function sanitizeTitle(title: string | undefined, fallback: string): stri
   if (lower.startsWith('spotify:') || lower.startsWith('spotify@')) {
     return fallback;
   }
+  // Service-native audiopath (applemusic:playlist:..., tidal:track:..., etc.)
+  // must never leak into the displayed title.
+  if (parseServiceNativeAudiopath(title)) {
+    return fallback;
+  }
   if (/^[A-Za-z0-9]{16,}$/i.test(title.trim())) {
     return fallback;
   }
@@ -59,7 +65,12 @@ export function sanitizeTitle(title: string | undefined, fallback: string): stri
 export function isUriLike(value: string | undefined): boolean {
   if (!value) return false;
   const lower = value.toLowerCase();
-  return lower.startsWith('spotify:') || lower.startsWith('spotify@') || /^[A-Za-z0-9]{16,}$/.test(value.trim());
+  return (
+    lower.startsWith('spotify:') ||
+    lower.startsWith('spotify@') ||
+    parseServiceNativeAudiopath(value) !== null ||
+    /^[A-Za-z0-9]{16,}$/.test(value.trim())
+  );
 }
 
 export function resolveDisplayAudiotype(

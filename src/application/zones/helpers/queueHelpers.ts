@@ -61,7 +61,16 @@ export function sanitizeStation(station: string | undefined, audiopath: string):
   if (normalizeSpotifyAudiopath(trimmed) === normalizeSpotifyAudiopath(audiopath)) {
     return '';
   }
-  if (lower.startsWith('spotify:track') || lower.startsWith('spotify@') || /^[a-z0-9]{16,}$/i.test(trimmed)) {
+  // A container audiopath is never a valid station label. The legacy Loxone form
+  // (`spotify@bridge-...:playlist:...`) was blanked by the `spotify@` check; the
+  // service-native form (`applemusic:playlist:...`, `soundcloud:playlist:...`)
+  // must be blanked here too, else it surfaces as the client's source line.
+  if (
+    lower.startsWith('spotify:track') ||
+    lower.startsWith('spotify@') ||
+    parseServiceNativeAudiopath(trimmed) !== null ||
+    /^[a-z0-9]{16,}$/i.test(trimmed)
+  ) {
     return '';
   }
   return trimmed;
@@ -179,7 +188,14 @@ export async function mapFolderItemsToQueue(
 function isUriLike(value: string | undefined): boolean {
   if (!value) return false;
   const lower = value.toLowerCase();
-  return lower.startsWith('spotify:') || lower.startsWith('spotify@') || /^[A-Za-z0-9]{16,}$/.test(value.trim());
+  return (
+    lower.startsWith('spotify:') ||
+    lower.startsWith('spotify@') ||
+    // Service-native audiopaths (applemusic:..., soundcloud:..., etc.) must not
+    // pass as a title, so createQueueItem falls back to the zone name.
+    parseServiceNativeAudiopath(value) !== null ||
+    /^[A-Za-z0-9]{16,}$/.test(value.trim())
+  );
 }
 
 // Local type import to avoid circular dependencies.

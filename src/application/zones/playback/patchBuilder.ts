@@ -4,6 +4,7 @@ import type { QueueAuthority, ZoneContext } from '@/application/zones/internal/z
 import { normalizeSpotifyAudiopath } from '@/application/zones/helpers/queueHelpers';
 import {
   fallbackTitle,
+  isUriLike,
   resolveDisplayAudiotype,
   sanitizeTitle,
 } from '@/application/zones/helpers/stateHelpers';
@@ -108,7 +109,7 @@ export function buildActiveItemPatch(
   const audiotype = audioHelpers.getStateAudiotype(ctx, current);
   const stationForState = current.audiotype === 1 || current.audiotype === 4 ? current.station : '';
   const patch: Partial<LoxoneZoneState> = {
-    title: current.title,
+    title: sanitizeTitle(current.title, fallbackTitle(ctx.state.title, ctx.name)),
     artist: current.artist,
     album: current.album,
     coverurl: current.coverurl,
@@ -229,7 +230,11 @@ export function buildPositionPatch(args: {
 export function buildMetadataPatch(metadata: PlaybackMetadata): Partial<LoxoneZoneState> {
   const patch: Partial<LoxoneZoneState> = {};
   if (typeof metadata.title === 'string') {
-    patch.title = metadata.title;
+    // Never let a service-native audiopath (or other uri-like value) leak into
+    // the title; leave the field untouched so a good title isn't clobbered.
+    if (!isUriLike(metadata.title)) {
+      patch.title = metadata.title;
+    }
   }
   if (typeof metadata.artist === 'string') {
     patch.artist = metadata.artist;
@@ -262,7 +267,11 @@ export function buildQueueItemPlaybackPatch(
   const stateAudiotype = audioHelpers.getStateAudiotype(ctx, item);
   const sourceName = audioHelpers.resolveSourceName(stateAudiotype ?? item.audiotype ?? null, ctx, item);
   const patch: Partial<LoxoneZoneState> = {
-    title: item.title,
+    // Sanitize: on the bridge-service fast path this queue-rebuild patch is the
+    // LAST writer (rebuild runs as a detached background promise after the start
+    // patch), so a raw service-native audiopath in item.title would overwrite the
+    // correct started title. Mirrors buildMatchedOutputUriPatch.
+    title: sanitizeTitle(item.title, fallbackTitle(ctx.state.title, ctx.name)),
     artist: item.artist,
     album: item.album,
     coverurl: item.coverurl,

@@ -1,6 +1,7 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { StorageConfig } from '@/adapters/content/storage/storageManager';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
+import { parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
 import type { AudioSyncGroupPayload } from '@/application/groups/types/AudioSyncGroupPayload';
 import type { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry';
 import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
@@ -59,9 +60,19 @@ export class LoxoneWsNotifier {
     const audiopath = this.audiopathToLoxone
       ? this.audiopathToLoxone(state.audiopath)
       : state.audiopath;
+    // Final output guard: an audiopath (service-native or spotify:/@) is never a
+    // valid title. A background-fill race can momentarily leave it in state.title;
+    // never let that leak to the client — fall back to the zone name.
+    const title = titleOrFallback(state.title, state.name);
+    // Same guard for the station line the native client renders as the source
+    // label: a container audiopath (e.g. `applemusic:playlist:...`) is not a
+    // name. Blank it so the raw id never surfaces. Pre-service-native this was
+    // implicitly blanked (the old `spotify@bridge` form matched sanitizeStation);
+    // the service-native form does not, so blank it here too.
+    const station = blankAudiopathStation(state.station);
     const group = this.groupTracker.getGroupByZone(state.playerid);
     if (!group) {
-      return { ...state, audiopath, syncedzones: [], mastervolume: 0, outputProtocol, mixedGroupEnabled };
+      return { ...state, audiopath, title, station, syncedzones: [], mastervolume: 0, outputProtocol, mixedGroupEnabled };
     }
     const syncedzones = Array.from(new Set<number>([group.leader, ...group.members]));
     const isLeader = group.leader === state.playerid;
@@ -71,6 +82,8 @@ export class LoxoneWsNotifier {
     return {
       ...state,
       audiopath,
+      title,
+      station,
       syncedzones,
       mastervolume: clamp01to100(leaderVolume),
       outputProtocol,
@@ -393,6 +406,42 @@ function clamp01to100(value: unknown): number {
     return 0;
   }
   return Math.min(100, Math.max(0, Math.round(n)));
+}
+
+/**
+ * Guard the emitted title: an audiopath is never a valid title. A background
+ * queue-fill race can momentarily leave a service-native audiopath (or a
+ * `spotify:`/`spotify@` id) in state.title; replace it with the zone name so the
+ * raw id never reaches the client.
+ */
+function titleOrFallback(title: string | undefined, zoneName: string): string {
+  const raw = (title ?? '').trim();
+  if (!raw) {
+    return raw;
+  }
+  const lower = raw.toLowerCase();
+  if (lower.startsWith('spotify:') || lower.startsWith('spotify@') || parseServiceNativeAudiopath(raw)) {
+    return zoneName;
+  }
+  return title ?? '';
+}
+
+/**
+ * The station line is a human-readable source label (radio name, playlist name).
+ * A raw audiopath — service-native (`applemusic:playlist:...`) or a `spotify:`/
+ * `spotify@` id — is never a valid station; blank it so the client's source line
+ * stays empty rather than showing the container id.
+ */
+function blankAudiopathStation(station: string | undefined): string {
+  const raw = (station ?? '').trim();
+  if (!raw) {
+    return '';
+  }
+  const lower = raw.toLowerCase();
+  if (lower.startsWith('spotify:') || lower.startsWith('spotify@') || parseServiceNativeAudiopath(raw)) {
+    return '';
+  }
+  return station ?? '';
 }
 
 function buildCategory(
