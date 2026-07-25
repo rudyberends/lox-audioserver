@@ -68,6 +68,9 @@ export class MediaServer {
       baseUrl: () => `${this.baseUrl()}${DLNA_BASE}`,
       provider,
       sourceProtocolInfo: SOURCE_PROTOCOL_INFO,
+      // The text properties globalSearch matches against; advertised in
+      // GetSearchCapabilities so control points offer a search box.
+      searchCapabilities: 'dc:title,upnp:artist,upnp:album',
       logger: this.log,
     });
     this.track = new TrackStreamHandler(engine, content);
@@ -154,6 +157,7 @@ export class MediaServer {
         title: service.title,
         rootFolderId: service.rootFolderId,
         iconUrl: iconPath ? icon(iconPath) : undefined,
+        searchSource: service.searchSource,
         browse: service.browse,
       };
     });

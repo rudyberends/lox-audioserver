@@ -3,7 +3,7 @@ import type { ContentManager } from '@/adapters/content/contentManager';
 import type { ContentFolder, ContentFolderItem, ContentItemMetadata } from '@/ports/ContentTypes';
 import { audioOutputSettings, mp3BitrateToBps } from '@/ports/types/audioFormat';
 import type { ContentProvider, BrowseResult, DidlContainer, DidlItem } from '@sonn-audio/node-upnp';
-import { ROOT_OBJECT_ID } from '@sonn-audio/node-upnp';
+import { ROOT_OBJECT_ID, parseSearchCriteria } from '@sonn-audio/node-upnp';
 import {
   decodeObjectId,
   encodeContainerId,
@@ -31,6 +31,8 @@ export type ServiceDef = {
   rootFolderId: string;
   /** Optional absolute icon URL shown as the service's root tile. */
   iconUrl?: string;
+  /** `globalSearch` source for this service (`local`, `spotify@bridgeId`, …), or null when it can't search. */
+  searchSource: string | null;
   browse: (
     cm: ContentManager,
     folderId: string,
@@ -143,6 +145,106 @@ export class MediaContentProvider implements ContentProvider {
       duration: meta?.duration,
     };
     return this.trackItem(item, '-1');
+  }
+
+  /**
+   * UPnP Search over the content layer. Extracts the free-text term from the
+   * SearchCriteria, then runs the app's `globalSearch` against each searchable
+   * service — all of them when searching the root (`ContainerID=0`), or just the
+   * one when a specific service container is given — and maps the hits onto DIDL.
+   *
+   * Tracks become playable items (same `/dlna/track/<id>` res as browse); albums/
+   * artists/playlists become browsable containers that route back into the service.
+   */
+  public async search(
+    containerId: string,
+    searchCriteria: string,
+    startingIndex: number,
+    requestedCount: number,
+  ): Promise<BrowseResult> {
+    const parsed = parseSearchCriteria(searchCriteria);
+    // No usable free-text term (empty criteria, or the `*` wildcard): we do NOT
+    // dump the whole catalogue as a "search" — return nothing.
+    if (parsed.terms.length === 0) {
+      return { objects: [], total: 0 };
+    }
+    const query = parsed.terms.join(' ');
+
+    // Which services to search: a specific service container restricts to that
+    // service; the root (or anything else) searches every searchable service.
+    const searchable = this.serviceDefs().filter((def) => def.searchSource);
+    const ref = decodeObjectId(containerId);
+    const targets =
+      ref?.kind === 'container'
+        ? searchable.filter((def) => def.key === ref.service)
+        : searchable;
+    if (targets.length === 0) {
+      return { objects: [], total: 0 };
+    }
+
+    const limit = requestedCount > 0 ? requestedCount : 200;
+    const offset = startingIndex > 0 ? startingIndex : 0;
+    const perService = Math.max(1, Math.min(limit, 50));
+
+    const settled = await Promise.allSettled(
+      targets.map((def) => this.searchService(def, query, perService)),
+    );
+
+    const objects: Array<DidlContainer | DidlItem> = [];
+    settled.forEach((outcome, i) => {
+      const def = targets[i]!;
+      if (outcome.status !== 'fulfilled') {
+        this.log.debug('search failed for service', {
+          service: def.key,
+          message:
+            outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason),
+        });
+        return;
+      }
+      const parentId = encodeContainerId(def.key, def.rootFolderId);
+      for (const [category, items] of Object.entries(outcome.value)) {
+        for (const item of items) {
+          const obj = this.searchHitToObject(item, def.key, parentId, category, parsed.classFilter);
+          if (obj) {
+            objects.push(obj);
+          }
+        }
+      }
+    });
+
+    const total = objects.length;
+    return { objects: objects.slice(offset, offset + limit), total };
+  }
+
+  private async searchService(
+    def: ServiceDef,
+    query: string,
+    perCategory: number,
+  ): Promise<Record<string, ContentFolderItem[]>> {
+    // The source syntax carries per-category limits (same as the Subsonic adapter).
+    const filters = [`track#${perCategory}`, `album#${perCategory}`, `artist#${perCategory}`].join(',');
+    const { result } = await this.contentManager.globalSearch(`${def.searchSource}:${filters}`, query);
+    return result ?? {};
+  }
+
+  private searchHitToObject(
+    item: ContentFolderItem,
+    serviceKey: string,
+    parentId: string,
+    category: string,
+    classFilter: 'item' | 'container' | null,
+  ): DidlContainer | DidlItem | null {
+    const isTrack = category === 'track' || isTrackItem(item);
+    if (isTrack) {
+      if (classFilter === 'container') {
+        return null;
+      }
+      return this.trackItem(item, parentId);
+    }
+    if (classFilter === 'item') {
+      return null;
+    }
+    return this.folderContainer(item, serviceKey, parentId);
   }
 
   private findService(key: string): ServiceDef | undefined {
