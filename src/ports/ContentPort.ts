@@ -1,6 +1,7 @@
 import type { ContentFolder, ContentFolderItem, ContentItemMetadata } from '@/ports/ContentTypes';
 import type { QueueItem } from '@/ports/types/queueTypes';
 import type { PlaybackSourceResolveArgs, StreamResolution } from '@/ports/types/StreamResolution';
+import type { BridgeRegistry } from '@/domain/loxone/bridgeIdentity';
 
 export type BuildQueueOptions = {
   maxItems?: number;
@@ -8,6 +9,8 @@ export type BuildQueueOptions = {
 
 export interface ContentPort {
   getDefaultSpotifyAccountId(): string | null;
+  /** Bridge registry for service-native ⇄ Loxone audiopath translation. */
+  getBridgeRegistry(): BridgeRegistry;
   resolveMetadata(audiopath: string): Promise<ContentItemMetadata | null>;
   resolvePlaybackSource(args: PlaybackSourceResolveArgs): Promise<StreamResolution>;
   configureAppleMusic(): void;

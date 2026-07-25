@@ -2,7 +2,7 @@ import type { ComponentLogger } from '@/shared/logging/logger';
 import type { ContentFolderItem } from '@/ports/ContentTypes';
 import type { ContentPort } from '@/ports/ContentPort';
 import type { NotifierPort } from '@/ports/NotifierPort';
-import { decodeAudiopath, detectServiceFromAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath, detectServiceFromAudiopath, parseServiceNativeAudiopath, BRIDGE_STREAMING_SERVICES } from '@/domain/loxone/audiopath';
 import {
   createQueueItem,
   mapFolderItemsToQueue,
@@ -1226,12 +1226,35 @@ export class QueueController {
   }
 }
 
-function sanitizeAudiopathForOutput(audiopath: string): string {
+/**
+ * @internal Exported for the boundary bit-identity test. Collapses core/legacy
+ * audiopaths to the `spotify:<kind>:<id>` shape the native getqueue schema
+ * requires (fail-hard: an unrecognized item empties the whole queue).
+ */
+export function sanitizeAudiopathForOutput(audiopath: string): string {
   if (!audiopath) {
     return audiopath;
   }
+  // Loxone getqueue payload uses the bare `spotify:<kind>:<id>` form (bridge/
+  // account dropped). The native client's queue schema is FAIL-HARD: it requires
+  // each streaming item's audiopath to literally start with `spotify:` whose 2nd
+  // segment is `track`/`episode` (audiotype 5); an unrecognized item throws the
+  // whole `z.array` parse and empties the queue. So collapse both the legacy
+  // `spotify@<x>:` disguise and the service-native `<service>[:<slug>]:...` form
+  // to `spotify:<kind>:<id>`, mapping the Apple `library-track` alias down to
+  // `track` (the client only accepts `track`/`episode` here).
   if (/^spotify@/i.test(audiopath)) {
-    return `spotify:${audiopath.replace(/^spotify@[^:]+:/i, '')}`;
+    const tail = audiopath.replace(/^spotify@[^:]+:/i, '').replace(/^library-/i, '');
+    return `spotify:${tail}`;
+  }
+  const native = parseServiceNativeAudiopath(audiopath);
+  // Only the bridged STREAMING services present to Loxone as spotify. `library`,
+  // `radio`, `local`, `linein`, etc. are their own native Loxone concepts and
+  // must NOT be rewritten to spotify: (that would corrupt library/radio queue
+  // items — and the queue schema is fail-hard).
+  if (native && BRIDGE_STREAMING_SERVICES.has(native.service)) {
+    // Drop the `library-` alias: the queue schema only recognizes `track`/`episode`.
+    return `spotify:${native.kind}:${native.id}`;
   }
   return audiopath;
 }

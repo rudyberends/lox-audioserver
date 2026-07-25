@@ -106,8 +106,32 @@ export function metadataKeyVariants(audiopath: string): string[] {
   add(decoded);
   add(normalizeProviderAudiopath(raw));
   add(normalizeProviderAudiopath(decoded));
+  // Bridge between the service-native core form and the `spotify:<kind>:<id>`
+  // form that favourites/recents (kept Loxone-side) look up with. A harvest
+  // stored under `applemusic:track:X` must still be found when a room-favourite
+  // resolve asks with `spotify:track:X` (the getqueue-collapsed shape), and
+  // vice-versa. Only the bridged STREAMING services map to spotify — `library`/
+  // `radio`/etc. keep their own identity.
+  const native = parseServiceNativeAudiopath(raw);
+  if (native && BRIDGE_STREAMING_SERVICES.has(native.service)) {
+    add(`spotify:${native.kind}:${native.id}`);
+  }
   return variants;
 }
+
+/**
+ * Services bridged to Loxone as Spotify (present as `cmd:spotify`, carry a
+ * `spotify:`-shaped audiopath on the Loxone wire). NOT `library`/`radio`/
+ * `local`/`linein`/`musicassistant` — those are their own native concepts.
+ */
+export const BRIDGE_STREAMING_SERVICES = new Set([
+  'applemusic',
+  'deezer',
+  'tidal',
+  'soundcloud',
+  'ytmusic',
+  'youtube',
+]);
 
 /**
  * Lightweight provider detection for Loxone audiopaths.

@@ -1,4 +1,4 @@
-import { inferAudiotype } from '@/domain/loxone/audiopath';
+import { inferAudiotype, parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
 import type { PlaybackMetadata } from '@/application/playback/audioManager';
 import type { ContentFolderItem } from '@/ports/ContentTypes';
 
@@ -25,6 +25,9 @@ export function normalizeSpotifyAudiopath(value: string): string {
     return cleaned;
   }
   if (/tidal/i.test(cleaned)) {
+    return cleaned;
+  }
+  if (/^(soundcloud|ytmusic|youtube):/i.test(cleaned)) {
     return cleaned;
   }
   if (cleaned.startsWith('spotify:') && !cleaned.startsWith('spotify@')) {
@@ -110,6 +113,8 @@ export function createQueueItem(
         ? 0
         : 120;
   const station = sanitizeStation(metadata?.station, normalizedUri);
+  // First-class service identity for neutral consumers (own player, DLNA).
+  const native = parseServiceNativeAudiopath(normalizedUri);
   return {
     album: metadata?.album ?? '',
     artist: metadata?.artist ?? '',
@@ -125,6 +130,7 @@ export function createQueueItem(
         ? normalizedUnique
         : generateQueueId(),
     user,
+    ...(native ? { provider: native.service, kind: native.kind } : {}),
   };
 }
 

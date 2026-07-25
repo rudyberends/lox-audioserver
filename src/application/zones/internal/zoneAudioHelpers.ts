@@ -285,10 +285,19 @@ export function getInputAudioType(ctx: ZoneContext, audiopathOverride?: string):
   const lowerAudiopath = audiopath.toLowerCase();
   const maProvider = getMusicAssistantProviderId().toLowerCase();
   const maUser = getMusicAssistantUserId().toLowerCase();
-  const isBridgeProvider = /^spotify@bridge-[^:]+:/i.test(lowerAudiopath);
-  const isBridgeApple = isBridgeProvider && /bridge-applemusic/i.test(lowerAudiopath);
-  const isBridgeDeezer = isBridgeProvider && /bridge-deezer/i.test(lowerAudiopath);
-  const isBridgeTidal = isBridgeProvider && /bridge-tidal/i.test(lowerAudiopath);
+  // Detect the real streaming service regardless of audiopath shape: the core is
+  // now service-native (`applemusic:track:...`) but legacy Loxone-boundary and
+  // stored favourites still carry `spotify@bridge-...`. detectServiceFromAudiopath
+  // resolves both. All bridged streaming services report the internal
+  // AudioType.Spotify (5); resolveDisplayAudiotype then flips 5→Playlist(2) for
+  // non-spotify queue authorities, keeping the emitted audiotype bit-identical.
+  const detectedService = detectServiceFromAudiopath(audiopath);
+  const isBridgedStreamingService =
+    detectedService === 'applemusic' ||
+    detectedService === 'deezer' ||
+    detectedService === 'tidal' ||
+    detectedService === 'soundcloud' ||
+    detectedService === 'ytmusic';
   // Prefer the active input mode when available, otherwise fall back to URI heuristics.
   if (ctx.inputMode === 'airplay' || audiopath.startsWith('airplay://')) {
     return 4;
@@ -296,33 +305,24 @@ export function getInputAudioType(ctx: ZoneContext, audiopathOverride?: string):
   if (ctx.inputMode === 'linein' || audiopath.startsWith('linein://')) {
     return 3;
   }
-  if (isBridgeProvider) {
-    return AudioType.Spotify;
-  }
-  if (lowerAudiopath.includes('applemusic') || isBridgeApple) {
-    return AudioType.Playlist;
-  }
-  if (lowerAudiopath.includes('deezer') || isBridgeDeezer) {
-    return AudioType.Playlist;
-  }
-  if (lowerAudiopath.includes('tidal') || isBridgeTidal) {
-    return AudioType.Playlist;
-  }
   if (
     ctx.inputMode === 'musicassistant' ||
+    detectedService === 'musicassistant' ||
     lowerAudiopath.startsWith('musicassistant://') ||
     lowerAudiopath.startsWith('musicassistant:') ||
     (maProvider && lowerAudiopath.startsWith(maProvider)) ||
     (maUser && lowerAudiopath.startsWith(`spotify@${maUser}`)) ||
-    (maUser && lowerAudiopath.startsWith(`musicassistant@${maUser}`)) ||
-    lowerAudiopath.includes('musicassistant')
+    (maUser && lowerAudiopath.startsWith(`musicassistant@${maUser}`))
   ) {
     return AudioType.Playlist;
+  }
+  if (isBridgedStreamingService) {
+    return AudioType.Spotify;
   }
   if (ctx.inputMode === 'spotify' || audiopath.startsWith('spotify://') || audiopath.startsWith('spotify:')) {
     return AudioType.Spotify;
   }
-  if (detectServiceFromAudiopath(audiopath) === 'radio') {
+  if (detectedService === 'radio') {
     if (ctx.metadata.radioControllable === true) {
       return AudioType.File;
     }
@@ -333,9 +333,6 @@ export function getInputAudioType(ctx: ZoneContext, audiopathOverride?: string):
 
 export function getStateAudiotype(ctx: ZoneContext, item?: QueueItem | null): number | null {
   const audiopath = item?.audiopath ?? ctx.queueController.current()?.audiopath ?? ctx.state.audiopath ?? '';
-  if (/^spotify@bridge-[^:]+:track:/i.test(audiopath)) {
-    return AudioType.Spotify;
-  }
   const resolved = getInputAudioType(ctx, audiopath);
   if (resolved != null) {
     return resolved;

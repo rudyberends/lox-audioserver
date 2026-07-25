@@ -2,6 +2,7 @@ import type { ComponentLogger } from '@/shared/logging/logger';
 import type { AudioManager, PlaybackMetadata, PlaybackSession, PlaybackSource, CoverArtPayload } from '@/application/playback/audioManager';
 import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import type { LoxoneZoneState } from '@/domain/loxone/types';
+import { toServiceNative } from '@/domain/loxone/bridgeIdentity';
 import type { QueueAuthority, ZoneContext } from '@/application/zones/internal/zoneTypes';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import type { InputsPort, MusicAssistantInputHandlers } from '@/ports/InputsPort';
@@ -384,7 +385,12 @@ export class PlaybackCoordinator {
     metadata?: PlaybackMetadata,
     options?: { startAtSec?: number },
   ): Promise<void> {
-    return this.playRequest.play(zoneId, uri, type, metadata, options);
+    // Loxone-boundary intake: a play request from the native client arrives in
+    // the disguised `spotify@bridge-...` form (also for room-favs). Translate it
+    // to the service-native core identity here so everything downstream is
+    // service-native. Idempotent on already-native / non-bridge paths.
+    const nativeUri = toServiceNative(uri, this.contentPort.getBridgeRegistry());
+    return this.playRequest.play(zoneId, nativeUri, type, metadata, options);
   }
 
   public async startQueuePlayback(

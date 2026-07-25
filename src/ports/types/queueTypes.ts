@@ -11,4 +11,12 @@ export interface QueueItem {
   title: string;
   unique_id: string;
   user: string;
+  /**
+   * First-class service identity for neutral consumers (own player, DLNA):
+   * the real streaming service (`applemusic`, `tidal`, …) and the content kind
+   * (`track`/`album`/`artist`/`playlist`/`radio`). Additive — not serialized in
+   * the Loxone getqueue payload, so the native wire shape is unchanged.
+   */
+  provider?: string;
+  kind?: string;
 }

@@ -454,6 +454,11 @@ class FakeQueueController {
 
 const noopContentPort: ContentPort = {
   getDefaultSpotifyAccountId: () => null,
+  getBridgeRegistry: () => ({
+    byServiceSlug: new Map(),
+    byBridgeId: new Map(),
+    accountCountByService: new Map(),
+  }),
   resolveMetadata: async () => null,
   resolvePlaybackSource: async () => ({ playbackSource: null, provider: 'library' }),
   configureAppleMusic: () => {},

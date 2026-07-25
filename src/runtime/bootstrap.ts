@@ -3,6 +3,7 @@ import { loadEnvironment } from '@/config/environment';
 import { createLogger, logManager } from '@/shared/logging/logger';
 import { createContentManager } from '@/adapters/content/contentManager';
 import { createContentAdapter } from '@/adapters/content/ContentAdapter';
+import { toLoxoneAudiopath } from '@/domain/loxone/bridgeIdentity';
 import { MediaServer } from '@/adapters/mediaserver/mediaServer';
 import { SsdpAdvertiser } from '@/adapters/mediaserver/ssdpAdvertiser';
 import { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
@@ -289,6 +290,13 @@ export function createRuntime(): Runtime {
   );
   loxoneNotifier.setMixedGroupLookup(
     () => configPort.getConfig().groups?.mixedGroupEnabled === true,
+  );
+  // Loxone-boundary: translate the core's service-native audiopath back to the
+  // `spotify@bridge-...` disguise so the native client's now-playing keeps its
+  // service/account attribution (isSpotifyPlaying + serviceId regex). No-op on
+  // non-bridge paths.
+  loxoneNotifier.setAudiopathToLoxone((audiopath) =>
+    toLoxoneAudiopath(audiopath, contentManager.getBridgeRegistry()),
   );
   // Let recents fall back to the live now-playing state for titles missing on
   // the queue item (e.g. radio/tunein station names).

@@ -9,6 +9,7 @@ import type {
   ScanStatus,
 } from '@/ports/ContentTypes';
 import { decodeAudiopath, detectServiceFromAudiopath, metadataKeyVariants } from '@/domain/loxone/audiopath';
+import { buildBridgeRegistry, type BridgeRegistry } from '@/domain/loxone/bridgeIdentity';
 import {
   LocalLibraryProvider,
   type LibraryCoverSample,
@@ -92,6 +93,9 @@ export class ContentManager {
   private initialized = false;
   private readonly configPort: ConfigPort;
   private readonly customRadioStore: CustomRadioStore;
+  // Cached bridge registry (service-native <-> Loxone identity translation).
+  // Rebuilt lazily and invalidated on config refresh.
+  private bridgeRegistry: BridgeRegistry | null = null;
 
   constructor(
     notifier: NotifierPort,
@@ -143,9 +147,24 @@ export class ContentManager {
     this.metadataCache.clear();
     this.metadataInflight.clear();
     this.metadataByAudiopath.clear();
+    this.bridgeRegistry = null;
     this.spotify = this.spotifyManagerProvider.reload();
     this.tunein = new TuneInProvider(this.customRadioStore, this.readTuneInConfig());
     this.radioParadise = new RadioParadiseProvider({ iconBaseUrl: this.readLocalIconBaseUrl() });
+  }
+
+  /**
+   * The bridge registry for service-native ⇄ Loxone identity translation, built
+   * from `content.spotify.bridges`. Cached until the next config refresh. Callers
+   * (Loxone command intake, state/queue emit) use it with toServiceNative /
+   * toLoxoneAudiopath from `@/domain/loxone/bridgeIdentity`.
+   */
+  public getBridgeRegistry(): BridgeRegistry {
+    if (!this.bridgeRegistry) {
+      const bridges = this.configPort.getConfig().content?.spotify?.bridges ?? [];
+      this.bridgeRegistry = buildBridgeRegistry(bridges);
+    }
+    return this.bridgeRegistry;
   }
 
   public getAvailableServices() {

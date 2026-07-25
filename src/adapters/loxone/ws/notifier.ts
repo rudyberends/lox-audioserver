@@ -13,6 +13,7 @@ export class LoxoneWsNotifier {
   private zoneStateLookup: ZoneStateLookup | null = null;
   private outputProtocolLookup: OutputProtocolLookup | null = null;
   private mixedGroupLookup: (() => boolean) | null = null;
+  private audiopathToLoxone: ((audiopath: string) => string) | null = null;
 
   constructor(
     private readonly registry: ConnectionRegistry,
@@ -40,12 +41,27 @@ export class LoxoneWsNotifier {
     this.mixedGroupLookup = lookup;
   }
 
+  /**
+   * Translates the core's service-native `state.audiopath` back to the Loxone
+   * disguise (`spotify@bridge-...`) the native client expects in `audio_event`.
+   * When unset, the audiopath is emitted verbatim (unchanged behaviour).
+   */
+  public setAudiopathToLoxone(translate: ((audiopath: string) => string) | null): void {
+    this.audiopathToLoxone = translate;
+  }
+
   private enrichWithGroupContext(state: LoxoneZoneState): LoxoneZoneState {
     const outputProtocol = this.outputProtocolLookup?.(state.playerid) ?? state.outputProtocol;
     const mixedGroupEnabled = this.mixedGroupLookup?.() ?? state.mixedGroupEnabled;
+    // Loxone-boundary emit: translate the core's service-native audiopath back to
+    // the disguise the native client expects. No-op when the translator is unset
+    // or the path isn't a bridged service-native id.
+    const audiopath = this.audiopathToLoxone
+      ? this.audiopathToLoxone(state.audiopath)
+      : state.audiopath;
     const group = this.groupTracker.getGroupByZone(state.playerid);
     if (!group) {
-      return { ...state, syncedzones: [], mastervolume: 0, outputProtocol, mixedGroupEnabled };
+      return { ...state, audiopath, syncedzones: [], mastervolume: 0, outputProtocol, mixedGroupEnabled };
     }
     const syncedzones = Array.from(new Set<number>([group.leader, ...group.members]));
     const isLeader = group.leader === state.playerid;
@@ -54,6 +70,7 @@ export class LoxoneWsNotifier {
       : (this.zoneStateLookup?.(group.leader)?.volume ?? state.volume);
     return {
       ...state,
+      audiopath,
       syncedzones,
       mastervolume: clamp01to100(leaderVolume),
       outputProtocol,

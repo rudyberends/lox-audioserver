@@ -34,6 +34,10 @@ export class ContentAdapter implements ContentPort {
     return this.contentManager.getDefaultSpotifyAccountId();
   }
 
+  public getBridgeRegistry() {
+    return this.contentManager.getBridgeRegistry();
+  }
+
   public resolveMetadata(audiopath: string): Promise<ContentItemMetadata | null> {
     return this.contentManager.resolveMetadata(audiopath);
   }
