@@ -8,6 +8,10 @@ import { buildBaseUrl } from '@/shared/streamUrl';
 import { resolveCoverHost } from '@/shared/utils/net';
 import { SsdpAdvertiser, UpnpMediaServer, MEDIA_SERVER_PATHS } from '@sonn-audio/node-upnp';
 import {
+  buildBrowsableServices,
+  parseProviderAllowlist,
+} from '@/adapters/content/browsableServices';
+import {
   MediaContentProvider,
   type ServiceDef,
 } from '@/adapters/mediaserver/mediaContentProvider';
@@ -130,79 +134,29 @@ export class MediaServer {
 
   // ── Config-derived values ────────────────────────────────────────────────────
 
-  private allowedServices(): Set<string> | null {
-    const providers = this.config.getConfig().content.mediaServer?.providers;
-    if (!providers || providers.length === 0) {
-      return null;
-    }
-    return new Set(providers.map((p) => p.trim().toLowerCase()).filter(Boolean));
-  }
-
   /**
-   * Build the top-level service catalogue from config.
-   *
-   * Library and Radio are always present. Each enabled streaming bridge becomes
-   * one tile keyed by its bridge id — crucially, the browse call passes that
-   * bridge id as the `user` argument, which is the only value the content layer's
-   * provider resolution matches (the generic provider name does NOT resolve a
-   * bridge). This also yields one tile per account when multiple bridges share a
-   * provider type. The optional config allowlist filters by provider name.
+   * Build the top-level service catalogue: the shared browsable-services list
+   * (library + radio + one entry per enabled streaming bridge), decorated with
+   * the per-service tile icons DLNA controllers show.
    */
   private buildServiceDefs(): ServiceDef[] {
-    const allow = this.allowedServices();
-    const permitted = (provider: string): boolean => !allow || allow.has(provider);
+    const allow = parseProviderAllowlist(this.config.getConfig().content.mediaServer?.providers);
     // Cache-buster: some controllers (B&O) cache tile icons hard by URL, so a
     // changed icon at the same path can keep showing the stale image. The version
     // token forces a fresh fetch when the icon set changes.
     const icon = (path: string): string => `${this.baseUrl()}${path}?v=${ICON_VERSION}`;
 
-    const defs: ServiceDef[] = [];
-    if (permitted('library')) {
-      defs.push({
-        key: 'library',
-        service: 'library',
-        title: 'Library',
-        rootFolderId: 'root',
-        iconUrl: icon('/dlna-icons/library.png'),
-        browse: (cm, folderId, offset, limit) => cm.getMediaFolder(folderId, offset, limit),
-      });
-    }
-    if (permitted('radio')) {
-      defs.push({
-        key: 'radio',
-        service: 'radio',
-        title: 'Radio',
-        rootFolderId: 'start',
-        iconUrl: icon('/dlna-icons/radio.png'),
-        browse: (cm, folderId, offset, limit) =>
-          cm.getServiceFolder('radioparadise', 'radioparadise', folderId, offset, limit),
-      });
-    }
-
-    const bridges = this.config.getConfig().content.spotify?.bridges ?? [];
-    for (const bridge of bridges) {
-      if (!bridge || bridge.enabled === false || !bridge.id) {
-        continue;
-      }
-      const provider = bridge.provider?.trim().toLowerCase();
-      if (!provider || !permitted(provider)) {
-        continue;
-      }
-      const bridgeId = bridge.id;
-      const service = provider as MediaServerService;
-      const iconPath = PROVIDER_ICON_PATHS[provider];
-      defs.push({
-        key: bridgeId,
-        service,
-        title: bridge.label?.trim() || defaultProviderTitle(provider),
-        rootFolderId: 'root',
+    return buildBrowsableServices(this.config, allow).map((service) => {
+      const iconPath = PROVIDER_ICON_PATHS[service.provider];
+      return {
+        key: service.key,
+        service: service.provider as MediaServerService,
+        title: service.title,
+        rootFolderId: service.rootFolderId,
         iconUrl: iconPath ? icon(iconPath) : undefined,
-        // The content layer resolves the bridge from `user === bridgeId`.
-        browse: (cm, folderId, offset, limit) =>
-          cm.getServiceFolder(provider, bridgeId, folderId, offset, limit),
-      });
-    }
-    return defs;
+        browse: service.browse,
+      };
+    });
   }
 
   private friendlyName(): string {
@@ -233,25 +187,14 @@ export class MediaServer {
   }
 }
 
-const PROVIDER_TITLES: Record<string, string> = {
-  soundcloud: 'SoundCloud',
-  applemusic: 'Apple Music',
-  deezer: 'Deezer',
-  tidal: 'Tidal',
-  ytmusic: 'YouTube Music',
-  youtube: 'YouTube',
-  musicassistant: 'Music Assistant',
-};
-
-function defaultProviderTitle(provider: string): string {
-  return PROVIDER_TITLES[provider] ?? provider;
-}
-
-// Per-provider tile icons. Flat RGB PNGs under /dlna-icons/. Bump when the icon
-// set changes so caching controllers refetch.
+// Per-service tile icons, keyed by provider type. Flat RGB PNGs under
+// /dlna-icons/. Bump ICON_VERSION when the icon set changes so caching
+// controllers refetch.
 const ICON_VERSION = '2';
 
 const PROVIDER_ICON_PATHS: Record<string, string> = {
+  library: '/dlna-icons/library.png',
+  radio: '/dlna-icons/radio.png',
   applemusic: '/dlna-icons/apple-music.png',
   deezer: '/dlna-icons/deezer.png',
   tidal: '/dlna-icons/tidal.png',
