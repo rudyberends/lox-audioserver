@@ -13,6 +13,7 @@ import type {
   ZoneTransportConfig,
   ZoneVolumesConfig,
 } from '@/domain/config/types';
+import { OUTPUT_DEFINITIONS } from '@/adapters/outputs';
 import { defaultMacId, normalizeMacId } from '@/shared/utils/mac';
 import { defaultLocalIp } from '@/shared/utils/net';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
@@ -105,6 +106,7 @@ export function buildConfigRoutes(deps: ConfigHandlerDeps): Route[] {
     { method: 'POST', pattern: /^\/config\/zones\/create$/, handler: async (req, res) => handleZoneCreate(req, res, deps) },
     { method: 'DELETE', pattern: /^\/config\/zones\/(\d+)$/, handler: async (_req, res, match) => handleZoneDelete(Number(match[1]), res, deps) },
     { method: 'POST', pattern: /^\/config\/inputs$/, handler: async (req, res) => handleInputsUpdate(req, res, deps) },
+    { method: 'POST', pattern: /^\/config\/outputs$/, handler: async (req, res) => handleOutputsUpdate(req, res, deps) },
     { method: 'POST', pattern: /^\/config\/system$/, handler: async (req, res) => handleSystemUpdate(req, res, deps) },
     { method: 'POST', pattern: /^\/config\/groups$/, handler: async (req, res) => handleGroupsUpdate(req, res, deps) },
     { method: 'POST', pattern: /^\/config\/content$/, handler: async (req, res) => handleContentUpdate(req, res, deps) },
@@ -646,6 +648,44 @@ async function handleContentUpdate(
     }
   });
   deps.contentManager.refreshFromConfig();
+  deps.sendJson(res, 204, {});
+}
+
+/**
+ * Availability of output types, keyed by output definition id. Only ids the
+ * build actually ships are accepted, so a stale admin UI cannot seed keys that
+ * no longer map to an output.
+ */
+async function handleOutputsUpdate(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: ConfigHandlerDeps,
+): Promise<void> {
+  const body = (await deps.readJsonBody(req, res)) as Record<string, { enabled?: boolean }> | null;
+  if (res.writableEnded) {
+    return;
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    deps.sendJson(res, 400, { error: 'invalid-outputs-payload' });
+    return;
+  }
+
+  const known = new Set(OUTPUT_DEFINITIONS.map((definition) => definition.id));
+  const unknown = Object.keys(body).filter((id) => !known.has(id));
+  if (unknown.length > 0) {
+    deps.sendJson(res, 400, { error: 'unknown-output', ids: unknown });
+    return;
+  }
+
+  await deps.configPort.updateConfig((cfg) => {
+    if (!cfg.outputs) cfg.outputs = {};
+    for (const [id, entry] of Object.entries(body)) {
+      if (!entry || typeof entry !== 'object' || typeof entry.enabled !== 'boolean') {
+        continue;
+      }
+      cfg.outputs[id] = { ...(cfg.outputs[id] ?? {}), enabled: entry.enabled };
+    }
+  });
   deps.sendJson(res, 204, {});
 }
 

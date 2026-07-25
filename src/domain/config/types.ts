@@ -4,8 +4,24 @@ export interface AudioServerConfig {
   zones: ZoneConfig[];
   rawAudioConfig: RawAudioConfig;
   inputs?: InputConfig;
+  outputs?: OutputAvailabilityConfig;
   groups?: GroupConfig;
   updatedAt?: string;
+}
+
+/**
+ * Which output types an operator offers when configuring a zone, keyed by the
+ * output definition id ('sendspin', 'sonos', …).
+ *
+ * This is availability, not runtime state: an absent entry means available, and
+ * turning one off only removes it from the picker — a zone already configured
+ * with that output keeps playing. That keeps the switch safe to flip on a live
+ * system and makes the default (nothing configured) mean "offer everything".
+ */
+export type OutputAvailabilityConfig = Record<string, OutputAvailabilityEntry | undefined>;
+
+export interface OutputAvailabilityEntry {
+  enabled?: boolean;
 }
 
 export interface SystemConfig {

@@ -119,4 +119,9 @@ export interface OutputConfigDefinition {
   fields: OutputFieldDefinition[];
 }
 
-export type TransportConfigDefinition = OutputConfigDefinition;
+/**
+ * Admin-facing shape of an output definition: the definition itself plus whether
+ * an operator currently offers it when configuring a zone (see
+ * `AudioServerConfig.outputs`). Absent means available.
+ */
+export type TransportConfigDefinition = OutputConfigDefinition & { enabled?: boolean };
