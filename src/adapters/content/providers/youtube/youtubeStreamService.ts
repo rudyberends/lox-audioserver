@@ -1,6 +1,6 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
-import type { SpotifyBridgeConfig } from '@/domain/config/types';
+import type { StreamingServiceConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import { decodeAudiopath, parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
 import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
@@ -26,15 +26,15 @@ type YoutubePlaybackResult = {
 type YoutubeTrackRequest = {
   providerId: string;
   videoId: string;
-  bridge: SpotifyBridgeConfig;
+  bridge: StreamingServiceConfig;
 };
 
 type OutputErrorHandler = (zoneId: number, reason?: string) => void;
 
 export class YoutubeStreamService {
   private readonly log = createLogger('Content', 'YoutubeStream');
-  private readonly bridgesByProvider = new Map<string, SpotifyBridgeConfig>();
-  private readonly bridgesById = new Map<string, SpotifyBridgeConfig>();
+  private readonly bridgesByProvider = new Map<string, StreamingServiceConfig>();
+  private readonly bridgesById = new Map<string, StreamingServiceConfig>();
   private readonly configPort: ConfigPort;
   private readonly streamCache = new Map<string, { playbackSource: PlaybackSource; expiresAt: number }>();
   private streamCachePruneCounter = 0;
@@ -52,7 +52,7 @@ export class YoutubeStreamService {
   public configureFromConfig(): void {
     this.bridgesByProvider.clear();
     this.bridgesById.clear();
-    const bridges = this.configPort.getConfig().content?.spotify?.bridges ?? [];
+    const bridges = this.configPort.getConfig().content?.streamingServices ?? [];
     const youtubeBridges = bridges.filter((b) => (b.provider || '').toLowerCase() === 'youtube');
     const single = youtubeBridges.length <= 1;
     for (const bridge of youtubeBridges) {

@@ -1,4 +1,4 @@
-import type { SpotifyBridgeConfig } from '@/domain/config/types';
+import type { StreamingServiceConfig } from '@/domain/config/types';
 import type { ContentFolder, ContentFolderItem, ContentServiceAccount, PlaylistEntry } from '@/ports/ContentTypes';
 import { createLogger } from '@/shared/logging/logger';
 import { DEFAULT_MIN_SEARCH_LIMIT } from '@/adapters/content/utils/searchLimits';
@@ -35,7 +35,7 @@ interface YtMusicProviderOptions {
   providerId: string;
   serviceNativePrefix?: string;
   label?: string;
-  bridge: SpotifyBridgeConfig;
+  bridge: StreamingServiceConfig;
   browse?: (browseId: string, options: YtMusicInnertubeClientOptions) => Promise<any>;
 }
 
@@ -60,7 +60,7 @@ export class YtMusicProvider {
   private readonly audiopathPrefix: string;
   private readonly log = createLogger('Content', 'YTMusic');
   private readonly label: string;
-  private bridge: SpotifyBridgeConfig;
+  private bridge: StreamingServiceConfig;
   private readonly browse: (browseId: string, options: YtMusicInnertubeClientOptions) => Promise<any>;
   private cookieFile: { cookie: string; path: string } | null = null;
   private missingCookieWarned = false;

@@ -221,7 +221,7 @@ async function handleSonosDiscovery(
 }
 
 function listMusicAssistantBridges(deps: TransportsHandlerDeps) {
-  const bridges = deps.configPort.getConfig().content?.spotify?.bridges ?? [];
+  const bridges = deps.configPort.getConfig().content?.streamingServices ?? [];
   return bridges
     .filter((b) => (b?.provider || '').toLowerCase() === 'musicassistant')
     .map((b) => ({
@@ -271,7 +271,7 @@ async function handleMusicAssistantPlayerDiscovery(
       }
     } else {
       raw = (await deps.musicAssistantStreamService.listPlayers()) as unknown[];
-      const bridges = deps.configPort.getConfig().content?.spotify?.bridges ?? [];
+      const bridges = deps.configPort.getConfig().content?.streamingServices ?? [];
       const maBridge = bridges.find((b) => (b?.provider || '').toLowerCase() === 'musicassistant');
       bridgeId = maBridge?.id ?? null;
       bridgeMode = maBridge?.mode === 'sink' ? 'sink' : 'source';

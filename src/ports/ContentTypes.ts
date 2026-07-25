@@ -71,7 +71,7 @@ export interface RadioMenuEntry {
 }
 
 export type SpotifyAccountConfig = ConfigSpotifyAccountConfig;
-export type SpotifyBridgeConfig = import('@/domain/config/types').SpotifyBridgeConfig;
+export type StreamingServiceConfig = import('@/domain/config/types').StreamingServiceConfig;
 
 export type ScanStatus = 0 | 1 | 2;
 

@@ -120,6 +120,14 @@ export interface AdminHttpConfig {
 export interface ContentConfig {
   radio: RadioContentConfig;
   spotify: SpotifyContentConfig;
+  /**
+   * First-class accounts for the non-Spotify streaming services (Apple Music,
+   * Tidal, Deezer, SoundCloud, YouTube/Music, Music Assistant). Each is a
+   * neutral service account — the "bridge" framing (disguising them as Spotify)
+   * exists only in the Loxone adapter, which needs it because Loxone knows just
+   * Spotify natively. Migrated once from the legacy `spotify.bridges` location.
+   */
+  streamingServices?: StreamingServiceConfig[];
   library?: LibraryContentConfig | null;
   tts?: TtsContentConfig;
   appleMusic?: AppleMusicContentConfig;
@@ -198,7 +206,12 @@ export interface RadioContentConfig {
 export interface SpotifyContentConfig {
   clientId?: string;
   accounts: SpotifyAccountConfig[];
-  bridges: SpotifyBridgeConfig[];
+  /**
+   * @deprecated Non-Spotify accounts moved to `content.streamingServices`. This
+   * field is only read once by the config migration, then cleared. Nothing
+   * writes it anymore.
+   */
+  bridges?: StreamingServiceConfig[];
   /** Cache decoded audio files to disk. Defaults to true. */
   cacheEnabled?: boolean;
   /** Maximum size of the audio cache in megabytes. Defaults to 1024. */
@@ -261,7 +274,7 @@ export interface SpotifyAccountConfig {
   deviceId?: string;
 }
 
-export interface SpotifyBridgeConfig {
+export interface StreamingServiceConfig {
   id: string;
   label: string;
   provider: string;

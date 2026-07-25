@@ -265,7 +265,7 @@ export function resolveBridgeProvider(
   // First, try exact bridge lookup from config.
   try {
     const cfg = configPort.getConfig();
-    const bridges = cfg?.content?.spotify?.bridges ?? [];
+    const bridges = cfg?.content?.streamingServices ?? [];
     const bridge = bridges.find((b: any) => String(b?.id ?? '').toLowerCase() === bridgeId);
     const provider = String(bridge?.provider ?? '').trim().toLowerCase();
     if (provider) {

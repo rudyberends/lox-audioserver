@@ -72,8 +72,8 @@ export function defaultConfig(): AudioServerConfig {
       spotify: {
         clientId: '',
         accounts: [],
-        bridges: [],
       },
+      streamingServices: [],
       library: {
         enabled: true,
         autoScan: true,
@@ -614,13 +614,12 @@ async function handleContentUpdate(
     }
     if (body.spotify) {
       cfg.content.spotify = {
-        ...(cfg.content.spotify ?? { accounts: [], bridges: [] }),
+        ...(cfg.content.spotify ?? { accounts: [] }),
         clientId:
           typeof body.spotify.clientId === 'string'
             ? body.spotify.clientId.trim()
             : '',
         accounts: cfg.content.spotify?.accounts ?? [],
-        bridges: cfg.content.spotify?.bridges ?? [],
         ...(typeof body.spotify.cacheEnabled === 'boolean' && { cacheEnabled: body.spotify.cacheEnabled }),
         ...(typeof body.spotify.cacheSizeMb === 'number' && { cacheSizeMb: body.spotify.cacheSizeMb }),
       };

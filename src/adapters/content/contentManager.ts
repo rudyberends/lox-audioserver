@@ -155,13 +155,14 @@ export class ContentManager {
 
   /**
    * The bridge registry for service-native ⇄ Loxone identity translation, built
-   * from `content.spotify.bridges`. Cached until the next config refresh. Callers
-   * (Loxone command intake, state/queue emit) use it with toServiceNative /
-   * toLoxoneAudiopath from `@/domain/loxone/bridgeIdentity`.
+   * from `content.streamingServices`. Cached until the next config refresh.
+   * Callers (Loxone command intake, state/queue emit) use it with toServiceNative
+   * / toLoxoneAudiopath from `@/domain/loxone/bridgeIdentity`. "Bridge" here is
+   * the Loxone-adapter concept; the accounts themselves are neutral.
    */
   public getBridgeRegistry(): BridgeRegistry {
     if (!this.bridgeRegistry) {
-      const bridges = this.configPort.getConfig().content?.spotify?.bridges ?? [];
+      const bridges = this.configPort.getConfig().content?.streamingServices ?? [];
       this.bridgeRegistry = buildBridgeRegistry(bridges);
     }
     return this.bridgeRegistry;

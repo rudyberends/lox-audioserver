@@ -1,7 +1,7 @@
 import { createLogger } from '@/shared/logging/logger';
 import { safeReadText } from '@/shared/bestEffort';
 import type { ConfigPort } from '@/ports/ConfigPort';
-import type { SpotifyBridgeConfig } from '@/domain/config/types';
+import type { StreamingServiceConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import { decodeAudiopath, parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
 import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
@@ -36,7 +36,7 @@ type DeezerPlaybackResult = {
 type DeezerTrackRequest = {
   providerId: string;
   trackId: string;
-  bridge: SpotifyBridgeConfig;
+  bridge: StreamingServiceConfig;
 };
 
 type DeezerSongData = {
@@ -147,8 +147,8 @@ function formatContentType(format?: number): string {
 
 export class DeezerStreamService {
   private readonly log = createLogger('Content', 'DeezerStream');
-  private readonly bridgesByProvider = new Map<string, SpotifyBridgeConfig>();
-  private readonly bridgesById = new Map<string, SpotifyBridgeConfig>();
+  private readonly bridgesByProvider = new Map<string, StreamingServiceConfig>();
+  private readonly bridgesById = new Map<string, StreamingServiceConfig>();
   private readonly proxySessions = new Map<string, DeezerProxySession>();
   private readonly configPort: ConfigPort;
 
@@ -159,7 +159,7 @@ export class DeezerStreamService {
   public configureFromConfig(): void {
     this.bridgesByProvider.clear();
     this.bridgesById.clear();
-    const bridges = this.configPort.getConfig().content?.spotify?.bridges ?? [];
+    const bridges = this.configPort.getConfig().content?.streamingServices ?? [];
     const deezerBridges = bridges.filter((b) => (b.provider || '').toLowerCase() === 'deezer');
     const single = deezerBridges.length <= 1;
     for (const bridge of deezerBridges) {
@@ -321,7 +321,7 @@ export class DeezerStreamService {
     return { providerId: providerKey, trackId, bridge };
   }
 
-  private buildHeaders(bridge: SpotifyBridgeConfig): Record<string, string> {
+  private buildHeaders(bridge: StreamingServiceConfig): Record<string, string> {
     const headers: Record<string, string> = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:95.0) Gecko/20100101 Firefox/95.0',
       Accept: '*/*',
@@ -419,7 +419,7 @@ export class DeezerStreamService {
       const res = await fetch(`https://www.deezer.com/ajax/gw-light.php?${params.toString()}`, {
         method: 'POST',
         headers: {
-          ...this.buildHeaders({ deezerArl: arl } as SpotifyBridgeConfig),
+          ...this.buildHeaders({ deezerArl: arl } as StreamingServiceConfig),
           'Content-Type': 'application/json',
         },
       });
@@ -461,7 +461,7 @@ export class DeezerStreamService {
       const res = await fetch(`https://www.deezer.com/ajax/gw-light.php?${params.toString()}`, {
         method: 'POST',
         headers: {
-          ...this.buildHeaders({ deezerArl: arl } as SpotifyBridgeConfig),
+          ...this.buildHeaders({ deezerArl: arl } as StreamingServiceConfig),
           ...(cookieHeader ? { Cookie: cookieHeader } : {}),
           'Content-Type': 'application/json',
         },
@@ -544,7 +544,7 @@ export class DeezerStreamService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': this.buildHeaders({} as SpotifyBridgeConfig)['User-Agent'],
+          'User-Agent': this.buildHeaders({} as StreamingServiceConfig)['User-Agent'],
         },
         body: JSON.stringify(payload),
       });
@@ -574,7 +574,7 @@ export class DeezerStreamService {
     }
   }
 
-  private async fetchTrackPage(trackId: string, bridge: SpotifyBridgeConfig): Promise<string | null> {
+  private async fetchTrackPage(trackId: string, bridge: StreamingServiceConfig): Promise<string | null> {
     try {
       const url = `${DEEZER_TRACK_URL}/${encodeURIComponent(trackId)}`;
       const res = await fetch(url, {

@@ -1,4 +1,4 @@
-import type { SpotifyBridgeConfig } from '@/domain/config/types';
+import type { StreamingServiceConfig } from '@/domain/config/types';
 import type { ContentFolder, ContentFolderItem, ContentServiceAccount, PlaylistEntry } from '@/ports/ContentTypes';
 import { createLogger } from '@/shared/logging/logger';
 import { DEFAULT_MIN_SEARCH_LIMIT } from '@/adapters/content/utils/searchLimits';
@@ -28,7 +28,7 @@ interface YoutubeProviderOptions {
   providerId: string;
   serviceNativePrefix?: string;
   label?: string;
-  bridge: SpotifyBridgeConfig;
+  bridge: StreamingServiceConfig;
 }
 
 type FolderKind =

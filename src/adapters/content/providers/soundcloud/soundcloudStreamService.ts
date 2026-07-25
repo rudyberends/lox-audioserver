@@ -1,6 +1,6 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
-import type { SpotifyBridgeConfig } from '@/domain/config/types';
+import type { StreamingServiceConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import { decodeAudiopath, parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
 import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
@@ -21,7 +21,7 @@ type SoundCloudPlaybackResult = {
 type SoundCloudTrackRequest = {
   providerId: string;
   trackId: string;
-  bridge: SpotifyBridgeConfig;
+  bridge: StreamingServiceConfig;
 };
 
 type OutputErrorHandler = (zoneId: number, reason?: string) => void;
@@ -35,8 +35,8 @@ type OutputErrorHandler = (zoneId: number, reason?: string) => void;
  */
 export class SoundCloudStreamService {
   private readonly log = createLogger('Content', 'SoundCloudStream');
-  private readonly bridgesByProvider = new Map<string, SpotifyBridgeConfig>();
-  private readonly bridgesById = new Map<string, SpotifyBridgeConfig>();
+  private readonly bridgesByProvider = new Map<string, StreamingServiceConfig>();
+  private readonly bridgesById = new Map<string, StreamingServiceConfig>();
   private readonly clients = new Map<string, SoundCloudClient>();
   private readonly configPort: ConfigPort;
 
@@ -48,7 +48,7 @@ export class SoundCloudStreamService {
     this.bridgesByProvider.clear();
     this.bridgesById.clear();
     this.clients.clear();
-    const bridges = this.configPort.getConfig().content?.spotify?.bridges ?? [];
+    const bridges = this.configPort.getConfig().content?.streamingServices ?? [];
     const soundcloudBridges = bridges.filter(
       (b) => (b.provider || '').toLowerCase() === 'soundcloud',
     );

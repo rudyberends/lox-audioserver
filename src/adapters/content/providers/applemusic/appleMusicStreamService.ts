@@ -1,7 +1,7 @@
 import { createLogger } from '@/shared/logging/logger';
 import { safeReadText } from '@/shared/bestEffort';
 import type { ConfigPort } from '@/ports/ConfigPort';
-import type { SpotifyBridgeConfig } from '@/domain/config/types';
+import type { StreamingServiceConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import { decodeAudiopath, parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
 import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
@@ -50,7 +50,7 @@ type AppleMusicTrackRequest = {
   providerId: string;
   trackId: string;
   isLibrary: boolean;
-  bridge: SpotifyBridgeConfig;
+  bridge: StreamingServiceConfig;
 };
 
 type BearerState = {
@@ -100,8 +100,8 @@ export class AppleMusicStreamService {
     connections: 10,
     pipelining: 1,
   });
-  private readonly bridgesByProvider = new Map<string, SpotifyBridgeConfig>();
-  private readonly bridgesById = new Map<string, SpotifyBridgeConfig>();
+  private readonly bridgesByProvider = new Map<string, StreamingServiceConfig>();
+  private readonly bridgesById = new Map<string, StreamingServiceConfig>();
   private readonly bearerTokens = new Map<string, BearerState>();
   private readonly proxySessions = new Map<string, AppleMusicProxySession>();
   private readonly drmKeyCache = new Map<string, AppleMusicDrmKeyCacheEntry>();
@@ -117,7 +117,7 @@ export class AppleMusicStreamService {
   public configureFromConfig(): void {
     this.bridgesByProvider.clear();
     this.bridgesById.clear();
-    const bridges = this.configPort.getConfig().content?.spotify?.bridges ?? [];
+    const bridges = this.configPort.getConfig().content?.streamingServices ?? [];
     const appleBridges = bridges.filter((b) => (b.provider || '').toLowerCase() === 'applemusic');
     const single = appleBridges.length <= 1;
     for (const bridge of appleBridges) {
@@ -442,7 +442,7 @@ export class AppleMusicStreamService {
     streamUrl: string,
     trackId: string,
     isLibrary: boolean,
-    bridge: SpotifyBridgeConfig,
+    bridge: StreamingServiceConfig,
     webPlayback?: any,
   ): Promise<AppleMusicPlaybackResult | null> {
     const drmStreamInfo = await this.resolveCtrp256StreamInfo(webPlayback, headers);
@@ -785,7 +785,7 @@ export class AppleMusicStreamService {
   private async buildStreamPlaybackSource(
     streamUrl: string,
     headers: Record<string, string>,
-    bridge: SpotifyBridgeConfig,
+    bridge: StreamingServiceConfig,
     decryptionKey?: string,
   ): Promise<PlaybackSource> {
     const streamHeaders = this.buildStreamHeaders(headers);
@@ -798,7 +798,7 @@ export class AppleMusicStreamService {
   private async buildDirectProxyPlaybackSource(
     streamUrl: string,
     headers: Record<string, string> | undefined,
-    bridge: SpotifyBridgeConfig,
+    bridge: StreamingServiceConfig,
     decryptionKey?: string,
   ): Promise<PlaybackSource> {
     const { host, port, sessionId } = await this.ensureProxySession(streamUrl, headers, decryptionKey);
@@ -856,7 +856,7 @@ export class AppleMusicStreamService {
   private async buildProxyPlaybackSource(
     streamUrl: string,
     headers: Record<string, string> | undefined,
-    bridge: SpotifyBridgeConfig,
+    bridge: StreamingServiceConfig,
     decryptionKey?: string,
   ): Promise<PlaybackSource> {
     const { host, port, sessionId } = await this.ensureProxySession(streamUrl, headers, decryptionKey);
@@ -876,7 +876,7 @@ export class AppleMusicStreamService {
     };
   }
 
-  private resolvePaceInput(bridge: SpotifyBridgeConfig): boolean {
+  private resolvePaceInput(bridge: StreamingServiceConfig): boolean {
     if (typeof bridge.appleMusicPaceInput === 'boolean') {
       return bridge.appleMusicPaceInput;
     }
@@ -1394,7 +1394,7 @@ export class AppleMusicStreamService {
    */
   private async resolvePlayableCatalog(
     headers: Record<string, string>,
-    bridge: SpotifyBridgeConfig,
+    bridge: StreamingServiceConfig,
     libraryTrackId: string,
     songId?: string,
   ): Promise<{ catalogId: string; webPlayback: any; streamUrl: string; via: 'songId' | 'playParams' | 'relationship' | 'search' } | null> {
@@ -1474,7 +1474,7 @@ export class AppleMusicStreamService {
    */
   private async findReplacementCatalogId(
     headers: Record<string, string>,
-    bridge: SpotifyBridgeConfig,
+    bridge: StreamingServiceConfig,
     info: { name?: string; artistName?: string; albumName?: string },
   ): Promise<string | null> {
     if (!info.name || !info.artistName) return null;
@@ -1531,7 +1531,7 @@ export class AppleMusicStreamService {
 
   private async ensureStorefront(
     headers: Record<string, string>,
-    bridge: SpotifyBridgeConfig,
+    bridge: StreamingServiceConfig,
   ): Promise<string | null> {
     const cached = this.storefrontByBridge.get(bridge.id);
     if (cached) return cached;
@@ -1542,7 +1542,7 @@ export class AppleMusicStreamService {
     return resolved;
   }
 
-  private async buildAuthHeaders(bridge: SpotifyBridgeConfig): Promise<Record<string, string>> {
+  private async buildAuthHeaders(bridge: StreamingServiceConfig): Promise<Record<string, string>> {
     const headers = buildBaseHeaders(bridge.userToken);
     let bearer: string | null = bridge.developerToken ?? getShippedDeveloperToken();
     if (!bearer && bridge.userToken) bearer = await this.ensureBearerToken(bridge);
@@ -1551,11 +1551,11 @@ export class AppleMusicStreamService {
   }
 
   /** Drop the cached bearer for a bridge so the next auth-header build re-scrapes a fresh token. */
-  private invalidateBearer(bridge: SpotifyBridgeConfig): void {
+  private invalidateBearer(bridge: StreamingServiceConfig): void {
     this.bearerTokens.delete(bridge.id);
   }
 
-  private async ensureBearerToken(bridge: SpotifyBridgeConfig): Promise<string | null> {
+  private async ensureBearerToken(bridge: StreamingServiceConfig): Promise<string | null> {
     const key = bridge.id;
     const cached = this.bearerTokens.get(key);
     if (cached?.token && Date.now() - cached.fetchedAt < BEARER_TOKEN_TTL_MS) return cached.token;

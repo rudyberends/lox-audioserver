@@ -163,8 +163,8 @@ function defaultConfig(): AudioServerConfig {
       spotify: {
         clientId: '',
         accounts: [],
-        bridges: [],
       },
+      streamingServices: [],
       tts: {
         provider: { type: 'internal' },
         fallbackToInternal: true,
@@ -199,7 +199,7 @@ function defaultConfig(): AudioServerConfig {
   };
 }
 
-function normalizeContent(config: AudioServerConfig): boolean {
+export function normalizeContent(config: AudioServerConfig): boolean {
   let changed = false;
   const defaults = defaultConfig().content;
   if (!config.content) {
@@ -218,10 +218,30 @@ function normalizeContent(config: AudioServerConfig): boolean {
       config.content.spotify.accounts = [];
       changed = true;
     }
-    if (!Array.isArray(config.content.spotify.bridges)) {
-      config.content.spotify.bridges = [];
-      changed = true;
+  }
+  // Neutral streaming-account surface: non-Spotify accounts live in
+  // content.streamingServices, not the legacy content.spotify.bridges ("Spotify
+  // bridge" disguise that only the Loxone adapter needs). Migrate once — merge
+  // any legacy bridges (dedup by id) and clear the old field so it isn't re-run.
+  if (!Array.isArray(config.content.streamingServices)) {
+    config.content.streamingServices = [];
+    changed = true;
+  }
+  const legacyBridges = config.content.spotify?.bridges;
+  if (Array.isArray(legacyBridges) && legacyBridges.length > 0) {
+    const target = config.content.streamingServices;
+    const seen = new Set(
+      target.map((s) => String(s?.id ?? '').toLowerCase()).filter(Boolean),
+    );
+    for (const bridge of legacyBridges) {
+      const id = String(bridge?.id ?? '').toLowerCase();
+      if (id && !seen.has(id)) {
+        target.push(bridge);
+        seen.add(id);
+      }
     }
+    config.content.spotify.bridges = [];
+    changed = true;
   }
   if (!config.content.tts) {
     config.content.tts = defaults.tts;

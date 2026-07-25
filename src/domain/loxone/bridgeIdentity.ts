@@ -1,4 +1,4 @@
-import type { SpotifyBridgeConfig } from '@/domain/config/types';
+import type { StreamingServiceConfig } from '@/domain/config/types';
 import { parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
 
 /**
@@ -11,13 +11,13 @@ import { parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
  * `spotify@bridge-<service>-<slug>` provider id. That bridge concept is a Loxone
  * ADAPTER detail only — the core speaks service-native. These pure functions are
  * the single place that converts between the two, backed by the bridge registry
- * derived from `content.spotify.bridges`. They import nothing from config/adapters;
+ * derived from `content.streamingServices`. They import nothing from config/adapters;
  * the caller (which owns ConfigPort) supplies the registry.
  */
 
 export interface BridgeRegistry {
   /** Forward: `<service>:<slug>` → bridge config. */
-  byServiceSlug: Map<string, SpotifyBridgeConfig>;
+  byServiceSlug: Map<string, StreamingServiceConfig>;
   /** Reverse: Loxone bridge id → { service, slug }. */
   byBridgeId: Map<string, { service: string; slug: string }>;
   /** Per-service account count, to decide slug-omission eligibility. */
@@ -52,9 +52,9 @@ const serviceSlugKey = (service: string, slug: string): string =>
  * consumes only the bridge list. Disabled bridges are skipped.
  */
 export function buildBridgeRegistry(
-  bridges: readonly SpotifyBridgeConfig[] | undefined | null,
+  bridges: readonly StreamingServiceConfig[] | undefined | null,
 ): BridgeRegistry {
-  const byServiceSlug = new Map<string, SpotifyBridgeConfig>();
+  const byServiceSlug = new Map<string, StreamingServiceConfig>();
   const byBridgeId = new Map<string, { service: string; slug: string }>();
   const accountCountByService = new Map<string, number>();
   if (Array.isArray(bridges)) {
@@ -127,7 +127,7 @@ export function toLoxoneAudiopath(serviceNative: string, registry: BridgeRegistr
   if (service === 'spotify') {
     return raw;
   }
-  let bridge: SpotifyBridgeConfig | undefined;
+  let bridge: StreamingServiceConfig | undefined;
   if (slug) {
     bridge = registry.byServiceSlug.get(serviceSlugKey(service, slug));
   } else if ((registry.accountCountByService.get(service) ?? 0) === 1) {

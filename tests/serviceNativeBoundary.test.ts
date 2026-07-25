@@ -6,7 +6,7 @@ import {
   toServiceNative,
   toLoxoneAudiopath,
 } from '../src/domain/loxone/bridgeIdentity';
-import type { SpotifyBridgeConfig } from '../src/domain/config/types';
+import type { StreamingServiceConfig } from '../src/domain/config/types';
 import { sanitizeTitle, isUriLike } from '../src/application/zones/helpers/stateHelpers';
 import { sanitizeStation } from '../src/application/zones/helpers/queueHelpers';
 
@@ -66,7 +66,7 @@ test('queue emit: non-streaming audiopaths pass through untouched', () => {
 // State emit round-trip: the core is service-native; the notifier translates back
 // to spotify@bridge so the native now-playing keeps service/account attribution.
 test('state emit round-trip: service-native ⇄ spotify@bridge is consistent', () => {
-  const bridges: SpotifyBridgeConfig[] = [
+  const bridges: StreamingServiceConfig[] = [
     { id: 'bridge-applemusic-p0gngd', label: 'Apple Music', provider: 'applemusic' },
   ];
   const reg = buildBridgeRegistry(bridges);
@@ -107,7 +107,7 @@ function resolveServiceplayPayload(decoded: string): string {
 }
 
 test('container playback intake: measured device payload resolves to real service', () => {
-  const bridges: SpotifyBridgeConfig[] = [
+  const bridges: StreamingServiceConfig[] = [
     { id: 'bridge-applemusic-p0gngd', label: 'Apple Music', provider: 'applemusic' },
   ];
   const reg = buildBridgeRegistry(bridges);

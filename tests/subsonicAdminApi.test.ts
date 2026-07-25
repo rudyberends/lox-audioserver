@@ -27,12 +27,10 @@ function makeConfigPort(
       users: deployment.users ?? [],
     },
     content: {
-      spotify: {
-        bridges: [
-          { id: BRIDGE_ID, provider: 'applemusic', label: 'Apple Music', enabled: true },
-          { id: 'bridge-sc', provider: 'soundcloud', enabled: true },
-        ],
-      },
+      streamingServices: [
+        { id: BRIDGE_ID, provider: 'applemusic', label: 'Apple Music', enabled: true },
+        { id: 'bridge-sc', provider: 'soundcloud', enabled: true },
+      ],
       ...(subsonic ? { subsonic } : {}),
     },
   } as unknown as AudioServerConfig;

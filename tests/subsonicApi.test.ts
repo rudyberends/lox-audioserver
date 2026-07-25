@@ -49,12 +49,10 @@ function makeHarness(options: { directoryLimit?: number; bigFolderSize?: number 
           enabled: true,
           ...(options.directoryLimit ? { directoryLimit: options.directoryLimit } : {}),
         },
-        spotify: {
-          bridges: [
-            { id: BRIDGE_ID, provider: 'applemusic', label: 'Apple Music', enabled: true },
-            { id: 'bridge-off', provider: 'tidal', label: 'Tidal', enabled: false },
-          ],
-        },
+        streamingServices: [
+          { id: BRIDGE_ID, provider: 'applemusic', label: 'Apple Music', enabled: true },
+          { id: 'bridge-off', provider: 'tidal', label: 'Tidal', enabled: false },
+        ],
       },
     }),
   } as unknown as ConfigPort;
@@ -404,7 +402,7 @@ test('subsonic api: a disabled config serves nothing', async () => {
   const configPort = {
     getConfig: () => ({
       system: { audioserver: { mode: 'standalone', paired: false }, users: [] },
-      content: { subsonic: { enabled: false }, spotify: { bridges: [] } },
+      content: { subsonic: { enabled: false }, streamingServices: [] },
     }),
   } as unknown as ConfigPort;
   const api = new SubsonicApi(
@@ -424,7 +422,7 @@ test('subsonic api: enabled with no user store and no Miniserver refuses everyon
   const configPort = {
     getConfig: () => ({
       system: { audioserver: { mode: 'standalone', paired: false }, users: [] },
-      content: { subsonic: { enabled: true }, spotify: { bridges: [] } },
+      content: { subsonic: { enabled: true }, streamingServices: [] },
     }),
   } as unknown as ConfigPort;
   const api = new SubsonicApi(

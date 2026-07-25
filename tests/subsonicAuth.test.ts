@@ -35,7 +35,7 @@ function makeAuth(options: {
       users: options.local ? [{ username: options.local.username, password: options.local.password }] : [],
     },
     content: {
-      spotify: { bridges: [] },
+      streamingServices: [],
       subsonic: { enabled: true },
     },
   } as unknown as AudioServerConfig;

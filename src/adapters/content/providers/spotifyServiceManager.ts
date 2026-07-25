@@ -6,7 +6,7 @@ import type {
   ContentServiceAccount,
   PlaylistEntry,
   SpotifyAccountConfig,
-  SpotifyBridgeConfig,
+  StreamingServiceConfig,
 } from '@/ports/ContentTypes';
 import {
   SpotifyAccountProvider,
@@ -74,14 +74,14 @@ export class SpotifyServiceManager {
     SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider | TidalProvider | YtMusicProvider | YoutubeProvider | SoundCloudProvider
   >();
   private accounts: SpotifyAccountState[] = [];
-  private bridges: SpotifyBridgeConfig[] = [];
+  private bridges: StreamingServiceConfig[] = [];
   private clientId = resolveSpotifyClientId();
 
   constructor(
     configPort: ConfigPort,
     accounts: SpotifyAccountConfig[] = [],
     clientId?: string,
-    bridges: SpotifyBridgeConfig[] = [],
+    bridges: StreamingServiceConfig[] = [],
   ) {
     this.configPort = configPort;
     this.reload(accounts, clientId, bridges);
@@ -93,7 +93,7 @@ export class SpotifyServiceManager {
   public reload(
     accounts: SpotifyAccountConfig[] = [],
     clientId?: string,
-    bridges: SpotifyBridgeConfig[] = [],
+    bridges: StreamingServiceConfig[] = [],
   ): void {
     // Keep the previous instances so unchanged accounts can be REUSED rather than
     // recreated. Recreating a Spotify provider mid-startup spawns a second token
@@ -969,7 +969,7 @@ export class SpotifyServiceManager {
     return `spotify@${id}`;
   }
 
-  private bridgeProviderId(bridge: SpotifyBridgeConfig): ProviderId {
+  private bridgeProviderId(bridge: StreamingServiceConfig): ProviderId {
     return this.providerIdFor(bridge.id);
   }
 
@@ -980,7 +980,7 @@ export class SpotifyServiceManager {
    * stays `spotify@<bridgeId>` (see bridgeProviderId). The Loxone adapter
    * translates between the two at the protocol boundary.
    */
-  private serviceNativePrefixFor(bridge: SpotifyBridgeConfig): string {
+  private serviceNativePrefixFor(bridge: StreamingServiceConfig): string {
     const service = (bridge.provider || 'spotify').toLowerCase();
     const sameServiceCount = (this.bridges ?? []).filter(
       (b) => b && b.enabled !== false && (b.provider || '').toLowerCase() === service,
@@ -1104,7 +1104,7 @@ export class SpotifyServiceManager {
     }
   }
 
-  private resolveBridgeSourceAccount(bridge: SpotifyBridgeConfig): SpotifyAccountState | null {
+  private resolveBridgeSourceAccount(bridge: StreamingServiceConfig): SpotifyAccountState | null {
     if (!this.accounts.length) {
       this.log.warn('bridge provider skipped; no spotify accounts configured', { bridge: bridge.id });
       return null;
@@ -1247,8 +1247,8 @@ export class SpotifyServiceManager {
 }
 
 function normalizeSpotifyConfig(
-  spotifyCfg: { accounts?: SpotifyAccountConfig[]; clientId?: string; bridges?: SpotifyBridgeConfig[] } | undefined,
-): { accounts: SpotifyAccountConfig[]; clientId?: string; bridges: SpotifyBridgeConfig[] } {
+  spotifyCfg: { accounts?: SpotifyAccountConfig[]; clientId?: string; bridges?: StreamingServiceConfig[] } | undefined,
+): { accounts: SpotifyAccountConfig[]; clientId?: string; bridges: StreamingServiceConfig[] } {
   const cfg = spotifyCfg ?? { accounts: [], bridges: [] };
   return {
     accounts: cfg.accounts ?? [],
@@ -1259,10 +1259,14 @@ function normalizeSpotifyConfig(
 
 function loadSpotifyConfig(
   configPort: ConfigPort,
-): { accounts: SpotifyAccountConfig[]; clientId?: string; bridges: SpotifyBridgeConfig[] } {
+): { accounts: SpotifyAccountConfig[]; clientId?: string; bridges: StreamingServiceConfig[] } {
   try {
     const cfg = configPort.getConfig();
-    return normalizeSpotifyConfig(cfg.content?.spotify);
+    const normalized = normalizeSpotifyConfig(cfg.content?.spotify);
+    // Non-Spotify accounts live in the neutral content.streamingServices; the
+    // manager still refers to them as "bridges" internally (Loxone concept).
+    normalized.bridges = cfg.content?.streamingServices ?? normalized.bridges;
+    return normalized;
   } catch {
     return { accounts: [], bridges: [] };
   }

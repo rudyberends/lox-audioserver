@@ -1,5 +1,5 @@
 import type { ConfigPort } from '@/ports/ConfigPort';
-import type { SpotifyBridgeConfig } from '@/domain/config/types';
+import type { StreamingServiceConfig } from '@/domain/config/types';
 import { MusicAssistantApi } from './musicAssistantApi';
 
 /**
@@ -9,8 +9,8 @@ import { MusicAssistantApi } from './musicAssistantApi';
 export function findMusicAssistantBridge(
   config: ConfigPort,
   bridgeId: string,
-): SpotifyBridgeConfig | null {
-  const bridges = config.getConfig().content?.spotify?.bridges ?? [];
+): StreamingServiceConfig | null {
+  const bridges = config.getConfig().content?.streamingServices ?? [];
   const target = bridgeId.trim().toLowerCase();
   if (target) {
     const match = bridges.find(
@@ -29,14 +29,14 @@ export function findMusicAssistantBridge(
 }
 
 export type MaBridgeConnection = {
-  bridge: SpotifyBridgeConfig;
+  bridge: StreamingServiceConfig;
   host: string;
   port: number;
   apiKey: string | undefined;
 };
 
 /** Normalise a bridge config into the connection params the API expects. */
-export function resolveMaBridgeConnection(bridge: SpotifyBridgeConfig): MaBridgeConnection {
+export function resolveMaBridgeConnection(bridge: StreamingServiceConfig): MaBridgeConnection {
   const host = (bridge.host || '').trim() || '127.0.0.1';
   const port = typeof bridge.port === 'number' && bridge.port > 0 ? bridge.port : 8095;
   const apiKey =
@@ -45,7 +45,7 @@ export function resolveMaBridgeConnection(bridge: SpotifyBridgeConfig): MaBridge
 }
 
 /** Acquire a refcounted MusicAssistantApi instance for the given bridge config. */
-export function acquireMaApiForBridge(bridge: SpotifyBridgeConfig): MusicAssistantApi {
+export function acquireMaApiForBridge(bridge: StreamingServiceConfig): MusicAssistantApi {
   const conn = resolveMaBridgeConnection(bridge);
   return MusicAssistantApi.acquire(conn.host, conn.port, conn.apiKey);
 }

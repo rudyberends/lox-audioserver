@@ -109,7 +109,7 @@ export function buildBrowsableServices(
     });
   }
 
-  const bridges = config.getConfig().content.spotify?.bridges ?? [];
+  const bridges = config.getConfig().content.streamingServices ?? [];
   for (const bridge of bridges) {
     if (!bridge || bridge.enabled === false || !bridge.id) {
       continue;

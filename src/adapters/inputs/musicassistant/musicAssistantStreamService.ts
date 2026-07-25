@@ -241,7 +241,7 @@ export class MusicAssistantStreamService {
     this.pendingStreamRequests.clear();
     try {
       const cfg = this.config.getConfig();
-      const bridge = (cfg.content?.spotify?.bridges ?? []).find(
+      const bridge = (cfg.content?.streamingServices ?? []).find(
         (b) => b?.provider?.toLowerCase() === 'musicassistant' || b?.id?.toLowerCase() === 'musicassistant',
       );
       if (!bridge || bridge.enabled === false) {

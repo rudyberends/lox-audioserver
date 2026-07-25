@@ -7,18 +7,18 @@ import {
   toServiceNative,
   toLoxoneAudiopath,
 } from '../src/domain/loxone/bridgeIdentity';
-import type { SpotifyBridgeConfig } from '../src/domain/config/types';
+import type { StreamingServiceConfig } from '../src/domain/config/types';
 
 // --- Fixtures ---------------------------------------------------------------
 
 // Single-account-per-service (mirrors the real config: applemusic + soundcloud).
-const SINGLE: SpotifyBridgeConfig[] = [
+const SINGLE: StreamingServiceConfig[] = [
   { id: 'bridge-applemusic-p0gngd', label: 'Apple Music', provider: 'applemusic' },
   { id: 'bridge-soundcloud-e0hmz5', label: 'SoundCloud', provider: 'soundcloud' },
 ];
 
 // Two accounts of the SAME service (synthetic multi-account case).
-const MULTI: SpotifyBridgeConfig[] = [
+const MULTI: StreamingServiceConfig[] = [
   { id: 'bridge-applemusic-aaa111', label: 'Apple A', provider: 'applemusic' },
   { id: 'bridge-applemusic-bbb222', label: 'Apple B', provider: 'applemusic' },
 ];

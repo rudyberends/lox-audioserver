@@ -1,6 +1,6 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
-import type { SpotifyBridgeConfig } from '@/domain/config/types';
+import type { StreamingServiceConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import { decodeAudiopath, parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
 import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
@@ -25,15 +25,15 @@ type YtMusicPlaybackResult = {
 type YtMusicTrackRequest = {
   providerId: string;
   videoId: string;
-  bridge: SpotifyBridgeConfig;
+  bridge: StreamingServiceConfig;
 };
 
 type OutputErrorHandler = (zoneId: number, reason?: string) => void;
 
 export class YtMusicStreamService {
   private readonly log = createLogger('Content', 'YTMusicStream');
-  private readonly bridgesByProvider = new Map<string, SpotifyBridgeConfig>();
-  private readonly bridgesById = new Map<string, SpotifyBridgeConfig>();
+  private readonly bridgesByProvider = new Map<string, StreamingServiceConfig>();
+  private readonly bridgesById = new Map<string, StreamingServiceConfig>();
   private readonly configPort: ConfigPort;
   private readonly cookieFilesByBridgeId = new Map<string, { cookie: string; path: string }>();
   private readonly streamCache = new Map<string, { playbackSource: PlaybackSource; expiresAt: number }>();
@@ -54,7 +54,7 @@ export class YtMusicStreamService {
     this.bridgesById.clear();
     // Cookie files and cache entries are keyed by bridge id; keep them so playback isn't disrupted
     // across config refreshes (cookie updates will rewrite the file on demand).
-    const bridges = this.configPort.getConfig().content?.spotify?.bridges ?? [];
+    const bridges = this.configPort.getConfig().content?.streamingServices ?? [];
     const ytmusicBridges = bridges.filter((b) => (b.provider || '').toLowerCase() === 'ytmusic');
     const single = ytmusicBridges.length <= 1;
     for (const bridge of ytmusicBridges) {
@@ -228,7 +228,7 @@ export class YtMusicStreamService {
     return { timeoutMs: 20_000 };
   }
 
-  private scheduleWarmup(bridge: SpotifyBridgeConfig): void {
+  private scheduleWarmup(bridge: StreamingServiceConfig): void {
     // Best-effort only. We do it on config refresh so the first real playback is fast.
     // Avoid piling on multiple warmups for the same cookie.
     const cookie = typeof bridge?.ytmusicCookie === 'string' ? bridge.ytmusicCookie.trim() : '';
@@ -291,7 +291,7 @@ export class YtMusicStreamService {
     timeout.unref?.();
   }
 
-  private async ensureCookieFile(bridge: SpotifyBridgeConfig): Promise<string | null> {
+  private async ensureCookieFile(bridge: StreamingServiceConfig): Promise<string | null> {
     const cookie = typeof bridge?.ytmusicCookie === 'string' ? bridge.ytmusicCookie.trim() : '';
     if (!cookie) {
       return null;

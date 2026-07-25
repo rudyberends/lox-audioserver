@@ -7,7 +7,7 @@ import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInput
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { MusicAssistantStreamService } from '@/adapters/inputs/musicassistant/musicAssistantStreamService';
-import type { SpotifyBridgeConfig } from '@/domain/config/types';
+import type { StreamingServiceConfig } from '@/domain/config/types';
 import {
   buildSpotifyAuthLink,
   deleteSpotifyAccount,
@@ -88,19 +88,39 @@ export function buildSpotifyRoutes(deps: SpotifyHandlerDeps): Route[] {
         await handleSpotifyAccountLink(res, deps);
       },
     },
+    // Neutral streaming-service account routes. Non-Spotify services (Apple
+    // Music, Tidal, Deezer, …) are first-class accounts, not "Spotify bridges";
+    // the bridge disguise is a Loxone-adapter detail. The legacy
+    // /spotify/bridges routes are kept as deprecated aliases.
+    {
+      method: 'POST',
+      pattern: /^\/content\/services$/,
+      handler: async (req, res) => {
+        await handleStreamingServiceCreate(req, res, deps);
+      },
+    },
+    {
+      method: 'DELETE',
+      pattern: /^\/content\/services\/([^/]+)$/,
+      handler: async (_req, res, match) => {
+        const serviceId = decodeURIComponent(match[1] ?? '');
+        await handleStreamingServiceDelete(serviceId, res, deps);
+      },
+    },
+    // Deprecated aliases (old adminui / cached clients).
     {
       method: 'POST',
       pattern: /^\/spotify\/bridges$/,
       handler: async (req, res) => {
-        await handleSpotifyBridgeCreate(req, res, deps);
+        await handleStreamingServiceCreate(req, res, deps);
       },
     },
     {
       method: 'DELETE',
       pattern: /^\/spotify\/bridges\/([^/]+)$/,
       handler: async (_req, res, match) => {
-        const bridgeId = decodeURIComponent(match[1] ?? '');
-        await handleSpotifyBridgeDelete(bridgeId, res, deps);
+        const serviceId = decodeURIComponent(match[1] ?? '');
+        await handleStreamingServiceDelete(serviceId, res, deps);
       },
     },
   ];
@@ -158,18 +178,18 @@ async function handleSpotifyLibrespotStatus(
   }
 }
 
-async function handleSpotifyBridgeCreate(
+async function handleStreamingServiceCreate(
   req: IncomingMessage,
   res: ServerResponse,
   deps: SpotifyHandlerDeps,
 ): Promise<void> {
-  const body = (await deps.readJsonBody(req, res)) as Partial<SpotifyBridgeConfig> | null;
+  const body = (await deps.readJsonBody(req, res)) as Partial<StreamingServiceConfig> | null;
   if (res.writableEnded) {
     return;
   }
   const provider = typeof body?.provider === 'string' ? body.provider.trim().toLowerCase() : '';
   if (!provider) {
-    deps.sendJson(res, 400, { error: 'invalid-bridge-payload' });
+    deps.sendJson(res, 400, { error: 'invalid-service-payload' });
     return;
   }
   const isMusicAssistant = provider === 'musicassistant';
@@ -241,7 +261,7 @@ async function handleSpotifyBridgeCreate(
               ? 'YouTube Music'
               : id;
 
-  const bridge: SpotifyBridgeConfig = {
+  const bridge: StreamingServiceConfig = {
     id,
     label: typeof body?.label === 'string' && body.label.trim() ? body.label.trim() : defaultLabel,
     provider,
@@ -297,18 +317,17 @@ async function handleSpotifyBridgeCreate(
   try {
     await deps.configPort.updateConfig((cfg) => {
       if (!cfg.content) cfg.content = defaultConfig().content;
-      if (!cfg.content.spotify) cfg.content.spotify = defaultConfig().content.spotify;
-      if (!Array.isArray(cfg.content.spotify.bridges)) cfg.content.spotify.bridges = [];
-      const bridges = cfg.content.spotify.bridges;
+      if (!Array.isArray(cfg.content.streamingServices)) cfg.content.streamingServices = [];
+      const bridges = cfg.content.streamingServices;
       const idx = bridges.findIndex(
         (b) => typeof b?.id === 'string' && b.id.trim().toLowerCase() === bridge.id.toLowerCase(),
       );
       if (idx >= 0) {
-        const cleaned = { ...bridges[idx], ...bridge } as SpotifyBridgeConfig & { storefront?: string };
+        const cleaned = { ...bridges[idx], ...bridge } as StreamingServiceConfig & { storefront?: string };
         delete cleaned.storefront;
         bridges[idx] = cleaned;
       } else {
-        const cleaned = bridge as SpotifyBridgeConfig & { storefront?: string };
+        const cleaned = bridge as StreamingServiceConfig & { storefront?: string };
         delete cleaned.storefront;
         bridges.push(cleaned);
       }
@@ -338,24 +357,24 @@ async function handleSpotifyBridgeCreate(
   }
 }
 
-async function handleSpotifyBridgeDelete(
+async function handleStreamingServiceDelete(
   bridgeId: string,
   res: ServerResponse,
   deps: SpotifyHandlerDeps,
 ): Promise<void> {
   if (!bridgeId) {
-    deps.sendJson(res, 400, { error: 'invalid-bridge-id' });
+    deps.sendJson(res, 400, { error: 'invalid-service-id' });
     return;
   }
   try {
     const cfgBefore = deps.configPort.getConfig();
-    const existing = (cfgBefore.content?.spotify?.bridges ?? []).find(
+    const existing = (cfgBefore.content?.streamingServices ?? []).find(
       (b) => typeof b?.id === 'string' && b.id.trim().toLowerCase() === bridgeId.trim().toLowerCase(),
     );
     await deps.configPort.updateConfig((cfg) => {
-      if (!cfg.content?.spotify?.bridges) return;
-      const current = cfg.content.spotify.bridges ?? [];
-      cfg.content.spotify.bridges = current.filter(
+      if (!cfg.content?.streamingServices) return;
+      const current = cfg.content.streamingServices ?? [];
+      cfg.content.streamingServices = current.filter(
         (b) => typeof b?.id !== 'string' || b.id.trim().toLowerCase() !== bridgeId.trim().toLowerCase(),
       );
     });

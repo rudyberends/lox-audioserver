@@ -10,6 +10,7 @@ import './architecture/importBoundaries.test';
 import './sessionKey.test';
 import './serviceNativeIdentity.test';
 import './serviceNativeBoundary.test';
+import './streamingServicesMigration.test';
 import './engine/rollingBuffer.test';
 import './engine/pcmFrameAligner.test';
 import './engine/codecPolicy.test';

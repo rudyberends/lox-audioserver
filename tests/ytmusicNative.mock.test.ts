@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { test } from './testHarness';
-import type { SpotifyBridgeConfig } from '../src/domain/config/types';
+import type { StreamingServiceConfig } from '../src/domain/config/types';
 import { YtMusicProvider } from '../src/adapters/content/providers/ytmusic/ytmusicProvider';
 import { YtMusicStreamService } from '../src/adapters/content/providers/ytmusic/ytmusicStreamService';
 
@@ -9,7 +9,7 @@ import { YtMusicStreamService } from '../src/adapters/content/providers/ytmusic/
 const scriptsDir = path.resolve(__dirname, '..', 'scripts');
 process.env.PATH = `${scriptsDir}:${process.env.PATH ?? ''}`;
 
-function makeBridge(id: string): SpotifyBridgeConfig {
+function makeBridge(id: string): StreamingServiceConfig {
   return {
     id,
     label: 'YouTube Music (Mock)',
@@ -62,7 +62,7 @@ test('ytmusic native: stream service resolves a direct url via yt-dlp', async ()
 
   const configPort = {
     getConfig: () => ({
-      content: { spotify: { bridges: [bridge] } },
+      content: { streamingServices: [bridge] },
     }),
   } as any;
 
