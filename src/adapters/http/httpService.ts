@@ -69,7 +69,7 @@ export class HttpService {
   private readonly sendspin: SendspinGateway;
   private readonly snapcast: SnapcastGateway;
   private readonly lmsCli: LmsCliServer;
-  private readonly loxoneProcessor: LoxoneCommandProcessor;
+  private readonly loxoneProcessor: LoxoneCommandProcessor | null;
   private readonly connectionRegistry: ConnectionRegistry;
   private readonly zoneManager: ZoneManagerFacade;
   private server?: http.Server;
@@ -104,7 +104,7 @@ export class HttpService {
       mdnsPort: MdnsPort;
       sonnCorePeers: SonnCorePeerRegistry;
       alertFiles: AlertFilesPort;
-      loxoneProcessor: LoxoneCommandProcessor;
+      loxoneProcessor: LoxoneCommandProcessor | null;
       connectionRegistry: ConnectionRegistry;
       browserZoneRegistry: BrowserZoneRegistry;
       streamProxyRoutes: StreamProxyRoute[];
@@ -248,6 +248,12 @@ export class HttpService {
   ): Promise<void> {
     const url = req.url ?? '/';
     const command = url.replace(/^\//, '');
+    // Standalone: the Loxone command dialect is disabled on the shared gateway.
+    if (!this.loxoneProcessor) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'loxone-disabled' }));
+      return;
+    }
     try {
       const body = await this.readRequestBody(req);
       const response = await this.loxoneProcessor.execute(command, body);

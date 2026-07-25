@@ -376,8 +376,19 @@ export function createRuntime(): Runtime {
     logManager.configure({ level: logLevel });
     const log = createLogger('Server');
 
+    // "uit is uit": in standalone mode the server exposes no Loxone protocol at
+    // all — neither the dedicated Miniserver/native-app server (7091/7095 + UDP
+    // discovery) nor the Loxone command dialect on the shared :7090 gateway.
+    // Only the neutral surfaces run (DLNA MediaServer, Subsonic, admin API, the
+    // /audio/events state mirror). The own player, still a Loxone client today,
+    // is knowingly disabled here until it moves to a native API.
+    const deploymentMode = storedConfig.system?.audioserver?.mode ?? 'loxone';
+    const loxoneEnabled = deploymentMode !== 'standalone';
+
     log.info('bootstrapping audio server', {
       env: config.env.nodeEnv,
+      mode: deploymentMode,
+      loxoneEnabled,
     });
 
     await zoneManager.initialize();
@@ -399,25 +410,30 @@ export function createRuntime(): Runtime {
     await squeezeliteCore.start();
     await squeezeliteCli.start();
 
-    const loxoneProcessor = new LoxoneCommandProcessor(config.loxone, {
-      onRestart: handleSoftRestart,
-      notifier: ports.notifier,
-      loxoneNotifier,
-      configService: loxoneConfigService,
-      zoneManager,
-      configPort,
-      lineInRegistry,
-      sendspinLineInService,
-      spotifyInputService,
-      recentsManager,
-      favoritesManager,
-      groupManager,
-      groupTracker,
-      fadeController: fadeControllerPort,
-      alerts: alertsPort,
-      contentManager,
-      sonnCorePeers,
-    });
+    // Only wire the Loxone command engine when the Loxone role is enabled. In
+    // standalone it stays null and the shared :7090 gateway rejects /audio/...
+    // commands (see HttpService.handleLoxoneCommand).
+    const loxoneProcessor = loxoneEnabled
+      ? new LoxoneCommandProcessor(config.loxone, {
+          onRestart: handleSoftRestart,
+          notifier: ports.notifier,
+          loxoneNotifier,
+          configService: loxoneConfigService,
+          zoneManager,
+          configPort,
+          lineInRegistry,
+          sendspinLineInService,
+          spotifyInputService,
+          recentsManager,
+          favoritesManager,
+          groupManager,
+          groupTracker,
+          fadeController: fadeControllerPort,
+          alerts: alertsPort,
+          contentManager,
+          sonnCorePeers,
+        })
+      : null;
 
     browserZoneRegistry = new BrowserZoneRegistry(zoneManager);
 
@@ -483,14 +499,19 @@ export function createRuntime(): Runtime {
       lineInRegistry,
       snapcastCore,
     });
-    loxoneService = new LoxoneHttpService(config.loxone, {
-      host: config.env.hostname,
-      processor: loxoneProcessor,
-      connectionRegistry,
-      serverHeartbeat,
-      zoneManager,
-      configPort,
-    });
+    // Dedicated Loxone protocol server (7091 native-app WS + 7095 Miniserver
+    // HTTP + UDP discovery). Skipped entirely in standalone. Gating on the
+    // processor (non-null iff the Loxone role is enabled) narrows the type here.
+    if (loxoneProcessor) {
+      loxoneService = new LoxoneHttpService(config.loxone, {
+        host: config.env.hostname,
+        processor: loxoneProcessor,
+        connectionRegistry,
+        serverHeartbeat,
+        zoneManager,
+        configPort,
+      });
+    }
 
     await httpService.start();
     await networkService.start();
@@ -516,8 +537,11 @@ export function createRuntime(): Runtime {
     mdnsServices.length = 0;
     mdnsServices.push(sendspinServerAdvertiser, sonnCoreMdnsService, snapcastMdnsService);
     mdnsServices.forEach((service) => service.start());
-    await loxoneService.start();
-    await notifyMiniserverStartup(storedConfig);
+    // No Loxone server and no Miniserver handshake in standalone.
+    if (loxoneService) {
+      await loxoneService.start();
+      await notifyMiniserverStartup(storedConfig);
+    }
 
     log.info('startup complete');
   }
