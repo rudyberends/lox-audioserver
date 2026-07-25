@@ -5,6 +5,7 @@ import { createContentManager } from '@/adapters/content/contentManager';
 import { createContentAdapter } from '@/adapters/content/ContentAdapter';
 import { toLoxoneAudiopath } from '@/domain/loxone/bridgeIdentity';
 import { MediaServer } from '@/adapters/mediaserver/mediaServer';
+import { SubsonicApi } from '@/adapters/subsonic/subsonicApi';
 import { SsdpAdvertiser } from '@sonn-audio/node-upnp';
 import { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
 import { CustomRadioStore } from '@/adapters/content/providers/customRadioStore';
@@ -433,6 +434,11 @@ export function createRuntime(): Runtime {
       ssdpAdvertiser,
     );
 
+    // Subsonic API: exposes the same browsable content (library, radio, bridges)
+    // over the Subsonic REST protocol at /rest/*. Stateless and gated on
+    // content.subsonic.enabled, so it needs no lifecycle of its own.
+    const subsonicApi = new SubsonicApi(configPort, contentManager, contentAdapter, engine);
+
     httpService = new HttpService(config.http, {
       onReinitialize: handleReinitialize,
       notifier: ports.notifier,
@@ -470,6 +476,7 @@ export function createRuntime(): Runtime {
         spotifyStreamProxyService.getProxyRoute(),
       ],
       mediaServer,
+      subsonic: subsonicApi,
       dlnaInput: dlnaInputService,
     });
     networkService = new NetworkService({

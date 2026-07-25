@@ -46,6 +46,8 @@ type AdminApiOptions = {
   alertFiles: AlertFilesPort;
   browserZoneRegistry: BrowserZoneRegistry;
   lineInApi: LineInApiHandler;
+  /** Gateway port, so handlers can build client-facing URLs. */
+  httpPort: number;
 };
 
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
@@ -57,6 +59,9 @@ import { MiniserverAuthClient } from '@/adapters/http/adminApi/auth/miniserverAu
 import { buildAuthRoutes } from '@/adapters/http/adminApi/auth/authHandlers';
 import { buildAppleMusicRoutes } from '@/adapters/http/adminApi/applemusic/appleMusicHandlers';
 import { buildAlertsRoutes } from '@/adapters/http/adminApi/alerts/alertsHandlers';
+import { buildSubsonicRoutes } from '@/adapters/http/adminApi/subsonic/subsonicHandlers';
+import { hasAdminUser } from '@/application/auth/localUsers';
+import { buildUsersRoutes } from '@/adapters/http/adminApi/users/usersHandlers';
 import type { AlertFilesPort } from '@/ports/AlertFilesPort';
 import { buildTransportsRoutes } from '@/adapters/http/adminApi/transports/transportsHandlers';
 import { buildContentRoutes } from '@/adapters/http/adminApi/content/contentHandlers';
@@ -168,6 +173,7 @@ export class AdminApiHandler {
   private readonly alertFiles: AlertFilesPort;
   private readonly browserZoneRegistry: BrowserZoneRegistry;
   private readonly lineInApi: LineInApiHandler;
+  private readonly httpPort: number;
   private readonly clockOffsetTracker = new ClockOffsetTracker(this.log);
   private readonly routes: Route[];
   private readonly sessionStore = new AdminSessionStore();
@@ -197,6 +203,7 @@ export class AdminApiHandler {
     this.alertFiles = options.alertFiles;
     this.browserZoneRegistry = options.browserZoneRegistry;
     this.lineInApi = options.lineInApi;
+    this.httpPort = options.httpPort;
     this.routes = this.buildRoutes();
   }
 
@@ -308,6 +315,19 @@ export class AdminApiHandler {
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),
+      ...buildUsersRoutes({
+        log: this.log,
+        configPort: this.configPort,
+        readJsonBody: (req, res, max) => readJsonBody(req, res, max),
+        sendJson: (res, status, payload) => sendJson(res, status, payload),
+      }),
+      ...buildSubsonicRoutes({
+        log: this.log,
+        configPort: this.configPort,
+        httpPort: this.httpPort,
+        readJsonBody: (req, res, max) => readJsonBody(req, res, max),
+        sendJson: (res, status, payload) => sendJson(res, status, payload),
+      }),
       ...buildLineInRoutes({
         log: this.log,
         lineInApi: this.lineInApi,
@@ -357,7 +377,13 @@ export class AdminApiHandler {
 
     try {
       const cfg = this.configPort.getConfig();
-      if (cfg.system.audioserver.paired && cfg.system.audioserver.authEnabled !== false && !isPublicAdminApiRoute(pathname, method)) {
+      // Authentication applies once there is somebody to authenticate as: a
+      // Miniserver pairing, or a server-local admin account. Gating on
+      // `hasAdminUser` rather than "any user" matters — a stream-only Subsonic
+      // account must not lock an operator out of an otherwise open admin UI.
+      const authRequired =
+        cfg.system.audioserver.paired || hasAdminUser(this.configPort);
+      if (authRequired && cfg.system.audioserver.authEnabled !== false && !isPublicAdminApiRoute(pathname, method)) {
         const session = this.sessionStore.getFromRequest(req);
         if (!session) {
           sendJson(res, 401, { error: 'auth-required' });

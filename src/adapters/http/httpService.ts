@@ -47,6 +47,7 @@ import type { LmsCliServer } from '@/adapters/outputs/squeezelite/lmsCliServer';
 import type { MdnsPort } from '@/ports/MdnsPort';
 import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
 import type { MediaServer } from '@/adapters/mediaserver/mediaServer';
+import type { SubsonicApi } from '@/adapters/subsonic/subsonicApi';
 import type { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
 
 /**
@@ -60,6 +61,7 @@ export class HttpService {
   private readonly audioStream: AudioStreamHandler;
   private readonly audioProxy: AudioProxyHandler;
   private readonly mediaServer?: MediaServer;
+  private readonly subsonic?: SubsonicApi;
   private readonly dlnaInput?: DlnaInputService;
   private readonly streamProxyRoutes: StreamProxyRoute[];
   private readonly lineInIngestWs: LineInIngestWebSocket;
@@ -107,6 +109,7 @@ export class HttpService {
       browserZoneRegistry: BrowserZoneRegistry;
       streamProxyRoutes: StreamProxyRoute[];
       mediaServer?: MediaServer;
+      subsonic?: SubsonicApi;
       dlnaInput?: DlnaInputService;
     },
   ) {
@@ -135,6 +138,7 @@ export class HttpService {
       alertFiles: options.alertFiles,
       browserZoneRegistry: options.browserZoneRegistry,
       lineInApi: this.lineInApi,
+      httpPort: config.port,
     });
     this.music = new MusicStreamingHandler(config.musicDir);
     this.staticFiles = new StaticFileHandler(config.publicDir);
@@ -146,6 +150,7 @@ export class HttpService {
     );
     this.audioProxy = new AudioProxyHandler(options.zoneManager);
     this.mediaServer = options.mediaServer;
+    this.subsonic = options.subsonic;
     this.dlnaInput = options.dlnaInput;
     this.streamProxyRoutes = options.streamProxyRoutes;
     this.lineInIngestWs = new LineInIngestWebSocket(options.lineInRegistry);
@@ -362,6 +367,14 @@ export class HttpService {
 
     if (this.mediaServer?.matches(pathname)) {
       await this.mediaServer.handle(req, res, pathname);
+      return;
+    }
+
+    // Subsonic API: the same content the MediaServer exposes over DLNA, served
+    // as an authenticated REST surface at /rest/*. Reachable from anywhere the
+    // gateway is, by design — it carries its own credential check.
+    if (this.subsonic?.matches(pathname)) {
+      await this.subsonic.handle(req, res, pathname);
       return;
     }
 
