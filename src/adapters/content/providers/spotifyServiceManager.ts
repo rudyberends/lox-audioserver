@@ -24,8 +24,7 @@ import { SoundCloudProvider } from '@/adapters/content/providers/soundcloud/soun
 import { resolveSpotifyClientId } from '@/adapters/content/providers/spotify/utils';
 import { parseSearchLimits } from '@/adapters/content/utils/searchLimits';
 import { resolveCoverHost } from '@/shared/utils/net';
-import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
-import { serviceNativeKey } from '@/domain/media/serviceIdentity';
+import { serviceNativeKey, slugFromBridgeId } from '@/domain/media/serviceIdentity';
 
 type ProviderId = string;
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';

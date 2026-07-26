@@ -1,5 +1,6 @@
 import type { StreamingServiceConfig } from '@/domain/config/types';
 import { parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
+import { slugFromBridgeId } from '@/domain/media/serviceIdentity';
 
 /**
  * Bridge-identity translation between the SERVICE-NATIVE core audiopath form
@@ -22,26 +23,6 @@ export interface BridgeRegistry {
   byBridgeId: Map<string, { service: string; slug: string }>;
   /** Per-service account count, to decide slug-omission eligibility. */
   accountCountByService: Map<string, number>;
-}
-
-/**
- * Derive the bridge-word-free account slug from a bridge id.
- * `bridge-applemusic-p0gngd` → `p0gngd`. Strips the provider-specific prefix
- * first, then a generic `bridge-<x>-` prefix, else falls back to the full id
- * (defensive for non-conforming ids).
- */
-export function slugFromBridgeId(bridgeId: string, provider: string): string {
-  const id = (bridgeId || '').trim();
-  if (!id) {
-    return id;
-  }
-  const svc = (provider || '').toLowerCase();
-  const providerPrefix = `bridge-${svc}-`;
-  if (svc && id.toLowerCase().startsWith(providerPrefix)) {
-    return id.slice(providerPrefix.length);
-  }
-  const generic = id.replace(/^bridge-[^-]+-/i, '');
-  return generic || id;
 }
 
 const serviceSlugKey = (service: string, slug: string): string =>

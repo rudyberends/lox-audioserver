@@ -15,15 +15,15 @@ import {
 /**
  * A top-level service the MediaServer surfaces as a child of the root container.
  *
- * `key` is the stable id used in the object id's service segment (a bridge id for
- * streaming services, or `library`/`radio`). `browse(folderId, offset, limit)`
- * maps the service to a ContentManager call; `rootFolderId` is the native id
- * handed in for the service's own top level.
+ * `key` is the stable id used in the object id's service segment: `library`/`radio`
+ * for the built-ins, or a streaming account's service-native name (`applemusic`,
+ * or `applemusic:p0gngd` when that service has several). `browse(folderId, offset,
+ * limit)` maps the service to a ContentManager call; `rootFolderId` is the native
+ * id handed in for the service's own top level.
  *
- * The catalogue is built from config (see MediaServer.buildServiceDefs), NOT a
- * static list, because streaming bridges are keyed by a per-instance bridge id —
- * `getServiceFolder(service, user, …)` only resolves the right provider when
- * `user` is that bridge id, not the generic provider name.
+ * The catalogue is built from config (see MediaServer.buildServiceDefs) rather than
+ * a static list, because a service is per account: two Apple Music logins are two
+ * entries here.
  */
 export type ServiceDef = {
   key: string;
@@ -32,7 +32,7 @@ export type ServiceDef = {
   rootFolderId: string;
   /** Optional absolute icon URL shown as the service's root tile. */
   iconUrl?: string;
-  /** `globalSearch` source for this service (`local`, `spotify@bridgeId`, …), or null when it can't search. */
+  /** `globalSearch` source for this service (`local`, `applemusic`, …), or null when it can't search. */
   searchSource: string | null;
   browse: (
     cm: ContentManager,
@@ -54,9 +54,6 @@ export const AUDIO_PROTOCOL_INFO = `http-get:*:audio/mpeg:${AUDIO_DLNA_FEATURES}
 
 /** How many described containers to remember for BrowseMetadata. */
 const CONTAINER_META_MAX = 2000;
-
-/** Loxone content type for a directly-playable file/track. Everything else browses. */
-const CONTENT_TYPE_TRACK = 2;
 
 /**
  * UPnP class per neutral item kind. Everything used to be announced as a plain
@@ -465,9 +462,10 @@ export class MediaContentProvider implements ContentProvider {
 }
 
 export function isTrackItem(item: ContentFolderItem): boolean {
-  // A track carries a playable audiopath and the "file" content type. Folders
-  // (type 1/7/11/12…) browse further even when they expose a container audiopath.
-  return item.type === CONTENT_TYPE_TRACK && !!item.audiopath;
+  // Playable here means both: something this server can stream, and something a
+  // control point should render as a track rather than browse into. An album
+  // carries an audiopath too — "play the whole thing" — so the kind has to agree.
+  return resolveItemKind(item) === 'track' && !!item.audiopath;
 }
 
 function coverFor(item: ContentFolderItem, baseUrl: string): string | null {

@@ -10,6 +10,7 @@ import './architecture/importBoundaries.test';
 import './sessionKey.test';
 import './loxoneServiceFolders.test';
 import './serviceNativeIdentity.test';
+import './trackIdentity.test';
 import './serviceNativeBoundary.test';
 import './streamingServicesMigration.test';
 import './engine/rollingBuffer.test';

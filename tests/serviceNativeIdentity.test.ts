@@ -3,13 +3,13 @@ import { test } from './testHarness';
 import { parseServiceNativeAudiopath, KNOWN_KINDS } from '../src/domain/loxone/audiopath';
 import {
   buildBridgeRegistry,
-  slugFromBridgeId,
   toServiceNative,
   toLoxoneAudiopath,
 } from '../src/domain/loxone/bridgeIdentity';
 import {
   searchSourceFromServiceKey,
   serviceNativeKey,
+  slugFromBridgeId,
 } from '../src/domain/media/serviceIdentity';
 import { buildBrowsableServices } from '../src/adapters/content/browsableServices';
 import type { ConfigPort } from '../src/ports/ConfigPort';

@@ -49,7 +49,7 @@ export type ContainerRef = {
 
 export type ItemRef = {
   kind: 'item';
-  /** The track's Loxone audiopath, ready for resolvePlaybackSource. */
+  /** The track's own URI (`applemusic:track:…`), ready for resolvePlaybackSource. */
   audiopath: string;
 };
 

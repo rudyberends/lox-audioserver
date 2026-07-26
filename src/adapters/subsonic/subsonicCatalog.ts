@@ -3,7 +3,8 @@ import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { ContentManager } from '@/adapters/content/contentManager';
 import type { ContentFolder, ContentFolderItem } from '@/ports/ContentTypes';
-import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeTrackUri } from '@/domain/media/trackIdentity';
+import { resolveItemKind } from '@/adapters/content/contentItemKind';
 import {
   buildBrowsableServices,
   parseProviderAllowlist,
@@ -17,9 +18,6 @@ import {
   type SubsonicContainerKind,
 } from '@/adapters/subsonic/subsonicIds';
 import type { SubsonicNode } from '@/adapters/subsonic/subsonicResponse';
-
-/** Loxone content type for a directly-playable file/track. Everything else browses. */
-const CONTENT_TYPE_TRACK = 2;
 
 /**
  * Page size used when materialising a directory that the client cannot page.
@@ -311,9 +309,10 @@ export class SubsonicCatalog {
   // ── Entity mapping ────────────────────────────────────────────────────────
 
   public isTrack(item: ContentFolderItem): boolean {
-    // A track carries a playable audiopath and the "file" content type. Folders
-    // browse further even when they expose a container audiopath.
-    return item.type === CONTENT_TYPE_TRACK && !!item.audiopath;
+    // Playable here means both: something this server can stream, and something a
+    // client should list as a song rather than browse into. An album carries an
+    // audiopath too — "play the whole thing" — so the kind has to agree.
+    return resolveItemKind(item) === 'track' && !!item.audiopath;
   }
 
   /** The `<child>` shape shared by getMusicDirectory, search results and lists. */
@@ -455,12 +454,12 @@ function normaliseDuration(duration?: number): number | undefined {
 }
 
 function isLocalAudiopath(audiopath: string): boolean {
-  const decoded = decodeAudiopath(audiopath);
+  const decoded = decodeTrackUri(audiopath);
   return decoded.startsWith('library://') || decoded.startsWith('alerts://');
 }
 
 function suffixFor(audiopath: string): string {
-  const decoded = decodeAudiopath(audiopath);
+  const decoded = decodeTrackUri(audiopath);
   const withoutQuery = decoded.split('?')[0] ?? '';
   const ext = path.extname(withoutQuery).replace(/^\./, '').toLowerCase();
   return ext && AUDIO_MIME[ext] ? ext : 'mp3';

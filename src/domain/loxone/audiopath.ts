@@ -1,3 +1,4 @@
+import { decodeTrackUri } from '@/domain/media/trackIdentity';
 /**
  * Decodes a raw Loxone audiopath (including any appended routing hints) into a
  * usable URI for downstream outputs.
@@ -11,26 +12,9 @@ export function decodeAudiopath(path: string): string {
   if (!path) {
     return '';
   }
-
-  const cleaned = stripRoutingSuffix(path);
-
-  const parts = cleaned.split(':');
-  const last = parts[parts.length - 1];
-  if (last?.startsWith('b64_')) {
-    const payload = last.slice('b64_'.length);
-    try {
-      return Buffer.from(payload, 'base64').toString('utf8');
-    } catch {
-      return cleaned;
-    }
-  }
-
-  // Preserve raw Music Assistant URIs intact (they embed provider/user info).
-  if (/musicassistant/i.test(cleaned)) {
-    return cleaned;
-  }
-
-  return cleaned;
+  // What is Loxone's about this is the hints; unwrapping the payload is not, so
+  // that half lives in domain/media for the consumers that never see a hint.
+  return decodeTrackUri(stripRoutingSuffix(path));
 }
 
 /**

@@ -3,7 +3,7 @@ import type { ConfigPort } from '@/ports/ConfigPort';
 import type { StreamingServiceConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import { decodeAudiopath, parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
-import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
+import { slugFromBridgeId } from '@/domain/media/serviceIdentity';
 import { type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { resolveProxyHost, resolveProxyPort } from '@/shared/urlProxy';

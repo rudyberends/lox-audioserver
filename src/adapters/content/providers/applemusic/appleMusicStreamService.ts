@@ -4,7 +4,7 @@ import type { ConfigPort } from '@/ports/ConfigPort';
 import type { StreamingServiceConfig } from '@/domain/config/types';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import { decodeAudiopath, parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
-import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
+import { slugFromBridgeId } from '@/domain/media/serviceIdentity';
 import Widevine, { LicenseType as WvLicenseType } from 'widevine';
 import {
   loadWidevineArtifacts,
