@@ -13,7 +13,6 @@ import type {
   ZoneTransportConfig,
   ZoneVolumesConfig,
 } from '@/domain/config/types';
-import { OUTPUT_DEFINITIONS } from '@/adapters/outputs';
 import { defaultMacId, normalizeMacId } from '@/shared/utils/mac';
 import { defaultLocalIp } from '@/shared/utils/net';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
@@ -25,6 +24,9 @@ export type ConfigHandlerDeps = {
   loxoneNotifier: LoxoneWsNotifier;
   sendspinLineInService: SendspinLineInService;
   zoneManager: ZoneManagerFacade;
+  /** Start/stop the DLNA MediaServer advertisement to match its current enabled
+   *  flag, so a runtime toggle takes effect without a server restart. */
+  syncMediaServer?: () => Promise<void>;
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
 };
@@ -80,9 +82,6 @@ export function defaultConfig(): AudioServerConfig {
       },
     },
     inputs: {
-      airplay: { enabled: true },
-      spotify: { enabled: true },
-      bluetooth: { enabled: false },
       lineIn: { inputs: [] },
     },
     groups: {
@@ -106,7 +105,6 @@ export function buildConfigRoutes(deps: ConfigHandlerDeps): Route[] {
     { method: 'POST', pattern: /^\/config\/zones\/create$/, handler: async (req, res) => handleZoneCreate(req, res, deps) },
     { method: 'DELETE', pattern: /^\/config\/zones\/(\d+)$/, handler: async (_req, res, match) => handleZoneDelete(Number(match[1]), res, deps) },
     { method: 'POST', pattern: /^\/config\/inputs$/, handler: async (req, res) => handleInputsUpdate(req, res, deps) },
-    { method: 'POST', pattern: /^\/config\/outputs$/, handler: async (req, res) => handleOutputsUpdate(req, res, deps) },
     { method: 'POST', pattern: /^\/config\/system$/, handler: async (req, res) => handleSystemUpdate(req, res, deps) },
     { method: 'POST', pattern: /^\/config\/groups$/, handler: async (req, res) => handleGroupsUpdate(req, res, deps) },
     { method: 'POST', pattern: /^\/config\/content$/, handler: async (req, res) => handleContentUpdate(req, res, deps) },
@@ -252,17 +250,18 @@ function nextZoneId(zones: ZoneConfig[]): number {
 }
 
 /**
- * Standalone-only: create a new zone with just a name. Output, inputs and other
- * settings are configured afterwards via the normal /config/zones path. The zone
- * is sourced from the audioserver itself (no Miniserver / extension in standalone).
+ * Create a new zone with just a name (only when Loxone is not connected). Output,
+ * inputs and other settings are configured afterwards via the normal /config/zones
+ * path. The zone is sourced from the audioserver itself (no Miniserver / extension).
  */
 async function handleZoneCreate(
   req: IncomingMessage,
   res: ServerResponse,
   deps: ConfigHandlerDeps,
 ): Promise<void> {
-  if (deps.configPort.getConfig().system?.audioserver?.mode !== 'standalone') {
-    deps.sendJson(res, 409, { error: 'not-standalone' });
+  if (deps.configPort.getConfig().system?.audioserver?.loxoneEnabled === true) {
+    // Loxone owns the players — they are pushed by the Miniserver, not created here.
+    deps.sendJson(res, 409, { error: 'loxone-managed' });
     return;
   }
   const body = (await deps.readJsonBody(req, res)) as { name?: string } | null;
@@ -285,7 +284,8 @@ async function handleZoneCreate(
       id: nextZoneId(cfg.zones),
       name,
       sourceMac: cfg.system.audioserver.macId,
-      inputs: { airplay: { enabled: true, model: 'generic' } },
+      // Receivers start off — the user turns on the ones they want per player.
+      inputs: {},
       volumes: defaultZoneVolumes(),
     };
     cfg.zones.push(created);
@@ -298,14 +298,15 @@ async function handleZoneCreate(
   deps.sendJson(res, 201, { zone: created });
 }
 
-/** Standalone-only: delete a config zone and rebuild the running zone set. */
+/** Delete a config zone and rebuild the running zone set (only when Loxone is off). */
 async function handleZoneDelete(
   zoneId: number,
   res: ServerResponse,
   deps: ConfigHandlerDeps,
 ): Promise<void> {
-  if (deps.configPort.getConfig().system?.audioserver?.mode !== 'standalone') {
-    deps.sendJson(res, 409, { error: 'not-standalone' });
+  if (deps.configPort.getConfig().system?.audioserver?.loxoneEnabled === true) {
+    // Loxone owns the players — they are pushed by the Miniserver, not created here.
+    deps.sendJson(res, 409, { error: 'loxone-managed' });
     return;
   }
   let existed = false;
@@ -334,13 +335,7 @@ async function handleInputsUpdate(
   deps: ConfigHandlerDeps,
 ): Promise<void> {
   const body = (await deps.readJsonBody(req, res)) as
-    | {
-        airplay?: { enabled?: boolean };
-        spotify?: { enabled?: boolean };
-        bluetooth?: { enabled?: boolean };
-        dlna?: { enabled?: boolean };
-        lineIn?: { inputs?: Array<Record<string, unknown>> | null };
-      }
+    | { lineIn?: { inputs?: Array<Record<string, unknown>> | null } }
     | null;
   if (res.writableEnded) {
     return;
@@ -362,21 +357,6 @@ async function handleInputsUpdate(
 
   await deps.configPort.updateConfig((cfg) => {
     if (!cfg.inputs) cfg.inputs = defaultConfig().inputs;
-    if (body.airplay && typeof body.airplay === 'object' && 'enabled' in body.airplay) {
-      cfg.inputs!.airplay = { ...(cfg.inputs!.airplay ?? {}), enabled: Boolean(body.airplay.enabled) };
-    }
-    if (body.spotify && typeof body.spotify === 'object' && 'enabled' in body.spotify) {
-      cfg.inputs!.spotify = { ...(cfg.inputs!.spotify ?? {}), enabled: Boolean(body.spotify.enabled) };
-    }
-    if (body.bluetooth && typeof body.bluetooth === 'object' && 'enabled' in body.bluetooth) {
-      cfg.inputs!.bluetooth = {
-        ...(cfg.inputs!.bluetooth ?? {}),
-        enabled: Boolean(body.bluetooth.enabled),
-      };
-    }
-    if (body.dlna && typeof body.dlna === 'object' && 'enabled' in body.dlna) {
-      cfg.inputs!.dlna = { ...(cfg.inputs!.dlna ?? {}), enabled: Boolean(body.dlna.enabled) };
-    }
     if (lineInUpdated) {
       cfg.inputs!.lineIn = { ...(cfg.inputs!.lineIn ?? {}), inputs: lineInInputs ?? [] };
     }
@@ -400,7 +380,9 @@ async function handleSystemUpdate(
           macId?: string;
           ip?: string;
           authEnabled?: boolean;
-          mode?: 'loxone' | 'standalone';
+          loxoneEnabled?: boolean;
+          setupComplete?: boolean;
+          managedPlayers?: boolean;
         };
         miniserver?: { ip?: string; port?: number; protocol?: 'http' | 'https' };
       }
@@ -422,7 +404,9 @@ async function handleSystemUpdate(
   const rawMac = hasAudioserver ? body.audioserver!.macId : undefined;
   const rawIp = hasAudioserver ? body.audioserver!.ip : undefined;
   const rawAuthEnabled = hasAudioserver ? body.audioserver!.authEnabled : undefined;
-  const rawMode = hasAudioserver ? body.audioserver!.mode : undefined;
+  const rawLoxoneEnabled = hasAudioserver ? body.audioserver!.loxoneEnabled : undefined;
+  const rawSetupComplete = hasAudioserver ? body.audioserver!.setupComplete : undefined;
+  const rawManagedPlayers = hasAudioserver ? body.audioserver!.managedPlayers : undefined;
   const rawMiniserverIp = hasMiniserver ? body.miniserver!.ip : undefined;
   const rawMiniserverPort = hasMiniserver ? body.miniserver!.port : undefined;
   const rawMiniserverProtocol = hasMiniserver ? body.miniserver!.protocol : undefined;
@@ -430,7 +414,9 @@ async function handleSystemUpdate(
     typeof rawMac !== 'string' &&
     typeof rawIp !== 'string' &&
     typeof rawAuthEnabled !== 'boolean' &&
-    typeof rawMode !== 'string' &&
+    typeof rawLoxoneEnabled !== 'boolean' &&
+    typeof rawSetupComplete !== 'boolean' &&
+    typeof rawManagedPlayers !== 'boolean' &&
     typeof rawMiniserverIp !== 'string' &&
     typeof rawMiniserverPort !== 'number' &&
     typeof rawMiniserverProtocol !== 'string'
@@ -492,14 +478,6 @@ async function handleSystemUpdate(
     }
     normalizedMiniserverProtocol = value;
   }
-  let normalizedMode: 'loxone' | 'standalone' | null = null;
-  if (typeof rawMode === 'string') {
-    if (rawMode !== 'loxone' && rawMode !== 'standalone') {
-      deps.sendJson(res, 400, { error: 'invalid-mode' });
-      return;
-    }
-    normalizedMode = rawMode;
-  }
   await deps.configPort.updateConfig((cfg) => {
     if (!cfg.system) cfg.system = defaultConfig().system;
     if (!cfg.system.audioserver) {
@@ -517,16 +495,23 @@ async function handleSystemUpdate(
     if (typeof rawAuthEnabled === 'boolean') {
       cfg.system.audioserver.authEnabled = rawAuthEnabled;
     }
-    if (normalizedMode) {
-      cfg.system.audioserver.mode = normalizedMode;
-      // Standalone has no Miniserver to supply a name; seed a unique default
-      // derived from the (unique) macId, unless the user already named it.
-      if (
-        normalizedMode === 'standalone' &&
-        (!cfg.system.audioserver.name || cfg.system.audioserver.name === 'Unconfigured')
-      ) {
-        cfg.system.audioserver.name = standaloneDefaultName(cfg.system.audioserver.macId);
-      }
+    if (typeof rawManagedPlayers === 'boolean') {
+      cfg.system.audioserver.managedPlayers = rawManagedPlayers;
+    }
+    if (typeof rawLoxoneEnabled === 'boolean') {
+      cfg.system.audioserver.loxoneEnabled = rawLoxoneEnabled;
+    }
+    if (typeof rawSetupComplete === 'boolean') {
+      cfg.system.audioserver.setupComplete = rawSetupComplete;
+    }
+    // A local (non-Loxone) box has no Miniserver to supply a name; seed a unique
+    // default from the (unique) macId once the user is set up, unless already named.
+    if (
+      cfg.system.audioserver.setupComplete &&
+      cfg.system.audioserver.loxoneEnabled !== true &&
+      (!cfg.system.audioserver.name || cfg.system.audioserver.name === 'Unconfigured')
+    ) {
+      cfg.system.audioserver.name = standaloneDefaultName(cfg.system.audioserver.macId);
     }
     if (normalizedMiniserverIp) {
       cfg.system.miniserver.ip = normalizedMiniserverIp;
@@ -652,44 +637,12 @@ async function handleContentUpdate(
     }
   });
   deps.contentManager.refreshFromConfig();
-  deps.sendJson(res, 204, {});
-}
-
-/**
- * Availability of output types, keyed by output definition id. Only ids the
- * build actually ships are accepted, so a stale admin UI cannot seed keys that
- * no longer map to an output.
- */
-async function handleOutputsUpdate(
-  req: IncomingMessage,
-  res: ServerResponse,
-  deps: ConfigHandlerDeps,
-): Promise<void> {
-  const body = (await deps.readJsonBody(req, res)) as Record<string, { enabled?: boolean }> | null;
-  if (res.writableEnded) {
-    return;
+  // The DLNA advertiser is boot-wired: a runtime enable/disable must start/stop it
+  // here, or a freshly-enabled server never announces itself and stays undiscoverable
+  // until a restart.
+  if (body.mediaServer && typeof body.mediaServer.enabled === 'boolean') {
+    await deps.syncMediaServer?.();
   }
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    deps.sendJson(res, 400, { error: 'invalid-outputs-payload' });
-    return;
-  }
-
-  const known = new Set(OUTPUT_DEFINITIONS.map((definition) => definition.id));
-  const unknown = Object.keys(body).filter((id) => !known.has(id));
-  if (unknown.length > 0) {
-    deps.sendJson(res, 400, { error: 'unknown-output', ids: unknown });
-    return;
-  }
-
-  await deps.configPort.updateConfig((cfg) => {
-    if (!cfg.outputs) cfg.outputs = {};
-    for (const [id, entry] of Object.entries(body)) {
-      if (!entry || typeof entry !== 'object' || typeof entry.enabled !== 'boolean') {
-        continue;
-      }
-      cfg.outputs[id] = { ...(cfg.outputs[id] ?? {}), enabled: entry.enabled };
-    }
-  });
   deps.sendJson(res, 204, {});
 }
 

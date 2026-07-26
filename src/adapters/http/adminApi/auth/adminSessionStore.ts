@@ -1,10 +1,17 @@
 import { randomBytes } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
+import path from 'node:path';
 import {
   AUTH_COOKIE_NAME,
   SESSION_TTL_MS,
   type AdminServerSession,
 } from '@/adapters/http/adminApi/auth/types';
+
+// Sessions live next to the config so they survive a server restart — otherwise
+// every restart would force a re-login. Random 32-byte ids, same trust level as
+// the config file (a LAN admin tool); expired entries are pruned on load.
+const SESSIONS_PATH = path.resolve(process.cwd(), 'data', 'sessions.json');
 
 export function parseCookies(req: IncomingMessage): Record<string, string> {
   const raw = req.headers.cookie;
@@ -58,12 +65,46 @@ export function extractSessionId(req: IncomingMessage): string | undefined {
 export class AdminSessionStore {
   private readonly sessions = new Map<string, AdminServerSession>();
 
+  constructor() {
+    this.load();
+  }
+
+  /** Best-effort load of persisted sessions, pruning any that already expired. */
+  private load(): void {
+    try {
+      const raw = readFileSync(SESSIONS_PATH, 'utf8');
+      const parsed = JSON.parse(raw) as AdminServerSession[];
+      const now = Date.now();
+      if (Array.isArray(parsed)) {
+        for (const s of parsed) {
+          if (s && typeof s.id === 'string' && typeof s.expiresAt === 'number' && s.expiresAt > now) {
+            this.sessions.set(s.id, s);
+          }
+        }
+      }
+    } catch {
+      // No file yet / unreadable / malformed → start with no sessions.
+    }
+  }
+
+  /** Best-effort persist so a restart doesn't invalidate active sessions. */
+  private persist(): void {
+    try {
+      writeFileSync(SESSIONS_PATH, JSON.stringify([...this.sessions.values()]));
+    } catch {
+      // Non-fatal: a login still works this run, it just won't survive a restart.
+    }
+  }
+
   public cleanupExpired(now = Date.now()): void {
+    let changed = false;
     for (const [id, session] of this.sessions.entries()) {
       if (session.expiresAt <= now) {
         this.sessions.delete(id);
+        changed = true;
       }
     }
+    if (changed) this.persist();
   }
 
   public getFromRequest(req: IncomingMessage): AdminServerSession | null {
@@ -74,6 +115,7 @@ export class AdminSessionStore {
     if (!session) return null;
     if (session.expiresAt <= Date.now()) {
       this.sessions.delete(sessionId);
+      this.persist();
       return null;
     }
     return session;
@@ -89,13 +131,14 @@ export class AdminSessionStore {
       expiresAt: now + SESSION_TTL_MS,
     };
     this.sessions.set(session.id, session);
+    this.persist();
     return session;
   }
 
   public clearFromRequest(req: IncomingMessage): void {
     const sessionId = extractSessionId(req);
     if (!sessionId) return;
-    this.sessions.delete(sessionId);
+    if (this.sessions.delete(sessionId)) this.persist();
   }
 
   public buildCookie(req: IncomingMessage, session: AdminServerSession): string {
@@ -129,6 +172,8 @@ export class AdminSessionStore {
 export function isPublicAdminApiRoute(pathname: string, method: string): boolean {
   if (method === 'OPTIONS') return true;
   if (pathname === '/info' && method === 'GET') return true;
+  // Self-guarding: refuses once an admin exists, so it can only bootstrap the first.
+  if (pathname === '/auth/setup' && method === 'POST') return true;
   if (pathname === '/auth/login' && method === 'POST') return true;
   if (pathname === '/auth/logout' && method === 'POST') return true;
   if (pathname === '/auth/me' && method === 'GET') return true;

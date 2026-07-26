@@ -124,4 +124,4 @@ export interface OutputConfigDefinition {
  * an operator currently offers it when configuring a zone (see
  * `AudioServerConfig.outputs`). Absent means available.
  */
-export type TransportConfigDefinition = OutputConfigDefinition & { enabled?: boolean };
+export type TransportConfigDefinition = OutputConfigDefinition;

@@ -382,12 +382,16 @@ export function createRuntime(): Runtime {
     // Only the neutral surfaces run (DLNA MediaServer, Subsonic, admin API, the
     // /audio/events state mirror). The own player, still a Loxone client today,
     // is knowingly disabled here until it moves to a native API.
-    const deploymentMode = storedConfig.system?.audioserver?.mode ?? 'loxone';
-    const loxoneEnabled = deploymentMode !== 'standalone';
+    // There is no deployment "mode": the server is just a server, and Loxone is a
+    // connection. The stack runs iff Loxone is connected. Config migration seeds
+    // `loxoneEnabled` from the old mode/paired, so existing installs are unchanged.
+    // The stack can't reach `paired` on its own, so a new Loxone box goes: connect
+    // (from the Players modal) → loxoneEnabled=true → soft restart → gate opens →
+    // Miniserver pairs.
+    const loxoneEnabled = storedConfig.system?.audioserver?.loxoneEnabled === true;
 
     log.info('bootstrapping audio server', {
       env: config.env.nodeEnv,
-      mode: deploymentMode,
       loxoneEnabled,
     });
 
@@ -410,30 +414,86 @@ export function createRuntime(): Runtime {
     await squeezeliteCore.start();
     await squeezeliteCli.start();
 
-    // Only wire the Loxone command engine when the Loxone role is enabled. In
-    // standalone it stays null and the shared :7090 gateway rejects /audio/...
-    // commands (see HttpService.handleLoxoneCommand).
-    const loxoneProcessor = loxoneEnabled
-      ? new LoxoneCommandProcessor(config.loxone, {
-          onRestart: handleSoftRestart,
-          notifier: ports.notifier,
-          loxoneNotifier,
-          configService: loxoneConfigService,
-          zoneManager,
-          configPort,
-          lineInRegistry,
-          sendspinLineInService,
-          spotifyInputService,
-          recentsManager,
-          favoritesManager,
-          groupManager,
-          groupTracker,
-          fadeController: fadeControllerPort,
-          alerts: alertsPort,
-          contentManager,
-          sonnCorePeers,
-        })
-      : null;
+    // The Loxone command engine + protocol servers are a runtime subsystem, not a
+    // boot-time gate: connecting/disconnecting Loxone attaches/detaches them while
+    // the rest of the server keeps running. Built lazily so a plain server never
+    // constructs the engine. (Hoisted so onLoxoneToggle below can reference them.)
+    function buildLoxoneProcessor(): LoxoneCommandProcessor {
+      return new LoxoneCommandProcessor(config.loxone, {
+        onRestart: handleSoftRestart,
+        notifier: ports.notifier,
+        loxoneNotifier,
+        configService: loxoneConfigService,
+        zoneManager,
+        configPort,
+        lineInRegistry,
+        sendspinLineInService,
+        spotifyInputService,
+        recentsManager,
+        favoritesManager,
+        groupManager,
+        groupTracker,
+        fadeController: fadeControllerPort,
+        alerts: alertsPort,
+        contentManager,
+        sonnCorePeers,
+      });
+    }
+
+    // Start the Loxone subsystem: attach the command engine to the shared :7090
+    // gateway and start the dedicated 7091/7095 servers + UDP discovery. Idempotent.
+    // persist=false at boot (the flag is already set); true for a runtime connect.
+    async function enableLoxone(persist = true): Promise<void> {
+      if (loxoneService) return;
+      const processor = buildLoxoneProcessor();
+      httpService?.setLoxoneProcessor(processor);
+      const service = new LoxoneHttpService(config.loxone, {
+        host: config.env.hostname,
+        processor,
+        connectionRegistry,
+        serverHeartbeat,
+        zoneManager,
+        configPort,
+      });
+      loxoneService = service;
+      try {
+        await service.start();
+      } catch (error) {
+        // Roll back so a retry isn't blocked by a half-started subsystem (and the
+        // gateway doesn't keep accepting Loxone commands nothing is serving).
+        try {
+          await service.stop();
+        } catch {
+          // Ignore: we're already unwinding a failed start.
+        }
+        loxoneService = null;
+        httpService?.setLoxoneProcessor(null);
+        throw error;
+      }
+      if (persist) {
+        await configPort.updateConfig((cfg) => {
+          cfg.system.audioserver.loxoneEnabled = true;
+        });
+      }
+      await notifyMiniserverStartup(storedConfig);
+      log.info('loxone subsystem enabled');
+    }
+
+    // Stop the Loxone subsystem and detach the command engine so :7090 rejects
+    // /audio/... again. Idempotent. The rest of the server is untouched.
+    async function disableLoxone(persist = true): Promise<void> {
+      if (loxoneService) {
+        await loxoneService.stop();
+        loxoneService = null;
+      }
+      httpService?.setLoxoneProcessor(null);
+      if (persist) {
+        await configPort.updateConfig((cfg) => {
+          cfg.system.audioserver.loxoneEnabled = false;
+        });
+      }
+      log.info('loxone subsystem disabled');
+    }
 
     browserZoneRegistry = new BrowserZoneRegistry(zoneManager);
 
@@ -457,6 +517,8 @@ export function createRuntime(): Runtime {
 
     httpService = new HttpService(config.http, {
       onReinitialize: handleReinitialize,
+      onSoftRestart: handleSoftRestart,
+      onLoxoneToggle: (enabled) => (enabled ? enableLoxone() : disableLoxone()),
       notifier: ports.notifier,
       loxoneNotifier,
       spotifyManagerProvider,
@@ -482,7 +544,8 @@ export function createRuntime(): Runtime {
       mdnsPort: mdnsService,
       sonnCorePeers,
       alertFiles: alertFilesPort,
-      loxoneProcessor,
+      // Attached at runtime via setLoxoneProcessor (enableLoxone), so starts null.
+      loxoneProcessor: null,
       connectionRegistry,
       browserZoneRegistry,
       streamProxyRoutes: [
@@ -499,19 +562,6 @@ export function createRuntime(): Runtime {
       lineInRegistry,
       snapcastCore,
     });
-    // Dedicated Loxone protocol server (7091 native-app WS + 7095 Miniserver
-    // HTTP + UDP discovery). Skipped entirely in standalone. Gating on the
-    // processor (non-null iff the Loxone role is enabled) narrows the type here.
-    if (loxoneProcessor) {
-      loxoneService = new LoxoneHttpService(config.loxone, {
-        host: config.env.hostname,
-        processor: loxoneProcessor,
-        connectionRegistry,
-        serverHeartbeat,
-        zoneManager,
-        configPort,
-      });
-    }
 
     await httpService.start();
     await networkService.start();
@@ -537,10 +587,10 @@ export function createRuntime(): Runtime {
     mdnsServices.length = 0;
     mdnsServices.push(sendspinServerAdvertiser, sonnCoreMdnsService, snapcastMdnsService);
     mdnsServices.forEach((service) => service.start());
-    // No Loxone server and no Miniserver handshake in standalone.
-    if (loxoneService) {
-      await loxoneService.start();
-      await notifyMiniserverStartup(storedConfig);
+    // Bring the Loxone subsystem up if it's connected. Same path a runtime connect
+    // uses; persist=false because the flag is already set. A plain server skips it.
+    if (loxoneEnabled) {
+      await enableLoxone(false);
     }
 
     log.info('startup complete');

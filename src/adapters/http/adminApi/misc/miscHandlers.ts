@@ -11,6 +11,7 @@ import { logManager } from '@/shared/logging/logger';
 import { logBuffer } from '@/shared/logging/logBuffer';
 import type { LogLevel } from '@/types/logLevel';
 import type { ConfigPort } from '@/ports/ConfigPort';
+import { hasAdminUser } from '@/application/auth/localUsers';
 import type { GroupManagerReadPort } from '@/application/groups/groupManager';
 import type { SnapcastCore } from '@/adapters/outputs/snapcast/snapcastCore';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
@@ -76,6 +77,8 @@ export type MiscHandlerDeps = {
   snapcastCore: SnapcastCore;
   runtimeConfig: RuntimeConfigSlice;
   onReinitialize?: () => Promise<boolean>;
+  onSoftRestart?: () => Promise<boolean>;
+  onLoxoneToggle?: (enabled: boolean) => Promise<void>;
   loxoneNotifier?: LoxoneWsNotifier;
   sonnCorePeers: SonnCorePeerRegistry;
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
@@ -114,6 +117,16 @@ export function buildMiscRoutes(deps: MiscHandlerDeps): Route[] {
       method: 'POST',
       pattern: /^\/setup\/reinitialize$/,
       handler: async (_req, res) => handleReinitialize(res, deps),
+    },
+    {
+      method: 'POST',
+      pattern: /^\/setup\/restart$/,
+      handler: async (_req, res) => handleSoftRestart(res, deps),
+    },
+    {
+      method: 'POST',
+      pattern: /^\/setup\/loxone$/,
+      handler: async (req, res) => handleLoxoneToggle(req, res, deps),
     },
     {
       method: 'POST',
@@ -323,8 +336,10 @@ function handleInfo(res: ServerResponse, deps: MiscHandlerDeps, containerized: b
       zones: cfg.zones?.length ?? 0,
       activeAdapters: cfg.system.audioserver.extensions?.length ?? 0,
       paired: !!cfg.system.audioserver.paired,
-      mode: cfg.system.audioserver.mode,
-      authEnabled: cfg.system.audioserver.authEnabled !== false,
+      loxoneEnabled: cfg.system.audioserver.loxoneEnabled === true,
+      setupComplete: cfg.system.audioserver.setupComplete === true,
+      // Drives the admin UI: a create-admin welcome when false, login when true.
+      hasAdminUser: hasAdminUser(deps.configPort),
       packages,
       player,
       containerized,
@@ -372,6 +387,54 @@ async function handleReinitialize(res: ServerResponse, deps: MiscHandlerDeps): P
     const message = err instanceof Error ? err.message : String(err);
     deps.log.error('reinitialize failed', { message });
     deps.sendJson(res, 500, { error: 'reinitialize-error', message });
+  }
+}
+
+// Full stop+start of the running services, re-reading config so the deployment-mode
+// gate is re-evaluated. This is how a mode choice takes effect: picking 'loxone'
+// brings the protocol stack up (so a Miniserver can pair), 'standalone' tears it down.
+// The restart tears down this very HTTP server, so we answer first and kick the
+// restart off on the next tick — the client polls status to learn when it's back.
+async function handleSoftRestart(res: ServerResponse, deps: MiscHandlerDeps): Promise<void> {
+  if (!deps.onSoftRestart) {
+    deps.sendJson(res, 501, { error: 'restart-not-supported' });
+    return;
+  }
+  const onSoftRestart = deps.onSoftRestart;
+  deps.sendJson(res, 202, { ok: true, restarting: true });
+  setTimeout(() => {
+    void onSoftRestart().catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      deps.log.error('soft restart failed', { message });
+    });
+  }, 100);
+}
+
+// Connect/disconnect the Loxone integration by starting/stopping just its protocol
+// subsystem (command engine + Miniserver/native-app servers + discovery). The rest
+// of the server keeps running, so unlike a mode switch there is no restart here.
+async function handleLoxoneToggle(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MiscHandlerDeps,
+): Promise<void> {
+  if (!deps.onLoxoneToggle) {
+    deps.sendJson(res, 501, { error: 'loxone-toggle-not-supported' });
+    return;
+  }
+  const body = (await deps.readJsonBody(req, res)) as { enabled?: boolean } | null;
+  if (res.writableEnded) return;
+  if (!body || typeof body.enabled !== 'boolean') {
+    deps.sendJson(res, 400, { error: 'invalid-loxone-payload' });
+    return;
+  }
+  try {
+    await deps.onLoxoneToggle(body.enabled);
+    deps.sendJson(res, 200, { ok: true, loxoneEnabled: body.enabled });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    deps.log.error('loxone toggle failed', { message });
+    deps.sendJson(res, 500, { error: 'loxone-toggle-error', message });
   }
 }
 

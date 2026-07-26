@@ -69,7 +69,9 @@ export class HttpService {
   private readonly sendspin: SendspinGateway;
   private readonly snapcast: SnapcastGateway;
   private readonly lmsCli: LmsCliServer;
-  private readonly loxoneProcessor: LoxoneCommandProcessor | null;
+  // Mutable: the Loxone command engine is attached/detached at runtime when the
+  // Loxone integration is connected/disconnected, without restarting this server.
+  private loxoneProcessor: LoxoneCommandProcessor | null;
   private readonly connectionRegistry: ConnectionRegistry;
   private readonly zoneManager: ZoneManagerFacade;
   private server?: http.Server;
@@ -79,6 +81,8 @@ export class HttpService {
     private readonly config: HttpServerConfig,
     options: {
       onReinitialize?: () => Promise<boolean>;
+      onSoftRestart?: () => Promise<boolean>;
+      onLoxoneToggle?: (enabled: boolean) => Promise<void>;
       notifier: NotifierPort;
       loxoneNotifier: LoxoneWsNotifier;
       spotifyManagerProvider: SpotifyServiceManagerProvider;
@@ -116,6 +120,8 @@ export class HttpService {
     this.lineInApi = new LineInApiHandler(options.configPort, options.lineInMetadataService);
     this.adminApi = new AdminApiHandler({
       onReinitialize: options.onReinitialize,
+      onSoftRestart: options.onSoftRestart,
+      onLoxoneToggle: options.onLoxoneToggle,
       notifier: options.notifier,
       loxoneNotifier: options.loxoneNotifier,
       spotifyManagerProvider: options.spotifyManagerProvider,
@@ -124,6 +130,14 @@ export class HttpService {
       configPort: options.configPort,
       spotifyInputService: options.spotifyInputService,
       sendspinLineInService: options.sendspinLineInService,
+      // Start/stop the DLNA advertisement to match its enabled flag, so the Access
+      // toggle takes effect at runtime instead of only on the next boot.
+      syncMediaServer: async () => {
+        const ms = options.mediaServer;
+        if (!ms) return;
+        if (ms.isEnabled()) await ms.start();
+        else await ms.stop();
+      },
       musicAssistantStreamService: options.musicAssistantStreamService,
       snapcastCore: options.snapcastCore,
       squeezeliteCore: options.squeezeliteCore,
@@ -218,11 +232,23 @@ export class HttpService {
         resolve();
         return;
       }
-      this.server.close(() => resolve());
+      const server = this.server;
       this.server = undefined;
+      server.close(() => resolve());
+      // Force-drop keep-alive and /audio/events WebSocket connections so close()
+      // resolves promptly instead of waiting on idle clients. Without this a soft
+      // restart triggered over HTTP would stall on the caller's own still-open
+      // socket (and any admin UI events stream); clients simply reconnect after.
+      server.closeAllConnections?.();
     });
     this.sendspin.close();
     this.snapcast.close();
+  }
+
+  /** Attach or detach the Loxone command engine at runtime. With it attached, the
+   *  shared :7090 gateway accepts /audio/... commands; with null it rejects them. */
+  public setLoxoneProcessor(processor: LoxoneCommandProcessor | null): void {
+    this.loxoneProcessor = processor;
   }
 
   private handleEventsConnection(connection: WebSocketConnection): void {

@@ -171,15 +171,6 @@ function defaultConfig(): AudioServerConfig {
       },
     },
     inputs: {
-      airplay: {
-        enabled: true,
-      },
-      spotify: {
-        enabled: true,
-      },
-      bluetooth: {
-        enabled: false,
-      },
       lineIn: {
         inputs: [],
         bridges: [],
@@ -295,18 +286,13 @@ function normalizeZoneInputs(zone: ZoneConfig): void {
   if (!zone.inputs) {
     zone.inputs = {};
   }
-  if (!zone.inputs.airplay) {
-    zone.inputs.airplay = { enabled: true };
-  } else if ('model' in zone.inputs.airplay!) {
+  // Receivers (AirPlay / Spotify Connect / DLNA) are opt-in per player: an absent
+  // entry means off, so nothing is seeded here — a new player starts with none.
+  if (zone.inputs.airplay && 'model' in zone.inputs.airplay) {
     // Do not persist model in config
     delete (zone.inputs.airplay as unknown as Record<string, unknown>).model;
   }
-  if (!zone.inputs.spotify) {
-    zone.inputs.spotify = {
-      enabled: true,
-      offload: false,
-    };
-  } else {
+  if (zone.inputs.spotify) {
     const sp = zone.inputs.spotify as unknown as Record<string, unknown>;
     const connectVal = sp.connectEnabled ?? sp.offload;
     zone.inputs.spotify.offload = connectVal === true;
@@ -398,21 +384,27 @@ function normalizeSystem(config: AudioServerConfig): boolean {
     config.system.audioserver.authEnabled = true;
     changed = true;
   }
+  // Retire the deployment-mode concept: seed the replacement flags from the old
+  // `mode`/`paired` exactly once, so every existing install keeps behaving as it
+  // did. An already-paired or explicitly-Loxone box stays on Loxone bit-identical;
+  // a chosen-standalone box stays standalone. `setupComplete` mirrors "the user has
+  // gotten past first run" so those installs never see the welcome again.
+  const as = config.system.audioserver;
+  const wasPaired = as.paired === true;
+  if (as.loxoneEnabled === undefined) {
+    as.loxoneEnabled = as.mode === 'loxone' || wasPaired;
+    changed = true;
+  }
+  if (as.setupComplete === undefined) {
+    as.setupComplete = as.mode === 'loxone' || as.mode === 'standalone' || wasPaired;
+    changed = true;
+  }
   return changed;
 }
 
 function normalizeInputs(config: AudioServerConfig): void {
   if (!config.inputs) {
     config.inputs = {};
-  }
-  if (!config.inputs.airplay) {
-    config.inputs.airplay = { enabled: true };
-  }
-  if (!config.inputs.spotify) {
-    config.inputs.spotify = { enabled: true };
-  }
-  if (!config.inputs.bluetooth) {
-    config.inputs.bluetooth = { enabled: false };
   }
   if (!config.inputs.lineIn) {
     config.inputs.lineIn = { inputs: [] };

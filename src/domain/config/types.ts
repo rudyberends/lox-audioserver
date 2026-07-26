@@ -4,24 +4,8 @@ export interface AudioServerConfig {
   zones: ZoneConfig[];
   rawAudioConfig: RawAudioConfig;
   inputs?: InputConfig;
-  outputs?: OutputAvailabilityConfig;
   groups?: GroupConfig;
   updatedAt?: string;
-}
-
-/**
- * Which output types an operator offers when configuring a zone, keyed by the
- * output definition id ('sendspin', 'sonos', …).
- *
- * This is availability, not runtime state: an absent entry means available, and
- * turning one off only removes it from the picker — a zone already configured
- * with that output keeps playing. That keeps the switch safe to flip on a live
- * system and makes the default (nothing configured) mean "offer everything".
- */
-export type OutputAvailabilityConfig = Record<string, OutputAvailabilityEntry | undefined>;
-
-export interface OutputAvailabilityEntry {
-  enabled?: boolean;
 }
 
 export interface SystemConfig {
@@ -85,11 +69,34 @@ export interface AudioserverConfig {
   macId: string;
   paired: boolean;
   /**
-   * Deployment mode chosen during first-run setup. Absent = not yet chosen, so the
-   * admin UI shows the welcome/mode-selection screen. 'loxone' keeps the Miniserver
-   * pairing flow; 'standalone' runs without a Miniserver.
+   * @deprecated Retired in favour of `loxoneEnabled` + `setupComplete`. Still read
+   * once by config migration to seed those flags for existing installs, then never
+   * written again. There is no deployment "mode" anymore — the server is just a
+   * server, and Loxone is a connection you opt into (see `loxoneEnabled`).
    */
   mode?: 'loxone' | 'standalone';
+  /**
+   * Whether the Loxone integration is connected. When true the server runs the
+   * Loxone protocol stack (Miniserver/native-app servers + discovery) and players
+   * are pushed by the Miniserver; when false/absent it is a plain audio server and
+   * players are managed locally. Toggled from the Players screen's Loxone modal;
+   * a change is applied by a soft restart. The stack must run before a Miniserver
+   * can pair, so connecting sets this true, then pairing sets `paired`.
+   */
+  loxoneEnabled?: boolean;
+  /**
+   * Set once the first-run welcome has been dismissed. Absent/false shows the
+   * minimal welcome intro; true drops straight into the admin shell. Not a mode —
+   * purely "has the user gotten started".
+   */
+  setupComplete?: boolean;
+  /**
+   * Opt-in for the local player layer when Loxone is not connected. Absent = treat
+   * as enabled if any zones already exist, off otherwise — so a fresh box is a pure
+   * content/access server (DLNA/Subsonic) until players are turned on. Ignored when
+   * `loxoneEnabled` is true, where zones are always pushed by the Miniserver.
+   */
+  managedPlayers?: boolean;
   /** When false, admin UI is accessible without authentication even if paired (default true). */
   authEnabled?: boolean;
   extensions: AudioserverExtensionConfig[];
@@ -478,16 +485,14 @@ export interface ZoneDlnaConfig {
   publishName?: string;
 }
 
+/**
+ * Server-wide input configuration. Receivers (AirPlay / Spotify Connect / DLNA) are
+ * configured per player on `zone.inputs` — there is no global on/off for them, so
+ * only genuinely server-wide input settings live here.
+ */
 export interface InputConfig {
-  airplay?: GlobalAirplayConfig | null;
   spotify?: GlobalSpotifyConfig | null;
-  bluetooth?: GlobalBluetoothConfig | null;
   lineIn?: GlobalLineInConfig | null;
-  dlna?: GlobalDlnaConfig | null;
-}
-
-export interface GlobalDlnaConfig {
-  enabled: boolean;
 }
 
 export interface GroupConfig {
@@ -514,18 +519,9 @@ export interface PowerGroupConfig {
   powerManager?: ZonePowerManagerConfig | null;
 }
 
-export interface GlobalAirplayConfig {
-  enabled: boolean;
-}
-
 export interface GlobalSpotifyConfig {
-  enabled: boolean;
   clientId?: string;
   accounts?: SpotifyAccountConfig[];
-}
-
-export interface GlobalBluetoothConfig {
-  enabled: boolean;
 }
 
 export interface GlobalLineInConfig {

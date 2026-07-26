@@ -8,7 +8,11 @@ import {
   readMiniserverBaseUrlFromConfig,
 } from '@/adapters/http/adminApi/auth/miniserverAuthClient';
 import { MiniserverAuthError } from '@/adapters/http/adminApi/auth/types';
-import { rememberLoxoneUser, verifyUser } from '@/application/auth/localUsers';
+import { hasAdminUser, rememberLoxoneUser, saveUser, verifyUser } from '@/application/auth/localUsers';
+
+/** Same constraint the users API applies — the name travels in URLs/Subsonic queries. */
+const USERNAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+const MAX_CREDENTIAL_LENGTH = 256;
 
 export type AuthHandlerDeps = {
   configPort: ConfigPort;
@@ -21,6 +25,11 @@ export type AuthHandlerDeps = {
 
 export function buildAuthRoutes(deps: AuthHandlerDeps): Route[] {
   return [
+    {
+      method: 'POST',
+      pattern: /^\/auth\/setup$/,
+      handler: async (req, res) => handleAuthSetup(req, res, deps),
+    },
     {
       method: 'POST',
       pattern: /^\/auth\/login$/,
@@ -37,6 +46,51 @@ export function buildAuthRoutes(deps: AuthHandlerDeps): Route[] {
       handler: async (req, res) => handleAuthLogout(req, res, deps),
     },
   ];
+}
+
+// First-run: create the local admin account and finish setup, in one step. Public
+// (see isPublicAdminApiRoute) but self-guarding — it refuses once an admin exists,
+// so it can only ever bootstrap the very first account. Logs the new admin straight
+// in so the welcome screen lands in the shell without a separate login round-trip.
+async function handleAuthSetup(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: AuthHandlerDeps,
+): Promise<void> {
+  if (hasAdminUser(deps.configPort)) {
+    deps.sendJson(res, 409, { error: 'already-set-up' });
+    return;
+  }
+  const body = (await deps.readJsonBody(req, res)) as { username?: string; password?: string } | null;
+  if (res.writableEnded) return;
+
+  const username = body?.username?.trim() ?? '';
+  const password = typeof body?.password === 'string' ? body.password : '';
+  if (!USERNAME_PATTERN.test(username)) {
+    deps.sendJson(res, 400, { error: 'invalid-username' });
+    return;
+  }
+  if (!password || password.length > MAX_CREDENTIAL_LENGTH) {
+    deps.sendJson(res, 400, { error: 'invalid-password' });
+    return;
+  }
+
+  await saveUser(deps.configPort, { username, password, admin: true, source: 'local' });
+  await deps.configPort.updateConfig((cfg) => {
+    cfg.system.audioserver.setupComplete = true;
+  });
+
+  const session = deps.sessionStore.create(username);
+  res.setHeader('Set-Cookie', deps.sessionStore.buildCookie(req, session));
+  deps.sendJson(res, 200, {
+    ok: true,
+    username,
+    source: 'local',
+    tokenRights: null,
+    loginAt: session.createdAt,
+    expiresAt: session.expiresAt,
+    token: session.id,
+  });
 }
 
 async function handleAuthLogin(
@@ -81,8 +135,10 @@ async function handleAuthLogin(
     return;
   }
 
-  if (!cfg.system.audioserver.paired) {
-    deps.sendJson(res, 409, { error: 'miniserver-auth-required' });
+  // No local match. Miniserver credentials are only an alternate login when Loxone
+  // is connected; otherwise this is simply a bad local login.
+  if (!cfg.system.audioserver.loxoneEnabled) {
+    deps.sendJson(res, 401, { error: 'invalid-credentials' });
     return;
   }
   const miniserverBaseUrl = readMiniserverBaseUrlFromConfig(cfg);

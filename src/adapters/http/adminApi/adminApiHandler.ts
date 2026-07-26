@@ -24,6 +24,8 @@ import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegi
 
 type AdminApiOptions = {
   onReinitialize?: () => Promise<boolean>;
+  onSoftRestart?: () => Promise<boolean>;
+  onLoxoneToggle?: (enabled: boolean) => Promise<void>;
   notifier: NotifierPort;
   loxoneNotifier: LoxoneWsNotifier;
   spotifyManagerProvider: SpotifyServiceManagerProvider;
@@ -32,6 +34,7 @@ type AdminApiOptions = {
   configPort: ConfigPort;
   spotifyInputService: SpotifyInputService;
   sendspinLineInService: SendspinLineInService;
+  syncMediaServer?: () => Promise<void>;
   musicAssistantStreamService: MusicAssistantStreamService;
   snapcastCore: SnapcastCore;
   squeezeliteCore: SqueezeliteCore;
@@ -151,6 +154,8 @@ export class AdminApiHandler {
   private readonly log = createLogger('Http', 'AdminApi');
   private readonly runtimeConfig = loadRuntimeConfig();
   private readonly onReinitialize?: () => Promise<boolean>;
+  private readonly onSoftRestart?: () => Promise<boolean>;
+  private readonly onLoxoneToggle?: (enabled: boolean) => Promise<void>;
   private readonly notifier: NotifierPort;
   private readonly loxoneNotifier: LoxoneWsNotifier;
   private readonly spotifyManagerProvider: SpotifyServiceManagerProvider;
@@ -159,6 +164,7 @@ export class AdminApiHandler {
   private readonly configPort: ConfigPort;
   private readonly spotifyInputService: SpotifyInputService;
   private readonly sendspinLineInService: SendspinLineInService;
+  private readonly syncMediaServer?: () => Promise<void>;
   private readonly musicAssistantStreamService: MusicAssistantStreamService;
   private readonly snapcastCore: SnapcastCore;
   private readonly squeezeliteCore: SqueezeliteCore;
@@ -181,6 +187,8 @@ export class AdminApiHandler {
 
   constructor(options: AdminApiOptions) {
     this.onReinitialize = options.onReinitialize;
+    this.onSoftRestart = options.onSoftRestart;
+    this.onLoxoneToggle = options.onLoxoneToggle;
     this.notifier = options.notifier;
     this.loxoneNotifier = options.loxoneNotifier;
     this.spotifyManagerProvider = options.spotifyManagerProvider;
@@ -189,6 +197,7 @@ export class AdminApiHandler {
     this.configPort = options.configPort;
     this.spotifyInputService = options.spotifyInputService;
     this.sendspinLineInService = options.sendspinLineInService;
+    this.syncMediaServer = options.syncMediaServer;
     this.musicAssistantStreamService = options.musicAssistantStreamService;
     this.snapcastCore = options.snapcastCore;
     this.squeezeliteCore = options.squeezeliteCore;
@@ -259,6 +268,8 @@ export class AdminApiHandler {
         snapcastCore: this.snapcastCore,
         runtimeConfig: this.runtimeConfig,
         onReinitialize: this.onReinitialize,
+        onSoftRestart: this.onSoftRestart,
+        onLoxoneToggle: this.onLoxoneToggle,
         loxoneNotifier: this.loxoneNotifier,
         sonnCorePeers: this.sonnCorePeers,
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
@@ -312,6 +323,7 @@ export class AdminApiHandler {
         loxoneNotifier: this.loxoneNotifier,
         sendspinLineInService: this.sendspinLineInService,
         zoneManager: this.zoneManager,
+        syncMediaServer: this.syncMediaServer,
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),
@@ -376,14 +388,15 @@ export class AdminApiHandler {
     const method = (req.method ?? 'GET').toUpperCase();
 
     try {
-      const cfg = this.configPort.getConfig();
-      // Authentication applies once there is somebody to authenticate as: a
-      // Miniserver pairing, or a server-local admin account. Gating on
-      // `hasAdminUser` rather than "any user" matters — a stream-only Subsonic
-      // account must not lock an operator out of an otherwise open admin UI.
-      const authRequired =
-        cfg.system.audioserver.paired || hasAdminUser(this.configPort);
-      if (authRequired && cfg.system.audioserver.authEnabled !== false && !isPublicAdminApiRoute(pathname, method)) {
+      // Authentication is driven purely by the local admin account created during
+      // first-run setup — NOT by Miniserver pairing. So connecting Loxone never
+      // forces auth on its own, and a fresh box stays open just long enough to
+      // create that first admin (the setup endpoint is public until one exists).
+      // Miniserver credentials remain an alternate way to log in once connected.
+      // Gating on `hasAdminUser` rather than "any user" matters — a stream-only
+      // Subsonic account must not lock an operator out.
+      const authRequired = hasAdminUser(this.configPort);
+      if (authRequired && !isPublicAdminApiRoute(pathname, method)) {
         const session = this.sessionStore.getFromRequest(req);
         if (!session) {
           sendJson(res, 401, { error: 'auth-required' });

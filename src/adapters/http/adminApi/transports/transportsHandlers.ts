@@ -118,16 +118,13 @@ export function buildTransportsRoutes(deps: TransportsHandlerDeps): Route[] {
 }
 
 function handleTransportDefinitions(res: ServerResponse, deps: TransportsHandlerDeps): void {
-  // Availability comes along with the catalogue so the zone picker and the
-  // Protocols tab read the same list; absent config means available.
-  const availability = deps.configPort.getConfig().outputs ?? {};
+  // Every output the build ships is offered; there is no per-type availability gate.
   const payload = OUTPUT_DEFINITIONS.filter(
     (definition) => !HIDDEN_TRANSPORT_IDS.has(definition.id),
   ).map((definition) => ({
     id: definition.id,
     label: definition.label,
     description: definition.description ?? '',
-    enabled: availability[definition.id]?.enabled !== false,
     fields: definition.fields.map((field) => ({
       id: field.id,
       label: field.label,
