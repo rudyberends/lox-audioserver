@@ -1,17 +1,21 @@
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { ContentManager } from '@/adapters/content/contentManager';
 import type { ContentFolder } from '@/ports/ContentTypes';
+import {
+  searchSourceFromServiceKey,
+  serviceNativeKey,
+} from '@/domain/media/serviceIdentity';
 
 /**
  * One browsable top-level service the server can expose to an external content
  * client (the DLNA MediaServer's ContentDirectory, the Subsonic API, …).
  *
  * `key` is the stable identity used in the client-facing object/entity ids: the
- * literals `library`/`radio` for the built-ins, or a per-instance **bridge id**
- * for streaming services. The bridge id matters: `getServiceFolder(service, user)`
- * only resolves the right provider when `user` is that bridge id — the generic
- * provider name does NOT resolve a bridge, and one provider type can have several
- * bridges (one per account), each of which is its own service here.
+ * literals `library`/`radio` for the built-ins, and the service-native name for a
+ * streaming account (`applemusic`, or `applemusic:p0gngd` when a service has more
+ * than one). One provider type can have several accounts, each of which is its own
+ * service here. Deliberately NOT the Loxone bridge id: that word describes a
+ * disguise these clients are not party to.
  *
  * `id3Probe` is the folder whose children carry the collection entry points
  * ("Albums"/"Artists"/"Playlists"). For a streaming bridge that is its root; for
@@ -120,17 +124,19 @@ export function buildBrowsableServices(
     if (!provider || !permitted(provider)) {
       continue;
     }
-    const bridgeId = bridge.id;
+    // These consumers have no Spotify to be disguised as, so the account is named
+    // service-natively here — `applemusic`, or `applemusic:p0gngd` when there is
+    // more than one of that service. The Loxone bridge id never leaves its adapter.
+    const key = serviceNativeKey(bridge, bridges);
     services.push({
-      key: bridgeId,
+      key,
       provider,
       title: bridge.label?.trim() || providerTitle(provider),
       rootFolderId: 'root',
       id3Probe: 'root',
-      // The service manager registers every bridge provider under this key.
-      searchSource: `spotify@${bridgeId}`,
+      searchSource: searchSourceFromServiceKey(key),
       browse: (cm, folderId, offset, limit) =>
-        cm.getServiceFolder(provider, bridgeId, folderId, offset, limit),
+        cm.getServiceFolder(key, key, folderId, offset, limit),
     });
   }
 

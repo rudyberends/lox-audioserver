@@ -37,10 +37,10 @@ export type MediaServerService =
 export type ContainerRef = {
   kind: 'container';
   /**
-   * Stable service key: 'library'/'radio' for the built-ins, or a per-instance
-   * bridge id for streaming services. The ContentDirectory maps it back to the
-   * right getServiceFolder(service, user) call. Free-form because bridge ids are
-   * config-generated (e.g. `bridge-applemusic-p0gngd`), not a fixed enum.
+   * Stable service key: 'library'/'radio' for the built-ins, or the service-native
+   * name of a streaming account (`applemusic`, or `applemusic:p0gngd` when a
+   * service has more than one) — see `domain/media/serviceIdentity`. Free-form
+   * rather than a fixed enum because the account part comes from config.
    */
   service: string;
   /** Native folder id understood by the content layer for this service. */

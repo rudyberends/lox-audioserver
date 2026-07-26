@@ -7,6 +7,13 @@ import {
   toServiceNative,
   toLoxoneAudiopath,
 } from '../src/domain/loxone/bridgeIdentity';
+import {
+  searchSourceFromServiceKey,
+  serviceNativeKey,
+} from '../src/domain/media/serviceIdentity';
+import { buildBrowsableServices } from '../src/adapters/content/browsableServices';
+import type { ConfigPort } from '../src/ports/ConfigPort';
+import { SpotifyServiceManager } from '../src/adapters/content/providers/spotifyServiceManager';
 import type { StreamingServiceConfig } from '../src/domain/config/types';
 
 // --- Fixtures ---------------------------------------------------------------
@@ -147,4 +154,92 @@ test('toLoxoneAudiopath: genuine spotify + unknown (service,slug) pass through',
 test('accountCountByService reflects the config', () => {
   assert.equal(buildBridgeRegistry(SINGLE).accountCountByService.get('applemusic'), 1);
   assert.equal(buildBridgeRegistry(MULTI).accountCountByService.get('applemusic'), 2);
+});
+
+// --- serviceNativeKey: what a non-Loxone consumer calls an account -----------
+
+test('serviceNativeKey names a lone account by its service alone', () => {
+  assert.equal(serviceNativeKey(SINGLE[0]!, SINGLE), 'applemusic');
+  assert.equal(serviceNativeKey(SINGLE[1]!, SINGLE), 'soundcloud');
+});
+
+// The slug only earns its place when there is something to tell apart, so the
+// common setup gets the short name and nothing has to know about accounts.
+test('serviceNativeKey adds the account only when a service has several', () => {
+  assert.equal(serviceNativeKey(MULTI[0]!, MULTI), 'applemusic:aaa111');
+  assert.equal(serviceNativeKey(MULTI[1]!, MULTI), 'applemusic:bbb222');
+});
+
+test('serviceNativeKey ignores disabled accounts when counting', () => {
+  const bridges: StreamingServiceConfig[] = [
+    { id: 'bridge-applemusic-aaa111', label: 'A', provider: 'applemusic' },
+    { id: 'bridge-applemusic-bbb222', label: 'B', provider: 'applemusic', enabled: false },
+  ];
+  assert.equal(serviceNativeKey(bridges[0]!, bridges), 'applemusic');
+});
+
+// globalSearch spends the colon on its filter list, so the account moves behind an
+// `@` there. A single-account service reads the same either way.
+test('searchSourceFromServiceKey moves the account behind an @', () => {
+  assert.equal(searchSourceFromServiceKey('applemusic'), 'applemusic');
+  assert.equal(searchSourceFromServiceKey('applemusic:aaa111'), 'applemusic@aaa111');
+});
+
+// --- the identity that actually reaches DLNA and Subsonic -------------------
+
+const configWith = (bridges: StreamingServiceConfig[]): ConfigPort =>
+  ({
+    getConfig: () => ({
+      content: { streamingServices: bridges, radio: { radioParadise: { enabled: true } } },
+    }),
+  }) as unknown as ConfigPort;
+
+// The whole point: the word "bridge" describes a disguise DLNA and Subsonic are not
+// party to, and it used to be in every object id they handed out.
+test('no browsable service carries a Loxone bridge id', () => {
+  for (const bridges of [SINGLE, MULTI]) {
+    for (const service of buildBrowsableServices(configWith(bridges))) {
+      assert.ok(!service.key.includes('bridge'), `key ${service.key}`);
+      assert.ok(!(service.searchSource ?? '').includes('bridge'), `source ${service.searchSource}`);
+      assert.ok(!(service.searchSource ?? '').includes('spotify@'), `source ${service.searchSource}`);
+    }
+  }
+});
+
+test('browsable services are named service-natively, one per account', () => {
+  assert.deepEqual(
+    buildBrowsableServices(configWith(SINGLE)).map((s) => [s.key, s.searchSource]),
+    [
+      ['library', 'local'],
+      ['radio', null],
+      ['applemusic', 'applemusic'],
+      ['soundcloud', 'soundcloud'],
+    ],
+  );
+  assert.deepEqual(
+    buildBrowsableServices(configWith(MULTI)).map((s) => [s.key, s.searchSource]),
+    [
+      ['library', 'local'],
+      ['radio', null],
+      ['applemusic:aaa111', 'applemusic@aaa111'],
+      ['applemusic:bbb222', 'applemusic@bbb222'],
+    ],
+  );
+});
+
+// With one account per service the service name is enough. With two, it is not —
+// and resolving to "the first one" would quietly serve the wrong library. The root
+// listing carries the account's own label, so it says which one answered.
+test('a service-native key with an account resolves to that account', async () => {
+  const configPort = { getConfig: () => ({ content: {} }) } as unknown as ConfigPort;
+  const manager = new SpotifyServiceManager(configPort, [], 'test-client', MULTI);
+
+  const a = await manager.getFolder('applemusic:aaa111', 'applemusic:aaa111', 'root', 0, 1);
+  const b = await manager.getFolder('applemusic:bbb222', 'applemusic:bbb222', 'root', 0, 1);
+  assert.equal(a?.name, 'Apple A');
+  assert.equal(b?.name, 'Apple B');
+
+  // The search grammar's `@` form has to land on the same account.
+  const viaSearchForm = await manager.getFolder('applemusic', 'bbb222', 'root', 0, 1);
+  assert.equal(viaSearchForm?.name, 'Apple B');
 });

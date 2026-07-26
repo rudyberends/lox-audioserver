@@ -25,6 +25,7 @@ import { resolveSpotifyClientId } from '@/adapters/content/providers/spotify/uti
 import { parseSearchLimits } from '@/adapters/content/utils/searchLimits';
 import { resolveCoverHost } from '@/shared/utils/net';
 import { slugFromBridgeId } from '@/domain/loxone/bridgeIdentity';
+import { serviceNativeKey } from '@/domain/media/serviceIdentity';
 
 type ProviderId = string;
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
@@ -828,6 +829,15 @@ export class SpotifyServiceManager {
    */
   private resolveProviderId(service: string, user: string): ProviderId | null {
     if (service) {
+      // A service-native request may hand the account over separately, as search
+      // does (`applemusic` + `p0gngd`). With several accounts of one service the
+      // service name alone would resolve to the first, so try the pair first.
+      if (user) {
+        const paired = this.normalizeServiceId(`${service}:${user}`);
+        if (this.providers.has(paired)) {
+          return paired;
+        }
+      }
       const serviceId = this.normalizeServiceId(service);
       if (this.providers.has(serviceId)) {
         return serviceId;
@@ -918,7 +928,9 @@ export class SpotifyServiceManager {
     if (!raw || raw === 'spotify') {
       return null;
     }
-    const [service, slug] = raw.split(':');
+    // Either separator names the account: browse ids spend the colon (`applemusic:p0gngd`),
+    // search sources spend it on the filter list and use `@` instead.
+    const [service, slug] = raw.split(/[:@]/);
     const candidates = (this.bridges ?? []).filter(
       (b) => b && b.enabled !== false && (b.provider || '').toLowerCase() === service,
     );
@@ -979,16 +991,12 @@ export class SpotifyServiceManager {
    * that service). This is the core identity — the internal provider-map key
    * stays `spotify@<bridgeId>` (see bridgeProviderId). The Loxone adapter
    * translates between the two at the protocol boundary.
+   *
+   * The same identity names an account to every non-Loxone consumer, so the rule
+   * itself lives in `domain/media/serviceIdentity`.
    */
   private serviceNativePrefixFor(bridge: StreamingServiceConfig): string {
-    const service = (bridge.provider || 'spotify').toLowerCase();
-    const sameServiceCount = (this.bridges ?? []).filter(
-      (b) => b && b.enabled !== false && (b.provider || '').toLowerCase() === service,
-    ).length;
-    if (sameServiceCount <= 1) {
-      return service;
-    }
-    return `${service}:${slugFromBridgeId(bridge.id, service)}`;
+    return serviceNativeKey(bridge, this.bridges);
   }
 
   private registerBridgeProviders(): void {
@@ -1282,8 +1290,13 @@ export function buildSpotifyManagerFromConfig(configPort: ConfigPort): SpotifySe
  */
 export class SpotifyServiceManagerProvider {
   private manager: SpotifyServiceManager | null = null;
+  // Spelled out rather than a constructor parameter property: the test runner
+  // strips types without transforming, and that syntax needs a transform.
+  private readonly configPort: ConfigPort;
 
-  constructor(private readonly configPort: ConfigPort) {}
+  constructor(configPort: ConfigPort) {
+    this.configPort = configPort;
+  }
 
   public get(): SpotifyServiceManager {
     if (!this.manager) {

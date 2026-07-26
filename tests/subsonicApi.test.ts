@@ -13,6 +13,11 @@ import type { ContentFolder, ContentFolderItem } from '../src/ports/ContentTypes
 const USERNAME = 'rudy';
 const PASSWORD = 's3cret';
 const BRIDGE_ID = 'bridge-applemusic-p0gngd';
+/**
+ * What Subsonic calls this account. The bridge id above is its Loxone name and
+ * stays inside that adapter; every other consumer uses the service-native one.
+ */
+const SERVICE_KEY = 'applemusic';
 
 type BrowseCall = { service: string; user: string; folderId: string; offset: number; limit: number };
 
@@ -262,12 +267,12 @@ test('subsonic api: getMusicFolders lists library, radio and enabled bridges onl
   // The disabled Tidal bridge must not appear.
   assert.ok(!names.includes('Tidal'));
   // Ids are the stable hash, not an array index.
-  assert.equal(folders[2].id, musicFolderId(BRIDGE_ID));
+  assert.equal(folders[2].id, musicFolderId(SERVICE_KEY));
 });
 
 test('subsonic api: getIndexes buckets top-level entries alphabetically', async () => {
   const { api } = makeHarness();
-  const body = await call(api, 'getIndexes', `musicFolderId=${musicFolderId(BRIDGE_ID)}`);
+  const body = await call(api, 'getIndexes', `musicFolderId=${musicFolderId(SERVICE_KEY)}`);
   const index = body.indexes.index;
   assert.deepEqual(
     index.map((entry: any) => entry.name),
@@ -281,7 +286,7 @@ test('subsonic api: getIndexes buckets top-level entries alphabetically', async 
 
 test('subsonic api: getMusicDirectory walks a bridge folder and maps tracks to songs', async () => {
   const { api, browseCalls } = makeHarness();
-  const indexes = await call(api, 'getIndexes', `musicFolderId=${musicFolderId(BRIDGE_ID)}`);
+  const indexes = await call(api, 'getIndexes', `musicFolderId=${musicFolderId(SERVICE_KEY)}`);
   const albumsDir = indexes.indexes.index[0].artist[0];
 
   const body = await call(api, 'getMusicDirectory', `id=${encodeURIComponent(albumsDir.id)}`);
@@ -291,16 +296,16 @@ test('subsonic api: getMusicDirectory walks a bridge folder and maps tracks to s
   assert.equal(child[0].title, 'Kid A');
   assert.equal(child[0].isDir, true);
 
-  // The bridge id must be the `user` argument — the provider name alone does not
-  // resolve a bridge in the content layer.
-  const bridgeCalls = browseCalls.filter((c) => c.service === 'applemusic');
+  // Both arguments are the service-native identity; the content layer resolves the
+  // account from it, so no Loxone bridge id reaches this path.
+  const bridgeCalls = browseCalls.filter((c) => c.service === SERVICE_KEY);
   assert.ok(bridgeCalls.length > 0);
-  assert.ok(bridgeCalls.every((c) => c.user === BRIDGE_ID));
+  assert.ok(bridgeCalls.every((c) => c.user === SERVICE_KEY));
 });
 
 test('subsonic api: getAlbum returns the album songs with playable ids', async () => {
   const { api } = makeHarness();
-  const indexes = await call(api, 'getIndexes', `musicFolderId=${musicFolderId(BRIDGE_ID)}`);
+  const indexes = await call(api, 'getIndexes', `musicFolderId=${musicFolderId(SERVICE_KEY)}`);
   const albumsDir = indexes.indexes.index[0].artist[0];
   const dir = await call(api, 'getMusicDirectory', `id=${encodeURIComponent(albumsDir.id)}`);
   const albumId = dir.directory.child[0].id;
@@ -331,8 +336,8 @@ test('subsonic api: search3 fans out across services and merges results', async 
   const sources = searchCalls.map((c) => c.source);
   assert.ok(sources.some((s) => s.startsWith('local:')), `local missing in ${sources}`);
   assert.ok(
-    sources.some((s) => s.startsWith(`spotify@${BRIDGE_ID}:`)),
-    `bridge missing in ${sources}`,
+    sources.some((s) => s.startsWith(`${SERVICE_KEY}:`)),
+    `streaming service missing in ${sources}`,
   );
   // Per-category limits ride along in the source. parseSearchLimits splits
   // `type#limit`, so an `=` here would be parsed as part of the type name and
@@ -359,7 +364,7 @@ test('subsonic api: search with an empty query returns nothing rather than fault
 
 test('subsonic api: a directory larger than one page is walked to completion', async () => {
   const { api, browseCalls } = makeHarness({ bigFolderSize: 450 });
-  const indexes = await call(api, 'getIndexes', `musicFolderId=${musicFolderId(BRIDGE_ID)}`);
+  const indexes = await call(api, 'getIndexes', `musicFolderId=${musicFolderId(SERVICE_KEY)}`);
   const serviceRoot = indexes.indexes.index[0].artist[0].id;
   // Re-point at the oversized folder by asking for it directly.
   const bigId = serviceRoot.replace(/\.[^.]+$/, `.${Buffer.from('big').toString('base64url')}`);
@@ -381,7 +386,7 @@ test('subsonic api: a directory larger than one page is walked to completion', a
 
 test('subsonic api: the directory cap truncates instead of walking forever', async () => {
   const { api } = makeHarness({ bigFolderSize: 5000, directoryLimit: 300 });
-  const indexes = await call(api, 'getIndexes', `musicFolderId=${musicFolderId(BRIDGE_ID)}`);
+  const indexes = await call(api, 'getIndexes', `musicFolderId=${musicFolderId(SERVICE_KEY)}`);
   const serviceRoot = indexes.indexes.index[0].artist[0].id;
   const bigId = serviceRoot.replace(/\.[^.]+$/, `.${Buffer.from('big').toString('base64url')}`);
 
