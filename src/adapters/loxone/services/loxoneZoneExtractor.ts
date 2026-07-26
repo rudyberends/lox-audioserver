@@ -129,21 +129,42 @@ export function extractZonesFromLoxoneConfig(
   });
 }
 
-export function buildZoneConfigs(descriptors: ZoneDescriptor[]): ZoneConfig[] {
-  return descriptors.map((descriptor) => ({
-    id: descriptor.id,
-    name: descriptor.name,
-    sourceMac: descriptor.sourceMac,
-    transports: [],
-    inputs: {
-      airplay: {
-        enabled: true,
-        port: undefined,
-        model: 'generic',
-      },
-    },
-    volumes: defaultVolumes(),
-  }));
+/**
+ * Projects the pushed Loxone player list onto our zone config.
+ *
+ * Ownership is split: the Miniserver decides **which** zones exist and their
+ * identity (name, source), we own how each one plays — output, receivers, EQ,
+ * power management and volumes. So this merges onto the existing zones by id
+ * instead of rebuilding them; a config deploy would otherwise wipe everything
+ * the user set up here. Zones the Miniserver no longer lists are dropped.
+ */
+export function buildZoneConfigs(
+  descriptors: ZoneDescriptor[],
+  existing: readonly ZoneConfig[] = [],
+): ZoneConfig[] {
+  const byId = new Map(existing.map((zone) => [zone.id, zone]));
+  return descriptors.map((descriptor) => {
+    const current = byId.get(descriptor.id);
+    if (current) {
+      return {
+        ...current,
+        // Loxone-owned identity, refreshed on every push.
+        name: descriptor.name,
+        sourceMac: descriptor.sourceMac,
+        sourceSerial: descriptor.sourceSerial,
+      };
+    }
+    return {
+      id: descriptor.id,
+      name: descriptor.name,
+      sourceMac: descriptor.sourceMac,
+      sourceSerial: descriptor.sourceSerial,
+      output: null,
+      // Receivers are opt-in per player, so a new zone starts with none.
+      inputs: {},
+      volumes: defaultVolumes(),
+    };
+  });
 }
 
 function defaultVolumes() {

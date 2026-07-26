@@ -204,7 +204,7 @@ export class LoxoneConfigService {
       return;
     }
 
-    cfg.zones = buildZoneConfigs(descriptors);
+    cfg.zones = buildZoneConfigs(descriptors, cfg.zones ?? []);
   }
 
   private async computeCrc(rawString: string): Promise<string> {
