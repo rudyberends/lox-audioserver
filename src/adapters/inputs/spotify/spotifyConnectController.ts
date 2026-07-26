@@ -1159,7 +1159,8 @@ export class SpotifyConnectInputController implements ZoneOutput {
         if (!zone) return;
         if (!zone.inputs) zone.inputs = {};
         if (!zone.inputs.spotify) {
-          zone.inputs.spotify = { enabled: true, deviceId };
+          // Only record the id — Spotify Connect stays off until the user enables it.
+          zone.inputs.spotify = { enabled: false, deviceId };
           return;
         }
         zone.inputs.spotify.deviceId = deviceId;

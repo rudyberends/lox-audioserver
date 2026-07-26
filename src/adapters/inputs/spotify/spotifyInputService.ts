@@ -1442,7 +1442,8 @@ export class SpotifyInputService {
   private readonly instances = new Map<number, SpotifyConnectInstance>();
   private accountIndex = new Map<string, SpotifyAccountConfig>();
   private controller: SpotifyConnectController | null = null;
-  private enabled = false;
+  /** Set once syncZones has run, so instances aren't started before configuration. */
+  private synced = false;
   private readonly pendingStartTimers = new Map<number, NodeJS.Timeout>();
   constructor(
     private readonly notifyOutputError: OutputErrorHandler,
@@ -1474,7 +1475,7 @@ export class SpotifyInputService {
         context: { zoneId },
       },
     ).then((stopped) => {
-      if (!stopped || !shouldRestart || !this.enabled) {
+      if (!stopped || !shouldRestart || !this.synced) {
         return;
       }
       setTimeout(() => {
@@ -1591,8 +1592,8 @@ export class SpotifyInputService {
 
   public syncZones(zones: ZoneConfig[], spotifyConfig?: GlobalSpotifyConfig | null): void {
     this.configPort.ensureInputs();
-    this.enabled = spotifyConfig?.enabled ?? true;
-    const inputsEnabled = this.enabled;
+    // Spotify Connect is opt-in per player; the only gate is zone.inputs.spotify.
+    this.synced = true;
     if (!this.controller) {
       this.log.debug('spotify controller not configured; skipping sync');
       return;
@@ -1628,7 +1629,7 @@ export class SpotifyInputService {
     const connectZones = zones.filter((zone) => {
       const config = zone.inputs?.spotify ?? this.buildDefaultZoneConfig(zone);
       const offloadEnabled = config.offload === true;
-      return inputsEnabled && Boolean(config.enabled) && !offloadEnabled;
+      return Boolean(config.enabled) && !offloadEnabled;
     });
     const connectZoneOrder = new Map<number, number>();
     connectZones.forEach((zone, index) => {
@@ -1645,7 +1646,7 @@ export class SpotifyInputService {
 
       const config = zone.inputs?.spotify ?? this.buildDefaultZoneConfig(zone);
       const offloadEnabled = config.offload === true;
-      const connectEnabled = inputsEnabled && Boolean(config?.enabled) && !offloadEnabled;
+      const connectEnabled = Boolean(config?.enabled) && !offloadEnabled;
       const account = this.resolveAccount(config.accountId) ?? defaultAccount;
       const credPath = 'inline';
       desired.add(zone.id);
@@ -1686,7 +1687,7 @@ export class SpotifyInputService {
         this.queueStart(zone.id, instance, delayMs, 'sync_new');
       } else {
         this.cancelQueuedStart(zone.id);
-        if (inputsEnabled && !offloadEnabled) {
+        if (!offloadEnabled) {
           // Best-effort warm start; failure will be retried via normal lifecycle.
           void bestEffort(() => instance.start(), {
             fallback: undefined,
@@ -1746,9 +1747,10 @@ export class SpotifyInputService {
     this.instances.delete(zoneId);
   }
 
+  /** Fallback for a zone with no Spotify entry: receivers are off until enabled. */
   private buildDefaultZoneConfig(zone: ZoneConfig): ZoneSpotifyConfig {
     return {
-      enabled: true,
+      enabled: false,
       publishName: zone.name,
     };
   }
@@ -1897,7 +1899,8 @@ export class SpotifyInputService {
         target.inputs = {};
       }
       if (!target.inputs.spotify) {
-        target.inputs.spotify = { enabled: true };
+        // Only record the id — Spotify Connect stays off until the user enables it.
+        target.inputs.spotify = { enabled: false };
       }
       target.inputs.spotify.deviceId = generated;
     }).catch((error) => {
@@ -1922,7 +1925,7 @@ export class SpotifyInputService {
     delayMs: number,
     reason: 'sync_existing' | 'sync_new' | 'restart_after_stop',
   ): void {
-    if (!this.enabled) {
+    if (!this.synced) {
       return;
     }
     this.cancelQueuedStart(zoneId);

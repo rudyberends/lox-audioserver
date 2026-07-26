@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '@/shared/logging/logger';
-import type { ZoneConfig, GlobalDlnaConfig } from '@/domain/config/types';
+import type { ZoneConfig } from '@/domain/config/types';
 import type { AirplayController } from '@/ports/InputsPort';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import { buildBaseUrl } from '@/shared/streamUrl';
@@ -54,12 +54,8 @@ export class DlnaInputService {
     return buildBaseUrl({ host, port: this.httpPort });
   }
 
-  public syncZones(zones: ZoneConfig[], dlnaConfig?: GlobalDlnaConfig | null): void {
-    const enabled = dlnaConfig?.enabled ?? false;
-    if (!enabled) {
-      this.removeAll();
-      return;
-    }
+  /** DLNA is opt-in per player: a zone gets a renderer iff its own input is on. */
+  public syncZones(zones: ZoneConfig[]): void {
     if (!this.controller) {
       this.log.debug('dlna input controller not configured; skipping sync');
       return;

@@ -360,8 +360,8 @@ export class ZoneManager {
     this.sharedPowerGroupManager.configure(groups?.powerGroups, zoneConfigs);
     this.inputConfigurator.configure();
     const inputsPort = this.inputsPort;
-    inputsPort.syncAirplayZones(zoneConfigs, inputs?.airplay ?? null);
-    inputsPort.syncDlnaZones(zoneConfigs, inputs?.dlna ?? null);
+    inputsPort.syncAirplayZones(zoneConfigs);
+    inputsPort.syncDlnaZones(zoneConfigs);
     inputsPort.syncSpotifyZones(zoneConfigs, inputs?.spotify ?? null);
     inputsPort.configureMusicAssistant(this.playbackCoordinator.getMusicAssistantInputHandlers());
     const contentPort = this.contentPort;
@@ -417,12 +417,12 @@ export class ZoneManager {
     this.sharedPowerGroupManager.configure(groups?.powerGroups, allZones);
     this.inputConfigurator.configure();
     // Partial re-syncs (e.g. dynamic browser zone registration) call this without
-    // the global input config; fall back to the last full config so we don't
-    // disable AirPlay/Spotify globally.
+    // the input config; fall back to the last full one so Spotify keeps its accounts.
+    // Receivers themselves are per-zone, so they can't be lost by a partial re-sync.
     const effectiveInputs = inputs ?? this.lastInputs;
     const inputsPort = this.inputsPort;
-    inputsPort.syncAirplayZones(allZones, effectiveInputs?.airplay ?? null);
-    inputsPort.syncDlnaZones(allZones, effectiveInputs?.dlna ?? null);
+    inputsPort.syncAirplayZones(allZones);
+    inputsPort.syncDlnaZones(allZones);
     inputsPort.syncSpotifyZones(allZones, effectiveInputs?.spotify ?? null);
     inputsPort.configureMusicAssistant(this.playbackCoordinator.getMusicAssistantInputHandlers());
     const contentPort = this.contentPort;

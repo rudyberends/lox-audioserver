@@ -1,7 +1,7 @@
 import type { PassThrough } from 'node:stream';
 import type { PlaybackSource } from '@/ports/EngineTypes';
 import type { PlaybackMetadata, CoverArtPayload } from '@/ports/types/playback';
-import type { ZoneConfig, GlobalAirplayConfig, GlobalSpotifyConfig, GlobalDlnaConfig } from '@/domain/config/types';
+import type { ZoneConfig, GlobalSpotifyConfig } from '@/domain/config/types';
 import type { ZonePlayer } from '@/ports/types/zonePlayer';
 
 export type InputStreamOptions = {
@@ -82,11 +82,11 @@ export type MusicAssistantSwitchAwayHandlers = {
 export interface InputsPort {
   configureAirplay(controller: AirplayController): void;
   setAirplayPlayerResolver(resolver: (zoneId: number) => ZonePlayer | null): void;
-  syncAirplayZones(zones: ZoneConfig[], airplayConfig?: GlobalAirplayConfig | null): void;
+  syncAirplayZones(zones: ZoneConfig[]): void;
   renameAirplayZone(zoneId: number, name: string): Promise<void>;
   shutdownAirplay(): Promise<void>;
   configureDlna(controller: AirplayController): void;
-  syncDlnaZones(zones: ZoneConfig[], dlnaConfig?: GlobalDlnaConfig | null): void;
+  syncDlnaZones(zones: ZoneConfig[]): void;
   shutdownDlna(): void;
   configureSpotify(controller: SpotifyConnectController): void;
   syncSpotifyZones(zones: ZoneConfig[], spotifyConfig?: GlobalSpotifyConfig | null): void;

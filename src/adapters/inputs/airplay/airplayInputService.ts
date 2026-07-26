@@ -1,6 +1,6 @@
 import { createLogger } from '@/shared/logging/logger';
 import { bestEffort, bestEffortSync } from '@/shared/bestEffort';
-import type { ZoneConfig, GlobalAirplayConfig } from '@/domain/config/types';
+import type { ZoneConfig } from '@/domain/config/types';
 import type { AirplayController } from '@/ports/InputsPort';
 import { AirplayInstance } from '@/adapters/inputs/airplay/airplayInstance';
 import type { ZonePlayer } from '@/ports/types/zonePlayer';
@@ -29,13 +29,8 @@ export class AirplayInputService {
     // resolver currently unused; retained for compatibility with bootstrap wiring.
   }
 
-  public syncZones(zones: ZoneConfig[], airplayConfig?: GlobalAirplayConfig | null): void {
-    const enabled = airplayConfig?.enabled ?? false;
-    if (!enabled) {
-      this.log.debug('global airplay disabled; shutting down instances');
-      this.disableAllInstances();
-      return;
-    }
+  /** AirPlay is opt-in per player: a zone gets a receiver iff its own input is on. */
+  public syncZones(zones: ZoneConfig[]): void {
     if (!this.controller) {
       this.log.debug('airplay controller not configured; skipping sync');
       return;
@@ -157,18 +152,6 @@ export class AirplayInputService {
       });
     });
     this.instances.delete(zoneId);
-  }
-
-  private disableAllInstances(): void {
-    for (const [zoneId, instance] of this.instances.entries()) {
-      instance.stop().catch((error) => {
-        this.log.warn('failed to stop airplay instance', {
-          zoneId,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      });
-    }
-    this.instances.clear();
   }
 
   private markAllInstancesStopping(): void {
