@@ -27,6 +27,8 @@ interface ServerRuntime {
   listener: net.Server;
   wsServer: WebSocketServer;
   tlsEnabled: boolean;
+  /** Live sockets, so stop() can force the port free instead of waiting them out. */
+  sockets: Set<net.Socket>;
 }
 
 export interface LoxoneHttpServiceOptions {
@@ -72,12 +74,24 @@ export class LoxoneHttpService {
 
   public async stop(): Promise<void> {
     this.udpDiscovery.stop();
-    for (const runtime of this.servers) {
-      await new Promise<void>((resolve) => runtime.listener.close(() => resolve()));
-      runtime.httpServer.close();
-      runtime.wsServer.closeAllConnections();
-    }
+    const runtimes = [...this.servers];
     this.servers.length = 0;
+    // Drop live sessions BEFORE closing: the Loxone app holds a WebSocket open and
+    // the Miniserver keeps HTTP sockets alive, so close() would wait for them, hit
+    // the shutdown timeout, and leave the port bound — the next connect then fails
+    // with EADDRINUSE on 7091/7095.
+    await Promise.all(
+      runtimes.map(async (runtime) => {
+        runtime.wsServer.closeAllConnections();
+        runtime.httpServer.closeAllConnections?.();
+        for (const socket of runtime.sockets) {
+          socket.destroy();
+        }
+        runtime.sockets.clear();
+        await new Promise<void>((resolve) => runtime.listener.close(() => resolve()));
+        runtime.httpServer.close();
+      }),
+    );
   }
 
   private createServer(
@@ -115,7 +129,13 @@ export class LoxoneHttpService {
       this.handleWebSocket(definition, connection),
     );
 
-    return { definition, httpServer, listener, wsServer, tlsEnabled: !!httpsServer };
+    const sockets = new Set<net.Socket>();
+    listener.on('connection', (socket) => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+    });
+
+    return { definition, httpServer, listener, wsServer, tlsEnabled: !!httpsServer, sockets };
   }
 
   private listen(runtime: ServerRuntime): Promise<void> {
