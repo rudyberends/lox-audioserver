@@ -1,4 +1,5 @@
 import { buildResponse } from '@/adapters/loxone/commands/responses';
+import { forLoxoneSearchResult } from '@/adapters/loxone/commands/utils/loxoneItems';
 import { splitCommand, decodeSegment } from '@/adapters/loxone/commands/utils/commandUtils';
 import type { ContentManager } from '@/adapters/content/contentManager';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
@@ -29,7 +30,7 @@ export function createGlobalSearchHandlers(contentManager: ContentManager, notif
           const provider = (providerId || source.split('@')[0] || 'spotify').split('@')[0] ?? 'spotify';
           notifier.notifyGlobalSearchResult(
             {
-              ...result,
+              ...forLoxoneSearchResult(result),
               user,
               query,
             },

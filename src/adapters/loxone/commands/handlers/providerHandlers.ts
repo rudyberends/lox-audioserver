@@ -11,6 +11,7 @@ import {
   encodeLoxoneId,
 } from '@/adapters/loxone/commands/utils/loxoneIdCodec';
 import type { ContentFolderItem } from '@/ports/ContentTypes';
+import { forLoxoneFolder } from '@/adapters/loxone/commands/utils/loxoneItems';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import { decodeBase64Segment, safeJsonParse } from '@/adapters/loxone/commands/utils/payload';
 import { decryptWithAudioCfgKey } from '@/adapters/loxone/commands/handlers/configHandlers';
@@ -40,7 +41,7 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
       const start = parseNumberPart(parts[4], 0);
       const limit = parseNumberPart(parts[5], 50);
       const folder = await contentManager.getMediaFolder(folderId, start, limit);
-      return buildResponse(command, 'getmediafolder', folder ? [folder] : []);
+      return buildResponse(command, 'getmediafolder', folder ? [forLoxoneFolder(folder)] : []);
     },
     audioCfgGetRadios: async (command: string) => {
       const radios = await contentManager.getRadios();
@@ -147,7 +148,7 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
       const start = parseNumberPart(parts[parts.length - 2], 0);
       const limit = parseNumberPart(parts[parts.length - 1], 50);
       const folder = await contentManager.getServiceFolder(service, user, folderId, start, limit);
-      return buildResponse(command, 'getservicefolder', folder ? [folder] : []);
+      return buildResponse(command, 'getservicefolder', folder ? [forLoxoneFolder(folder)] : []);
     },
     audioCfgRescan: (command: string) => {
       void contentManager.rescanLibrary();

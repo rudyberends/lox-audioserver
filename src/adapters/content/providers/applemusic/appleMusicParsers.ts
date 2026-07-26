@@ -99,6 +99,7 @@ export function mapTrack(providerId: string, track: any): ContentFolderItem {
     thumbnail: cover,
     type: FileType.File,
     tag: 'track',
+    kind: 'track',
     duration: typeof attrs?.durationInMillis === 'number'
       ? Math.round(attrs.durationInMillis / 1000)
       : undefined,
@@ -132,6 +133,7 @@ export function mapLibraryTrack(providerId: string, track: any): ContentFolderIt
     thumbnail: cover,
     type: FileType.File,
     tag: 'track',
+    kind: 'track',
     duration: typeof durationMs === 'number' ? Math.round(durationMs / 1000) : undefined,
     hasCover: !!cover,
     provider: 'applemusic',
@@ -154,6 +156,7 @@ export function mapAlbum(providerId: string, album: any): ContentFolderItem {
     thumbnail: cover,
     type: FileType.PlaylistBrowsable,
     tag: 'album',
+    kind: 'album',
     provider: 'applemusic',
   };
 }
@@ -177,6 +180,7 @@ export function mapLibraryAlbum(providerId: string, album: any): ContentFolderIt
     thumbnail: cover,
     type: FileType.PlaylistBrowsable,
     tag: 'album',
+    kind: 'album',
     provider: 'applemusic',
   };
 }
@@ -196,6 +200,7 @@ export function mapArtist(providerId: string, artistObj: any): ContentFolderItem
     thumbnail: cover,
     type: FileType.PlaylistBrowsable,
     tag: 'artist',
+    kind: 'artist',
     provider: 'applemusic',
   };
 }
@@ -218,6 +223,7 @@ export function mapLibraryArtist(providerId: string, artistObj: any): ContentFol
     thumbnail: cover,
     type: FileType.PlaylistBrowsable,
     tag: 'artist',
+    kind: 'artist',
     provider: 'applemusic',
   };
 }
@@ -238,6 +244,7 @@ export function mapPlaylist(providerId: string, playlist: any): ContentFolderIte
     thumbnail: cover,
     type: FileType.PlaylistBrowsable,
     tag: 'playlist',
+    kind: 'playlist',
     provider: 'applemusic',
   };
 }
@@ -261,6 +268,7 @@ export function mapLibraryPlaylist(providerId: string, playlist: any): ContentFo
     thumbnail: cover,
     type: FileType.PlaylistBrowsable,
     tag: 'playlist',
+    kind: 'playlist',
     provider: 'applemusic',
   };
 }

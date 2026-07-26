@@ -1,6 +1,7 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { ContentManager } from '@/adapters/content/contentManager';
-import type { ContentFolder, ContentFolderItem, ContentItemMetadata } from '@/ports/ContentTypes';
+import type { ContentFolder, ContentFolderItem, ContentItemMetadata, ContentItemKind } from '@/ports/ContentTypes';
+import { resolveItemKind } from '@/adapters/content/contentItemKind';
 import { audioOutputSettings, mp3BitrateToBps } from '@/ports/types/audioFormat';
 import type { ContentProvider, BrowseResult, DidlContainer, DidlItem } from '@sonn-audio/node-upnp';
 import { ROOT_OBJECT_ID, parseSearchCriteria } from '@sonn-audio/node-upnp';
@@ -56,6 +57,25 @@ const CONTAINER_META_MAX = 2000;
 
 /** Loxone content type for a directly-playable file/track. Everything else browses. */
 const CONTENT_TYPE_TRACK = 2;
+
+/**
+ * UPnP class per neutral item kind. Everything used to be announced as a plain
+ * storage folder, so controllers could not render albums as albums, group by artist,
+ * or offer play-all on a playlist — the distinction existed in the provider data and
+ * was thrown away here.
+ */
+const CONTAINER_CLASS: Record<ContentItemKind, string> = {
+  album: 'object.container.album.musicAlbum',
+  artist: 'object.container.person.musicArtist',
+  playlist: 'object.container.playlistContainer',
+  show: 'object.container.album.musicAlbum',
+  category: 'object.container.genre.musicGenre',
+  folder: 'object.container.storageFolder',
+  // Playable kinds never reach the container path; mapped for exhaustiveness.
+  track: 'object.container.storageFolder',
+  radio: 'object.container.storageFolder',
+  episode: 'object.container.storageFolder',
+};
 
 // The engine transcodes MP3 at the configured output settings, so we advertise
 // honest res descriptors. A strict renderer keys on size + audio attributes to
@@ -154,7 +174,8 @@ export class MediaContentProvider implements ContentProvider {
           id: objectId,
           parentId: encodeContainerId(ref.service, 'root'),
           title: resolved.album || resolved.title || def?.title || ref.service,
-          upnpClass: 'object.container.album.musicAlbum',
+          upnpClass: CONTAINER_CLASS.album,
+          artist: resolved.artist || undefined,
           albumArtUri: resolved.coverurl || undefined,
         };
       }
@@ -287,7 +308,10 @@ export class MediaContentProvider implements ContentProvider {
     if (classFilter === 'item') {
       return null;
     }
-    return this.folderContainer(item, serviceKey, parentId);
+    // A search category ('album'/'artist') is a reliable hint for providers that
+    // don't tag their hits.
+    const hint = category === 'album' || category === 'artist' ? category : undefined;
+    return this.folderContainer(item, serviceKey, parentId, hint);
   }
 
   /** Metadata for a container whose id doubles as an audiopath (streaming services). */
@@ -379,17 +403,24 @@ export class MediaContentProvider implements ContentProvider {
     item: ContentFolderItem,
     serviceKey: string,
     parentId: string,
+    /** Used when the caller knows the kind and the item carries no hint (search). */
+    kindHint?: ContentItemKind,
   ): DidlContainer {
     // The child container id must be the value the content layer accepts back as a
     // folderId on the next Browse: the listing item's `id` (e.g. `library-local`),
     // NOT its audiopath — the audiopath is a play target, not a browse key.
     const folderId = item.id || item.audiopath || 'root';
+    const kind = item.kind ?? (item.tag ? resolveItemKind(item) : (kindHint ?? resolveItemKind(item)));
+    const artist = item.artist?.trim() || undefined;
     return this.rememberContainer({
       id: encodeContainerId(serviceKey, folderId),
       parentId,
       title: item.name || item.title || 'Folder',
-      upnpClass: 'object.container.storageFolder',
+      upnpClass: CONTAINER_CLASS[kind] ?? CONTAINER_CLASS.folder,
       childCount: typeof item.items === 'number' ? item.items : undefined,
+      albumArtUri: coverFor(item, this.baseUrl()) ?? undefined,
+      // Only meaningful where the container has a performer; a genre folder does not.
+      artist: kind === 'album' || kind === 'artist' ? artist : undefined,
     });
   }
 

@@ -790,6 +790,7 @@ export class LocalLibraryProvider {
       id: track.audiopath,
       name: track.title,
       type: FILE_TYPE_FILE,
+      kind: 'track',
       audiopath: track.audiopath,
       coverurl: this.buildCoverUrl(track),
       artist: track.artist ?? '',
@@ -912,6 +913,7 @@ export class LocalLibraryProvider {
       id,
       name: album.album,
       type: FILE_TYPE_FOLDER,
+      kind: 'album',
       coverurl: firstTrack ? this.buildCoverUrl(firstTrack) : '',
       items: album.track_count,
     };
@@ -947,6 +949,7 @@ export class LocalLibraryProvider {
       id,
       name: artist.name,
       type: FILE_TYPE_FOLDER,
+      kind: 'artist',
       items: artist.track_count,
       coverurl,
     };
