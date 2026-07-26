@@ -150,14 +150,14 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
       const limit = parseNumberPart(parts[parts.length - 1], 50);
       // The app addresses sections by its own slot index; providers publish named
       // nodes. Translate on the way in, and hand the slots back on the way out.
-      const folderId = toProviderNode(user, rawFolderId);
+      const folderId = toProviderNode(service, user, rawFolderId);
       const folder = await contentManager.getServiceFolder(service, user, folderId, start, limit);
       if (!folder) {
         return buildResponse(command, 'getservicefolder', []);
       }
       const isRoot = folderId === 'root' || folderId === 'start';
       const projected = isRoot
-        ? { ...folder, items: rootItemsForLoxone(user, folder.items ?? []) }
+        ? { ...folder, items: rootItemsForLoxone(service, user, folder.items ?? []) }
         : folder;
       return buildResponse(command, 'getservicefolder', [forLoxoneFolder(projected)]);
     },

@@ -320,16 +320,16 @@ export class DeezerProvider {
     if (lower === 'root' || lower === 'start') {
       return { type: 'root' };
     }
-    if (lower === 'top-tracks' || lower === 'tracks' || lower === '0') {
+    if (lower === 'top-tracks' || lower === 'tracks') {
       return { type: 'chartsTracks' };
     }
-    if (lower === 'top-albums' || lower === 'albums' || lower === '1') {
+    if (lower === 'top-albums' || lower === 'albums') {
       return { type: 'chartsAlbums' };
     }
-    if (lower === 'top-artists' || lower === 'artists' || lower === '2') {
+    if (lower === 'top-artists' || lower === 'artists') {
       return { type: 'chartsArtists' };
     }
-    if (lower === 'top-playlists' || lower === 'playlists' || lower === '3') {
+    if (lower === 'top-playlists' || lower === 'playlists') {
       return { type: 'chartsPlaylists' };
     }
 

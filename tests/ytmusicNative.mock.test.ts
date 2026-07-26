@@ -55,7 +55,7 @@ test("ytmusic native: the Loxone app's artists slot still reaches the artists fo
   const bridge = makeBridge('bridge-ytmusic-test');
   const provider = new YtMusicProvider({ providerId: `spotify@${bridge.id}`, bridge });
   // What the Loxone adapter does with slot 6 before the provider ever sees it.
-  const folder = await provider.getFolder(toProviderNode(bridge.id, '6'), 0, 50);
+  const folder = await provider.getFolder(toProviderNode('spotify', bridge.id, '6'), 0, 50);
   assert.ok(folder);
   assert.equal(folder?.name, 'Artists');
   assert.ok(Array.isArray(folder?.items));

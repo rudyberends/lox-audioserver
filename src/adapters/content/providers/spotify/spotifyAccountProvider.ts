@@ -66,18 +66,25 @@ const PATHFINDER_SEARCH_TYPES = new Set(['track', 'album', 'artist', 'playlist']
  * returning artists). Section titles in the app come from each folder response's
  * name (see the getFolder switch), not from these names.
  */
+/**
+ * The sections this account publishes, each addressed by its own name.
+ *
+ * The Loxone app asks for these by an index into its own enum instead; that
+ * mapping lives in the Loxone adapter (`loxoneServiceFolders`), so the order here
+ * is presentation only and a section may be added without a slot to give it.
+ */
 const SPOTIFY_ROOT_FOLDERS: ReadonlyArray<{
   type: 'popular' | 'new' | 'genres' | 'playlists' | 'liked' | 'albums' | 'artists' | 'podcasts';
   name: string;
 }> = [
-  { type: 'popular', name: 'Popular Playlists' }, // 0 Features
-  { type: 'new', name: 'New Releases' }, //          1 NewReleases
-  { type: 'genres', name: 'Genres & Moods' }, //     2 Categories
-  { type: 'playlists', name: 'My Playlists' }, //    3 MyPlaylists
-  { type: 'liked', name: 'Liked Songs' }, //         4 LikedSongs
-  { type: 'albums', name: 'Albums' }, //             5 Albums
-  { type: 'artists', name: 'Artists' }, //           6 Artists
-  { type: 'podcasts', name: 'Podcasts' }, //         7 Podcasts
+  { type: 'popular', name: 'Popular Playlists' },
+  { type: 'new', name: 'New Releases' },
+  { type: 'genres', name: 'Genres & Moods' },
+  { type: 'playlists', name: 'My Playlists' },
+  { type: 'liked', name: 'Liked Songs' },
+  { type: 'albums', name: 'Albums' },
+  { type: 'artists', name: 'Artists' },
+  { type: 'podcasts', name: 'Podcasts' },
 ];
 
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
@@ -451,9 +458,7 @@ export class SpotifyAccountProvider {
       service: 'spotify',
       start: offset,
       totalitems: SPOTIFY_ROOT_FOLDERS.length,
-      // The Loxone app re-requests each child by its numeric index, so the id
-      // here MUST be that index (see SPOTIFY_ROOT_FOLDERS / normalizeFolderId).
-      items: SPOTIFY_ROOT_FOLDERS.map((folder, index) => this.folderLink(String(index), folder.name)),
+      items: SPOTIFY_ROOT_FOLDERS.map((folder) => this.folderLink(folder.type, folder.name)),
     };
   }
 
@@ -520,14 +525,6 @@ export class SpotifyAccountProvider {
     }
     if (key.startsWith('category:') || key.startsWith('spotify:category:')) {
       return { type: 'category', id: tail };
-    }
-    // Numeric root-folder index from the Loxone app → resolve via the single
-    // ordered list, so index, label and content always line up.
-    if (/^\d+$/.test(key)) {
-      const folder = SPOTIFY_ROOT_FOLDERS[Number(key)];
-      if (folder) {
-        return { type: folder.type };
-      }
     }
     if (key === 'playlist' || key === 'playlists') {
       return { type: 'playlists' };

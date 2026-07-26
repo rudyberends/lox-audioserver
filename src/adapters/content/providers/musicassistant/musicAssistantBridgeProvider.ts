@@ -461,9 +461,9 @@ export class MusicAssistantBridgeProvider extends SpotifyAccountProvider {
     const lower = key.toLowerCase();
 
     if (lower === 'root' || lower === 'start') return 'root';
-    if (lower === 'playlists' || lower === 'playlist' || lower === '3') return 'playlists';
-    if (lower === 'albums' || lower === 'album' || lower === '5') return 'albums';
-    if (lower === 'artists' || lower === 'artist' || lower === '6') return 'artists';
+    if (lower === 'playlists' || lower === 'playlist') return 'playlists';
+    if (lower === 'albums' || lower === 'album') return 'albums';
+    if (lower === 'artists' || lower === 'artist') return 'artists';
     if (lower === 'radios' || lower === 'radio') return 'radios';
     if (lower === 'recommendations' || lower === 'rec') return 'recommendationRoot';
     const recMatch = key.match(/^recommendation:(.+)$/i);

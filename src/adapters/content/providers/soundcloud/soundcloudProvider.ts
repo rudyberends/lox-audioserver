@@ -327,29 +327,24 @@ export class SoundCloudProvider {
   /* Folder shaping + id parsing                                              */
   /* ------------------------------------------------------------------------ */
 
-  // Root sections keyed by the FIXED Loxone category numbers the client was
-  // built against (the canonical Spotify numbering, mirrored by YtMusic/Apple
-  // Music): 0=Popular/Features, 1=New Releases, 3=Playlists, 4=Liked Songs,
-  // 5=Albums, 6=Artists. The client echoes an item's `id` back verbatim as the
-  // folderId, so the id MUST be the canonical number (not a made-up index) or
-  // the client mis-categorises the section. `keyword` is a readable alias also
-  // accepted by normalizeFolderId().
+  // The sections this account publishes, each addressed by its own keyword. Which
+  // slot of the Loxone app's fixed section list a keyword fills is that app's
+  // business, and lives in its adapter (`loxoneServiceFolders`).
   private static readonly ROOT_SECTIONS: ReadonlyArray<{
-    id: string;
     keyword: 'trending' | 'top' | 'likes' | 'playlists';
     name: string;
     requiresToken: boolean;
   }> = [
-    { id: '0', keyword: 'trending', name: 'Trending', requiresToken: false },
-    { id: '1', keyword: 'top', name: 'Top 50', requiresToken: false },
-    { id: '3', keyword: 'playlists', name: 'Your Playlists', requiresToken: true },
-    { id: '4', keyword: 'likes', name: 'Your Likes', requiresToken: true },
+    { keyword: 'trending', name: 'Trending', requiresToken: false },
+    { keyword: 'top', name: 'Top 50', requiresToken: false },
+    { keyword: 'playlists', name: 'Your Playlists', requiresToken: true },
+    { keyword: 'likes', name: 'Your Likes', requiresToken: true },
   ];
 
   private buildRootFolder(offset: number): ContentFolder {
     const items = SoundCloudProvider.ROOT_SECTIONS.filter(
       (section) => !section.requiresToken || this.hasToken,
-    ).map((section) => this.folderLink(section.id, section.name));
+    ).map((section) => this.folderLink(section.keyword, section.name));
     return {
       id: 'root',
       name: this.displayLabel,
@@ -417,11 +412,7 @@ export class SoundCloudProvider {
     if (lower === 'root' || lower === 'start' || lower === '') {
       return { type: 'root' };
     }
-    // The client echoes back the canonical Loxone category number ("0","3","4"..)
-    // or we accept the readable keyword ("trending","playlists"..) — resolve both.
-    const section = SoundCloudProvider.ROOT_SECTIONS.find(
-      (s) => s.id === lower || s.keyword === lower,
-    );
+    const section = SoundCloudProvider.ROOT_SECTIONS.find((s) => s.keyword === lower);
     if (section) {
       return { type: section.keyword };
     }
