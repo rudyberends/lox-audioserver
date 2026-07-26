@@ -26,6 +26,8 @@ export interface ContentPort {
   isYoutubeProvider(providerId: string): boolean;
   isSoundcloudProvider(providerId: string): boolean;
   getMediaFolder(folderId: string, offset: number, limit: number): Promise<ContentFolder | null>;
+  /** Describe a container by id: a folder never names itself when browsed. */
+  resolveFolder(service: string, user: string, folderId: string): Promise<ContentFolderItem | null>;
   getServiceTrack(
     service: string,
     user: string,

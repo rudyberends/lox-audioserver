@@ -618,6 +618,69 @@ export class ContentManager {
     return { result: {}, user, providerId: fallbackProviderId };
   }
 
+  /**
+   * Describe a container by its id — what it is called, who performs it, its cover.
+   *
+   * Browsing a folder cannot answer this: a folder never names itself. Every
+   * provider returns the literal 'Album' or 'Artist' as the folder name, because
+   * the Loxone app takes the title from the parent listing and never asks. Any
+   * other consumer does need to ask: a DLNA controller opening an album, or a
+   * player rendering an album screen from a link, has only the id.
+   *
+   * Two sources, cheapest first: the harvest cache knows anything that has been
+   * listed, and otherwise the folder's own first child carries the album and
+   * artist it belongs to. A playlist has neither until it has been listed once —
+   * naming it exactly needs a per-provider lookup, which is the next step.
+   */
+  public async resolveFolder(
+    service: string,
+    user: string,
+    folderId: string,
+  ): Promise<ContentFolderItem | null> {
+    const id = String(folderId || '').trim();
+    if (!id || id === 'root' || id === 'start') {
+      return null;
+    }
+
+    if (id.includes(':')) {
+      const meta = await this.resolveMetadata(id).catch(() => null);
+      const name = meta?.album?.trim() || meta?.title?.trim();
+      if (name) {
+        return {
+          id,
+          name,
+          // Loxone FileType for a browsable container; `kind` carries the real meaning.
+          type: 7,
+          kind: 'album',
+          artist: meta?.artist || undefined,
+          coverurl: meta?.coverurl || undefined,
+        };
+      }
+    }
+
+    const folder =
+      service === 'library'
+        ? await this.getMediaFolder(id, 0, 1).catch(() => null)
+        : await this.getServiceFolder(service, user, id, 0, 1).catch(() => null);
+    const first = folder?.items?.[0];
+    if (!first) {
+      return null;
+    }
+    // Tracks name the album they sit in; albums name their artist.
+    const derived = first.album?.trim() || undefined;
+    if (!derived && !first.artist?.trim()) {
+      return null;
+    }
+    return {
+      id,
+      name: derived ?? first.artist!.trim(),
+      type: 7,
+      kind: derived ? 'album' : 'artist',
+      artist: first.artist || undefined,
+      coverurl: first.coverurl || undefined,
+    };
+  }
+
   public async resolveMetadata(audiopath: string): Promise<ContentItemMetadata | null> {
     const raw = String(audiopath || '').trim();
     const decoded = decodeAudiopath(raw);

@@ -252,6 +252,14 @@ export class ContentAdapter implements ContentPort {
     return this.contentManager.getServiceTrack(service, user, trackId);
   }
 
+  public resolveFolder(
+    service: string,
+    user: string,
+    folderId: string,
+  ): Promise<ContentFolderItem | null> {
+    return this.contentManager.resolveFolder(service, user, folderId);
+  }
+
   public getServiceFolder(
     service: string,
     user: string,

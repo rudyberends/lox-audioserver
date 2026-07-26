@@ -112,12 +112,12 @@ export class MediaContentProvider implements ContentProvider {
   /**
    * Containers we have already described, keyed by their object id.
    *
-   * BrowseMetadata on a container has to answer with that container's own title,
-   * art and class. Nothing in the content layer can look a folder up by id — a
-   * provider only ever returns folders as *children* of a browse — so we keep what
-   * we knew when we listed it. Controllers always browse the parent before opening
-   * a child, so this is warm exactly when it is needed; {@link browseMetadata}
-   * falls back to resolving the id as an audiopath, then to the service tile.
+   * A fast path, not the answer: controllers issue BrowseMetadata constantly, and
+   * they always browse the parent first, so reusing what we knew when we listed the
+   * container avoids a provider round-trip per call. On a miss — a deep link, or an
+   * eviction — {@link browseMetadata} asks the content layer to describe the
+   * container, and falls back to the service tile only when even that comes up
+   * empty.
    */
   private readonly containerMeta = new Map<string, DidlContainer>();
 
@@ -166,19 +166,19 @@ export class MediaContentProvider implements ContentProvider {
       if (known) {
         return known;
       }
-      // Not listed this session (deep link, or evicted). For services whose folder
-      // ids are audiopaths — the streaming providers — the harvest cache can still
-      // name it; the local library uses opaque ids and falls through.
-      const resolved = await this.resolveContainerMetadata(ref.folderId);
+      // Not listed this session — a deep link, or evicted. Ask the content layer to
+      // describe the container; browsing it would only answer 'Album'.
       const def = this.findService(ref.service);
-      if (resolved) {
+      const described = await this.describeContainer(ref.service, ref.folderId);
+      if (described) {
+        const kind = resolveItemKind(described);
         return {
           id: objectId,
-          parentId: encodeContainerId(ref.service, 'root'),
-          title: resolved.album || resolved.title || def?.title || ref.service,
-          upnpClass: CONTAINER_CLASS.album,
-          artist: resolved.artist || undefined,
-          albumArtUri: resolved.coverurl || undefined,
+          parentId: encodeContainerId(ref.service, def?.rootFolderId ?? 'root'),
+          title: described.name || def?.title || ref.service,
+          upnpClass: CONTAINER_CLASS[kind] ?? CONTAINER_CLASS.folder,
+          artist: described.artist || undefined,
+          albumArtUri: coverFor(described, this.baseUrl()) ?? undefined,
         };
       }
       return {
@@ -316,15 +316,21 @@ export class MediaContentProvider implements ContentProvider {
     return this.folderContainer(item, serviceKey, parentId, hint);
   }
 
-  /** Metadata for a container whose id doubles as an audiopath (streaming services). */
-  private async resolveContainerMetadata(folderId: string): Promise<ContentItemMetadata | null> {
-    if (!folderId.includes(':')) {
-      return null;
-    }
+  /** What this container is, for a BrowseMetadata that arrives without a listing. */
+  private async describeContainer(
+    serviceKey: string,
+    folderId: string,
+  ): Promise<ContentFolderItem | null> {
+    const def = this.findService(serviceKey);
     try {
-      return await this.contentManager.resolveMetadata(folderId);
+      return await this.contentManager.resolveFolder(
+        def?.service ?? serviceKey,
+        serviceKey,
+        folderId,
+      );
     } catch (error) {
-      this.log.debug('container metadata resolve failed', {
+      this.log.debug('container describe failed', {
+        serviceKey,
         folderId,
         message: error instanceof Error ? error.message : String(error),
       });
