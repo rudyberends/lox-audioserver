@@ -11,6 +11,7 @@ import './sessionKey.test';
 import './loxoneServiceFolders.test';
 import './serviceNativeIdentity.test';
 import './trackIdentity.test';
+import './appleMusicNewReleases.test';
 import './serviceNativeBoundary.test';
 import './streamingServicesMigration.test';
 import './engine/rollingBuffer.test';

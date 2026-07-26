@@ -287,3 +287,47 @@ export function mapRecommendationItem(providerId: string, item: any): ContentFol
       return null;
   }
 }
+
+/**
+ * Find the album shelf in Apple's editorial home feed.
+ *
+ * The feed is a grouping whose tabs nest `editorial-elements` several levels deep,
+ * each shelf carrying its items inline under `relationships.contents`. Shelves are
+ * identified by what they hold (`resourceTypes`) rather than by their titles, which
+ * are localized, or their ids, which rotate. Apple flags its lead shelf `emphasize`;
+ * that is the new-release one, so it wins over document order.
+ *
+ * Returns the shelf's album entries, or an empty array when the feed has none.
+ */
+export function pickAlbumShelf(feed: any): any[] {
+  const shelves: Array<{ emphasize: boolean; contents: any[] }> = [];
+
+  const visit = (node: any, depth: number): void => {
+    if (!node || typeof node !== 'object' || depth > 8) {
+      return;
+    }
+    if (node.type === 'editorial-elements') {
+      const attrs = node.attributes ?? {};
+      const holdsAlbums = Array.isArray(attrs.resourceTypes)
+        ? attrs.resourceTypes.includes('albums')
+        : false;
+      const contents = node.relationships?.contents?.data;
+      if (holdsAlbums && Array.isArray(contents) && contents.length > 0) {
+        shelves.push({ emphasize: attrs.emphasize === true, contents });
+      }
+    }
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        for (const entry of value) {
+          visit(entry, depth + 1);
+        }
+      } else if (value && typeof value === 'object') {
+        visit(value, depth + 1);
+      }
+    }
+  };
+  visit(feed, 0);
+
+  const chosen = shelves.find((shelf) => shelf.emphasize) ?? shelves[0];
+  return chosen?.contents ?? [];
+}

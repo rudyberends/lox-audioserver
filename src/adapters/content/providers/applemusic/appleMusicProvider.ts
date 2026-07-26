@@ -13,6 +13,7 @@ import {
   mapPlaylist,
   mapLibraryPlaylist,
   mapRecommendationItem,
+  pickAlbumShelf,
 } from './appleMusicParsers';
 import { getShippedDeveloperToken, buildBaseHeaders, scrapeBearerToken } from './appleMusicAuth';
 import { collageKey, collageCachedUrl, ensureCollage } from '@/shared/playlistCollage';
@@ -746,19 +747,47 @@ export class AppleMusicProvider {
     };
   }
 
+  /**
+   * The albums Apple is currently featuring as new.
+   *
+   * There is no `new-releases` endpoint — that one was borrowed from Spotify, and
+   * Apple answers it with the same "Invalid Path Value" it gives a made-up route, so
+   * this section had been silently empty since it was written. What Apple has is the
+   * editorial home feed: a grouping of shelves, one of which is the new-release one.
+   *
+   * Which shelf that is cannot be asked for by name. Every shelf title is localized
+   * ('Nieuw deze week'), and the element ids rotate weekly, so the only durable
+   * handles are the ones that describe the shelf rather than name it: it lists
+   * albums, and Apple marks its lead shelf `emphasize`. Prefer that; fall back to the
+   * first album shelf.
+   */
   private async fetchNewReleases(
     limit: number,
     offset: number,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
     const storefront = await this.ensureStorefront();
-    const url = new URL(`${APPLE_MUSIC_API_BASE}/catalog/${storefront}/new-releases`);
-    url.searchParams.set('limit', String(limit));
-    url.searchParams.set('offset', String(offset));
+    const url = new URL(`${APPLE_MUSIC_API_BASE}/editorial/${storefront}/groupings`);
+    url.searchParams.set('platform', 'web');
+    url.searchParams.set('name', 'music');
+    // The feed inlines every shelf's contents, most of which are playlists, songs and
+    // videos this section never shows. Naming the fields we use takes it from ~360KB
+    // to ~100KB; `id` and `type` always come regardless.
+    url.searchParams.set('fields[albums]', 'name,artistName,artwork');
+    for (const other of ['playlists', 'songs', 'stations', 'music-videos']) {
+      url.searchParams.set(`fields[${other}]`, 'name');
+    }
     const data = await this.fetchJson<any>(url.toString());
-    const items = Array.isArray(data?.data) ? data.data : [];
+    const albums = pickAlbumShelf(data);
+    if (!albums.length) {
+      // Better empty than wrong: showing the charts here would label "most played" as
+      // new. A storefront whose feed has no album shelf is worth knowing about.
+      this.log.warn('apple music new releases: no album shelf in the editorial feed', { storefront });
+      return { items: [], total: 0 };
+    }
+    const page = albums.slice(offset, offset + (limit || 50));
     return {
-      items: items.map((entry: any) => mapAlbum(this.audiopathPrefix, entry)),
-      total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
+      items: page.map((entry: any) => mapAlbum(this.audiopathPrefix, entry)),
+      total: albums.length,
     };
   }
 
