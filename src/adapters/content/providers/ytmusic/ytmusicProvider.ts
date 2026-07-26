@@ -516,14 +516,14 @@ export class YtMusicProvider {
 
     // Loxone Spotify clients sometimes use numeric folder ids (consistent with Spotify's own mapping):
     // 0 popular, 1 new releases, 2 genres, 3 playlists, 5 albums, 6 artists.
-    if (lower === '3' || lower === 'playlist' || lower === 'playlists') return { type: 'playlists' };
-    if (lower === '5' || lower === 'album' || lower === 'albums') return { type: 'albums' };
-    if (lower === '6' || lower === 'artist' || lower === 'artists') return { type: 'artists' };
-    if (lower === '0' || lower.includes('popular') || lower.includes('recommend') || lower.includes('aanbevel')) {
+    if (lower === 'playlist' || lower === 'playlists') return { type: 'playlists' };
+    if (lower === 'album' || lower === 'albums') return { type: 'albums' };
+    if (lower === 'artist' || lower === 'artists') return { type: 'artists' };
+    if (lower.includes('popular') || lower.includes('recommend') || lower.includes('aanbevel')) {
       return { type: 'popular' };
     }
-    if (lower === '1' || lower.includes('new')) return { type: 'newReleases' };
-    if (lower === '2' || lower.includes('genres') || lower.includes('moods')) return { type: 'genres' };
+    if (lower.includes('new')) return { type: 'newReleases' };
+    if (lower.includes('genres') || lower.includes('moods')) return { type: 'genres' };
 
     if (lower === 'liked' || lower === 'likes' || lower === 'lm') return { type: 'likedSongs' };
     if (lower.startsWith('genre:')) return { type: 'genre', q: lower.slice('genre:'.length) };
@@ -564,12 +564,12 @@ export class YtMusicProvider {
       start: offset,
       totalitems: 6,
       items: [
-        this.folderLink('3', 'Playlists'),
-        this.folderLink('5', 'Albums'),
-        this.folderLink('6', 'Artists'),
-        this.folderLink('0', 'Popular'),
-        this.folderLink('1', 'New Releases'),
-        this.folderLink('2', 'Genres & Moods'),
+        this.folderLink('playlists', 'Playlists'),
+        this.folderLink('albums', 'Albums'),
+        this.folderLink('artists', 'Artists'),
+        this.folderLink('popular', 'Popular'),
+        this.folderLink('new-releases', 'New Releases'),
+        this.folderLink('genres', 'Genres & Moods'),
       ],
     };
   }

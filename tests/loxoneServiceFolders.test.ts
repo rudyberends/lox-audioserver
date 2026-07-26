@@ -81,3 +81,31 @@ test('providerTypeFromBridgeId reads the service out of a bridge id', () => {
   assert.equal(providerTypeFromBridgeId('radioparadise'), '');
   assert.equal(providerTypeFromBridgeId(''), '');
 });
+
+// Each service fills the app's slots with its own sections, so every table is
+// pinned separately: a wrong entry silently serves the wrong content in a section.
+test('the YouTube services keep their own slot assignments', () => {
+  const ytmusic: Array<[string, string]> = [
+    ['0', 'popular'],
+    ['1', 'new-releases'],
+    ['2', 'genres'],
+    ['3', 'playlists'],
+    ['5', 'albums'],
+    ['6', 'artists'],
+  ];
+  for (const [slot, node] of ytmusic) {
+    assert.equal(toProviderNode('bridge-ytmusic-x1', slot), node, `ytmusic slot ${slot}`);
+  }
+
+  const youtube: Array<[string, string]> = [
+    ['0', 'trending'],
+    ['1', 'new-releases'],
+    ['2', 'genres'],
+    ['3', 'playlists'],
+  ];
+  for (const [slot, node] of youtube) {
+    assert.equal(toProviderNode('bridge-youtube-y2', slot), node, `youtube slot ${slot}`);
+  }
+  // YouTube proper has no album/artist sections, so those slots stay unmapped.
+  assert.equal(toProviderNode('bridge-youtube-y2', '5'), '5');
+});

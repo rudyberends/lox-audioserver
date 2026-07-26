@@ -4,6 +4,7 @@ import { test } from './testHarness';
 import type { StreamingServiceConfig } from '../src/domain/config/types';
 import { YtMusicProvider } from '../src/adapters/content/providers/ytmusic/ytmusicProvider';
 import { YtMusicStreamService } from '../src/adapters/content/providers/ytmusic/ytmusicStreamService';
+import { toProviderNode } from '../src/adapters/loxone/commands/utils/loxoneServiceFolders';
 
 // Ensure offline tests always use the repo-local yt-dlp mock (instead of the system yt-dlp).
 const scriptsDir = path.resolve(__dirname, '..', 'scripts');
@@ -28,12 +29,15 @@ test('ytmusic native: provider search uses yt-dlp and returns tracks', async () 
   assert.ok(res.result.tracks?.[0]?.audiopath?.includes('spotify@bridge-ytmusic-test:track:'));
 });
 
-test('ytmusic native: provider folder root exposes liked songs', async () => {
+test('ytmusic native: provider folder root exposes its sections by name', async () => {
   const bridge = makeBridge('bridge-ytmusic-test');
   const provider = new YtMusicProvider({ providerId: `spotify@${bridge.id}`, bridge });
   const folder = await provider.getFolder('root', 0, 50);
   assert.ok(folder);
-  assert.ok(folder?.items?.some((i) => i.id === '3'));
+  // The root publishes node names; the Loxone app's slot indices are mapped onto
+  // these by its adapter (see loxoneServiceFolders.test.ts).
+  assert.ok(folder?.items?.some((i) => i.id === 'playlists'));
+  assert.ok(folder?.items?.some((i) => i.id === 'artists'));
 });
 
 test('ytmusic native: provider liked songs expands playlist LM', async () => {
@@ -47,10 +51,11 @@ test('ytmusic native: provider liked songs expands playlist LM', async () => {
   assert.ok(typeof first?.audiopath === 'string' && first.audiopath.includes(':track:'));
 });
 
-test('ytmusic native: numeric folder id 6 (artists) resolves to the artists folder', async () => {
+test("ytmusic native: the Loxone app's artists slot still reaches the artists folder", async () => {
   const bridge = makeBridge('bridge-ytmusic-test');
   const provider = new YtMusicProvider({ providerId: `spotify@${bridge.id}`, bridge });
-  const folder = await provider.getFolder('6', 0, 50);
+  // What the Loxone adapter does with slot 6 before the provider ever sees it.
+  const folder = await provider.getFolder(toProviderNode(bridge.id, '6'), 0, 50);
   assert.ok(folder);
   assert.equal(folder?.name, 'Artists');
   assert.ok(Array.isArray(folder?.items));

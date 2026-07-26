@@ -318,10 +318,10 @@ export class YoutubeProvider {
 
     if (!lower || lower === 'root' || lower === 'start') return 'root';
 
-    if (lower === '0' || lower === 'popular' || lower === 'trending') return { type: 'trending' };
-    if (lower === '1' || lower === 'newreleases' || lower.startsWith('new')) return { type: 'newReleases' };
-    if (lower === '2' || lower === 'genres' || lower === 'moods') return { type: 'genres' };
-    if (lower === '3' || lower === 'playlists' || lower === 'playlist') return { type: 'playlists' };
+    if (lower === 'popular' || lower === 'trending') return { type: 'trending' };
+    if (lower === 'newreleases' || lower.startsWith('new')) return { type: 'newReleases' };
+    if (lower === 'genres' || lower === 'moods') return { type: 'genres' };
+    if (lower === 'playlists' || lower === 'playlist') return { type: 'playlists' };
 
     const genreMatch = stripped.match(/^genre:(.+)$/i);
     if (genreMatch) return { type: 'genre', q: genreMatch[1] ?? '' };
@@ -347,10 +347,10 @@ export class YoutubeProvider {
 
   private buildRootFolder(offset: number): ContentFolder {
     const items: ContentFolderItem[] = [
-      this.folderLink('0', 'Trending'),
-      this.folderLink('1', 'New Releases'),
-      this.folderLink('2', 'Genres'),
-      this.folderLink('3', 'Playlists'),
+      this.folderLink('trending', 'Trending'),
+      this.folderLink('new-releases', 'New Releases'),
+      this.folderLink('genres', 'Genres'),
+      this.folderLink('playlists', 'Playlists'),
     ];
     return { id: 'root', name: this.displayLabel, service: 'youtube', start: offset, totalitems: items.length, items };
   }

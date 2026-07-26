@@ -27,6 +27,22 @@ const SLOT_NODES: Record<string, Readonly<Record<string, string>>> = {
     '5': 'albums',
     '6': 'artists',
   },
+  // Both YouTube services fill the slots with their own sections; the names mirror
+  // exactly what each provider used to decode from the index.
+  ytmusic: {
+    '0': 'popular',
+    '1': 'new-releases',
+    '2': 'genres',
+    '3': 'playlists',
+    '5': 'albums',
+    '6': 'artists',
+  },
+  youtube: {
+    '0': 'trending',
+    '1': 'new-releases',
+    '2': 'genres',
+    '3': 'playlists',
+  },
 };
 
 /** `bridge-applemusic-p0gngd` → `applemusic`. Empty when it isn't a bridge id. */
