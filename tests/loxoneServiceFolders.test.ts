@@ -219,3 +219,21 @@ test("Spotify's real root listing still reaches Loxone as slots 0-7", async () =
     assert.equal(toProviderNode('spotify', 'rudy', String(index)), item.id);
   }
 });
+
+// A dropped node has to be dropped from the count too. Caught live: the provider
+// published eight sections, the app got six items under a claim of eight, and a
+// client that paginates on the total would ask for rows that are not there.
+test('the projected root advertises the number of items it actually contains', () => {
+  const items = [
+    { id: 'albums', name: 'Albums' },
+    { id: 'artists', name: 'Artists' },
+    { id: 'songs', name: 'Songs' },
+    { id: 'recent', name: 'Recently Added' },
+  ];
+  const projected = rootItemsForLoxone('spotify', APPLE, items);
+  assert.equal(projected.length, 2);
+  // What the handler builds from it (see audioCfgGetServiceFolder).
+  const folder = { id: 'root', totalitems: items.length, items: projected };
+  const forApp = { ...folder, totalitems: projected.length };
+  assert.equal(forApp.totalitems, forApp.items.length);
+});

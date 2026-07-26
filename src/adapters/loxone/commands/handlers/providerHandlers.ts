@@ -156,9 +156,14 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
         return buildResponse(command, 'getservicefolder', []);
       }
       const isRoot = folderId === 'root' || folderId === 'start';
-      const projected = isRoot
-        ? { ...folder, items: rootItemsForLoxone(service, user, folder.items ?? []) }
-        : folder;
+      let projected = folder;
+      if (isRoot) {
+        const items = rootItemsForLoxone(service, user, folder.items ?? []);
+        // The count has to follow the list. A provider may publish sections this app
+        // has no slot for, so the projection drops some — leaving the provider's own
+        // total would advertise rows that are not in the payload.
+        projected = { ...folder, items, totalitems: items.length };
+      }
       return buildResponse(command, 'getservicefolder', [forLoxoneFolder(projected)]);
     },
     audioCfgRescan: (command: string) => {
