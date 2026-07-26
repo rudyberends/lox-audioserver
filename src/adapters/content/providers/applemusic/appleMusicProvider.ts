@@ -318,14 +318,21 @@ export class AppleMusicProvider {
       name: this.displayLabel,
       service: 'applemusic',
       start: offset,
-      totalitems: 6,
+      totalitems: 8,
+      // Node names, not the Loxone app's slot indices: the Loxone adapter maps its
+      // slots onto these, so this tree can grow without touching that protocol.
       items: [
-        this.folderLink('0', 'New Releases'),
-        this.folderLink('1', 'Recommended Playlists'),
-        this.folderLink('2', 'Recommended Albums'),
+        this.folderLink('new-releases', 'New Releases'),
+        this.folderLink('recommended-playlists', 'Recommended Playlists'),
+        this.folderLink('recommended-albums', 'Recommended Albums'),
         this.folderLink('albums', 'Albums'),
         this.folderLink('artists', 'Artists'),
         this.folderLink('playlists', 'Playlists'),
+        // The Loxone app has no slot for these, so they stay out of its view while
+        // every other consumer can browse them — the point of publishing nodes
+        // instead of the app's slot indices.
+        this.folderLink('recent', 'Recently Added'),
+        this.folderLink('songs', 'Songs'),
       ],
     };
   }
@@ -335,6 +342,7 @@ export class AppleMusicProvider {
       id,
       name,
       type: FileType.Folder,
+      kind: 'category',
       items: 0,
     };
   }
@@ -392,22 +400,22 @@ export class AppleMusicProvider {
     if (lower === 'root' || lower === 'start') {
       return { type: 'root' };
     }
-    if (lower === 'albums' || lower === 'album' || lower === '5') {
+    if (lower === 'albums' || lower === 'album') {
       return { type: 'albums' };
     }
-    if (lower === 'artists' || lower === 'artist' || lower === '6') {
+    if (lower === 'artists' || lower === 'artist') {
       return { type: 'artists' };
     }
-    if (lower === 'playlists' || lower === 'playlist' || lower === '3') {
+    if (lower === 'playlists' || lower === 'playlist') {
       return { type: 'playlists' };
     }
-    if (lower === 'new-releases' || lower === 'new' || lower === '0') {
+    if (lower === 'new-releases' || lower === 'new') {
       return { type: 'newReleases' };
     }
-    if (lower === 'recommendations-playlists' || lower === 'recommended-playlists' || lower === '1') {
+    if (lower === 'recommendations-playlists' || lower === 'recommended-playlists') {
       return { type: 'recommendationsPlaylists' };
     }
-    if (lower === 'recommendations-albums' || lower === 'recommended-albums' || lower === '2') {
+    if (lower === 'recommendations-albums' || lower === 'recommended-albums') {
       return { type: 'recommendationsAlbums' };
     }
     if (lower === 'songs' || lower === 'tracks') {
@@ -648,7 +656,7 @@ export class AppleMusicProvider {
     limit: number,
     offset: number,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
-    const url = `${APPLE_MUSIC_API_BASE}/me/library/albums?limit=${limit}&offset=${offset}&sort=recent&include=catalog`;
+    const url = `${APPLE_MUSIC_API_BASE}/me/library/albums?limit=${limit}&offset=${offset}&sort=-dateAdded&include=catalog`;
     const data = await this.fetchJson<any>(url);
     const items = Array.isArray(data?.data) ? data.data : [];
     return {

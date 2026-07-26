@@ -69,7 +69,9 @@ const CONTAINER_CLASS: Record<ContentItemKind, string> = {
   artist: 'object.container.person.musicArtist',
   playlist: 'object.container.playlistContainer',
   show: 'object.container.album.musicAlbum',
-  category: 'object.container.genre.musicGenre',
+  // A browse section ('Albums', 'Genres & Moods') is not itself a genre container:
+  // claiming musicGenre makes controllers file navigation roots under genres.
+  category: 'object.container.storageFolder',
   folder: 'object.container.storageFolder',
   // Playable kinds never reach the container path; mapped for exhaustiveness.
   track: 'object.container.storageFolder',

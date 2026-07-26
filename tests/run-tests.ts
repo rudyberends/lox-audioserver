@@ -8,6 +8,7 @@ import path from 'node:path';
 import { test, tests } from './testHarness';
 import './architecture/importBoundaries.test';
 import './sessionKey.test';
+import './loxoneServiceFolders.test';
 import './serviceNativeIdentity.test';
 import './serviceNativeBoundary.test';
 import './streamingServicesMigration.test';

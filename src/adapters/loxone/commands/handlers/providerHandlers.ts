@@ -12,6 +12,7 @@ import {
 } from '@/adapters/loxone/commands/utils/loxoneIdCodec';
 import type { ContentFolderItem } from '@/ports/ContentTypes';
 import { forLoxoneFolder } from '@/adapters/loxone/commands/utils/loxoneItems';
+import { toProviderNode, rootItemsForLoxone } from '@/adapters/loxone/commands/utils/loxoneServiceFolders';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import { decodeBase64Segment, safeJsonParse } from '@/adapters/loxone/commands/utils/payload';
 import { decryptWithAudioCfgKey } from '@/adapters/loxone/commands/handlers/configHandlers';
@@ -144,11 +145,21 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
       const parts = splitCommand(command);
       const service = parts[3] ?? '';
       const user = parts[4] ?? 'nouser';
-      const folderId = decodeSegment(parts.slice(5, -2).join('/') || 'root');
+      const rawFolderId = decodeSegment(parts.slice(5, -2).join('/') || 'root');
       const start = parseNumberPart(parts[parts.length - 2], 0);
       const limit = parseNumberPart(parts[parts.length - 1], 50);
+      // The app addresses sections by its own slot index; providers publish named
+      // nodes. Translate on the way in, and hand the slots back on the way out.
+      const folderId = toProviderNode(user, rawFolderId);
       const folder = await contentManager.getServiceFolder(service, user, folderId, start, limit);
-      return buildResponse(command, 'getservicefolder', folder ? [forLoxoneFolder(folder)] : []);
+      if (!folder) {
+        return buildResponse(command, 'getservicefolder', []);
+      }
+      const isRoot = folderId === 'root' || folderId === 'start';
+      const projected = isRoot
+        ? { ...folder, items: rootItemsForLoxone(user, folder.items ?? []) }
+        : folder;
+      return buildResponse(command, 'getservicefolder', [forLoxoneFolder(projected)]);
     },
     audioCfgRescan: (command: string) => {
       void contentManager.rescanLibrary();
