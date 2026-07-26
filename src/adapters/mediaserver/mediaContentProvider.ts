@@ -51,6 +51,9 @@ export const AUDIO_DLNA_FEATURES =
   'DLNA.ORG_FLAGS=8D500000000000000000000000000000';
 export const AUDIO_PROTOCOL_INFO = `http-get:*:audio/mpeg:${AUDIO_DLNA_FEATURES}`;
 
+/** How many described containers to remember for BrowseMetadata. */
+const CONTAINER_META_MAX = 2000;
+
 /** Loxone content type for a directly-playable file/track. Everything else browses. */
 const CONTENT_TYPE_TRACK = 2;
 
@@ -84,6 +87,29 @@ export class MediaContentProvider implements ContentProvider {
     private readonly baseUrl: () => string,
   ) {}
 
+  /**
+   * Containers we have already described, keyed by their object id.
+   *
+   * BrowseMetadata on a container has to answer with that container's own title,
+   * art and class. Nothing in the content layer can look a folder up by id — a
+   * provider only ever returns folders as *children* of a browse — so we keep what
+   * we knew when we listed it. Controllers always browse the parent before opening
+   * a child, so this is warm exactly when it is needed; {@link browseMetadata}
+   * falls back to resolving the id as an audiopath, then to the service tile.
+   */
+  private readonly containerMeta = new Map<string, DidlContainer>();
+
+  private rememberContainer(container: DidlContainer): DidlContainer {
+    if (this.containerMeta.size >= CONTAINER_META_MAX) {
+      const oldest = this.containerMeta.keys().next().value;
+      if (oldest !== undefined) {
+        this.containerMeta.delete(oldest);
+      }
+    }
+    this.containerMeta.set(container.id, container);
+    return container;
+  }
+
   public async browse(objectId: string, startingIndex: number, requestedCount: number): Promise<BrowseResult> {
     const ref = decodeObjectId(objectId);
     if (!ref) {
@@ -114,7 +140,24 @@ export class MediaContentProvider implements ContentProvider {
       };
     }
     if (ref.kind === 'container') {
+      const known = this.containerMeta.get(objectId);
+      if (known) {
+        return known;
+      }
+      // Not listed this session (deep link, or evicted). For services whose folder
+      // ids are audiopaths — the streaming providers — the harvest cache can still
+      // name it; the local library uses opaque ids and falls through.
+      const resolved = await this.resolveContainerMetadata(ref.folderId);
       const def = this.findService(ref.service);
+      if (resolved) {
+        return {
+          id: objectId,
+          parentId: encodeContainerId(ref.service, 'root'),
+          title: resolved.album || resolved.title || def?.title || ref.service,
+          upnpClass: 'object.container.album.musicAlbum',
+          albumArtUri: resolved.coverurl || undefined,
+        };
+      }
       return {
         id: objectId,
         parentId: ROOT_OBJECT_ID,
@@ -247,6 +290,22 @@ export class MediaContentProvider implements ContentProvider {
     return this.folderContainer(item, serviceKey, parentId);
   }
 
+  /** Metadata for a container whose id doubles as an audiopath (streaming services). */
+  private async resolveContainerMetadata(folderId: string): Promise<ContentItemMetadata | null> {
+    if (!folderId.includes(':')) {
+      return null;
+    }
+    try {
+      return await this.contentManager.resolveMetadata(folderId);
+    } catch (error) {
+      this.log.debug('container metadata resolve failed', {
+        folderId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
   private findService(key: string): ServiceDef | undefined {
     return this.serviceDefs().find((def) => def.key === key);
   }
@@ -306,13 +365,13 @@ export class MediaContentProvider implements ContentProvider {
 
   /** A top-level service tile (child of the root container). */
   private serviceContainer(def: ServiceDef): DidlContainer {
-    return {
+    return this.rememberContainer({
       id: encodeContainerId(def.key, def.rootFolderId),
       parentId: ROOT_OBJECT_ID,
       title: def.title,
       upnpClass: 'object.container.storageFolder',
       albumArtUri: def.iconUrl,
-    };
+    });
   }
 
   /** A browsable folder/playlist/album belonging to `serviceKey`. */
@@ -325,13 +384,13 @@ export class MediaContentProvider implements ContentProvider {
     // folderId on the next Browse: the listing item's `id` (e.g. `library-local`),
     // NOT its audiopath — the audiopath is a play target, not a browse key.
     const folderId = item.id || item.audiopath || 'root';
-    return {
+    return this.rememberContainer({
       id: encodeContainerId(serviceKey, folderId),
       parentId,
       title: item.name || item.title || 'Folder',
       upnpClass: 'object.container.storageFolder',
       childCount: typeof item.items === 'number' ? item.items : undefined,
-    };
+    });
   }
 
   /** A playable track item; res URL points back at our stateless track endpoint. */
