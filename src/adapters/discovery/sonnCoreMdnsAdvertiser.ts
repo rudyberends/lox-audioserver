@@ -25,7 +25,7 @@ export class SonnCoreMdnsAdvertiser {
       host: options.host,
       txt,
     });
-    this.log.info('Lox Audio server advertised via mDNS', {
+    this.log.info('Sonn Core advertised via mDNS', {
       name: options.name,
       host: options.host,
       port: options.port,
