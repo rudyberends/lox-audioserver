@@ -25,10 +25,25 @@ export type QueuedSourceCommand = {
  */
 const MAX_QUEUED_COMMANDS = 16;
 
+/**
+ * Pushes a command straight to a connected bridge, returning false when there is no live socket.
+ * Injected rather than imported so this registry stays independent of the HTTP layer.
+ */
+export type LineInCommandPusher = (inputId: string, command: string, args: string[]) => boolean;
+
 export class LineInActivationRegistry {
   private readonly log = createLogger('Audio', 'LineInActivation');
   private readonly active = new Set<string>();
   private readonly commands = new Map<string, QueuedSourceCommand[]>();
+  private pusher: LineInCommandPusher | null = null;
+
+  /**
+   * Attach the push transport. Set once the HTTP layer exists, so a command taken while a bridge is
+   * connected over the WebSocket ingest goes out immediately instead of waiting for its next poll.
+   */
+  public setCommandPusher(pusher: LineInCommandPusher | null): void {
+    this.pusher = pusher;
+  }
 
   public activate(inputId: string): void {
     const id = inputId.trim();
@@ -65,6 +80,13 @@ export class LineInActivationRegistry {
     const id = inputId.trim();
     const verb = command.trim();
     if (!id || !verb) {
+      return;
+    }
+    // Push when the bridge is on the WebSocket ingest: that turns a button press into a round trip
+    // instead of a wait for the next status poll. Queueing is the fallback for a bridge on the
+    // upstream-only TCP transport, or one that is momentarily reconnecting.
+    if (this.pusher?.(id, verb, args)) {
+      this.log.info('line-in command pushed', { inputId: id, command: verb, args });
       return;
     }
     const queue = this.commands.get(id) ?? [];

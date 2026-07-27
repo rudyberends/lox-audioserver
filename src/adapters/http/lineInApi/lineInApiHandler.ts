@@ -346,6 +346,22 @@ export class LineInApiHandler {
     return { ingest_tcp_host, ingest_tcp_port: 7080 };
   }
 
+  /**
+   * WebSocket ingest URL for an input, which the bridge prefers over the raw TCP target.
+   *
+   * The socket is bidirectional, so transport commands can be pushed down it the moment a client
+   * presses a button rather than waiting for the next status poll. The authority comes from the
+   * request's own Host header: it is by definition an address the bridge just reached us on, which a
+   * reconstructed host:port is not.
+   */
+  private resolveIngestWsUrl(inputId: string, req: IncomingMessage): string | undefined {
+    const authority = (req.headers.host ?? '').trim();
+    if (!authority) {
+      return undefined;
+    }
+    return `ws://${authority}/ingest/${encodeURIComponent(inputId)}`;
+  }
+
   private buildLineInConfigResponse(
     inputId: string,
     req: IncomingMessage,
@@ -553,6 +569,7 @@ export class LineInApiHandler {
     assigned_input_id: string | null;
     source_active?: boolean;
     commands?: Array<{ command: string; args: string[] }>;
+    ingest_ws_url?: string;
     ingest_tcp_host?: string;
     ingest_tcp_port?: number;
     ingest_sample_rate?: number;
@@ -579,6 +596,9 @@ export class LineInApiHandler {
       // Transport commands for hardware the bridge fronts. Draining here is the acknowledgement, so
       // they are delivered at most once -- a replayed `next` would skip two tracks.
       commands: options.takeCommands ? this.activation.takeCommands(inputId) : [],
+      // Offered alongside the TCP target; the bridge prefers this because it also carries commands
+      // downstream, cutting control latency from the poll interval to a round trip.
+      ingest_ws_url: this.resolveIngestWsUrl(inputId, req),
       ...ingest,
       ingest_sample_rate: resolveLineInSampleRate(entry),
       ingest_resampler: resolveLineInIngestResampler(entry),

@@ -174,6 +174,11 @@ export class HttpService {
     this.dlnaInput = options.dlnaInput;
     this.streamProxyRoutes = options.streamProxyRoutes;
     this.lineInIngestWs = new LineInIngestWebSocket(options.lineInRegistry);
+    // Commands prefer the live ingest socket and fall back to the polled queue, so control latency
+    // drops from the poll interval to a round trip wherever the bridge speaks WebSocket.
+    options.lineInActivation.setCommandPusher((inputId, command, args) =>
+      this.lineInIngestWs.sendCommand(inputId, command, args),
+    );
     this.sendspin = new SendspinGateway(options.browserZoneRegistry);
     this.snapcast = new SnapcastGateway(options.snapcastCore);
     this.lmsCli = options.squeezeliteCli;

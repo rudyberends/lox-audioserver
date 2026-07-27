@@ -1,5 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
+import { LINEIN_INGEST_HIGH_WATER_MARK } from '@/adapters/inputs/linein/lineInConstants';
 
 type LineInIngestSession = {
   id: string;
@@ -42,7 +43,7 @@ export class LineInIngestRegistry {
     const channels = options.format?.channels ?? 2;
     const bytesPerSample = options.format ? Math.max(1, Math.floor(options.format.bitDepth / 8)) : 2;
     const logIntervalMs = 5000;
-    const stream = new PassThrough({ highWaterMark: 1024 * 64 });
+    const stream = new PassThrough({ highWaterMark: LINEIN_INGEST_HIGH_WATER_MARK });
     const session: LineInIngestSession = {
       id: inputId,
       stream,

@@ -2,6 +2,7 @@ import net from 'node:net';
 import { PassThrough } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
+import { LINEIN_INGEST_HIGH_WATER_MARK } from '@/adapters/inputs/linein/lineInConstants';
 
 const DEFAULT_TCP_PORT = 7080;
 const MAX_ID_BYTES = 256;
@@ -87,7 +88,7 @@ export class LineInIngestTcp {
   }
 
   private pipeSocket(socket: net.Socket, inputId: string, initial: Buffer): void {
-    const source = new PassThrough({ highWaterMark: 1024 * 64 });
+    const source = new PassThrough({ highWaterMark: LINEIN_INGEST_HIGH_WATER_MARK });
     this.registry.start(inputId, source);
     this.log.info('line-in ingest tcp connected', { inputId });
 

@@ -31,3 +31,12 @@ export function resolveLineInIngestResampler(entry?: LineInInputConfig | null): 
   }
   return undefined;
 }
+
+/**
+ * Bytes buffered on the receiving end of a line-in ingest before backpressure kicks in.
+ *
+ * This is latency, not headroom: a line-in is a live source, so anything sitting here is delay
+ * between the instrument and the speaker with no benefit. 64 KB of s16le stereo at 48 kHz is ~340 ms.
+ * 8 KB is ~42 ms, still several writer chunks deep so a scheduling hiccup does not stall the stream.
+ */
+export const LINEIN_INGEST_HIGH_WATER_MARK = 8 * 1024;
