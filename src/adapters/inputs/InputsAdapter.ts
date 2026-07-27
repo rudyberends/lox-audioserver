@@ -1,6 +1,7 @@
 import type { AirplayInputService } from '@/adapters/inputs/airplay/airplayInputService';
 import type { MusicAssistantInputService } from '@/adapters/inputs/musicassistant/musicAssistantInputService';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
+import type { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInActivationRegistry';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
 import type { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
 import type { InputsPort } from '@/ports/InputsPort';
@@ -14,6 +15,7 @@ export type InputsAdapterDeps = {
   spotify: SpotifyInputService;
   musicAssistant: MusicAssistantInputService;
   sendspinLineIn: SendspinLineInService;
+  lineInActivation: LineInActivationRegistry;
   dlna: DlnaInputService;
 };
 
@@ -133,10 +135,23 @@ export class InputsAdapter implements InputsPort {
 
   public requestLineInStop(...args: Parameters<InputsPort['requestLineInStop']>): void {
     this.deps.sendspinLineIn.requestStop(...args);
+    this.deps.lineInActivation.deactivate(args[0]);
   }
 
+  /**
+   * A line-in input is served by one of two transports: a sendspin client, which we can command
+   * over its open connection, or a polling bridge, which picks up desired state on its next status
+   * post. Both speak the same activate/deactivate vocabulary, so route to both rather than
+   * assuming sendspin -- an unmapped input is a no-op there, and vice versa.
+   */
   public requestLineInControl(...args: Parameters<InputsPort['requestLineInControl']>): void {
-    this.deps.sendspinLineIn.requestControl(...args);
+    const [inputId, command] = args;
+    this.deps.sendspinLineIn.requestControl(inputId, command);
+    if (command === 'activate') {
+      this.deps.lineInActivation.activate(inputId);
+    } else if (command === 'deactivate') {
+      this.deps.lineInActivation.deactivate(inputId);
+    }
   }
 
   public startCrossfadeStream(...args: Parameters<InputsPort['startCrossfadeStream']>): ReturnType<InputsPort['startCrossfadeStream']> {

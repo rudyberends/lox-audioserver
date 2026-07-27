@@ -24,6 +24,7 @@ import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
 import type { FadeControllerPort } from '@/ports/FadeControllerPort';
 import type { AlertsPort } from '@/ports/AlertsPort';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
+import type { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInActivationRegistry';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
@@ -38,6 +39,7 @@ export interface RouteDependencies {
   zoneManager: ZoneManagerFacade;
   configPort: ConfigPort;
   lineInRegistry: LineInIngestRegistry;
+  lineInActivation: LineInActivationRegistry;
   sendspinLineInService: SendspinLineInService;
   spotifyInputService: SpotifyInputService;
   recentsManager: RecentsManager;
@@ -88,6 +90,7 @@ export function registerRoutes(
   const inputHandlers = createInputHandlers(dependencies.zoneManager, dependencies.configPort, {
     registry: dependencies.lineInRegistry,
     sendspinLineIn: dependencies.sendspinLineInService,
+    activation: dependencies.lineInActivation,
     notifier: dependencies.loxoneNotifier,
   });
   const playlistEditHandlers = createPlaylistEditHandlers(

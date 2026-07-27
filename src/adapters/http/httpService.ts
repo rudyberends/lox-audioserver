@@ -25,6 +25,7 @@ import type { EnginePort } from '@/ports/EnginePort';
 import type { AlertFilesPort } from '@/ports/AlertFilesPort';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import type { LineInMetadataService } from '@/adapters/inputs/linein/lineInMetadataService';
+import type { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInActivationRegistry';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
 import type { MusicAssistantStreamService } from '@/adapters/inputs/musicassistant/musicAssistantStreamService';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
@@ -93,6 +94,7 @@ export class HttpService {
       streamEvents: StreamEvents;
       lineInRegistry: LineInIngestRegistry;
       lineInMetadataService: LineInMetadataService;
+      lineInActivation: LineInActivationRegistry;
       sendspinLineInService: SendspinLineInService;
       musicAssistantStreamService: MusicAssistantStreamService;
       spotifyInputService: SpotifyInputService;
@@ -117,7 +119,11 @@ export class HttpService {
       dlnaInput?: DlnaInputService;
     },
   ) {
-    this.lineInApi = new LineInApiHandler(options.configPort, options.lineInMetadataService);
+    this.lineInApi = new LineInApiHandler(
+      options.configPort,
+      options.lineInMetadataService,
+      options.lineInActivation,
+    );
     this.adminApi = new AdminApiHandler({
       onReinitialize: options.onReinitialize,
       onSoftRestart: options.onSoftRestart,

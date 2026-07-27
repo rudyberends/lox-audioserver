@@ -38,6 +38,7 @@ type CommandCoordinator = {
   remoteVolume: (zoneId: number, volume: number) => void;
   playerCommand: (zoneId: number, command: string, args?: Record<string, unknown>) => Promise<boolean>;
   requestLineInControl: (inputId: string, command: LineInControlCommand) => void;
+  requestLineInStop: (inputId: string) => void;
 };
 
 export function handleZoneCommand(args: {
@@ -224,6 +225,11 @@ function handleStopOff(
   zoneId: number,
   mode: ZoneContext['inputMode'],
 ): void {
+  // Keyed off the audiopath rather than inputMode: a selected line-in that never produced audio
+  // (a source still waiting to be switched on) never reached inputMode 'linein', and it is exactly
+  // that case which must be released here -- otherwise the source stays powered after the zone is
+  // off, with nothing left to turn it back down.
+  releaseLineInOnStop(coordinator, ctx);
   if (mode === 'airplay') {
     coordinator.remoteControl(zoneId, 'Stop');
     coordinator.setInputMode(ctx, null);
@@ -417,6 +423,14 @@ function handleQueuePlayCurrent(
       message: error instanceof Error ? error.message : String(error),
     });
   });
+}
+
+function releaseLineInOnStop(coordinator: CommandCoordinator, ctx: ZoneContext): void {
+  const inputId = parseLineInInputId(ctx.state.audiopath);
+  if (!inputId) {
+    return;
+  }
+  coordinator.requestLineInStop(inputId);
 }
 
 function requestLineInControl(

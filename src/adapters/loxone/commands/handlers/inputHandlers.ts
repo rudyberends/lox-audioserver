@@ -9,6 +9,7 @@ import { AudioType, FileType } from '@/domain/loxone/enums';
 import { resolveLineInSampleRate } from '@/adapters/inputs/linein/lineInConstants';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
+import type { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInActivationRegistry';
 import type { ConfigPort } from '@/ports/ConfigPort';
 
 type ResolvedLineInInput = {
@@ -32,6 +33,7 @@ type LineInState = {
 type LineInDeps = {
   registry: LineInIngestRegistry;
   sendspinLineIn: SendspinLineInService;
+  activation: LineInActivationRegistry;
   notifier: LoxoneWsNotifier;
 };
 
@@ -207,6 +209,10 @@ function audioLineIn(
   const iconType = selected?.iconType ?? DEFAULT_ICON_TYPE;
 
   log.info('line-in selected', { zoneId, inputId: audiopath });
+  // Selecting the input is what makes the source wanted. A sendspin source is told directly (via
+  // requestStart below); a polling bridge reads this on its next status post and runs its on_start
+  // hook, which is what switches on gear that does not power up by itself.
+  deps.activation.activate(audiopath);
   ensureLineInWatch(zoneManager, configPort, deps, state, zoneId, audiopath);
   startLineInPlayback(zoneManager, configPort, deps, state, zoneId, audiopath, title, iconType);
   return buildEmptyResponse(command);
@@ -360,6 +366,7 @@ function ensureLineInWatch(
       return;
     }
     deps.sendspinLineIn.requestStop(existing.inputId);
+    deps.activation.deactivate(existing.inputId);
     existing.stop();
     state.lineInWatchByZone.delete(zoneId);
   }

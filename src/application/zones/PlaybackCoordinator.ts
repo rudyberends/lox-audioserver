@@ -691,6 +691,7 @@ export class PlaybackCoordinator {
         remoteVolume: (id, volume) => this.inputsPort.remoteVolume(id, volume),
         playerCommand: (id, cmd, args) => this.inputsPort.playerCommand(id, cmd, args),
         requestLineInControl: (inputId, cmd) => this.inputsPort.requestLineInControl(inputId, cmd),
+        requestLineInStop: (inputId) => this.inputsPort.requestLineInStop(inputId),
       },
       ctx,
       zoneId,
@@ -812,6 +813,16 @@ export class PlaybackCoordinator {
     prevInput: ZoneContext['inputMode'],
     nextInput: ZoneContext['inputMode'],
   ): void {
+    // Released ahead of the guard below and keyed off the audiopath rather than prevInput: a line-in
+    // that was selected but never started streaming (a source still waiting to be switched on) has
+    // inputMode null, so it would otherwise never be told to stop and would stay powered on.
+    if (nextInput !== 'linein') {
+      const ctx = this.zoneRepo.get(zoneId);
+      const inputId = this.audioHelpers.parseLineInInputId(ctx?.state.audiopath);
+      if (inputId) {
+        this.inputsPort.requestLineInStop(inputId);
+      }
+    }
     if (!prevInput || prevInput === nextInput) {
       return;
     }
@@ -824,13 +835,6 @@ export class PlaybackCoordinator {
     }
     if (prevInput === 'musicassistant') {
       void this.inputsPort.switchAway(zoneId);
-    }
-    if (prevInput === 'linein') {
-      const ctx = this.zoneRepo.get(zoneId);
-      const inputId = this.audioHelpers.parseLineInInputId(ctx?.state.audiopath);
-      if (inputId) {
-        this.inputsPort.requestLineInStop(inputId);
-      }
     }
   }
 

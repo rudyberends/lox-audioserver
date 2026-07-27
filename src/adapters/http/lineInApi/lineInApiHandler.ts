@@ -3,6 +3,7 @@ import { createLogger } from '@/shared/logging/logger';
 import { defaultLocalIp } from '@/shared/utils/net';
 import type { LineInBridgeConfig, LineInInputConfig } from '@/domain/config/types';
 import type { LineInMetadataService } from '@/adapters/inputs/linein/lineInMetadataService';
+import type { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInActivationRegistry';
 import { resolveLineInIngestResampler, resolveLineInSampleRate } from '@/adapters/inputs/linein/lineInConstants';
 import type { ConfigPort } from '@/ports/ConfigPort';
 
@@ -64,10 +65,16 @@ export class LineInApiHandler {
   private readonly bridgesById = new Map<string, BridgeRecord>();
   private readonly configPort: ConfigPort;
   private readonly metadataService: LineInMetadataService;
+  private readonly activation: LineInActivationRegistry;
 
-  constructor(configPort: ConfigPort, metadataService: LineInMetadataService) {
+  constructor(
+    configPort: ConfigPort,
+    metadataService: LineInMetadataService,
+    activation: LineInActivationRegistry,
+  ) {
     this.configPort = configPort;
     this.metadataService = metadataService;
+    this.activation = activation;
   }
 
   public matches(pathname: string): boolean {
@@ -540,6 +547,7 @@ export class LineInApiHandler {
   ): {
     bridge_id: string;
     assigned_input_id: string | null;
+    source_active?: boolean;
     ingest_tcp_host?: string;
     ingest_tcp_port?: number;
     ingest_sample_rate?: number;
@@ -560,6 +568,9 @@ export class LineInApiHandler {
     return {
       bridge_id: bridgeId,
       assigned_input_id: inputId,
+      // Desired state, carried on the status poll the bridge already makes: this is how a bridge
+      // learns it has been selected, so it can run its on_start hook and switch the source on.
+      source_active: this.activation.isActive(inputId),
       ...ingest,
       ingest_sample_rate: resolveLineInSampleRate(entry),
       ingest_resampler: resolveLineInIngestResampler(entry),

@@ -69,7 +69,10 @@ export function playInputSource(args: {
   const prevInput = ctx.inputMode;
   const prevAudiopath = ctx.state.audiopath;
   coordinator.setInputMode(ctx, mode);
-  if (prevInput === 'linein' && mode !== 'linein') {
+  // Keyed off the previous audiopath, not inputMode: a line-in that was selected but never started
+  // streaming (a source still waiting to be switched on) never reached inputMode 'linein', yet it
+  // must still be released when the zone moves to another input.
+  if (mode !== 'linein') {
     const inputId = coordinator.audioHelpers.parseLineInInputId(prevAudiopath);
     if (inputId) {
       coordinator.log.info('line-in input cleared on input switch', {

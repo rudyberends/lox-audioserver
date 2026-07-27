@@ -44,6 +44,7 @@ import { MusicAssistantInputService } from '@/adapters/inputs/musicassistant/mus
 import { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
 import { SpotifyStreamProxyService } from '@/adapters/inputs/spotify/spotifyStreamProxyService';
 import { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
+import { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInActivationRegistry';
 import { SendspinHookRegistry } from '@/adapters/outputs/sendspin/sendspinHookRegistry';
 import { SpotifyDeviceRegistry } from '@/adapters/outputs/spotify/deviceRegistry';
 import { StreamEvents } from '@/adapters/http/streams/streamEvents';
@@ -174,6 +175,7 @@ export function createRuntime(): Runtime {
   const serverHeartbeat = new ServerHeartbeat(connectionRegistry);
   const sendspinHookRegistry = new SendspinHookRegistry();
   const sendspinLineInService = new SendspinLineInService(lineInRegistry, sendspinHookRegistry, configPort);
+  const lineInActivation = new LineInActivationRegistry();
   const lineInMetadataService = new LineInMetadataService(lineInRegistry);
   const musicAssistantStreamService = new MusicAssistantStreamService(outputHandlersProxy, configPort);
   const musicAssistantInputService = new MusicAssistantInputService(musicAssistantStreamService);
@@ -205,6 +207,7 @@ export function createRuntime(): Runtime {
     spotify: spotifyInputService,
     musicAssistant: musicAssistantInputService,
     sendspinLineIn: sendspinLineInService,
+    lineInActivation,
     dlna: dlnaInputService,
   });
   const zoneAudioPrefs = new ZoneAudioPreferences();
@@ -427,6 +430,7 @@ export function createRuntime(): Runtime {
         zoneManager,
         configPort,
         lineInRegistry,
+        lineInActivation,
         sendspinLineInService,
         spotifyInputService,
         recentsManager,
@@ -529,6 +533,7 @@ export function createRuntime(): Runtime {
       streamEvents,
       lineInRegistry,
       lineInMetadataService,
+      lineInActivation,
       sendspinLineInService,
       musicAssistantStreamService,
       spotifyInputService,
