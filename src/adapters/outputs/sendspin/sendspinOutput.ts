@@ -220,7 +220,18 @@ export class SendspinOutput implements ZoneOutput {
       normalizeSendspinLatencyMs(config.latencyMs),
       zoneId,
     );
-    this.options = { ignoreVolumeUpdates: true, ...options };
+    // Volume vanaf de client accepteren. Dit maakt bediening via de client
+    // mogelijk: een Beoremote One aan een Pi stuurt zijn volumetoetsen als
+    // MPRIS-commando naar de sendspin-daemon, die ze als controller-commando
+    // hier aflevert (zie handleGroupCommand).
+    //
+    // De vlag dekt twee paden. Controller-commando's zijn intenties ("zet op
+    // 40") en kunnen geen lus vormen. Client-state is een statusmelding en kan
+    // dat wel: server zet volume -> client meldt het terug -> server ziet een
+    // nieuwe opdracht. Daarvoor staat hierboven een echo-onderdrukking van 1s.
+    // Outputs die hun volume voortdurend rapporteren -- Cast is het voorbeeld --
+    // zetten deze vlag daarom expliciet op true.
+    this.options = { ignoreVolumeUpdates: false, ...options };
     this.unwatchClient = this.ports.sendspinConnector.watchClient(this.clientId, config.endpointUrl);
     sendspinOutputsByZoneId.set(this.zoneId, this);
     this.ports.sendspinGroup.register(this.zoneId, this);
