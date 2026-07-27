@@ -104,8 +104,11 @@ function handlePlayResume(
   zoneId: number,
   mode: ZoneContext['inputMode'],
 ): void {
-  if (mode === 'linein') {
-    requestLineInControl(coordinator, ctx, 'play');
+  // Keyed off the audiopath, not inputMode: a line-in that was selected but has not started
+  // streaming yet (hardware still coming up) never reached inputMode 'linein', and it is exactly
+  // then that a transport command has to reach the source rather than the local queue.
+  if (routeLineInCommand(coordinator, ctx, 'play')) {
+    return;
   }
   if (mode === 'airplay') {
     coordinator.remoteControl(zoneId, 'Play');
@@ -176,8 +179,8 @@ function handlePause(
   zoneId: number,
   mode: ZoneContext['inputMode'],
 ): void {
-  if (mode === 'linein') {
-    requestLineInControl(coordinator, ctx, 'pause');
+  if (routeLineInCommand(coordinator, ctx, 'pause')) {
+    return;
   }
   if (mode === 'airplay') {
     coordinator.remoteControl(zoneId, 'Pause');
@@ -358,8 +361,7 @@ function handleQueueStep(
   mode: ZoneContext['inputMode'],
   delta: 1 | -1,
 ): void {
-  if (mode === 'linein') {
-    requestLineInControl(coordinator, ctx, delta === 1 ? 'next' : 'previous');
+  if (routeLineInCommand(coordinator, ctx, delta === 1 ? 'next' : 'previous')) {
     return;
   }
   if (mode === 'airplay') {
@@ -431,6 +433,27 @@ function releaseLineInOnStop(coordinator: CommandCoordinator, ctx: ZoneContext):
     return;
   }
   coordinator.requestLineInStop(inputId);
+}
+
+/**
+ * Send a transport command to the line-in source when the zone is on one, and report whether it was
+ * handled so the caller stops instead of also driving the local queue.
+ *
+ * The server is the only place that knows which source a zone is on, so this is where the decision
+ * belongs. Previously the play branch fell through to the queue as well, which is why pressing play
+ * in the app moved the queue while the source itself heard nothing.
+ */
+function routeLineInCommand(
+  coordinator: CommandCoordinator,
+  ctx: ZoneContext,
+  command: LineInControlCommand,
+): boolean {
+  const audiopath = ctx.queueController.current()?.audiopath ?? ctx.state.audiopath ?? '';
+  if (!parseLineInInputId(audiopath)) {
+    return false;
+  }
+  requestLineInControl(coordinator, ctx, command);
+  return true;
 }
 
 function requestLineInControl(

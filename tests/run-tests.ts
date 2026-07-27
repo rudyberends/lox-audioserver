@@ -26,6 +26,7 @@ import './engine/pipeSourceAdapter.test';
 import './playbackRefactorSeams.test';
 import './playbackCoordinator.characterization.test';
 import './mdnsAdvertisedAddresses.test';
+import './lineInCommandQueue.test';
 import './adminApiJsonBody.test';
 import './lineInAdminRoutes.test';
 import './audioServersAndBearer.test';

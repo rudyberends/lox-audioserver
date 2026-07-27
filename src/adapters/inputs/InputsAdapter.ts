@@ -151,6 +151,12 @@ export class InputsAdapter implements InputsPort {
       this.deps.lineInActivation.activate(inputId);
     } else if (command === 'deactivate') {
       this.deps.lineInActivation.deactivate(inputId);
+    } else {
+      // Transport commands (play/pause/next/previous) go to the bridge's hook, which is where the
+      // knowledge of how to drive the attached hardware lives. activate/deactivate are already
+      // expressed as the start/stop the bridge derives from source_active, so they are not queued
+      // twice.
+      this.deps.lineInActivation.enqueueCommand(inputId, command);
     }
   }
 

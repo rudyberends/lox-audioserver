@@ -186,7 +186,7 @@ export class LineInApiHandler {
       if (Array.isArray((body as BridgeStatusPayload).capture_devices)) {
         await this.persistBridgeRecord(bridgeId, body as BridgeStatusPayload, true);
       }
-      this.sendJson(res, 200, this.buildBridgeConfigResponse(bridgeId, req));
+      this.sendJson(res, 200, this.buildBridgeConfigResponse(bridgeId, req, { takeCommands: true }));
       return;
     }
 
@@ -544,10 +544,15 @@ export class LineInApiHandler {
   private buildBridgeConfigResponse(
     bridgeId: string,
     req: IncomingMessage,
+    // Draining is the acknowledgement, so only the status poll may do it. Registration returns the
+    // same config, and a bridge that reconnects would otherwise swallow queued commands before its
+    // hook is wired up.
+    options: { takeCommands?: boolean } = {},
   ): {
     bridge_id: string;
     assigned_input_id: string | null;
     source_active?: boolean;
+    commands?: Array<{ command: string; args: string[] }>;
     ingest_tcp_host?: string;
     ingest_tcp_port?: number;
     ingest_sample_rate?: number;
@@ -569,8 +574,11 @@ export class LineInApiHandler {
       bridge_id: bridgeId,
       assigned_input_id: inputId,
       // Desired state, carried on the status poll the bridge already makes: this is how a bridge
-      // learns it has been selected, so it can run its on_start hook and switch the source on.
+      // learns it has been selected, so it can run its hook and switch the source on.
       source_active: this.activation.isActive(inputId),
+      // Transport commands for hardware the bridge fronts. Draining here is the acknowledgement, so
+      // they are delivered at most once -- a replayed `next` would skip two tracks.
+      commands: options.takeCommands ? this.activation.takeCommands(inputId) : [],
       ...ingest,
       ingest_sample_rate: resolveLineInSampleRate(entry),
       ingest_resampler: resolveLineInIngestResampler(entry),
