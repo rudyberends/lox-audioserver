@@ -335,6 +335,70 @@ test('a zone can leave line-ins out of its remote menu', async () => {
   assert.equal(menu.sources.some((e: any) => e.name === 'BeoSound 9000'), false);
 });
 
+test('a burst of step presses advances the queue once', async () => {
+  const { handler, commands } = createHarness();
+  // The remote sends one press several times over; each would skip another track,
+  // so six packets must not land six tracks away.
+  for (let i = 0; i < 6; i += 1) {
+    const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb5' });
+    assert.equal(res.statusCode, 200, 'a folded press is still a success, not a failure');
+  }
+  assert.deepEqual(commands, [{ zoneId: 12, command: 'next' }]);
+});
+
+test('a suppressed press says so, so the bridge does not retry it', async () => {
+  const { handler } = createHarness();
+  const first = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb5' });
+  const second = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb5' });
+  assert.equal(first.json().coalesced, undefined);
+  assert.equal(second.json().coalesced, true);
+});
+
+test('the alias code bursts together with the code it mirrors', async () => {
+  const { handler, commands } = createHarness();
+  // 0x9c and 0xb5 are the same intent from different controls, so a remote sending
+  // both must not count as two deliberate presses.
+  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb5' });
+  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0x9c' });
+  assert.deepEqual(commands, [{ zoneId: 12, command: 'next' }]);
+});
+
+test('previous is not suppressed by a preceding next', async () => {
+  const { handler, commands } = createHarness();
+  // Pressing back straight after forward is a correction, not a burst.
+  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb5' });
+  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb6' });
+  assert.deepEqual(commands, [
+    { zoneId: 12, command: 'next' },
+    { zoneId: 12, command: 'previous' },
+  ]);
+});
+
+test('two zones stepping at once do not suppress each other', async () => {
+  const { handler, commands, config } = createHarness();
+  config.zones.push({
+    id: 13,
+    name: 'Kitchen',
+    inputs: { beoremote: { enabled: true } },
+  });
+  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb5' });
+  await call(handler, 'POST', '/api/beoremote/zones/13/key', { code: '0xb5' });
+  assert.deepEqual(commands, [
+    { zoneId: 12, command: 'next' },
+    { zoneId: 13, command: 'next' },
+  ]);
+});
+
+test('play and pause are never suppressed — a repeat there is harmless', async () => {
+  const { handler, commands } = createHarness();
+  // Unlike a skip, a second play or pause is a no-op, so folding them would only
+  // risk dropping the press that mattered.
+  for (const code of ['0xb0', '0xb0', '0xb1', '0xb1']) {
+    await call(handler, 'POST', '/api/beoremote/zones/12/key', { code });
+  }
+  assert.deepEqual(commands.map((c) => c.command), ['play', 'play', 'pause', 'pause']);
+});
+
 test('a transport key goes through the existing routing, not around it', async () => {
   const { handler, commands } = createHarness();
   const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb5' });

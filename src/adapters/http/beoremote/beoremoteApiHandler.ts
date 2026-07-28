@@ -46,6 +46,11 @@ import {
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 
 const API_PREFIX = '/api/beoremote';
+/**
+ * How long a step key stays deaf to repeats. Long enough to swallow the remote's
+ * burst, short enough that pressing next twice on purpose still skips twice.
+ */
+const STEP_BURST_WINDOW_MS = 600;
 /** Bodies here are a handful of small fields; anything larger is not ours. */
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -56,6 +61,8 @@ export type BeoremoteApiDeps = BeoremoteMenuSourceDeps & {
 export class BeoremoteApiHandler {
   private readonly log = createLogger('Http', 'BeoremoteApi');
   private readonly deps: BeoremoteApiDeps;
+  /** When each zone last took a step, per direction. See {@link isStepBurst}. */
+  private readonly lastStepAt = new Map<string, number>();
 
   constructor(deps: BeoremoteApiDeps) {
     this.deps = deps;
@@ -256,6 +263,14 @@ export class BeoremoteApiHandler {
       return;
     }
 
+    if (this.isStepBurst(zoneId, action)) {
+      // Answer 200: the press was received and deliberately folded into the one
+      // being handled. A 4xx would read as a failure and invite a retry.
+      this.log.debug('beoremote step burst suppressed', { zoneId, code: formatKeyCode(code) });
+      sendJson(res, 200, { ok: true, code: formatKeyCode(code), action: action.kind, coalesced: true });
+      return;
+    }
+
     try {
       const handled = await this.performKeyAction(zoneId, action);
       if (!handled.ok) {
@@ -272,6 +287,40 @@ export class BeoremoteApiHandler {
       });
       sendJson(res, 500, { error: 'key-failed' });
     }
+  }
+
+  /**
+   * Whether this is a repeat of a step the zone has only just taken.
+   *
+   * The remote sends step-forward/back as a burst — one press arrives several times
+   * — and each one would skip another track, so a single press could land six
+   * tracks away. Skipping is destructive in a way the other keys are not: a second
+   * `play` or a re-picked favorite is a no-op, but a second `next` is gone.
+   *
+   * The window is deliberately short. It has to outlast the burst without swallowing
+   * a deliberate double-press, and someone skipping through tracks presses far
+   * slower than a remote repeats. Held down, the remote keeps sending: each accepted
+   * step re-arms the window, so holding still advances at roughly one step per
+   * window rather than as fast as the packets arrive.
+   *
+   * Per zone and per direction: next and previous do not suppress each other, since
+   * pressing back right after forward is a correction, not a burst.
+   */
+  private isStepBurst(
+    zoneId: number,
+    action: Exclude<BeoremoteKeyAction, { kind: 'unassigned' }>,
+  ): boolean {
+    if (action.kind !== 'transport' || (action.command !== 'next' && action.command !== 'previous')) {
+      return false;
+    }
+    const key = `${zoneId}:${action.command}`;
+    const now = Date.now();
+    const last = this.lastStepAt.get(key) ?? 0;
+    if (now - last < STEP_BURST_WINDOW_MS) {
+      return true;
+    }
+    this.lastStepAt.set(key, now);
+    return false;
   }
 
   private async performKeyAction(
