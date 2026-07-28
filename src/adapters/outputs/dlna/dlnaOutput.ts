@@ -101,6 +101,7 @@ export class DlnaOutput implements ZoneOutput {
   private lastOutboundVolume?: number;
   private lastOutboundVolumeAt = 0;
   private lastKnownVolume?: number;
+  private lastKnownMuted?: boolean;
   private eventsSubscribed = false;
 
   constructor(
@@ -409,11 +410,19 @@ export class DlnaOutput implements ZoneOutput {
       }
     }
     if (typeof event.muted === 'boolean') {
-      this.ports.zoneManager.handleCommand(
-        this.zoneId,
-        'volume_set',
-        event.muted ? '0' : String(this.lastKnownVolume ?? 0),
-      );
+      // Only act on an actual mute-state CHANGE. RenderingControl NOTIFYs (including the
+      // periodic keep-alive/renew snapshots) always carry <Mute val="0"/>, so firing on every
+      // event re-sent SetVolume every ~25s on an idle zone (issue #314, stiwy18). First event
+      // just seeds lastKnownMuted without emitting.
+      const first = this.lastKnownMuted === undefined;
+      if (!first && event.muted !== this.lastKnownMuted) {
+        this.ports.zoneManager.handleCommand(
+          this.zoneId,
+          'volume_set',
+          event.muted ? '0' : String(this.lastKnownVolume ?? 0),
+        );
+      }
+      this.lastKnownMuted = event.muted;
     }
   }
 }
