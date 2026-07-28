@@ -118,6 +118,7 @@ export class LocalLibraryStore {
   private static readonly SCHEMA_V3 = 3; // adds album artist for album grouping
   private static readonly SCHEMA_V4 = 4; // adds artist_covers sidecar table
   private static readonly SCHEMA_V5 = 5; // adds user-editable playlists
+  private static readonly SCHEMA_V6 = 6; // adds materialized album rollup
 
   public constructor(options: { dbPath?: string } = {}) {
     this.dbPath = options.dbPath ?? resolveDataDir('music', 'library.db');
@@ -139,6 +140,7 @@ export class LocalLibraryStore {
     const db = this.requireDb();
     db.exec('DELETE FROM tracks;');
     db.exec('DELETE FROM artist_covers;');
+    db.exec('DELETE FROM album_rollup;');
   }
 
   public upsertArtistCover(entry: ArtistCoverInsert): void {
@@ -167,6 +169,13 @@ export class LocalLibraryStore {
       ...track,
       albumArtist: normalizeGroupArtist(track.albumArtist || track.artist),
     };
+    // A retag can move a track to a different album artist; the group it left
+    // has to be recomputed too or it keeps a row with a stale track count.
+    const previous = db
+      .prepare(
+        `SELECT ${ALBUM_GROUP_EXPR} AS group_artist FROM tracks WHERE storage_id = ? AND rel_path = ?`,
+      )
+      .get(track.storageId, track.relPath) as { group_artist: string } | undefined;
     const stmt = db.prepare(`
       INSERT INTO tracks (storage_id, rel_path, title, album, artist, album_artist, audiopath, cover, mtime, size, duration)
       VALUES (@storageId, @relPath, @title, @album, @artist, @albumArtist, @audiopath, @cover, @mtime, @size, @duration)
@@ -182,19 +191,45 @@ export class LocalLibraryStore {
         duration = excluded.duration
     `);
     stmt.run(params);
+    // Keep the rollup in step with the row just written, so a caller that inserts
+    // and immediately browses sees its track. A bulk scan still calls
+    // rebuildAlbumRollup() once at the end, which is cheaper than N of these.
+    const groupArtist = normalizeGroupArtist(params.albumArtist);
+    this.refreshAlbumRollupFor(params.storageId, groupArtist);
+    if (previous && previous.group_artist !== groupArtist) {
+      this.refreshAlbumRollupFor(params.storageId, previous.group_artist);
+    }
+  }
+
+  /**
+   * Recomputes the rollup rows for one album group. Deriving from `tracks` rather
+   * than incrementing a counter means it cannot drift, and a retag that moves a
+   * track between albums leaves no stale row behind.
+   */
+  private refreshAlbumRollupFor(storageId: string, groupArtist: string): void {
+    const db = this.requireDb();
+    db.prepare('DELETE FROM album_rollup WHERE storage_id = ? AND artist = ?').run(
+      storageId,
+      groupArtist,
+    );
+    db.prepare(
+      `
+      INSERT INTO album_rollup
+        (storage_id, artist, album, track_count, cover, rel_path, last_mtime, sort_album, sort_artist)
+      SELECT storage_id, ${ALBUM_GROUP_EXPR}, album, COUNT(*), MAX(NULLIF(cover, '')),
+             MIN(rel_path), MAX(mtime), LOWER(album), LOWER(${ALBUM_GROUP_EXPR})
+      FROM tracks
+      WHERE storage_id = ? AND ${ALBUM_GROUP_EXPR} = ?
+      GROUP BY storage_id, ${ALBUM_GROUP_EXPR}, album
+    `,
+    ).run(storageId, groupArtist);
   }
 
   public getStats(): { tracks: number; albums: number; artists: number } {
     const db = this.requireDb();
     const trackCount = db.prepare('SELECT COUNT(*) AS count FROM tracks').get() as { count: number };
     const albumCount = db
-      .prepare(
-        `SELECT COUNT(*) AS count FROM (
-          SELECT storage_id, ${ALBUM_GROUP_EXPR} AS album_group_artist, album
-          FROM tracks
-          GROUP BY storage_id, album_group_artist, album
-        )`,
-      )
+      .prepare('SELECT COUNT(*) AS count FROM album_rollup')
       .get() as { count: number };
     const artistCount = db
       .prepare(
@@ -210,14 +245,7 @@ export class LocalLibraryStore {
       .prepare('SELECT COUNT(*) AS count FROM tracks WHERE storage_id = ?')
       .get(storageId) as { count: number };
     const albumCount = db
-      .prepare(
-        `SELECT COUNT(*) AS count FROM (
-          SELECT storage_id, ${ALBUM_GROUP_EXPR} AS album_group_artist, album
-          FROM tracks
-          WHERE storage_id = ?
-          GROUP BY storage_id, album_group_artist, album
-        )`,
-      )
+      .prepare('SELECT COUNT(*) AS count FROM album_rollup WHERE storage_id = ?')
       .get(storageId) as { count: number };
     const artistCount = db
       .prepare(
@@ -227,6 +255,10 @@ export class LocalLibraryStore {
     return { tracks: trackCount.count, albums: albumCount.count, artists: artistCount.count };
   }
 
+  /**
+   * Served from {@link rebuildAlbumRollup}'s table: an indexed range scan with no
+   * grouping and no sort, so paging stays flat however deep it goes.
+   */
   public getAlbums(
     storageId: string | null,
     offset: number,
@@ -240,27 +272,16 @@ export class LocalLibraryStore {
       params.push(storageId);
     }
     const total = db
-      .prepare(
-        `SELECT COUNT(*) AS count FROM (
-          SELECT storage_id, ${ALBUM_GROUP_EXPR} AS album_group_artist, album
-          FROM tracks
-          ${where}
-          GROUP BY storage_id, album_group_artist, album
-        )`,
-      )
+      .prepare(`SELECT COUNT(*) AS count FROM album_rollup ${where}`)
       .get(...params) as { count: number };
 
     const rows = db
       .prepare(
         `
-        SELECT storage_id, album, ${ALBUM_GROUP_EXPR} AS artist,
-          COUNT(*) AS track_count,
-          MAX(NULLIF(cover, '')) AS cover,
-          MIN(rel_path) AS rel_path
-        FROM tracks
+        SELECT storage_id, album, artist, track_count, cover, rel_path
+        FROM album_rollup
         ${where}
-        GROUP BY storage_id, ${ALBUM_GROUP_EXPR}, album
-        ORDER BY LOWER(album), LOWER(${ALBUM_GROUP_EXPR})
+        ORDER BY sort_album, sort_artist
         LIMIT ? OFFSET ?
       `,
       )
@@ -304,6 +325,34 @@ export class LocalLibraryStore {
       `,
       )
       .all(storageId, limit) as AlbumCoverRow[];
+  }
+
+  /**
+   * Artists with no stored cover, and one track path each to locate their folder.
+   *
+   * Drives the background artist-art fetch after a scan. Only artists that
+   * actually need a picture are returned, so a second scan does no lookups.
+   */
+  public listArtistsWithoutCover(limit: number): Array<{
+    storage_id: string;
+    name: string;
+    rel_path: string;
+  }> {
+    const db = this.requireDb();
+    return db
+      .prepare(
+        `
+        SELECT t.storage_id, t.artist AS name, MIN(t.rel_path) AS rel_path
+        FROM tracks t
+        LEFT JOIN artist_covers ac
+          ON ac.storage_id = t.storage_id AND ac.name = t.artist
+        WHERE ac.name IS NULL AND TRIM(t.artist) <> ''
+        GROUP BY t.storage_id, t.artist
+        ORDER BY COUNT(*) DESC
+        LIMIT ?
+      `,
+      )
+      .all(limit) as Array<{ storage_id: string; name: string; rel_path: string }>;
   }
 
   public getArtists(
@@ -505,9 +554,81 @@ export class LocalLibraryStore {
       .all(storageId, artist) as TrackFileRow[];
   }
 
+  /** Storage ids that currently have rows, so removed shares can be cleaned up. */
+  public listStorageIds(): string[] {
+    const db = this.requireDb();
+    const rows = db.prepare('SELECT DISTINCT storage_id FROM tracks').all() as Array<{
+      storage_id: string;
+    }>;
+    return rows.map((row) => row.storage_id);
+  }
+
+  /**
+   * Drops every row for one storage. Used by the rescan to refresh a single
+   * storage in isolation, so a share that failed to mount keeps the rows it had
+   * instead of being wiped by a whole-table reset.
+   */
+  public deleteTracksForStorage(storageId: string): number {
+    const db = this.requireDb();
+    const changes = db.prepare('DELETE FROM tracks WHERE storage_id = ?').run(storageId).changes;
+    if (changes > 0) {
+      this.rebuildAlbumRollup();
+    }
+    return changes;
+  }
+
+  /**
+   * Removes rows for a storage that the current scan did not see — the files were
+   * deleted or moved while the server was not looking. `seenRelPaths` must be the
+   * complete set the scan just indexed for that storage.
+   */
+  public deleteTracksMissingFrom(storageId: string, seenRelPaths: Set<string>): number {
+    const db = this.requireDb();
+    const existing = db
+      .prepare('SELECT rel_path FROM tracks WHERE storage_id = ?')
+      .all(storageId) as Array<{ rel_path: string }>;
+    const stale = existing.filter((row) => !seenRelPaths.has(row.rel_path));
+    if (stale.length === 0) {
+      return 0;
+    }
+    const stmt = db.prepare('DELETE FROM tracks WHERE storage_id = ? AND rel_path = ?');
+    const run = db.transaction((rows: Array<{ rel_path: string }>) => {
+      for (const row of rows) {
+        stmt.run(storageId, row.rel_path);
+      }
+    });
+    run(stale);
+    this.rebuildAlbumRollup();
+    return stale.length;
+  }
+
+  /** Wraps a batch of writes in one transaction. A rescan otherwise commits per track. */
+  public transaction<T>(fn: () => T): T {
+    const db = this.requireDb();
+    return db.transaction(fn)();
+  }
+
+  /**
+   * Truncates the WAL and refreshes planner statistics. Called after a scan: a
+   * full rescan writes a large WAL that nothing else reclaims, which matters on
+   * the SD cards these servers usually run from.
+   */
+  public checkpoint(): void {
+    const db = this.requireDb();
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+      db.pragma('optimize');
+    } catch {
+      // Housekeeping only — never fail a scan over it.
+    }
+  }
+
   public deleteTracksByAudiopath(audiopath: string): number {
     const db = this.requireDb();
     const result = db.prepare('DELETE FROM tracks WHERE audiopath = ?').run(audiopath);
+    if (result.changes > 0) {
+      this.rebuildAlbumRollup();
+    }
     return result.changes;
   }
 
@@ -516,6 +637,9 @@ export class LocalLibraryStore {
     const result = db
       .prepare(`DELETE FROM tracks WHERE storage_id = ? AND ${ALBUM_GROUP_EXPR} = ? AND album = ?`)
       .run(storageId, albumArtist, album);
+    if (result.changes > 0) {
+      this.rebuildAlbumRollup();
+    }
     return result.changes;
   }
 
@@ -524,6 +648,9 @@ export class LocalLibraryStore {
     const result = db
       .prepare('DELETE FROM tracks WHERE storage_id = ? AND artist = ?')
       .run(storageId, artist);
+    if (result.changes > 0) {
+      this.rebuildAlbumRollup();
+    }
     return result.changes;
   }
 
@@ -749,6 +876,68 @@ export class LocalLibraryStore {
     if (userVersion < LocalLibraryStore.SCHEMA_V5) {
       db.pragma(`user_version = ${LocalLibraryStore.SCHEMA_V5}`);
     }
+
+    // Album browse used to GROUP BY an expression over two columns, which no
+    // index can satisfy: every page built two temp b-trees over the whole table
+    // (~100ms per page at 100k tracks, and worse the deeper you paged). The
+    // rollup below is derived data — rebuilt from `tracks` after every scan — but
+    // it turns that into a single indexed range scan (~0.1ms, flat with depth).
+    // Sort keys are materialized too, so ORDER BY needs no sort at all.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS album_rollup (
+        storage_id TEXT NOT NULL,
+        artist TEXT NOT NULL,
+        album TEXT NOT NULL,
+        track_count INTEGER NOT NULL,
+        cover TEXT,
+        rel_path TEXT,
+        last_mtime INTEGER,
+        sort_album TEXT NOT NULL,
+        sort_artist TEXT NOT NULL,
+        PRIMARY KEY (storage_id, artist, album)
+      );
+      CREATE INDEX IF NOT EXISTS idx_album_rollup_sort
+        ON album_rollup(storage_id, sort_album, sort_artist);
+      CREATE INDEX IF NOT EXISTS idx_album_rollup_recent
+        ON album_rollup(storage_id, last_mtime DESC);
+    `);
+
+    if (userVersion < LocalLibraryStore.SCHEMA_V6) {
+      db.pragma(`user_version = ${LocalLibraryStore.SCHEMA_V6}`);
+      // Existing databases get their rollup filled immediately, so the first
+      // browse after an upgrade is not empty.
+      this.rebuildAlbumRollup();
+    }
+  }
+
+  /**
+   * Rebuilds the album rollup from `tracks`.
+   *
+   * Cheap enough to do wholesale (~290ms at 100k tracks) and simple enough to be
+   * obviously correct, which beats incrementally patching rows and drifting out
+   * of sync. Callers run it once at the end of a scan, not per track.
+   */
+  public rebuildAlbumRollup(): void {
+    const db = this.requireDb();
+    const rebuild = db.transaction(() => {
+      db.exec('DELETE FROM album_rollup;');
+      db.exec(`
+        INSERT INTO album_rollup
+          (storage_id, artist, album, track_count, cover, rel_path, last_mtime, sort_album, sort_artist)
+        SELECT storage_id,
+               ${ALBUM_GROUP_EXPR} AS artist,
+               album,
+               COUNT(*),
+               MAX(NULLIF(cover, '')),
+               MIN(rel_path),
+               MAX(mtime),
+               LOWER(album),
+               LOWER(${ALBUM_GROUP_EXPR})
+        FROM tracks
+        GROUP BY storage_id, ${ALBUM_GROUP_EXPR}, album;
+      `);
+    });
+    rebuild();
   }
 
   // -- Playlists ----------------------------------------------------------------
@@ -1028,7 +1217,10 @@ export class LocalLibraryStore {
     if (!raw) {
       return null;
     }
-    const tokens = raw.match(/[a-z0-9]+/g) ?? [];
+    // Unicode-aware: an ASCII-only class would split "Björk" into "bj" + "rk"
+    // and match nothing, even though the track is indexed. Letters and numbers
+    // in any script count as word characters.
+    const tokens = raw.match(/[\p{L}\p{N}]+/gu) ?? [];
     if (!tokens.length) {
       return null;
     }
