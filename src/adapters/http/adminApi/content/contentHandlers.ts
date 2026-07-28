@@ -7,8 +7,7 @@ import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { StorageConfig } from '@/adapters/content/storage/storageManager';
 import { TuneInClient } from '@/adapters/content/providers/tunein/tuneinClient';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
-
-const MAX_LIBRARY_UPLOAD_JSON_BODY_BYTES = 32 * 1024 * 1024;
+import type { WebdavServer } from '@/adapters/webdav/webdavServer';
 
 export type ContentHandlerDeps = {
   log: ComponentLogger;
@@ -16,6 +15,11 @@ export type ContentHandlerDeps = {
   customRadioStore: CustomRadioStore;
   loxoneNotifier: LoxoneWsNotifier;
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
+  /**
+   * Streaming write path shared with the WebDAV share, so a file dropped in the
+   * admin UI lands on disk exactly as one copied over the network drive.
+   */
+  webdav?: WebdavServer;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
 };
 
@@ -32,9 +36,17 @@ export function buildContentRoutes(deps: ContentHandlerDeps): Route[] {
       handler: async (req, res) => handleLibraryCovers(req, res, deps),
     },
     {
-      method: 'POST',
-      pattern: /^\/content\/library\/upload$/,
-      handler: async (req, res) => handleLibraryUpload(req, res, deps),
+      method: 'GET',
+      pattern: /^\/content\/library\/browse$/,
+      handler: async (req, res) => handleLibraryBrowse(req, res, deps),
+    },
+    {
+      method: 'PUT',
+      pattern: /^\/content\/library\/files\/(.+)$/,
+      handler: async (req, res, match) => {
+        const relativePath = decodeURIComponent(match[1] ?? '');
+        await handleLibraryFilePut(req, res, relativePath, deps);
+      },
     },
     {
       method: 'DELETE',
@@ -175,6 +187,105 @@ async function handleLibraryCovers(
   }
 }
 
+/** Entities the admin library browser can page through, mapped to their folder id stem. */
+const LIBRARY_BROWSE_KINDS = {
+  albums: 'albums',
+  artists: 'artists',
+  tracks: 'tracks',
+} as const;
+
+type LibraryBrowseKind = keyof typeof LIBRARY_BROWSE_KINDS;
+
+const LIBRARY_BROWSE_MAX_LIMIT = 200;
+
+/** Per-type hit cap the local library search enforces (localLibraryProvider.search). */
+const LIBRARY_SEARCH_MAX_HITS = 50;
+
+/**
+ * Folder id for a library entity listing. `local` is the built-in storage; every
+ * other id is a configured network share.
+ */
+function libraryBrowseFolderId(kind: LibraryBrowseKind, storageId: string): string {
+  const stem = LIBRARY_BROWSE_KINDS[kind];
+  return storageId === 'local' ? `library-local-${stem}` : `library-nas-${storageId}-${stem}`;
+}
+
+/**
+ * Paged listing behind the admin library manager. Browsing delegates to the same
+ * `getMediaFolder` the players use, so the item ids it returns are exactly the ids
+ * the album/artist/track DELETE endpoints accept.
+ *
+ * Search is a different shape: the underlying store matches with a per-type cap and
+ * reports no total, so a query returns one capped page and says so via `truncated`
+ * rather than pretending to paginate.
+ */
+async function handleLibraryBrowse(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: ContentHandlerDeps,
+): Promise<void> {
+  const url = new URL(req.url ?? '', 'http://localhost');
+  const kindParam = (url.searchParams.get('kind') ?? 'albums') as LibraryBrowseKind;
+  if (!(kindParam in LIBRARY_BROWSE_KINDS)) {
+    deps.sendJson(res, 400, { error: 'invalid-library-browse-kind' });
+    return;
+  }
+  const storageId = (url.searchParams.get('storageId') ?? 'local').trim() || 'local';
+  const query = (url.searchParams.get('q') ?? '').trim();
+
+  const rawOffset = Number(url.searchParams.get('offset'));
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
+  const rawLimit = Number(url.searchParams.get('limit'));
+  const limit =
+    Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(Math.floor(rawLimit), LIBRARY_BROWSE_MAX_LIMIT)
+      : 50;
+
+  try {
+    if (query) {
+      // The store's search caps each type at LIBRARY_SEARCH_MAX_HITS and returns no
+      // total, so a query yields a single capped page rather than a pageable set.
+      const singular = kindParam.slice(0, -1);
+      const hitLimit = Math.min(limit, LIBRARY_SEARCH_MAX_HITS);
+      const found = await deps.contentManager.globalSearch(
+        `local:${singular}#${hitLimit}`,
+        query,
+      );
+      const items = found.result?.[kindParam] ?? [];
+      deps.sendJson(res, 200, {
+        kind: kindParam,
+        storageId,
+        query,
+        items,
+        offset: 0,
+        limit: hitLimit,
+        total: items.length,
+        truncated: items.length >= hitLimit,
+      });
+      return;
+    }
+
+    const folder = await deps.contentManager.getMediaFolder(
+      libraryBrowseFolderId(kindParam, storageId),
+      offset,
+      limit,
+    );
+    deps.sendJson(res, 200, {
+      kind: kindParam,
+      storageId,
+      query: '',
+      items: folder?.items ?? [],
+      offset,
+      limit,
+      total: folder?.totalitems ?? 0,
+      truncated: false,
+    });
+  } catch (err) {
+    deps.log.warn('library browse failed', { err, kind: kindParam, storageId });
+    deps.sendJson(res, 500, { error: 'library-browse-failed' });
+  }
+}
+
 async function handleLibraryStorageCovers(
   storageId: string,
   req: IncomingMessage,
@@ -197,42 +308,64 @@ async function handleLibraryStorageCovers(
   }
 }
 
-async function handleLibraryUpload(
+/**
+ * Streams one uploaded file into the local library.
+ *
+ * Delegates to the same writer the WebDAV share uses, which is the point: the
+ * admin UI's drop zone and a file copied over the network drive now produce
+ * byte-identical results on disk. The previous base64-in-JSON endpoint capped a
+ * file at roughly 24 MB of real audio and rewrote every non-ASCII character in
+ * the path to an underscore, so the same album landed under a different name
+ * depending on which route added it.
+ */
+async function handleLibraryFilePut(
   req: IncomingMessage,
   res: ServerResponse,
+  relativePath: string,
   deps: ContentHandlerDeps,
 ): Promise<void> {
-  const body = (await deps.readJsonBody(req, res, MAX_LIBRARY_UPLOAD_JSON_BODY_BYTES)) as
-    | { filename?: string; relativePath?: string; data?: string }
-    | null;
-  if (res.writableEnded) {
+  if (!deps.webdav) {
+    deps.sendJson(res, 503, { error: 'library-upload-unavailable' });
     return;
   }
-  const filename = typeof body?.filename === 'string' ? body.filename.trim() : '';
-  const relativePath = typeof body?.relativePath === 'string' ? body.relativePath.trim() : '';
-  const data = typeof body?.data === 'string' ? body.data : '';
-  if ((!filename && !relativePath) || !data) {
+  if (!relativePath.trim()) {
     deps.sendJson(res, 400, { error: 'invalid-library-upload' });
     return;
   }
-  try {
-    const upload = await deps.contentManager.uploadLibraryAudio(relativePath || filename, data);
-    void bestEffort(() => deps.contentManager.rescanLibrary(), {
-      fallback: undefined,
-      onError: 'debug',
-      log: deps.log,
-      label: 'library rescan failed after upload',
-    });
-    deps.sendJson(res, 201, { upload });
-  } catch (err) {
-    const code = err instanceof Error ? err.message : 'library-upload-failed';
-    if (['invalid-filename', 'invalid-audio-data', 'invalid-audio-extension'].includes(code)) {
-      deps.sendJson(res, 400, { error: code });
-      return;
-    }
-    deps.log.warn('library upload failed', { err });
-    deps.sendJson(res, 500, { error: 'library-upload-failed' });
+  if (!isAudioUploadName(relativePath)) {
+    deps.sendJson(res, 400, { error: 'invalid-audio-extension' });
+    return;
   }
+  // A file dropped on its own has no folder to keep, so it is filed under its
+  // tags (Artist/Album) instead of landing loose in the library root. A whole
+  // folder that was dropped already carries its structure and is left alone.
+  const isLooseFile = !relativePath.replace(/^\/+/, '').includes('/');
+
+  try {
+    await deps.webdav.writeFile(
+      req,
+      res,
+      relativePath,
+      isLooseFile
+        ? async (written, libraryPath) => {
+          // Tags are read from the file as the indexer sees it, so the path
+          // must be library-relative, not share-relative.
+          const subdir = await deps.contentManager.resolveLibraryUploadSubdir(libraryPath);
+          return subdir ? `${subdir}/${written.split('/').pop()}` : written;
+        }
+        : undefined,
+    );
+  } catch (err) {
+    deps.log.warn('library upload failed', { err, relativePath });
+    if (!res.headersSent) {
+      deps.sendJson(res, 500, { error: 'library-upload-failed' });
+    }
+  }
+}
+
+/** Extensions the library indexes; anything else is refused rather than stored. */
+function isAudioUploadName(name: string): boolean {
+  return /\.(mp3|flac|m4a|aac|ogg|wav)$/i.test(name);
 }
 
 async function handleLibraryTrackDelete(

@@ -12,6 +12,7 @@ import { AudioStreamHandler } from '@/adapters/http/streams/audioStreamHandler';
 import { AudioProxyHandler } from '@/adapters/http/streams/audioProxyHandler';
 import { LineInIngestWebSocket } from '@/adapters/http/streams/lineInIngestWs';
 import { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
+import { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandler';
 import { isLocalRequest } from '@/shared/utils/net';
 import type { StreamProxyRoute } from '@/shared/streamProxyRoute';
 import type { NotifierPort } from '@/ports/NotifierPort';
@@ -26,6 +27,7 @@ import type { AlertFilesPort } from '@/ports/AlertFilesPort';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import type { LineInMetadataService } from '@/adapters/inputs/linein/lineInMetadataService';
 import type { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInActivationRegistry';
+import type { LineInActivationService } from '@/application/inputs/lineInActivationService';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
 import type { MusicAssistantStreamService } from '@/adapters/inputs/musicassistant/musicAssistantStreamService';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
@@ -49,6 +51,7 @@ import type { MdnsPort } from '@/ports/MdnsPort';
 import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
 import type { MediaServer } from '@/adapters/mediaserver/mediaServer';
 import type { SubsonicApi } from '@/adapters/subsonic/subsonicApi';
+import type { WebdavServer } from '@/adapters/webdav/webdavServer';
 import type { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
 
 /**
@@ -63,10 +66,12 @@ export class HttpService {
   private readonly audioProxy: AudioProxyHandler;
   private readonly mediaServer?: MediaServer;
   private readonly subsonic?: SubsonicApi;
+  private readonly webdav?: WebdavServer;
   private readonly dlnaInput?: DlnaInputService;
   private readonly streamProxyRoutes: StreamProxyRoute[];
   private readonly lineInIngestWs: LineInIngestWebSocket;
   private readonly lineInApi: LineInApiHandler;
+  private readonly beoremoteApi: BeoremoteApiHandler;
   private readonly sendspin: SendspinGateway;
   private readonly snapcast: SnapcastGateway;
   private readonly lmsCli: LmsCliServer;
@@ -95,6 +100,7 @@ export class HttpService {
       lineInRegistry: LineInIngestRegistry;
       lineInMetadataService: LineInMetadataService;
       lineInActivation: LineInActivationRegistry;
+      lineInActivationService: LineInActivationService;
       sendspinLineInService: SendspinLineInService;
       musicAssistantStreamService: MusicAssistantStreamService;
       spotifyInputService: SpotifyInputService;
@@ -116,6 +122,7 @@ export class HttpService {
       streamProxyRoutes: StreamProxyRoute[];
       mediaServer?: MediaServer;
       subsonic?: SubsonicApi;
+      webdav?: WebdavServer;
       dlnaInput?: DlnaInputService;
     },
   ) {
@@ -124,6 +131,13 @@ export class HttpService {
       options.lineInMetadataService,
       options.lineInActivation,
     );
+    this.beoremoteApi = new BeoremoteApiHandler({
+      configPort: options.configPort,
+      favorites: options.favoritesManager,
+      contentManager: options.contentManager,
+      zoneManager: options.zoneManager,
+      lineIn: options.lineInActivationService,
+    });
     this.adminApi = new AdminApiHandler({
       onReinitialize: options.onReinitialize,
       onSoftRestart: options.onSoftRestart,
@@ -145,6 +159,9 @@ export class HttpService {
         else await ms.stop();
       },
       musicAssistantStreamService: options.musicAssistantStreamService,
+      // Lets the admin UI's drop zone write through the same streaming path the
+      // WebDAV share uses, instead of its own base64 endpoint.
+      webdav: options.webdav,
       snapcastCore: options.snapcastCore,
       squeezeliteCore: options.squeezeliteCore,
       recentsManager: options.recentsManager,
@@ -158,6 +175,7 @@ export class HttpService {
       alertFiles: options.alertFiles,
       browserZoneRegistry: options.browserZoneRegistry,
       lineInApi: this.lineInApi,
+      beoremoteApi: this.beoremoteApi,
       httpPort: config.port,
     });
     this.music = new MusicStreamingHandler(config.musicDir);
@@ -171,6 +189,7 @@ export class HttpService {
     this.audioProxy = new AudioProxyHandler(options.zoneManager);
     this.mediaServer = options.mediaServer;
     this.subsonic = options.subsonic;
+    this.webdav = options.webdav;
     this.dlnaInput = options.dlnaInput;
     this.streamProxyRoutes = options.streamProxyRoutes;
     this.lineInIngestWs = new LineInIngestWebSocket(options.lineInRegistry);
@@ -321,13 +340,15 @@ export class HttpService {
   ): Promise<void> {
     this.applyCors(res);
 
-    if (req.method === 'OPTIONS') {
+    const pathname = this.normalizePath(req.url ?? '/');
+
+    // WebDAV owns its own OPTIONS: clients read the DAV/Allow headers from it to
+    // decide the mount is writable, and a bare 204 reads as "not a WebDAV share".
+    if (req.method === 'OPTIONS' && !this.webdav?.matches(pathname)) {
       res.writeHead(204);
       res.end();
       return;
     }
-
-    const pathname = this.normalizePath(req.url ?? '/');
 
     if (pathname === '/') {
       res.writeHead(302, { Location: '/admin/?chooser=1' });
@@ -421,6 +442,13 @@ export class HttpService {
       return;
     }
 
+    // WebDAV share over the music library, so the folder can be mounted as a
+    // network drive. Carries its own Basic-auth check, like Subsonic above.
+    if (this.webdav?.matches(pathname)) {
+      await this.webdav.handle(req, res, pathname);
+      return;
+    }
+
     if (this.audioStream.matches(pathname)) {
       await this.audioStream.handle(req, res, pathname);
       return;
@@ -428,6 +456,11 @@ export class HttpService {
 
     if (this.lineInApi.matches(pathname)) {
       await this.lineInApi.handle(req, res, pathname);
+      return;
+    }
+
+    if (this.beoremoteApi.matches(pathname)) {
+      await this.beoremoteApi.handle(req, res, pathname);
       return;
     }
 
