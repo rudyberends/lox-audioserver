@@ -63,6 +63,7 @@ export class AudioProxyHandler {
     const contentType = upstream.headers.get('content-type') ?? 'application/octet-stream';
     const contentLength = upstream.headers.get('content-length');
     const acceptRanges = upstream.headers.get('accept-ranges');
+    const contentRange = upstream.headers.get('content-range');
     const icyMetaInt = upstream.headers.get('icy-metaint');
     const zoneId = this.resolveZoneId(req);
 
@@ -86,6 +87,12 @@ export class AudioProxyHandler {
     };
     if (contentLength) headers['Content-Length'] = contentLength;
     if (acceptRanges) headers['Accept-Ranges'] = acceptRanges;
+    // A 206 without its Content-Range is a broken partial response: the client
+    // reads Content-Length bytes and treats them as the whole resource, ending
+    // the stream early (ffmpeg's probe range-request then plays only the first
+    // chunk of long tracks). Forward the upstream Content-Range so a partial
+    // stays a partial.
+    if (contentRange) headers['Content-Range'] = contentRange;
     if (icyMetaInt) headers['icy-metaint'] = icyMetaInt;
 
     res.writeHead(upstream.status || 200, headers);
