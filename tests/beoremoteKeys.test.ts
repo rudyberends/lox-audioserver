@@ -21,6 +21,15 @@ test('transport keys map to the four transport verbs', () => {
   assert.deepEqual(resolveKeyAction(0xb6), { kind: 'transport', command: 'previous' });
 });
 
+test('the second step pair is an alias, not a replacement', () => {
+  // A different physical control reporting the same intent. Both pairs stay live
+  // because a remote may send either.
+  assert.deepEqual(resolveKeyAction(0x9c), { kind: 'transport', command: 'next' });
+  assert.deepEqual(resolveKeyAction(0x9d), { kind: 'transport', command: 'previous' });
+  assert.deepEqual(resolveKeyAction(0x9c), resolveKeyAction(0xb5));
+  assert.deepEqual(resolveKeyAction(0x9d), resolveKeyAction(0xb6));
+});
+
 test('yellow and blue are the reverse of the expected order', () => {
   // The single most surprising fact in the table: 0x03 is yellow, 0x04 is blue.
   assert.deepEqual(resolveKeyAction(0x03), { kind: 'favorite', slot: 3 });
@@ -64,7 +73,6 @@ test('observed-but-unidentified codes report as known, not as missing', () => {
   // genuinely new buttons rather than ones we already know we have not mapped.
   const nav = resolveKeyAction(0x41);
   assert.equal(nav?.kind, 'unassigned');
-  assert.equal(resolveKeyAction(0x9c)?.kind, 'unassigned');
   assert.equal(resolveKeyAction(0x10)?.kind, 'unassigned', 'menu is known but unbound');
 });
 

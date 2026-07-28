@@ -91,8 +91,6 @@ export function defaultFavoriteSlot(button: AssignableButton): number {
  * 0x41–0x45 is almost certainly the navigation ring.
  */
 const OBSERVED_UNASSIGNED: Record<number, string> = {
-  0x9c: 'unknown-9c',
-  0x9d: 'unknown-9d',
   0x30: 'unknown-30',
   0x41: 'nav-41',
   0x42: 'nav-42',
@@ -111,6 +109,11 @@ const KEY_ACTIONS: Record<number, BeoremoteKeyAction> = {
   0xb1: { kind: 'transport', command: 'pause' },
   0xb5: { kind: 'transport', command: 'next' },
   0xb6: { kind: 'transport', command: 'previous' },
+  // The remote emits a second pair for step-forward/back — a different physical
+  // control reporting the same intent. Aliases rather than replacements: both pairs
+  // are live, because a remote may send either.
+  0x9c: { kind: 'transport', command: 'next' },
+  0x9d: { kind: 'transport', command: 'previous' },
 
   // Digits 1-6 → disc select on a changer.
   0x06: { kind: 'disc', disc: 1 },
