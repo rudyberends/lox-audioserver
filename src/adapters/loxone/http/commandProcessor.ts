@@ -14,9 +14,7 @@ import type { ConfigPort } from '@/ports/ConfigPort';
 import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
 import type { FadeControllerPort } from '@/ports/FadeControllerPort';
 import type { AlertsPort } from '@/ports/AlertsPort';
-import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
-import type { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInActivationRegistry';
-import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
+import type { LineInActivationService } from '@/application/inputs/lineInActivationService';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { LoxoneConfigService } from '@/adapters/loxone/services/loxoneConfigService';
@@ -29,9 +27,7 @@ export interface LoxoneCommandProcessorOptions {
   configService: LoxoneConfigService;
   zoneManager: ZoneManagerFacade;
   configPort: ConfigPort;
-  lineInRegistry: LineInIngestRegistry;
-  lineInActivation: LineInActivationRegistry;
-  sendspinLineInService: SendspinLineInService;
+  lineInActivationService: LineInActivationService;
   spotifyInputService: SpotifyInputService;
   recentsManager: RecentsManager;
   favoritesManager: FavoritesManager;
@@ -60,9 +56,7 @@ export class LoxoneCommandProcessor {
       configService: options.configService,
       zoneManager: options.zoneManager,
       configPort: options.configPort,
-      lineInRegistry: options.lineInRegistry,
-      lineInActivation: options.lineInActivation,
-      sendspinLineInService: options.sendspinLineInService,
+      lineInActivationService: options.lineInActivationService,
       spotifyInputService: options.spotifyInputService,
       recentsManager: options.recentsManager,
       favoritesManager: options.favoritesManager,

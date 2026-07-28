@@ -2,6 +2,7 @@ import type { AirplayInputService } from '@/adapters/inputs/airplay/airplayInput
 import type { MusicAssistantInputService } from '@/adapters/inputs/musicassistant/musicAssistantInputService';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
 import type { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInActivationRegistry';
+import type { LineInActivationService } from '@/application/inputs/lineInActivationService';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
 import type { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
 import type { InputsPort } from '@/ports/InputsPort';
@@ -16,6 +17,12 @@ export type InputsAdapterDeps = {
   musicAssistant: MusicAssistantInputService;
   sendspinLineIn: SendspinLineInService;
   lineInActivation: LineInActivationRegistry;
+  /**
+   * Resolved lazily: the activation service is constructed after this adapter, and
+   * it owns whether an input is controllable — which decides whether releasing it
+   * should also tell the hardware to stop.
+   */
+  lineInActivationService?: () => LineInActivationService | null;
   dlna: DlnaInputService;
 };
 
@@ -134,6 +141,14 @@ export class InputsAdapter implements InputsPort {
   }
 
   public requestLineInStop(...args: Parameters<InputsPort['requestLineInStop']>): void {
+    // The service knows whether this source can be told to stop; when it is wired
+    // up it owns the whole teardown so a controllable device does not keep playing
+    // into a room that has moved on.
+    const service = this.deps.lineInActivationService?.();
+    if (service) {
+      service.releaseLineIn(args[0]);
+      return;
+    }
     this.deps.sendspinLineIn.requestStop(...args);
     this.deps.lineInActivation.deactivate(args[0]);
   }
@@ -156,6 +171,14 @@ export class InputsAdapter implements InputsPort {
       // knowledge of how to drive the attached hardware lives. activate/deactivate are already
       // expressed as the start/stop the bridge derives from source_active, so they are not queued
       // twice.
+      //
+      // An input marked uncontrollable gets nothing: queueing for a turntable would
+      // leave the command sitting until some later selection drained it.
+      const service = this.deps.lineInActivationService?.();
+      if (service) {
+        service.sendCommandIfControllable(inputId, command);
+        return;
+      }
       this.deps.lineInActivation.enqueueCommand(inputId, command);
     }
   }

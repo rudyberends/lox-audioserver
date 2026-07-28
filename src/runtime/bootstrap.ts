@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { loadConfig } from '@/config';
 import { loadEnvironment } from '@/config/environment';
 import { createLogger, logManager } from '@/shared/logging/logger';
@@ -6,6 +7,7 @@ import { createContentAdapter } from '@/adapters/content/ContentAdapter';
 import { toLoxoneAudiopath } from '@/domain/loxone/bridgeIdentity';
 import { MediaServer } from '@/adapters/mediaserver/mediaServer';
 import { SubsonicApi } from '@/adapters/subsonic/subsonicApi';
+import { WebdavServer } from '@/adapters/webdav/webdavServer';
 import { SsdpAdvertiser } from '@sonn-audio/node-upnp';
 import { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
 import { CustomRadioStore } from '@/adapters/content/providers/customRadioStore';
@@ -45,6 +47,8 @@ import { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputServi
 import { SpotifyStreamProxyService } from '@/adapters/inputs/spotify/spotifyStreamProxyService';
 import { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInActivationRegistry';
+import { createLineInSourceAdapter } from '@/adapters/inputs/linein/lineInSourceAdapter';
+import { createLineInActivationService } from '@/application/inputs/lineInActivationService';
 import { SendspinHookRegistry } from '@/adapters/outputs/sendspin/sendspinHookRegistry';
 import { SpotifyDeviceRegistry } from '@/adapters/outputs/spotify/deviceRegistry';
 import { StreamEvents } from '@/adapters/http/streams/streamEvents';
@@ -176,6 +180,17 @@ export function createRuntime(): Runtime {
   const sendspinHookRegistry = new SendspinHookRegistry();
   const sendspinLineInService = new SendspinLineInService(lineInRegistry, sendspinHookRegistry, configPort);
   const lineInActivation = new LineInActivationRegistry();
+  // One long-lived owner of zone→line-in state, shared by every adapter that can
+  // select a source. It must outlive the Loxone processor, which is rebuilt on each
+  // connect and would otherwise orphan its ingest listeners.
+  const lineInActivationService = createLineInActivationService({
+    configPort,
+    source: createLineInSourceAdapter({
+      ingest: lineInRegistry,
+      sendspin: sendspinLineInService,
+      activation: lineInActivation,
+    }),
+  });
   const lineInMetadataService = new LineInMetadataService(lineInRegistry);
   const musicAssistantStreamService = new MusicAssistantStreamService(outputHandlersProxy, configPort);
   const musicAssistantInputService = new MusicAssistantInputService(musicAssistantStreamService);
@@ -208,6 +223,7 @@ export function createRuntime(): Runtime {
     musicAssistant: musicAssistantInputService,
     sendspinLineIn: sendspinLineInService,
     lineInActivation,
+    lineInActivationService: () => lineInActivationService,
     dlna: dlnaInputService,
   });
   const zoneAudioPrefs = new ZoneAudioPreferences();
@@ -306,6 +322,7 @@ export function createRuntime(): Runtime {
   // the queue item (e.g. radio/tunein station names).
   recentsManager.setZoneStateLookup((zoneId) => zoneManager.getState(zoneId));
   lineInMetadataService.initOnce({ zoneManager, configPort });
+  lineInActivationService.initOnce({ zoneManager });
   snapcastCore.initOnce({ zoneManager });
   groupManager.initOnce({ zoneManager });
   mixedGroupController.initOnce({ zoneManager });
@@ -429,9 +446,7 @@ export function createRuntime(): Runtime {
         configService: loxoneConfigService,
         zoneManager,
         configPort,
-        lineInRegistry,
-        lineInActivation,
-        sendspinLineInService,
+        lineInActivationService,
         spotifyInputService,
         recentsManager,
         favoritesManager,
@@ -519,6 +534,18 @@ export function createRuntime(): Runtime {
     // content.subsonic.enabled, so it needs no lifecycle of its own.
     const subsonicApi = new SubsonicApi(configPort, contentManager, contentAdapter, engine);
 
+    // WebDAV share at /dav: the music folder as a mountable network drive, so an
+    // album can be dragged in instead of uploaded a file at a time. Authenticates
+    // with the same local accounts over HTTP Basic.
+    const webdavServer = new WebdavServer({
+      configPort,
+      contentManager,
+      // Rooted at the local library folder, so a client that mounts the share
+      // lands straight in the music instead of one level above it.
+      baseDir: path.join(config.http.musicDir, 'local'),
+      storagePrefix: 'local',
+    });
+
     httpService = new HttpService(config.http, {
       onReinitialize: handleReinitialize,
       onSoftRestart: handleSoftRestart,
@@ -534,6 +561,7 @@ export function createRuntime(): Runtime {
       lineInRegistry,
       lineInMetadataService,
       lineInActivation,
+      lineInActivationService,
       sendspinLineInService,
       musicAssistantStreamService,
       spotifyInputService,
@@ -561,6 +589,7 @@ export function createRuntime(): Runtime {
       ],
       mediaServer,
       subsonic: subsonicApi,
+      webdav: webdavServer,
       dlnaInput: dlnaInputService,
     });
     networkService = new NetworkService({

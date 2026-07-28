@@ -140,6 +140,22 @@ export interface ContentConfig {
   appleMusic?: AppleMusicContentConfig;
   mediaServer?: MediaServerContentConfig;
   subsonic?: SubsonicContentConfig;
+  webdav?: WebdavContentConfig;
+}
+
+/**
+ * Serves the music folder as a mountable WebDAV drive at `/dav`.
+ *
+ * Complements the JSON upload endpoint, which can only take one base64-encoded
+ * file per request: mounting the share lets a whole album be dragged in with the
+ * file manager. Writes are indexed incrementally rather than by full rescan.
+ *
+ * Authenticates with the same local accounts over HTTP Basic, because Finder and
+ * Explorer have no way to carry the admin session cookie.
+ */
+export interface WebdavContentConfig {
+  /** Master switch. When absent/false `/dav` is not served at all. */
+  enabled?: boolean;
 }
 
 /**
@@ -476,7 +492,48 @@ export interface ZoneInputConfig {
   musicassistant?: ZoneMusicAssistantConfig | null;
   lineIn?: ZoneLineInConfig | null;
   dlna?: ZoneDlnaConfig | null;
+  beoremote?: ZoneBeoremoteConfig | null;
 }
+
+/**
+ * Beoremote One control for this zone.
+ *
+ * There is no remote identity here: a bridge names the zone it drives in its own
+ * config, so any number of remotes can point at the same room and they all read
+ * these settings. This is only what they show and what their keys do.
+ */
+export interface ZoneBeoremoteConfig {
+  enabled: boolean;
+  /**
+   * What fills the single submenu the remote's firmware allows. See
+   * {@link BeoremoteSubmenuSource}; omitted means no submenu.
+   */
+  submenuSource?: BeoremoteSubmenuSource | null;
+  /** Include this zone's favorites as sources. Defaults to true. */
+  includeFavorites?: boolean;
+  /** Include line-in inputs (turntable, CD player) as sources. Defaults to true. */
+  includeLineIns?: boolean;
+  /**
+   * What the coloured and dot keys do, keyed by button name (`red`, `green`,
+   * `yellow`, `blue`, `dot1`…`dot4`). A button with no entry falls back to the
+   * favorite in the slot it sits at; an entry of `{kind:'none'}` disables it.
+   *
+   * Which HID code is which button stays in the server — that is a property of the
+   * remote. This is only what each button should mean here.
+   */
+  keys?: Record<string, BeoremoteKeyBinding> | null;
+}
+
+/** What a configurable Beoremote button does when pressed. */
+export type BeoremoteKeyBinding =
+  /** Deliberately dead: the key answers 404 and the bridge logs it. */
+  | { kind: 'none' }
+  /** Start one of this zone's favorites, by its slot number. */
+  | { kind: 'favorite'; slot: number }
+  /** Switch the zone to a line-in input. */
+  | { kind: 'lineIn'; inputId: string }
+  /** Start a radio station by its audiopath, with the name to show in the UI. */
+  | { kind: 'radio'; audiopath: string; name?: string };
 
 export interface ZoneDlnaConfig {
   /** Expose this zone as a DLNA/UPnP MediaRenderer that apps can cast to. */
@@ -582,7 +639,39 @@ export interface LineInInputConfig {
   iconType?: number;
   source?: Record<string, unknown> | null;
   metadataEnabled?: boolean;
+  /**
+   * Whether this source can be driven at all.
+   *
+   * A turntable or a bare jack hears nothing we say: selecting it is the whole
+   * interaction. A BeoSound 9000 on a MasterLink bus is the opposite — it will
+   * switch on but sit idle until told to play, and it can be stopped again when the
+   * zone moves on.
+   *
+   * Saying yes here is what opens the command path: the server sends `start` on
+   * selection and `stop` when the zone leaves, plus transport keys as they arrive.
+   * Saying no means nothing is ever sent, so nothing waits on hardware that was
+   * never going to answer.
+   *
+   * The bridge's on_command hook maps each verb onto whatever the device speaks, so
+   * adding a verb is a change to that script rather than to this server.
+   */
+  controllable?: boolean;
 }
+
+/**
+ * What fills the one available submenu.
+ *
+ * The remote reads only SOURCE_CONTENT_1 and never reports which submenu it
+ * opened, so a second flagged source would just show the first one's contents.
+ * Exactly one source may carry it, and the menu builder enforces that — this
+ * setting only chooses what goes in it.
+ */
+export type BeoremoteSubmenuSource =
+  | { kind: 'none' }
+  | { kind: 'radio' }
+  | { kind: 'favorites' }
+  /** A folder from a browsable service, flattened to its first page of entries. */
+  | { kind: 'serviceFolder'; service: string; user?: string; folderId: string; title?: string };
 
 export interface LineInBridgeConfig {
   bridge_id: string;

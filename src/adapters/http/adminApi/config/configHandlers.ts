@@ -335,7 +335,9 @@ async function handleInputsUpdate(
   deps: ConfigHandlerDeps,
 ): Promise<void> {
   const body = (await deps.readJsonBody(req, res)) as
-    | { lineIn?: { inputs?: Array<Record<string, unknown>> | null } }
+    | {
+        lineIn?: { inputs?: Array<Record<string, unknown>> | null };
+      }
     | null;
   if (res.writableEnded) {
     return;
@@ -576,6 +578,7 @@ async function handleContentUpdate(
         library?: { enabled?: boolean; autoScan?: boolean };
         tts?: AudioServerConfig['content']['tts'];
         mediaServer?: { enabled?: boolean; friendlyName?: string };
+        webdav?: { enabled?: boolean };
       }
     | null;
   if (res.writableEnded) {
@@ -634,6 +637,11 @@ async function handleContentUpdate(
           friendlyName: body.mediaServer.friendlyName.trim(),
         }),
       };
+    }
+    if (body.webdav && typeof body.webdav.enabled === 'boolean') {
+      // No lifecycle to sync: the share is served straight off the running
+      // gateway and reads this flag per request.
+      cfg.content.webdav = { ...(cfg.content.webdav ?? {}), enabled: body.webdav.enabled };
     }
   });
   deps.contentManager.refreshFromConfig();

@@ -8,6 +8,7 @@ import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
 import type { ContentManager } from '@/adapters/content/contentManager';
 import type { MusicAssistantStreamService } from '@/adapters/inputs/musicassistant/musicAssistantStreamService';
+import type { WebdavServer } from '@/adapters/webdav/webdavServer';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { CustomRadioStore } from '@/adapters/content/providers/customRadioStore';
@@ -36,6 +37,8 @@ type AdminApiOptions = {
   sendspinLineInService: SendspinLineInService;
   syncMediaServer?: () => Promise<void>;
   musicAssistantStreamService: MusicAssistantStreamService;
+  /** Shared streaming write path for the admin UI's drop zone. */
+  webdav?: WebdavServer;
   snapcastCore: SnapcastCore;
   squeezeliteCore: SqueezeliteCore;
   recentsManager: RecentsManager;
@@ -49,6 +52,7 @@ type AdminApiOptions = {
   alertFiles: AlertFilesPort;
   browserZoneRegistry: BrowserZoneRegistry;
   lineInApi: LineInApiHandler;
+  beoremoteApi: BeoremoteApiHandler;
   /** Gateway port, so handlers can build client-facing URLs. */
   httpPort: number;
 };
@@ -79,6 +83,8 @@ import { buildMiscRoutes } from '@/adapters/http/adminApi/misc/miscHandlers';
 import { buildConfigRoutes } from '@/adapters/http/adminApi/config/configHandlers';
 import { buildLineInRoutes } from '@/adapters/http/adminApi/linein/lineInAdminHandlers';
 import type { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
+import { buildBeoremoteRoutes } from '@/adapters/http/adminApi/beoremote/beoremoteAdminHandlers';
+import type { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandler';
 import {
   readBinaryBody,
   readJsonBody,
@@ -166,6 +172,7 @@ export class AdminApiHandler {
   private readonly sendspinLineInService: SendspinLineInService;
   private readonly syncMediaServer?: () => Promise<void>;
   private readonly musicAssistantStreamService: MusicAssistantStreamService;
+  private readonly webdav?: WebdavServer;
   private readonly snapcastCore: SnapcastCore;
   private readonly squeezeliteCore: SqueezeliteCore;
   private readonly recentsManager: RecentsManager;
@@ -179,6 +186,7 @@ export class AdminApiHandler {
   private readonly alertFiles: AlertFilesPort;
   private readonly browserZoneRegistry: BrowserZoneRegistry;
   private readonly lineInApi: LineInApiHandler;
+  private readonly beoremoteApi: BeoremoteApiHandler;
   private readonly httpPort: number;
   private readonly clockOffsetTracker = new ClockOffsetTracker(this.log);
   private readonly routes: Route[];
@@ -199,6 +207,7 @@ export class AdminApiHandler {
     this.sendspinLineInService = options.sendspinLineInService;
     this.syncMediaServer = options.syncMediaServer;
     this.musicAssistantStreamService = options.musicAssistantStreamService;
+    this.webdav = options.webdav;
     this.snapcastCore = options.snapcastCore;
     this.squeezeliteCore = options.squeezeliteCore;
     this.recentsManager = options.recentsManager;
@@ -212,6 +221,7 @@ export class AdminApiHandler {
     this.alertFiles = options.alertFiles;
     this.browserZoneRegistry = options.browserZoneRegistry;
     this.lineInApi = options.lineInApi;
+    this.beoremoteApi = options.beoremoteApi;
     this.httpPort = options.httpPort;
     this.routes = this.buildRoutes();
   }
@@ -311,6 +321,7 @@ export class AdminApiHandler {
       ...buildContentRoutes({
         log: this.log,
         contentManager: this.contentManager,
+        webdav: this.webdav,
         customRadioStore: this.customRadioStore,
         loxoneNotifier: this.loxoneNotifier,
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
@@ -343,6 +354,11 @@ export class AdminApiHandler {
       ...buildLineInRoutes({
         log: this.log,
         lineInApi: this.lineInApi,
+        sendJson: (res, status, payload) => sendJson(res, status, payload),
+      }),
+      ...buildBeoremoteRoutes({
+        log: this.log,
+        beoremoteApi: this.beoremoteApi,
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),
       ...buildAlertsRoutes({
