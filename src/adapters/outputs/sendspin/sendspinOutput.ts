@@ -40,6 +40,18 @@ type SendspinFormat = PlayerFormatWithBitDepth<PcmBitDepth>;
 
 type ArtworkChannel = Parameters<SendspinSession['sendArtworkStreamStart']>[0][number];
 
+/**
+ * One entry of a client's `supported_formats` list from client/hello. Declared
+ * locally because older published node-sendspin builds do not expose the getter
+ * that returns these; see getClientDeclaredFormats.
+ */
+type ClientDeclaredFormat = {
+  codec?: string;
+  sample_rate?: number;
+  bit_depth?: number;
+  channels?: number;
+};
+
 // Multiple zones can be configured against the same Sendspin client. In that case we need
 // a single "controller" zone at a time; otherwise multiple outputs race and the client can
 // disconnect due to conflicting metadata/stream commands.
@@ -2297,7 +2309,7 @@ export class SendspinOutput implements ZoneOutput {
     ) {
       return format;
     }
-    const declared = this.activeSession?.getPlayerSupportedFormats?.() ?? [];
+    const declared = this.getClientDeclaredFormats();
     const supportsNative = declared.some(
       (fmt) =>
         fmt.sample_rate === native.sampleRate &&
@@ -2327,6 +2339,31 @@ export class SendspinOutput implements ZoneOutput {
       channels: native.channels,
       bitDepth: targetBitDepth,
     };
+  }
+
+  /**
+   * The formats the connected client declared in client/hello, in its own priority
+   * order, or an empty list when unavailable.
+   *
+   * `getPlayerSupportedFormats` was added to node-sendspin for this and is absent
+   * from older published builds, so the lookup is duck-typed rather than relying on
+   * the module's type surface. An empty list simply means we keep the negotiated
+   * format instead of moving to the source's native one.
+   */
+  private getClientDeclaredFormats(): ClientDeclaredFormat[] {
+    const session = this.activeSession as
+      | { getPlayerSupportedFormats?: () => ClientDeclaredFormat[] }
+      | null
+      | undefined;
+    if (typeof session?.getPlayerSupportedFormats !== 'function') {
+      return [];
+    }
+    try {
+      const formats = session.getPlayerSupportedFormats();
+      return Array.isArray(formats) ? formats : [];
+    } catch {
+      return [];
+    }
   }
 
   /**
