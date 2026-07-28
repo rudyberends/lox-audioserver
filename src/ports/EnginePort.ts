@@ -5,6 +5,15 @@ import type { SessionKey } from '@/ports/types/SessionKey';
 
 export type EngineSessionStats = {
   profile: OutputProfile;
+  /**
+   * The format this session actually encodes at. Callers must compare this — not
+   * just `profile` — before reusing a session: a 48 kHz FLAC session matches the
+   * 'flac' profile of a 96 kHz request, and reusing it would stream 48 kHz frames
+   * under a stream/start that announced 96 kHz, which makes clients fail to decode.
+   */
+  sampleRate: number;
+  channels: number;
+  pcmBitDepth: number;
   bps: number | null;
   bufferedBytes: number;
   totalBytes: number;

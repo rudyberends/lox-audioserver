@@ -25,6 +25,9 @@ import {
 import type { PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import type { SendspinSession } from '@sonn-audio/node-sendspin';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
+import type { PlaybackSource } from '@/ports/EngineTypes';
+import { probeFileFormat, type ProbedSourceFormat } from '@/engine/sourceProbe';
+import { FlacFrameSplitter } from '@/engine/flacFrameSplitter';
 import { SendspinClientSender } from '@/adapters/outputs/sendspin/sendspinClientSender';
 import { derivePalette } from '@/adapters/outputs/sendspin/artworkPalette';
 import { SendspinVisualizer, type SpectrumScale } from '@/adapters/outputs/sendspin/sendspinVisualizer';
@@ -929,6 +932,13 @@ export class SendspinOutput implements ZoneOutput {
         return;
       }
       let chosenFormat = this.normalizeFormat(options.formatOverride ?? this.negotiatedFormat);
+      // Prefer the source's native rate/depth when the client can accept it, so a
+      // lossless file reaches the speaker without a resample. Explicit overrides
+      // (a client-driven stream/request-format) win — the client asked for that
+      // format specifically, so we must not second-guess it.
+      if (!options.formatOverride) {
+        chosenFormat = await this.applyBitPerfectFormat(chosenFormat, current.playbackSource);
+      }
       this.negotiatedFormat = chosenFormat;
       // A group leader streams PCM so every member can decode the shared audio
       // regardless of its own preferred codec (PCM is the universal sendspin
@@ -1037,7 +1047,18 @@ export class SendspinOutput implements ZoneOutput {
       token = this.streamToken;
 
       const sessionStats = this.ports.engine.getSessionStats(zoneSessionKey(this.zoneId));
-      const hasTargetProfile = sessionStats.some((s) => s.profile === profile);
+      // Match the *format*, not just the profile. A leftover 48 kHz FLAC session
+      // satisfies `profile === 'flac'` for a 96 kHz request, so the engine was not
+      // restarted and kept emitting 48 kHz frames while stream/start announced
+      // 96 kHz — every packet then failed to decode on the client. This is why
+      // 96 kHz sessions only broke when they followed a 48 kHz one.
+      const hasTargetProfile = sessionStats.some(
+        (s) =>
+          s.profile === profile &&
+          s.sampleRate === chosenFormat.sampleRate &&
+          s.channels === chosenFormat.channels &&
+          s.pcmBitDepth === chosenFormat.bitDepth,
+      );
       let startedEngine = false;
       if ((shouldRestartForFormat || !hasTargetProfile) && current?.playbackSource) {
         this.ports.engine.start(zoneSessionKey(this.zoneId), current.playbackSource, [profile], sendspinOutputSettings);
@@ -1082,6 +1103,9 @@ export class SendspinOutput implements ZoneOutput {
       const frameSamples = Math.max(1, Math.floor(sampleRate * 0.025));
       const frameBytes = frameSamples * bytesPerSample;
       let pcmFrameBuffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+      // Splits ffmpeg's byte chunks back into individual FLAC frames so each
+      // binary message carries exactly one, as the protocol describes.
+      const flacSplitter = new FlacFrameSplitter();
       let flacBlocksizeSamples = 0;
       let lastSendWallUs: number | null = null;
       let jitterSumUs = 0;
@@ -1131,11 +1155,14 @@ export class SendspinOutput implements ZoneOutput {
           }
         }
       };
+      // FLAC: we encode with `-frame_size 512`, so start from that rather than
+      // libFLAC's 4096 default — an 8x-too-long frame duration would skew the
+      // modelled timeline until STREAMINFO is parsed and the real blocksize known.
       let encodedFrameDurationUs =
         chosenFormat.codec === AudioCodec.OPUS
           ? Math.floor(1_000_000 / 50) // 20 ms frames
           : chosenFormat.codec === AudioCodec.FLAC
-            ? Math.floor((4096 * 1_000_000) / sampleRate)
+            ? Math.floor((512 * 1_000_000) / sampleRate)
             : 0;
       const overbufferMarginUs = 100_000; // keep lead tight around target
       const prepareBufferMarginUs = Math.max(500_000, Math.min(2_500_000, this.targetLeadUs));
@@ -1430,6 +1457,20 @@ export class SendspinOutput implements ZoneOutput {
               codecHeaderSent = true;
             }
           }
+          if (isFlac) {
+            // One binary message must carry exactly one FLAC frame. ffmpeg hands us
+            // arbitrary chunks (32 KB+ = a dozen frames or more), and libavcodec
+            // clients decode only the first frame of a packet and discard the rest
+            // — losing audio until the decoder resynchronises. The effect scales
+            // with sample rate, since a fixed blocksize packs twice as many frames
+            // into a 96 kHz chunk as a 48 kHz one.
+            for (const frame of flacSplitter.push(payload)) {
+              // Duration is per *frame* (blocksize/rate), not per chunk, or the
+              // modelled timeline would run ahead by the frames-per-chunk factor.
+              await processFrame(frame, encodedFrameDurationUs || durationUs);
+            }
+            return;
+          }
           await processFrame(payload, durationUs);
         }
       };
@@ -1458,6 +1499,13 @@ export class SendspinOutput implements ZoneOutput {
           }
           if (localToken !== this.streamToken || streamRef !== this.currentStream) {
             return;
+          }
+          // A FLAC frame's length is only known once the next frame's header
+          // appears, so the final frame is still held back here.
+          if (isFlac) {
+            for (const frame of flacSplitter.flush()) {
+              await processFrame(frame, encodedFrameDurationUs || 0);
+            }
           }
           this.log.debug('Sendspin stream closed', { zoneId: this.zoneId });
           this.teardown();
@@ -2208,6 +2256,110 @@ export class SendspinOutput implements ZoneOutput {
     return 16;
   }
 
+  /**
+   * Aligns the session format with the source's native rate (and depth, when the
+   * source declares one) so the audio reaches the player untouched by us.
+   *
+   * Both source kinds win, verified by measurement:
+   *  - lossless (local FLAC/ALAC): matching rate *and* depth passes the original
+   *    samples through unchanged — bit-identical to the file.
+   *  - lossy (Apple Music AAC): resampling 44.1→48k and padding 16→24 bits alters
+   *    every sample and inflates the stream ~2.7x for nothing. At the native rate
+   *    we hand the provider's decode to the player exactly as delivered.
+   *
+   * Deliberately conservative — it only ever moves to a format the client listed
+   * in its own `supported_formats`, and returns `format` untouched when:
+   *  - the source format is unknown (no declaration, no probe),
+   *  - the client never declared a matching entry,
+   *  - the zone is a group leader (members must share one format).
+   */
+  private async applyBitPerfectFormat(
+    format: SendspinFormat,
+    source: PlaybackSource,
+  ): Promise<SendspinFormat> {
+    // Members of a group all decode the leader's stream; changing rate per source
+    // would desync them. Leave grouped zones on the negotiated format.
+    if (this.isGroupLeaderWithMembers()) {
+      return format;
+    }
+    const native = await this.probeSourceFormat(source);
+    if (!native) {
+      return format;
+    }
+    // For a lossy source there is no original depth to preserve, so keep whatever
+    // depth was negotiated rather than inventing bits. Only the rate is aligned.
+    const targetBitDepth =
+      native.lossless && native.bitDepth !== null ? this.normalizeBitDepth(native.bitDepth) : format.bitDepth;
+    if (
+      native.sampleRate === format.sampleRate &&
+      targetBitDepth === format.bitDepth &&
+      native.channels === format.channels
+    ) {
+      return format;
+    }
+    const declared = this.activeSession?.getPlayerSupportedFormats?.() ?? [];
+    const supportsNative = declared.some(
+      (fmt) =>
+        fmt.sample_rate === native.sampleRate &&
+        fmt.bit_depth === targetBitDepth &&
+        fmt.channels === native.channels,
+    );
+    if (!supportsNative) {
+      this.log.debug('Sendspin native-format match skipped; client does not declare it', {
+        zoneId: this.zoneId,
+        clientId: this.clientId,
+        source: { sampleRate: native.sampleRate, bitDepth: targetBitDepth, channels: native.channels },
+        declaredCount: declared.length,
+      });
+      return format;
+    }
+    this.log.info('Sendspin matching source format to avoid resampling', {
+      zoneId: this.zoneId,
+      clientId: this.clientId,
+      codecName: native.codecName,
+      lossless: native.lossless,
+      from: { sampleRate: format.sampleRate, bitDepth: format.bitDepth },
+      to: { sampleRate: native.sampleRate, bitDepth: targetBitDepth },
+    });
+    return {
+      ...format,
+      sampleRate: native.sampleRate,
+      channels: native.channels,
+      bitDepth: targetBitDepth,
+    };
+  }
+
+  /**
+   * Probes a playback source for its native format. URL sources need the same
+   * headers/decryption key/input format that playback uses, or ffprobe cannot open
+   * them (Apple Music segments are encrypted `mov` behind a local proxy).
+   */
+  private async probeSourceFormat(source: PlaybackSource): Promise<ProbedSourceFormat | null> {
+    // A provider-declared format always wins: it costs nothing and is the only
+    // safe option for URLs. Probing a stream URL would mean a second HTTP request,
+    // which for DRM-protected or single-use segment URLs is wasteful at best and
+    // can fail outright (an expired proxy session returns 404).
+    if (source.kind === 'url') {
+      const declared = source.nativeFormat;
+      if (!declared) {
+        return null;
+      }
+      return {
+        sampleRate: declared.sampleRate,
+        channels: declared.channels,
+        bitDepth: declared.bitDepth ?? null,
+        lossless: declared.lossless,
+        codecName: declared.codecName ?? '',
+      };
+    }
+    if (source.kind === 'file') {
+      // Local files are cheap to probe and have no session semantics.
+      return probeFileFormat(source.path);
+    }
+    // Pipe sources already declare their format; there is nothing to probe.
+    return null;
+  }
+
   private normalizeFormat(format: Partial<PlayerFormat>): SendspinFormat {
     const sampleRate = Number.isFinite(format.sampleRate) ? format.sampleRate! : audioOutputSettings.sampleRate;
     const channels = Number.isFinite(format.channels) ? format.channels! : audioOutputSettings.channels;
@@ -2215,6 +2367,30 @@ export class SendspinOutput implements ZoneOutput {
       Number.isFinite(format.bitDepth) ? (format.bitDepth as number) : audioOutputSettings.pcmBitDepth,
     );
     // Force PCM for Sendspin output stability.
+    //
+    // FLAC was tried and reverted after it proved audibly bad in practice. What we
+    // know for certain:
+    //  - The wire format we emit is correct: valid frames, one per binary message,
+    //    STREAMINFO consistent with the frame headers, each frame decodable
+    //    standalone. All verified byte-for-byte.
+    //  - The client reported 81+ 'Invalid data found' errors from
+    //    avcodec_send_packet(), i.e. essentially every packet failed to decode,
+    //    while the same frames decoded cleanly in isolation.
+    //  - Server-side send metrics are NOT meaningfully worse for FLAC than for
+    //    PCM. Compared on live streams (FLAC 44.1 kHz vs PCM 192 kHz): both spend
+    //    ~98% of wall-clock in waitUntilLeadInRange (that is real-time pacing, not
+    //    overhead), both emit in ~2.7-frame bursts, and both hold a constant
+    //    one-frame modelled drift with no accumulation.
+    //
+    // So the root cause was never established. It is not the framing and, on the
+    // evidence, not the send scheduler either — it sits somewhere in the
+    // client/decoder interaction that we could not reproduce outside sendspin.
+    //
+    // PCM costs bandwidth but is already uncompressed, so bit-perfect playback
+    // (see applyBitPerfectFormat) does not need FLAC at all — FLAC only ever
+    // bought bandwidth. Do not re-enable it without a reproducible explanation for
+    // the decode failures. Note also that the visualizer taps PCM frames only
+    // (see emitFrame), so FLAC silently disables it.
     const codec: AudioCodec = AudioCodec.PCM;
     return { codec, sampleRate, channels, bitDepth };
   }
