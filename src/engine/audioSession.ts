@@ -14,7 +14,8 @@ import { codecPolicyForProfile, type CodecPolicy } from '@/engine/codecPolicy';
 import type { OutputProfile } from '@/ports/EngineTypes';
 import type { EngineSessionStats } from '@/ports/EnginePort';
 import type { SessionKey } from '@/ports/types/SessionKey';
-import { FfmpegArgBuilder } from '@/engine/ffmpegArgs';
+import { FfmpegArgBuilder, type SourceNativeFormat } from '@/engine/ffmpegArgs';
+import { getCachedSourceFormat } from '@/engine/sourceProbe';
 import { PipeSourceAdapter } from '@/engine/pipeSourceAdapter';
 import { TwoStagePipeline } from '@/engine/twoStagePipeline';
 import { FirstChunkBarrier } from '@/engine/firstChunkBarrier';
@@ -188,12 +189,37 @@ export class AudioSession {
         ? new PcmFrameAligner(this.outputSettings.channels, this.outputSettings.pcmBitDepth)
         : null;
     this.codec = codecPolicyForProfile(this.profile);
+    // Bit-perfect passthrough needs the source's native format. The probe is async
+    // and this constructor is not, so we only read the cache that the caller
+    // (e.g. sendspinOutput before engine.start) populated. A cache miss simply
+    // means "resample as before" — never a stall.
+    // URL sources carry a provider-declared format (no probing — see sourceProbe);
+    // local files use the cache that the caller populated before engine.start.
+    const nativeFormat = ((): SourceNativeFormat | undefined => {
+      if (this.source.kind === 'url') {
+        const declared = this.source.nativeFormat;
+        if (!declared) {
+          return undefined;
+        }
+        return {
+          sampleRate: declared.sampleRate,
+          channels: declared.channels,
+          bitDepth: declared.bitDepth ?? null,
+          lossless: declared.lossless,
+        };
+      }
+      if (this.source.kind === 'file') {
+        return getCachedSourceFormat(this.source.path) ?? undefined;
+      }
+      return undefined;
+    })();
     this.args = new FfmpegArgBuilder(
       this.source,
       this.profile,
       this.outputSettings,
       isAlertSource,
       this.sourcePreDelayMs,
+      nativeFormat,
     );
     this.pipeline = new TwoStagePipeline(this.log, { zoneId: this.zoneId, profile: this.profile });
     this.starter = new SessionStarter(this);
@@ -582,6 +608,9 @@ export class AudioSession {
     const drops = this.fanout.drops;
     return {
       profile: this.profile,
+      sampleRate: this.outputSettings.sampleRate,
+      channels: this.outputSettings.channels,
+      pcmBitDepth: this.outputSettings.pcmBitDepth,
       bps: this.lastBpsTs ? this.lastBps : null,
       bufferedBytes: this.buffer.bytes,
       totalBytes: this.totalBytes,

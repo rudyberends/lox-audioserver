@@ -27,6 +27,25 @@ export type FadeInSource =
   | { kind: 'url'; url: string; headers?: Record<string, string>; decryptionKey?: string };
 
 /**
+ * Native format of the source, either probed (local files) or declared by the
+ * provider (stream URLs). Supplied only when the caller wants an untouched
+ * passthrough path; when absent the builder behaves exactly as before (always
+ * resample).
+ */
+export interface SourceNativeFormat {
+  sampleRate: number;
+  channels: number;
+  /** Null when the source has no meaningful sample depth (lossy codecs). */
+  bitDepth: number | null;
+  /**
+   * Whether the source codec preserves its input samples. Informational for
+   * callers/logging — it does not gate passthrough, since not touching a lossy
+   * stream is still not touching it.
+   */
+  lossless: boolean;
+}
+
+/**
  * Builds the ffmpeg command-line for an audio session. All state needed by the
  * various build* helpers (source, profile, output settings, alert flag,
  * pre-delay) is supplied in the constructor; only EQ bands vary per call.
@@ -38,7 +57,64 @@ export class FfmpegArgBuilder {
     private readonly outputSettings: AudioOutputSettings,
     private readonly isAlertSource: boolean,
     private readonly sourcePreDelayMs: number | undefined,
+    /**
+     * Probed native format of the source. When it matches the output settings
+     * exactly and no DSP is active, the soxr resampler is omitted so samples
+     * reach the sink untouched. Undefined = legacy behaviour (always resample).
+     */
+    private readonly sourceNativeFormat?: SourceNativeFormat,
   ) {}
+
+  /**
+   * True when we do not touch the audio: the source reaches the player exactly as
+   * the provider delivered it, with no rate conversion, no requantisation and no
+   * filtering on our side.
+   *
+   * This is the project's definition of bit-perfect — "we don't come near it" —
+   * and it deliberately says nothing about whether the *source* is lossless. A
+   * 44.1 kHz AAC stream served at 44.1 kHz is bit-perfect by this definition: we
+   * pass Apple's decode through untouched. That the encoder threw information away
+   * upstream is their choice, not our alteration.
+   *
+   * Each condition is load-bearing:
+   *  - rate/channels equal: any mismatch genuinely needs a converter.
+   *  - depth: only enforced when the source declares one. A lossy source has no
+   *    original sample depth to preserve, so whatever depth we carry it in cannot
+   *    lose anything; a lossless source at a different depth *would* be requantised.
+   *  - PCM or FLAC profile: the lossy encoders re-encode by definition.
+   *  - no pre-delay, gain or EQ: each forces ffmpeg into filtered processing.
+   */
+  public isBitPerfect(equalizerBands: ReadonlyArray<number> | null): boolean {
+    const native = this.sourceNativeFormat;
+    if (!native) {
+      return false;
+    }
+    if (this.profile !== 'pcm' && this.profile !== 'flac') {
+      return false;
+    }
+    const { sampleRate, channels, pcmBitDepth, fixedGainDb } = this.outputSettings;
+    if (native.sampleRate !== sampleRate || native.channels !== channels) {
+      return false;
+    }
+    // A declared depth must match; an undeclared one (lossy source) cannot be lost.
+    if (native.bitDepth !== null && native.bitDepth !== pcmBitDepth) {
+      return false;
+    }
+    if (this.sourcePreDelayMs && this.sourcePreDelayMs > 0) {
+      return false;
+    }
+    if (Number.isFinite(fixedGainDb) && fixedGainDb !== 0) {
+      return false;
+    }
+    const sourceGainDb = this.source.kind === 'url' ? this.source.gainDb : undefined;
+    if (typeof sourceGainDb === 'number' && Number.isFinite(sourceGainDb) && sourceGainDb !== 0) {
+      return false;
+    }
+    if (buildEqualizerFilterChain(equalizerBands)) {
+      return false;
+    }
+    return true;
+  }
 
   public getLogLevel(): string {
     if (this.source.kind === 'url' && this.source.logLevel) {
@@ -124,6 +200,7 @@ export class FfmpegArgBuilder {
       }
       case 'flac': {
         return ['-vn', '-acodec', 'flac', '-compression_level', '0', '-frame_size', '512',
+          '-sample_fmt', flacSampleFormat(pcmBitDepth),
           '-ar', String(sampleRate), '-ac', String(channels),
           ...filterArgs, '-f', 'flac'];
       }
@@ -135,13 +212,24 @@ export class FfmpegArgBuilder {
     }
   }
 
-  /** Two-stage decoder args: source → s16le PCM at output sample-rate/channels. */
+  /**
+   * Two-stage decoder args: source → PCM at the output sample-rate/channels/depth.
+   *
+   * The intermediate bus carries the *negotiated* depth, not a fixed s16le. It used
+   * to be hardcoded to 16-bit while the stage-2 encoder happily emitted pcm_s24le,
+   * which silently produced 16-bit samples padded into 24-bit containers while
+   * advertising 24-bit downstream.
+   *
+   * Note the two-stage path exists for crossfade, and crossfade blending itself
+   * requantises — so this path is never bit-perfect. It is merely no longer
+   * truncating.
+   */
   public buildPcmDecoderArgs(): string[] {
-    const { sampleRate, channels } = this.outputSettings;
+    const { sampleRate, channels, pcmBitDepth } = this.outputSettings;
     const pcmOut = [
-      '-vn', '-acodec', 'pcm_s16le',
+      '-vn', '-acodec', pcmCodecFromBitDepth(pcmBitDepth),
       '-ar', String(sampleRate), '-ac', String(channels),
-      '-f', 's16le', 'pipe:1',
+      '-f', pcmFormatFromBitDepth(pcmBitDepth), 'pipe:1',
     ];
     const log = ['-hide_banner', '-loglevel', this.getLogLevel()];
 
@@ -177,9 +265,10 @@ export class FfmpegArgBuilder {
 
   /** Decoder args for a fade-in source during an inline crossfade. */
   public buildPcmDecoderArgsForSource(source: FadeInSource): string[] {
-    const { sampleRate, channels } = this.outputSettings;
-    const pcmOut = ['-vn', '-acodec', 'pcm_s16le', '-ar', String(sampleRate), '-ac', String(channels),
-      '-f', 's16le', 'pipe:1'];
+    const { sampleRate, channels, pcmBitDepth } = this.outputSettings;
+    const pcmOut = ['-vn', '-acodec', pcmCodecFromBitDepth(pcmBitDepth),
+      '-ar', String(sampleRate), '-ac', String(channels),
+      '-f', pcmFormatFromBitDepth(pcmBitDepth), 'pipe:1'];
     const log = ['-hide_banner', '-loglevel', this.getLogLevel()];
 
     if (source.kind === 'file') {
@@ -197,15 +286,18 @@ export class FfmpegArgBuilder {
     ];
   }
 
-  /** Two-stage encoder args: PCM s16le on stdin → output profile on stdout. */
+  /** Two-stage encoder args: PCM on stdin → output profile on stdout. */
   public buildPcmEncoderArgs(): string[] {
     const { sampleRate, channels, pcmBitDepth, mp3Bitrate, fixedGainDb } = this.outputSettings;
     // -fflags nobuffer / -analyzeduration 0: without these, FFmpeg buffers ~5 s of raw
     // PCM from pipe:0 before producing its first output frame (probing raw input).
     // Since we fully specify the format, probing is unnecessary and wastes startup time.
+    // The input format must track buildPcmDecoderArgs' output depth exactly — these
+    // two are the same pipe.
     const pcmIn = [
       '-fflags', 'nobuffer', '-probesize', '32', '-analyzeduration', '0',
-      '-f', 's16le', '-ar', String(sampleRate), '-ac', String(channels), '-i', 'pipe:0',
+      '-f', pcmFormatFromBitDepth(pcmBitDepth),
+      '-ar', String(sampleRate), '-ac', String(channels), '-i', 'pipe:0',
     ];
 
     const filters: string[] = [];
@@ -222,6 +314,7 @@ export class FfmpegArgBuilder {
     switch (this.profile) {
       case 'flac':
         return [...base, '-acodec', 'flac', '-compression_level', '0', '-frame_size', '512',
+          '-sample_fmt', flacSampleFormat(pcmBitDepth),
           '-ar', String(sampleRate), '-ac', String(channels), '-f', 'flac', 'pipe:1'];
       case 'aac': {
         const br = mp3Bitrate || '160k';
@@ -277,7 +370,11 @@ export class FfmpegArgBuilder {
     if (Number.isFinite(fixedGainDb) && fixedGainDb !== 0) {
       filters.push(`volume=${fixedGainDb}dB`);
     }
-    if (audioResampler.name === 'soxr' && !canBypassResampleForPipe) {
+    // Nothing about this session alters the audio, so the resampler would be a
+    // pure no-op. Holds for lossy sources too — see isBitPerfect.
+    const canBypassResampleForSource = this.isBitPerfect(equalizerBands);
+
+    if (audioResampler.name === 'soxr' && !canBypassResampleForPipe && !canBypassResampleForSource) {
       // For live pipe inputs (e.g. librespot), ffmpeg's async resampling can build up
       // noticeable startup latency before first output chunk. Keep resampling enabled
       // but disable async clock correction for pipe sources.
@@ -292,6 +389,20 @@ export class FfmpegArgBuilder {
     }
     return filters.length ? ['-af', filters.join(',')] : [];
   }
+}
+
+/**
+ * ffmpeg's FLAC encoder accepts only s16 and s32 as sample formats — there is no
+ * s24. For 24-bit output we pass s32 and let the encoder derive a 24-bit
+ * bits_per_raw_sample from the input's actual precision.
+ *
+ * Pinning this matters: without an explicit -sample_fmt the encoder negotiates
+ * the format with the *decoder*, so a 24-bit source produced a 24-bit FLAC even
+ * when the client had negotiated 16-bit. The STREAMINFO header we forward in
+ * stream/start would then disagree with the frames, and the client decodes noise.
+ */
+function flacSampleFormat(bitDepth: number): string {
+  return bitDepth === 16 ? 's16' : 's32';
 }
 
 function buildSeekArgs(startAtSec?: number): string[] {

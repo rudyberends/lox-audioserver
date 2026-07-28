@@ -73,6 +73,12 @@ export interface PcmBlendLogger {
 
 export interface PcmBlendOptions {
   channels: number;
+  /**
+   * Bytes per sample on the PCM bus (2 = s16le, 3 = s24le, 4 = s32le). Must match
+   * the depth the two-stage decoder emits; defaults to 2 for callers that predate
+   * the depth-aware bus.
+   */
+  bytesPerSample?: number;
   /** Linear-ramp length in PCM frames. */
   totalFrames: number;
   /** Returns true when the old source has stopped producing chunks. */
@@ -110,7 +116,23 @@ export async function runPcmBlend(
   options: PcmBlendOptions,
 ): Promise<{ framesProcessed: number; newRem: Buffer }> {
   const { channels, totalFrames, getOldEnded, getNewEnded, onBlendedFrame, log, logContext } = options;
-  const frameBytes = channels * 2;
+  const bytesPerSample = options.bytesPerSample ?? 2;
+  const frameBytes = channels * bytesPerSample;
+  // Signed range for the bus depth, used to clamp the blended sum.
+  const sampleMax = 2 ** (bytesPerSample * 8 - 1) - 1;
+  const sampleMin = -(2 ** (bytesPerSample * 8 - 1));
+  // Node has no readInt24LE, so use the generic width-aware accessors for
+  // everything except the 32-bit case (readIntLE caps at 48 bits, which is fine
+  // here, but writeInt32LE is the documented path for 4-byte samples).
+  const readSample = (buf: Buffer, off: number): number =>
+    bytesPerSample === 4 ? buf.readInt32LE(off) : buf.readIntLE(off, bytesPerSample);
+  const writeSample = (buf: Buffer, value: number, off: number): void => {
+    if (bytesPerSample === 4) {
+      buf.writeInt32LE(value, off);
+    } else {
+      buf.writeIntLE(value, off, bytesPerSample);
+    }
+  };
   let framesProcessed = 0;
   let oldRem = Buffer.alloc(0);
   let newRem = Buffer.alloc(0);
@@ -192,11 +214,12 @@ export async function runPcmBlend(
         const t = Math.min(1, framesProcessed / totalFrames);
         const dstOff = f * frameBytes;
         for (let ch = 0; ch < channels; ch++) {
-          const co = ch * 2;
-          const a = oldEffectivelyDone ? 0 : oldRem.readInt16LE(oldOff + co);
-          const b = newEffectivelyDone ? 0 : newRem.readInt16LE(newOff + co);
-          blended.writeInt16LE(
-            Math.max(-32768, Math.min(32767, Math.round(a * (1 - t) + b * t))),
+          const co = ch * bytesPerSample;
+          const a = oldEffectivelyDone ? 0 : readSample(oldRem, oldOff + co);
+          const b = newEffectivelyDone ? 0 : readSample(newRem, newOff + co);
+          writeSample(
+            blended,
+            Math.max(sampleMin, Math.min(sampleMax, Math.round(a * (1 - t) + b * t))),
             dstOff + co,
           );
         }
@@ -220,6 +243,8 @@ export async function runPcmBlend(
 
 export interface BlendStreamsOptions {
   channels: number;
+  /** Bytes per sample on the PCM bus (2/3/4); defaults to 2. */
+  bytesPerSample?: number;
   /** Linear-ramp length in PCM frames. */
   totalFrames: number;
   onBlendedFrame: (blended: Buffer) => void;
@@ -245,6 +270,7 @@ export async function blendPcmStreams(
   try {
     return await runPcmBlend(oldChunks, newChunks, {
       channels: options.channels,
+      bytesPerSample: options.bytesPerSample,
       totalFrames: options.totalFrames,
       getOldEnded: () => oldSource.isEnded(),
       getNewEnded: () => newSource.isEnded(),

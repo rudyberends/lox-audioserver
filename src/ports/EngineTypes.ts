@@ -27,6 +27,23 @@ export type PlaybackSource =
       realTime?: boolean;
       lowLatency?: boolean;
       restartOnFailure?: boolean;
+      /**
+       * Native audio format of this stream, when the provider knows it up front.
+       * Lets the engine skip a pointless resample (e.g. Apple Music always serves
+       * 44.1 kHz AAC-LC stereo, so resampling to a 48 kHz sink alters every sample
+       * for nothing). Omit when unknown — the engine then resamples as before.
+       *
+       * Declaring this avoids a second HTTP request to probe the URL, which for
+       * DRM-protected or single-use segment URLs is either wasteful or unsafe.
+       */
+      nativeFormat?: {
+        sampleRate: number;
+        channels: number;
+        /** Omit for lossy codecs; there is no original depth to preserve. */
+        bitDepth?: 16 | 24 | 32;
+        lossless: boolean;
+        codecName?: string;
+      };
     }
   | {
       kind: 'pipe';
@@ -71,6 +88,23 @@ export type EngineInputSpec =
       realTime?: boolean;
       lowLatency?: boolean;
       restartOnFailure?: boolean;
+      /**
+       * Native audio format of this stream, when the provider knows it up front.
+       * Lets the engine skip a pointless resample (e.g. Apple Music always serves
+       * 44.1 kHz AAC-LC stereo, so resampling to a 48 kHz sink alters every sample
+       * for nothing). Omit when unknown — the engine then resamples as before.
+       *
+       * Declaring this avoids a second HTTP request to probe the URL, which for
+       * DRM-protected or single-use segment URLs is either wasteful or unsafe.
+       */
+      nativeFormat?: {
+        sampleRate: number;
+        channels: number;
+        /** Omit for lossy codecs; there is no original depth to preserve. */
+        bitDepth?: 16 | 24 | 32;
+        lossless: boolean;
+        codecName?: string;
+      };
     }
   | {
       kind: 'pipe';

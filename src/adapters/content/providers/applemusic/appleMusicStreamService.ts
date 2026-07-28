@@ -38,6 +38,27 @@ const WEBPLAYBACK_URL = 'https://play.music.apple.com/WebObjects/MZPlay.woa/wa/w
 
 const BEARER_TOKEN_TTL_MS = 30 * 60 * 1000;
 
+/**
+ * Apple Music's web-playback tier serves AAC-LC 44.1 kHz stereo for every asset
+ * (verified with ffprobe against a live asset: codec_name=aac, profile=LC,
+ * sample_rate=44100, channels=2, ~285 kbps).
+ *
+ * Declaring it lets the engine skip resampling to a 48 kHz sink, which otherwise
+ * alters every sample and inflates a FLAC-encoded output roughly 2.7x for no gain.
+ * We deliberately declare no bitDepth: the source is lossy, so there is no
+ * original sample depth worth preserving.
+ *
+ * If Apple ever ships a different rate, the worst case is that ffmpeg resamples
+ * as it does today — the engine only skips the resampler when the *negotiated*
+ * output rate already equals the declared one.
+ */
+const APPLE_MUSIC_NATIVE_FORMAT = {
+  sampleRate: 44100,
+  channels: 2,
+  lossless: false,
+  codecName: 'aac',
+} as const;
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 type AppleMusicPlaybackResult = {
@@ -822,6 +843,7 @@ export class AppleMusicStreamService {
       // aggressive low-latency probing to reduce premature EOF/truncation.
       lowLatency: false,
       decryptionKey,
+      nativeFormat: APPLE_MUSIC_NATIVE_FORMAT,
     };
   }
 
@@ -873,6 +895,7 @@ export class AppleMusicStreamService {
       realTime,
       // Keep parser buffering enabled for better HLS end-of-track stability.
       lowLatency: false,
+      nativeFormat: APPLE_MUSIC_NATIVE_FORMAT,
     };
   }
 

@@ -90,6 +90,7 @@ export class Crossfader {
 
     const { framesProcessed, newRem } = await blendPcmStreams(oldSource, newSource, {
       channels: s.outputSettings.channels,
+      bytesPerSample: s.outputSettings.pcmBitDepth / 8,
       totalFrames,
       onBlendedFrame: (blended) => { s.pipeline.encoderInput?.write(blended); },
       log: s.log,
@@ -175,6 +176,7 @@ export class Crossfader {
 
     const { framesProcessed, newRem } = await blendPcmStreams(oldSource, newSource, {
       channels: s.outputSettings.channels,
+      bytesPerSample: s.outputSettings.pcmBitDepth / 8,
       totalFrames,
       onBlendedFrame: (blended) => s.pipeline.encoderInput?.write(blended),
       log: s.log,
@@ -271,6 +273,7 @@ export class Crossfader {
 
     const { framesProcessed, newRem } = await blendPcmStreams(oldSource, newSource, {
       channels: s.outputSettings.channels,
+      bytesPerSample: s.outputSettings.pcmBitDepth / 8,
       totalFrames,
       onBlendedFrame: (blended) => {
         s.buffer.push(blended);
