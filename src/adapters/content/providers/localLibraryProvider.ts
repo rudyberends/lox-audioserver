@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Dirent, Stats } from 'node:fs';
 import fsp from 'node:fs/promises';
 import { networkInterfaces } from 'node:os';
@@ -40,7 +41,17 @@ const FILE_TYPE_FILE = 2;
 const COVER_CANDIDATES = ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp'];
 const ARTIST_COVER_CANDIDATES = ['artist.jpg', 'artist.jpeg', 'artist.png', 'artist.webp'];
 const NAS_DIR_TIMEOUT_MS = 3000;
+/** Quiet period before queued path changes are indexed, so a file copy settles first. */
+const PATH_SYNC_SETTLE_MS = 1500;
 const MUSICBRAINZ_ENDPOINT = 'https://musicbrainz.org/ws/2/release/';
+const MUSICBRAINZ_ARTIST_ENDPOINT = 'https://musicbrainz.org/ws/2/artist/';
+const WIKIDATA_CLAIMS_ENDPOINT = 'https://www.wikidata.org/w/api.php';
+/** Width to request from Commons; artist tiles never need more. */
+const ARTIST_ART_SIZE = 500;
+/** MusicBrainz search score below which a match is treated as wrong. */
+const ARTIST_ART_MIN_SCORE = 90;
+/** Ceiling per scan, so a huge library can't hold the rate limiter forever. */
+const ARTIST_ART_MAX_PER_SCAN = 50;
 const MUSICBRAINZ_USER_AGENT = 'sonn-core/1.0 (library-cover-fallback)';
 const COVER_ART_ARCHIVE_RELEASE = 'https://coverartarchive.org/release';
 const ALERTS_PUBLIC_DIR = path.resolve(process.cwd(), 'public', 'alerts');
@@ -117,6 +128,14 @@ export class LocalLibraryProvider {
   private readonly coverLookupCache = new Map<string, string | null>();
   private readonly artistCoverProbeCache = new Map<string, string | null>();
   private musicBrainzNextAllowedAt = 0;
+  /** Artists already looked up without result, so a rescan doesn't re-ask. */
+  private readonly artistArtMisses = new Set<string>();
+  private artistArtRunning = false;
+  /** Paths awaiting an incremental index pass, coalesced by {@link queuePathSync}. */
+  private readonly pendingPathSyncs = new Set<string>();
+  private pathSyncTimer: NodeJS.Timeout | null = null;
+  private pathSyncRunning = false;
+  private onPathSyncSettled: (() => void) | null = null;
 
   constructor(notifier: NotifierPort, configPort: ConfigPort) {
     this.notifier = notifier;
@@ -212,79 +231,6 @@ export class LocalLibraryProvider {
     );
   }
 
-  public async uploadLocalAudio(
-    relativePath: string,
-    base64Data: string,
-  ): Promise<{ relPath: string; filename: string }> {
-    if (!relativePath) {
-      throw new Error('invalid-filename');
-    }
-    if (!base64Data) {
-      throw new Error('invalid-audio-data');
-    }
-    const safeRelative = sanitizeRelativePath(relativePath);
-    if (!safeRelative) {
-      throw new Error('invalid-filename');
-    }
-    const fileName = path.basename(safeRelative);
-    if (!fileName || !isAudioFile(fileName)) {
-      throw new Error('invalid-audio-extension');
-    }
-    const buffer = Buffer.from(base64Data, 'base64');
-    const requestedSubdir = path.dirname(safeRelative);
-    const autoSubdir =
-      !requestedSubdir || requestedSubdir === '.'
-        ? await this.resolveUploadSubdirFromMetadata(buffer, fileName)
-        : '';
-    const targetSubdir =
-      requestedSubdir && requestedSubdir !== '.'
-        ? requestedSubdir
-        : autoSubdir;
-    const targetDir = path.join(this.baseDir, 'local');
-    const finalDir =
-      targetSubdir && targetSubdir !== '.'
-        ? path.join(targetDir, targetSubdir)
-        : targetDir;
-    await ensureDir(finalDir);
-    const finalName = await ensureUniqueFilename(finalDir, fileName);
-    await fsp.writeFile(path.join(finalDir, finalName), buffer);
-    const relPath =
-      targetSubdir && targetSubdir !== '.'
-        ? path.join('local', targetSubdir, finalName)
-        : path.join('local', finalName);
-    return {
-      relPath,
-      filename: finalName,
-    };
-  }
-
-  private async resolveUploadSubdirFromMetadata(
-    data: Buffer,
-    fileName: string,
-  ): Promise<string> {
-    try {
-      const metadata = await mm.parseBuffer(data, undefined, { duration: false });
-      const artistRaw = metadata.common.artist?.trim() ?? '';
-      const albumRaw = metadata.common.album?.trim() ?? '';
-      if (!artistRaw || !albumRaw) {
-        return '';
-      }
-      if (/^unknown\b/i.test(artistRaw) || /^unknown\b/i.test(albumRaw)) {
-        return '';
-      }
-      const artistDir = sanitizePathSegment(artistRaw);
-      const albumDir = sanitizePathSegment(albumRaw);
-      if (!artistDir || !albumDir) {
-        return '';
-      }
-      return path.join(artistDir, albumDir);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log.debug('upload metadata parse failed for folder grouping', { fileName, message });
-      return '';
-    }
-  }
-
   public async deleteTrackByAudiopath(audiopath: string): Promise<LibraryDeleteResult> {
     const safeAudiopath = String(audiopath || '').trim();
     if (!safeAudiopath) {
@@ -362,10 +308,13 @@ export class LocalLibraryProvider {
       await this.ensureBaseStructure({ includeNasStorages: true });
       await ensureNasMounts(this.baseDir);
       await this.store.init();
-      this.store.reset();
       this.artistCoverProbeCache.clear();
 
-      await this.scanStorage('local', 'local');
+      // Each storage is refreshed on its own. The table is deliberately NOT
+      // wiped up front: an unreachable share would then lose every track it had
+      // and the scan would still report success. Instead a storage that cannot
+      // be read is left exactly as it was.
+      await this.rescanStorage('local', 'local');
 
       // Best-effort storage listing; if missing, scan local only.
       const storages = await bestEffort(() => listStorages(), {
@@ -374,10 +323,32 @@ export class LocalLibraryProvider {
         log: this.log,
         label: 'list storages failed',
       });
+      const knownStorageIds = new Set<string>(['local']);
       for (const storage of storages) {
         const storageId = String(storage.id);
-        await this.scanStorage(storageId, path.join('nas', storageId));
+        knownStorageIds.add(storageId);
+        await this.rescanStorage(storageId, path.join('nas', storageId));
       }
+
+      // A share removed from the config keeps no rows behind.
+      for (const orphaned of this.store.listStorageIds()) {
+        if (!knownStorageIds.has(orphaned)) {
+          const dropped = this.store.deleteTracksForStorage(orphaned);
+          this.log.info('dropped tracks for removed storage', { storageId: orphaned, dropped });
+        }
+      }
+
+      // Album browse reads a rollup derived from `tracks`; refresh it once the
+      // whole scan has settled rather than per storage.
+      this.store.rebuildAlbumRollup();
+      this.store.checkpoint();
+
+      // Artist pictures come from the network at one request per second, so the
+      // scan finishes and reports first; pictures appear as they arrive.
+      void this.fetchMissingArtistCovers().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.debug('artist art pass failed', { message });
+      });
 
       const stats: LibraryStats = this.store.getStats();
       this.stats = stats;
@@ -392,6 +363,169 @@ export class LocalLibraryProvider {
       this.updateScanStatus(0, silent);
     } finally {
       this.scanning = false;
+    }
+  }
+
+  /**
+   * Indexes a single file that appeared, changed or disappeared on disk, without
+   * touching the rest of the library.
+   *
+   * A full {@link rescan} re-reads tags, cover art and artist art for every file;
+   * fine once at boot, far too expensive per file when audio arrives one write at
+   * a time. This keeps the index correct for the one path that actually changed.
+   *
+   * `relPath` is relative to the music dir (e.g. `local/Artist/Album/01.mp3`).
+   */
+  public async syncPath(relPath: string): Promise<'added' | 'updated' | 'removed' | 'ignored'> {
+    const safeRel = normalizeLibraryRelPath(relPath);
+    if (!safeRel || !isAudioFile(safeRel)) {
+      return 'ignored';
+    }
+
+    await this.store.init();
+
+    const storageId = resolveStorageIdFromRelPath(safeRel);
+    const existing = this.store.findByStoragePath(storageId, safeRel);
+
+    let fileStat: Stats | null = null;
+    try {
+      fileStat = await fsp.stat(path.join(this.baseDir, safeRel));
+    } catch {
+      fileStat = null;
+    }
+
+    if (!fileStat?.isFile()) {
+      if (!existing) {
+        return 'ignored';
+      }
+      this.store.deleteTracksByAudiopath(existing.audiopath);
+      this.stats = null;
+      return 'removed';
+    }
+
+    if (
+      existing &&
+      existing.size === fileStat.size &&
+      existing.mtime === Math.floor(fileStat.mtimeMs)
+    ) {
+      return 'ignored';
+    }
+
+    await this.addTrack(storageId, safeRel);
+    this.stats = null;
+    return existing ? 'updated' : 'added';
+  }
+
+  /**
+   * Where a loose upload belongs, based on its tags: `Artist/Album`, or '' when
+   * the tags don't say.
+   *
+   * Only for files dropped without a folder of their own — a whole album keeps the
+   * structure it arrived with. Grouping uses {@link resolveAlbumArtist}, the same
+   * rule the indexer applies, so a compilation files under one folder instead of
+   * scattering across per-track artists.
+   *
+   * Reads the file on disk rather than a buffer, so nothing large is held in
+   * memory; call it after the upload has landed.
+   */
+  public async resolveTagBasedSubdir(relPath: string): Promise<string> {
+    const safeRel = normalizeLibraryRelPath(relPath);
+    if (!safeRel) {
+      return '';
+    }
+    const metadata = await this.readMetadata(path.join(this.baseDir, safeRel));
+    const albumRaw = metadata.album.trim();
+    const artistRaw = metadata.artist.trim();
+    if (!albumRaw || (!artistRaw && !metadata.albumArtist.trim() && !metadata.compilation)) {
+      return '';
+    }
+
+    const baseInfo = createTrackFromPath(safeRel);
+    const groupArtist = resolveAlbumArtist(metadata, baseInfo, artistRaw).trim();
+    if (!groupArtist || isUnknownTagValue(groupArtist) || isUnknownTagValue(albumRaw)) {
+      return '';
+    }
+
+    const artistDir = toSafeFolderName(groupArtist);
+    const albumDir = toSafeFolderName(albumRaw);
+    if (!artistDir || !albumDir) {
+      return '';
+    }
+    return `${artistDir}/${albumDir}`;
+  }
+
+  /**
+   * Queues a path for incremental indexing, coalescing bursts.
+   *
+   * Copying an album lands as many sequential writes; indexing each the moment it
+   * arrives would re-read tags while the next file is still being written. Paths
+   * accumulate and drain once the writes go quiet, so a whole album settles as a
+   * single pass. Unlike {@link rescan}, concurrent callers are never dropped.
+   */
+  public queuePathSync(relPath: string, settleMs = PATH_SYNC_SETTLE_MS): void {
+    const safeRel = normalizeLibraryRelPath(relPath);
+    if (!safeRel || !isAudioFile(safeRel)) {
+      return;
+    }
+    this.pendingPathSyncs.add(safeRel);
+    if (this.pathSyncTimer) {
+      clearTimeout(this.pathSyncTimer);
+    }
+    this.pathSyncTimer = setTimeout(() => {
+      this.pathSyncTimer = null;
+      void this.drainPathSyncs();
+    }, settleMs);
+    this.pathSyncTimer.unref?.();
+  }
+
+  /** Resolves once no path sync is queued or running. Test/shutdown aid. */
+  public async waitForPathSyncs(): Promise<void> {
+    if (!this.pathSyncTimer && !this.pathSyncRunning && this.pendingPathSyncs.size === 0) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      this.onPathSyncSettled = resolve;
+    });
+  }
+
+  private async drainPathSyncs(): Promise<void> {
+    if (this.pathSyncRunning) {
+      return;
+    }
+    this.pathSyncRunning = true;
+    let changed = 0;
+    try {
+      // Re-read the set each round: a write that lands mid-drain queues a new path.
+      while (this.pendingPathSyncs.size > 0) {
+        const batch = [...this.pendingPathSyncs];
+        this.pendingPathSyncs.clear();
+        for (const relPath of batch) {
+          try {
+            const result = await this.syncPath(relPath);
+            if (result !== 'ignored') {
+              changed += 1;
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.log.warn('incremental library sync failed', { relPath, message });
+          }
+        }
+      }
+
+      if (changed > 0) {
+        this.store.rebuildAlbumRollup();
+        const stats: LibraryStats = this.store.getStats();
+        this.stats = stats;
+        this.log.info('library updated incrementally', { changed, ...stats });
+        this.updateScanStatus(0, false, stats);
+      }
+    } finally {
+      this.pathSyncRunning = false;
+      if (!this.pathSyncTimer && this.pendingPathSyncs.size === 0) {
+        const settled = this.onPathSyncSettled;
+        this.onPathSyncSettled = null;
+        settled?.();
+      }
     }
   }
 
@@ -1084,21 +1218,69 @@ export class LocalLibraryProvider {
     }
   }
 
-  private async scanStorage(storageId: string, relRoot: string): Promise<void> {
+  /**
+   * Refreshes one storage, leaving the others untouched.
+   *
+   * Reconciles rather than wipes: files found are upserted, rows the walk did not
+   * see are deleted afterwards. If the root cannot be read at all — an unmounted
+   * share, a disconnected disk — nothing is deleted and the previous index stands,
+   * because "I can't see it" must not be recorded as "it's gone".
+   */
+  private async rescanStorage(storageId: string, relRoot: string): Promise<void> {
+    const absRoot = path.join(this.baseDir, relRoot);
+    try {
+      await fsp.readdir(absRoot);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.warn('storage unreachable; keeping its existing index', {
+        storageId,
+        relRoot,
+        message,
+      });
+      return;
+    }
+
+    const seen = new Set<string>();
+    const reachable = await this.scanStorage(storageId, relRoot, seen);
+    if (!reachable) {
+      this.log.warn('storage became unreadable mid-scan; keeping its existing index', {
+        storageId,
+      });
+      return;
+    }
+
+    const removed = this.store.deleteTracksMissingFrom(storageId, seen);
+    if (removed > 0) {
+      this.log.info('pruned tracks that disappeared from disk', { storageId, removed });
+    }
+  }
+
+  /**
+   * Walks one storage, upserting every audio file and recording what it saw in
+   * `seen`. Returns false when the root itself could not be read; an unreadable
+   * *sub*directory is logged and skipped without failing the whole walk.
+   */
+  private async scanStorage(
+    storageId: string,
+    relRoot: string,
+    seen: Set<string>,
+  ): Promise<boolean> {
     const absRoot = path.join(this.baseDir, relRoot);
     let entries: Dirent[];
 
     try {
       entries = await fsp.readdir(absRoot, { withFileTypes: true });
-    } catch {
-      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.debug('directory unreadable during scan', { relRoot, message });
+      return false;
     }
 
     for (const entry of entries) {
       const nextRel = path.join(relRoot, entry.name);
 
       if (entry.isDirectory()) {
-        await this.scanStorage(storageId, nextRel);
+        await this.scanStorage(storageId, nextRel, seen);
         continue;
       }
 
@@ -1106,8 +1288,10 @@ export class LocalLibraryProvider {
         continue;
       }
 
+      seen.add(nextRel);
       await this.addTrack(storageId, nextRel);
     }
+    return true;
   }
 
   private async addTrack(storageId: string, relPath: string): Promise<void> {
@@ -1117,6 +1301,19 @@ export class LocalLibraryProvider {
     try {
       fileStat = await fsp.stat(fullPath);
     } catch {
+      return;
+    }
+
+    // Untouched file: the stored row is still accurate, so skip the expensive
+    // part (tag parse, cover extraction, artist-art probe). Size is compared as
+    // well as mtime because a restore or in-place edit can preserve one but not
+    // the other.
+    const known = this.store.findByStoragePath(storageId, relPath);
+    if (
+      known &&
+      known.size === fileStat.size &&
+      known.mtime === Math.floor(fileStat.mtimeMs)
+    ) {
       return;
     }
 
@@ -1360,6 +1557,188 @@ export class LocalLibraryProvider {
       this.log.debug('remote cover download error', { relPath, artist, album, url: coverUrl });
       return undefined;
     }
+  }
+
+  /**
+   * Fills in missing artist pictures after a scan, in the background.
+   *
+   * Cover Art Archive only serves releases, so an artist photo comes the long way
+   * round: MusicBrainz artist search → its Wikidata relation → the P18 "image"
+   * claim → the file on Wikimedia Commons. Everything there is freely licensed and
+   * needs no API key.
+   *
+   * Deliberately not awaited by {@link rescan}: MusicBrainz allows one request a
+   * second, so a library with many artists would otherwise stretch the scan out
+   * for minutes while the index is already complete and usable.
+   */
+  private async fetchMissingArtistCovers(): Promise<void> {
+    if (this.artistArtRunning) {
+      return;
+    }
+    this.artistArtRunning = true;
+    try {
+      const pending = this.store.listArtistsWithoutCover(ARTIST_ART_MAX_PER_SCAN);
+      if (pending.length === 0) {
+        return;
+      }
+      this.log.info('fetching missing artist art', { artists: pending.length });
+
+      let stored = 0;
+      for (const entry of pending) {
+        // A negative result is remembered for the process lifetime, so repeated
+        // scans don't re-ask MusicBrainz about artists it has no picture for.
+        const cacheKey = `${entry.storage_id}::${entry.name.toLowerCase()}`;
+        if (this.artistArtMisses.has(cacheKey)) {
+          continue;
+        }
+
+        // Prefer a real artist folder. A flat layout has none — the album sits
+        // directly at the storage root — so the picture goes beside the album
+        // instead. Only safe because such a folder holds one artist by
+        // definition: if it had an artist folder we would not be here.
+        const artistDir = this.resolveArtistDir(entry.rel_path) ?? path.dirname(entry.rel_path);
+        if (!artistDir || artistDir === '.') {
+          this.artistArtMisses.add(cacheKey);
+          continue;
+        }
+
+        try {
+          const fileName = await this.fetchAndStoreArtistImage(entry.name, artistDir);
+          if (!fileName) {
+            this.artistArtMisses.add(cacheKey);
+            continue;
+          }
+          const absFile = path.join(this.baseDir, artistDir, fileName);
+          const stat = await fsp.stat(absFile).catch(() => null);
+          this.store.upsertArtistCover({
+            storageId: entry.storage_id,
+            name: entry.name,
+            cover: fileName,
+            relPath: artistDir,
+            mtime: stat ? Math.floor(stat.mtimeMs) : undefined,
+          });
+          // The probe cache would otherwise keep reporting "no cover here".
+          this.artistCoverProbeCache.clear();
+          stored += 1;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.log.debug('artist art fetch failed', { artist: entry.name, message });
+          this.artistArtMisses.add(cacheKey);
+        }
+      }
+
+      if (stored > 0) {
+        this.log.info('artist art stored', { stored });
+      }
+    } finally {
+      this.artistArtRunning = false;
+    }
+  }
+
+  /**
+   * Folder that represents the artist for a track, or null when the layout has
+   * none — `local/Album/track.mp3` is an album sitting at the storage root, so
+   * its parent is the storage itself and not an artist.
+   */
+  private resolveArtistDir(relPath: string): string | null {
+    const albumDir = path.dirname(relPath);
+    const artistRelDir = path.dirname(albumDir);
+    if (!artistRelDir || artistRelDir === '.' || artistRelDir === albumDir) {
+      return null;
+    }
+    const segments = artistRelDir.split(path.sep).filter(Boolean);
+    const minSegments = artistRelDir.startsWith(`nas${path.sep}`) ? 3 : 2;
+    return segments.length >= minSegments ? artistRelDir : null;
+  }
+
+  /** Resolves an artist to a Commons image and writes it as `artist.<ext>`. */
+  private async fetchAndStoreArtistImage(
+    artist: string,
+    artistRelDir: string,
+  ): Promise<string | null> {
+    const mbid = await this.lookupMusicBrainzArtistMbid(artist);
+    if (!mbid) {
+      return null;
+    }
+    const wikidataId = await this.lookupWikidataIdForArtist(mbid);
+    if (!wikidataId) {
+      return null;
+    }
+    const commonsFile = await this.lookupWikidataImage(wikidataId);
+    if (!commonsFile) {
+      return null;
+    }
+
+    const url = buildCommonsThumbUrl(commonsFile, ARTIST_ART_SIZE);
+    const response = await fetch(url, { headers: { 'User-Agent': MUSICBRAINZ_USER_AGENT } });
+    if (!response.ok) {
+      this.log.debug('artist art download failed', { artist, status: response.status });
+      return null;
+    }
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength <= 0 || bytes.byteLength > COVER_ART_MAX_BYTES) {
+      return null;
+    }
+    const contentType = String(response.headers.get('content-type') ?? '').toLowerCase();
+    const ext = contentType.includes('png') ? '.png' : contentType.includes('webp') ? '.webp' : '.jpg';
+    const fileName = `artist${ext}`;
+    const outDir = path.join(this.baseDir, artistRelDir);
+    await ensureDir(outDir);
+    await fsp.writeFile(path.join(outDir, fileName), Buffer.from(bytes));
+    this.log.info('artist art stored', { artist, artistRelDir, fileName, bytes: bytes.byteLength });
+    return fileName;
+  }
+
+  private async lookupMusicBrainzArtistMbid(artist: string): Promise<string | null> {
+    await this.waitForMusicBrainzRateLimit();
+    const query = `artist:"${escapeMusicBrainzQuery(artist)}"`;
+    const url = `${MUSICBRAINZ_ARTIST_ENDPOINT}?query=${encodeURIComponent(query)}&fmt=json&limit=1`;
+    const response = await fetch(url, { headers: { 'User-Agent': MUSICBRAINZ_USER_AGENT } });
+    if (!response.ok) {
+      return null;
+    }
+    const payload = (await response.json()) as {
+      artists?: Array<{ id?: string; score?: number }>;
+    };
+    const best = payload.artists?.[0];
+    // A weak match is worse than no picture: it would attach the wrong face to
+    // an artist and look like a bug rather than a gap.
+    if (!best?.id || Number(best.score ?? 0) < ARTIST_ART_MIN_SCORE) {
+      return null;
+    }
+    return best.id;
+  }
+
+  private async lookupWikidataIdForArtist(mbid: string): Promise<string | null> {
+    await this.waitForMusicBrainzRateLimit();
+    const url = `${MUSICBRAINZ_ARTIST_ENDPOINT.replace(/\/$/, '')}/${encodeURIComponent(mbid)}?inc=url-rels&fmt=json`;
+    const response = await fetch(url, { headers: { 'User-Agent': MUSICBRAINZ_USER_AGENT } });
+    if (!response.ok) {
+      return null;
+    }
+    const payload = (await response.json()) as {
+      relations?: Array<{ url?: { resource?: string } }>;
+    };
+    for (const relation of payload.relations ?? []) {
+      const match = /wikidata\.org\/wiki\/(Q\d+)/.exec(relation.url?.resource ?? '');
+      if (match?.[1]) {
+        return match[1];
+      }
+    }
+    return null;
+  }
+
+  /** The P18 ("image") claim on a Wikidata entity, as a Commons filename. */
+  private async lookupWikidataImage(wikidataId: string): Promise<string | null> {
+    const url = `${WIKIDATA_CLAIMS_ENDPOINT}?action=wbgetclaims&entity=${encodeURIComponent(wikidataId)}&property=P18&format=json`;
+    const response = await fetch(url, { headers: { 'User-Agent': MUSICBRAINZ_USER_AGENT } });
+    if (!response.ok) {
+      return null;
+    }
+    const payload = (await response.json()) as {
+      claims?: { P18?: Array<{ mainsnak?: { datavalue?: { value?: string } } }> };
+    };
+    return payload.claims?.P18?.[0]?.mainsnak?.datavalue?.value ?? null;
   }
 
   private async lookupMusicBrainzReleaseMbid(album: string, artist: string): Promise<string | null> {
@@ -1761,25 +2140,63 @@ function resolveAlbumArtist(
   return trackArtist;
 }
 
-function sanitizeRelativePath(value: string): string {
-  const normalized = value.replace(/\\/g, '/').replace(/^\/+/, '');
-  const parts = normalized
-    .split('/')
-    .filter((part) => part && part !== '.' && part !== '..')
-    .map((part) => part.replace(/[^A-Za-z0-9._-]/g, '_'));
+/** Placeholder tags that shouldn't become a folder ("Unknown Artist" and friends). */
+function isUnknownTagValue(value: string): boolean {
+  // Matches the placeholder itself ("Unknown", "Unknown Artist", "unknown album")
+  // but not a real name that merely starts with the word — "Unknown Mortal
+  // Orchestra" is a band, and filing it as unidentified would be wrong.
+  return /^unknown(\s+(artist|album|albumartist|title))?$/i.test(value.trim());
+}
+
+/**
+ * Turns a tag value into a usable folder name.
+ *
+ * Removes only what a filesystem genuinely cannot take — path separators and the
+ * characters Windows reserves — and leaves everything else alone. Accents and
+ * non-Latin scripts survive, so a tag reading "Björk" becomes the folder "Björk"
+ * rather than "Bj_rk". Returns '' when nothing usable remains.
+ */
+function toSafeFolderName(value: string): string {
+  return value
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    // Control characters are legal on disk but never intended.
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/\s+/g, ' ')
+    // A leading dot hides the folder; a trailing dot or space breaks Windows.
+    .replace(/^[.\s]+/, '')
+    .replace(/[.\s]+$/, '')
+    .slice(0, 96)
+    .trim();
+}
+
+/**
+ * Normalizes a library-relative path without rewriting the name.
+ *
+ * For paths that already exist on disk: accents, spaces and CJK must survive
+ * verbatim or the lookup misses. Traversal is rejected rather than rewritten.
+ */
+function normalizeLibraryRelPath(value: string): string {
+  const normalized = String(value ?? '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '');
+  const parts = normalized.split('/').filter((part) => part && part !== '.');
+  if (parts.some((part) => part === '..')) {
+    return '';
+  }
   return parts.join('/');
 }
 
-function sanitizePathSegment(value: string): string {
-  return value
-    .trim()
-    .replace(/[\\/:*?"<>|]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .replace(/\.+/g, '.')
-    .replace(/^\.+/, '')
-    .replace(/\.+$/, '')
-    .slice(0, 96)
-    .trim();
+/**
+ * Storage a library-relative path belongs to: `nas/<id>/…` is that share,
+ * anything else is the built-in local folder.
+ */
+function resolveStorageIdFromRelPath(relPath: string): string {
+  const parts = relPath.split('/');
+  if (parts[0] === 'nas' && parts[1]) {
+    return parts[1];
+  }
+  return 'local';
 }
 
 function resolveCoverExtension(format: string | undefined): '.jpg' | '.png' | '.webp' {
@@ -1798,6 +2215,26 @@ function isLoopbackHost(host: string): boolean {
   return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
 }
 
+/**
+ * Thumbnail URL for a Wikimedia Commons file.
+ *
+ * Commons derives the storage path from the MD5 of the underscored filename;
+ * there is no lookup endpoint for it, so the path is computed the same way the
+ * wiki does.
+ */
+function buildCommonsThumbUrl(fileName: string, width: number): string {
+  const underscored = fileName.replace(/ /g, '_');
+  // The hash is over the raw underscored name, before any escaping.
+  const hash = createHash('md5').update(underscored).digest('hex');
+  // Commons also escapes the sub-delims encodeURIComponent leaves alone, and
+  // parentheses are common in photo filenames ("… (cropped).jpg").
+  const encoded = encodeURIComponent(underscored).replace(
+    /[!'()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `https://upload.wikimedia.org/wikipedia/commons/thumb/${hash[0]}/${hash.slice(0, 2)}/${encoded}/${width}px-${encoded}`;
+}
+
 function escapeMusicBrainzQuery(value: string): string {
   return value.replace(/[\\"]/g, '\\$&').trim();
 }
@@ -1807,18 +2244,6 @@ function normalizeMetaText(value: string): string {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, ' ');
-}
-
-async function ensureUniqueFilename(dir: string, filename: string): Promise<string> {
-  const ext = path.extname(filename);
-  const base = filename.slice(0, -ext.length) || 'upload';
-  let candidate = filename;
-  let index = 1;
-  while (await fileExists(path.join(dir, candidate))) {
-    candidate = `${base}-${Date.now()}-${index}${ext}`;
-    index += 1;
-  }
-  return candidate;
 }
 
 function encodeAlbumKey(payload: AlbumIdPayload): string {
@@ -1892,3 +2317,13 @@ async function fileExists(filePath: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Internals exposed for tests only. Filing an upload under its tags is
+ * name-sensitive enough to be worth covering directly.
+ */
+export const __testing = {
+  toSafeFolderName,
+  isUnknownTagValue,
+  buildCommonsThumbUrl,
+};

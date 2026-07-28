@@ -475,6 +475,24 @@ export class ContentManager {
     return this.library.rescan();
   }
 
+  /**
+   * Indexes one changed path instead of rebuilding the whole library. Used when a
+   * single file is added or removed (upload, WebDAV write) — see
+   * {@link LocalLibraryProvider.queuePathSync}.
+   */
+  /**
+   * Folder a loose upload belongs in based on its tags ('Artist/Album'), or ''
+   * when the tags don't say. See {@link LocalLibraryProvider.resolveTagBasedSubdir}.
+   */
+  public resolveLibraryUploadSubdir(relPath: string): Promise<string> {
+    return this.library.resolveTagBasedSubdir(relPath);
+  }
+
+  public syncLibraryPath(relPath: string): void {
+    this.cache.clearAll();
+    this.library.queuePathSync(relPath);
+  }
+
   public getScanStatus(): ScanStatus {
     return this.library.getScanStatus();
   }
@@ -493,10 +511,6 @@ export class ContentManager {
 
   public getLibraryStorageCoverSamples(storageId: string, limit: number): LibraryCoverSample[] {
     return this.library.getStorageCoverSamples(storageId, limit);
-  }
-
-  public uploadLibraryAudio(relativePath: string, base64Data: string): Promise<{ relPath: string; filename: string }> {
-    return this.library.uploadLocalAudio(relativePath, base64Data);
   }
 
   public deleteLibraryTrackByAudiopath(audiopath: string): Promise<LibraryDeleteResult> {
