@@ -1627,3 +1627,22 @@ test('removing a local destination is refused for a zone', async () => {
   // A configured zone is not this route's to delete.
   assert.equal((await call(h, 'DELETE', `${API_ROOT}/destinations/local/3`)).statusCode, 404);
 });
+
+test('the server\'s own routing MAC is not reported as a source name', () => {
+  // For anything with no service to name — a local file — `sourceName` holds this
+  // audioserver's own MAC, which it uses to route between its parts. The native Loxone app
+  // ignores it, so it was never visible there; reported here the source appeared to be
+  // called "000C290E5497".
+  const api = toApiZoneState(
+    zoneState({ audiopath: 'library://local/Coldplay/01.flac', sourceName: '000C290E5497' }),
+  );
+  assert.equal(api.source?.name, '');
+});
+
+test('a real source name survives', () => {
+  // Only a bare twelve-hex-character string is a MAC; anything a person chose stays.
+  for (const name of ['Library', 'Apple Music', 'Kitchen NAS']) {
+    const api = toApiZoneState(zoneState({ sourceName: name }));
+    assert.equal(api.source?.name, name, name);
+  }
+});

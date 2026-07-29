@@ -188,7 +188,10 @@ function toSource(
   // that is the disguise: an Apple Music track reports "Spotify", because Spotify is
   // the only streaming service those clients know. Name the real service here, from the
   // audiopath, which is service-native by then.
-  const name = kind === 'radio' ? state.station || '' : serviceLabel?.(id) || state.sourceName || '';
+  const name =
+    kind === 'radio'
+      ? state.station || ''
+      : serviceLabel?.(id) || withoutRoutingTag(state.sourceName);
   // A live stream has no length, so there is nowhere to seek to. Same rule the
   // Snapcast metadata bridge already applies.
   const seekable = Number.isFinite(state.duration) && state.duration > 0;
@@ -200,6 +203,19 @@ const LINEIN_PREFIX = 'linein:';
 
 /** The configured name of an input, so a line-in reports it rather than the server's MAC. */
 export type InputLabelLookup = (inputId: string) => string | null;
+
+/**
+ * `sourceName` with the server's internal routing tag removed.
+ *
+ * For anything with no service to name — a local file — the field holds this audioserver's own
+ * MAC, which it uses to route between its parts. The native Loxone app ignores it, so it was
+ * never user-visible there; reported here it looked like the source was called `000C290E5497`.
+ */
+function withoutRoutingTag(sourceName: string | undefined): string {
+  const raw = (sourceName ?? '').trim();
+  // Twelve hex characters and nothing else is a MAC, not a name anyone chose.
+  return /^[0-9a-f]{12}$/i.test(raw) ? '' : raw;
+}
 
 /** Loxone leaves `syncedzones` empty (or absent) for an ungrouped zone. */
 function toGroup(state: ZoneState): ApiGroup | null {
