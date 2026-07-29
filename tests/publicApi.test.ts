@@ -9,6 +9,8 @@ import { withApiEvents } from '../src/adapters/http/api/apiNotifierTap';
 import { toApiZoneState } from '../src/adapters/http/api/zoneProjection';
 import { AudioType } from '../src/domain/zones/enums';
 import { COVER_ART_NOW_PLAYING_SIZE } from '../src/shared/coverArt';
+import { ServerLifecycle } from '../src/domain/server/lifecycle';
+import type { HealthReport } from '../src/domain/server/health';
 import type { ZoneState } from '../src/domain/zones/zoneState';
 import type { NotifierPort } from '../src/ports/NotifierPort';
 
@@ -100,6 +102,8 @@ let libOps: string[] = [];
 // What the cover route asked for, so the tests can check the size hint it passed on.
 let coverAsks: Array<{ zoneId: number; targetSize: number }> = [];
 let zoneCover: { data: Buffer; mime?: string } | string | null = null;
+let lifecycle = new ServerLifecycle();
+let health: HealthReport;
 const favItems = [{ id: 1, name: 'Radio Paradise', source: 'tunein:s1', coverUrl: 'c' }];
 const recentItems = [
   { source: 'applemusic:track:1', title: 'One', artist: 'A', album: 'X', coverUrl: 'c', service: 'applemusic' },
@@ -115,6 +119,15 @@ function harness(): Harness {
   libOps = [];
   coverAsks = [];
   zoneCover = { data: Buffer.from('jpegbytes'), mime: 'image/png' };
+  lifecycle = new ServerLifecycle();
+  lifecycle.markReady();
+  health = {
+    status: 'ok',
+    version: '4.0.0-test',
+    uptimeSec: 5,
+    phase: 'ready',
+    checks: [{ name: 'audio', status: 'ok' }],
+  };
   const states = new Map<number, ZoneState>([[3, zoneState()]]);
   const commands: Harness['commands'] = [];
   const plays: Harness['plays'] = [];
@@ -220,6 +233,8 @@ function harness(): Harness {
       eqBands = bands.map((b) => Math.min(6, Math.max(-6, Math.round(b as number))));
       return [...eqBands];
     },
+    getHealth: () => health,
+    getLifecycle: () => lifecycle.snapshot(),
     serverVersion: '4.0.0-test',
     startedAt: Date.now() - 5000,
   });
@@ -1114,5 +1129,56 @@ test('the cover route is read-only', async () => {
   const h = harness();
   for (const method of ['PUT', 'POST', 'DELETE']) {
     assert.equal((await call(h, method, `${API_ROOT}/zones/3/cover`, {})).statusCode, 405, method);
+  }
+});
+
+// A supervisor decides from the status code, so that is the part of /health and /ready
+// that must not drift. The plugin's UI currently does a bare GET / and treats anything
+// that is not a connection failure as healthy — a 500 passes.
+
+test('health carries the verdict in the status code, not only the body', async () => {
+  const h = harness();
+  assert.equal((await call(h, 'GET', `${API_ROOT}/health`)).statusCode, 200);
+
+  // Degraded stays 200: the commonest reaction to a non-2xx is a restart, which is wrong
+  // for a server that is still playing music.
+  health = { ...health, status: 'degraded', checks: [{ name: 'loxone', status: 'degraded' }] };
+  const degraded = await call(h, 'GET', `${API_ROOT}/health`);
+  assert.equal(degraded.statusCode, 200);
+  assert.equal(degraded.json().status, 'degraded');
+
+  health = { ...health, status: 'unhealthy' };
+  assert.equal((await call(h, 'GET', `${API_ROOT}/health`)).statusCode, 503);
+});
+
+test('ready answers a yes/no a supervisor can poll cheaply', async () => {
+  const h = harness();
+  const ready = await call(h, 'GET', `${API_ROOT}/ready`);
+  assert.equal(ready.statusCode, 200);
+  assert.deepEqual(ready.json(), { ready: true, phase: 'ready' });
+
+  // Not ready is a 503 so a caller can branch on the code alone. This is what replaces
+  // blocking 600 seconds on a file lock to guess whether a restart finished.
+  lifecycle.markStarting();
+  const restarting = await call(h, 'GET', `${API_ROOT}/ready`);
+  assert.equal(restarting.statusCode, 503);
+  assert.equal(restarting.json().ready, false);
+  assert.equal(restarting.json().phase, 'starting');
+
+  // A failed start says why, so "slow" and "broken" are distinguishable.
+  lifecycle.markFailed(new Error('port 7090 already in use'));
+  const failed = await call(h, 'GET', `${API_ROOT}/ready`);
+  assert.equal(failed.statusCode, 503);
+  assert.equal(failed.json().phase, 'failed');
+  assert.equal(failed.json().error, 'port 7090 already in use');
+});
+
+test('health and ready need no session and reject writes', async () => {
+  const h = harness();
+  for (const path of ['/health', '/ready']) {
+    for (const method of ['POST', 'PUT', 'DELETE']) {
+      const res = await call(h, method, `${API_ROOT}${path}`, {});
+      assert.notEqual(res.statusCode, 200, `${method} ${path} is not a command`);
+    }
   }
 });

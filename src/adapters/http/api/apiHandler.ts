@@ -27,6 +27,8 @@ import type {
 } from '@/domain/zones/apiTypes';
 import type { ZoneState } from '@/domain/zones/zoneState';
 import { createLogger } from '@/shared/logging/logger';
+import { healthHttpStatus, type HealthReport } from '@/domain/server/health';
+import type { ServerLifecycleSnapshot } from '@/domain/server/lifecycle';
 import { serveCover } from '@/adapters/http/streams/serveCover';
 import { COVER_ART_NOW_PLAYING_SIZE } from '@/shared/coverArt';
 
@@ -100,6 +102,10 @@ export type ApiHandlerDeps = {
    * (sonn-audio/core#251). Only app-originated writes are forwarded.
    */
   setEqualizerBands: (zoneId: number, bands: unknown) => Promise<number[] | null>;
+  /** The current health verdict; see buildHealthReport. */
+  getHealth: () => HealthReport;
+  /** Whether the server is serving yet, for the cheap readiness probe. */
+  getLifecycle: () => ServerLifecycleSnapshot;
   serverVersion: string;
   startedAt: number;
 };
@@ -211,10 +217,21 @@ export class ApiHandler {
     const pathname = full === API_ROOT ? '' : full.slice(API_ROOT.length);
 
     if (pathname === '/health' && method === 'GET') {
-      this.sendJson(res, 200, {
-        status: 'ok',
-        version: this.deps.serverVersion,
-        uptimeSec: Math.round((Date.now() - this.deps.startedAt) / 1000),
+      const report = this.deps.getHealth();
+      this.sendJson(res, healthHttpStatus(report.status), report);
+      return;
+    }
+
+    // Separate from /health on purpose: a supervisor asking "can I stop waiting?" wants a
+    // yes/no it can read from a status code, not a report it has to parse. Kept cheap
+    // enough to poll every second, which is what replaces waiting on a file lock.
+    if (pathname === '/ready' && method === 'GET') {
+      const lifecycle = this.deps.getLifecycle();
+      const ready = lifecycle.phase === 'ready';
+      this.sendJson(res, ready ? 200 : 503, {
+        ready,
+        phase: lifecycle.phase,
+        ...(lifecycle.error ? { error: lifecycle.error } : {}),
       });
       return;
     }

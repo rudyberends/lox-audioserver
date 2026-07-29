@@ -95,6 +95,7 @@ import './contentMetadataHarvestCache.test';
 import './queueBuilderArtistFlatten.test';
 import './nowPlayingMetadata.test';
 import './publicApi.test';
+import './serverHealth.test';
 import './loxoneZoneProjection.test';
 import './adminZoneStates.test';
 import './adminInfo.test';

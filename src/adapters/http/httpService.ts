@@ -63,6 +63,22 @@ import type { MediaServer } from '@/adapters/mediaserver/mediaServer';
 import type { SubsonicApi } from '@/adapters/subsonic/subsonicApi';
 import type { WebdavServer } from '@/adapters/webdav/webdavServer';
 import type { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
+import type { ServerLifecycle } from '@/domain/server/lifecycle';
+import { buildHealthReport } from '@/adapters/http/api/healthReport';
+
+/**
+ * The Loxone link as a health signal, or null when Loxone is not part of this install.
+ *
+ * A server nobody ever pointed a Miniserver at should not report a Loxone check at all —
+ * an absent integration is not a degraded one.
+ */
+function loxoneHealthInputs(
+  audioserver: { paired?: boolean; loxoneEnabled?: boolean } | undefined,
+): { enabled: boolean; paired: boolean } | null {
+  const enabled = audioserver?.loxoneEnabled === true;
+  const paired = audioserver?.paired === true;
+  return enabled || paired ? { enabled, paired } : null;
+}
 
 /**
  * Hosts the public HTTP gateway (admin UI, API stub, music streaming, Sendspin).
@@ -139,6 +155,8 @@ export class HttpService {
       /** Resolves the configured name of the service an audiopath belongs to. */
       resolveServiceLabel: (audiopath: string) => string | null;
       serverVersion: string;
+      /** Whether the server is serving yet, for /health and /ready. */
+      lifecycle: ServerLifecycle;
       browserZoneRegistry: BrowserZoneRegistry;
       streamProxyRoutes: StreamProxyRoute[];
       mediaServer?: MediaServer;
@@ -164,6 +182,24 @@ export class HttpService {
       getOutputDevice: (zoneId) => options.resolveOutputDevice(zoneId),
       getVolumeLimits: (zoneId) => options.resolveVolumeLimits(zoneId),
       getOutputProtocol: (zoneId) => options.resolveOutputProtocol(zoneId),
+      getHealth: () =>
+        buildHealthReport({
+          lifecycle: options.lifecycle.snapshot(),
+          version: options.serverVersion,
+          zones: options.zoneManager.getAllZoneStates().map((state) => {
+            // A zone has one session but a session can encode several profiles, so fold
+            // them into the worst case: any profile failing means this zone is failing.
+            const stats = options.audioManager.getStreamStats(state.id);
+            return {
+              id: state.id,
+              name: state.name,
+              restarts: stats.reduce((worst, entry) => Math.max(worst, entry.restarts), 0),
+              lastError: stats.find((entry) => entry.lastError)?.lastError ?? null,
+            };
+          }),
+          loxone: loxoneHealthInputs(options.configPort.getConfig()?.system?.audioserver),
+        }),
+      getLifecycle: () => options.lifecycle.snapshot(),
       getZoneCover: (zoneId, targetSize) => {
         const session = options.audioManager.getSession(zoneId);
         // Inline bytes win: embedded artwork has no url to hand out.

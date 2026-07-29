@@ -5,6 +5,7 @@ import { createLogger, logManager } from '@/shared/logging/logger';
 import { createContentManager } from '@/adapters/content/contentManager';
 import { createContentAdapter } from '@/adapters/content/ContentAdapter';
 import { toLoxoneAudiopath } from '@/domain/zones/bridgeIdentity';
+import { ServerLifecycle } from '@/domain/server/lifecycle';
 import { MediaServer } from '@/adapters/mediaserver/mediaServer';
 import { SubsonicApi } from '@/adapters/subsonic/subsonicApi';
 import { WebdavServer } from '@/adapters/webdav/webdavServer';
@@ -410,6 +411,7 @@ export function createRuntime(): Runtime {
   let loxoneService: LoxoneHttpService | null = null;
   let browserZoneRegistry: BrowserZoneRegistry | null = null;
   let restartInFlight = false;
+  const lifecycle = new ServerLifecycle();
 
   async function handleReinitialize(): Promise<boolean> {
     const log = createLogger('Server');
@@ -443,12 +445,17 @@ export function createRuntime(): Runtime {
     restartInFlight = true;
     try {
       log.info('soft restart requested');
+      // The HTTP service goes away and comes back, so the server genuinely is not ready
+      // during this window. Saying so is what lets a caller poll /ready instead of
+      // blocking on a lock and hoping ten minutes is long enough.
+      lifecycle.markStarting();
       await stopServices();
       await startServices();
       log.info('soft restart complete');
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      lifecycle.markFailed(error);
       log.error('soft restart failed', { message });
       return false;
     } finally {
@@ -654,6 +661,7 @@ export function createRuntime(): Runtime {
       resolveServiceLabel,
       resolveVolumeLimits,
       serverVersion: readBuildVersion(),
+      lifecycle,
       browserZoneRegistry,
       streamProxyRoutes: [
         tidalStreamService.getProxyRoute(),
@@ -701,6 +709,9 @@ export function createRuntime(): Runtime {
       await enableLoxone(false);
     }
 
+    // Not just a log line: this is what /ready and /health answer from, so a supervisor
+    // can tell a slow start from a failed one instead of grepping `docker ps`.
+    lifecycle.markReady();
     log.info('startup complete');
   }
 
@@ -762,7 +773,17 @@ export function createRuntime(): Runtime {
   }
 
   return {
-    start: startServices,
+    // Wrapped rather than passed straight through so a failed boot is recorded before the
+    // error propagates. Without this, a server that died during startup would still be
+    // reporting `starting` — indistinguishable from one that is merely slow.
+    start: async () => {
+      try {
+        await startServices();
+      } catch (error) {
+        lifecycle.markFailed(error);
+        throw error;
+      }
+    },
     stop: stopServices,
   };
 }

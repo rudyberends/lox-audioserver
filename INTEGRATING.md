@@ -174,9 +174,66 @@ GET /api/v1/zones/{id}/equalizer    →  { "zoneId": 3, "bands": [ …10 ] }
 GET /api/v1/zones/{id}/queue        →  { "items": [ … ], "start": 0, "total": 42, "currentIndex": 3 }
 GET /api/v1/zones/{id}/favorites    →  { "items": [ … ], "start": 0, "total": 8 }
 GET /api/v1/zones/{id}/recents      →  { "items": [ … ], "start": 0, "total": 20 }
-GET /api/v1/health                  →  { "status": "ok", "version": "…", "uptimeSec": 120 }
+GET /api/v1/health                  →  { "status": "ok"|"degraded"|"unhealthy", … }
+GET /api/v1/ready                   →  { "ready": true, "phase": "ready" }   503 when not
 GET /api/v1/zones/{id}/cover        →  the image itself        404 when the zone has none
 ```
+
+### Supervising the server
+
+Two endpoints, because "is it working?" and "can I stop waiting?" are different questions.
+
+`GET /api/v1/ready` is the cheap one — poll it every second if you like:
+
+```json
+{ "ready": true, "phase": "ready" }
+```
+
+`phase` is `starting`, `ready` or `failed`, and the status code carries the same answer:
+**200** when ready, **503** when not. That distinction is the point — a server that is still
+booting and one that died during boot both fail to answer, but only the second needs you.
+A `failed` phase adds `error` with the reason. This is also what to poll after a restart,
+instead of sleeping and hoping.
+
+`GET /api/v1/health` gives a verdict you can act on:
+
+```json
+{
+  "status": "degraded",
+  "version": "4.0.0-beta.17",
+  "uptimeSec": 451,
+  "phase": "ready",
+  "checks": [
+    { "name": "audio", "status": "degraded", "detail": "last playback attempt failed on Study (ffmpeg exited 1)" },
+    { "name": "loxone", "status": "ok" }
+  ]
+}
+```
+
+Three statuses, and the middle one matters most:
+
+| status | code | what to do |
+| --- | --- | --- |
+| `ok` | 200 | nothing |
+| `degraded` | **200** | look, but do not restart — it is still serving |
+| `unhealthy` | 503 | intervene |
+
+`degraded` deliberately stays a 200. The usual reaction to a non-2xx is a restart, and
+restarting a server whose Loxone link is down or whose one zone has a failing encoder fixes
+nothing while interrupting every zone that was fine. If you want a single boolean for a
+`docker healthcheck` or a load balancer, the status code already is one — only `unhealthy`
+fails.
+
+`checks[]` is keyed by a stable `name`, so branch on that rather than parsing `detail`
+(which is prose, aimed at whoever has to fix it, and may change). Healthy checks carry no
+`detail`. A check appears only where it is meaningful: a server no Miniserver has ever
+paired with reports no `loxone` check at all, because an absent integration is not a broken
+one.
+
+`uptimeSec` counts from when the server last became **ready**, not from process start —
+otherwise a restart keeps counting through a window in which nothing was served.
+
+Neither endpoint needs a session.
 
 ### Cover art
 
