@@ -148,6 +148,9 @@ export class HttpService {
       getZoneState: (zoneId) => options.zoneManager.getZoneState(zoneId),
       handleCommand: (zoneId, command, payload) =>
         options.zoneManager.handleCommand(zoneId, command, payload),
+      // 'api' as the type, so anything keying on how playback started can tell this
+      // apart from a Loxone tap or a favourite.
+      playContent: (zoneId, uri) => options.zoneManager.playContent(zoneId, uri, 'api'),
       getOutputDevice: (zoneId) => options.resolveOutputDevice(zoneId),
       getVolumeLimits: (zoneId) => options.resolveVolumeLimits(zoneId),
       getEqualizerBands: (zoneId) => {

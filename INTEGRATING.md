@@ -180,7 +180,7 @@ All return **`204 No Content`** on success. The resulting state arrives over
 `/api/v1/events`.
 
 ```
-POST /api/v1/zones/{id}/play
+POST /api/v1/zones/{id}/play    {"uri": "…"}   or  no body to resume
 POST /api/v1/zones/{id}/pause
 POST /api/v1/zones/{id}/stop
 POST /api/v1/zones/{id}/next
@@ -190,6 +190,25 @@ PUT  /api/v1/zones/{id}/volume     {"volume": 40}   or  {"delta": -5}
 PUT  /api/v1/zones/{id}/position   {"position": 90}
 PUT  /api/v1/zones/{id}/power      {"power": "on"}
 PUT  /api/v1/zones/{id}/equalizer  {"bands": [3,3,2,1,0,0,-1,-2,-2,-3]}
+```
+
+`pause` keeps the zone's place and `stop` gives it up: after `pause`, `play` resumes
+where it was; after `stop` it starts over. Both let the zone's power management switch
+an amplifier off, since by default only `play` counts as active.
+
+Live radio is the exception — it has no position to resume, so `pause` tears the stream
+down and `play` reconnects live. Expect `position` to restart at 0 there rather than
+continue.
+
+`play` without a body resumes whatever the zone already has queued. With `{"uri": "…"}`
+it **starts** something: either a stream URL, or a `source.id` this API gave you
+earlier — that is what makes the id worth storing. Resolving it and rebuilding the queue
+happens server-side, so you do not need to know anything about how content is modelled.
+
+```bash
+# Start a stream, then a track this zone reported playing earlier
+curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"http://example/stream.mp3"}'
+curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"library://track/9"}'
 ```
 
 `volume` takes either an absolute value (`0`–`100`) or a signed `delta`. Use `delta` for
@@ -210,7 +229,7 @@ reflect it — write here when your own UI changes, and read here to pick up cha
 elsewhere. The server does not push your change back to you.
 
 Errors are `4xx` with `{"error":"…"}`: `zone-not-found`, `invalid-json`,
-`invalid-volume`, `invalid-position`, `invalid-power`, `invalid-equalizer-bands`,
+`invalid-volume`, `invalid-position`, `invalid-power`, `invalid-uri`, `invalid-equalizer-bands`,
 `method-not-allowed`.
 
 ## Examples

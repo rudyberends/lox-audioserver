@@ -83,6 +83,7 @@ type Harness = {
   handler: ApiHandler;
   hub: ApiEventHub;
   commands: Array<{ zoneId: number; command: string; payload?: string }>;
+  plays: Array<{ zoneId: number; uri: string }>;
   states: Map<number, ZoneState>;
 };
 
@@ -92,12 +93,16 @@ function harness(): Harness {
   eqBands = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
   const states = new Map<number, ZoneState>([[3, zoneState()]]);
   const commands: Harness['commands'] = [];
+  const plays: Harness['plays'] = [];
   const hub = new ApiEventHub();
   const handler = new ApiHandler({
     eventHub: hub,
     getAllZoneStates: () => [...states.values()],
     getZoneState: (zoneId) => states.get(zoneId) ?? null,
     handleCommand: (zoneId, command, payload) => commands.push({ zoneId, command, payload }),
+    playContent: async (zoneId, uri) => {
+      plays.push({ zoneId, uri });
+    },
     getVolumeLimits: (zoneId) => (zoneId === 3 ? { max: 70, default: 20, step: 2 } : undefined),
     getOutputDevice: (zoneId) =>
       zoneId === 3
@@ -114,7 +119,7 @@ function harness(): Harness {
     serverVersion: '4.0.0-test',
     startedAt: Date.now() - 5000,
   });
-  return { handler, hub, commands, states };
+  return { handler, hub, commands, plays, states };
 }
 
 async function call(h: Harness, method: string, url: string, body?: unknown) {
@@ -582,4 +587,54 @@ test('progress is tracked per zone, so one zone cannot mask another', () => {
   hub.publishZoneChanged(toApiZoneState(zoneState({ id: 7, time: 11 })));
   assert.equal(seen[2].type, 'zone.progress');
   assert.equal(seen[2].id, 7);
+});
+
+// Without a body, /play resumes what is queued — which is all this API could do at
+// first, making it a remote rather than something an automation can trigger.
+
+test('play with a uri starts it, play without one resumes', async () => {
+  const h = harness();
+  const resumed = await call(h, 'POST', `${API_ROOT}/zones/3/play`);
+  assert.equal(resumed.statusCode, 204);
+  assert.equal(h.commands.at(-1)?.command, 'play', 'resume goes to the command engine');
+  assert.equal(h.plays.length, 0, 'and starts nothing new');
+
+  const started = await call(h, 'POST', `${API_ROOT}/zones/3/play`, {
+    uri: 'http://example/stream.mp3',
+  });
+  assert.equal(started.statusCode, 204);
+  assert.deepEqual(h.plays.at(-1), { zoneId: 3, uri: 'http://example/stream.mp3' });
+});
+
+test('play accepts a source.id back, so a client can restart what it saw', async () => {
+  // The zone reports `source.id` as an opaque value; handing it back is how an
+  // integration replays something without knowing our content model.
+  const h = harness();
+  const zone = (await call(h, 'GET', `${API_ROOT}/zones/3`)).json();
+  const id = zone.source.id;
+  assert.ok(id, 'the zone reports an id to hand back');
+
+  const res = await call(h, 'POST', `${API_ROOT}/zones/3/play`, { uri: id });
+  assert.equal(res.statusCode, 204);
+  assert.equal(h.plays.at(-1)?.uri, id);
+});
+
+test('play rejects an empty uri rather than silently resuming', async () => {
+  const h = harness();
+  for (const uri of ['', '   ', 42, null]) {
+    const res = await call(h, 'POST', `${API_ROOT}/zones/3/play`, { uri });
+    assert.equal(res.statusCode, 400, `rejects ${JSON.stringify(uri)}`);
+    assert.equal(res.json().error, 'invalid-uri');
+  }
+  assert.equal(h.plays.length, 0);
+  assert.equal(h.commands.length, 0, 'and does not fall back to resume');
+});
+
+test('the other transport verbs still take no body', async () => {
+  const h = harness();
+  for (const verb of ['pause', 'stop', 'next', 'previous']) {
+    const res = await call(h, 'POST', `${API_ROOT}/zones/3/${verb}`);
+    assert.equal(res.statusCode, 204, verb);
+  }
+  assert.equal(h.plays.length, 0);
 });

@@ -25,6 +25,12 @@ export type ApiHandlerDeps = {
   handleCommand: (zoneId: number, command: string, payload?: string) => void;
   /** Which device a zone's output plays to, when its protocol identifies one. */
   getOutputDevice: (zoneId: number) => ApiOutput['device'] | undefined;
+  /**
+   * Starts something on a zone. `uri` is either a stream URL or a `source.id` this API
+   * handed out earlier; resolving metadata and rebuilding the queue happens downstream,
+   * the same way it does for a Loxone-originated play.
+   */
+  playContent: (zoneId: number, uri: string) => Promise<void>;
   /** What a zone's volume will accept: its cap, its power-on level and its step. */
   getVolumeLimits: (zoneId: number) => ApiVolumeLimits | undefined;
   /** Current equalizer bands for a zone, or null when the zone is unknown. */
@@ -175,6 +181,27 @@ export class ApiHandler {
     };
 
     if (action in simpleCommands && method === 'POST') {
+      // `play` with a body starts something; without one it resumes whatever is
+      // already queued. Everything else takes no body at all.
+      if (action === 'play') {
+        let body: Record<string, unknown>;
+        try {
+          body = await this.readJsonBody(req);
+        } catch {
+          this.sendJson(res, 400, { error: 'invalid-json' });
+          return;
+        }
+        const uri = typeof body.uri === 'string' ? body.uri.trim() : '';
+        if (uri) {
+          await this.deps.playContent(zoneId, uri);
+          res.writeHead(204).end();
+          return;
+        }
+        if (body.uri !== undefined) {
+          this.sendJson(res, 400, { error: 'invalid-uri' });
+          return;
+        }
+      }
       this.deps.handleCommand(zoneId, simpleCommands[action]!);
       res.writeHead(204).end();
       return;
