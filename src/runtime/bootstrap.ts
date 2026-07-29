@@ -609,15 +609,28 @@ export function createRuntime(): Runtime {
 
     // MQTT: pushes zone state to a broker so home automation stops polling us. Taps
     // the same event hub the SSE endpoint uses, so both see identical payloads.
-    mqttPublisher = new MqttPublisher(configPort, apiEventHub, () =>
-      zoneManager.getAllZoneStates().map((state) =>
-        toApiZoneState(state, {
-          device: resolveOutputDevice,
-          outputProtocol: resolveOutputProtocol,
-          serviceLabel: resolveServiceLabel,
-          volumeLimits: resolveVolumeLimits(state.id),
-        }),
-      ),
+    mqttPublisher = new MqttPublisher(
+      configPort,
+      apiEventHub,
+      () =>
+        zoneManager.getAllZoneStates().map((state) =>
+          toApiZoneState(state, {
+            device: resolveOutputDevice,
+            outputProtocol: resolveOutputProtocol,
+            serviceLabel: resolveServiceLabel,
+            volumeLimits: resolveVolumeLimits(state.id),
+          }),
+        ),
+      {
+        // The same command engine the Loxone adapter and /api drive, so "pause zone 3"
+        // has one implementation regardless of which protocol asked for it.
+        handleCommand: (zoneId, command, payload) =>
+          zoneManager.handleCommand(zoneId, command, payload),
+        // 'mqtt' as the origin, so anything keying on how playback started can tell this
+        // apart from a Loxone tap, a favourite or an API call.
+        playContent: (zoneId, uri) => zoneManager.playContent(zoneId, uri, 'mqtt'),
+        hasZone: (zoneId) => Boolean(zoneManager.getZoneState(zoneId)),
+      },
     );
 
     // Subsonic API: exposes the same browsable content (library, radio, bridges)

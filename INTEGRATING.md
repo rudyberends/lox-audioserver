@@ -400,6 +400,81 @@ Errors are `4xx` with `{"error":"…"}`: `zone-not-found`, `invalid-json`,
 `favorite-not-found`, `invalid-members`,
 `method-not-allowed`.
 
+## MQTT
+
+An optional second surface, for setups already built around a broker. It is not a
+replacement for the API above: it carries zone state and the everyday transport controls,
+and nothing else. Browsing, the queue, favourites, recents, the equalizer, grouping, cover
+art and health checks are HTTP only.
+
+Reach for it when a broker is already how your house talks to itself — then MQTT saves you
+writing an HTTP client, and tools like Home Assistant or Node-RED consume it with no code
+at all. Reach for the HTTP API when you want the whole feature set, or when adding a broker
+would be infrastructure you do not otherwise need. Both can run at once, and both report
+the same state: MQTT publishes from the same event source `/api/v1/events` streams from, so
+the two cannot disagree.
+
+Switch it on under **Access** in the admin UI and point it at your broker. The payload is
+the same zone object described above — the API model, not Loxone's field names.
+
+### What it publishes
+
+```
+sonn/server/online              1        (0 when the server dies — this is an MQTT will)
+sonn/zones/3                    {"id":3,"name":"Kitchen","state":"playing",…}
+sonn/zones/3/state              playing
+sonn/zones/3/volume             40
+sonn/zones/3/track/title        Song
+sonn/zones/3/source/name        Apple Music
+sonn/zones/3/output/protocol    sendspin
+```
+
+Two shapes on purpose. The `zones/<id>` topic carries the whole object as JSON. The
+per-field topics carry plain scalars, because a Miniserver or a KNX gateway can subscribe
+to a topic and read a number but cannot parse JSON. Booleans are `1`/`0` for the same
+reason, and a field with no value is published empty rather than dropped — so a display
+clears when playback stops instead of keeping the last track.
+
+Everything is **retained**, so a consumer that connects later sees current state
+immediately instead of waiting for the next change.
+
+`sonn` is the default prefix and is configurable; two servers on one broker need different
+ones. The playing-time counter (`position`) is off by default — it costs a message per
+second per zone — and can be switched on in the same panel.
+
+### Controlling it
+
+Publish to `set/<field>` for a single value, or to `cmd` with JSON when you need more than
+one at once:
+
+```bash
+mosquitto_pub -t 'sonn/zones/3/set/volume' -m '40'      # absolute
+mosquitto_pub -t 'sonn/zones/3/set/volume' -m '+5'      # relative, like a remote
+mosquitto_pub -t 'sonn/zones/3/set/state'  -m 'paused'
+mosquitto_pub -t 'sonn/zones/3/set/next'   -m '1'       # value ignored
+
+mosquitto_pub -t 'sonn/zones/3/cmd' -m '{"power":"on","volume":40}'
+mosquitto_pub -t 'sonn/zones/3/cmd' -m '{"play":"applemusic:track:…"}'
+```
+
+Writable fields: `volume`, `state`, `power`, `position`, `repeat`, `shuffle`, `next`,
+`previous`, `play`. The values are the ones the state topics publish — write `paused`, not
+some separate command word — and booleans accept `1`/`true`/`on`/`yes` and their opposites.
+A message carrying several fields is applied in a sensible order regardless of key order:
+power before volume, so `{"power":"on","volume":40}` does what it looks like.
+
+An invalid value is refused whole rather than applied in part, and an unknown field is
+ignored, so echoing our own state topics back does no harm.
+
+> **Publish commands unretained.** A retained command is replayed to us every time we
+> reconnect, which makes a zone lurch back to it after each restart. The server refuses
+> replayed commands and *deletes* the retained message, so the surprise happens once — but
+> `mosquitto_pub -r` on a command topic is never what you want.
+
+Access is your broker's business: anyone allowed to publish to these topics can control
+the audio, exactly as anyone allowed to read the state topics can watch it. Use your
+broker's own credentials and per-topic ACLs.
+
 ## Examples
 
 ```bash
@@ -438,6 +513,7 @@ rebuilding it. See [Access](README.md#access) for how to enable each of these.
 | Surface | Use it for |
 | --- | --- |
 | `/api` | Reading zone state and controlling playback — start here |
+| MQTT | The same state and transport controls, where a broker already exists. Nothing beyond that |
 | Subsonic (`/rest/*`) | Browsing and streaming the library with existing apps |
 | DLNA / UPnP | Renderers, and discovery by TVs and network speakers |
 | WebDAV (`/dav`) | Adding and organising files in the library |

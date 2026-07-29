@@ -17,6 +17,7 @@ import type { ApiEvent, ApiZoneState } from '@/domain/zones/apiTypes';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { MqttConfig } from '@/domain/config/types';
+import { commandTopicFilters, parseMqttCommand } from '@/domain/server/mqttCommands';
 import {
   availabilityTopic,
   progressMessages,
@@ -48,6 +49,8 @@ export type MqttPublisherStatus = {
   lastError: string | null;
   /** How many messages have been published since connecting, as a sign of life. */
   published: number;
+  /** Whether inbound commands are accepted, i.e. this runtime was built with control. */
+  control: boolean;
 };
 
 export class MqttPublisher {
@@ -62,6 +65,15 @@ export class MqttPublisher {
     private readonly configPort: ConfigPort,
     private readonly eventHub: ApiEventHub,
     private readonly getZones: () => ApiZoneState[],
+    /**
+     * Applies an inbound command. Absent when this runtime only publishes — control is
+     * opt-in at construction so a deployment can be sure nothing off-broker can steer it.
+     */
+    private readonly control?: {
+      handleCommand: (zoneId: number, command: string, payload?: string) => void;
+      playContent: (zoneId: number, uri: string) => Promise<void>;
+      hasZone: (zoneId: number) => boolean;
+    },
   ) {}
 
   private config(): MqttConfig {
@@ -82,6 +94,7 @@ export class MqttPublisher {
       topicPrefix: sanitizeTopicPrefix(cfg.topicPrefix),
       lastError: this.lastError,
       published: this.published,
+      control: Boolean(this.control),
     };
   }
 
@@ -133,7 +146,12 @@ export class MqttPublisher {
       });
       await this.publishSnapshot(prefix, online);
       this.subscribeToEvents(prefix);
-      this.log.info('publishing zone state', { broker: url, topicPrefix: prefix });
+      await this.subscribeToCommands(client, prefix);
+      this.log.info('publishing zone state', {
+        broker: url,
+        topicPrefix: prefix,
+        control: Boolean(this.control),
+      });
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
       this.log.warn('could not reach broker', { broker: url, message: this.lastError });
@@ -188,6 +206,80 @@ export class MqttPublisher {
     }
     // server.ready is per-connection bookkeeping for SSE and means nothing here: this
     // publisher already sends its own snapshot on connect.
+  }
+
+  /**
+   * Listens for commands, when this runtime was built with control.
+   *
+   * Access is the broker's business: anyone allowed to publish here can steer the audio,
+   * exactly as anyone allowed to read the state topics can watch it. That is the normal
+   * MQTT trust model — the broker has its own credentials and per-topic ACLs — and
+   * duplicating it here would only add a second place to get it wrong.
+   */
+  private async subscribeToCommands(client: MqttClient, prefix: string): Promise<void> {
+    if (!this.control) {
+      return;
+    }
+    client.on('message', (topic, payload, packet) => {
+      // Never throw out of a client event handler: an unhandled one takes the process.
+      try {
+        this.applyCommand(prefix, topic, payload.toString('utf8'), packet.retain === true);
+      } catch (error) {
+        this.lastError = error instanceof Error ? error.message : String(error);
+        this.log.warn('command failed', { topic, message: this.lastError });
+      }
+    });
+    for (const filter of commandTopicFilters(prefix)) {
+      await client.subscribeAsync(filter, { qos: 0 });
+    }
+  }
+
+  private applyCommand(prefix: string, topic: string, payload: string, retained: boolean): void {
+    const control = this.control;
+    if (!control) {
+      return;
+    }
+    const result = parseMqttCommand(prefix, topic, payload, retained);
+    if (result.kind === 'ignored') {
+      if (result.reason === 'retained-command') {
+        // Clear it, do not merely skip it: a stored command is replayed on every
+        // reconnect, so ignoring it leaves a zone that lurches back after each restart
+        // with nothing on the broker explaining why. An empty retained payload is how
+        // MQTT deletes one.
+        this.log.warn('clearing retained command; commands must be published unretained', {
+          topic,
+        });
+        void this.client
+          ?.publishAsync(topic, '', { retain: true })
+          .catch(() => undefined);
+      } else {
+        this.log.debug('ignoring message', { topic, reason: result.reason });
+      }
+      return;
+    }
+    if (result.kind === 'error') {
+      this.log.warn('rejected command', { topic, reason: result.reason });
+      return;
+    }
+    if (!control.hasZone(result.zoneId)) {
+      this.log.warn('command for unknown zone', { topic, zoneId: result.zoneId });
+      return;
+    }
+    for (const command of result.commands) {
+      control.handleCommand(command.zoneId, command.command, command.payload);
+    }
+    if (result.play) {
+      // Fire-and-forget: resolving a uri can take a moment and there is nobody to answer.
+      void control.playContent(result.play.zoneId, result.play.uri).catch((error) => {
+        this.lastError = error instanceof Error ? error.message : String(error);
+        this.log.warn('play failed', { topic, message: this.lastError });
+      });
+    }
+    this.log.debug('applied command', {
+      topic,
+      commands: result.commands.length,
+      play: Boolean(result.play),
+    });
   }
 
   private async send(messages: MqttMessage[]): Promise<void> {
