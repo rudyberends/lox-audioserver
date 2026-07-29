@@ -442,19 +442,24 @@ Playback works the same on either: `POST /destinations/{id}/play`, `/pause`, `/v
 rest are the same commands as their `/zones/{id}/…` counterparts, and a destination's id *is*
 its zone id.
 
-**A local destination is a zone.** It appears in `GET /zones` with full state — now-playing,
-`format`, `volumeLimits` — and every zone route works on it: the queue, favourites, recents and
-grouping all answer for a browser tab exactly as they do for a hardware zone. So a client needs
-no separate set of components for local playback; a tab shows up in the room list beside the
-speakers and the code you already wrote drives it.
+**A local destination is not in `GET /zones`.** A zone is a room in a house — everyone may see
+that the kitchen is playing. A browser tab is not a room, so it appears in neither the zone list
+nor the events stream, not even for the browser that registered it. Otherwise every client's
+room list would grow with every tab anyone opened, and one person's phone would sit beside the
+speakers, playable by mistake.
 
-**But only in *your* list.** A configured zone is a room in a house and everyone may see it; a
-local destination is one person's browser and is private to it. Send the `clientId` you were
-given at registration — as an `X-Sonn-Client-Id` header, or `?clientId=` where you cannot set
-one — and you see your own tab plus the configured zones. Send nothing and you see the
-configured zones alone, which is the right answer for a script: it has no browser to play to,
-and a list that grows with every open tab elsewhere is noise. The filter applies to
-`GET /zones`, `GET /destinations` and the events stream alike.
+A tab does not need it there either: the Sendspin socket it already holds to receive audio pushes
+title, artist, album, artwork, playback state and progress as `server/state`. That is the source
+that cannot be out of step with the sound, and reading the same thing twice from two places is
+one time too many.
+
+`GET /destinations` is where a tab finds itself, and it is private: send the `clientId` you were
+given at registration, as an `X-Sonn-Client-Id` header or `?clientId=`, and your own destination
+is listed alongside the configured zones. Send nothing and you get the zones only.
+
+Every zone route still *works* on a local destination — `/zones/{id}/queue`, favourites,
+grouping — because it is a zone underneath. It is only absent from the listings. Drive it through
+`/destinations/{id}/…` and you never need to know that.
 
 `/destinations` exists for the one thing `/zones` cannot express: **registering** a client as
 somewhere audio goes, and telling a zone from a tab (`kind`). Everything after that is a zone.
