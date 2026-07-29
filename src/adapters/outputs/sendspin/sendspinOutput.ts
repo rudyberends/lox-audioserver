@@ -86,6 +86,28 @@ export interface SendspinOutputConfig {
 
 const SENDSPIN_MAX_STATIC_DELAY_MS = 5000;
 
+/**
+ * Lead for a browser client. Generous because a tab's timing is at the mercy of garbage
+ * collection and the event loop, not a real-time scheduler.
+ */
+const BROWSER_ANCHOR_LEAD_MS = 1000;
+
+/** The send lead in milliseconds for a client; see SendspinOutput.resolveAnchorLeadUs. */
+export function resolveAnchorLeadMs(clientId: string): number {
+  const defaultMs = isBrowserClientId(clientId) ? BROWSER_ANCHOR_LEAD_MS : 250;
+  return Math.max(250, Math.min(8000, Math.round(defaultMs)));
+}
+
+/**
+ * Whether a client id belongs to a browser tab.
+ *
+ * The registry mints these as `browser-<zoneId>`, so the prefix is the signal. A dedicated
+ * receiver never carries it.
+ */
+export function isBrowserClientId(clientId: string): boolean {
+  return clientId.trim().toLowerCase().startsWith('browser-');
+}
+
 function normalizeSendspinLatencyMs(value: unknown): number {
   if (value === undefined || value === null || value === '') return 0;
   const num = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
@@ -207,9 +229,9 @@ export class SendspinOutput implements ZoneOutput {
   /** Actual output format of the current ffmpeg pipeline. */
   private activeOutputFormat: SendspinFormat | null = null;
   private activeCodecHeader: string | null = null;
-  private anchorLeadUs = SendspinOutput.resolveAnchorLeadUs();
+  private anchorLeadUs: number;
   // Keep target lead aligned with the configured anchor for low-latency playback.
-  private readonly targetLeadUs = this.anchorLeadUs;
+  private readonly targetLeadUs: number;
   private lastMetadataSignature: string | null = null;
   private lastStreamSignature: string | null = null;
   private pcmRemainder: Buffer | null = null;
@@ -230,6 +252,8 @@ export class SendspinOutput implements ZoneOutput {
     options: SendspinOutputOptions = {},
     private readonly ports: OutputPorts,
   ) {
+    this.anchorLeadUs = SendspinOutput.resolveAnchorLeadUs(config.clientId ?? '');
+    this.targetLeadUs = this.anchorLeadUs;
     this.primary = new SendspinClientSender(
       config.clientId,
       normalizeSendspinLatencyMs(config.latencyMs),
@@ -2432,9 +2456,23 @@ export class SendspinOutput implements ZoneOutput {
     return { codec, sampleRate, channels, bitDepth };
   }
 
-  private static resolveAnchorLeadUs(): number {
-    const defaultMs = 250;
-    const clampedMs = Math.max(250, Math.min(8000, Math.round(defaultMs)));
-    return clampedMs * 1000;
+  /**
+   * How far ahead of the play clock frames are sent.
+   *
+   * 250 ms suits a dedicated receiver — a Pi on ethernet whose scheduler is predictable. A
+   * browser tab is not that: measured against one, jitter reached 194 ms against a 246 ms
+   * lead, leaving 52 ms of margin. One garbage collection or a scheduler hiccup past that and
+   * the frame arrives too late to place, which is what a listener hears as a stutter.
+   *
+   * A browser therefore gets a second of lead. The cost is latency on a play or a seek, which
+   * for local playback in a tab nobody is synchronising against is the cheaper of the two.
+   *
+   * Note this is not the same knob as the client's `latencyMs` static delay, which tells the
+   * *client* to play later. That was already set to 1500 ms for browser zones with a comment
+   * about giving the player a head start — but a client-side delay does nothing for a frame
+   * the server sent too late to begin with.
+   */
+  private static resolveAnchorLeadUs(clientId: string): number {
+    return resolveAnchorLeadMs(clientId) * 1000;
   }
 }

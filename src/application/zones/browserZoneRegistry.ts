@@ -19,9 +19,16 @@ import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 const BROWSER_ZONE_ID_BASE = 9000;
 const BROWSER_ZONE_ID_LIMIT = 9999;
 
-/** Client-side static buffer (ms) pushed to the Sendspin player. Browsers
- *  introduce more jitter than dedicated Sendspin receivers (GC pauses, WS
- *  scheduling, ffmpeg pacing) so we give the player a sizeable head start.
+/**
+ * Client-side static buffer (ms) pushed to the Sendspin player.
+ *
+ * This tells the *client* to play later, which absorbs jitter on its own side. It does
+ * nothing for a frame the server sent too late to place — that needs the server's send lead,
+ * which is separate and set in `sendspinOutput.resolveAnchorLeadUs` (a browser client id gets
+ * a second there rather than the 250 ms a dedicated receiver uses).
+ *
+ * Both exist because browsers introduce jitter a real-time scheduler does not: garbage
+ * collection, event-loop scheduling, and the pacing of the pipe feeding them.
  */
 const BROWSER_SENDSPIN_LATENCY_MS = 1500;
 

@@ -104,6 +104,7 @@ import './loxoneProjectionBoundary.test';
 import './browseRef.test';
 import './libraryProjectionSource.test';
 import './streamFormat.test';
+import './sendspinBrowserLead.test';
 import './mqttCommands.test';
 import './squeezeliteReconnect.test';
 import './loxoneZoneProjection.test';
