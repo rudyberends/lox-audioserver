@@ -51,6 +51,17 @@ export class ApiEventHub {
     this.publish({ type: 'zone.changed', zone });
   }
 
+  /**
+   * Publishes a collection change — the queue, favourites or recents.
+   *
+   * Deliberately not deduplicated the way `publishZoneChanged` is. A zone's state is a value
+   * that can be compared against the last one published; "the queue changed" is an event, and
+   * two identical ones mean it changed twice.
+   */
+  public publishCollectionChanged(event: ApiEvent): void {
+    this.publish(event);
+  }
+
   private publish(event: ApiEvent): void {
     // Iterate a copy: a subscriber that fails and unsubscribes itself must not
     // mutate the set we are walking.

@@ -70,8 +70,10 @@ Two rules explain every choice below:
 - **Commands are plain HTTP.** No handshake, no socket, no correlation ids — a `curl`
   one-liner or a five-line shell script is a first-class client.
 
-Every successful command is followed by a `zone.changed` event. You never have to read
-back after writing.
+Every successful command is followed by an event, so you never have to read back after
+writing: `zone.changed` for anything that alters a zone's state, and `queue.changed`,
+`favorites.changed` or `recents.changed` for the collections — those say *that* something
+changed and leave you to re-read the page you are showing.
 
 ## Zone object
 
@@ -160,6 +162,12 @@ data: {"type":"server.ready","zones":[ … ]}
 data: {"type":"zone.changed","zone":{ … }}
 
 data: {"type":"zone.progress","id":3,"position":44}
+
+data: {"type":"queue.changed","id":3,"size":12}
+
+data: {"type":"favorites.changed","id":3,"count":4}
+
+data: {"type":"recents.changed","id":3}
 ```
 
 `zone.changed` always carries the **complete zone**, never a patch — you never need to
@@ -171,6 +179,15 @@ moved, only the new position is sent. A full zone is ~550 bytes and this fires o
 second per playing zone. Anything else that changes — volume, a new track, a source
 switch — still arrives as a `zone.changed`, so **a client that ignores
 `zone.progress` stays correct**; its progress bar just moves a beat later.
+
+The three collection events carry a **size, not the collection**. A queue is paged and can
+hold thousands of entries, so shipping it on every edit would be the wrong trade — re-read
+`GET /zones/{id}/queue` for the page you are showing. They also fire when *another* client
+makes the change, which is the point: two tabs, or a tab and a Loxone panel, stay in step.
+
+Unlike `zone.changed` these are not deduplicated. "The queue changed" is an event rather than
+a value, so two identical ones mean it changed twice — a reorder keeps the size and still
+reports.
 
 Browser:
 

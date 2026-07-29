@@ -164,7 +164,45 @@ export interface ApiServerReadyEvent {
   zones: ApiZoneState[];
 }
 
-export type ApiEvent = ApiZoneChangedEvent | ApiZoneProgressEvent | ApiServerReadyEvent;
+/**
+ * A zone's queue changed — someone added, removed, reordered or cleared something.
+ *
+ * Carries the size, not the queue. A queue is paged and can hold thousands of entries, so
+ * putting it in an event that fires on every edit would be the wrong trade; re-read
+ * `GET /zones/{id}/queue` for the page you are showing.
+ *
+ * This exists because without it a client cannot know a queue changed at all — including
+ * when *another* client changes it. Our own player worked around that by re-reading after
+ * its own edits, which left a second tab stale indefinitely. The Loxone protocol has had
+ * this event all along (`audio_queue_event`); it simply was not forwarded here.
+ */
+export interface ApiQueueChangedEvent {
+  type: 'queue.changed';
+  id: number;
+  /** How many entries the queue now holds. */
+  size: number;
+}
+
+/** A zone's favourites changed. Carries the count for the same reason the queue does. */
+export interface ApiFavoritesChangedEvent {
+  type: 'favorites.changed';
+  id: number;
+  count: number;
+}
+
+/** A zone played something new, so its recently-played list moved. */
+export interface ApiRecentsChangedEvent {
+  type: 'recents.changed';
+  id: number;
+}
+
+export type ApiEvent =
+  | ApiZoneChangedEvent
+  | ApiZoneProgressEvent
+  | ApiServerReadyEvent
+  | ApiQueueChangedEvent
+  | ApiFavoritesChangedEvent
+  | ApiRecentsChangedEvent;
 
 /**
  * A zone's 10-band equalizer, in dB per ISO band.

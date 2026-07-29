@@ -13,6 +13,7 @@
  * forget to publish — anything that notifies Loxone notifies the API.
  */
 import type { NotifierPort } from '@/ports/NotifierPort';
+import type { ApiEvent } from '@/domain/zones/apiTypes';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import type { ApiVolumeLimits } from '@/domain/zones/apiTypes';
 import {
@@ -36,6 +37,21 @@ export function withApiEvents(
     volumeLimits?: (zoneId: number) => ApiVolumeLimits | undefined;
   } = {},
 ): NotifierPort {
+  /**
+   * Publishes to the hub without letting a failure reach the caller: the public API must
+   * never be able to break Loxone delivery, which is why every publish here is guarded.
+   */
+  const publish = (event: ApiEvent): void => {
+    if (hub.subscriberCount === 0) {
+      return;
+    }
+    try {
+      hub.publishCollectionChanged(event);
+    } catch {
+      /* a subscriber's failure is its own problem; the hub already drops it */
+    }
+  };
+
   return {
     notifyZoneStateChanged: (state) => {
       inner.notifyZoneStateChanged(state);
@@ -53,10 +69,24 @@ export function withApiEvents(
         );
       }
     },
-    notifyQueueUpdated: (zoneId, queueSize) => inner.notifyQueueUpdated(zoneId, queueSize),
-    notifyRoomFavoritesChanged: (zoneId, count) => inner.notifyRoomFavoritesChanged(zoneId, count),
-    notifyRecentlyPlayedChanged: (zoneId, timestamp) =>
-      inner.notifyRecentlyPlayedChanged(zoneId, timestamp),
+    // These three were forwarded to Loxone and dropped here, so a client on our own API
+    // could not tell that a queue, favourite or recents list had changed — including when
+    // another client changed it. The Loxone protocol has carried them all along; the tap
+    // simply passed them through without publishing.
+    notifyQueueUpdated: (zoneId, queueSize) => {
+      inner.notifyQueueUpdated(zoneId, queueSize);
+      publish({ type: 'queue.changed', id: zoneId, size: queueSize });
+    },
+    notifyRoomFavoritesChanged: (zoneId, count) => {
+      inner.notifyRoomFavoritesChanged(zoneId, count);
+      publish({ type: 'favorites.changed', id: zoneId, count });
+    },
+    notifyRecentlyPlayedChanged: (zoneId, timestamp) => {
+      inner.notifyRecentlyPlayedChanged(zoneId, timestamp);
+      // The timestamp is Loxone's own change marker and says nothing a caller can use, so
+      // only the zone travels: re-read the list.
+      publish({ type: 'recents.changed', id: zoneId });
+    },
     notifyRescan: (status, folders, files) => inner.notifyRescan(status, folders, files),
     notifyReloadMusicApp: (action, provider, userId) =>
       inner.notifyReloadMusicApp(action, provider, userId),

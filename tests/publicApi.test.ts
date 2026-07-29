@@ -1408,3 +1408,83 @@ test('a line-in reports the id you can hand straight back, and its configured na
   assert.equal(api.source?.name, 'BeoSound 9000', 'not the MAC');
   assert.equal(api.source?.seekable, false, 'nothing to seek in a live input');
 });
+
+// A queue mutation used to emit nothing at all, so a client could not tell a queue had
+// changed — including when *another* client changed it. Our own player worked around it by
+// re-reading after its own edits, which left a second tab stale indefinitely. The Loxone
+// protocol has carried `audio_queue_event` all along; the API tap forwarded it there and
+// published nothing here.
+
+test('a collection change reaches subscribers on our own API too', () => {
+  const hub = new ApiEventHub();
+  const seen: any[] = [];
+  hub.subscribe((event) => seen.push(event));
+
+  const inner = makeNotifier();
+  const notifier = withApiEvents(inner as unknown as NotifierPort, hub);
+  notifier.notifyQueueUpdated(3, 12);
+  notifier.notifyRoomFavoritesChanged(3, 4);
+  notifier.notifyRecentlyPlayedChanged(3, 1234567890);
+
+  assert.deepEqual(seen, [
+    { type: 'queue.changed', id: 3, size: 12 },
+    { type: 'favorites.changed', id: 3, count: 4 },
+    // The timestamp is Loxone's own change marker and says nothing a caller can use.
+    { type: 'recents.changed', id: 3 },
+  ]);
+});
+
+test('a collection event carries the size, never the collection', () => {
+  // A queue is paged and can hold thousands of entries; putting it in an event that fires on
+  // every edit would be the wrong trade.
+  const hub = new ApiEventHub();
+  const seen: any[] = [];
+  hub.subscribe((event) => seen.push(event));
+  withApiEvents(makeNotifier() as unknown as NotifierPort, hub).notifyQueueUpdated(3, 900);
+  assert.deepEqual(Object.keys(seen[0]).sort(), ['id', 'size', 'type']);
+});
+
+test('Loxone still gets its own event, whatever happens on our side', () => {
+  // The public API must never be able to break Loxone delivery, so the inner notifier is
+  // called first and a subscriber that throws cannot stop it.
+  const hub = new ApiEventHub();
+  hub.subscribe(() => {
+    throw new Error('subscriber is broken');
+  });
+  const inner = makeNotifier();
+  const notifier = withApiEvents(inner as unknown as NotifierPort, hub);
+  notifier.notifyQueueUpdated(3, 1);
+  assert.deepEqual(inner.queue, [{ zoneId: 3, size: 1 }], 'Loxone was told regardless');
+});
+
+test('identical collection events are both delivered', () => {
+  // Unlike zone state, which is a value worth deduplicating, "the queue changed" is an
+  // event: two identical ones mean it changed twice. A reorder keeps the size and must
+  // still be reported.
+  const hub = new ApiEventHub();
+  const seen: any[] = [];
+  hub.subscribe((event) => seen.push(event));
+  const notifier = withApiEvents(makeNotifier() as unknown as NotifierPort, hub);
+  notifier.notifyQueueUpdated(3, 5);
+  notifier.notifyQueueUpdated(3, 5);
+  assert.equal(seen.length, 2);
+});
+
+function makeNotifier() {
+  const queue: Array<{ zoneId: number; size: number }> = [];
+  return {
+    queue,
+    notifyZoneStateChanged: () => {},
+    notifyQueueUpdated: (zoneId: number, size: number) => queue.push({ zoneId, size }),
+    notifyRoomFavoritesChanged: () => {},
+    notifyRecentlyPlayedChanged: () => {},
+    notifyRescan: () => {},
+    notifyReloadMusicApp: () => {},
+    notifyGlobalSearchResult: () => {},
+    notifyGlobalSearchError: () => {},
+    notifyAlertStateChanged: () => {},
+    notifyPlaylistsChanged: () => {},
+    notifyRadiosChanged: () => {},
+    notifyServiceChanged: () => {},
+  };
+}
