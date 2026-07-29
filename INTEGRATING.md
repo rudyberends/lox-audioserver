@@ -3,14 +3,15 @@
 How to read and control sonn core from your own software — a home-automation system, a
 script, a wall display, a plugin.
 
-The API below is the server's own: stable, versionless by design (additive changes only),
+The API below is the server's own: versioned in the path, additive within a version,
 and it speaks its own vocabulary. You do not need to know anything about Loxone to use it,
 and it works whether or not the Loxone integration is enabled.
 
-Base URL: `http://<server>:7090`
+Base URL: `http://<server>:7090/api/v1`
 
 > **Not to be confused with `/admin/api`.** That is the back end of this server's own
-> admin UI: it is UI-shaped, changes freely, and is not a contract. Build your integrations on `/api`.
+> admin UI: it is UI-shaped, changes freely, and is not a contract. Build your integrations on
+> `/api/v1`.
 
 ### Coming from `/admin/api/zones/states`?
 
@@ -31,21 +32,21 @@ our own Admin UI — and the now-playing fields have moved here:
 protocol-neutral `id`. Same value, same guarantee that an idle zone still reports it.
 
 `PUT`/`GET /admin/api/zones/{id}/equalizer` moved too, to
-`/api/zones/{id}/equalizer`. The old path is gone rather than aliased, because nothing
+`/api/v1/zones/{id}/equalizer`. The old path is gone rather than aliased, because nothing
 outside our own Admin UI should have to touch `/admin/api`. The request body is
 unchanged (`{"bands": [ …10 ]}`); the response drops `ok` and `equalizerSettings` —
 a `2xx` already means it worked, and the comma-joined string was only ever there for
 the Loxone app.
 
-And you no longer need to poll: subscribe to `/api/events` and the same data
+And you no longer need to poll: subscribe to `/api/v1/events` and the same data
 arrives on every change.
 
 ## Design
 
 Two rules explain every choice below:
 
-- **Reading state never requires polling.** Subscribe to `/api/events` once and you are
-  told about every change. `GET /api/zones` exists to bootstrap or for one-shot scripts.
+- **Reading state never requires polling.** Subscribe to `/api/v1/events` once and you are
+  told about every change. `GET /api/v1/zones` exists to bootstrap or for one-shot scripts.
 - **Commands are plain HTTP.** No handshake, no socket, no correlation ids — a `curl`
   one-liner or a five-line shell script is a first-class client.
 
@@ -121,7 +122,7 @@ tell "playing something" from "idle".
 ## Events
 
 ```
-GET /api/events        →  text/event-stream
+GET /api/v1/events        →  text/event-stream
 ```
 
 Server-Sent Events. Every message is a JSON object on a `data:` line with a `type`
@@ -141,41 +142,41 @@ correct.
 Browser:
 
 ```js
-new EventSource('http://server:7090/api/events')
+new EventSource('http://server:7090/api/v1/events')
   .onmessage = (e) => console.log(JSON.parse(e.data));
 ```
 
 Shell:
 
 ```bash
-curl -N http://server:7090/api/events
+curl -N http://server:7090/api/v1/events
 ```
 
 ## Reading
 
 ```
-GET /api/zones                   →  { "zones": [ … ] }
-GET /api/zones/{id}              →  { … }              404 zone-not-found
-GET /api/zones/{id}/equalizer    →  { "zoneId": 3, "bands": [ …10 ] }
-GET /api/health                  →  { "status": "ok", "version": "…", "uptimeSec": 120 }
+GET /api/v1/zones                   →  { "zones": [ … ] }
+GET /api/v1/zones/{id}              →  { … }              404 zone-not-found
+GET /api/v1/zones/{id}/equalizer    →  { "zoneId": 3, "bands": [ …10 ] }
+GET /api/v1/health                  →  { "status": "ok", "version": "…", "uptimeSec": 120 }
 ```
 
 ## Commands
 
 All return **`204 No Content`** on success. The resulting state arrives over
-`/api/events`.
+`/api/v1/events`.
 
 ```
-POST /api/zones/{id}/play
-POST /api/zones/{id}/pause
-POST /api/zones/{id}/stop
-POST /api/zones/{id}/next
-POST /api/zones/{id}/previous
+POST /api/v1/zones/{id}/play
+POST /api/v1/zones/{id}/pause
+POST /api/v1/zones/{id}/stop
+POST /api/v1/zones/{id}/next
+POST /api/v1/zones/{id}/previous
 
-PUT  /api/zones/{id}/volume     {"volume": 40}   or  {"delta": -5}
-PUT  /api/zones/{id}/position   {"position": 90}
-PUT  /api/zones/{id}/power      {"power": "on"}
-PUT  /api/zones/{id}/equalizer  {"bands": [3,3,2,1,0,0,-1,-2,-2,-3]}
+PUT  /api/v1/zones/{id}/volume     {"volume": 40}   or  {"delta": -5}
+PUT  /api/v1/zones/{id}/position   {"position": 90}
+PUT  /api/v1/zones/{id}/power      {"power": "on"}
+PUT  /api/v1/zones/{id}/equalizer  {"bands": [3,3,2,1,0,0,-1,-2,-2,-3]}
 ```
 
 `volume` takes either an absolute value (`0`–`100`, clamped) or a signed `delta`. Use
@@ -199,14 +200,14 @@ Errors are `4xx` with `{"error":"…"}`: `zone-not-found`, `invalid-json`,
 
 ```bash
 # What is playing everywhere?
-curl -s http://server:7090/api/zones | jq -r '.zones[] | "\(.name): \(.track.title // "—")"'
+curl -s http://server:7090/api/v1/zones | jq -r '.zones[] | "\(.name): \(.track.title // "—")"'
 
 # Pause the kitchen, then turn it down a notch
-curl -X POST http://server:7090/api/zones/3/pause
-curl -X PUT http://server:7090/api/zones/3/volume -d '{"delta":-5}'
+curl -X POST http://server:7090/api/v1/zones/3/pause
+curl -X PUT http://server:7090/api/v1/zones/3/volume -d '{"delta":-5}'
 
 # Follow every change
-curl -N http://server:7090/api/events
+curl -N http://server:7090/api/v1/events
 ```
 
 ## Notes for integrators
@@ -218,6 +219,11 @@ curl -N http://server:7090/api/events
   surface and does not depend on one.
 - Additive changes (new fields, new `source.kind` values, new event types) are **not**
   breaking. Ignore fields and event `type`s you do not know.
+- **The version is in the path.** Within `v1`, fields are only ever added — nothing is
+  renamed or removed under you. Anything that has to break appears as `v2`, served
+  alongside `v1` rather than replacing it, so you migrate when it suits you. Calling
+  `/api/...` without a version returns `404 api-version-required` and names the prefix
+  to use, rather than failing in some way you have to guess at.
 
 ## Choosing the right surface
 

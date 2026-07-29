@@ -4,6 +4,7 @@ import type { MdnsPort } from '@/ports/MdnsPort';
 import { resolveMdnsHost } from '@/shared/utils/net';
 import { SonnCoreMdnsAdvertiser } from '@/adapters/discovery/sonnCoreMdnsAdvertiser';
 import type { MdnsLifecycleService } from '@/adapters/discovery/mdnsLifecycle';
+import { API_ROOT } from '@/adapters/http/api/apiHandler';
 
 export class SonnCoreMdnsService implements MdnsLifecycleService {
   private readonly advertiser: SonnCoreMdnsAdvertiser;
@@ -30,7 +31,9 @@ export class SonnCoreMdnsService implements MdnsLifecycleService {
       host: resolveMdnsHost(this.config.host, systemIp),
       port: this.config.port,
       txt: {
-        api: '/api',
+        // Versioned, so a client that finds us over mDNS lands on the contract it was
+        // built against rather than on whatever the newest one happens to be.
+        api: API_ROOT,
         linein: '/api/linein',
         linein_register: '/api/linein/bridges/register',
         linein_status: '/api/linein/bridges/{bridge_id}/status',

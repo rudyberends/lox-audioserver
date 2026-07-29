@@ -40,6 +40,19 @@ export type ApiHandlerDeps = {
   startedAt: number;
 };
 
+/**
+ * Where this API lives. Versioned in the path from the start: additive changes are
+ * safe without it, but a field that has to be renamed or removed cannot be, and
+ * discovering that after integrators have shipped is too late to fix cheaply.
+ */
+export const API_ROOT = '/api/v1';
+
+/**
+ * The unversioned prefix this API briefly used during the 4.0 beta. Matched only so a
+ * caller from that period gets told where things went, never served.
+ */
+const LEGACY_ROOT = '/api';
+
 /** How long an idle SSE stream waits before emitting a comment to keep proxies from closing it. */
 const SSE_KEEPALIVE_MS = 25_000;
 
@@ -48,14 +61,25 @@ export class ApiHandler {
 
   constructor(private readonly deps: ApiHandlerDeps) {}
 
-  /** True when this handler owns the path, so the gateway can delegate. */
+  /**
+   * True when this handler owns the path, so the gateway can delegate.
+   *
+   * Claims unversioned `/api/...` too, purely to answer it properly: without that it
+   * would fall through to the static file handler and a caller written against the
+   * beta would get an HTML page instead of an explanation.
+   */
   public static owns(pathname: string): boolean {
-    return pathname === '/api' || pathname.startsWith('/api/');
+    return (
+      pathname === API_ROOT ||
+      pathname.startsWith(`${API_ROOT}/`) ||
+      pathname === LEGACY_ROOT ||
+      pathname.startsWith(`${LEGACY_ROOT}/`)
+    );
   }
 
   public async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
-    const pathname = url.pathname.replace(/\/+$/, '') || '/api';
+    const full = url.pathname.replace(/\/+$/, '') || API_ROOT;
     const method = (req.method ?? 'GET').toUpperCase();
 
     if (method === 'OPTIONS') {
@@ -63,7 +87,24 @@ export class ApiHandler {
       return;
     }
 
-    if (pathname === '/api/health' && method === 'GET') {
+    // A request without the version is answered, not silently 404'd: say where the
+    // API moved rather than leaving the caller guessing. Checked *after* ruling out the
+    // versioned prefix, since `/api/v1/...` also starts with `/api/`.
+    const versioned = full === API_ROOT || full.startsWith(`${API_ROOT}/`);
+    if (!versioned && (full === LEGACY_ROOT || full.startsWith(`${LEGACY_ROOT}/`))) {
+      const suffix = full.slice(LEGACY_ROOT.length);
+      this.sendJson(res, 404, {
+        error: 'api-version-required',
+        message: `This API is versioned. Use ${API_ROOT}${suffix} instead of ${full}.`,
+      });
+      return;
+    }
+
+    // Everything below matches against the path *after* the version, so the version
+    // lives in one place instead of in every comparison.
+    const pathname = full === API_ROOT ? '' : full.slice(API_ROOT.length);
+
+    if (pathname === '/health' && method === 'GET') {
       this.sendJson(res, 200, {
         status: 'ok',
         version: this.deps.serverVersion,
@@ -72,17 +113,17 @@ export class ApiHandler {
       return;
     }
 
-    if (pathname === '/api/events' && method === 'GET') {
+    if (pathname === '/events' && method === 'GET') {
       this.streamEvents(req, res);
       return;
     }
 
-    if (pathname === '/api/zones' && method === 'GET') {
+    if (pathname === '/zones' && method === 'GET') {
       this.sendJson(res, 200, { zones: this.snapshot() });
       return;
     }
 
-    const zoneMatch = /^\/api\/zones\/(\d+)(?:\/([a-z]+))?$/.exec(pathname);
+    const zoneMatch = /^\/zones\/(\d+)(?:\/([a-z]+))?$/.exec(pathname);
     if (zoneMatch) {
       const zoneId = Number(zoneMatch[1]);
       const action = zoneMatch[2];

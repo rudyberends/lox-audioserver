@@ -184,7 +184,7 @@ playback and see what's playing.
 
 ### Your own software
 
-sonn core has its own HTTP API at `/api` for reading zone state and controlling playback, plus a
+sonn core has its own HTTP API at `/api/v1` for reading zone state and controlling playback, plus a
 live event stream so you never have to poll. It speaks its own vocabulary and works with or without
 the Loxone integration. Unlike the rest of this section it needs nothing switched on — it is always
 available. See **[Integrating with sonn core](INTEGRATING.md)**.

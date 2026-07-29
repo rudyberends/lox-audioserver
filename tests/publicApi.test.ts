@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { test } from './testHarness';
-import { ApiHandler } from '../src/adapters/http/api/apiHandler';
+import { ApiHandler, API_ROOT } from '../src/adapters/http/api/apiHandler';
 import { ApiEventHub } from '../src/adapters/http/api/apiEventHub';
 import { withApiEvents } from '../src/adapters/http/api/apiNotifierTap';
 import { toApiZoneState } from '../src/adapters/http/api/zoneProjection';
@@ -206,7 +206,7 @@ test('projection surfaces the sync group with the leader first', () => {
 
 test('GET /api/zones returns the projected snapshot', async () => {
   const h = harness();
-  const res = await call(h, 'GET', '/api/zones');
+  const res = await call(h, 'GET', `${API_ROOT}/zones`);
   assert.equal(res.statusCode, 200);
   assert.equal(res.json().zones.length, 1);
   assert.equal(res.json().zones[0].name, 'Kitchen');
@@ -214,7 +214,7 @@ test('GET /api/zones returns the projected snapshot', async () => {
 
 test('GET /api/zones/{id} 404s for an unknown zone', async () => {
   const h = harness();
-  const res = await call(h, 'GET', '/api/zones/99');
+  const res = await call(h, 'GET', `${API_ROOT}/zones/99`);
   assert.equal(res.statusCode, 404);
   assert.equal(res.json().error, 'zone-not-found');
 });
@@ -228,7 +228,7 @@ test('transport verbs map onto the shared zone command engine', async () => {
     ['next', 'queueplus'],
     ['previous', 'queueminus'],
   ] as Array<[string, string]>) {
-    const res = await call(h, 'POST', `/api/zones/3/${route}`);
+    const res = await call(h, 'POST', `${API_ROOT}/zones/3/${route}`);
     assert.equal(res.statusCode, 204, `${route} should return 204`);
     assert.equal(h.commands.at(-1)?.command, expected);
     assert.equal(h.commands.at(-1)?.zoneId, 3);
@@ -237,46 +237,46 @@ test('transport verbs map onto the shared zone command engine', async () => {
 
 test('volume accepts an absolute value and a signed delta', async () => {
   const h = harness();
-  await call(h, 'PUT', '/api/zones/3/volume', { volume: 55 });
+  await call(h, 'PUT', `${API_ROOT}/zones/3/volume`, { volume: 55 });
   assert.deepEqual(h.commands.at(-1), { zoneId: 3, command: 'volume', payload: '55' });
 
   // Relative stepping is how every physical remote works; a read-then-write
   // client would race with itself.
-  await call(h, 'PUT', '/api/zones/3/volume', { delta: -5 });
+  await call(h, 'PUT', `${API_ROOT}/zones/3/volume`, { delta: -5 });
   assert.equal(h.commands.at(-1)?.payload, '-5');
-  await call(h, 'PUT', '/api/zones/3/volume', { delta: 5 });
+  await call(h, 'PUT', `${API_ROOT}/zones/3/volume`, { delta: 5 });
   assert.equal(h.commands.at(-1)?.payload, '+5');
 });
 
 test('volume clamps to the documented 0-100 range', async () => {
   const h = harness();
-  await call(h, 'PUT', '/api/zones/3/volume', { volume: 500 });
+  await call(h, 'PUT', `${API_ROOT}/zones/3/volume`, { volume: 500 });
   assert.equal(h.commands.at(-1)?.payload, '100');
-  await call(h, 'PUT', '/api/zones/3/volume', { volume: -20 });
+  await call(h, 'PUT', `${API_ROOT}/zones/3/volume`, { volume: -20 });
   assert.equal(h.commands.at(-1)?.payload, '0');
 });
 
 test('malformed command bodies are rejected without reaching the engine', async () => {
   const h = harness();
   for (const body of [{ volume: 'loud' }, {}]) {
-    const res = await call(h, 'PUT', '/api/zones/3/volume', body);
+    const res = await call(h, 'PUT', `${API_ROOT}/zones/3/volume`, body);
     assert.equal(res.statusCode, 400);
   }
-  const bad = await call(h, 'PUT', '/api/zones/3/power', { power: 'maybe' });
+  const bad = await call(h, 'PUT', `${API_ROOT}/zones/3/power`, { power: 'maybe' });
   assert.equal(bad.statusCode, 400);
   assert.equal(h.commands.length, 0, 'no invalid request may reach the zone engine');
 });
 
 test('a wrong method is a 405, not a silent success', async () => {
   const h = harness();
-  const res = await call(h, 'GET', '/api/zones/3/volume');
+  const res = await call(h, 'GET', `${API_ROOT}/zones/3/volume`);
   assert.equal(res.statusCode, 405);
   assert.equal(h.commands.length, 0);
 });
 
 test('GET /api/health reports status, version and uptime', async () => {
   const h = harness();
-  const res = await call(h, 'GET', '/api/health');
+  const res = await call(h, 'GET', `${API_ROOT}/health`);
   assert.equal(res.statusCode, 200);
   assert.equal(res.json().status, 'ok');
   assert.equal(res.json().version, '4.0.0-test');
@@ -287,7 +287,7 @@ test('the events stream opens with a full snapshot so clients render immediately
   const h = harness();
   const res = new FakeResponse();
   await h.handler.handle(
-    makeRequest('GET', '/api/events'),
+    makeRequest('GET', `${API_ROOT}/events`),
     res as unknown as ServerResponse,
   );
   assert.equal(res.statusCode, 200);
@@ -301,7 +301,7 @@ test('the events stream opens with a full snapshot so clients render immediately
 test('a zone change reaches the stream as a full zone, never a patch', async () => {
   const h = harness();
   const res = new FakeResponse();
-  await h.handler.handle(makeRequest('GET', '/api/events'), res as unknown as ServerResponse);
+  await h.handler.handle(makeRequest('GET', `${API_ROOT}/events`), res as unknown as ServerResponse);
   res.body = '';
 
   h.hub.publishZoneChanged(toApiZoneState(zoneState({ title: 'Next song' })));
@@ -316,7 +316,7 @@ test('a zone change reaches the stream as a full zone, never a patch', async () 
 
 test('closing a stream unsubscribes it', async () => {
   const h = harness();
-  const req = makeRequest('GET', '/api/events');
+  const req = makeRequest('GET', `${API_ROOT}/events`);
   const res = new FakeResponse();
   await h.handler.handle(req, res as unknown as ServerResponse);
   assert.equal(h.hub.subscriberCount, 1);
@@ -380,18 +380,18 @@ test('a failing API subscriber cannot break Loxone delivery', () => {
 
 test('equalizer bands round-trip for a configured zone', async () => {
   const h = harness();
-  const before = await call(h, 'GET', '/api/zones/3/equalizer');
+  const before = await call(h, 'GET', `${API_ROOT}/zones/3/equalizer`);
   assert.equal(before.statusCode, 200);
   assert.deepEqual(before.json().bands, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
   // The exact body the plugin sends.
-  const put = await call(h, 'PUT', '/api/zones/3/equalizer', {
+  const put = await call(h, 'PUT', `${API_ROOT}/zones/3/equalizer`, {
     bands: [6, 6, 6, 6, 6, 6, 6, 0, -2, 2],
   });
   assert.equal(put.statusCode, 200);
   assert.deepEqual(put.json().bands, [6, 6, 6, 6, 6, 6, 6, 0, -2, 2]);
 
-  const after = await call(h, 'GET', '/api/zones/3/equalizer');
+  const after = await call(h, 'GET', `${API_ROOT}/zones/3/equalizer`);
   assert.deepEqual(after.json().bands, [6, 6, 6, 6, 6, 6, 6, 0, -2, 2]);
 });
 
@@ -400,7 +400,7 @@ test('equalizer is readable without live playback state', async () => {
   // currently streaming — an idle zone still has an equalizer to configure.
   const h = harness();
   h.states.clear();
-  const res = await call(h, 'GET', '/api/zones/3/equalizer');
+  const res = await call(h, 'GET', `${API_ROOT}/zones/3/equalizer`);
   assert.equal(res.statusCode, 200);
   assert.equal(res.json().zoneId, 3);
 });
@@ -408,19 +408,19 @@ test('equalizer is readable without live playback state', async () => {
 test('equalizer rejects a band array that is not ten values', async () => {
   const h = harness();
   for (const bands of [[1, 2], new Array(11).fill(0), 'loud', null]) {
-    const res = await call(h, 'PUT', '/api/zones/3/equalizer', { bands });
+    const res = await call(h, 'PUT', `${API_ROOT}/zones/3/equalizer`, { bands });
     assert.equal(res.statusCode, 400, `rejects ${JSON.stringify(bands)}`);
     assert.equal(res.json().error, 'invalid-equalizer-bands');
   }
   // And nothing was applied.
-  const after = await call(h, 'GET', '/api/zones/3/equalizer');
+  const after = await call(h, 'GET', `${API_ROOT}/zones/3/equalizer`);
   assert.deepEqual(after.json().bands, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 });
 
 test('equalizer 404s an unknown zone and 405s a wrong method', async () => {
   const h = harness();
-  assert.equal((await call(h, 'GET', '/api/zones/99/equalizer')).statusCode, 404);
-  assert.equal((await call(h, 'POST', '/api/zones/3/equalizer')).statusCode, 405);
+  assert.equal((await call(h, 'GET', `${API_ROOT}/zones/99/equalizer`)).statusCode, 404);
+  assert.equal((await call(h, 'POST', `${API_ROOT}/zones/3/equalizer`)).statusCode, 405);
 });
 
 // A caller mapping its own devices onto zones needs the device identity from the same
@@ -429,7 +429,7 @@ test('equalizer 404s an unknown zone and 405s a wrong method', async () => {
 
 test('a zone reports which device its output plays to', async () => {
   const h = harness();
-  const zone = (await call(h, 'GET', '/api/zones/3')).json();
+  const zone = (await call(h, 'GET', `${API_ROOT}/zones/3`)).json();
   assert.deepEqual(zone.output, {
     protocol: 'sendspin',
     device: { id: '02:8C:54:A9:DC:AC', name: 'Test1', connected: true },
@@ -439,7 +439,7 @@ test('a zone reports which device its output plays to', async () => {
 test('device identity is reported on an idle zone too', async () => {
   const h = harness();
   h.states.set(3, zoneState({ mode: 'stop', title: '', artist: '', album: '', audiopath: '' }));
-  const zone = (await call(h, 'GET', '/api/zones/3')).json();
+  const zone = (await call(h, 'GET', `${API_ROOT}/zones/3`)).json();
   assert.equal(zone.state, 'stopped');
   assert.equal(zone.track, null, 'nothing playing');
   assert.equal(zone.output?.device?.id, '02:8C:54:A9:DC:AC', 'yet the device is known');
@@ -450,8 +450,51 @@ test('an event describes a zone exactly as a read does', async () => {
   // disappear depending on which path it last heard from.
   const h = harness();
   const res = new FakeResponse();
-  await h.handler.handle(makeRequest('GET', '/api/events'), res as unknown as ServerResponse);
+  await h.handler.handle(makeRequest('GET', `${API_ROOT}/events`), res as unknown as ServerResponse);
   const ready = JSON.parse(res.body.replace(/^data: /, '').trim());
-  const read = (await call(h, 'GET', '/api/zones/3')).json();
+  const read = (await call(h, 'GET', `${API_ROOT}/zones/3`)).json();
   assert.deepEqual(ready.zones[0], read, 'snapshot and read agree');
+});
+
+// The path carries the version. Additive changes are safe without one, but a field
+// that has to be renamed cannot be — and by the time that is clear, integrators have
+// shipped. These pin the version so it cannot be dropped back out by accident.
+
+test('the API is served under a versioned path', async () => {
+  const h = harness();
+  assert.equal(API_ROOT, '/api/v1');
+  assert.equal((await call(h, 'GET', `${API_ROOT}/health`)).statusCode, 200);
+  assert.equal((await call(h, 'GET', `${API_ROOT}/zones`)).statusCode, 200);
+  assert.equal((await call(h, 'GET', `${API_ROOT}/zones/3`)).statusCode, 200);
+});
+
+test('an unversioned request is told where the API went', async () => {
+  // It would otherwise fall through to the static file handler and answer a caller
+  // written against the beta with an HTML page.
+  const h = harness();
+  for (const path of ['/api', '/api/zones', '/api/health', '/api/zones/3/volume']) {
+    const res = await call(h, 'GET', path);
+    assert.equal(res.statusCode, 404, `${path} is refused`);
+    assert.equal(res.json().error, 'api-version-required');
+    assert.ok(
+      String(res.json().message).includes(API_ROOT),
+      'and says which prefix to use instead',
+    );
+  }
+});
+
+test('the versioned prefix is matched before the unversioned one', async () => {
+  // `/api/v1/zones` also starts with `/api/`, so checking the legacy prefix first
+  // would swallow every real request.
+  const h = harness();
+  const res = await call(h, 'GET', `${API_ROOT}/zones`);
+  assert.equal(res.statusCode, 200);
+  assert.ok(Array.isArray(res.json().zones));
+});
+
+test('an unknown path under the version is a plain not-found', async () => {
+  const h = harness();
+  const res = await call(h, 'GET', `${API_ROOT}/nope`);
+  assert.equal(res.statusCode, 404);
+  assert.equal(res.json().error, 'not-found', 'not the version message');
 });
