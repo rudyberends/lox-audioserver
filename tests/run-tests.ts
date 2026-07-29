@@ -97,6 +97,7 @@ import './nowPlayingMetadata.test';
 import './publicApi.test';
 import './serverHealth.test';
 import './mqttTopics.test';
+import './contentItemKind.test';
 import './mqttCommands.test';
 import './squeezeliteReconnect.test';
 import './loxoneZoneProjection.test';

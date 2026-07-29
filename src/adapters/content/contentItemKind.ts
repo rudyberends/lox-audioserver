@@ -36,13 +36,18 @@ export function resolveItemKind(item: ContentFolderItem): ContentItemKind {
   if (item.kind) {
     return item.kind;
   }
-  // A playable file is a track whatever the tag says: the local library tags tracks
-  // by storage ('sd'/'nas'), so the tag must not win here.
-  if (item.type === FILE_TYPE_TRACK && item.audiopath) {
-    return 'track';
-  }
   const tag = item.tag?.trim().toLowerCase();
   const mapped = tag ? TAG_TO_KIND[tag] : undefined;
+  // A playable file is a track when its tag says nothing about what it is: the local
+  // library tags tracks by storage ('sd'/'nas'), so that must not decide the kind.
+  //
+  // It must not override a tag that *does* name a kind, though. Radio stations are
+  // playable files tagged 'radio', and letting the file check win made every station
+  // indistinguishable from a track at every consumer — which also left `kind: 'radio'`
+  // unreachable in practice, since no provider sets it explicitly.
+  if (item.type === FILE_TYPE_TRACK && item.audiopath && (!mapped || mapped === 'folder')) {
+    return 'track';
+  }
   if (mapped) {
     return mapped;
   }

@@ -465,7 +465,12 @@ export function isTrackItem(item: ContentFolderItem): boolean {
   // Playable here means both: something this server can stream, and something a
   // control point should render as a track rather than browse into. An album
   // carries an audiopath too — "play the whole thing" — so the kind has to agree.
-  return resolveItemKind(item) === 'track' && !!item.audiopath;
+  //
+  // A radio station is its own kind but is playable in exactly this sense: there is
+  // nothing inside it to browse. Kept in step with `isContainerKind`, which excludes
+  // the same set.
+  const kind = resolveItemKind(item);
+  return (kind === 'track' || kind === 'radio' || kind === 'episode') && !!item.audiopath;
 }
 
 function coverFor(item: ContentFolderItem, baseUrl: string): string | null {
