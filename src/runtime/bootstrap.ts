@@ -174,12 +174,26 @@ export function createRuntime(): Runtime {
     return match?.label ?? null;
   };
 
+  /**
+   * The configured name of a line-in. `state.sourceName` holds the server's MAC for these,
+   * which is what the Loxone clients expect and useless to anyone else.
+   */
+  const resolveInputLabel = (inputId: string): string | null => {
+    const inputs = configPort.getConfig()?.inputs?.lineIn?.inputs ?? [];
+    const match = inputs.find(
+      (entry) => typeof entry?.id === 'string' && entry.id.trim() === inputId,
+    );
+    const name = typeof match?.name === 'string' ? match.name.trim() : '';
+    return name || null;
+  };
+
   const apiEventHub = new ApiEventHub();
   const ports = createRuntimePorts({
     notifier: withApiEvents(new LoxoneNotifierAdapter(loxoneNotifier), apiEventHub, {
       device: resolveOutputDevice,
       outputProtocol: resolveOutputProtocol,
       serviceLabel: resolveServiceLabel,
+      inputLabel: resolveInputLabel,
       volumeLimits: resolveVolumeLimits,
     }),
   });
@@ -618,6 +632,7 @@ export function createRuntime(): Runtime {
             device: resolveOutputDevice,
             outputProtocol: resolveOutputProtocol,
             serviceLabel: resolveServiceLabel,
+            inputLabel: resolveInputLabel,
             volumeLimits: resolveVolumeLimits(state.id),
           }),
         ),
@@ -689,6 +704,7 @@ export function createRuntime(): Runtime {
       resolveOutputProtocol,
       resolveServiceLabel,
       resolveVolumeLimits,
+      resolveInputLabel,
       serverVersion: readBuildVersion(),
       lifecycle,
       browserZoneRegistry,

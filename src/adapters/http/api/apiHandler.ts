@@ -17,6 +17,7 @@ import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
 import type {
   ApiAlertKind,
+  ApiInput,
   ApiFavorite,
   ApiGroupResult,
   ApiFavorites,
@@ -103,6 +104,8 @@ export type ApiHandlerDeps = {
   getOutputProtocol: (zoneId: number) => string | null;
   /** The configured name of the service an audiopath belongs to, for `source.name`. */
   getServiceLabel: (audiopath: string) => string | null;
+  /** The configured name of a line-in, so `source.name` is not the server's MAC. */
+  getInputLabel: (inputId: string) => string | null;
   /** What a zone's volume will accept: its cap, its power-on level and its step. */
   getVolumeLimits: (zoneId: number) => ApiVolumeLimits | undefined;
   /** Current equalizer bands for a zone, or null when the zone is unknown. */
@@ -116,6 +119,15 @@ export type ApiHandlerDeps = {
    * (sonn-audio/core#251). Only app-originated writes are forwarded.
    */
   setEqualizerBands: (zoneId: number, bands: unknown) => Promise<number[] | null>;
+  /** Every configured input, in configuration order. */
+  getInputs: () => ApiInput[];
+  /**
+   * Switches a zone to an input. False when no input has that id.
+   *
+   * There is no counterpart: leaving an input means selecting something else, which the
+   * ordinary play/favourite paths already do.
+   */
+  selectInput: (zoneId: number, inputId: string) => boolean;
   /** The current health verdict; see buildHealthReport. */
   getHealth: () => HealthReport;
   /** Whether the server is serving yet, for the cheap readiness probe. */
@@ -264,6 +276,13 @@ export class ApiHandler {
       return;
     }
 
+    if (pathname === '/inputs' && method === 'GET') {
+      // Server-level, not per zone: an input is selectable from any zone, so hanging the
+      // list off one would imply each has its own.
+      this.sendJson(res, 200, { inputs: this.deps.getInputs() });
+      return;
+    }
+
     if (pathname === '/zones' && method === 'GET') {
       this.sendJson(res, 200, { zones: this.snapshot() });
       return;
@@ -302,6 +321,10 @@ export class ApiHandler {
       }
       if (action === 'alert') {
         await this.handleAlert(req, res, method, zoneId);
+        return;
+      }
+      if (action === 'input') {
+        await this.handleInput(req, res, method, zoneId);
         return;
       }
       await this.handleZoneRoute(req, res, method, zoneId, action);
@@ -647,6 +670,54 @@ export class ApiHandler {
   }
 
   /**
+   * Switches a zone to one of the configured inputs.
+   *
+   * `input` is the id from `GET /api/v1/inputs` — the same string `source.id` reports back
+   * once the zone is on it, which is what closes the loop: until now you could see a zone
+   * was on a line-in but not put it there.
+   *
+   * There is no counterpart for leaving one. Selecting something else is how you leave —
+   * a `play`, a favourite, another input — and the server tears the old source down as
+   * part of that. A `DELETE` would be a third way to express it with "and what plays now?"
+   * left unanswered.
+   */
+  private async handleInput(
+    req: IncomingMessage,
+    res: ServerResponse,
+    method: string,
+    zoneId: number,
+  ): Promise<void> {
+    if (method !== 'PUT') {
+      this.sendJson(res, 405, { error: 'method-not-allowed' });
+      return;
+    }
+    let body: Record<string, unknown>;
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'invalid-json' });
+      return;
+    }
+    const inputId = typeof body.input === 'string' ? body.input.trim() : '';
+    if (!inputId) {
+      this.sendJson(res, 400, { error: 'invalid-input' });
+      return;
+    }
+    if (!this.deps.getZoneState(zoneId)) {
+      this.sendJson(res, 404, { error: 'zone-not-found' });
+      return;
+    }
+    // Distinguished from an unknown zone on purpose: "you named an input that is not
+    // configured" is a different mistake from "that zone does not exist", and a caller
+    // reading ids out of GET /inputs deserves to be told which.
+    if (!this.deps.selectInput(zoneId, inputId)) {
+      this.sendJson(res, 404, { error: 'input-not-found' });
+      return;
+    }
+    res.writeHead(204).end();
+  }
+
+  /**
    * Plays a sound or a spoken message over whatever a zone was doing.
    *
    * A resource rather than a `play` with a special uri, because an alert is an interruption
@@ -968,6 +1039,7 @@ export class ApiHandler {
       device: (zoneId) => this.deps.getOutputDevice(zoneId),
       outputProtocol: (zoneId) => this.deps.getOutputProtocol(zoneId),
       serviceLabel: (audiopath) => this.deps.getServiceLabel(audiopath),
+      inputLabel: (inputId) => this.deps.getInputLabel(inputId),
       volumeLimits: this.deps.getVolumeLimits(state.id),
     });
   }

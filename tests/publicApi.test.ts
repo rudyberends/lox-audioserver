@@ -102,6 +102,7 @@ let libOps: string[] = [];
 // What the cover route asked for, so the tests can check the size hint it passed on.
 let coverAsks: Array<{ zoneId: number; targetSize: number }> = [];
 let zoneCover: { data: Buffer; mime?: string } | string | null = null;
+let inputSelections: Array<{ zoneId: number; inputId: string }> = [];
 let alertCalls: Array<Record<string, unknown>> = [];
 let alertResult: { success: boolean; action: 'on' | 'off'; reason?: string } | null = null;
 let lifecycle = new ServerLifecycle();
@@ -121,6 +122,7 @@ function harness(): Harness {
   libOps = [];
   coverAsks = [];
   zoneCover = { data: Buffer.from('jpegbytes'), mime: 'image/png' };
+  inputSelections = [];
   alertCalls = [];
   alertResult = { success: true, action: 'on' };
   lifecycle = new ServerLifecycle();
@@ -220,6 +222,16 @@ function harness(): Harness {
     queueUndo: () => {
       queueOps.push('undo');
     },
+    getInputs: () => [
+      { id: 'linein-a', name: 'BeoSound 9000', icon: 'cd-player', controllable: true, reportsMetadata: true },
+      { id: 'linein-b', name: 'Turntable', icon: 'turntable', controllable: false, reportsMetadata: false },
+    ],
+    selectInput: (zoneId, inputId) => {
+      if (inputId !== 'linein-a' && inputId !== 'linein-b') return false;
+      inputSelections.push({ zoneId, inputId });
+      return true;
+    },
+    getInputLabel: (inputId) => (inputId === 'linein-a' ? 'BeoSound 9000' : null),
     playAlert: async (request) => {
       alertCalls.push(request as unknown as Record<string, unknown>);
       return request.zoneId === 3 ? alertResult : null;
@@ -1317,4 +1329,82 @@ test('an unknown zone and a wrong method are refused', async () => {
     const res = await call(h, method, `${API_ROOT}/zones/3/alert`, { kind: 'bell' });
     assert.equal(res.statusCode, 405, method);
   }
+});
+
+// You could already see that a zone was on a line-in but not put it there. Inputs are
+// server-level — the same socket is selectable from every zone — so they are listed at the
+// top level rather than under one zone, which would imply each has its own.
+
+test('the configured inputs are listed, with what a client needs to render them', async () => {
+  const h = harness();
+  const res = await call(h, 'GET', `${API_ROOT}/inputs`);
+  assert.equal(res.statusCode, 200);
+  const inputs = res.json().inputs;
+  assert.equal(inputs.length, 2);
+  // The icon is a name, not the internal Loxone number: a client would otherwise have to
+  // carry that table to render anything.
+  assert.equal(inputs[0].icon, 'cd-player');
+  assert.equal(inputs[1].icon, 'turntable');
+  // controllable says whether transport commands reach the device at all — false for a
+  // turntable, where selecting it is the whole interaction.
+  assert.equal(inputs[0].controllable, true);
+  assert.equal(inputs[1].controllable, false);
+});
+
+test('a zone can be switched to an input', async () => {
+  const h = harness();
+  const res = await call(h, 'PUT', `${API_ROOT}/zones/3/input`, { input: 'linein-a' });
+  assert.equal(res.statusCode, 204);
+  assert.deepEqual(inputSelections, [{ zoneId: 3, inputId: 'linein-a' }]);
+});
+
+test('an unknown input is a different failure from an unknown zone', async () => {
+  // A caller reading ids out of GET /inputs deserves to be told which of the two it got
+  // wrong, rather than one 404 covering both.
+  const h = harness();
+  const badInput = await call(h, 'PUT', `${API_ROOT}/zones/3/input`, { input: 'linein-z' });
+  assert.equal(badInput.statusCode, 404);
+  assert.equal(badInput.json().error, 'input-not-found');
+
+  const badZone = await call(h, 'PUT', `${API_ROOT}/zones/404/input`, { input: 'linein-a' });
+  assert.equal(badZone.statusCode, 404);
+  assert.equal(badZone.json().error, 'zone-not-found');
+  assert.equal(inputSelections.length, 0, 'neither reached the service');
+});
+
+test('the input must actually be named', async () => {
+  const h = harness();
+  for (const body of [{}, { input: '' }, { input: '   ' }, { input: 7 }]) {
+    const res = await call(h, 'PUT', `${API_ROOT}/zones/3/input`, body);
+    assert.equal(res.statusCode, 400, JSON.stringify(body));
+    assert.equal(res.json().error, 'invalid-input');
+  }
+});
+
+test('there is no verb for leaving an input', async () => {
+  // Selecting something else is how you leave, and the server tears the old source down as
+  // part of that. A DELETE would be a third way to say it with "and what plays now?" open.
+  const h = harness();
+  for (const method of ['GET', 'POST', 'DELETE', 'PATCH']) {
+    const res = await call(h, method, `${API_ROOT}/zones/3/input`, { input: 'linein-a' });
+    assert.equal(res.statusCode, 405, method);
+  }
+});
+
+test('a line-in reports the id you can hand straight back, and its configured name', async () => {
+  // The stored audiopath is `linein:<id>` and sourceName holds the server's MAC — neither
+  // is usable by a caller, so what round-trips is the input id and the configured name.
+  const api = toApiZoneState(
+    zoneState({
+      audiopath: 'linein:linein-a',
+      audiotype: AudioType.LineIn,
+      sourceName: '000C290E5497',
+      duration: 0,
+    }),
+    { inputLabel: (id) => (id === 'linein-a' ? 'BeoSound 9000' : null) },
+  );
+  assert.equal(api.source?.kind, 'linein');
+  assert.equal(api.source?.id, 'linein-a', 'no prefix; this is what PUT /input takes');
+  assert.equal(api.source?.name, 'BeoSound 9000', 'not the MAC');
+  assert.equal(api.source?.seekable, false, 'nothing to seek in a live input');
 });

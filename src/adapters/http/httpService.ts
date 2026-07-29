@@ -16,6 +16,7 @@ import { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandl
 import { ApiHandler } from '@/adapters/http/api/apiHandler';
 import { toApiQueue } from '@/adapters/http/api/queueProjection';
 import { toApiFavorites, toApiRecents } from '@/adapters/http/api/libraryProjection';
+import { toApiInput } from '@/adapters/http/api/inputProjection';
 import { getZoneEqualizerBands } from '@/domain/zones/equalizer';
 import { resizeCoverUrl, resizeTuneInCoverUrl } from '@/shared/coverArt';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
@@ -158,6 +159,8 @@ export class HttpService {
       resolveOutputProtocol: (zoneId: number) => string | null;
       /** Resolves the configured name of the service an audiopath belongs to. */
       resolveServiceLabel: (audiopath: string) => string | null;
+      /** Names a configured line-in for `source.name`; see InputLabelLookup. */
+      resolveInputLabel: (inputId: string) => string | null;
       serverVersion: string;
       /** Whether the server is serving yet, for /health and /ready. */
       lifecycle: ServerLifecycle;
@@ -205,6 +208,36 @@ export class HttpService {
           loxone: loxoneHealthInputs(options.configPort.getConfig()?.system?.audioserver),
         }),
       getLifecycle: () => options.lifecycle.snapshot(),
+      getInputs: () => {
+        // listLineInInputs resolves ids/names/icons; controllable and metadataEnabled are
+        // config flags it does not carry, so they are joined back on by id here.
+        const configured = options.configPort.getConfig()?.inputs?.lineIn?.inputs ?? [];
+        return options.lineInActivationService.listLineInInputs().map((input) => {
+          const record = configured.find(
+            (entry) => typeof entry?.id === 'string' && entry.id.trim() === input.id,
+          );
+          return toApiInput({
+            id: input.id,
+            name: input.name,
+            iconType: input.iconType,
+            controllable: record?.controllable,
+            metadataEnabled: record?.metadataEnabled,
+          });
+        });
+      },
+      selectInput: (zoneId, inputId) => {
+        const input = options.lineInActivationService.findLineInInput(inputId);
+        if (!input) {
+          return false;
+        }
+        // Pass the resolved name and icon: the service would otherwise look them up again,
+        // and its no-signal fallback is aimed at the Loxone client rather than at us.
+        options.lineInActivationService.activateLineIn(zoneId, inputId, {
+          title: input.name,
+          iconType: input.iconType,
+        });
+        return true;
+      },
       playAlert: async (request) => {
         if (!options.zoneManager.getZoneState(request.zoneId)) {
           return null;
@@ -341,6 +374,7 @@ export class HttpService {
         await options.recentsManager.clear(zoneId);
       },
       getServiceLabel: (audiopath) => options.resolveServiceLabel(audiopath),
+      getInputLabel: (inputId) => options.resolveInputLabel(inputId),
       getEqualizerBands: (zoneId) => {
         const zone = options.configPort.getConfig().zones?.find((z) => z.id === zoneId);
         return zone ? [...getZoneEqualizerBands(zone)] : null;

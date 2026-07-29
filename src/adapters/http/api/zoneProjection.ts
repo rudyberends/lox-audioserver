@@ -129,7 +129,11 @@ function toTrack(state: ZoneState): ApiTrack | null {
  * before this API existed. Emitting them would surface a MAC address as a
  * human-readable source name.
  */
-function toSource(state: ZoneState, serviceLabel?: ServiceLabelLookup): ApiSource | null {
+function toSource(
+  state: ZoneState,
+  serviceLabel?: ServiceLabelLookup,
+  inputLabel?: InputLabelLookup,
+): ApiSource | null {
   const id = (state.audiopath ?? '').trim();
   if (!id) {
     return null;
@@ -138,6 +142,19 @@ function toSource(state: ZoneState, serviceLabel?: ServiceLabelLookup): ApiSourc
   // bridged service is reported as Spotify and then downgraded to Playlist whenever the
   // queue is not Spotify-owned — which labels a single Apple Music track a playlist.
   const kind = kindFromAudiopath(id) ?? toSourceKind(state.audiotype);
+  if (kind === 'linein') {
+    // A line-in identifies itself by the configured input's own id, so what you read here
+    // is what `PUT /zones/{id}/input` accepts. The stored audiopath prefixes it and
+    // `sourceName` holds the server's MAC — neither is usable by a caller.
+    const inputId = id.startsWith(LINEIN_PREFIX) ? id.slice(LINEIN_PREFIX.length) : id;
+    return {
+      kind,
+      name: inputLabel?.(inputId) || '',
+      id: inputId,
+      // Nothing to seek in a live input.
+      seekable: false,
+    };
+  }
   // `sourceName` carries the name the Loxone clients need, and for a bridged service
   // that is the disguise: an Apple Music track reports "Spotify", because Spotify is
   // the only streaming service those clients know. Name the real service here, from the
@@ -148,6 +165,12 @@ function toSource(state: ZoneState, serviceLabel?: ServiceLabelLookup): ApiSourc
   const seekable = Number.isFinite(state.duration) && state.duration > 0;
   return { kind, name, id, seekable };
 }
+
+/** How a selected line-in is stored in `audiopath`. */
+const LINEIN_PREFIX = 'linein:';
+
+/** The configured name of an input, so a line-in reports it rather than the server's MAC. */
+export type InputLabelLookup = (inputId: string) => string | null;
 
 /** Loxone leaves `syncedzones` empty (or absent) for an ungrouped zone. */
 function toGroup(state: ZoneState): ApiGroup | null {
@@ -198,6 +221,8 @@ export type ZoneProjectionLookups = {
   device?: OutputDeviceLookup;
   outputProtocol?: OutputProtocolLookup;
   serviceLabel?: ServiceLabelLookup;
+  /** Names a configured line-in, so `source.name` is its name and not the server's MAC. */
+  inputLabel?: InputLabelLookup;
   volumeLimits?: ApiVolumeLimits;
 };
 
@@ -214,7 +239,7 @@ export function toApiZoneState(state: ZoneState, lookups: ZoneProjectionLookups 
     repeat: toRepeatMode(state.plrepeat),
     shuffle: Boolean(state.plshuffle),
     track: toTrack(state),
-    source: toSource(state, lookups.serviceLabel),
+    source: toSource(state, lookups.serviceLabel, lookups.inputLabel),
     group: toGroup(state),
     output: toOutput(state, lookups.device, lookups.outputProtocol),
   };

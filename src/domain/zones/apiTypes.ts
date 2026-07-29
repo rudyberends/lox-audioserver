@@ -313,3 +313,49 @@ export interface ApiAlertResult {
   /** Every zone it was played in, leader first. */
   zones: number[];
 }
+
+/**
+ * A configured physical input a zone can be switched to.
+ *
+ * Server-level rather than per zone: an input is a configured source with a capture
+ * bridge behind it, selectable from any zone, so listing them under one zone would imply
+ * each has its own.
+ *
+ * Read-only. Adding an input, naming it or pointing it at a capture device is
+ * configuration and lives in the admin UI; this is here so an integration can see what
+ * exists and switch to it.
+ */
+export interface ApiInput {
+  /** Opaque. Hand it back to `PUT /zones/{id}/input`; also what `source.id` reports. */
+  id: string;
+  name: string;
+  /**
+   * What is plugged in, as a hint for choosing an icon — `line-in` when nothing was set.
+   *
+   * **Treat the list as open**: new values may be added, and a client must not fail on
+   * one it does not recognise.
+   */
+  icon: ApiInputIcon;
+  /**
+   * Whether this input answers transport commands once a zone is on it.
+   *
+   * False for a turntable or a bare jack: selecting it is the whole interaction, and
+   * `pause` on that zone changes nothing audible. True for something like a BeoSound on a
+   * MasterLink bus, which switches on but sits idle until told to play — for those, the
+   * ordinary `POST /zones/{id}/pause` and friends reach the device.
+   */
+  controllable: boolean;
+  /** Whether the input reports what is playing, so `track` can be more than blank. */
+  reportsMetadata: boolean;
+}
+
+export type ApiInputIcon =
+  | 'line-in'
+  | 'cd-player'
+  | 'computer'
+  | 'imac'
+  | 'ipod'
+  | 'mobile'
+  | 'radio'
+  | 'screen'
+  | 'turntable';

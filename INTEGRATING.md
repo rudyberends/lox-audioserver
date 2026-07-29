@@ -185,6 +185,7 @@ GET /api/v1/zones/{id}/equalizer    →  { "zoneId": 3, "bands": [ …10 ] }
 GET /api/v1/zones/{id}/queue        →  { "items": [ … ], "start": 0, "total": 42, "currentIndex": 3 }
 GET /api/v1/zones/{id}/favorites    →  { "items": [ … ], "start": 0, "total": 8 }
 GET /api/v1/zones/{id}/recents      →  { "items": [ … ], "start": 0, "total": 20 }
+GET /api/v1/inputs                  →  { "inputs": [ … ] }
 GET /api/v1/health                  →  { "status": "ok"|"degraded"|"unhealthy", … }
 GET /api/v1/ready                   →  { "ready": true, "phase": "ready" }   503 when not
 GET /api/v1/zones/{id}/cover        →  the image itself        404 when the zone has none
@@ -316,6 +317,7 @@ POST /api/v1/zones/{id}/previous
 PUT  /api/v1/zones/{id}/volume     {"volume": 40}   or  {"delta": -5}
 PUT  /api/v1/zones/{id}/position   {"position": 90}
 PUT  /api/v1/zones/{id}/power      {"power": "on"}
+PUT  /api/v1/zones/{id}/input      {"input": "linein-ms3h9f42"}
 PUT  /api/v1/zones/{id}/equalizer  {"bands": [3,3,2,1,0,0,-1,-2,-2,-3]}
 PUT  /api/v1/zones/{id}/repeat     {"repeat": "off" | "all" | "one"}
 PUT  /api/v1/zones/{id}/shuffle    {"shuffle": true}
@@ -360,6 +362,42 @@ happens server-side, so you do not need to know anything about how content is mo
 curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"http://example/stream.mp3"}'
 curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"library://track/9"}'
 ```
+
+### Inputs
+
+Physical inputs — a turntable, a CD player, a MasterLink device — are configured in the
+admin UI. What is configured is listed here, and there may be none:
+
+```json
+{
+  "inputs": [
+    { "id": "linein-ms3h9f42", "name": "BeoSound 9000", "icon": "cd-player",
+      "controllable": true, "reportsMetadata": true }
+  ]
+}
+```
+
+They belong to the server, not to a zone: the same input is selectable from any zone, so
+switching one is a property of the zone rather than a list under it.
+
+```bash
+curl -X PUT http://server:7090/api/v1/zones/3/input -d '{"input":"linein-ms3h9f42"}'
+```
+
+`source.id` reports that same id back once the zone is on it, so what you read is what you
+can write. `source.name` is the input's configured name.
+
+`controllable` is worth branching on. For an input that answers commands — something on a
+MasterLink bus, say — the ordinary `POST /zones/{id}/pause`, `/next` and so on reach the
+device. For a turntable or a bare jack it is `false`: selecting it is the whole
+interaction, and transport commands change nothing audible. `reportsMetadata` says whether
+`track` will ever be more than blank.
+
+`icon` is a hint for choosing an artwork: `line-in`, `cd-player`, `computer`, `imac`,
+`ipod`, `mobile`, `radio`, `screen`, `turntable`. **Treat the list as open.**
+
+There is no verb for leaving an input — selecting something else is how you leave, and the
+server releases the old source as part of that.
 
 ### Announcements
 
@@ -446,6 +484,7 @@ Errors are `4xx` with `{"error":"…"}`: `zone-not-found`, `invalid-json`,
 `invalid-favorite-patch`, `invalid-favorite-delete`, `invalid-favorite-order`,
 `favorite-not-found`, `invalid-members`,
 `invalid-alert-kind`, `invalid-text`, `invalid-zones`,
+`invalid-input`, `input-not-found`,
 `method-not-allowed`.
 
 ## MQTT
