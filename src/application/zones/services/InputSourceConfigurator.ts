@@ -3,7 +3,7 @@ import type { OutputRouter } from '@/application/zones/OutputRouter';
 import type { PlaybackCoordinator } from '@/application/zones/PlaybackCoordinator';
 import type { ZoneStateStore } from '@/application/zones/ZoneStateStore';
 import type { ZoneRepository } from '@/application/zones/ZoneRepository';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { buildVolumePatch } from '@/application/zones/playback/patchBuilder';
 import {
   clampVolumeForZone,
@@ -28,7 +28,7 @@ export type InputSourceConfiguratorDeps = {
   >;
   outputRouter: Pick<OutputRouter, 'dispatchVolume'>;
   stateStore: Pick<ZoneStateStore, 'applyPatch'>;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>, force?: boolean) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>, force?: boolean) => void;
 };
 
 /**

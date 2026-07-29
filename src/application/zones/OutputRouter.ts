@@ -7,7 +7,7 @@ import {
   dispatchVolume,
   selectPlayOutputs,
 } from '@/application/zones/services/outputOrchestrator';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 import { clearPlayers } from '@/application/playback/playerRegistry';
 import { ZoneRepository } from '@/application/zones/ZoneRepository';
@@ -43,7 +43,7 @@ export class OutputRouter {
   public notifyOutputMetadata(
     zoneId: number,
     ctx: ZoneContext,
-    patch: Partial<LoxoneZoneState>,
+    patch: Partial<ZoneState>,
   ): void {
     // Only trigger when metadata-relevant fields change.
     const touchesMeta =

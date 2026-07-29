@@ -1,6 +1,6 @@
 import type { ZoneConfig } from '@/domain/config/types';
 import type { QueueState } from '@/application/zones/zoneManager';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { AudioType } from '@/domain/loxone/enums';
 import { parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
 import { formatEqualizerSettings, getZoneEqualizerBands } from '@/domain/zones/equalizer';
@@ -86,7 +86,7 @@ export function resolveDisplayAudiotype(
   return audiotype;
 }
 
-export function buildInitialState(zone: ZoneConfig): LoxoneZoneState {
+export function buildInitialState(zone: ZoneConfig): ZoneState {
   const defaultVol = getZoneDefaultVolume(zone);
   return {
     playerid: zone.id,

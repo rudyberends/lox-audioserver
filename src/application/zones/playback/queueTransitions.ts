@@ -1,7 +1,7 @@
 import type { PlaybackMetadata, PlaybackSession } from '@/application/playback/audioManager';
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
 import type { QueueAuthority, ZoneContext } from '@/application/zones/internal/zoneTypes';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { QueueItem } from '@/ports/types/queueTypes';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import { buildQueueItemPlaybackPatch } from '@/application/zones/playback/patchBuilder';
@@ -16,7 +16,7 @@ type QueueTransitionCoordinator = {
     options?: { startAtSec?: number },
   ) => Promise<PlaybackSession | null>;
   prefetchPlaybackSource?: (ctx: ZoneContext, audiopath: string) => void;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>) => void;
   dispatchOutputs: (
     ctx: ZoneContext,
     outputs: ZoneOutput[],

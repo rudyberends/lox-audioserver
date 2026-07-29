@@ -1,11 +1,11 @@
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { AudioType, FileType } from '@/domain/loxone/enums';
 import { fallbackTitle, sanitizeTitle } from '@/application/zones/helpers/stateHelpers';
 import type { ProviderAction, ProviderPatchResult } from '@/application/zones/playback/types';
 
 export function handleRadioMetadataUpdate(args: {
-  state: LoxoneZoneState;
+  state: ZoneState;
   zoneName: string;
   metadata: { title: string; artist: string; coverurl?: string; duration?: number; controllable?: boolean };
   audioHelpers: ZoneAudioHelpers;
@@ -20,7 +20,7 @@ export function handleRadioMetadataUpdate(args: {
   if (!isRadioState && !radioControllable) {
     return null;
   }
-  const patch: Partial<LoxoneZoneState> = {};
+  const patch: Partial<ZoneState> = {};
   if (metadata.title) {
     patch.title = sanitizeTitle(metadata.title, fallbackTitle(state.title, zoneName));
   }

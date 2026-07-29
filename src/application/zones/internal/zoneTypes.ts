@@ -1,5 +1,5 @@
 import type { ZoneConfig } from '@/domain/config/types';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { PlaybackQueueNavigator } from '@/application/playback/PlaybackQueueNavigator';
 import type { InputAdapter } from '@/application/playback/inputAdapter';
 import type { SpotifyInputAdapter } from '@/application/playback/adapters/SpotifyInputAdapter';
@@ -31,13 +31,13 @@ export interface QueueState {
 }
 
 export interface AlertSnapshot {
-  mode: LoxoneZoneState['mode'];
+  mode: ZoneState['mode'];
   inputMode: ZoneContext['inputMode'];
   activeOutput: string | null;
   activeOutputTypes: Set<string>;
   volume: number;
   queue: QueueState;
-  statePatch: Partial<LoxoneZoneState>;
+  statePatch: Partial<ZoneState>;
 }
 
 export interface ActiveAlertState {
@@ -59,7 +59,7 @@ export interface ZoneContext {
   name: string;
   sourceMac: string;
   config: ZoneConfig;
-  state: LoxoneZoneState;
+  state: ZoneState;
   queue: QueueState;
   queueController: PlaybackQueueNavigator;
   inputAdapter: InputAdapter;

@@ -1,5 +1,5 @@
 import type { createLogger } from '@/shared/logging/logger';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { MusicAssistantApi } from '@/shared/musicassistant/musicAssistantApi';
 import { clampVolume, normalizeCommand } from './maHelpers';
 
@@ -17,7 +17,7 @@ export type CommandDispatcherDeps = {
   getLastVolume: () => number | null;
   setLastVolume: (value: number) => void;
   /** Optimistic state patch — Loxone slider should not wait for the echo event. */
-  emitPatch: (patch: Partial<LoxoneZoneState>) => void;
+  emitPatch: (patch: Partial<ZoneState>) => void;
 };
 
 /**

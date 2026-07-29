@@ -3,7 +3,7 @@ import { test } from './testHarness';
 import { ZoneStateStore } from '../src/application/zones/ZoneStateStore';
 import { ZoneRepository } from '../src/application/zones/ZoneRepository';
 import type { ZoneContext } from '../src/application/zones/internal/zoneTypes';
-import type { LoxoneZoneState } from '../src/domain/loxone/types';
+import type { ZoneState } from '../src/domain/zones/zoneState';
 import { AudioType } from '../src/domain/loxone/enums';
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -11,17 +11,17 @@ const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, 
 type StoreFakes = {
   zones: ZoneRepository;
   ctx: ZoneContext;
-  broadcasts: LoxoneZoneState[];
-  groupSyncs: Array<{ leaderId: number; patch: Partial<LoxoneZoneState>; force: boolean }>;
-  metadataCalls: Array<{ zoneId: number; patch: Partial<LoxoneZoneState> }>;
+  broadcasts: ZoneState[];
+  groupSyncs: Array<{ leaderId: number; patch: Partial<ZoneState>; force: boolean }>;
+  metadataCalls: Array<{ zoneId: number; patch: Partial<ZoneState> }>;
   sessionTimingCalls: Array<{ zoneId: number; elapsed: number; duration: number }>;
   sessionMetadataCalls: Array<{ zoneId: number; metadata: unknown }>;
-  onStatePatchCalls: Array<{ zoneId: number; patch: Partial<LoxoneZoneState> }>;
+  onStatePatchCalls: Array<{ zoneId: number; patch: Partial<ZoneState> }>;
   audioSession: { metadata?: Record<string, unknown> } | null;
 };
 
 function buildStore(opts: {
-  initialState?: Partial<LoxoneZoneState>;
+  initialState?: Partial<ZoneState>;
   isRadioAudiopath?: (a: string | undefined, t?: number | null) => boolean;
   isLineInAudiopath?: (a: string | undefined) => boolean;
   audioSession?: { metadata?: Record<string, unknown> } | null;
@@ -29,7 +29,7 @@ function buildStore(opts: {
 } = {}): { store: ZoneStateStore; fakes: StoreFakes } {
   const zones = new ZoneRepository();
   // Default type = FileType.Playlist (3) so resolveLoxoneType does not auto-mutate the patch.
-  const initial: LoxoneZoneState = {
+  const initial: ZoneState = {
     id: 1,
     name: 'Zone',
     volume: 30,
@@ -43,7 +43,7 @@ function buildStore(opts: {
     audiotype: 0,
     type: 3,
     ...(opts.initialState ?? {}),
-  } as LoxoneZoneState;
+  } as ZoneState;
 
   const fakes: StoreFakes = {
     zones,
@@ -278,7 +278,7 @@ test('ZoneStateStore.getZoneState returns current state or null', () => {
 
 test('ZoneStateStore.setInitial replaces state without going through patch logic', () => {
   const { store, fakes } = buildStore();
-  const newState = { id: 1, volume: 77, mode: 'play' } as LoxoneZoneState;
+  const newState = { id: 1, volume: 77, mode: 'play' } as ZoneState;
   store.setInitial(1, newState);
   assert.equal(fakes.ctx.state.volume, 77);
   assert.equal(fakes.broadcasts.length, 0);

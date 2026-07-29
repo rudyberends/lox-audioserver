@@ -3,7 +3,7 @@
  * The server's own zone contract.
  * -----------------------------------------------------------------------------
  * This is the shape the public API speaks, and it is deliberately *not* the
- * shape the Loxone clients speak (`LoxoneZoneState`). Everything here has to be
+ * shape the Loxone clients speak (`ZoneState`). Everything here has to be
  * usable by someone who has never seen a Loxone installation: readable enums
  * instead of numeric ones, seconds instead of Loxone's mixed units, `null`
  * instead of empty-string sentinels, and no browse/queue internals.

@@ -7,7 +7,7 @@
  * As internal state migrates to neutral fields, this file shrinks — it is the
  * seam, so the public contract never has to move with it.
  */
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { AudioType } from '@/domain/loxone/enums';
 import type {
   ApiGroup,
@@ -21,7 +21,7 @@ import type {
 } from '@/domain/zones/apiTypes';
 
 /** Loxone's `mode` is already a closed set; anything unexpected reads as stopped. */
-function toPlaybackState(mode: LoxoneZoneState['mode']): ApiPlaybackState {
+function toPlaybackState(mode: ZoneState['mode']): ApiPlaybackState {
   switch (mode) {
     case 'play':
       return 'playing';
@@ -77,7 +77,7 @@ function toSourceKind(audiotype: number | undefined): ApiSourceKind {
  * A zone with nothing loaded still carries empty strings in Loxone's state
  * (the native app has no null), so treat "no title and no artist" as no track.
  */
-function toTrack(state: LoxoneZoneState): ApiTrack | null {
+function toTrack(state: ZoneState): ApiTrack | null {
   const title = state.title ?? '';
   const artist = state.artist ?? '';
   const album = state.album ?? '';
@@ -100,7 +100,7 @@ function toTrack(state: LoxoneZoneState): ApiTrack | null {
  * before this API existed. Emitting them would surface a MAC address as a
  * human-readable source name.
  */
-function toSource(state: LoxoneZoneState): ApiSource | null {
+function toSource(state: ZoneState): ApiSource | null {
   const id = (state.audiopath ?? '').trim();
   if (!id) {
     return null;
@@ -111,7 +111,7 @@ function toSource(state: LoxoneZoneState): ApiSource | null {
 }
 
 /** Loxone leaves `syncedzones` empty (or absent) for an ungrouped zone. */
-function toGroup(state: LoxoneZoneState): ApiGroup | null {
+function toGroup(state: ZoneState): ApiGroup | null {
   const members = state.syncedzones ?? [];
   if (members.length === 0) {
     return null;
@@ -119,7 +119,7 @@ function toGroup(state: LoxoneZoneState): ApiGroup | null {
   return { leader: members[0]!, members: [...members] };
 }
 
-function toOutput(state: LoxoneZoneState): ApiOutput | null {
+function toOutput(state: ZoneState): ApiOutput | null {
   return state.outputProtocol ? { protocol: state.outputProtocol } : null;
 }
 
@@ -131,7 +131,7 @@ function toWholeSeconds(value: number | undefined): number {
   return Number.isFinite(value) ? Math.max(0, Math.round(value as number)) : 0;
 }
 
-export function toApiZoneState(state: LoxoneZoneState): ApiZoneState {
+export function toApiZoneState(state: ZoneState): ApiZoneState {
   return {
     id: state.playerid,
     name: state.name ?? '',

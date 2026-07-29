@@ -2,7 +2,7 @@ import { PassThrough } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import { getGroupByLeader, onGroupChanged } from '@/application/groups/groupTracker';
 import type { GroupRecord } from '@/application/groups/types/groupRecord';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { AudioManager, PlaybackMetadata, PlaybackSource } from '@/application/playback/audioManager';
@@ -13,8 +13,8 @@ import { audioOutputSettings } from '@/ports/types/audioFormat';
 export type MixedGroupCoordinator = {
   handleStatePatch: (
     zoneId: number,
-    patch: Partial<LoxoneZoneState>,
-    nextState: LoxoneZoneState,
+    patch: Partial<ZoneState>,
+    nextState: ZoneState,
   ) => void;
 };
 
@@ -58,8 +58,8 @@ class MixedGroupController implements MixedGroupCoordinator {
 
   public handleStatePatch(
     zoneId: number,
-    patch: Partial<LoxoneZoneState>,
-    nextState: LoxoneZoneState,
+    patch: Partial<ZoneState>,
+    nextState: ZoneState,
   ): void {
     if (!this.zoneManager || !this.isEnabled()) {
       return;
@@ -164,7 +164,7 @@ class MixedGroupController implements MixedGroupCoordinator {
     return lower.startsWith('airplay://') || lower.startsWith('linein:') || lower.startsWith('linein://');
   }
 
-  private buildMetadata(state: LoxoneZoneState): PlaybackMetadata {
+  private buildMetadata(state: ZoneState): PlaybackMetadata {
     return {
       title: state.title || '',
       artist: state.artist || '',
@@ -224,7 +224,7 @@ class MixedGroupController implements MixedGroupCoordinator {
   private resolveLeaderPcmStream(
     leaderId: number,
     leaderSession: NonNullable<ReturnType<AudioManager['getSession']>>,
-    leaderState: LoxoneZoneState,
+    leaderState: ZoneState,
   ): {
     stream: NodeJS.ReadableStream;
     format: 's16le' | 's24le' | 's32le';
@@ -315,7 +315,7 @@ class MixedGroupController implements MixedGroupCoordinator {
   }
 
   private resolveLeaderElapsedSec(
-    leaderState: LoxoneZoneState,
+    leaderState: ZoneState,
     leaderSession: ReturnType<AudioManager['getSession']>,
   ): number {
     if (!leaderSession) {
@@ -345,7 +345,7 @@ class MixedGroupController implements MixedGroupCoordinator {
   }
 
   private resolveLeaderDurationSec(
-    leaderState: LoxoneZoneState,
+    leaderState: ZoneState,
     leaderSession: ReturnType<AudioManager['getSession']>,
   ): number {
     if (typeof leaderState.duration === 'number' && leaderState.duration > 0) {
@@ -359,7 +359,7 @@ class MixedGroupController implements MixedGroupCoordinator {
   }
 
   private resolveStartAtSec(
-    leaderState: LoxoneZoneState,
+    leaderState: ZoneState,
     leaderSession: ReturnType<AudioManager['getSession']>,
   ): number | null {
     if (!leaderSession?.playbackSource) {
@@ -389,7 +389,7 @@ class MixedGroupController implements MixedGroupCoordinator {
 
   private syncMembersToLeader(
     group: GroupRecord,
-    leaderState: LoxoneZoneState,
+    leaderState: ZoneState,
     opts: { force?: boolean } = {},
   ): void {
     const leaderMode = leaderState.mode;
@@ -592,7 +592,7 @@ class MixedGroupController implements MixedGroupCoordinator {
     }
   }
 
-  private syncMemberMetadata(group: GroupRecord, patch: Partial<LoxoneZoneState>): void {
+  private syncMemberMetadata(group: GroupRecord, patch: Partial<ZoneState>): void {
     if (!this.pipeFanouts.has(group.leader)) {
       return;
     }

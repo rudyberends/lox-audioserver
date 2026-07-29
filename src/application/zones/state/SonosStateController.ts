@@ -13,14 +13,14 @@ import {
 type AnySonosGroup = SonosGroup | S1SonosGroup;
 type AnySonosClient = SonosClient | S1Client;
 import type { ZoneConfig } from '@/domain/config/types';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { AudioType } from '@/domain/loxone/enums';
 import { createLogger } from '@/shared/logging/logger';
 import type { ZoneStateController } from '@/application/zones/state/StateController';
 
 type SonosControllerOptions = {
   zone: ZoneConfig;
-  onStatePatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  onStatePatch: (zoneId: number, patch: Partial<ZoneState>) => void;
 };
 
 const TIME_TICK_MS = 1000;
@@ -37,7 +37,7 @@ const START_TIMEOUT_MS = 15_000;
 export class SonosStateController implements ZoneStateController {
   private readonly log = createLogger('Zones', 'StateController:Sonos');
   private readonly zone: ZoneConfig;
-  private readonly onStatePatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  private readonly onStatePatch: (zoneId: number, patch: Partial<ZoneState>) => void;
   private readonly host: string | null;
 
   private client: AnySonosClient | null = null;
@@ -314,7 +314,7 @@ export class SonosStateController implements ZoneStateController {
     this.onStatePatch(this.zone.id, patch);
   }
 
-  private buildSnapshotPatch(): Partial<LoxoneZoneState> | null {
+  private buildSnapshotPatch(): Partial<ZoneState> | null {
     const player = this.client?.player;
     const group = player?.group;
 
@@ -375,7 +375,7 @@ export class SonosStateController implements ZoneStateController {
 
     this.lastTrackSignature = signature;
 
-    const patch: Partial<LoxoneZoneState> = {
+    const patch: Partial<ZoneState> = {
       audiopath: '',
       mode,
       power: 'on',
@@ -551,7 +551,7 @@ function extractHostname(url: string | null): string | null {
   }
 }
 
-function mapPlaybackState(state: string | null | undefined): LoxoneZoneState['mode'] {
+function mapPlaybackState(state: string | null | undefined): ZoneState['mode'] {
   const token = String(state ?? '').toUpperCase();
   if (token.includes('PAUSED')) return 'pause';
   if (token.includes('PLAYING') || token.includes('BUFFERING')) return 'play';

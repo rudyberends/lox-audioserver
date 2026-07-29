@@ -1,6 +1,6 @@
 import type { ComponentLogger } from '@/shared/logging/logger';
 import type { AudioManager, PlaybackMetadata, PlaybackSession } from '@/application/playback/audioManager';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { QueueAuthority, ZoneContext } from '@/application/zones/internal/zoneTypes';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import type { ZoneRepository } from '@/application/zones/ZoneRepository';
@@ -14,7 +14,7 @@ export type QueueStepDispatcherDeps = {
   audioHelpers: ZoneAudioHelpers;
   recentsManager: RecentsManager;
   log: ComponentLogger;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>, force?: boolean) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>, force?: boolean) => void;
   dispatchOutputs: (
     ctx: ZoneContext,
     outputs: ZoneOutput[],

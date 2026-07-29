@@ -1,7 +1,7 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { ZoneConfig, InputConfig, GroupConfig } from '@/domain/config/types';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ContentPort } from '@/ports/ContentPort';
 import {
@@ -153,7 +153,7 @@ export class ZoneManager {
   private lastInputs: InputConfig | null = null;
 
   /** Read-only snapshot of the current zone state for external consumers (e.g. outputs). */
-  public getZoneState(zoneId: number): LoxoneZoneState | null {
+  public getZoneState(zoneId: number): ZoneState | null {
     return this.stateStore.getZoneState(zoneId);
   }
 
@@ -499,12 +499,12 @@ export class ZoneManager {
     this.initialized = false;
   }
 
-  public getState(zoneId: number): LoxoneZoneState | undefined {
+  public getState(zoneId: number): ZoneState | undefined {
     return this.stateStore.getState(zoneId);
   }
 
-  public getAllZoneStates(): LoxoneZoneState[] {
-    const states: LoxoneZoneState[] = [];
+  public getAllZoneStates(): ZoneState[] {
+    const states: ZoneState[] = [];
     for (const ctx of this.zoneRepo.list()) {
       if (ctx.state) {
         states.push(ctx.state);
@@ -624,7 +624,7 @@ export class ZoneManager {
       return;
     }
     ctx.name = trimmed;
-    const patch: Partial<LoxoneZoneState> = { name: trimmed };
+    const patch: Partial<ZoneState> = { name: trimmed };
     const current = ctx.queueController.current();
     const sourceName = this.audioHelpers.resolveSourceName(
       ctx.state.audiotype ?? this.audioHelpers.getInputAudioType(ctx),
@@ -696,7 +696,7 @@ export class ZoneManager {
     return this.alertsCoordinator.stopAlert(zoneId);
   }
 
-  public applyPatch(zoneId: number, patch: Partial<LoxoneZoneState>, force = false): void {
+  public applyPatch(zoneId: number, patch: Partial<ZoneState>, force = false): void {
     this.stateStore.patch(zoneId, patch, force);
   }
 
@@ -857,7 +857,7 @@ export class ZoneManager {
   private notifyOutputMetadata(
     zoneId: number,
     ctx: ZoneContext,
-    patch: Partial<LoxoneZoneState>,
+    patch: Partial<ZoneState>,
   ): void {
     this.outputRouter.notifyOutputMetadata(zoneId, ctx, patch);
   }

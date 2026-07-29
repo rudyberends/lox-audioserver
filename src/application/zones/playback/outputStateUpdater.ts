@@ -1,14 +1,14 @@
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
 import { normalizeSpotifyAudiopath } from '@/application/zones/helpers/queueHelpers';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { buildMatchedOutputUriPatch } from '@/application/zones/playback/patchBuilder';
 import { findQueueIndexByUri } from '@/application/zones/playback/queueOps';
 
 type OutputStateCoordinator = {
   getZone: (zoneId: number) => ZoneContext | undefined;
   audioHelpers: ZoneAudioHelpers;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>) => void;
 };
 
 export function updateOutputState(args: {
@@ -30,7 +30,7 @@ export function updateOutputState(args: {
     // Ignore output updates while an alert is active to avoid clobbering alert metadata.
     return;
   }
-  const patch: Partial<LoxoneZoneState> = {};
+  const patch: Partial<ZoneState> = {};
   if (state.status === 'paused' || state.status === 'stopped') {
     ctx.outputTimingActive = false;
     ctx.lastOutputTimingAt = 0;

@@ -2,14 +2,14 @@ import type { PlaybackMetadata, PlaybackSource, CoverArtPayload } from '@/applic
 import type { ZonePlayer } from '@/application/playback/zonePlayer';
 import type { QueueItem } from '@/application/zones/zoneManager';
 import { normalizeSpotifyAudiopath, createQueueItem } from '@/application/zones/helpers/queueHelpers';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 
 export interface InputAdapterDeps {
   player: ZonePlayer;
   zoneName: string;
   sourceMac: string;
   replaceQueue: (items: QueueItem[], startIndex?: number) => QueueItem | null;
-  applyPatch: (patch: Partial<LoxoneZoneState>) => void;
+  applyPatch: (patch: Partial<ZoneState>) => void;
   getDefaultSpotifyAccountId: () => string | null;
 }
 

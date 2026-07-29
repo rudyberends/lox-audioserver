@@ -1,5 +1,5 @@
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { ComponentLogger } from '@/shared/logging/logger';
 
 const IGNORED_PLAYER_ERROR_REASONS = new Set([
@@ -36,7 +36,7 @@ const PLAYBACK_ERROR_TITLES: Record<string, string> = {
 
 type PlaybackErrorCoordinator = {
   getZone: (zoneId: number) => ZoneContext | undefined;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>) => void;
   log: ComponentLogger;
 };
 

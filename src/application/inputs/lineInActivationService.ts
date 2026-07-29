@@ -5,7 +5,7 @@ import type { ConfigPort } from '@/ports/ConfigPort';
 import type { LineInSourcePort } from '@/ports/LineInSourcePort';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { LineInInputConfig } from '@/domain/config/types';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 
 export type ResolvedLineInInput = {
   id: string;
@@ -363,7 +363,7 @@ export class LineInActivationService {
     inputId: string,
     title: string,
     iconType: number,
-    mode: LoxoneZoneState['mode'],
+    mode: ZoneState['mode'],
   ): void {
     const current = this.zones.getZoneState(zoneId);
     if (!current) {
@@ -371,7 +371,7 @@ export class LineInActivationService {
     }
     const { audiotype, type } = this.resolveLineInTypes(inputId);
     const sourceName = this.resolveZoneSourceName(zoneId) ?? current.sourceName;
-    const patch: Partial<LoxoneZoneState> = {
+    const patch: Partial<ZoneState> = {
       playerid: current.playerid,
       name: current.name,
       volume: current.volume,

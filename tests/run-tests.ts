@@ -97,7 +97,7 @@ import './nowPlayingMetadata.test';
 import './publicApi.test';
 import type { ZoneConfig } from '../src/domain/config/types';
 import { applyZonePatch } from '../src/domain/loxone/reducer';
-import type { LoxoneZoneState } from '../src/domain/loxone/types';
+import type { ZoneState } from '../src/domain/zones/zoneState';
 import type { QueueItem } from '../src/ports/types/queueTypes';
 import type { PlaybackSession } from '../src/application/playback/audioManager';
 import { StorageAdapter } from '../src/adapters/storage/StorageAdapter';
@@ -716,7 +716,7 @@ test('spotify explicit serviceplay restarts same pipe when request uri changed b
 });
 
 test('applyZonePatch merges fields', () => {
-  const state: LoxoneZoneState = {
+  const state: ZoneState = {
     album: 'Old Album',
     artist: 'Old Artist',
     audiopath: 'spotify:track:old',
@@ -748,7 +748,7 @@ test('applyZonePatch merges fields', () => {
 });
 
 test('applyZonePatch does not mutate inputs', () => {
-  const state: LoxoneZoneState = {
+  const state: ZoneState = {
     album: '',
     artist: '',
     audiopath: '',

@@ -1,9 +1,9 @@
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { getGroupByLeader } from '@/application/groups/groupTracker';
 
 type GroupingCoordinatorDeps = {
-  getState: (zoneId: number) => LoxoneZoneState | undefined;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>, force?: boolean) => void;
+  getState: (zoneId: number) => ZoneState | undefined;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>, force?: boolean) => void;
 };
 
 export class GroupingCoordinator {
@@ -20,7 +20,7 @@ export class GroupingCoordinator {
 
   public syncGroupMembersPatch(
     leaderId: number,
-    patch: Partial<LoxoneZoneState>,
+    patch: Partial<ZoneState>,
     force: boolean,
   ): void {
     const filtered = this.stripGroupStateFields(patch);
@@ -32,7 +32,7 @@ export class GroupingCoordinator {
 
   private applyGroupPatchToMembers(
     leaderId: number,
-    patch: Partial<LoxoneZoneState>,
+    patch: Partial<ZoneState>,
     force: boolean,
   ): void {
     const group = getGroupByLeader(leaderId);
@@ -48,8 +48,8 @@ export class GroupingCoordinator {
   }
 
   private stripGroupStateFields(
-    patch: Partial<LoxoneZoneState>,
-  ): Partial<LoxoneZoneState> {
+    patch: Partial<ZoneState>,
+  ): Partial<ZoneState> {
     const {
       playerid: _playerid,
       name: _name,

@@ -4,7 +4,7 @@ import type {
   PlaybackMetadata,
   PlaybackSession,
 } from '@/application/playback/audioManager';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import type { ContentPort } from '@/ports/ContentPort';
@@ -42,7 +42,7 @@ export interface PlayRequestServiceDeps {
   notifier: NotifierPort;
   recentsManager: RecentsManager;
   log: ComponentLogger;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>, force?: boolean) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>, force?: boolean) => void;
   /** Pipeline-external playback entry point (kept on coordinator). */
   startQueuePlayback: (
     ctx: ZoneContext,

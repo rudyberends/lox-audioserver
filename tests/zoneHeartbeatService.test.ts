@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import { test } from './testHarness';
 import { ZoneHeartbeatService } from '../src/application/zones/services/ZoneHeartbeatService';
 import type { ZoneContext } from '../src/application/zones/internal/zoneTypes';
-import type { LoxoneZoneState } from '../src/domain/loxone/types';
+import type { ZoneState } from '../src/domain/zones/zoneState';
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-function makeCtx(id: number, state: Partial<LoxoneZoneState> | null = {}): ZoneContext {
+function makeCtx(id: number, state: Partial<ZoneState> | null = {}): ZoneContext {
   return {
     id,
-    state: state as LoxoneZoneState | null,
+    state: state as ZoneState | null,
     lastZoneBroadcastAt: 0,
   } as unknown as ZoneContext;
 }
@@ -17,7 +17,7 @@ function makeCtx(id: number, state: Partial<LoxoneZoneState> | null = {}): ZoneC
 test('ZoneHeartbeatService re-broadcasts each zone state on tick', async () => {
   const ctxA = makeCtx(1, { mode: 'play' });
   const ctxB = makeCtx(2, { mode: 'stop' });
-  const broadcasts: LoxoneZoneState[] = [];
+  const broadcasts: ZoneState[] = [];
 
   const heartbeat = new ZoneHeartbeatService({
     listZones: () => [ctxA, ctxB],
@@ -42,7 +42,7 @@ test('ZoneHeartbeatService re-broadcasts each zone state on tick', async () => {
 test('ZoneHeartbeatService skips zones with null state', async () => {
   const ctxAlive = makeCtx(1, { mode: 'play' });
   const ctxDead = makeCtx(2, null);
-  const broadcasts: LoxoneZoneState[] = [];
+  const broadcasts: ZoneState[] = [];
 
   const heartbeat = new ZoneHeartbeatService({
     listZones: () => [ctxAlive, ctxDead],
@@ -78,7 +78,7 @@ test('ZoneHeartbeatService stamps lastZoneBroadcastAt on the context', async () 
 });
 
 test('ZoneHeartbeatService start is idempotent', async () => {
-  const broadcasts: LoxoneZoneState[] = [];
+  const broadcasts: ZoneState[] = [];
   const ctx = makeCtx(1, { mode: 'play' });
 
   const heartbeat = new ZoneHeartbeatService({
@@ -101,7 +101,7 @@ test('ZoneHeartbeatService start is idempotent', async () => {
 });
 
 test('ZoneHeartbeatService stop halts further broadcasts', async () => {
-  const broadcasts: LoxoneZoneState[] = [];
+  const broadcasts: ZoneState[] = [];
   const ctx = makeCtx(1, { mode: 'play' });
 
   const heartbeat = new ZoneHeartbeatService({

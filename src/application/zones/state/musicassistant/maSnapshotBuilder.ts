@@ -1,4 +1,4 @@
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import {
   clampVolume,
   extractMediaMeta,
@@ -17,10 +17,10 @@ export type SnapshotInputs = {
 };
 
 export type SnapshotResult = {
-  patch: Partial<LoxoneZoneState>;
+  patch: Partial<ZoneState>;
   /** Derived values the caller should persist on the controller. */
   derived: {
-    mode: LoxoneZoneState['mode'];
+    mode: ZoneState['mode'];
     volume: number | null;
     duration: number | null;
     /** When mode != play, the ticker's anchor must be cleared. */
@@ -40,7 +40,7 @@ export type SnapshotResult = {
  */
 export function buildSnapshotPatch(inputs: SnapshotInputs): SnapshotResult | null {
   const { player, queue, lastTime } = inputs;
-  const patch: Partial<LoxoneZoneState> = {};
+  const patch: Partial<ZoneState> = {};
   const current =
     (player ? pickRecord(player.current_media) ?? pickRecord(player.media) ?? pickRecord(player.item) : null) ??
     (queue ? pickRecord(queue.current_item) ?? pickRecord(queue.current_media) : null);

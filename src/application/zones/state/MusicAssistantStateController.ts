@@ -1,6 +1,6 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { ZoneConfig } from '@/domain/config/types';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { ZoneStateController } from '@/application/zones/state/StateController';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { QueueItem } from '@/ports/types/queueTypes';
@@ -22,7 +22,7 @@ import { MaCommandDispatcher } from './musicassistant/maCommandDispatcher';
 type MusicAssistantStateControllerOptions = {
   zone: ZoneConfig;
   configPort: ConfigPort;
-  onStatePatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  onStatePatch: (zoneId: number, patch: Partial<ZoneState>) => void;
   onQueueMirror?: (zoneId: number, items: QueueItem[], currentIndex: number) => void;
 };
 
@@ -43,7 +43,7 @@ export class MusicAssistantStateController implements ZoneStateController {
   private readonly log = createLogger('Zones', 'StateController:MA');
   private readonly zone: ZoneConfig;
   private readonly configPort: ConfigPort;
-  private readonly onStatePatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  private readonly onStatePatch: (zoneId: number, patch: Partial<ZoneState>) => void;
   private readonly onQueueMirror?: (zoneId: number, items: QueueItem[], currentIndex: number) => void;
   private readonly commandDispatcher: MaCommandDispatcher;
 
@@ -68,7 +68,7 @@ export class MusicAssistantStateController implements ZoneStateController {
   private queueData: Record<string, unknown> | null = null;
 
   // Cached projection used by the time ticker.
-  private lastMode: LoxoneZoneState['mode'] = 'stop';
+  private lastMode: ZoneState['mode'] = 'stop';
   private lastTime = 0;
   private lastTimeAtMs = 0;
   private lastDuration = 0;

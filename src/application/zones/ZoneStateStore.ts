@@ -1,4 +1,4 @@
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { applyZonePatch } from '@/domain/loxone/reducer';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { AudioManager } from '@/application/playback/audioManager';
@@ -10,16 +10,16 @@ import { ZoneRepository } from '@/application/zones/ZoneRepository';
 type ZoneStateStoreDeps = {
   isRadioAudiopath: (audiopath: string | undefined, audiotype?: number | null) => boolean;
   isLineInAudiopath: (audiopath: string | undefined) => boolean;
-  syncGroupMembersPatch: (leaderId: number, patch: Partial<LoxoneZoneState>, force: boolean) => void;
+  syncGroupMembersPatch: (leaderId: number, patch: Partial<ZoneState>, force: boolean) => void;
   onStatePatch?: (
     zoneId: number,
-    patch: Partial<LoxoneZoneState>,
-    nextState: LoxoneZoneState,
+    patch: Partial<ZoneState>,
+    nextState: ZoneState,
   ) => void;
   notifyOutputMetadata: (
     zoneId: number,
     ctx: ZoneContext,
-    patch: Partial<LoxoneZoneState>,
+    patch: Partial<ZoneState>,
   ) => void;
   notifier: NotifierPort;
   audioManager: AudioManager;
@@ -32,16 +32,16 @@ export class ZoneStateStore {
   ) {}
 
   /** Read-only snapshot of the current zone state for external consumers (e.g. outputs). */
-  public getZoneState(zoneId: number): LoxoneZoneState | null {
+  public getZoneState(zoneId: number): ZoneState | null {
     const ctx = this.zoneRepo.get(zoneId);
     return ctx ? ctx.state : null;
   }
 
-  public getState(zoneId: number): LoxoneZoneState | undefined {
+  public getState(zoneId: number): ZoneState | undefined {
     return this.zoneRepo.get(zoneId)?.state;
   }
 
-  public setInitial(zoneId: number, state: LoxoneZoneState): void {
+  public setInitial(zoneId: number, state: ZoneState): void {
     const ctx = this.zoneRepo.get(zoneId);
     if (!ctx) {
       return;
@@ -78,11 +78,11 @@ export class ZoneStateStore {
     };
   }
 
-  public applyPatch(zoneId: number, patch: Partial<LoxoneZoneState>, force = false): void {
+  public applyPatch(zoneId: number, patch: Partial<ZoneState>, force = false): void {
     this.patch(zoneId, patch, force);
   }
 
-  public patch(zoneId: number, patch: Partial<LoxoneZoneState>, force = false): void {
+  public patch(zoneId: number, patch: Partial<ZoneState>, force = false): void {
     const ctx = this.zoneRepo.get(zoneId);
     if (!ctx) {
       return;

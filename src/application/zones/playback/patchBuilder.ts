@@ -8,7 +8,7 @@ import {
   resolveDisplayAudiotype,
   sanitizeTitle,
 } from '@/application/zones/helpers/stateHelpers';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { AudioType } from '@/domain/loxone/enums';
 import type { QueueItem } from '@/ports/types/queueTypes';
 
@@ -23,7 +23,7 @@ export type InputMetadataPatchArgs = {
   stateIcontype?: number;
 };
 
-export function buildInputMetadataPatch(args: InputMetadataPatchArgs): Partial<LoxoneZoneState> {
+export function buildInputMetadataPatch(args: InputMetadataPatchArgs): Partial<ZoneState> {
   const {
     metadata,
     stateTitle,
@@ -34,9 +34,9 @@ export function buildInputMetadataPatch(args: InputMetadataPatchArgs): Partial<L
     queueAuthority,
     stateIcontype,
   } = args;
-  const patch: Partial<LoxoneZoneState> = {};
+  const patch: Partial<ZoneState> = {};
   const assignPatch = (
-    key: keyof Pick<LoxoneZoneState, 'title' | 'artist' | 'album' | 'coverurl' | 'audiopath'>,
+    key: keyof Pick<ZoneState, 'title' | 'artist' | 'album' | 'coverurl' | 'audiopath'>,
     value?: string,
   ): void => {
     const trimmed = typeof value === 'string' ? value.trim() : '';
@@ -81,7 +81,7 @@ export function buildInputMetadataPatch(args: InputMetadataPatchArgs): Partial<L
 export function buildActiveItemPatch(
   ctx: ZoneContext,
   audioHelpers: ZoneAudioHelpers,
-): Partial<LoxoneZoneState> {
+): Partial<ZoneState> {
   if (ctx.alert) {
     const reportedDuration =
       typeof ctx.alert.reportedDurationSec === 'number' && ctx.alert.reportedDurationSec > 0
@@ -108,7 +108,7 @@ export function buildActiveItemPatch(
   }
   const audiotype = audioHelpers.getStateAudiotype(ctx, current);
   const stationForState = current.audiotype === 1 || current.audiotype === 4 ? current.station : '';
-  const patch: Partial<LoxoneZoneState> = {
+  const patch: Partial<ZoneState> = {
     title: sanitizeTitle(current.title, fallbackTitle(ctx.state.title, ctx.name)),
     artist: current.artist,
     album: current.album,
@@ -140,12 +140,12 @@ export function buildStartedPatch(args: {
   ctx: ZoneContext;
   session: PlaybackSession | null | undefined;
   audioHelpers: ZoneAudioHelpers;
-}): Partial<LoxoneZoneState> {
+}): Partial<ZoneState> {
   const { ctx, session, audioHelpers } = args;
   const meta = session?.metadata ?? ({} as PlaybackMetadata);
   const radioControllable = ctx.metadata.radioControllable === true;
   const startTime = typeof session?.elapsed === 'number' && session.elapsed > 0 ? session.elapsed : 0;
-  const basePatch: Partial<LoxoneZoneState> = {
+  const basePatch: Partial<ZoneState> = {
     mode: 'play',
     clientState: 'on',
     power: 'on',
@@ -191,7 +191,7 @@ export function buildStartedPatch(args: {
 export function buildResumedPatch(args: {
   ctx: ZoneContext;
   audioHelpers: ZoneAudioHelpers;
-}): Partial<LoxoneZoneState> {
+}): Partial<ZoneState> {
   const { ctx, audioHelpers } = args;
   const radioControllable = ctx.metadata.radioControllable === true;
   const activePatch = buildActiveItemPatch(ctx, audioHelpers);
@@ -209,7 +209,7 @@ export function buildResumedPatch(args: {
   };
 }
 
-export function buildStoppedPatch(): Partial<LoxoneZoneState> {
+export function buildStoppedPatch(): Partial<ZoneState> {
   return { mode: 'stop', clientState: 'on', power: 'on', time: 0, duration: 0 };
 }
 
@@ -217,7 +217,7 @@ export function buildPositionPatch(args: {
   time: number;
   duration: number;
   forceDurationZero?: boolean;
-}): Partial<LoxoneZoneState> {
+}): Partial<ZoneState> {
   if (args.forceDurationZero) {
     return { time: args.time, duration: 0 };
   }
@@ -227,8 +227,8 @@ export function buildPositionPatch(args: {
   };
 }
 
-export function buildMetadataPatch(metadata: PlaybackMetadata): Partial<LoxoneZoneState> {
-  const patch: Partial<LoxoneZoneState> = {};
+export function buildMetadataPatch(metadata: PlaybackMetadata): Partial<ZoneState> {
+  const patch: Partial<ZoneState> = {};
   if (typeof metadata.title === 'string') {
     // Never let a service-native audiopath (or other uri-like value) leak into
     // the title; leave the field untouched so a good title isn't clobbered.
@@ -254,7 +254,7 @@ export function buildMetadataPatch(metadata: PlaybackMetadata): Partial<LoxoneZo
   return patch;
 }
 
-export function buildVolumePatch(volume: number): Partial<LoxoneZoneState> {
+export function buildVolumePatch(volume: number): Partial<ZoneState> {
   return { volume };
 }
 
@@ -263,10 +263,10 @@ export function buildQueueItemPlaybackPatch(
   item: QueueItem,
   index: number,
   audioHelpers: ZoneAudioHelpers,
-): Partial<LoxoneZoneState> {
+): Partial<ZoneState> {
   const stateAudiotype = audioHelpers.getStateAudiotype(ctx, item);
   const sourceName = audioHelpers.resolveSourceName(stateAudiotype ?? item.audiotype ?? null, ctx, item);
-  const patch: Partial<LoxoneZoneState> = {
+  const patch: Partial<ZoneState> = {
     // Sanitize: on the bridge-service fast path this queue-rebuild patch is the
     // LAST writer (rebuild runs as a detached background promise after the start
     // patch), so a raw service-native audiopath in item.title would overwrite the
@@ -296,9 +296,9 @@ export function buildMatchedOutputUriPatch(
   item: QueueItem,
   index: number,
   audioHelpers: ZoneAudioHelpers,
-): Partial<LoxoneZoneState> {
+): Partial<ZoneState> {
   const fallback = fallbackTitle(ctx.state.title, ctx.name);
-  const patch: Partial<LoxoneZoneState> = {
+  const patch: Partial<ZoneState> = {
     title: sanitizeTitle(item.title, fallback),
     artist: item.artist,
     album: item.album,

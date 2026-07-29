@@ -1,9 +1,9 @@
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 
 export function applyZonePatch(
-  state: LoxoneZoneState,
-  patch: Partial<LoxoneZoneState>,
+  state: ZoneState,
+  patch: Partial<ZoneState>,
   _opts?: { force?: boolean },
-): LoxoneZoneState {
+): ZoneState {
   return { ...state, ...patch };
 }

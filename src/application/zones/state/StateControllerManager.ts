@@ -1,7 +1,7 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { ZoneConfig } from '@/domain/config/types';
 import type { ZoneStateController } from '@/application/zones/state/StateController';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { InternalStateController } from '@/application/zones/state/InternalStateController';
 import { BeoLinkStateController } from '@/application/zones/state/BeoLinkStateController';
 import { SonosStateController } from '@/application/zones/state/SonosStateController';
@@ -11,7 +11,7 @@ import type { ConfigPort } from '@/ports/ConfigPort';
 import type { QueueItem } from '@/ports/types/queueTypes';
 
 type StateControllerManagerOptions = {
-  onStatePatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  onStatePatch: (zoneId: number, patch: Partial<ZoneState>) => void;
   onQueueMirror?: (zoneId: number, items: QueueItem[], currentIndex: number) => void;
   configPort: ConfigPort;
 };
@@ -19,7 +19,7 @@ type StateControllerManagerOptions = {
 export class StateControllerManager {
   private readonly log = createLogger('Zones', 'StateControllers');
   private readonly controllers = new Map<number, ZoneStateController>();
-  private readonly onStatePatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  private readonly onStatePatch: (zoneId: number, patch: Partial<ZoneState>) => void;
   private readonly onQueueMirror?: (zoneId: number, items: QueueItem[], currentIndex: number) => void;
   private readonly configPort: ConfigPort;
 

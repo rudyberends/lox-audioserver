@@ -4,12 +4,12 @@ import { ExternalStateRouter } from '../src/application/zones/state/ExternalStat
 import { ZoneRepository } from '../src/application/zones/ZoneRepository';
 import { createLogger } from '../src/shared/logging/logger';
 import type { ZoneContext } from '../src/application/zones/internal/zoneTypes';
-import type { LoxoneZoneState } from '../src/domain/loxone/types';
+import type { ZoneState } from '../src/domain/zones/zoneState';
 import type { PlaybackSession } from '../src/ports/types/playback';
 
 type RouterFakes = {
   zones: ZoneRepository;
-  applied: Array<{ zoneId: number; patch: Partial<LoxoneZoneState>; force?: boolean }>;
+  applied: Array<{ zoneId: number; patch: Partial<ZoneState>; force?: boolean }>;
   notifiedQueue: Array<{ zoneId: number; queueSize: number }>;
   sessions: Map<number, PlaybackSession>;
   activeLocal: Set<number>;

@@ -1,5 +1,5 @@
 import type { PowerGroupConfig, ZoneConfig } from '@/domain/config/types';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { ComponentLogger } from '@/shared/logging/logger';
 import {
   type NormalizedPowerConfig,
@@ -78,7 +78,7 @@ export class SharedPowerGroupManager {
     }
   }
 
-  public onStatePatch(zoneId: number, patch: Partial<LoxoneZoneState>, nextState: LoxoneZoneState): void {
+  public onStatePatch(zoneId: number, patch: Partial<ZoneState>, nextState: ZoneState): void {
     if (!('mode' in patch)) {
       return;
     }

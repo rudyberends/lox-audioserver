@@ -4,7 +4,7 @@ import type {
   PlaybackMetadata,
   PlaybackSession,
 } from '@/application/playback/audioManager';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { ZoneContext, QueueAuthority } from '@/application/zones/internal/zoneTypes';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import type { ContentPort } from '@/ports/ContentPort';
@@ -26,7 +26,7 @@ export interface QueueAdvanceControllerDeps {
   radioParadise: RadioParadiseBlockService;
   crossfade: CrossfadeController;
   log: ComponentLogger;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>, force?: boolean) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>, force?: boolean) => void;
   isLocalQueueAuthority: (authority: QueueAuthority | undefined | null) => boolean;
   dispatchOutputs: (
     ctx: ZoneContext,

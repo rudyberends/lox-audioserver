@@ -1,5 +1,5 @@
 import type { ComponentLogger } from '@/shared/logging/logger';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { AudioManager } from '@/application/playback/audioManager';
 import type { ZoneRepository } from '@/application/zones/ZoneRepository';
 import type { QueueItem } from '@/application/zones/internal/zoneTypes';
@@ -8,7 +8,7 @@ import { resolveZoneStateControllerId } from '@/application/zones/state/authorit
 export type ExternalStateRouterDeps = {
   zones: ZoneRepository;
   audioManager: Pick<AudioManager, 'hasActiveLocalSession' | 'getSession' | 'stopPlayback'>;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>, force?: boolean) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>, force?: boolean) => void;
   notifyQueueUpdated: (zoneId: number, queueSize: number) => void;
   log: ComponentLogger;
 };
@@ -33,7 +33,7 @@ export class ExternalStateRouter {
     this.deps = deps;
   }
 
-  public onStatePatch(zoneId: number, patch: Partial<LoxoneZoneState>): void {
+  public onStatePatch(zoneId: number, patch: Partial<ZoneState>): void {
     const ctx = this.deps.zones.get(zoneId);
     if (!ctx) {
       return;
@@ -45,7 +45,7 @@ export class ExternalStateRouter {
     }
     const hasActiveLocalSession = this.deps.audioManager.hasActiveLocalSession(zoneId);
     if (hasActiveLocalSession) {
-      const propagated: Partial<LoxoneZoneState> = { ...patch };
+      const propagated: Partial<ZoneState> = { ...patch };
       delete propagated.time;
       delete propagated.duration;
       if (Object.keys(propagated).length === 0) return;
@@ -79,7 +79,7 @@ export class ExternalStateRouter {
     //   - queueAuthority = local mirrors the existing playContent flow
     const current = items[safeIndex];
     if (current) {
-      const patch: Partial<LoxoneZoneState> = {
+      const patch: Partial<ZoneState> = {
         audiopath: current.audiopath,
         audiotype: 2,
         qindex: safeIndex,

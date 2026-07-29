@@ -7,7 +7,7 @@ import type {
   InputsPort,
 } from '../src/ports/InputsPort';
 import type { ZoneContext } from '../src/application/zones/internal/zoneTypes';
-import type { LoxoneZoneState } from '../src/domain/loxone/types';
+import type { ZoneState } from '../src/domain/zones/zoneState';
 
 type ConfiguratorFakes = {
   airplay: AirplayController | null;
@@ -16,8 +16,8 @@ type ConfiguratorFakes = {
   airplayResolverSet: number;
   ctx: ZoneContext;
   playbackCalls: string[];
-  applyPatchCalls: Array<{ zoneId: number; patch: Partial<LoxoneZoneState>; force?: boolean }>;
-  stateStorePatches: Array<{ zoneId: number; patch: Partial<LoxoneZoneState> }>;
+  applyPatchCalls: Array<{ zoneId: number; patch: Partial<ZoneState>; force?: boolean }>;
+  stateStorePatches: Array<{ zoneId: number; patch: Partial<ZoneState> }>;
   outputVolumeCalls: Array<{ zoneId: number; volume: number; outputTypes: string[] }>;
   spotifyAdapterEvents: string[];
 };

@@ -8,7 +8,7 @@ import { ApiEventHub } from '../src/adapters/http/api/apiEventHub';
 import { withApiEvents } from '../src/adapters/http/api/apiNotifierTap';
 import { toApiZoneState } from '../src/adapters/http/api/zoneProjection';
 import { AudioType } from '../src/domain/loxone/enums';
-import type { LoxoneZoneState } from '../src/domain/loxone/types';
+import type { ZoneState } from '../src/domain/zones/zoneState';
 import type { NotifierPort } from '../src/ports/NotifierPort';
 
 // This API is the contract third parties build on, so the tests below guard the
@@ -51,7 +51,7 @@ function makeRequest(method: string, url: string, body?: unknown): IncomingMessa
   return stream;
 }
 
-function zoneState(overrides: Partial<LoxoneZoneState> = {}): LoxoneZoneState {
+function zoneState(overrides: Partial<ZoneState> = {}): ZoneState {
   return {
     playerid: 3,
     name: 'Kitchen',
@@ -76,18 +76,18 @@ function zoneState(overrides: Partial<LoxoneZoneState> = {}): LoxoneZoneState {
     parent: null,
     qindex: 0,
     ...overrides,
-  } as LoxoneZoneState;
+  } as ZoneState;
 }
 
 type Harness = {
   handler: ApiHandler;
   hub: ApiEventHub;
   commands: Array<{ zoneId: number; command: string; payload?: string }>;
-  states: Map<number, LoxoneZoneState>;
+  states: Map<number, ZoneState>;
 };
 
 function harness(): Harness {
-  const states = new Map<number, LoxoneZoneState>([[3, zoneState()]]);
+  const states = new Map<number, ZoneState>([[3, zoneState()]]);
   const commands: Harness['commands'] = [];
   const hub = new ApiEventHub();
   const handler = new ApiHandler({
@@ -306,7 +306,7 @@ test('closing a stream unsubscribes it', async () => {
 test('the notifier tap feeds the API without disturbing Loxone delivery', () => {
   const delivered: unknown[] = [];
   const inner = {
-    notifyZoneStateChanged: (s: LoxoneZoneState) => delivered.push(s),
+    notifyZoneStateChanged: (s: ZoneState) => delivered.push(s),
     notifyQueueUpdated: () => {},
     notifyRoomFavoritesChanged: () => {},
     notifyRecentlyPlayedChanged: () => {},
@@ -331,7 +331,7 @@ test('the notifier tap feeds the API without disturbing Loxone delivery', () => 
 test('a failing API subscriber cannot break Loxone delivery', () => {
   const delivered: unknown[] = [];
   const inner = {
-    notifyZoneStateChanged: (s: LoxoneZoneState) => delivered.push(s),
+    notifyZoneStateChanged: (s: ZoneState) => delivered.push(s),
     notifyQueueUpdated: () => {},
     notifyRoomFavoritesChanged: () => {},
     notifyRecentlyPlayedChanged: () => {},

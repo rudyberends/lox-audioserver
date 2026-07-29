@@ -1,5 +1,5 @@
 import type { ZoneConfig } from '@/domain/config/types';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 
 export interface ZoneStateController {
   start(): Promise<void> | void;
@@ -9,5 +9,5 @@ export interface ZoneStateController {
 
 export type ZoneStateControllerFactoryArgs = {
   zone: ZoneConfig;
-  onStatePatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  onStatePatch: (zoneId: number, patch: Partial<ZoneState>) => void;
 };

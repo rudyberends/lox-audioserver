@@ -1,14 +1,14 @@
 import ndjson from 'ndjson';
 import { Readable } from 'node:stream';
 import type { ZoneConfig } from '@/domain/config/types';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { AudioType } from '@/domain/loxone/enums';
 import { createLogger } from '@/shared/logging/logger';
 import type { ZoneStateController } from '@/application/zones/state/StateController';
 
 type BeoLinkControllerOptions = {
   zone: ZoneConfig;
-  onStatePatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  onStatePatch: (zoneId: number, patch: Partial<ZoneState>) => void;
 };
 
 const RECONNECT_MIN_MS = 1_000;
@@ -23,7 +23,7 @@ const IDLE_CHECK_INTERVAL_MS = 15_000;
 export class BeoLinkStateController implements ZoneStateController {
   private readonly log = createLogger('Zones', 'StateController:BeoLink');
   private readonly zone: ZoneConfig;
-  private readonly onStatePatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  private readonly onStatePatch: (zoneId: number, patch: Partial<ZoneState>) => void;
   private readonly notifyUrl: string | null;
   private readonly coverBaseOrigin: string | null;
   private stream: Readable | null = null;
@@ -407,7 +407,7 @@ export class BeoLinkStateController implements ZoneStateController {
   }
 
   private applyCoverCacheBusting(
-    patch: Partial<LoxoneZoneState>,
+    patch: Partial<ZoneState>,
     eventType: string,
   ): void {
     if (eventType === 'NOW_PLAYING_ENDED') {
@@ -442,7 +442,7 @@ export class BeoLinkStateController implements ZoneStateController {
     }
   }
 
-  private captureMetadata(patch: Partial<LoxoneZoneState>): boolean {
+  private captureMetadata(patch: Partial<ZoneState>): boolean {
     let changed = false;
     if (typeof patch.title === 'string') {
       const next = patch.title.trim();
@@ -473,7 +473,7 @@ export class BeoLinkStateController implements ZoneStateController {
     return changed;
   }
 
-  private applyExternalSourceLabelFallback(patch: Partial<LoxoneZoneState>): void {
+  private applyExternalSourceLabelFallback(patch: Partial<ZoneState>): void {
     const sourceName = typeof patch.sourceName === 'string' ? patch.sourceName.trim() : '';
     if (!sourceName) {
       return;
@@ -671,14 +671,14 @@ function findVolumeRangeMaximum(message: unknown): number | null {
   return maximum;
 }
 
-function mapZonePatch(message: unknown, coverBaseOrigin: string | null): Partial<LoxoneZoneState> {
+function mapZonePatch(message: unknown, coverBaseOrigin: string | null): Partial<ZoneState> {
   const root = asRecord(message);
   if (!root) return {};
   const notification = asRecord(root.notification);
   const type = pickString(notification?.type) ?? pickString(root.type) ?? '';
   const data = (notification?.data ?? root.data ?? root) as unknown;
   const payload = asRecord(data) ?? {};
-  const patch: Partial<LoxoneZoneState> = {};
+  const patch: Partial<ZoneState> = {};
 
   if (type === 'SOURCE') {
     // External BeoLink source should detach any prior local queue audiopath.
@@ -841,7 +841,7 @@ function findCoverUrl(payload: unknown, baseOrigin: string | null): string | nul
   return null;
 }
 
-function mapToken(token: string): LoxoneZoneState['mode'] | null {
+function mapToken(token: string): ZoneState['mode'] | null {
   const normalized = token.trim().toUpperCase();
   if (!normalized) return null;
 

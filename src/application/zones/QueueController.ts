@@ -15,14 +15,14 @@ import {
   resolveDisplayAudiotype,
   sanitizeTitle,
 } from '@/application/zones/helpers/stateHelpers';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { QueueAuthority, QueueItem, ZoneContext } from '@/application/zones/internal/zoneTypes';
 import { ZoneRepository } from '@/application/zones/ZoneRepository';
 
 type QueueControllerDeps = {
   log: ComponentLogger;
   contentPort: ContentPort;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>, force?: boolean) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>, force?: boolean) => void;
   isRadioAudiopath: (audiopath: string | undefined, audiotype?: number | null) => boolean;
   isSpotifyAudiopath: (audiopath: string | null | undefined) => boolean;
   isMusicAssistantAudiopath: (audiopath: string | null | undefined) => boolean;

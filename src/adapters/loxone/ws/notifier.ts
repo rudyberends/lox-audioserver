@@ -1,12 +1,12 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { StorageConfig } from '@/adapters/content/storage/storageManager';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
 import type { AudioSyncGroupPayload } from '@/application/groups/types/AudioSyncGroupPayload';
 import type { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry';
 import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
 
-type ZoneStateLookup = (zoneId: number) => LoxoneZoneState | undefined;
+type ZoneStateLookup = (zoneId: number) => ZoneState | undefined;
 type OutputProtocolLookup = (zoneId: number) => string | null;
 
 export class LoxoneWsNotifier {
@@ -51,7 +51,7 @@ export class LoxoneWsNotifier {
     this.audiopathToLoxone = translate;
   }
 
-  private enrichWithGroupContext(state: LoxoneZoneState): LoxoneZoneState {
+  private enrichWithGroupContext(state: ZoneState): ZoneState {
     const outputProtocol = this.outputProtocolLookup?.(state.playerid) ?? state.outputProtocol;
     const mixedGroupEnabled = this.mixedGroupLookup?.() ?? state.mixedGroupEnabled;
     // Loxone-boundary emit: translate the core's service-native audiopath back to
@@ -104,7 +104,7 @@ export class LoxoneWsNotifier {
   /**
    * Pushes the current zone state to all Loxone clients.
    */
-  public notifyZoneStateChanged(state: LoxoneZoneState): void {
+  public notifyZoneStateChanged(state: ZoneState): void {
     // The full state is broadcast frequently (often once per second for progress updates).
     // Logging the entire payload makes spam logging unusable, so keep this as a summary.
     this.log.spam('audio_event payload', {

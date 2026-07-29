@@ -10,7 +10,7 @@ import type { ZoneOutput } from '@/ports/OutputsTypes';
 import type { InputsPort } from '@/ports/InputsPort';
 import type { ContentPort } from '@/ports/ContentPort';
 import type { ConfigPort } from '@/ports/ConfigPort';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { ZoneRepository } from '@/application/zones/ZoneRepository';
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
@@ -38,7 +38,7 @@ export interface CrossfadeControllerDeps {
   inputsPort: InputsPort;
   recentsManager: RecentsManager;
   log: ComponentLogger;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>, force?: boolean) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>, force?: boolean) => void;
   isLocalQueueAuthority: (authority: QueueAuthority | undefined | null) => boolean;
   dispatchOutputs: (
     ctx: ZoneContext,

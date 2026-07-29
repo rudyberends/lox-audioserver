@@ -2,7 +2,7 @@ import type { ComponentLogger } from '@/shared/logging/logger';
 import type { PlaybackMetadata } from '@/application/playback/audioManager';
 import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import type { AlertMediaResource } from '@/application/alerts/types';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { AlertSnapshot, ZoneContext } from '@/application/zones/internal/zoneTypes';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { NativeAlertRequest, ZoneOutput } from '@/ports/OutputsTypes';
@@ -23,7 +23,7 @@ const ALERT_STOP_MARGIN_MS = 750;
 type AlertsCoordinatorDeps = {
   zones: ZoneRepository;
   playbackCoordinator: PlaybackCoordinator;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>, force?: boolean) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>, force?: boolean) => void;
   log: ComponentLogger;
   audioHelpers: ZoneAudioHelpers;
   zoneAudioPrefs: ZoneAudioPreferences;
@@ -39,7 +39,7 @@ export class AlertsCoordinator {
   private readonly playbackCoordinator: PlaybackCoordinator;
   private readonly applyPatch: (
     zoneId: number,
-    patch: Partial<LoxoneZoneState>,
+    patch: Partial<ZoneState>,
     force?: boolean,
   ) => void;
   private readonly log: ComponentLogger;

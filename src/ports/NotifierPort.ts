@@ -1,8 +1,8 @@
 import type { AudioSyncGroupPayload } from '@/ports/types/groups';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 
 export interface NotifierPort {
-  notifyZoneStateChanged: (state: LoxoneZoneState) => void;
+  notifyZoneStateChanged: (state: ZoneState) => void;
   notifyQueueUpdated: (zoneId: number, queueSize: number) => void;
   notifyRoomFavoritesChanged: (zoneId: number, count: number) => void;
   notifyRecentlyPlayedChanged: (zoneId: number, timestamp: number) => void;

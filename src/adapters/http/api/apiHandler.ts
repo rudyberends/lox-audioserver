@@ -15,13 +15,13 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
 import type { ApiZoneState } from '@/domain/zones/apiTypes';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { createLogger } from '@/shared/logging/logger';
 
 export type ApiHandlerDeps = {
   eventHub: ApiEventHub;
-  getAllZoneStates: () => LoxoneZoneState[];
-  getZoneState: (zoneId: number) => LoxoneZoneState | null | undefined;
+  getAllZoneStates: () => ZoneState[];
+  getZoneState: (zoneId: number) => ZoneState | null | undefined;
   handleCommand: (zoneId: number, command: string, payload?: string) => void;
   serverVersion: string;
   startedAt: number;

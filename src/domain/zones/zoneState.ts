@@ -1,20 +1,34 @@
 /**
- * Projection of a zone state as expected by Loxone Audio clients.
+ * The server's internal zone state — the single source of truth every consumer
+ * projects from: the public API (`ApiZoneState`), the Loxone clients, DLNA,
+ * sendspin and the outputs.
+ *
+ * It is *not* a Loxone type, despite still carrying some of Loxone's vocabulary.
+ * Those leftovers are called out per field below and are being replaced one at a
+ * time; the neutral projection in `src/adapters/http/api/zoneProjection.ts` is
+ * the seam that lets that happen without moving the public contract. Do not add
+ * fields here that only one consumer understands.
  */
-export interface LoxoneZoneState {
+export interface ZoneState {
   album: string;
   artist: string;
+  /** Where the audio comes from. A real domain concept, not a Loxone artefact. */
   audiopath: string;
+  /** Loxone leftover: numeric source category. `ApiSourceKind` is the readable form. */
   audiotype: number;
+  /** Loxone leftover: duplicates `power`. */
   clientState: 'on' | 'off';
   coverurl: string;
   duration: number;
-  /** Comma-separated 10-band EQ values for Loxone App AudioZone controls. */
+  /** Loxone leftover: comma-separated 10-band EQ. A `number[]` everywhere else. */
   equalizerSettings: string;
+  /** Loxone leftover: icon id for the Loxone app. */
   icontype?: number;
   mode: 'play' | 'pause' | 'stop';
   name: string;
-  parent: LoxoneParentMeta | null;
+  /** Loxone leftover: browse context, which belongs to the content model. */
+  parent: ZoneParentMeta | null;
+  /** Loxone leftover: this is the zone id. */
   playerid: number;
   plrepeat: number;
   plshuffle: number;
@@ -26,6 +40,7 @@ export interface LoxoneZoneState {
   time: number;
   title: string;
   qid?: string;
+  /** Loxone leftover: numeric file/container type for the Loxone app. */
   type: number;
   volume: number;
   /**
@@ -35,8 +50,8 @@ export interface LoxoneZoneState {
    */
   syncedzones?: number[];
   /**
-   * Master volume of the sync group this zone belongs to (leader's volume).
-   * 0 when the zone is not grouped.
+   * Loxone leftover: master volume of the sync group (the leader's volume), 0 when
+   * ungrouped. Derivable from `syncedzones[0]`.
    */
   mastervolume?: number;
   /**
@@ -54,7 +69,7 @@ export interface LoxoneZoneState {
   mixedGroupEnabled?: boolean;
 }
 
-export interface LoxoneParentMeta {
+export interface ZoneParentMeta {
   audiopath: string;
   coverurl: string;
   id: string;

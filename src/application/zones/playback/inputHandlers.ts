@@ -3,7 +3,7 @@ import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHel
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 import { clampVolumeForZone } from '@/application/zones/helpers/stateHelpers';
 import { AudioType, FileType } from '@/domain/loxone/enums';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { ComponentLogger } from '@/shared/logging/logger';
 import { allowsInputCover, allowsInputMetadata, allowsInputVolume, isActiveInputMode } from '@/application/zones/playback/guards';
 import { resolveInputStartDecision } from '@/application/zones/playback/commandMapping';
@@ -16,7 +16,7 @@ type InputCoordinator = {
   getZone: (zoneId: number) => ZoneContext | undefined;
   log: ComponentLogger;
   audioHelpers: ZoneAudioHelpers;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>) => void;
   setInputMode: (ctx: ZoneContext | undefined, mode: ZoneContext['inputMode']) => void;
   stopExternalInputSessions: (
     zoneId: number,

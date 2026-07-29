@@ -1,7 +1,7 @@
 import type { ComponentLogger } from '@/shared/logging/logger';
 import type { AudioManager, PlaybackMetadata, PlaybackSession, PlaybackSource, CoverArtPayload } from '@/application/playback/audioManager';
 import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { toServiceNative } from '@/domain/loxone/bridgeIdentity';
 import type { QueueAuthority, ZoneContext } from '@/application/zones/internal/zoneTypes';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
@@ -50,7 +50,7 @@ type PlaybackCoordinatorDeps = {
   zones: ZoneRepository;
   queueController: ZoneQueueController;
   outputRouter: OutputRouter;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>, force?: boolean) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>, force?: boolean) => void;
   stopAlert: (zoneId: number) => Promise<void>;
   log: ComponentLogger;
   notifier: NotifierPort;
@@ -69,7 +69,7 @@ export class PlaybackCoordinator {
   private readonly outputRouter: OutputRouter;
   private readonly applyPatch: (
     zoneId: number,
-    patch: Partial<LoxoneZoneState>,
+    patch: Partial<ZoneState>,
     force?: boolean,
   ) => void;
   private readonly stopAlert: (zoneId: number) => Promise<void>;

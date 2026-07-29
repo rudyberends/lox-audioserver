@@ -2,7 +2,7 @@ import type { PlaybackMetadata, PlaybackSession } from '@/application/playback/a
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 import { clampVolumeForZone, getZoneDefaultVolume } from '@/application/zones/helpers/stateHelpers';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import {
   buildMetadataPatch,
@@ -19,7 +19,7 @@ const log = createLogger('Zones', 'PlayerListeners');
 
 type PlayerListenerCoordinator = {
   getZone: (zoneId: number) => ZoneContext | undefined;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>) => void;
   dispatchOutputs: (
     ctx: ZoneContext,
     outputs: ZoneOutput[],
@@ -340,9 +340,9 @@ function onPlayerError(
 }
 
 function applyPatchIfNonEmpty(
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void,
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>) => void,
   zoneId: number,
-  patch: Partial<LoxoneZoneState>,
+  patch: Partial<ZoneState>,
 ): void {
   if (Object.keys(patch).length > 0) {
     applyPatch(zoneId, patch);

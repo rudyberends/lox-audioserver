@@ -1,7 +1,7 @@
 import type { PlaybackMetadata } from '@/application/playback/audioManager';
 import type { QueueAuthority, ZoneContext } from '@/application/zones/internal/zoneTypes';
 import type { ParentContext } from '@/application/zones/policies/ParentContextPolicy';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 
 export type InputStartDecision = {
   mode: ZoneContext['inputMode'];
@@ -13,7 +13,7 @@ export type ProviderAction =
   | { type: 'setRadioControllable'; value: boolean };
 
 export type ProviderPatchResult = {
-  patch: Partial<LoxoneZoneState>;
+  patch: Partial<ZoneState>;
   actions?: ProviderAction[];
 };
 

@@ -11,7 +11,7 @@ import type {
   ZoneUdpPowerConfig,
   ZoneUrlPowerConfig,
 } from '@/domain/config/types';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { ComponentLogger } from '@/shared/logging/logger';
 
 const execFileAsync = promisify(execFile);
@@ -82,8 +82,8 @@ export class PowerManager {
   public onStatePatch(
     zoneId: number,
     zoneConfig: ZoneConfig,
-    patch: Partial<LoxoneZoneState>,
-    nextState: LoxoneZoneState,
+    patch: Partial<ZoneState>,
+    nextState: ZoneState,
   ): void {
     if (!('mode' in patch)) {
       return;
@@ -436,7 +436,7 @@ function normalizeActiveModes(raw: ZonePowerManagerConfig['activeModes']): Reado
 
 export function isPowerOnMode(
   activeModes: ReadonlySet<'play' | 'pause'>,
-  mode: LoxoneZoneState['mode'],
+  mode: ZoneState['mode'],
 ): boolean {
   return mode === 'play' || (mode === 'pause' && activeModes.has('pause'));
 }

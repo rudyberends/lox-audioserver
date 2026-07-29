@@ -4,7 +4,7 @@ import { isQueueDrivenInput } from '@/application/zones/playback/guards';
 import { mapZoneCommandToIntent } from '@/application/zones/playback/commandIntents';
 import type { VolumeCommandIntent } from '@/application/zones/playback/types';
 import type { ComponentLogger } from '@/shared/logging/logger';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import type { QueueAuthority } from '@/application/zones/internal/zoneTypes';
 import type { PlaybackMetadata, PlaybackSession } from '@/application/playback/audioManager';
@@ -14,7 +14,7 @@ import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHel
 
 type CommandCoordinator = {
   log: ComponentLogger;
-  applyPatch: (zoneId: number, patch: Partial<LoxoneZoneState>) => void;
+  applyPatch: (zoneId: number, patch: Partial<ZoneState>) => void;
   dispatchOutputs: (
     ctx: ZoneContext,
     outputs: ZoneOutput[],

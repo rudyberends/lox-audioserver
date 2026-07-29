@@ -1,5 +1,5 @@
 import type { ZoneConfig } from '@/domain/config/types';
-import type { LoxoneZoneState } from '@/domain/loxone/types';
+import type { ZoneState } from '@/domain/zones/zoneState';
 import { AudioType } from '@/domain/loxone/enums';
 import { resizeCoverUrl, COVER_ART_NOW_PLAYING_SIZE } from '@/shared/coverArt';
 
@@ -44,7 +44,7 @@ export function clampVolume(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
-export function mapPlaybackState(state: string | null | undefined): LoxoneZoneState['mode'] {
+export function mapPlaybackState(state: string | null | undefined): ZoneState['mode'] {
   const token = String(state ?? '').toLowerCase();
   if (token.includes('pause')) return 'pause';
   if (token.includes('play') || token.includes('buffer')) return 'play';
