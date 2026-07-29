@@ -1,6 +1,8 @@
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { ContentManager } from '@/adapters/content/contentManager';
 import type { ContentFolder } from '@/ports/ContentTypes';
+import type { ProviderCapabilities } from '@/ports/ProviderCapabilities';
+import { capabilitiesFor } from '@/adapters/content/providerCapabilities';
 import {
   searchSourceFromServiceKey,
   serviceNativeKey,
@@ -32,6 +34,16 @@ export type BrowsableService = {
   id3Probe: string;
   /** `globalSearch` source for this service, or null when it cannot search. */
   searchSource: string | null;
+  /**
+   * What this service can actually do — which item kinds its search returns, and whether
+   * its catalogue is larger than the user's collection.
+   *
+   * Distinct from `searchSource`, which only names the search *endpoint*: two services can
+   * both be searchable and disagree about albums. A consumer should offer the kinds listed
+   * here rather than assume every service serves the same set, which is what
+   * `globalsearch/describe` used to assert for all of them.
+   */
+  capabilities: ProviderCapabilities;
   browse: (
     cm: ContentManager,
     folderId: string,
@@ -95,6 +107,7 @@ export function buildBrowsableServices(
       // Artists / Tracks / Folders) live under the local storage folder.
       id3Probe: 'library-local',
       searchSource: 'local',
+      capabilities: capabilitiesFor('library'),
       browse: (cm, folderId, offset, limit) => cm.getMediaFolder(folderId, offset, limit),
     });
   }
@@ -110,6 +123,8 @@ export function buildBrowsableServices(
       id3Probe: 'start',
       // Radio is a stream directory, not a searchable track catalogue.
       searchSource: null,
+      // Radio is browsable but its providers do not answer a general search.
+      capabilities: capabilitiesFor('radio'),
       browse: (cm, folderId, offset, limit) =>
         cm.getServiceFolder('radioparadise', 'radioparadise', folderId, offset, limit),
     });
@@ -135,6 +150,7 @@ export function buildBrowsableServices(
       rootFolderId: 'root',
       id3Probe: 'root',
       searchSource: searchSourceFromServiceKey(key),
+      capabilities: capabilitiesFor(provider),
       browse: (cm, folderId, offset, limit) =>
         cm.getServiceFolder(key, key, folderId, offset, limit),
     });

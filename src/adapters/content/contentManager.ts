@@ -32,6 +32,10 @@ import {
   listStorages,
 } from '@/adapters/content/storage/storageManager';
 import { parseSearchLimits } from '@/adapters/content/utils/searchLimits';
+import {
+  intersectSearchCategories,
+  searchCategoriesForLoxone,
+} from '@/adapters/content/providerCapabilities';
 import { createLogger } from '@/shared/logging/logger';
 import type { CustomRadioStore } from '@/adapters/content/providers/customRadioStore';
 
@@ -531,13 +535,22 @@ export class ContentManager {
 
   public getGlobalSearchDescription(): Record<string, string[]> {
     const desc: Record<string, string[]> = {};
+    // Which real providers sit behind the accounts the app can see. A bridge is announced
+    // to Loxone as Spotify — the app knows no other streaming source — but what it can
+    // actually search is the bridged provider's business, so both are tracked.
     const providerTypes = new Set<string>();
+    const bridgedProviders = new Set<string>();
+    let hasRealSpotify = false;
     const spotify = this.requireSpotify();
     for (const account of spotify.listAccounts()) {
       if (account.fake) {
         providerTypes.add('spotify');
+        if (account.provider) {
+          bridgedProviders.add(account.provider.toLowerCase());
+        }
         continue;
       }
+      hasRealSpotify = true;
       if (account.provider) {
         providerTypes.add(account.provider.toLowerCase());
       }
@@ -546,10 +559,23 @@ export class ContentManager {
       providerTypes.add('spotify');
     }
 
+    // Read from the capability table rather than asserted. This used to hand every
+    // provider Spotify's six categories, which is false for SoundCloud (no album search)
+    // and badly false for YouTube/YT Music (tracks only) — so the app offered tabs that
+    // could never fill.
     for (const provider of providerTypes) {
-      desc[provider] = ['track', 'album', 'artist', 'playlist', 'episode', 'show'];
+      desc[provider] = searchCategoriesForLoxone(provider);
     }
-    desc.local = ['track', 'album', 'artist', 'playlist', 'folder'];
+    // The `spotify` entry stands for every bridged service too, so it may only promise what
+    // all of them can deliver: announcing `show` because real Spotify has podcasts would
+    // put an empty tab in front of an Apple Music user. Real Spotify keeps its own set.
+    if (bridgedProviders.size > 0 && !hasRealSpotify) {
+      desc.spotify = intersectSearchCategories([...bridgedProviders]);
+    }
+    // `local` and `tunein` keep the names the Loxone app knows, which are not our provider
+    // ids: it asks for `station`/`custom` on TuneIn, and calls the library `local`. The
+    // categories come from the table; the naming stays the app's.
+    desc.local = searchCategoriesForLoxone('library');
     desc.tunein = ['station', 'custom'];
     return desc;
   }

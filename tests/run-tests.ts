@@ -99,6 +99,7 @@ import './serverHealth.test';
 import './mqttTopics.test';
 import './contentItemKind.test';
 import './folderPage.test';
+import './providerCapabilities.test';
 import './mqttCommands.test';
 import './squeezeliteReconnect.test';
 import './loxoneZoneProjection.test';
