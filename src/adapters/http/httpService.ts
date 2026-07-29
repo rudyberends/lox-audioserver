@@ -17,6 +17,7 @@ import { ApiHandler } from '@/adapters/http/api/apiHandler';
 import { toApiQueue } from '@/adapters/http/api/queueProjection';
 import { toApiFavorites, toApiRecents } from '@/adapters/http/api/libraryProjection';
 import { getZoneEqualizerBands } from '@/domain/zones/equalizer';
+import { resizeCoverUrl, resizeTuneInCoverUrl } from '@/shared/coverArt';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import type { ApiGroupResult, ApiOutput, ApiVolumeLimits } from '@/domain/zones/apiTypes';
 import { isLocalRequest } from '@/shared/utils/net';
@@ -163,6 +164,22 @@ export class HttpService {
       getOutputDevice: (zoneId) => options.resolveOutputDevice(zoneId),
       getVolumeLimits: (zoneId) => options.resolveVolumeLimits(zoneId),
       getOutputProtocol: (zoneId) => options.resolveOutputProtocol(zoneId),
+      getZoneCover: (zoneId, targetSize) => {
+        const session = options.audioManager.getSession(zoneId);
+        // Inline bytes win: embedded artwork has no url to hand out.
+        if (session?.cover) {
+          return session.cover;
+        }
+        const state = options.zoneManager.getZoneState(zoneId);
+        const source = state?.coverurl?.trim() || '';
+        if (!source) {
+          return null;
+        }
+        // Ask the provider for the requested size where it supports variants; otherwise
+        // this returns the url unchanged.
+        const sized = resizeCoverUrl(source, targetSize);
+        return source.includes('tunein.com') ? resizeTuneInCoverUrl(sized, targetSize) : sized;
+      },
       getQueue: (zoneId, start, limit) => {
         if (!options.zoneManager.getZoneState(zoneId)) {
           return null;

@@ -8,6 +8,7 @@ import { ApiEventHub } from '../src/adapters/http/api/apiEventHub';
 import { withApiEvents } from '../src/adapters/http/api/apiNotifierTap';
 import { toApiZoneState } from '../src/adapters/http/api/zoneProjection';
 import { AudioType } from '../src/domain/zones/enums';
+import { COVER_ART_NOW_PLAYING_SIZE } from '../src/shared/coverArt';
 import type { ZoneState } from '../src/domain/zones/zoneState';
 import type { NotifierPort } from '../src/ports/NotifierPort';
 
@@ -43,11 +44,17 @@ class FakeResponse extends EventEmitter {
   }
 }
 
-function makeRequest(method: string, url: string, body?: unknown): IncomingMessage {
+function makeRequest(
+  method: string,
+  url: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): IncomingMessage {
   const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
   const stream = Readable.from(payload ? [payload] : []) as unknown as IncomingMessage;
   (stream as any).method = method;
   (stream as any).url = url;
+  (stream as any).headers = headers;
   return stream;
 }
 
@@ -90,6 +97,9 @@ type Harness = {
 let eqBands: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 let queueOps: string[] = [];
 let libOps: string[] = [];
+// What the cover route asked for, so the tests can check the size hint it passed on.
+let coverAsks: Array<{ zoneId: number; targetSize: number }> = [];
+let zoneCover: { data: Buffer; mime?: string } | string | null = null;
 const favItems = [{ id: 1, name: 'Radio Paradise', source: 'tunein:s1', coverUrl: 'c' }];
 const recentItems = [
   { source: 'applemusic:track:1', title: 'One', artist: 'A', album: 'X', coverUrl: 'c', service: 'applemusic' },
@@ -103,6 +113,8 @@ function harness(): Harness {
   eqBands = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
   queueOps = [];
   libOps = [];
+  coverAsks = [];
+  zoneCover = { data: Buffer.from('jpegbytes'), mime: 'image/png' };
   const states = new Map<number, ZoneState>([[3, zoneState()]]);
   const commands: Harness['commands'] = [];
   const plays: Harness['plays'] = [];
@@ -191,6 +203,10 @@ function harness(): Harness {
     queueUndo: () => {
       queueOps.push('undo');
     },
+    getZoneCover: (zoneId, targetSize) => {
+      coverAsks.push({ zoneId, targetSize });
+      return zoneId === 3 ? zoneCover : null;
+    },
     getServiceLabel: (audiopath) => (audiopath.startsWith('applemusic:') ? 'Apple Music' : null),
     getOutputDevice: (zoneId) =>
       zoneId === 3
@@ -210,9 +226,18 @@ function harness(): Harness {
   return { handler, hub, commands, plays, states };
 }
 
-async function call(h: Harness, method: string, url: string, body?: unknown) {
+async function call(
+  h: Harness,
+  method: string,
+  url: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+) {
   const res = new FakeResponse();
-  await h.handler.handle(makeRequest(method, url, body), res as unknown as ServerResponse);
+  await h.handler.handle(
+    makeRequest(method, url, body, headers),
+    res as unknown as ServerResponse,
+  );
   return res;
 }
 
@@ -976,4 +1001,118 @@ test('an empty member list ungroups, and a bad one is refused', async () => {
   assert.equal((await call(h, 'PUT', `${API_ROOT}/zones/3/group`, { members: 'nope' })).statusCode, 400);
   assert.equal((await call(h, 'PUT', `${API_ROOT}/zones/3/group`, {})).statusCode, 400);
   assert.equal((await call(h, 'GET', `${API_ROOT}/zones/3/group`)).statusCode, 405);
+});
+
+// A cover url that only names the zone is the point of this route: `track.coverUrl`
+// changes every track and can be a remote host or a data uri, so it cannot be put in a
+// wall panel's <img src> and left there.
+
+test('the zone cover serves whatever the zone has, at a url that never changes', async () => {
+  const h = harness();
+  const res = await call(h, 'GET', `${API_ROOT}/zones/3/cover`);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.headers['Content-Type'], 'image/png', 'the mime the source reported');
+  assert.equal(res.body, 'jpegbytes');
+  // Briefly cacheable: polling should not re-fetch the same art every second, but the
+  // next track has to become visible without a url change to force it.
+  assert.equal(res.headers['Cache-Control'], 'public, max-age=10');
+});
+
+test('a data-uri cover is decoded rather than handed over as text', async () => {
+  const h = harness();
+  zoneCover = `data:image/gif;base64,${Buffer.from('gifbytes').toString('base64')}`;
+  const res = await call(h, 'GET', `${API_ROOT}/zones/3/cover`);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.headers['Content-Type'], 'image/gif');
+  assert.equal(res.body, 'gifbytes');
+  assert.equal(res.headers['Cache-Control'], 'public, max-age=10', 'same policy as bytes');
+});
+
+test('a zone without art answers 404 instead of an empty image', async () => {
+  const h = harness();
+  zoneCover = null;
+  const res = await call(h, 'GET', `${API_ROOT}/zones/3/cover`);
+  assert.equal(res.statusCode, 404);
+  // An unknown zone looks the same from outside: there is no cover either way.
+  assert.equal((await call(h, 'GET', `${API_ROOT}/zones/404/cover`)).statusCode, 404);
+});
+
+test('size is passed upstream as a hint, and a nonsense one falls back', async () => {
+  const h = harness();
+  await call(h, 'GET', `${API_ROOT}/zones/3/cover?size=300`);
+  assert.deepEqual(coverAsks.at(-1), { zoneId: 3, targetSize: 300 });
+
+  // No size, out of range, or not a number: use the now-playing default rather than
+  // refusing, since the caller is usually an <img> tag that cannot handle a 400. An
+  // out-of-range size must NOT be clamped to the nearest bound — this route once served
+  // a 16px thumbnail to every caller that omitted `size`, because a missing value became
+  // 0 and 0 clamped up to the minimum.
+  for (const query of ['', '?size=0', '?size=1', '?size=99999', '?size=abc', '?size=-4']) {
+    await call(h, 'GET', `${API_ROOT}/zones/3/cover${query}`);
+    assert.equal(
+      coverAsks.at(-1)?.targetSize,
+      COVER_ART_NOW_PLAYING_SIZE,
+      `${query || 'no query'} falls back`,
+    );
+  }
+});
+
+// The url deliberately does not change when the track does, so an ETag is what keeps a
+// cached copy from going stale: revalidating costs a bodyless 304, and a new cover is
+// visible immediately without the client having to change the url.
+
+test('an unchanged cover revalidates to 304, and a new one does not', async () => {
+  const h = harness();
+  const first = await call(h, 'GET', `${API_ROOT}/zones/3/cover`);
+  const etag = first.headers['ETag'] as string;
+  assert.ok(etag, 'the response identifies which cover it carried');
+
+  const again = await call(h, 'GET', `${API_ROOT}/zones/3/cover`, undefined, {
+    'if-none-match': etag,
+  });
+  assert.equal(again.statusCode, 304);
+  assert.equal(again.body, '', 'no body is the entire point');
+
+  // A different track is a different tag, so the same conditional request now gets bytes.
+  zoneCover = { data: Buffer.from('other-art'), mime: 'image/jpeg' };
+  const changed = await call(h, 'GET', `${API_ROOT}/zones/3/cover`, undefined, {
+    'if-none-match': etag,
+  });
+  assert.equal(changed.statusCode, 200);
+  assert.equal(changed.body, 'other-art');
+  assert.notEqual(changed.headers['ETag'], etag);
+});
+
+test('the same artwork at another size is a different tag', async () => {
+  // Two sizes are two images behind one url, so sharing a tag would serve the wrong one.
+  const h = harness();
+  const big = await call(h, 'GET', `${API_ROOT}/zones/3/cover?size=640`);
+  const small = await call(h, 'GET', `${API_ROOT}/zones/3/cover?size=300`);
+  assert.notEqual(big.headers['ETag'], small.headers['ETag']);
+});
+
+test('a tag is stable across requests and identifies the source, not the request', async () => {
+  // Stable means a restart or a second server hands out the same tag: it is hashed from
+  // the artwork itself, not from a counter or a clock.
+  const h = harness();
+  const a = await call(h, 'GET', `${API_ROOT}/zones/3/cover`);
+  const b = await call(harness(), 'GET', `${API_ROOT}/zones/3/cover`);
+  assert.equal(a.headers['ETag'], b.headers['ETag']);
+});
+
+test('a client can bust a cache it does not control with a throwaway parameter', async () => {
+  // A Loxone visualisation holds an <img src> far longer than max-age suggests, so an
+  // unknown query parameter must be ignored rather than refused.
+  const h = harness();
+  const res = await call(h, 'GET', `${API_ROOT}/zones/3/cover?v=track-1234`);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body, 'jpegbytes');
+  assert.equal(coverAsks.at(-1)?.targetSize, COVER_ART_NOW_PLAYING_SIZE, 'size still default');
+});
+
+test('the cover route is read-only', async () => {
+  const h = harness();
+  for (const method of ['PUT', 'POST', 'DELETE']) {
+    assert.equal((await call(h, method, `${API_ROOT}/zones/3/cover`, {})).statusCode, 405, method);
+  }
 });

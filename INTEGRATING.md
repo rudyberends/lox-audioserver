@@ -175,7 +175,63 @@ GET /api/v1/zones/{id}/queue        →  { "items": [ … ], "start": 0, "total"
 GET /api/v1/zones/{id}/favorites    →  { "items": [ … ], "start": 0, "total": 8 }
 GET /api/v1/zones/{id}/recents      →  { "items": [ … ], "start": 0, "total": 20 }
 GET /api/v1/health                  →  { "status": "ok", "version": "…", "uptimeSec": 120 }
+GET /api/v1/zones/{id}/cover        →  the image itself        404 when the zone has none
 ```
+
+### Cover art
+
+`track.coverUrl` is the artwork's real location, and it changes every track — it can be a
+remote CDN, a data uri, or a url only reachable from the server. That is fine if you read
+state and update an `<img>` each time, but not if you want one address you can point a
+wall panel or a Loxone visualisation at and forget about.
+
+`GET /api/v1/zones/{id}/cover` is that address. It names only the zone, returns the image
+bytes, and follows whatever that zone is playing:
+
+```bash
+# Always shows the kitchen's current cover
+http://server:7090/api/v1/zones/3/cover
+http://server:7090/api/v1/zones/3/cover?size=300
+```
+
+`size` is a hint. Where the provider offers variants (Apple Music, TuneIn, the image
+proxy) the server asks upstream for one near that size, which is sharper and cheaper than
+scaling here; otherwise it is ignored. Out-of-range or unparseable values fall back to the
+default rather than erroring, so an `<img src>` that cannot handle a `400` stays safe.
+
+A zone playing nothing, or an unknown zone, answers `404` — draw your own placeholder
+rather than expecting a blank image.
+
+#### Keeping it fresh
+
+Because the url does not change when the track does, caching needs a way to tell one cover
+from the next. Every response carries an `ETag` hashed from the artwork itself, alongside
+`Cache-Control: public, max-age=10`:
+
+```bash
+curl -s -o cover.jpg -D - http://server:7090/api/v1/zones/3/cover
+# ETag: "xLp3…"
+
+# Still the same cover → 304, no body transferred
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H 'If-None-Match: "xLp3…"' http://server:7090/api/v1/zones/3/cover
+```
+
+So polling costs almost nothing while a track plays, and the moment it changes you get
+bytes again. The tag is derived from the source and the requested size, which makes it
+stable across restarts and identical on two servers holding the same art — not a counter
+you have to store.
+
+Some clients ignore all of that. A Loxone visualisation will hold an `<img src>` far longer
+than `max-age` suggests, and there is no header that fixes it. For those, add any parameter
+of your own and vary it when the track changes — unknown parameters are ignored:
+
+```
+http://server:7090/api/v1/zones/3/cover?v=applemusic:track:b64_MTc4MDM4MjY5NQ==
+```
+
+`track.coverUrl` from `/api/v1/events` is a convenient value to put there: it changes
+exactly when the picture does.
 
 ## Commands
 

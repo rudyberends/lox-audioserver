@@ -12,6 +12,7 @@
  * "pause zone 3" rather than one per protocol.
  */
 import type { IncomingMessage, ServerResponse } from 'http';
+import { createHash } from 'node:crypto';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
 import type {
@@ -26,6 +27,8 @@ import type {
 } from '@/domain/zones/apiTypes';
 import type { ZoneState } from '@/domain/zones/zoneState';
 import { createLogger } from '@/shared/logging/logger';
+import { serveCover } from '@/adapters/http/streams/serveCover';
+import { COVER_ART_NOW_PLAYING_SIZE } from '@/shared/coverArt';
 
 export type ApiHandlerDeps = {
   eventHub: ApiEventHub;
@@ -72,6 +75,14 @@ export type ApiHandlerDeps = {
    * is empty. Returns what the group became, including anything rejected.
    */
   setGroup: (zoneId: number, members: number[]) => ApiGroupResult | null;
+  /**
+   * The cover for what a zone is playing now: inline bytes, a data uri, or a url to
+   * proxy. Null when the zone has none.
+   */
+  getZoneCover: (
+    zoneId: number,
+    targetSize: number,
+  ) => { data: Buffer; mime?: string } | string | null;
   /** Which protocol a zone plays over right now; see ApiOutput. */
   getOutputProtocol: (zoneId: number) => string | null;
   /** The configured name of the service an audiopath belongs to, for `source.name`. */
@@ -108,6 +119,48 @@ const LEGACY_ROOT = '/api';
 
 /** How long an idle SSE stream waits before emitting a comment to keep proxies from closing it. */
 const SSE_KEEPALIVE_MS = 25_000;
+
+/** Smallest and largest cover a caller may ask for; outside this it is treated as unasked. */
+const COVER_SIZE_MIN = 32;
+const COVER_SIZE_MAX = 2000;
+
+/**
+ * The cover size a `?size=` parameter asks for, or the now-playing default.
+ *
+ * Deliberately *not* clamped: an absent or nonsensical size means "no preference", and
+ * clamping it would silently turn that into the nearest bound. Clamping a missing size to
+ * the minimum is how this route once served 16px thumbnails to everyone who omitted it.
+ */
+function coverSize(raw: string | null): number {
+  const requested = Number(raw);
+  if (!raw || !Number.isFinite(requested)) {
+    return COVER_ART_NOW_PLAYING_SIZE;
+  }
+  const rounded = Math.round(requested);
+  return rounded >= COVER_SIZE_MIN && rounded <= COVER_SIZE_MAX
+    ? rounded
+    : COVER_ART_NOW_PLAYING_SIZE;
+}
+
+/**
+ * A tag identifying which cover a response carried, or undefined when there is none.
+ *
+ * Hashed from what the artwork *is* — the upstream url, or the bytes when they are inline
+ * — plus the requested size, since two sizes are different images at the same url. It is
+ * therefore stable across restarts and identical across servers, which a counter or a
+ * timestamp would not be.
+ */
+function coverEtag(
+  cover: { data: Buffer; mime?: string } | string | null,
+  size: number,
+): string | undefined {
+  if (!cover) {
+    return undefined;
+  }
+  const identity = typeof cover === 'string' ? Buffer.from(cover) : cover.data;
+  const hash = createHash('sha1').update(identity).update(`@${size}`).digest('base64url');
+  return `"${hash}"`;
+}
 
 export class ApiHandler {
   private readonly log = createLogger('Api');
@@ -201,6 +254,10 @@ export class ApiHandler {
       }
       if (action === 'group') {
         await this.handleGroup(req, res, method, zoneId);
+        return;
+      }
+      if (action === 'cover') {
+        await this.handleCover(req, res, method, zoneId, url);
         return;
       }
       await this.handleZoneRoute(req, res, method, zoneId, action);
@@ -452,6 +509,49 @@ export class ApiHandler {
       return;
     }
     this.sendJson(res, 400, { error: 'invalid-queue-delete' });
+  }
+
+  /**
+   * The cover art for whatever a zone is playing, at a stable url.
+   *
+   * `track.coverUrl` already points at the artwork, but it changes per track and can be
+   * a remote host or a data uri — neither of which you can put in an `<img src>` on a
+   * wall panel and leave there. This url only names the zone, so it keeps working as the
+   * music changes. (The `/streams/{zone}/{session}/cover` route is a different thing: it
+   * exists so a Cast or DLNA device can fetch artwork itself, and carries a session id
+   * precisely so those devices stop caching the previous track's image.)
+   *
+   * `size` is a hint, not a promise: it is passed upstream where the provider supports
+   * variants (Apple Music, TuneIn, imageproxy) rather than being resized here. Asking a
+   * CDN for a smaller image beats scaling a bigger one.
+   *
+   * Because the url deliberately does not change per track, cache-busting is handled two
+   * ways: an `ETag` derived from the resolved artwork, so a polling client revalidates for
+   * a bodyless `304` and still sees a new cover immediately; and any unrecognised query
+   * parameter, which a client can vary (`?v=<track id>`) to defeat a cache it does not
+   * control — a Loxone visualisation will happily hold an `<img src>` far longer than
+   * `max-age` suggests.
+   */
+  private async handleCover(
+    req: IncomingMessage,
+    res: ServerResponse,
+    method: string,
+    zoneId: number,
+    url: URL,
+  ): Promise<void> {
+    if (method !== 'GET') {
+      this.sendJson(res, 405, { error: 'method-not-allowed' });
+      return;
+    }
+    const size = coverSize(url.searchParams.get('size'));
+    const cover = this.deps.getZoneCover(zoneId, size);
+    await serveCover(res, cover, this.log, {
+      // Held briefly: a panel polling this should not re-fetch the same artwork every
+      // second, but must still notice the next track without changing the url.
+      cacheControl: 'public, max-age=10',
+      etag: coverEtag(cover, size),
+      ifNoneMatch: req.headers['if-none-match'],
+    });
   }
 
   /**

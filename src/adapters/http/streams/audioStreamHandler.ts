@@ -1,12 +1,13 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { PassThrough, Readable } from 'node:stream';
+import { PassThrough } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import type { AudioManager, PlaybackSession } from '@/application/playback/audioManager';
 import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import type { EnginePort } from '@/ports/EnginePort';
 import type { OutputProfile } from '@/ports/EngineTypes';
 import { zoneSessionKey } from '@/ports/types/SessionKey';
-import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
+import { resolveSessionCover } from '@/shared/coverArt';
+import { serveCover } from '@/adapters/http/streams/serveCover';
 import {
   audioOutputSettings,
   buildWavHeader,
@@ -280,75 +281,9 @@ export class AudioStreamHandler {
   }
 
   private async handleCoverRequest(res: ServerResponse, session: PlaybackSession): Promise<void> {
-    if (session.cover) {
-      res.writeHead(200, {
-        'Content-Type': session.cover.mime || 'image/jpeg',
-        'Cache-Control': 'no-cache',
-      });
-      res.end(session.cover.data);
-      return;
-    }
-    const coverSource = resolveSessionCover(session);
-    if (!coverSource) {
-      this.coverUnavailable(res);
-      return;
-    }
-    if (coverSource.startsWith('data:')) {
-      this.serveDataUri(res, coverSource);
-      return;
-    }
-    if (isHttpUrl(coverSource)) {
-      await this.proxyCoverFromHttp(res, coverSource);
-      return;
-    }
-    this.coverUnavailable(res);
+    // A session cover is only valid while that session lives, so it is not cached.
+    await serveCover(res, session.cover ?? resolveSessionCover(session) ?? null, this.log);
   }
-
-  private serveDataUri(res: ServerResponse, dataUri: string): void {
-    const match = /^data:([^;]+);base64,(.+)$/i.exec(dataUri);
-    if (!match) {
-      this.coverUnavailable(res);
-      return;
-    }
-    const [, mime, payload] = match;
-    res.writeHead(200, {
-      'Content-Type': mime || 'image/jpeg',
-      'Cache-Control': 'no-cache',
-    });
-    res.end(Buffer.from(payload ?? '', 'base64'));
-  }
-
-  private async proxyCoverFromHttp(res: ServerResponse, source: string): Promise<void> {
-    try {
-      const response = await fetch(source);
-      if (!response.ok || !response.body) {
-        this.coverUnavailable(res);
-        return;
-      }
-      const contentType = response.headers.get('content-type') ?? 'image/jpeg';
-      res.writeHead(200, {
-        'Content-Type': contentType,
-        'Cache-Control': 'no-cache',
-      });
-      const stream = Readable.fromWeb(response.body as unknown as Parameters<typeof Readable.fromWeb>[0]);
-      stream.on('error', (error) => {
-        this.log.warn('cover proxy stream failed', {
-          message: error instanceof Error ? error.message : String(error),
-        });
-        if (!res.headersSent) {
-          this.coverUnavailable(res);
-        } else {
-          res.destroy(error as Error);
-        }
-      });
-      stream.pipe(res);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log.warn('cover proxy failed', { source, message });
-      this.coverUnavailable(res);
-    }
-  }
-
   private writeHeaders(
     res: ServerResponse,
     contentType = 'audio/mpeg',
@@ -397,11 +332,6 @@ export class AudioStreamHandler {
   private notFound(res: ServerResponse): void {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'stream-not-found' }));
-  }
-
-  private coverUnavailable(res: ServerResponse): void {
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('cover-not-found');
   }
 
   private engineUnavailable(res: ServerResponse): void {
