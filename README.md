@@ -181,6 +181,13 @@ indexed automatically. Off by default — it is a writable share.
 A built-in web player is served alongside the Admin UI, so any browser on the network can control
 playback and see what's playing.
 
+### Your own software
+
+sonn core has its own HTTP API at `/api` for reading zone state and controlling playback, plus a
+live event stream so you never have to poll. It speaks its own vocabulary and works with or without
+the Loxone integration. Unlike the rest of this section it needs nothing switched on — it is always
+available. See **[Integrating with sonn core](INTEGRATING.md)**.
+
 ## Users and authentication
 
 sonn core has its own local user store. The first launch asks you to create an admin account, and
@@ -199,7 +206,7 @@ login.
 
 | Port | Used for | When |
 | --- | --- | --- |
-| `7090` | Admin UI, web player, Subsonic API, WebDAV, DLNA, audio streams | Always |
+| `7090` | Admin UI, web player, public API, Subsonic API, WebDAV, DLNA, audio streams | Always |
 | `7091` | Loxone native app protocol | Loxone integration enabled |
 | `7095` | Loxone Miniserver protocol | Loxone integration enabled |
 
