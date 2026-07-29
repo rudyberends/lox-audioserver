@@ -59,19 +59,27 @@ export function coverArtArchiveSize(target: number): number {
 
 /**
  * TuneIn logo URLs end in a single-letter variant before the extension
- * (`...q.jpg`). Only `q` (145px) and `d` (300px) are known-good, so the target
- * is quantized to the nearest of those (capped at `d`/300px).
+ * (`.../logoq.jpg`). Sizes verified against cdn-profiles.tunein.com: `q` is
+ * 145px, `d` 300px and `g` 600px. `g` matters because now-playing asks for 640 —
+ * quantizing to `d` there was a soft image on anything larger than a phone.
  */
 const TUNEIN_VARIANTS: Array<[letter: string, size: number]> = [
   ['q', 145],
   ['d', 300],
+  ['g', 600],
 ];
+
+/** `.../logo<letter>.<ext>` — the letter is what selects the size. */
+const TUNEIN_LOGO_VARIANT = /(\/logo)[a-z](?=\.[^./]*$)/i;
+
 export function resizeTuneInCoverUrl(url: string, targetSize: number): string {
   if (!url) return url;
   const [letter] = TUNEIN_VARIANTS.reduce((best, cur) =>
     Math.abs(cur[1] - targetSize) < Math.abs(best[1] - targetSize) ? cur : best,
   );
-  return url.replace(/q(?=\.[^.]*$)/, letter);
+  // Matches whichever letter is there rather than only `q`: a URL that already
+  // arrived as `logod.jpg` could otherwise never be moved up or down.
+  return url.replace(TUNEIN_LOGO_VARIANT, `$1${letter}`);
 }
 
 /**

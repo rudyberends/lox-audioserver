@@ -1,3 +1,4 @@
+import { resizeTuneInCoverUrl, COVER_ART_NOW_PLAYING_SIZE } from '@/shared/coverArt';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type {
   ContentFolder,
@@ -935,7 +936,11 @@ export class ContentManager {
           title: station.name || '',
           artist: '',
           album: '',
-          coverurl: station.coverurl ?? '',
+          // The station's own cover is sized for a browse list; this one is going to be
+          // shown as the now-playing art, so ask TuneIn for its larger variant.
+          coverurl: station.coverurl
+            ? resizeTuneInCoverUrl(station.coverurl, COVER_ART_NOW_PLAYING_SIZE)
+            : '',
           station: station.name || '',
         };
       }

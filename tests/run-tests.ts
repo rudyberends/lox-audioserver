@@ -98,6 +98,7 @@ import './publicApi.test';
 import './loxoneZoneProjection.test';
 import './adminZoneStates.test';
 import './adminInfo.test';
+import './coverArtTuneIn.test';
 import type { ZoneConfig } from '../src/domain/config/types';
 import { applyZonePatch } from '../src/domain/zones/reducer';
 import type { ZoneState } from '../src/domain/zones/zoneState';
