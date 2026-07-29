@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { test, tests } from './testHarness';
+import { test, tests, type TestFn } from './testHarness';
 import './architecture/importBoundaries.test';
 import './sessionKey.test';
 import './loxoneServiceFolders.test';
@@ -273,7 +273,16 @@ async function createZoneHarness(): Promise<ZoneHarness> {
       spotify: spotifyInputService,
       musicAssistant: musicAssistantInputService,
       sendspinLineIn: sendspinLineInService,
-    });
+      // DLNA became a first-class input after this harness was written. It is a
+      // required dep, but the harness loads the adapter through `require`, so the
+      // omission type-checked and only surfaced as `undefined.configure` at run
+      // time. These zone tests never exercise DLNA, so a no-op is the right stub.
+      dlna: {
+        configure: () => {},
+        syncZones: () => {},
+        shutdown: () => {},
+      },
+    } as unknown as Parameters<typeof createInputsAdapter>[0]);
     const airplayGroupController: AirplayGroupCoordinator = {
       ...noopAirplayGroupController,
     };
@@ -1076,7 +1085,10 @@ test('config loads defaults and ignores env overrides', async () => {
       assert.ok(Array.isArray(cfg.zones));
       assert.equal(cfg.zones.length, 0);
       assert.equal(cfg.system.adminHttp.enabled, true);
-      assert.equal(cfg.inputs?.airplay?.enabled, true);
+      // AirPlay used to be a global input toggle; it is per-zone now
+      // (`ZoneAirplayConfig`), so there is deliberately no `inputs.airplay`
+      // default to assert. Only line-in remains a global input.
+      assert.ok(Array.isArray(cfg.inputs?.lineIn?.inputs));
       assert.deepEqual(cfg.content.tts?.provider, { type: 'internal' });
       assert.notEqual(cfg.system.audioserver.ip, '203.0.113.123');
       assert.equal('alertPreDelayMs' in cfg.system.audioserver, false);
@@ -1122,11 +1134,50 @@ test('config repository serializes concurrent updates', async () => {
   });
 });
 
+/**
+ * A test that awaits something which never settles does not fail — the event loop
+ * simply drains and Node exits 0 mid-run, reporting success for every test that
+ * never got to run. That silently hid the last 63 tests of this suite for a while
+ * (a stubbed ffmpeg spawn that only exits when killed). These two guards make that
+ * failure mode loud: a per-test timeout turns a stuck await into one failing test,
+ * and the completion flag turns an early exit into a non-zero exit code.
+ */
+const TEST_TIMEOUT_MS = 30_000;
+let runCompleted = false;
+
+process.on('exit', (code) => {
+  if (!runCompleted && code === 0) {
+    console.error(
+      '\nnot ok - test run exited before completing: a test is awaiting something that never settles',
+    );
+    process.exitCode = 1;
+  }
+});
+
+async function withTimeout(name: string, fn: TestFn): Promise<void> {
+  // Arm the watchdog *before* invoking the test. Some tests swap out
+  // `global.setTimeout` to capture the delays their subject schedules, and a
+  // watchdog created inside that window would be recorded as one of them.
+  let reject!: (error: Error) => void;
+  const tripped = new Promise<never>((_resolve, rej) => {
+    reject = rej;
+  });
+  const timer = setTimeout(
+    () => reject(new Error(`test timed out after ${TEST_TIMEOUT_MS} ms: ${name}`)),
+    TEST_TIMEOUT_MS,
+  );
+  try {
+    await Promise.race([Promise.resolve(fn()), tripped]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function run(): Promise<void> {
   let failures = 0;
   for (const { name, fn } of tests) {
     try {
-      await fn();
+      await withTimeout(name, fn);
       console.log(`ok - ${name}`);
     } catch (error) {
       failures += 1;
@@ -1139,6 +1190,8 @@ async function run(): Promise<void> {
     const harness = await zoneHarnessPromise;
     await harness.cleanup();
   }
+  console.log(`\n# ${tests.length - failures}/${tests.length} passed`);
+  runCompleted = true;
   if (failures > 0) {
     process.exitCode = 1;
   }
