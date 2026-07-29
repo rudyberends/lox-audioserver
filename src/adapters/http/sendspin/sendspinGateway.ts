@@ -135,7 +135,15 @@ export class SendspinGateway {
     }
 
     const now = Date.now();
-    for (const [serial, zoneId] of this.browserZones) {
+    // Iterate the registry, not just the zones this gateway created. A client that
+    // registered explicitly through `POST /api/v1/destinations/local` and then never
+    // connected — a failed enable, a socket that could not be reached — is unknown to
+    // `browserZones` and was therefore never reaped: it sat in everyone's room list as a
+    // speaker that plays nothing, and each reload added another.
+    const known = new Map<string, number>(
+      registry.list().map((record) => [record.serial, record.zoneId]),
+    );
+    for (const [serial, zoneId] of known) {
       if (active.has(serial) || this.pendingBrowser.has(serial)) continue;
       const deadline = this.teardownDeadlines.get(serial);
       if (deadline === undefined) {
