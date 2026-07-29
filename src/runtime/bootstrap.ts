@@ -83,6 +83,9 @@ import { createRuntimePorts, createZoneManagerProxy } from '@/runtime/ports';
 import { alertsManager } from '@/application/alerts/alertsManager';
 import { fadeController } from '@/application/zones/fadeController';
 import { LoxoneNotifierAdapter } from '@/adapters/loxone/LoxoneNotifierAdapter';
+import { ApiEventHub } from '@/adapters/http/api/apiEventHub';
+import { withApiEvents } from '@/adapters/http/api/apiNotifierTap';
+import { readBuildVersion } from '@/shared/serverVersion';
 import { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry';
 import { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import { ServerHeartbeat } from '@/adapters/loxone/ws/serverHeartbeat';
@@ -112,7 +115,12 @@ export function createRuntime(): Runtime {
   const alertsPort = createAlertsPort();
   const alertFilesPort = createAlertFilesPort();
   const loxoneNotifier = new LoxoneWsNotifier(connectionRegistry, groupTracker);
-  const ports = createRuntimePorts({ notifier: new LoxoneNotifierAdapter(loxoneNotifier) });
+  // The public /api surface listens on the same zone-change signal the Loxone
+  // notifier does, so both always describe the same state (see withApiEvents).
+  const apiEventHub = new ApiEventHub();
+  const ports = createRuntimePorts({
+    notifier: withApiEvents(new LoxoneNotifierAdapter(loxoneNotifier), apiEventHub),
+  });
   const configPort = ports.config;
   // Drive the per-session crossfade pipeline-shape from the system-wide
   // `audioserver.crossfadeSec` config: when crossfade is off (0 or empty) the
@@ -580,6 +588,8 @@ export function createRuntime(): Runtime {
       // Attached at runtime via setLoxoneProcessor (enableLoxone), so starts null.
       loxoneProcessor: null,
       connectionRegistry,
+      apiEventHub,
+      serverVersion: readBuildVersion(),
       browserZoneRegistry,
       streamProxyRoutes: [
         tidalStreamService.getProxyRoute(),

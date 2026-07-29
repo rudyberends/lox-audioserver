@@ -6,6 +6,7 @@ import https from 'node:https';
 import os from 'node:os';
 import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
+import { readBuildVersion, readPackageVersion } from '@/shared/serverVersion';
 import type { ComponentLogger } from '@/shared/logging/logger';
 import { logManager } from '@/shared/logging/logger';
 import { logBuffer } from '@/shared/logging/logBuffer';
@@ -558,27 +559,6 @@ function handleGroups(res: ServerResponse, deps: MiscHandlerDeps): void {
 
 // ---- Info helpers ----
 
-function readPackageVersion(): string {
-  try {
-    const json = readFileSync(resolve(process.cwd(), 'package.json'), 'utf8');
-    const parsed = JSON.parse(json) as { version?: string };
-    return parsed.version ?? 'dev';
-  } catch {
-    return 'dev';
-  }
-}
-
-function readBuildVersion(pkgVersion: string): string {
-  const tsRaw = process.env.BUILD_TIMESTAMP?.trim();
-  if (!tsRaw) {
-    return pkgVersion;
-  }
-  const normalizedTs = tsRaw.replace(/[^0-9A-Za-z._-]/g, '');
-  if (!normalizedTs) {
-    return pkgVersion;
-  }
-  return `${pkgVersion}+${normalizedTs}`;
-}
 
 function readAddonPackageVersions(): Record<string, { installed: string | null; declared: string | null }> {
   const declared = readDeclaredAddonPackages();

@@ -13,6 +13,8 @@ import { AudioProxyHandler } from '@/adapters/http/streams/audioProxyHandler';
 import { LineInIngestWebSocket } from '@/adapters/http/streams/lineInIngestWs';
 import { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
 import { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandler';
+import { ApiHandler } from '@/adapters/http/api/apiHandler';
+import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { isLocalRequest } from '@/shared/utils/net';
 import type { StreamProxyRoute } from '@/shared/streamProxyRoute';
 import type { NotifierPort } from '@/ports/NotifierPort';
@@ -72,6 +74,7 @@ export class HttpService {
   private readonly lineInIngestWs: LineInIngestWebSocket;
   private readonly lineInApi: LineInApiHandler;
   private readonly beoremoteApi: BeoremoteApiHandler;
+  private readonly api: ApiHandler;
   private readonly sendspin: SendspinGateway;
   private readonly snapcast: SnapcastGateway;
   private readonly lmsCli: LmsCliServer;
@@ -118,6 +121,8 @@ export class HttpService {
       alertFiles: AlertFilesPort;
       loxoneProcessor: LoxoneCommandProcessor | null;
       connectionRegistry: ConnectionRegistry;
+      apiEventHub: ApiEventHub;
+      serverVersion: string;
       browserZoneRegistry: BrowserZoneRegistry;
       streamProxyRoutes: StreamProxyRoute[];
       mediaServer?: MediaServer;
@@ -131,6 +136,15 @@ export class HttpService {
       options.lineInMetadataService,
       options.lineInActivation,
     );
+    this.api = new ApiHandler({
+      eventHub: options.apiEventHub,
+      getAllZoneStates: () => options.zoneManager.getAllZoneStates(),
+      getZoneState: (zoneId) => options.zoneManager.getZoneState(zoneId),
+      handleCommand: (zoneId, command, payload) =>
+        options.zoneManager.handleCommand(zoneId, command, payload),
+      serverVersion: options.serverVersion,
+      startedAt: Date.now(),
+    });
     this.beoremoteApi = new BeoremoteApiHandler({
       configPort: options.configPort,
       favorites: options.favoritesManager,
@@ -461,6 +475,13 @@ export class HttpService {
 
     if (this.beoremoteApi.matches(pathname)) {
       await this.beoremoteApi.handle(req, res, pathname);
+      return;
+    }
+
+    // The server's own public API. Deliberately last of the /api/* handlers: the
+    // device-facing linein and beoremote surfaces claimed their subpaths first.
+    if (ApiHandler.owns(pathname)) {
+      await this.api.handle(req, res);
       return;
     }
 
