@@ -10,8 +10,8 @@ like the real thing.
 > **Status: 4.0 beta.** In active use and actively developed. Releases are tagged from the `beta`
 > branch, and breaking changes can still land between betas — check the release notes before updating.
 
-<!-- Screenshot: the Content screen with a populated library, and the Players screen with a few
-     players assigned to different output types. Save under .github/images/ and uncomment. -->
+<!-- Screenshot: the Content screen with a populated library, and the Zones screen with a few
+     zones assigned to different output types. Save under .github/images/ and uncomment. -->
 <!-- ![The Content screen in the Admin UI](.github/images/admin-content.png) -->
 
 ## How it fits together
@@ -22,19 +22,18 @@ sonn core has three sides, each configured independently in the Admin UI:
 | --- | --- | --- |
 | **Content** | Where the music comes from: local library, Spotify, Apple Music, Tidal, Deezer, radio, line-in | Yes |
 | **Access** | How other apps and devices reach the server: DLNA/UPnP, Subsonic API, network drive, Loxone | Pick at least one way to listen |
-| **Players** | Fixed zones this server drives itself, each with one output | Optional |
+| **Zones** | The devices this server drives itself, one per room | Optional |
 
 Content plus Access is already a working audio server. Point a DLNA TV or a Subsonic app at it and
-browse your library, Apple Music or Tidal straight from the device — no players involved, and nothing
-to configure per room.
+browse your library, Apple Music or Tidal straight from the device — no zones involved, and nothing to
+configure per room.
 
-Players are for the other model: **fixed zones that this server owns and controls centrally.** Add
-them when you want to name your rooms, group them to play in sync, and drive them from one place —
-or when you want to give a device features it has no support for itself (see
-[Receivers](#receivers)).
+Zones are for the other model: **devices that this server owns and controls centrally.** Add them when
+you want to name your rooms, group them to play in sync, and drive them from one place — or when you
+want to give a device features it has no support for itself (see [Receivers](#receivers)).
 
-The Loxone integration is player-driven, so there players are always on: the Miniserver supplies the
-zones and expects to control them.
+The Loxone integration is zone-driven, so with it on zones are always active: the Miniserver supplies
+them and expects to control them.
 
 ## Content
 
@@ -85,25 +84,27 @@ registered, its inputs appear under Content.
 - Built-in alert sounds
 - Native Loxone alerts when the integration is on
 
-## Players
+## Zones
 
-Players are optional. Skip this section entirely if you only want to serve your content to other apps
-and devices — that is what Access does. Loxone is the exception: it drives players by design, so with
-the Loxone integration on, players are always active and come from the Miniserver.
+Zones are optional. Skip this section entirely if you only want to serve your content to other apps and
+devices — that is what Access does. Loxone is the exception: it drives zones by design, so with the
+Loxone integration on, zones are always active and come from the Miniserver.
 
-A player is a fixed zone — one room, one device — that this server owns and controls. Adding players
-gets you:
+A zone is a single device you play music on, named after the room it stands in. Adding zones gets you:
 
 - **Central control**: every zone in one place, in the web player, the Admin UI, or a Loxone app
-- **Grouping**: several players in sync
+- **Grouping**: several zones in sync
 - **Receivers**: features on a device that it doesn't support natively (see below)
 
-Each player has exactly one output, plus:
+Each zone plays to exactly one device, plus:
 
-- Per-player equalizer, volume limits, recents and favorites
+- Per-zone equalizer, volume limits, recents and favorites
 - Optional power management (GPIO or USB HID relay), individually or per shared amp/PSU group
 
-You can add up to 24 players, the same ceiling a Loxone Audio Server has.
+You can add up to 24 zones, the same ceiling a Loxone Audio Server has.
+
+"Player" in this document only ever means the built-in web player — the app a person uses. The API uses
+the same word this section does: see [Integrating with sonn core](INTEGRATING.md).
 
 ### Outputs
 
@@ -119,8 +120,8 @@ You can add up to 24 players, the same ceiling a Loxone Audio Server has.
 
 ### Receivers
 
-A receiver lets a phone or app play *to* a player. The server accepts the stream and sends it on to
-that player's output, which means the device itself needs no support for the protocol: point AirPlay
+A receiver lets a phone or app play *to* a zone. The server accepts the stream and sends it on to that
+zone's output, which means the device itself needs no support for the protocol: point AirPlay
 or Spotify Connect at a pair of Snapcast speakers or an old amplifier on a line-out, and it works.
 
 - Spotify Connect
@@ -131,7 +132,7 @@ or Spotify Connect at a pair of Snapcast speakers or an old amplifier on a line-
 
 ### Bang & Olufsen remotes
 
-A player can be controlled with a **Beoremote One**. The server builds the menu the remote shows —
+A zone can be controlled with a **Beoremote One**. The server builds the menu the remote shows —
 your favorites, radio stations, and any line-in devices such as a turntable or CD player — and each of
 the coloured and dot buttons starts something in that room. Play, pause and track skip are routed to
 whatever the room is playing, including a line-in device that can be controlled. Volume stays on the
@@ -139,14 +140,14 @@ device itself, so it keeps working even if the server is briefly unreachable.
 
 Like line-in, this needs a **separate helper** — the remote pairs with it over Bluetooth, and it
 forwards the keypresses to this server. It registers itself the same way, so once it is running you
-only pick which remote belongs to which player in the Admin UI.
+only pick which remote belongs to which zone in the Admin UI.
 
-Under **Players** you pick one of three arrangements, and can change it later:
+Under **Zones** you pick one of three arrangements, and can change it later:
 
-- **Disabled** — no players. The server shares your content through Access only. This is how a fresh
+- **Disabled** — no zones. The server shares your content through Access only. This is how a fresh
   install starts.
-- **Set up here** — you add players yourself: speakers and rooms you name, group and cast to.
-- **Loxone integrated** — your Miniserver pushes which players exist and their names; you still
+- **Set up here** — you add zones yourself: the speakers and rooms you name, group and cast to.
+- **Loxone integrated** — your Miniserver pushes which zones exist and their names; you still
   configure each one's output and receivers here.
 
 ## Access
@@ -278,9 +279,9 @@ npm start
 
 ## Switching amplifiers on and off
 
-A player can switch an amplifier or power supply on when it starts and off after it stops, over either
-a GPIO line (using libgpiod's `gpioset`) or a USB HID relay board (CRelay). Configure it per player
-under Players.
+A zone can switch an amplifier or power supply on when it starts and off after it stops, over either a
+GPIO line (using libgpiod's `gpioset`) or a USB HID relay board (CRelay). Configure it per zone under
+Zones.
 
 **From Docker**, the container needs access to the host devices, or calls that work on a host shell will
 still fail inside the container. Expose the relevant `/dev/gpiochip*` and/or `/dev/hidraw*` entries, or
@@ -291,8 +292,8 @@ run the container with elevated device access.
 old sysfs-style global number such as `534` is not what `gpioset` expects, and a correctly wired relay
 will do nothing.
 
-**Shared amps and PSUs** — when several players share one amplifier, switch it as a group instead of per
-player. Configure the group under `groups.powerGroups[]`, set each player's
+**Shared amps and PSUs** — when several zones share one amplifier, switch it as a group instead of per
+zone. Configure the group under `groups.powerGroups[]`, set each zone's
 `powerManager.powerGroupId` to that group id, and give the group its own `powerManager.gpio` or
 `powerManager.crelay`. The shared output turns on while any member is active and off after the last one
 stops.
@@ -305,30 +306,30 @@ and `offDelayMs` delays switching off so short gaps don't cycle the amplifier (d
 ## Configuring
 
 Open the Admin UI at `http://<server-ip>:7090`. On first launch it asks you to create an admin account.
-A fresh install has no players and nothing shared yet, so:
+A fresh install has no zones and nothing shared yet, so:
 
 1. **Content** — add your music: point the library at a folder or share, connect a streaming account,
    set up radio.
 2. **Access** — turn on how you want to reach it. Switch on DLNA or the Subsonic API and your content
    is immediately browsable from a TV, receiver or phone app.
-3. **Players** — only if you want fixed zones this server drives itself. Choose how players are set up,
+3. **Zones** — only if you want rooms this server drives itself. Choose how zones are set up,
    add one, and assign its output.
 
 Steps 1 and 2 are enough for a content server. Step 3 is required only for Loxone, which supplies its
-own players.
+own zones.
 
 ### Enabling the Loxone integration
 
-Under **Players**, choose **Loxone integrated**. The server starts listening immediately, then:
+Under **Zones**, choose **Loxone integrated**. The server starts listening immediately, then:
 
 1. Add the AudioServer in Loxone Config using the serial and host shown in the Admin UI.
 2. Split the stereo outputs into 4 zones and drag them into your project.
 3. Deploy the changes and reboot the Miniserver to start pairing.
 
 When pairing succeeds, the Audio Server icon in Loxone Config turns green and the Miniserver pushes its
-zones. You still configure each player's output and receivers in the Admin UI.
+zones. You still configure each zone's output and receivers in the Admin UI.
 
-Any players you set up yourself are kept while Loxone is connected and return when you disconnect.
+Any zones you set up yourself are kept while Loxone is connected and return when you disconnect.
 Disconnecting takes effect without a restart.
 
 ---
