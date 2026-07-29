@@ -1,0 +1,106 @@
+/**
+ * Opaque ids for the public browse API.
+ *
+ * A caller round-trips these verbatim: browse gives you one, and it goes straight back into
+ * `GET /browse/{id}`, `GET /items/{id}` or `POST /zones/{id}/play`. So the id has to carry
+ * everything needed to act on it, stay valid across restarts and rescans, and reveal nothing
+ * a caller might be tempted to parse.
+ *
+ * Three decisions, each learned from an id scheme already in this codebase:
+ *
+ * - **The kind travels with the id** (Subsonic's tags). The same folder is legitimately an
+ *   album to one caller and a plain container to another, and a consumer needs to know what
+ *   it is holding without a lookup. It is also what makes our model better than the Loxone
+ *   one, whose `type` collapses album, artist, playlist and show onto a single number.
+ * - **No database rowids** (`subsonicIds.ts`): a library rescan deletes and re-inserts every
+ *   track, so a rowid-based id would break every stored favourite. These key on the content
+ *   layer's own stable identities instead.
+ * - **A playable id is the audiopath** (DLNA's `objectId.ts`), so browse → play needs no
+ *   second lookup and no server-side table.
+ *
+ * Deliberately *not* a URI like Music Assistant's `spotify://album/x`. A URI invites
+ * parsing, and `source.id` is documented as opaque — a scheme that looks structured gets
+ * split on by a client sooner or later, and then we cannot change it.
+ */
+import type { ContentItemKind } from '@/ports/ContentTypes';
+
+/** Separator, chosen because it is outside the base64url alphabet (`A-Za-z0-9-_`). */
+const SEP = '.';
+
+/** Version prefix, so a future scheme can be told apart from this one rather than guessed. */
+const V1 = 'b1';
+
+/**
+ * A container a caller can browse into: a service root, a folder, an album, an artist.
+ *
+ * `service` is the provider under its own name — `applemusic`, not the Loxone bridge
+ * disguise. `folderId` is the native id the content layer expects back.
+ */
+export type BrowseContainerRef = {
+  target: 'container';
+  kind: ContentItemKind;
+  service: string;
+  folderId: string;
+};
+
+/** Something playable: a track, a radio station, a podcast episode. */
+export type BrowsePlayableRef = {
+  target: 'playable';
+  kind: ContentItemKind;
+  audiopath: string;
+};
+
+export type BrowseRef = BrowseContainerRef | BrowsePlayableRef;
+
+function encode(value: string): string {
+  return Buffer.from(value, 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+function decode(value: string): string {
+  return Buffer.from(value.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+}
+
+/** The id for a container. */
+export function encodeContainerRef(ref: Omit<BrowseContainerRef, 'target'>): string {
+  return [V1, 'c', ref.kind, encode(ref.service), encode(ref.folderId || 'root')].join(SEP);
+}
+
+/** The id for something playable. */
+export function encodePlayableRef(ref: Omit<BrowsePlayableRef, 'target'>): string {
+  return [V1, 'p', ref.kind, encode(ref.audiopath)].join(SEP);
+}
+
+/**
+ * Reads an id back, or null when it is not one of ours.
+ *
+ * Null rather than a throw, so a handler answers a clean `404` for a mistyped id instead of
+ * turning it into a 500. Note that base64 decoding never throws in Node, so a structurally
+ * valid id with a garbage payload decodes to a garbage-but-harmless folderId — which the
+ * content layer then simply fails to find.
+ */
+export function decodeBrowseRef(id: string): BrowseRef | null {
+  const parts = (id ?? '').trim().split(SEP);
+  if (parts[0] !== V1) {
+    return null;
+  }
+  const [, target, kind] = parts;
+  if (!kind) {
+    return null;
+  }
+  if (target === 'c' && parts.length === 5) {
+    return {
+      target: 'container',
+      kind: kind as ContentItemKind,
+      service: decode(parts[3]!),
+      folderId: decode(parts[4]!),
+    };
+  }
+  if (target === 'p' && parts.length === 4) {
+    return { target: 'playable', kind: kind as ContentItemKind, audiopath: decode(parts[3]!) };
+  }
+  return null;
+}

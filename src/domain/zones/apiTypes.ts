@@ -359,3 +359,83 @@ export type ApiInputIcon =
   | 'radio'
   | 'screen'
   | 'turntable';
+
+/**
+ * What a browsable or playable thing is.
+ *
+ * The field that makes this model better than the Loxone one, whose `type` number collapses
+ * album, artist, playlist and show onto a single value — so its clients cannot tell them
+ * apart and neither could ours.
+ *
+ * **Treat the list as open.** New kinds will be added; a client must not fail on one it does
+ * not recognise, and `unknown` is the placeholder for exactly that.
+ */
+export type ApiItemKind =
+  | 'track'
+  | 'album'
+  | 'artist'
+  | 'playlist'
+  | 'radio'
+  | 'show'
+  | 'episode'
+  | 'category'
+  | 'folder'
+  | 'unknown';
+
+/** One row in a browse listing or a search result. */
+export interface ApiBrowseItem {
+  /** Opaque. Feed it back to browse, to items, or to play. Never parse it. */
+  id: string;
+  name: string;
+  kind: ApiItemKind;
+  /** Whether `GET /browse/{id}` will list anything inside it. */
+  browsable: boolean;
+  /** Whether it can be handed to `POST /zones/{id}/play`. */
+  playable: boolean;
+  /** The provider under its own name — `applemusic`, never a Spotify disguise. */
+  service: string;
+  artist?: string;
+  album?: string;
+  /** Seconds, when known. */
+  duration?: number;
+  coverUrl?: string;
+}
+
+/** A page of children. */
+export interface ApiBrowseResult {
+  /** The container that was listed, or null for the root, which has no id. */
+  container: ApiBrowseItem | null;
+  items: ApiBrowseItem[];
+  start: number;
+  /**
+   * How many children the container holds, or **null when the provider cannot say**.
+   *
+   * Null is the honest answer rather than a guess: several providers page without reporting
+   * a count. When it is null, page until you get fewer items than you asked for.
+   */
+  total: number | null;
+}
+
+/** Search results, grouped by kind. */
+export interface ApiSearchResult {
+  query: string;
+  /**
+   * One bucket per kind that was searched. A kind absent here was not searched — check
+   * `GET /services` to see what a provider can actually search for, rather than assuming
+   * every provider serves every kind.
+   */
+  items: Partial<Record<ApiItemKind, ApiBrowseItem[]>>;
+  /** Which services answered, and which of them failed. */
+  services: Array<{ service: string; failed?: boolean }>;
+}
+
+/** A content service, with what it can actually do. */
+export interface ApiService {
+  /** Provider name, as used in `service` on every item. */
+  id: string;
+  name: string;
+  /** The id to browse this service's top level. */
+  rootId: string;
+  /** Which kinds its search returns. Empty means it cannot search. */
+  searchableKinds: ApiItemKind[];
+}

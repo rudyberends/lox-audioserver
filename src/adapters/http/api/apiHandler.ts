@@ -17,7 +17,11 @@ import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
 import type {
   ApiAlertKind,
+  ApiBrowseItem,
+  ApiBrowseResult,
   ApiInput,
+  ApiSearchResult,
+  ApiService,
   ApiFavorite,
   ApiGroupResult,
   ApiFavorites,
@@ -119,6 +123,21 @@ export type ApiHandlerDeps = {
    * (sonn-audio/core#251). Only app-originated writes are forwarded.
    */
   setEqualizerBands: (zoneId: number, bands: unknown) => Promise<number[] | null>;
+  /** Every content service, with what it can actually search. */
+  listServices: () => Promise<ApiService[]>;
+  /**
+   * Lists a container's children. Null when the id is not one of ours or names nothing.
+   */
+  browse: (id: string, start: number, limit: number) => Promise<ApiBrowseResult | null>;
+  /** Describes one item by id. Null when it cannot be found. */
+  describeItem: (id: string) => Promise<ApiBrowseItem | null>;
+  /** Searches across services, grouped by kind. */
+  search: (request: {
+    query: string;
+    kinds: string[];
+    services: string[];
+    limit: number;
+  }) => Promise<ApiSearchResult>;
   /** Every configured input, in configuration order. */
   getInputs: () => ApiInput[];
   /**
@@ -151,6 +170,25 @@ const LEGACY_ROOT = '/api';
 
 /** How long an idle SSE stream waits before emitting a comment to keep proxies from closing it. */
 const SSE_KEEPALIVE_MS = 25_000;
+
+/**
+ * Browse paging bounds.
+ *
+ * Capped because a caller asking for everything is usually a mistake, and several providers
+ * fetch a whole upstream page per request. 50 is the same default the Loxone dialect uses.
+ */
+const BROWSE_DEFAULT_LIMIT = 50;
+const BROWSE_MAX_LIMIT = 500;
+
+/**
+ * Search paging bounds, per kind.
+ *
+ * The internal search layer clamps to 20 per category, which is why no consumer can fetch a
+ * second page today. This API's own ceiling is set higher so it does not become the binding
+ * limit once that is lifted.
+ */
+const SEARCH_DEFAULT_LIMIT = 20;
+const SEARCH_MAX_LIMIT = 100;
 
 /** The alert kinds this API accepts; `url` becomes a custom sound. */
 const ALERT_KINDS: ApiAlertKind[] = ['tts', 'bell', 'alarm', 'fire', 'buzzer', 'url'];
@@ -273,6 +311,30 @@ export class ApiHandler {
 
     if (pathname === '/events' && method === 'GET') {
       this.streamEvents(req, res);
+      return;
+    }
+
+    if (pathname === '/services' && method === 'GET') {
+      this.sendJson(res, 200, { services: await this.deps.listServices() });
+      return;
+    }
+
+    if (pathname === '/search' && method === 'GET') {
+      await this.handleSearch(res, url);
+      return;
+    }
+
+    // The root has no id of its own, so `/browse` and `/browse/{id}` are one route with the
+    // id optional rather than two.
+    const browseMatch = /^\/browse(?:\/(.+))?$/.exec(pathname);
+    if (browseMatch && method === 'GET') {
+      await this.handleBrowse(res, browseMatch[1], url);
+      return;
+    }
+
+    const itemMatch = /^\/items\/(.+)$/.exec(pathname);
+    if (itemMatch && method === 'GET') {
+      await this.handleItem(res, itemMatch[1]!);
       return;
     }
 
@@ -667,6 +729,95 @@ export class ApiHandler {
       return;
     }
     this.sendJson(res, 200, result);
+  }
+
+  /**
+   * Lists a container's children, or the services at the root.
+   *
+   * The root is every configured service — the library, radio, and each streaming account
+   * under its own name. There is no `spotify@bridge-…` disguise here: that translation
+   * exists for the Loxone clients, which know exactly one streaming service, and it stops
+   * at that adapter.
+   */
+  private async handleBrowse(
+    res: ServerResponse,
+    rawId: string | undefined,
+    url: URL,
+  ): Promise<void> {
+    const start = this.clampInt(Number(url.searchParams.get('offset') ?? 0), 0, 1_000_000) ?? 0;
+    const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 0), 1, BROWSE_MAX_LIMIT)
+      ?? BROWSE_DEFAULT_LIMIT;
+
+    if (!rawId) {
+      const services = await this.deps.listServices();
+      // The root is synthesised, not fetched: it has no container of its own and its total
+      // is exactly the number of services, so it is the one listing that is always honest.
+      this.sendJson(res, 200, {
+        container: null,
+        items: services.map((service) => ({
+          id: service.rootId,
+          name: service.name,
+          kind: 'category' as const,
+          browsable: true,
+          playable: false,
+          service: service.id,
+        })),
+        start: 0,
+        total: services.length,
+      });
+      return;
+    }
+
+    const result = await this.deps.browse(rawId, start, limit);
+    if (!result) {
+      this.sendJson(res, 404, { error: 'not-found' });
+      return;
+    }
+    this.sendJson(res, 200, result);
+  }
+
+  /**
+   * Describes one item by its id — the capability neither Loxone nor Music Assistant has.
+   *
+   * Worth having because a client that deep-links, restores a session or receives an id from
+   * elsewhere has no parent listing to take the name from. Where the content layer genuinely
+   * cannot answer, `name` comes back empty rather than filled with the raw id: Music
+   * Assistant returns the id as the name in this case, which looks like data and is not.
+   */
+  private async handleItem(res: ServerResponse, rawId: string): Promise<void> {
+    const item = await this.deps.describeItem(rawId);
+    if (!item) {
+      this.sendJson(res, 404, { error: 'not-found' });
+      return;
+    }
+    this.sendJson(res, 200, item);
+  }
+
+  /**
+   * Searches across services, grouped by kind.
+   *
+   * `kind` narrows what is asked for, which is not just a filter: a provider that cannot
+   * search a kind is skipped for it entirely rather than asked and ignored. `service`
+   * narrows which providers are asked.
+   */
+  private async handleSearch(res: ServerResponse, url: URL): Promise<void> {
+    const query = (url.searchParams.get('q') ?? '').trim();
+    if (!query) {
+      this.sendJson(res, 400, { error: 'invalid-query', message: 'q is required.' });
+      return;
+    }
+    const kinds = (url.searchParams.get('kind') ?? '')
+      .split(',')
+      .map((kind) => kind.trim().toLowerCase())
+      .filter(Boolean);
+    const services = (url.searchParams.get('service') ?? '')
+      .split(',')
+      .map((service) => service.trim().toLowerCase())
+      .filter(Boolean);
+    const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 0), 1, SEARCH_MAX_LIMIT)
+      ?? SEARCH_DEFAULT_LIMIT;
+
+    this.sendJson(res, 200, await this.deps.search({ query, kinds, services, limit }));
   }
 
   /**

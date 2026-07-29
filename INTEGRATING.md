@@ -185,6 +185,11 @@ GET /api/v1/zones/{id}/equalizer    →  { "zoneId": 3, "bands": [ …10 ] }
 GET /api/v1/zones/{id}/queue        →  { "items": [ … ], "start": 0, "total": 42, "currentIndex": 3 }
 GET /api/v1/zones/{id}/favorites    →  { "items": [ … ], "start": 0, "total": 8 }
 GET /api/v1/zones/{id}/recents      →  { "items": [ … ], "start": 0, "total": 20 }
+GET /api/v1/services                →  { "services": [ … ] }
+GET /api/v1/browse                  →  the root: one entry per service
+GET /api/v1/browse/{id}             →  { "container": …, "items": [ … ], "start": 0, "total": 42 }
+GET /api/v1/items/{id}              →  one item                404 not-found
+GET /api/v1/search?q=…              →  { "items": { "track": [ … ] }, … }
 GET /api/v1/inputs                  →  { "inputs": [ … ] }
 GET /api/v1/health                  →  { "status": "ok"|"degraded"|"unhealthy", … }
 GET /api/v1/ready                   →  { "ready": true, "phase": "ready" }   503 when not
@@ -363,6 +368,95 @@ curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"http://example/s
 curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"library://track/9"}'
 ```
 
+## Browsing
+
+```bash
+# What is there?
+curl -s http://server:7090/api/v1/services
+
+# Start at the root, then walk in
+curl -s http://server:7090/api/v1/browse
+curl -s "http://server:7090/api/v1/browse/<id>?offset=0&limit=50"
+```
+
+Every service appears **under its own name** — `applemusic`, `soundcloud`, `library`. There
+is no Spotify disguise here. That disguise exists because the Loxone clients know exactly
+one streaming service; it is a translation in that adapter and it stops there.
+
+### Items
+
+```json
+{
+  "id": "b1.p.track.YXBwbGVtdXNpYzp0cmFjazpiNjRfYVM1WVRVUldaRUpS…",
+  "name": "A Bird In New York",
+  "kind": "track",
+  "browsable": false,
+  "playable": true,
+  "service": "applemusic",
+  "artist": "Eric Serra",
+  "album": "Léon (Original Motion Picture Soundtrack)",
+  "duration": 81,
+  "coverUrl": "https://…/640x640bb.jpg"
+}
+```
+
+`kind` is `track`, `album`, `artist`, `playlist`, `radio`, `show`, `episode`, `category`,
+`folder` or `unknown`. **Treat the list as open** — new kinds may appear and a client must
+not fail on one it does not know.
+
+`browsable` and `playable` are separate questions and both can be true: an album is
+something to open *and* something to play, so branch on what the user did rather than
+inferring from `kind`.
+
+`id` is **opaque**. Feed it back to `/browse/{id}`, `/items/{id}` or
+`POST /zones/{id}/play` — it round-trips exactly. Do not parse it: the encoding is not part
+of this contract, and ids stay valid across restarts and library rescans precisely because
+they do not encode anything you should rely on.
+
+### Paging
+
+`offset` and `limit` (default 50, max 500). `total` is the number of children — **or `null`
+when the provider cannot say**, which several streaming providers genuinely cannot. When it
+is null, keep paging until you get back fewer items than you asked for. A number here is a
+real count, not an estimate.
+
+### Looking one thing up
+
+```bash
+curl -s http://server:7090/api/v1/items/<id>
+```
+
+For when you have an id but no listing it came from — a deep link, a restored session, an id
+stored last week. One caveat, stated plainly: a container's own name is not always knowable.
+Providers name a folder in the *listing that contains it*, not in the folder itself, so
+`name` can come back empty for a container you did not browse into. It is never fabricated.
+
+### Search
+
+```bash
+curl -s "http://server:7090/api/v1/search?q=beatles"
+curl -s "http://server:7090/api/v1/search?q=beatles&kind=album&limit=10"
+curl -s "http://server:7090/api/v1/search?q=beatles&service=applemusic,library"
+```
+
+```json
+{
+  "query": "beatles",
+  "items": { "track": [ … ], "album": [ … ], "artist": [ … ] },
+  "services": [{ "service": "library" }, { "service": "applemusic" }]
+}
+```
+
+Results are grouped by kind, and every item names the service it came from.
+
+`kind` narrows the search, and it is not merely a filter: a provider that cannot search a
+kind is **not asked** for it. Ask for albums and SoundCloud sits it out, because SoundCloud
+has no album search — check `searchableKinds` in `/services` to see what each one offers
+rather than assuming they are alike. `service` narrows which providers are asked at all.
+
+`services` in the response says who answered, with `failed: true` on any that errored — so
+a provider outage looks like a partial answer rather than "no matches".
+
 ### Inputs
 
 Physical inputs — a turntable, a CD player, a MasterLink device — are configured in the
@@ -484,7 +578,7 @@ Errors are `4xx` with `{"error":"…"}`: `zone-not-found`, `invalid-json`,
 `invalid-favorite-patch`, `invalid-favorite-delete`, `invalid-favorite-order`,
 `favorite-not-found`, `invalid-members`,
 `invalid-alert-kind`, `invalid-text`, `invalid-zones`,
-`invalid-input`, `input-not-found`,
+`invalid-input`, `input-not-found`, `invalid-query`,
 `method-not-allowed`.
 
 ## MQTT
@@ -599,13 +693,15 @@ curl -N http://server:7090/api/v1/events
 
 ## Choosing the right surface
 
-`/api` is for controlling the server. For content, existing protocols usually get you
-further — a Subsonic app already does browsing, search and offline sync, and you would be
-rebuilding it. See [Access](README.md#access) for how to enable each of these.
+`/api` reads state, controls playback, and browses and searches the content this server can
+reach. Where it stops is *playing content yourself*: it hands you ids to play through a
+zone, not audio to decode. If you are building something that streams — an app with offline
+sync, a phone client — a Subsonic app already does all of that and you would be rebuilding
+it. See [Access](README.md#access) for how to enable each of these.
 
 | Surface | Use it for |
 | --- | --- |
-| `/api` | Reading zone state and controlling playback — start here |
+| `/api` | Reading zone state, controlling playback, browsing and searching — start here |
 | MQTT | The same state and transport controls, where a broker already exists. Nothing beyond that |
 | Subsonic (`/rest/*`) | Browsing and streaming the library with existing apps |
 | DLNA / UPnP | Renderers, and discovery by TVs and network speakers |
