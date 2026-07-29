@@ -115,3 +115,29 @@ test('admin zone states reports a zone with no live state as stopped', async () 
   const sent = await fetchStates(null);
   assert.equal(sent.body.zones[0].state, 'stopped');
 });
+
+test('state-controllers serves the picker its options, with a stable shape', async () => {
+  // The Admin UI renders its state-controller picker from this, instead of keeping a
+  // second copy of the list. So each entry needs an id to submit and a label to show;
+  // adding a controller server-side must be enough to make it appear.
+  const { sent, deps: d } = deps('play');
+  const route = buildZonesRoutes(d).find(
+    (r) => r.pattern.source === /^\/zones\/state-controllers$/.source,
+  );
+  assert.ok(route, 'route exists');
+  await route!.handler({} as any, new FakeResponse() as unknown as ServerResponse, [] as any);
+
+  assert.equal(sent.status, 200);
+  const list = sent.body.stateControllers;
+  assert.ok(Array.isArray(list) && list.length > 0);
+  for (const entry of list) {
+    assert.equal(typeof entry.id, 'string', 'id is what the UI submits');
+    assert.ok(entry.id.length > 0);
+    assert.equal(typeof entry.label, 'string', 'label is the fallback when untranslated');
+    assert.ok(entry.label.length > 0);
+  }
+  assert.ok(
+    list.some((e: { id: string }) => e.id === 'internal'),
+    'internal is the default a zone falls back to',
+  );
+});

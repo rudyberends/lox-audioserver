@@ -10,7 +10,7 @@ and it works whether or not the Loxone integration is enabled.
 Base URL: `http://<server>:7090`
 
 > **Not to be confused with `/admin/api`.** That is the back end of this server's own
-> admin UI: it is UI-shaped, changes freely, and is not a contract. Build on `/api`.
+> admin UI: it is UI-shaped, changes freely, and is not a contract. Build your integrations on `/api`.
 
 ### Coming from `/admin/api/zones/states`?
 
