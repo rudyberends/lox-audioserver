@@ -1,4 +1,5 @@
-import type { AudioType } from '@/domain/zones/enums';
+import type { AudioType, LineInIconType } from '@/domain/zones/enums';
+import type { EqualizerBands } from '@/domain/zones/equalizer';
 
 /**
  * The server's internal zone state — the single source of truth every consumer
@@ -22,14 +23,17 @@ export interface ZoneState {
   clientState: 'on' | 'off';
   coverurl: string;
   duration: number;
-  /** Loxone leftover: comma-separated 10-band EQ. A `number[]` everywhere else. */
-  equalizerSettings: string;
-  /** Loxone leftover: icon id for the Loxone app. */
-  icontype?: number;
+  /** 10-band equalizer, in dB. The Loxone payload serialises this to a string. */
+  eq: EqualizerBands;
+  /**
+   * Which icon represents the current source, from the line-in input's configured
+   * `iconType` (see `LineInIconType`). Cleared once real cover art arrives, so a
+   * generic turntable glyph gives way to the album picture. Real state, not a
+   * Loxone artefact — the numbering is Loxone's, like the other enums here.
+   */
+  icontype?: LineInIconType;
   mode: 'play' | 'pause' | 'stop';
   name: string;
-  /** Loxone leftover: browse context, which belongs to the content model. */
-  parent: ZoneParentMeta | null;
   /** Loxone leftover: this is the zone id. */
   playerid: number;
   plrepeat: number;
@@ -64,13 +68,4 @@ export interface ZoneState {
    * the protocol-match grouping hint when mixed groups are enabled.
    */
   mixedGroupEnabled?: boolean;
-}
-
-export interface ZoneParentMeta {
-  audiopath: string;
-  coverurl: string;
-  id: string;
-  items: number;
-  name: string;
-  type: number;
 }

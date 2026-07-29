@@ -725,7 +725,7 @@ export class ZoneManager {
     if (ctx) {
       ctx.config.equalizer = { ...(ctx.config.equalizer ?? {}), bands: [...normalized] };
     }
-    this.applyPatch(zoneId, { equalizerSettings }, true);
+    this.applyPatch(zoneId, { eq: [...normalized] as EqualizerBands }, true);
 
     if (ctx?.config.equalizer?.provider === 'builtin') {
       this.audioManager.equalizerScheduler.schedule(zoneId);

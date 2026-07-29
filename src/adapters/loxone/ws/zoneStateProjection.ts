@@ -8,9 +8,10 @@
  * below that only the Loxone clients understand should ultimately be *computed*
  * here rather than carried in `ZoneState`; `mastervolume` already is.
  */
-import type { AudioType } from '@/domain/zones/enums';
+import type { AudioType, LineInIconType } from '@/domain/zones/enums';
 import { parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
-import type { ZoneParentMeta, ZoneState } from '@/domain/zones/zoneState';
+import type { ZoneState } from '@/domain/zones/zoneState';
+import { formatEqualizerSettings } from '@/domain/zones/equalizer';
 
 /**
  * The `audio_event` entry as the Loxone Miniserver and native app parse it.
@@ -19,6 +20,20 @@ import type { ZoneParentMeta, ZoneState } from '@/domain/zones/zoneState';
  * the official Audio Server UI. Anything here that is *not* in the native
  * protocol is marked as ours.
  */
+/**
+ * Browse context for the item that started playback. The native client accepts it
+ * but does not require it, and the server has never populated it — it is emitted as
+ * null. Kept in the payload type because dropping the key entirely is a wire change.
+ */
+export interface LoxoneParentMeta {
+  audiopath: string;
+  coverurl: string;
+  id: string;
+  items: number;
+  name: string;
+  type: number;
+}
+
 export interface LoxoneZoneState {
   album: string;
   artist: string;
@@ -29,10 +44,10 @@ export interface LoxoneZoneState {
   duration: number;
   /** Comma-separated 10-band EQ values for the Loxone app's AudioZone control. */
   equalizerSettings: string;
-  icontype?: number;
+  icontype?: LineInIconType;
   mode: 'play' | 'pause' | 'stop';
   name: string;
-  parent: ZoneParentMeta | null;
+  parent: LoxoneParentMeta | null;
   playerid: number;
   plrepeat: number;
   plshuffle: number;
@@ -136,11 +151,12 @@ export function toLoxoneZoneState(
     clientState: state.clientState,
     coverurl: state.coverurl,
     duration: state.duration,
-    equalizerSettings: state.equalizerSettings,
+    equalizerSettings: formatEqualizerSettings(state.eq),
     icontype: state.icontype,
     mode: state.mode,
     name: state.name,
-    parent: state.parent,
+    // Never populated by the server; the client treats null as "no browse context".
+    parent: null,
     playerid: state.playerid,
     plrepeat: state.plrepeat,
     plshuffle: state.plshuffle,

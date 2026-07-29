@@ -390,7 +390,6 @@ export class LineInActivationService {
       album: '',
       coverurl: '',
       station: '',
-      parent: null,
       mode,
       clientState: 'on',
       power: 'on',

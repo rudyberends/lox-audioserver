@@ -72,8 +72,7 @@ function zoneState(overrides: Partial<ZoneState> = {}): ZoneState {
     audiopath: 'library://track/9',
     audiotype: AudioType.File,
     type: 2,
-    equalizerSettings: '0,0,0,0,0,0,0,0,0,0',
-    parent: null,
+    eq: [0,0,0,0,0,0,0,0,0,0],
     qindex: 0,
     ...overrides,
   } as ZoneState;

@@ -29,8 +29,7 @@ function zoneState(overrides: Partial<ZoneState> = {}): ZoneState {
     audiopath: 'library://track/9',
     audiotype: AudioType.File,
     type: 2,
-    equalizerSettings: '0,0,0,0,0,0,0,0,0,0',
-    parent: null,
+    eq: [0,0,0,0,0,0,0,0,0,0],
     qindex: 0,
     ...overrides,
   } as ZoneState;
@@ -114,13 +113,23 @@ test('loxone projection leaves real titles and station names alone', () => {
   assert.equal(out.station, 'Radio Paradise');
 });
 
-test('loxone projection carries the fields the native client needs verbatim', () => {
+test('loxone projection serialises the equalizer bands to the string the app parses', () => {
+  // The core holds ten dB values; only this payload wants them comma-joined.
   const out = toLoxoneZoneState(
-    zoneState({ equalizerSettings: '1,2,3,4,5,6,7,8,9,10', type: 3, icontype: 5 }),
+    zoneState({ eq: [1, 2, 3, 4, 5, 6, -6, 0, 0, 6] }),
     noGroup,
   );
+  assert.equal(out.equalizerSettings, '1,2,3,4,5,6,-6,0,0,6');
+});
+
+test('loxone projection emits a null parent, which the server never populates', () => {
+  const out = toLoxoneZoneState(zoneState(), noGroup);
+  assert.equal(out.parent, null);
+});
+
+test('loxone projection carries the fields the native client needs verbatim', () => {
+  const out = toLoxoneZoneState(zoneState({ type: 3, icontype: 5 }), noGroup);
   // These are still Loxone's encodings, and the client cannot read anything else.
-  assert.equal(out.equalizerSettings, '1,2,3,4,5,6,7,8,9,10');
   assert.equal(out.type, 3);
   assert.equal(out.icontype, 5);
   assert.equal(out.audiotype, AudioType.File);

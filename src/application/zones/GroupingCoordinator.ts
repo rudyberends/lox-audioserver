@@ -54,7 +54,7 @@ export class GroupingCoordinator {
       playerid: _playerid,
       name: _name,
       volume: _volume,
-      equalizerSettings: _equalizerSettings,
+      eq: _eq,
       ...rest
     } = patch;
     return rest;
