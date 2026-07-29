@@ -328,6 +328,9 @@ DELETE /api/v1/zones/{id}/queue    {"id": "<item id>"}      remove one entry
 DELETE /api/v1/zones/{id}/queue    {"all": true}            clear it
 DELETE /api/v1/zones/{id}/queue    {"undo": true}           revert the last edit
 
+POST   /api/v1/zones/{id}/alert      {"kind": "tts", "text": "…"}   say or play something
+DELETE /api/v1/zones/{id}/alert      {"kind": "alarm"}              stop it
+
 POST   /api/v1/zones/{id}/favorites  {"uri": "…", "name": "…"}   add (name optional)
 PATCH  /api/v1/zones/{id}/favorites  {"id": 1, "name": "…"}      rename
 PATCH  /api/v1/zones/{id}/favorites  {"order": [3,1,2]}          reorder
@@ -357,6 +360,39 @@ happens server-side, so you do not need to know anything about how content is mo
 curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"http://example/stream.mp3"}'
 curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"library://track/9"}'
 ```
+
+### Announcements
+
+```bash
+# Say something in the kitchen
+curl -X POST http://server:7090/api/v1/zones/3/alert \
+  -d '{"kind":"tts","text":"Dinner is ready","language":"nl"}'
+
+# The doorbell, everywhere at once
+curl -X POST http://server:7090/api/v1/zones/3/alert \
+  -d '{"kind":"bell","zones":[7,9]}'
+
+# Your own sound
+curl -X POST http://server:7090/api/v1/zones/3/alert \
+  -d '{"kind":"url","url":"http://nas/sounds/washer-done.mp3"}'
+```
+
+An alert interrupts rather than queues: whatever the zone was playing is ducked and picked
+up again afterwards, and the volume comes from that zone's configured alert level — not its
+current one, so an announcement is audible in a room someone had turned down.
+
+`kind` is `tts`, `bell`, `alarm`, `fire`, `buzzer` or `url`. `tts` needs `text` and takes an
+optional `language`; `url` needs an `http(s)` address this server can reach. `zones` adds
+more rooms to the same announcement, with the zone in the path leading it — the response
+lists every room it played in.
+
+`volume` (0–100) overrides the zone's alert level for one announcement.
+
+`alarm` and `fire` keep going until stopped, which is what `DELETE` is for. The others end
+by themselves.
+
+A `422` means the alerts layer refused it — most often no text-to-speech provider is set up
+— with `error` naming the reason. A `2xx` means it started, not that you heard it.
 
 ### Favourites, recents and groups
 
@@ -409,14 +445,15 @@ Errors are `4xx` with `{"error":"…"}`: `zone-not-found`, `invalid-json`,
 `invalid-queue-patch`, `invalid-queue-delete`, `queue-item-not-found`,
 `invalid-favorite-patch`, `invalid-favorite-delete`, `invalid-favorite-order`,
 `favorite-not-found`, `invalid-members`,
+`invalid-alert-kind`, `invalid-text`, `invalid-zones`,
 `method-not-allowed`.
 
 ## MQTT
 
 An optional second surface, for setups already built around a broker. It is not a
 replacement for the API above: it carries zone state and the everyday transport controls,
-and nothing else. Browsing, the queue, favourites, recents, the equalizer, grouping, cover
-art and health checks are HTTP only.
+and nothing else. Announcements, browsing, the queue, favourites, recents, the equalizer,
+grouping, cover art and health checks are HTTP only.
 
 Reach for it when a broker is already how your house talks to itself — then MQTT saves you
 writing an HTTP client, and tools like Home Assistant or Node-RED consume it with no code

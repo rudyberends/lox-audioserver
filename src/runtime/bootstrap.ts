@@ -700,6 +700,7 @@ export function createRuntime(): Runtime {
       ],
       mediaServer,
       mqttPublisher,
+      alerts: alertsPort,
       subsonic: subsonicApi,
       webdav: webdavServer,
       dlnaInput: dlnaInputService,

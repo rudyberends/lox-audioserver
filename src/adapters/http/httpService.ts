@@ -34,6 +34,7 @@ import type {
 import type { ContentManager } from '@/adapters/content/contentManager';
 import type { EnginePort } from '@/ports/EnginePort';
 import type { AlertFilesPort } from '@/ports/AlertFilesPort';
+import type { AlertsPort } from '@/ports/AlertsPort';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import type { LineInMetadataService } from '@/adapters/inputs/linein/lineInMetadataService';
 import type { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInActivationRegistry';
@@ -144,6 +145,8 @@ export class HttpService {
       mdnsPort: MdnsPort;
       sonnCorePeers: SonnCorePeerRegistry;
       alertFiles: AlertFilesPort;
+      /** Plays announcements into zones; see ApiHandlerDeps.playAlert. */
+      alerts: AlertsPort;
       loxoneProcessor: LoxoneCommandProcessor | null;
       connectionRegistry: ConnectionRegistry;
       apiEventHub: ApiEventHub;
@@ -202,6 +205,22 @@ export class HttpService {
           loxone: loxoneHealthInputs(options.configPort.getConfig()?.system?.audioserver),
         }),
       getLifecycle: () => options.lifecycle.snapshot(),
+      playAlert: async (request) => {
+        if (!options.zoneManager.getZoneState(request.zoneId)) {
+          return null;
+        }
+        // handleGroupedAlert covers the single-zone case too: it takes the leader plus the
+        // full target list, and one zone is simply a group of one.
+        return options.alerts.handleGroupedAlert(
+          request.zoneId,
+          request.type,
+          request.action,
+          request.zones,
+          request.text,
+          request.language,
+          request.volume,
+        );
+      },
       getZoneCover: (zoneId, targetSize) => {
         const session = options.audioManager.getSession(zoneId);
         // Inline bytes win: embedded artwork has no url to hand out.

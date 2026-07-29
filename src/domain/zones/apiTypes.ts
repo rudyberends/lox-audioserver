@@ -276,3 +276,40 @@ export interface ApiGroupResult {
   /** Zones that were asked for but could not join, with why. */
   rejected: Array<{ id: number; reason: 'protocol-mismatch' | 'zone-not-found' }>;
 }
+
+/**
+ * A sound or spoken message played over whatever a zone was doing, then handed back.
+ *
+ * The reason this is a resource and not a `play` with a special uri: an alert is an
+ * interruption, not a queue entry. The zone's own playback is ducked and resumed around it,
+ * the volume comes from that zone's per-alert setting rather than its current level, and
+ * several zones can be interrupted together as one announcement.
+ */
+export type ApiAlertKind = 'tts' | 'bell' | 'alarm' | 'fire' | 'buzzer' | 'url';
+
+export interface ApiAlertRequest {
+  kind: ApiAlertKind;
+  /** What to say. Required for `tts`, ignored otherwise. */
+  text?: string;
+  /** BCP-47-ish language hint for `tts`, e.g. `nl` or `en`. Defaults to the server's. */
+  language?: string;
+  /** What to play. Required for `url`, ignored otherwise. */
+  url?: string;
+  /**
+   * Extra zones to announce in at the same time. The zone in the path leads; a group is
+   * formed for the announcement and taken apart again afterwards.
+   */
+  zones?: number[];
+  /** Overrides the zone's configured alert volume for this announcement only, 0-100. */
+  volume?: number;
+}
+
+export interface ApiAlertResult {
+  /** The zone that led the announcement. */
+  zoneId: number;
+  kind: string;
+  /** `on` while it plays, `off` once it has been stopped. */
+  action: 'on' | 'off';
+  /** Every zone it was played in, leader first. */
+  zones: number[];
+}

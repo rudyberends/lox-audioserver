@@ -102,6 +102,8 @@ let libOps: string[] = [];
 // What the cover route asked for, so the tests can check the size hint it passed on.
 let coverAsks: Array<{ zoneId: number; targetSize: number }> = [];
 let zoneCover: { data: Buffer; mime?: string } | string | null = null;
+let alertCalls: Array<Record<string, unknown>> = [];
+let alertResult: { success: boolean; action: 'on' | 'off'; reason?: string } | null = null;
 let lifecycle = new ServerLifecycle();
 let health: HealthReport;
 const favItems = [{ id: 1, name: 'Radio Paradise', source: 'tunein:s1', coverUrl: 'c' }];
@@ -119,6 +121,8 @@ function harness(): Harness {
   libOps = [];
   coverAsks = [];
   zoneCover = { data: Buffer.from('jpegbytes'), mime: 'image/png' };
+  alertCalls = [];
+  alertResult = { success: true, action: 'on' };
   lifecycle = new ServerLifecycle();
   lifecycle.markReady();
   health = {
@@ -215,6 +219,10 @@ function harness(): Harness {
     },
     queueUndo: () => {
       queueOps.push('undo');
+    },
+    playAlert: async (request) => {
+      alertCalls.push(request as unknown as Record<string, unknown>);
+      return request.zoneId === 3 ? alertResult : null;
     },
     getZoneCover: (zoneId, targetSize) => {
       coverAsks.push({ zoneId, targetSize });
@@ -1180,5 +1188,133 @@ test('health and ready need no session and reject writes', async () => {
       const res = await call(h, method, `${API_ROOT}${path}`, {});
       assert.notEqual(res.statusCode, 200, `${method} ${path} is not a command`);
     }
+  }
+});
+
+// "Say in the kitchen that dinner is ready" is the thing an integrator actually wants from
+// a music server, and until now only the Loxone clients could do it — spread over
+// audio/<id>/tts, /alert, playeventfile and groupalert. It is a resource rather than a
+// play-with-a-special-uri because an alert interrupts: the zone's own playback is ducked
+// and resumed around it, and the volume comes from its alert setting, not its current one.
+
+test('speaking into a zone passes the text and language through', async () => {
+  const h = harness();
+  const res = await call(h, 'POST', `${API_ROOT}/zones/3/alert`, {
+    kind: 'tts',
+    text: 'Dinner is ready',
+    language: 'en',
+  });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), { zoneId: 3, kind: 'tts', action: 'on', zones: [3] });
+  assert.equal(alertCalls.length, 1);
+  assert.equal(alertCalls[0]!.text, 'Dinner is ready');
+  assert.equal(alertCalls[0]!.language, 'en');
+  assert.equal(alertCalls[0]!.action, 'on');
+});
+
+test('tts without text is refused rather than announcing silence', async () => {
+  const h = harness();
+  for (const body of [{ kind: 'tts' }, { kind: 'tts', text: '   ' }]) {
+    const res = await call(h, 'POST', `${API_ROOT}/zones/3/alert`, body);
+    assert.equal(res.statusCode, 400, JSON.stringify(body));
+    assert.equal(res.json().error, 'invalid-text');
+  }
+  assert.equal(alertCalls.length, 0, 'nothing reached the alerts layer');
+});
+
+test('the built-in sounds need no payload beyond their kind', async () => {
+  const h = harness();
+  for (const kind of ['bell', 'alarm', 'fire', 'buzzer']) {
+    const res = await call(h, 'POST', `${API_ROOT}/zones/3/alert`, { kind });
+    assert.equal(res.statusCode, 200, kind);
+    assert.equal(res.json().kind, kind);
+    assert.equal(alertCalls.at(-1)!.type, kind, 'passed through unchanged');
+  }
+});
+
+test('an arbitrary sound travels as a custom url', async () => {
+  // The alerts layer takes a caller-supplied sound as part of the type rather than as its
+  // own argument, so the url is prefixed instead of sent separately.
+  const h = harness();
+  const res = await call(h, 'POST', `${API_ROOT}/zones/3/alert`, {
+    kind: 'url',
+    url: 'http://example/doorbell.mp3',
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(alertCalls[0]!.type, 'custom_url/http://example/doorbell.mp3');
+
+  for (const bad of ['', 'not-a-url', 'file:///etc/passwd', 'ftp://host/x.mp3']) {
+    const rejected = await call(h, 'POST', `${API_ROOT}/zones/3/alert`, { kind: 'url', url: bad });
+    assert.equal(rejected.statusCode, 400, bad || '(empty)');
+    assert.equal(rejected.json().error, 'invalid-url');
+  }
+});
+
+test('one call can announce in several zones, with the addressed one leading', async () => {
+  const h = harness();
+  const res = await call(h, 'POST', `${API_ROOT}/zones/3/alert`, {
+    kind: 'tts',
+    text: 'Everyone out',
+    zones: [7, 9],
+  });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json().zones, [3, 7, 9], 'the path zone leads');
+  assert.deepEqual(alertCalls[0]!.zones, [3, 7, 9]);
+});
+
+test('the addressed zone is not repeated when it is also listed', async () => {
+  const h = harness();
+  await call(h, 'POST', `${API_ROOT}/zones/3/alert`, { kind: 'bell', zones: [3, 7] });
+  assert.deepEqual(alertCalls[0]!.zones, [3, 7]);
+});
+
+test('an alert can be stopped, which is what the looping kinds need', async () => {
+  const h = harness();
+  alertResult = { success: true, action: 'off' };
+  const res = await call(h, 'DELETE', `${API_ROOT}/zones/3/alert`, { kind: 'alarm' });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().action, 'off');
+  assert.equal(alertCalls[0]!.action, 'off');
+});
+
+test('an unknown kind is refused with the list of real ones', async () => {
+  const h = harness();
+  const res = await call(h, 'POST', `${API_ROOT}/zones/3/alert`, { kind: 'foghorn' });
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.json().error, 'invalid-alert-kind');
+  assert.match(res.json().message, /tts/, 'says what is valid');
+});
+
+test('a volume override is optional and bounded', async () => {
+  const h = harness();
+  await call(h, 'POST', `${API_ROOT}/zones/3/alert`, { kind: 'bell' });
+  assert.equal(alertCalls[0]!.volume, undefined, 'absent means the zone alert setting wins');
+
+  await call(h, 'POST', `${API_ROOT}/zones/3/alert`, { kind: 'bell', volume: 80 });
+  assert.equal(alertCalls[1]!.volume, 80);
+
+  const bad = await call(h, 'POST', `${API_ROOT}/zones/3/alert`, { kind: 'bell', volume: 'loud' });
+  assert.equal(bad.statusCode, 400);
+  assert.equal(bad.json().error, 'invalid-volume');
+});
+
+test('a refusal from the alerts layer is reported, not swallowed', async () => {
+  // No TTS provider configured is the common one, and a 2xx there would look like success.
+  const h = harness();
+  alertResult = { success: false, action: 'on', reason: 'no-tts-provider' };
+  const res = await call(h, 'POST', `${API_ROOT}/zones/3/alert`, { kind: 'tts', text: 'hello' });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.json().error, 'no-tts-provider');
+});
+
+test('an unknown zone and a wrong method are refused', async () => {
+  const h = harness();
+  assert.equal(
+    (await call(h, 'POST', `${API_ROOT}/zones/404/alert`, { kind: 'bell' })).statusCode,
+    404,
+  );
+  for (const method of ['GET', 'PUT', 'PATCH']) {
+    const res = await call(h, method, `${API_ROOT}/zones/3/alert`, { kind: 'bell' });
+    assert.equal(res.statusCode, 405, method);
   }
 });

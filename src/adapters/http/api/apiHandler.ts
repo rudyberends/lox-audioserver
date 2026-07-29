@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
 import type {
+  ApiAlertKind,
   ApiFavorite,
   ApiGroupResult,
   ApiFavorites,
@@ -30,7 +31,7 @@ import { createLogger } from '@/shared/logging/logger';
 import { healthHttpStatus, type HealthReport } from '@/domain/server/health';
 import type { ServerLifecycleSnapshot } from '@/domain/server/lifecycle';
 import { serveCover } from '@/adapters/http/streams/serveCover';
-import { COVER_ART_NOW_PLAYING_SIZE } from '@/shared/coverArt';
+import { COVER_ART_NOW_PLAYING_SIZE, isHttpUrl } from '@/shared/coverArt';
 
 export type ApiHandlerDeps = {
   eventHub: ApiEventHub;
@@ -77,6 +78,19 @@ export type ApiHandlerDeps = {
    * is empty. Returns what the group became, including anything rejected.
    */
   setGroup: (zoneId: number, members: number[]) => ApiGroupResult | null;
+  /**
+   * Plays or stops an alert. Null when the zone is unknown; otherwise the alerts layer's
+   * own verdict, which can still be a refusal (no TTS provider, missing sound).
+   */
+  playAlert: (request: {
+    zoneId: number;
+    type: string;
+    action: 'on' | 'off';
+    zones: number[];
+    text?: string;
+    language?: string;
+    volume?: number;
+  }) => Promise<{ success: boolean; action: 'on' | 'off'; reason?: string } | null>;
   /**
    * The cover for what a zone is playing now: inline bytes, a data uri, or a url to
    * proxy. Null when the zone has none.
@@ -125,6 +139,15 @@ const LEGACY_ROOT = '/api';
 
 /** How long an idle SSE stream waits before emitting a comment to keep proxies from closing it. */
 const SSE_KEEPALIVE_MS = 25_000;
+
+/** The alert kinds this API accepts; `url` becomes a custom sound. */
+const ALERT_KINDS: ApiAlertKind[] = ['tts', 'bell', 'alarm', 'fire', 'buzzer', 'url'];
+
+/**
+ * How the alerts layer spells "play this arbitrary sound". It takes the url as part of the
+ * type rather than as its own argument, so a caller-supplied url is prefixed with this.
+ */
+const ALERT_CUSTOM_URL_PREFIX = 'custom_url/';
 
 /** Smallest and largest cover a caller may ask for; outside this it is treated as unasked. */
 const COVER_SIZE_MIN = 32;
@@ -275,6 +298,10 @@ export class ApiHandler {
       }
       if (action === 'cover') {
         await this.handleCover(req, res, method, zoneId, url);
+        return;
+      }
+      if (action === 'alert') {
+        await this.handleAlert(req, res, method, zoneId);
         return;
       }
       await this.handleZoneRoute(req, res, method, zoneId, action);
@@ -617,6 +644,119 @@ export class ApiHandler {
       return;
     }
     this.sendJson(res, 200, result);
+  }
+
+  /**
+   * Plays a sound or a spoken message over whatever a zone was doing.
+   *
+   * A resource rather than a `play` with a special uri, because an alert is an interruption
+   * and not a queue entry: the zone's own playback is ducked and resumed around it, the
+   * volume comes from that zone's configured alert level rather than its current one, and
+   * one call can interrupt several zones as a single announcement.
+   *
+   * This is the thing an integrator actually asks a music server for — "say in the kitchen
+   * that dinner is ready" — and until now only the Loxone clients could do it, spread over
+   * `audio/<id>/tts`, `/alert`, `playeventfile` and `groupalert`.
+   *
+   * `DELETE` stops one, which matters for the looping kinds (`alarm`, `fire`): they play
+   * until told otherwise.
+   */
+  private async handleAlert(
+    req: IncomingMessage,
+    res: ServerResponse,
+    method: string,
+    zoneId: number,
+  ): Promise<void> {
+    if (method !== 'POST' && method !== 'DELETE') {
+      this.sendJson(res, 405, { error: 'method-not-allowed' });
+      return;
+    }
+    let body: Record<string, unknown>;
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'invalid-json' });
+      return;
+    }
+
+    const kind = typeof body.kind === 'string' ? body.kind.trim().toLowerCase() : '';
+    if (!ALERT_KINDS.includes(kind as ApiAlertKind)) {
+      this.sendJson(res, 400, {
+        error: 'invalid-alert-kind',
+        message: `kind must be one of: ${ALERT_KINDS.join(', ')}.`,
+      });
+      return;
+    }
+
+    // Extra zones join the announcement; the zone in the path always leads it.
+    const extra = body.zones === undefined ? [] : body.zones;
+    if (!Array.isArray(extra)) {
+      this.sendJson(res, 400, { error: 'invalid-zones' });
+      return;
+    }
+    const valid = extra.filter(
+      (v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0,
+    );
+    if (valid.length !== extra.length) {
+      this.sendJson(res, 400, { error: 'invalid-zones' });
+      return;
+    }
+    const zones = [zoneId, ...valid.filter((id) => id !== zoneId)];
+
+    const volume = body.volume === undefined ? undefined : this.clampInt(body.volume, 0, 100);
+    if (body.volume !== undefined && volume === null) {
+      this.sendJson(res, 400, { error: 'invalid-volume' });
+      return;
+    }
+
+    let text: string | undefined;
+    let language: string | undefined;
+    let target = kind;
+    if (kind === 'tts') {
+      text = typeof body.text === 'string' ? body.text.trim() : '';
+      if (!text) {
+        this.sendJson(res, 400, { error: 'invalid-text', message: 'tts needs text to speak.' });
+        return;
+      }
+      language = typeof body.language === 'string' ? body.language.trim().toLowerCase() : undefined;
+    } else if (kind === 'url') {
+      const raw = typeof body.url === 'string' ? body.url.trim() : '';
+      if (!isHttpUrl(raw)) {
+        this.sendJson(res, 400, {
+          error: 'invalid-url',
+          message: 'url must be an http(s) address the server can reach.',
+        });
+        return;
+      }
+      // The alerts layer takes an arbitrary sound as a `custom_url/` type rather than as a
+      // separate argument, so the url travels in place of the kind.
+      target = `${ALERT_CUSTOM_URL_PREFIX}${raw}`;
+    }
+
+    const result = await this.deps.playAlert({
+      zoneId,
+      type: target,
+      action: method === 'DELETE' ? 'off' : 'on',
+      zones,
+      text,
+      language,
+      volume: volume ?? undefined,
+    });
+    if (!result) {
+      this.sendJson(res, 404, { error: 'zone-not-found' });
+      return;
+    }
+    if (!result.success) {
+      // The alerts layer refused it — a missing sound file, no TTS provider configured.
+      this.sendJson(res, 422, { error: result.reason ?? 'alert-failed', kind });
+      return;
+    }
+    this.sendJson(res, 200, {
+      zoneId,
+      kind,
+      action: result.action,
+      zones,
+    });
   }
 
   /**
