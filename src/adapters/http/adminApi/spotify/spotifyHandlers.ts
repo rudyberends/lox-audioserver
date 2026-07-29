@@ -65,7 +65,10 @@ export function buildSpotifyRoutes(deps: SpotifyHandlerDeps): Route[] {
         ),
     },
     {
-      pattern: /^\/spotify\/librespot\/credentials/,
+      // Anchored and GET-only: the pattern used to be an unanchored prefix with no
+      // method, so it also claimed anything beginning with this path.
+      method: 'GET',
+      pattern: /^\/spotify\/librespot\/credentials$/,
       handler: async (req, res) => handleSpotifyLibrespotExport(req, res, deps.configPort),
     },
     {

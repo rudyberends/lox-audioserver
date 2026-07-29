@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { test } from './testHarness';
 import { buildMiscRoutes } from '../src/adapters/http/adminApi/misc/miscHandlers';
+import { isPublicAdminApiRoute } from '../src/adapters/http/adminApi/auth/adminSessionStore';
 
 // /info answers without a session because the Admin UI has to know whether to show a
 // login form or a create-admin welcome before it can authenticate. That bootstrap needs
@@ -101,4 +102,66 @@ test('info still reports everything to an authenticated caller', () => {
   }
   assert.equal(sent.body.serial, MAC);
   assert.equal(sent.body.miniserverIp, MINISERVER_IP);
+});
+
+// The admin API is authenticated by default; anything reachable without a session is
+// an exemption, and each one needs a reason. This pins the list so a route cannot be
+// added to it without the test being changed too.
+
+test('only the routes that must answer before login are exempt from auth', () => {
+  const exempt: Array<[string, string]> = [
+    // Says whether to show a login form or a create-admin welcome. Answers with the
+    // three flags that decide only that; the rest of the payload needs a session.
+    ['/info', 'GET'],
+    // Self-guarding: refuses once an admin exists.
+    ['/auth/setup', 'POST'],
+    ['/auth/login', 'POST'],
+    ['/auth/logout', 'POST'],
+    ['/auth/me', 'GET'],
+    // Spotify redirects the browser here.
+    ['/spotify/auth/callback', 'GET'],
+    // The admin UI's server switcher reads this from the origin server, so it keeps a
+    // way back when pointed at a peer where the session does not apply.
+    ['/audioservers', 'GET'],
+  ];
+  for (const [pathname, method] of exempt) {
+    assert.equal(isPublicAdminApiRoute(pathname, method), true, `${method} ${pathname} is exempt`);
+  }
+});
+
+test('nothing that reads config or secrets is reachable without a session', () => {
+  for (const [pathname, method] of [
+    ['/config', 'GET'],
+    ['/users', 'GET'],
+    ['/zones/states', 'GET'],
+    ['/logs', 'GET'],
+    ['/groups', 'GET'],
+    // Returned a Spotify account's librespot credentials in plaintext to anyone on
+    // the network. Nothing reads it over HTTP — the inputs load them straight from
+    // config — so the exemption bought nothing.
+    ['/spotify/librespot/credentials', 'GET'],
+    ['/spotify/librespot/status', 'GET'],
+  ] as Array<[string, string]>) {
+    assert.equal(
+      isPublicAdminApiRoute(pathname, method),
+      false,
+      `${method} ${pathname} requires a session`,
+    );
+  }
+});
+
+test('no exemption may mutate state', () => {
+  // A write reachable without a session is a different class of hole than a read.
+  for (const pathname of ['/config', '/config/clear', '/zones/1/equalizer', '/server/update', '/users']) {
+    for (const method of ['PUT', 'DELETE', 'PATCH']) {
+      assert.equal(
+        isPublicAdminApiRoute(pathname, method),
+        false,
+        `${method} ${pathname} must not be exempt`,
+      );
+    }
+  }
+  // The only exempt POSTs are the auth bootstrap.
+  assert.equal(isPublicAdminApiRoute('/config/clear', 'POST'), false);
+  assert.equal(isPublicAdminApiRoute('/server/update', 'POST'), false);
 });
