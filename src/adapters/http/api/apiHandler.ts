@@ -14,7 +14,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
-import type { ApiZoneState } from '@/domain/zones/apiTypes';
+import type { ApiOutput, ApiZoneState } from '@/domain/zones/apiTypes';
 import type { ZoneState } from '@/domain/zones/zoneState';
 import { createLogger } from '@/shared/logging/logger';
 
@@ -23,6 +23,8 @@ export type ApiHandlerDeps = {
   getAllZoneStates: () => ZoneState[];
   getZoneState: (zoneId: number) => ZoneState | null | undefined;
   handleCommand: (zoneId: number, command: string, payload?: string) => void;
+  /** Which device a zone's output plays to, when its protocol identifies one. */
+  getOutputDevice: (zoneId: number) => ApiOutput['device'] | undefined;
   /** Current equalizer bands for a zone, or null when the zone is unknown. */
   getEqualizerBands: (zoneId: number) => number[] | null;
   /**
@@ -116,7 +118,7 @@ export class ApiHandler {
         this.sendJson(res, 405, { error: 'method-not-allowed' });
         return;
       }
-      this.sendJson(res, 200, toApiZoneState(state));
+      this.sendJson(res, 200, this.project(state));
       return;
     }
 
@@ -271,8 +273,12 @@ export class ApiHandler {
     this.log.debug('events stream opened');
   }
 
+  private project(state: ZoneState): ApiZoneState {
+    return toApiZoneState(state, (zoneId) => this.deps.getOutputDevice(zoneId));
+  }
+
   private snapshot(): ApiZoneState[] {
-    return this.deps.getAllZoneStates().map(toApiZoneState);
+    return this.deps.getAllZoneStates().map((state) => this.project(state));
   }
 
   private clampInt(value: unknown, min: number, max: number): number | null {

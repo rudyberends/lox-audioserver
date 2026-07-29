@@ -74,6 +74,7 @@ function zoneState(overrides: Partial<ZoneState> = {}): ZoneState {
     type: 2,
     eq: [0,0,0,0,0,0,0,0,0,0],
     qindex: 0,
+    outputProtocol: 'sendspin',
     ...overrides,
   } as ZoneState;
 }
@@ -97,6 +98,10 @@ function harness(): Harness {
     getAllZoneStates: () => [...states.values()],
     getZoneState: (zoneId) => states.get(zoneId) ?? null,
     handleCommand: (zoneId, command, payload) => commands.push({ zoneId, command, payload }),
+    getOutputDevice: (zoneId) =>
+      zoneId === 3
+        ? { id: '02:8C:54:A9:DC:AC', name: 'Test1', connected: true }
+        : undefined,
     getEqualizerBands: (zoneId) => (zoneId === 3 ? [...eqBands] : null),
     setEqualizerBands: async (zoneId, bands) => {
       if (zoneId !== 3) return null;
@@ -416,4 +421,37 @@ test('equalizer 404s an unknown zone and 405s a wrong method', async () => {
   const h = harness();
   assert.equal((await call(h, 'GET', '/api/zones/99/equalizer')).statusCode, 404);
   assert.equal((await call(h, 'POST', '/api/zones/3/equalizer')).statusCode, 405);
+});
+
+// A caller mapping its own devices onto zones needs the device identity from the same
+// read that gives it zone state, on an idle zone as much as a playing one
+// (sonn-audio/core#247).
+
+test('a zone reports which device its output plays to', async () => {
+  const h = harness();
+  const zone = (await call(h, 'GET', '/api/zones/3')).json();
+  assert.deepEqual(zone.output, {
+    protocol: 'sendspin',
+    device: { id: '02:8C:54:A9:DC:AC', name: 'Test1', connected: true },
+  });
+});
+
+test('device identity is reported on an idle zone too', async () => {
+  const h = harness();
+  h.states.set(3, zoneState({ mode: 'stop', title: '', artist: '', album: '', audiopath: '' }));
+  const zone = (await call(h, 'GET', '/api/zones/3')).json();
+  assert.equal(zone.state, 'stopped');
+  assert.equal(zone.track, null, 'nothing playing');
+  assert.equal(zone.output?.device?.id, '02:8C:54:A9:DC:AC', 'yet the device is known');
+});
+
+test('an event describes a zone exactly as a read does', async () => {
+  // If the event stream omitted output.device, a client would watch it appear and
+  // disappear depending on which path it last heard from.
+  const h = harness();
+  const res = new FakeResponse();
+  await h.handler.handle(makeRequest('GET', '/api/events'), res as unknown as ServerResponse);
+  const ready = JSON.parse(res.body.replace(/^data: /, '').trim());
+  const read = (await call(h, 'GET', '/api/zones/3')).json();
+  assert.deepEqual(ready.zones[0], read, 'snapshot and read agree');
 });

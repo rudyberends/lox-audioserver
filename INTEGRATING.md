@@ -27,6 +27,9 @@ our own Admin UI — and the now-playing fields have moved here:
 | `powerState` (never actually sent) | `power` (`on`/`off`) |
 | `tech`, `system` | stayed — engine internals, not part of this contract |
 
+`tech.player` moved as well: it is `output.device` here, with `mac` renamed to the
+protocol-neutral `id`. Same value, same guarantee that an idle zone still reports it.
+
 `PUT`/`GET /admin/api/zones/{id}/equalizer` moved too, to
 `/api/zones/{id}/equalizer`. The old path is gone rather than aliased, because nothing
 outside our own Admin UI should have to touch `/admin/api`. The request body is
@@ -89,6 +92,20 @@ back after writing.
 | `source` | object \| **null** | Where the audio comes from. |
 | `group` | object \| **null** | `null` when the zone plays on its own; `members` lists leader first. |
 | `output` | object \| **null** | `protocol` is e.g. `sendspin`, `snapcast`, `googlecast`, `dlna`, `sonos`, `airplay`. |
+
+`output.device` is present when the protocol identifies a specific device — for
+squeezelite that is the SlimProto MAC, i.e. what its `-m` is set to:
+
+```json
+"output": {
+  "protocol": "squeezelite",
+  "device": { "id": "02:8C:54:A9:DC:AC", "name": "Test1", "connected": true }
+}
+```
+
+It is reported whether or not the zone is playing and whether or not the device is
+reachable, so you can map your own devices onto zones from a single read. `connected`
+tells you the current link state; the id stays put either way.
 
 `source.kind` is one of `track`, `radio`, `playlist`, `linein`, `airplay`, `spotify`,
 `bluetooth`, `unknown`. **Treat the list as open**: new kinds may be added, and a client

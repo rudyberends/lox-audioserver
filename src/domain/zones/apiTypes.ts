@@ -72,6 +72,20 @@ export interface ApiOutput {
   /** e.g. 'sendspin', 'snapcast', 'googlecast', 'dlna', 'sonos', 'airplay'. */
   protocol: string;
   name?: string;
+  /**
+   * Which device this zone plays to, when the protocol identifies one.
+   *
+   * Present whether or not the zone is playing, and whether or not the device is
+   * currently reachable, so a caller can map its own devices onto zones from a single
+   * read (sonn-audio/core#247). `id` is the protocol's own identifier — for
+   * squeezelite the SlimProto MAC, which is what its `-m` is set to.
+   */
+  device?: {
+    id: string | null;
+    name: string | null;
+    /** Whether the device is connected right now. */
+    connected: boolean;
+  };
 }
 
 /**

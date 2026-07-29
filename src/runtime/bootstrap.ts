@@ -86,6 +86,8 @@ import { LoxoneNotifierAdapter } from '@/adapters/loxone/LoxoneNotifierAdapter';
 import { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { withApiEvents } from '@/adapters/http/api/apiNotifierTap';
 import { readBuildVersion } from '@/shared/serverVersion';
+import { buildSqueezeliteAdminPlayerSnapshot } from '@/adapters/http/adminApi/adminApiHandler';
+import { getZoneOutputConfig } from '@/adapters/http/adminApi/config/configHandlers';
 import { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry';
 import { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import { ServerHeartbeat } from '@/adapters/loxone/ws/serverHeartbeat';
@@ -117,9 +119,32 @@ export function createRuntime(): Runtime {
   const loxoneNotifier = new LoxoneWsNotifier(connectionRegistry, groupTracker);
   // The public /api surface listens on the same zone-change signal the Loxone
   // notifier does, so both always describe the same state (see withApiEvents).
+  // Which device a zone's output plays to, for the public API's `output.device`.
+  // Reuses the squeezelite identity resolver the admin API already had, so the MAC
+  // reported here is the same one that endpoint reports (sonn-audio/core#247). Shared
+  // by the request path and the event stream, so both describe a zone identically.
+  // Only squeezelite identifies a device today; other protocols report none.
+  const resolveOutputDevice = (zoneId: number) => {
+    const zone = configPort.getConfig().zones?.find((z) => z.id === zoneId);
+    if (!zone) {
+      return undefined;
+    }
+    const snapshot = buildSqueezeliteAdminPlayerSnapshot(
+      getZoneOutputConfig(zone),
+      squeezeliteCore.players,
+    );
+    return snapshot
+      ? { id: snapshot.mac ?? null, name: snapshot.name ?? null, connected: snapshot.connected }
+      : undefined;
+  };
+
   const apiEventHub = new ApiEventHub();
   const ports = createRuntimePorts({
-    notifier: withApiEvents(new LoxoneNotifierAdapter(loxoneNotifier), apiEventHub),
+    notifier: withApiEvents(
+      new LoxoneNotifierAdapter(loxoneNotifier),
+      apiEventHub,
+      resolveOutputDevice,
+    ),
   });
   const configPort = ports.config;
   // Drive the per-session crossfade pipeline-shape from the system-wide
@@ -590,6 +615,7 @@ export function createRuntime(): Runtime {
       loxoneProcessor: null,
       connectionRegistry,
       apiEventHub,
+      resolveOutputDevice,
       serverVersion: readBuildVersion(),
       browserZoneRegistry,
       streamProxyRoutes: [

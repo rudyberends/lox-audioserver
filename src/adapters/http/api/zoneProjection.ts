@@ -125,8 +125,18 @@ function toGroup(state: ZoneState): ApiGroup | null {
   return { leader: members[0]!, members: [...members] };
 }
 
-function toOutput(state: ZoneState): ApiOutput | null {
-  return state.outputProtocol ? { protocol: state.outputProtocol } : null;
+/**
+ * The device identity is not in ZoneState — it comes from the zone's output config
+ * plus whichever backend tracks connections — so it is passed in rather than derived.
+ */
+export type OutputDeviceLookup = (zoneId: number) => ApiOutput['device'] | undefined;
+
+function toOutput(state: ZoneState, deviceLookup?: OutputDeviceLookup): ApiOutput | null {
+  if (!state.outputProtocol) {
+    return null;
+  }
+  const device = deviceLookup?.(state.id);
+  return device ? { protocol: state.outputProtocol, device } : { protocol: state.outputProtocol };
 }
 
 /**
@@ -137,7 +147,7 @@ function toWholeSeconds(value: number | undefined): number {
   return Number.isFinite(value) ? Math.max(0, Math.round(value as number)) : 0;
 }
 
-export function toApiZoneState(state: ZoneState): ApiZoneState {
+export function toApiZoneState(state: ZoneState, deviceLookup?: OutputDeviceLookup): ApiZoneState {
   return {
     id: state.id,
     name: state.name ?? '',
@@ -151,6 +161,6 @@ export function toApiZoneState(state: ZoneState): ApiZoneState {
     track: toTrack(state),
     source: toSource(state),
     group: toGroup(state),
-    output: toOutput(state),
+    output: toOutput(state, deviceLookup),
   };
 }

@@ -16,6 +16,7 @@ import { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandl
 import { ApiHandler } from '@/adapters/http/api/apiHandler';
 import { getZoneEqualizerBands } from '@/domain/zones/equalizer';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
+import type { ApiOutput } from '@/domain/zones/apiTypes';
 import { isLocalRequest } from '@/shared/utils/net';
 import type { StreamProxyRoute } from '@/shared/streamProxyRoute';
 import type { NotifierPort } from '@/ports/NotifierPort';
@@ -123,6 +124,8 @@ export class HttpService {
       loxoneProcessor: LoxoneCommandProcessor | null;
       connectionRegistry: ConnectionRegistry;
       apiEventHub: ApiEventHub;
+      /** Resolves which device a zone's output plays to; see ApiOutput.device. */
+      resolveOutputDevice: (zoneId: number) => ApiOutput['device'] | undefined;
       serverVersion: string;
       browserZoneRegistry: BrowserZoneRegistry;
       streamProxyRoutes: StreamProxyRoute[];
@@ -143,6 +146,7 @@ export class HttpService {
       getZoneState: (zoneId) => options.zoneManager.getZoneState(zoneId),
       handleCommand: (zoneId, command, payload) =>
         options.zoneManager.handleCommand(zoneId, command, payload),
+      getOutputDevice: (zoneId) => options.resolveOutputDevice(zoneId),
       getEqualizerBands: (zoneId) => {
         const zone = options.configPort.getConfig().zones?.find((z) => z.id === zoneId);
         return zone ? [...getZoneEqualizerBands(zone)] : null;

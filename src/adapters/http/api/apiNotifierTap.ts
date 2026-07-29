@@ -14,16 +14,22 @@
  */
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
-import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
+import { toApiZoneState, type OutputDeviceLookup } from '@/adapters/http/api/zoneProjection';
 
-export function withApiEvents(inner: NotifierPort, hub: ApiEventHub): NotifierPort {
+export function withApiEvents(
+  inner: NotifierPort,
+  hub: ApiEventHub,
+  // Same lookup the request path uses, so an event carries the identical zone shape
+  // a GET would — a client must not see `output.device` appear and disappear.
+  deviceLookup?: OutputDeviceLookup,
+): NotifierPort {
   return {
     notifyZoneStateChanged: (state) => {
       inner.notifyZoneStateChanged(state);
       // The public API must never be able to break Loxone delivery, so failures
       // here are contained rather than propagated to the caller.
       if (hub.subscriberCount > 0) {
-        hub.publishZoneChanged(toApiZoneState(state));
+        hub.publishZoneChanged(toApiZoneState(state, deviceLookup));
       }
     },
     notifyQueueUpdated: (zoneId, queueSize) => inner.notifyQueueUpdated(zoneId, queueSize),
