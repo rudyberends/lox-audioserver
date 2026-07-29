@@ -5,7 +5,48 @@ export interface AudioServerConfig {
   rawAudioConfig: RawAudioConfig;
   inputs?: InputConfig;
   groups?: GroupConfig;
+  /**
+   * Publishes zone state to an MQTT broker. Top-level rather than under `content`
+   * because it serves nothing — it is an outbound integration, not another way to
+   * reach this server's music.
+   */
+  mqtt?: MqttConfig;
   updatedAt?: string;
+}
+
+/**
+ * Pushes zone state to an MQTT broker, so home automation can consume it without
+ * polling and without speaking our HTTP API.
+ *
+ * The payload is the same `ApiZoneState` an SSE client receives, published as JSON
+ * on retained topics. That is deliberate: an MQTT-shaped vocabulary invented here
+ * would be a second contract to keep in step with the first, and the reason this
+ * exists at all is that integrators were reimplementing change detection — a full
+ * shadow copy of every field, diffed on a one-second poll — for want of a push feed.
+ */
+export interface MqttConfig {
+  /** Master switch. When absent/false nothing connects and nothing is published. */
+  enabled?: boolean;
+  /** Broker hostname or IP. */
+  host?: string;
+  /** Defaults to 1883, or 8883 when the protocol is `mqtts`. */
+  port?: number;
+  protocol?: 'mqtt' | 'mqtts';
+  username?: string;
+  password?: string;
+  /**
+   * Prefix every topic sits under, defaulting to `sonn`. Lets two servers share a
+   * broker without colliding.
+   */
+  topicPrefix?: string;
+  /**
+   * Whether to publish `position` while a track plays.
+   *
+   * Off by default: it changes every second, and a broker retaining one message per
+   * second per zone forever is a cost most consumers did not ask for. Turn it on if
+   * you want a progress bar; leave it off and you still get every state change.
+   */
+  publishProgress?: boolean;
 }
 
 export interface SystemConfig {

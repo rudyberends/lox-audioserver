@@ -60,6 +60,7 @@ import type { LmsCliServer } from '@/adapters/outputs/squeezelite/lmsCliServer';
 import type { MdnsPort } from '@/ports/MdnsPort';
 import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
 import type { MediaServer } from '@/adapters/mediaserver/mediaServer';
+import type { MqttPublisher } from '@/adapters/mqtt/mqttPublisher';
 import type { SubsonicApi } from '@/adapters/subsonic/subsonicApi';
 import type { WebdavServer } from '@/adapters/webdav/webdavServer';
 import type { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
@@ -160,6 +161,7 @@ export class HttpService {
       browserZoneRegistry: BrowserZoneRegistry;
       streamProxyRoutes: StreamProxyRoute[];
       mediaServer?: MediaServer;
+      mqttPublisher?: MqttPublisher;
       subsonic?: SubsonicApi;
       webdav?: WebdavServer;
       dlnaInput?: DlnaInputService;
@@ -358,6 +360,9 @@ export class HttpService {
         if (ms.isEnabled()) await ms.start();
         else await ms.stop();
       },
+      // Same idea for MQTT: connect, disconnect or reconnect to match the saved config
+      // so a broker change applies without a restart.
+      mqttPublisher: options.mqttPublisher,
       musicAssistantStreamService: options.musicAssistantStreamService,
       // Lets the admin UI's drop zone write through the same streaming path the
       // WebDAV share uses, instead of its own base64 endpoint.

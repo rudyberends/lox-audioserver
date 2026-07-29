@@ -22,6 +22,7 @@ import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers
 import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
 import type { MdnsPort } from '@/ports/MdnsPort';
 import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
+import type { MqttPublisher } from '@/adapters/mqtt/mqttPublisher';
 
 type AdminApiOptions = {
   onReinitialize?: () => Promise<boolean>;
@@ -36,6 +37,8 @@ type AdminApiOptions = {
   spotifyInputService: SpotifyInputService;
   sendspinLineInService: SendspinLineInService;
   syncMediaServer?: () => Promise<void>;
+  /** Drives /mqtt/status and applies a saved broker change without a restart. */
+  mqttPublisher?: MqttPublisher;
   musicAssistantStreamService: MusicAssistantStreamService;
   /** Shared streaming write path for the admin UI's drop zone. */
   webdav?: WebdavServer;
@@ -67,6 +70,7 @@ import { buildAuthRoutes } from '@/adapters/http/adminApi/auth/authHandlers';
 import { buildAppleMusicRoutes } from '@/adapters/http/adminApi/applemusic/appleMusicHandlers';
 import { buildAlertsRoutes } from '@/adapters/http/adminApi/alerts/alertsHandlers';
 import { buildSubsonicRoutes } from '@/adapters/http/adminApi/subsonic/subsonicHandlers';
+import { buildMqttRoutes } from '@/adapters/http/adminApi/mqtt/mqttHandlers';
 import { hasAdminUser } from '@/application/auth/localUsers';
 import { buildUsersRoutes } from '@/adapters/http/adminApi/users/usersHandlers';
 import type { AlertFilesPort } from '@/ports/AlertFilesPort';
@@ -171,6 +175,7 @@ export class AdminApiHandler {
   private readonly spotifyInputService: SpotifyInputService;
   private readonly sendspinLineInService: SendspinLineInService;
   private readonly syncMediaServer?: () => Promise<void>;
+  private readonly mqttPublisher?: MqttPublisher;
   private readonly musicAssistantStreamService: MusicAssistantStreamService;
   private readonly webdav?: WebdavServer;
   private readonly snapcastCore: SnapcastCore;
@@ -206,6 +211,7 @@ export class AdminApiHandler {
     this.spotifyInputService = options.spotifyInputService;
     this.sendspinLineInService = options.sendspinLineInService;
     this.syncMediaServer = options.syncMediaServer;
+    this.mqttPublisher = options.mqttPublisher;
     this.musicAssistantStreamService = options.musicAssistantStreamService;
     this.webdav = options.webdav;
     this.snapcastCore = options.snapcastCore;
@@ -348,6 +354,13 @@ export class AdminApiHandler {
         log: this.log,
         configPort: this.configPort,
         httpPort: this.httpPort,
+        readJsonBody: (req, res, max) => readJsonBody(req, res, max),
+        sendJson: (res, status, payload) => sendJson(res, status, payload),
+      }),
+      ...buildMqttRoutes({
+        log: this.log,
+        configPort: this.configPort,
+        publisher: this.mqttPublisher,
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),

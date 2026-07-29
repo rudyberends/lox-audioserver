@@ -6,6 +6,8 @@ import { createContentManager } from '@/adapters/content/contentManager';
 import { createContentAdapter } from '@/adapters/content/ContentAdapter';
 import { toLoxoneAudiopath } from '@/domain/zones/bridgeIdentity';
 import { ServerLifecycle } from '@/domain/server/lifecycle';
+import { MqttPublisher } from '@/adapters/mqtt/mqttPublisher';
+import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
 import { MediaServer } from '@/adapters/mediaserver/mediaServer';
 import { SubsonicApi } from '@/adapters/subsonic/subsonicApi';
 import { WebdavServer } from '@/adapters/webdav/webdavServer';
@@ -411,6 +413,7 @@ export function createRuntime(): Runtime {
   let loxoneService: LoxoneHttpService | null = null;
   let browserZoneRegistry: BrowserZoneRegistry | null = null;
   let restartInFlight = false;
+  let mqttPublisher: MqttPublisher | null = null;
   const lifecycle = new ServerLifecycle();
 
   async function handleReinitialize(): Promise<boolean> {
@@ -604,6 +607,19 @@ export function createRuntime(): Runtime {
       ssdpAdvertiser,
     );
 
+    // MQTT: pushes zone state to a broker so home automation stops polling us. Taps
+    // the same event hub the SSE endpoint uses, so both see identical payloads.
+    mqttPublisher = new MqttPublisher(configPort, apiEventHub, () =>
+      zoneManager.getAllZoneStates().map((state) =>
+        toApiZoneState(state, {
+          device: resolveOutputDevice,
+          outputProtocol: resolveOutputProtocol,
+          serviceLabel: resolveServiceLabel,
+          volumeLimits: resolveVolumeLimits(state.id),
+        }),
+      ),
+    );
+
     // Subsonic API: exposes the same browsable content (library, radio, bridges)
     // over the Subsonic REST protocol at /rest/*. Stateless and gated on
     // content.subsonic.enabled, so it needs no lifecycle of its own.
@@ -670,6 +686,7 @@ export function createRuntime(): Runtime {
         spotifyStreamProxyService.getProxyRoute(),
       ],
       mediaServer,
+      mqttPublisher,
       subsonic: subsonicApi,
       webdav: webdavServer,
       dlnaInput: dlnaInputService,
@@ -686,6 +703,9 @@ export function createRuntime(): Runtime {
     // zoneManager). All share this one advertiser / UDP :1900 socket.
     await ssdpAdvertiser.start();
     await mediaServer.start();
+    // Deliberately not awaited into the startup path: an unreachable broker must not
+    // hold up a server that plays music perfectly well without one. It retries itself.
+    void mqttPublisher.start();
 
     sendspinServerAdvertiser = new SendspinServerAdvertiser(
       config.http,
@@ -750,6 +770,11 @@ export function createRuntime(): Runtime {
         await ssdpAdvertiser.stop();
       },
     });
+    if (mqttPublisher) {
+      // Says goodbye on the availability topic, so consumers see us go rather than
+      // waiting for the broker to notice a dropped connection.
+      services.push({ name: 'mqtt', stop: () => mqttPublisher!.stop() });
+    }
     if (networkService) {
       services.push({ name: 'network', stop: () => networkService!.stop() });
     }
