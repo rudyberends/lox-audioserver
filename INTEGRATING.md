@@ -27,6 +27,13 @@ our own Admin UI — and the now-playing fields have moved here:
 | `powerState` (never actually sent) | `power` (`on`/`off`) |
 | `tech`, `system` | stayed — engine internals, not part of this contract |
 
+`PUT`/`GET /admin/api/zones/{id}/equalizer` moved too, to
+`/api/zones/{id}/equalizer`. The old path is gone rather than aliased, because nothing
+outside our own Admin UI should have to touch `/admin/api`. The request body is
+unchanged (`{"bands": [ …10 ]}`); the response drops `ok` and `equalizerSettings` —
+a `2xx` already means it worked, and the comma-joined string was only ever there for
+the Loxone app.
+
 And you no longer need to poll: subscribe to `/api/events` and the same data
 arrives on every change.
 
@@ -130,9 +137,10 @@ curl -N http://server:7090/api/events
 ## Reading
 
 ```
-GET /api/zones            →  { "zones": [ … ] }
-GET /api/zones/{id}       →  { … }              404 zone-not-found
-GET /api/health           →  { "status": "ok", "version": "…", "uptimeSec": 120 }
+GET /api/zones                   →  { "zones": [ … ] }
+GET /api/zones/{id}              →  { … }              404 zone-not-found
+GET /api/zones/{id}/equalizer    →  { "zoneId": 3, "bands": [ …10 ] }
+GET /api/health                  →  { "status": "ok", "version": "…", "uptimeSec": 120 }
 ```
 
 ## Commands
@@ -150,14 +158,25 @@ POST /api/zones/{id}/previous
 PUT  /api/zones/{id}/volume     {"volume": 40}   or  {"delta": -5}
 PUT  /api/zones/{id}/position   {"position": 90}
 PUT  /api/zones/{id}/power      {"power": "on"}
+PUT  /api/zones/{id}/equalizer  {"bands": [3,3,2,1,0,0,-1,-2,-2,-3]}
 ```
 
 `volume` takes either an absolute value (`0`–`100`, clamped) or a signed `delta`. Use
 `delta` for remote-control style stepping: it avoids the read-then-write race that two
 clients adjusting the same zone would otherwise hit.
 
+`equalizer` takes ten gains in dB, low band first, clamped to `-6`..`+6` — the same
+range the Loxone app uses. It replies `200` with the applied bands rather than `204`,
+since a clamped value is worth seeing. Unlike the transport verbs it is configuration,
+so it works on an idle zone too.
+
+If you are an **equalizer provider** — you run the actual DSP and want the server to
+reflect it — write here when your own UI changes, and read here to pick up changes made
+elsewhere. The server does not push your change back to you.
+
 Errors are `4xx` with `{"error":"…"}`: `zone-not-found`, `invalid-json`,
-`invalid-volume`, `invalid-position`, `invalid-power`, `method-not-allowed`.
+`invalid-volume`, `invalid-position`, `invalid-power`, `invalid-equalizer-bands`,
+`method-not-allowed`.
 
 ## Examples
 

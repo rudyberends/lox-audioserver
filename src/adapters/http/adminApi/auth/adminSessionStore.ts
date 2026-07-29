@@ -179,7 +179,6 @@ export function isPublicAdminApiRoute(pathname: string, method: string): boolean
   if (pathname === '/auth/me' && method === 'GET') return true;
   if (/^\/spotify\/auth\/callback/.test(pathname)) return true;
   if (/^\/spotify\/librespot\/credentials/.test(pathname)) return true;
-  if (/^\/zones\/\d+\/equalizer$/.test(pathname) && (method === 'GET' || method === 'PUT')) return true;
   // Read-only list of peer audioservers (LAN-local, low-sensitivity) — the
   // player reads this to discover/switch servers without an admin login.
   if (pathname === '/audioservers' && method === 'GET') return true;

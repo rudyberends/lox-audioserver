@@ -14,6 +14,7 @@ import { LineInIngestWebSocket } from '@/adapters/http/streams/lineInIngestWs';
 import { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
 import { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandler';
 import { ApiHandler } from '@/adapters/http/api/apiHandler';
+import { getZoneEqualizerBands } from '@/domain/zones/equalizer';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { isLocalRequest } from '@/shared/utils/net';
 import type { StreamProxyRoute } from '@/shared/streamProxyRoute';
@@ -142,6 +143,14 @@ export class HttpService {
       getZoneState: (zoneId) => options.zoneManager.getZoneState(zoneId),
       handleCommand: (zoneId, command, payload) =>
         options.zoneManager.handleCommand(zoneId, command, payload),
+      getEqualizerBands: (zoneId) => {
+        const zone = options.configPort.getConfig().zones?.find((z) => z.id === zoneId);
+        return zone ? [...getZoneEqualizerBands(zone)] : null;
+      },
+      setEqualizerBands: async (zoneId, bands) => {
+        const updated = await options.zoneManager.setEqualizerBands(zoneId, bands);
+        return updated ? [...updated.bands] : null;
+      },
       serverVersion: options.serverVersion,
       startedAt: Date.now(),
     });

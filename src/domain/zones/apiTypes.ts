@@ -112,3 +112,17 @@ export interface ApiServerReadyEvent {
 }
 
 export type ApiEvent = ApiZoneChangedEvent | ApiServerReadyEvent;
+
+/**
+ * A zone's 10-band equalizer, in dB per ISO band.
+ *
+ * Read and written by external equalizer providers as well as our own UI — the
+ * LoxBerry Squeezelite Multi-Room plugin pushes here when someone moves a slider in
+ * its own web UI (sonn-audio/core#251). Values are clamped to the -6..+6 the Loxone
+ * app also uses.
+ */
+export interface ApiZoneEqualizer {
+  zoneId: number;
+  /** Ten gains in dB, low band first. */
+  bands: number[];
+}

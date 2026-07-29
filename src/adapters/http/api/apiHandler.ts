@@ -23,6 +23,17 @@ export type ApiHandlerDeps = {
   getAllZoneStates: () => ZoneState[];
   getZoneState: (zoneId: number) => ZoneState | null | undefined;
   handleCommand: (zoneId: number, command: string, payload?: string) => void;
+  /** Current equalizer bands for a zone, or null when the zone is unknown. */
+  getEqualizerBands: (zoneId: number) => number[] | null;
+  /**
+   * Applies equalizer bands. Returns the applied bands, or null when the zone is
+   * unknown or the bands are not ten valid values.
+   *
+   * Deliberately does not forward to an external equalizer provider: a provider that
+   * pushed a change here would otherwise receive its own change straight back
+   * (sonn-audio/core#251). Only app-originated writes are forwarded.
+   */
+  setEqualizerBands: (zoneId: number, bands: unknown) => Promise<number[] | null>;
   serverVersion: string;
   startedAt: number;
 };
@@ -73,6 +84,13 @@ export class ApiHandler {
     if (zoneMatch) {
       const zoneId = Number(zoneMatch[1]);
       const action = zoneMatch[2];
+      // The equalizer is configuration, not playback: it is readable and writable for
+      // a configured zone whether or not that zone currently has live state, so it
+      // does not go through the live-state lookup below.
+      if (action === 'equalizer') {
+        await this.handleEqualizer(req, res, method, zoneId);
+        return;
+      }
       await this.handleZoneRoute(req, res, method, zoneId, action);
       return;
     }
@@ -172,6 +190,53 @@ export class ApiHandler {
         this.sendJson(res, 404, { error: 'not-found' });
         return;
     }
+  }
+
+  /**
+   * Read and write a zone's 10-band equalizer.
+   *
+   * A GET/PUT pair rather than a command, because this is state a caller owns rather
+   * than an action it triggers — an external provider reads what is set, and writes
+   * back when its own UI changes. Bands are validated as ten values; anything else is
+   * rejected rather than partially applied.
+   */
+  private async handleEqualizer(
+    req: IncomingMessage,
+    res: ServerResponse,
+    method: string,
+    zoneId: number,
+  ): Promise<void> {
+    if (method === 'GET') {
+      const bands = this.deps.getEqualizerBands(zoneId);
+      if (!bands) {
+        this.sendJson(res, 404, { error: 'zone-not-found' });
+        return;
+      }
+      this.sendJson(res, 200, { zoneId, bands });
+      return;
+    }
+
+    if (method !== 'PUT') {
+      this.sendJson(res, 405, { error: 'method-not-allowed' });
+      return;
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'invalid-json' });
+      return;
+    }
+
+    const applied = await this.deps.setEqualizerBands(zoneId, body.bands);
+    if (!applied) {
+      // Either the zone is gone or the bands were not ten usable numbers; the caller
+      // can tell which from the zone read, and conflating them keeps this simple.
+      this.sendJson(res, 400, { error: 'invalid-equalizer-bands' });
+      return;
+    }
+    this.sendJson(res, 200, { zoneId, bands: applied });
   }
 
   /**

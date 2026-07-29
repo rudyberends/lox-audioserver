@@ -85,7 +85,10 @@ type Harness = {
   states: Map<number, ZoneState>;
 };
 
+let eqBands: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
 function harness(): Harness {
+  eqBands = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
   const states = new Map<number, ZoneState>([[3, zoneState()]]);
   const commands: Harness['commands'] = [];
   const hub = new ApiEventHub();
@@ -94,6 +97,14 @@ function harness(): Harness {
     getAllZoneStates: () => [...states.values()],
     getZoneState: (zoneId) => states.get(zoneId) ?? null,
     handleCommand: (zoneId, command, payload) => commands.push({ zoneId, command, payload }),
+    getEqualizerBands: (zoneId) => (zoneId === 3 ? [...eqBands] : null),
+    setEqualizerBands: async (zoneId, bands) => {
+      if (zoneId !== 3) return null;
+      if (!Array.isArray(bands) || bands.length !== 10) return null;
+      if (!bands.every((b) => typeof b === 'number' && Number.isFinite(b))) return null;
+      eqBands = bands.map((b) => Math.min(6, Math.max(-6, Math.round(b as number))));
+      return [...eqBands];
+    },
     serverVersion: '4.0.0-test',
     startedAt: Date.now() - 5000,
   });
@@ -355,4 +366,54 @@ test('a failing API subscriber cannot break Loxone delivery', () => {
 
   assert.equal(delivered.length, 1, 'Loxone delivery survives a broken subscriber');
   assert.equal(hub.subscriberCount, 0, 'the broken subscriber is dropped');
+});
+
+// The equalizer moved here from /admin/api because an external provider owns it: the
+// LoxBerry Squeezelite Multi-Room plugin writes a zone's bands whenever someone moves
+// a slider in its own UI (sonn-audio/core#251). Integrators should never need a route
+// under /admin/api, which is why that one is gone rather than aliased.
+
+test('equalizer bands round-trip for a configured zone', async () => {
+  const h = harness();
+  const before = await call(h, 'GET', '/api/zones/3/equalizer');
+  assert.equal(before.statusCode, 200);
+  assert.deepEqual(before.json().bands, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+  // The exact body the plugin sends.
+  const put = await call(h, 'PUT', '/api/zones/3/equalizer', {
+    bands: [6, 6, 6, 6, 6, 6, 6, 0, -2, 2],
+  });
+  assert.equal(put.statusCode, 200);
+  assert.deepEqual(put.json().bands, [6, 6, 6, 6, 6, 6, 6, 0, -2, 2]);
+
+  const after = await call(h, 'GET', '/api/zones/3/equalizer');
+  assert.deepEqual(after.json().bands, [6, 6, 6, 6, 6, 6, 6, 0, -2, 2]);
+});
+
+test('equalizer is readable without live playback state', async () => {
+  // It is configuration, not playback, so it must not require a zone that is
+  // currently streaming — an idle zone still has an equalizer to configure.
+  const h = harness();
+  h.states.clear();
+  const res = await call(h, 'GET', '/api/zones/3/equalizer');
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().zoneId, 3);
+});
+
+test('equalizer rejects a band array that is not ten values', async () => {
+  const h = harness();
+  for (const bands of [[1, 2], new Array(11).fill(0), 'loud', null]) {
+    const res = await call(h, 'PUT', '/api/zones/3/equalizer', { bands });
+    assert.equal(res.statusCode, 400, `rejects ${JSON.stringify(bands)}`);
+    assert.equal(res.json().error, 'invalid-equalizer-bands');
+  }
+  // And nothing was applied.
+  const after = await call(h, 'GET', '/api/zones/3/equalizer');
+  assert.deepEqual(after.json().bands, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+});
+
+test('equalizer 404s an unknown zone and 405s a wrong method', async () => {
+  const h = harness();
+  assert.equal((await call(h, 'GET', '/api/zones/99/equalizer')).statusCode, 404);
+  assert.equal((await call(h, 'POST', '/api/zones/3/equalizer')).statusCode, 405);
 });

@@ -8,11 +8,6 @@ import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
-import {
-  formatEqualizerSettings,
-  getZoneEqualizerBands,
-  normalizeEqualizerBands,
-} from '@/domain/zones/equalizer';
 import { audioResampler } from '@/ports/types/audioFormat';
 import { sendspinCore } from '@sonn-audio/node-sendspin';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
@@ -57,20 +52,6 @@ export function buildZonesRoutes(deps: ZonesHandlerDeps): Route[] {
       method: 'GET',
       pattern: /^\/zones\/states$/,
       handler: async (_req, res) => handleZoneStates(res, deps),
-    },
-    {
-      method: 'GET',
-      pattern: /^\/zones\/(\d+)\/equalizer$/,
-      handler: async (_req, res, match) => {
-        await handleZoneEqualizerGet(Number(match[1]), res, deps);
-      },
-    },
-    {
-      method: 'PUT',
-      pattern: /^\/zones\/(\d+)\/equalizer$/,
-      handler: async (req, res, match) => {
-        await handleZoneEqualizerPut(Number(match[1]), req, res, deps);
-      },
     },
     {
       method: 'GET',
@@ -325,63 +306,6 @@ async function handleZoneStates(res: ServerResponse, deps: ZonesHandlerDeps): Pr
     deps.log.warn('zone state fetch failed', { err });
     deps.sendJson(res, 500, { error: 'zone-states-failed' });
   }
-}
-
-async function handleZoneEqualizerGet(
-  zoneId: number,
-  res: ServerResponse,
-  deps: ZonesHandlerDeps,
-): Promise<void> {
-  const zone = deps.configPort.getConfig().zones.find((entry) => entry.id === zoneId);
-  if (!zone) {
-    deps.sendJson(res, 404, { error: 'zone-not-found' });
-    return;
-  }
-
-  const bands = getZoneEqualizerBands(zone);
-  deps.sendJson(res, 200, {
-    ok: true,
-    zoneId,
-    bands,
-    equalizerSettings: formatEqualizerSettings(bands),
-  });
-}
-
-async function handleZoneEqualizerPut(
-  zoneId: number,
-  req: IncomingMessage,
-  res: ServerResponse,
-  deps: ZonesHandlerDeps,
-): Promise<void> {
-  const body = (await deps.readJsonBody(req, res)) as { bands?: unknown } | unknown[] | null;
-  if (res.writableEnded) {
-    return;
-  }
-
-  const bands = normalizeEqualizerBands(Array.isArray(body) ? body : body?.bands);
-  if (!bands) {
-    deps.sendJson(res, 400, { error: 'invalid-equalizer-bands' });
-    return;
-  }
-
-  const zone = deps.configPort.getConfig().zones.find((entry) => entry.id === zoneId);
-  if (!zone) {
-    deps.sendJson(res, 404, { error: 'zone-not-found' });
-    return;
-  }
-
-  const updated = await deps.zoneManager.setEqualizerBands(zoneId, bands);
-  if (!updated) {
-    deps.sendJson(res, 404, { error: 'zone-not-found' });
-    return;
-  }
-
-  deps.sendJson(res, 200, {
-    ok: true,
-    zoneId,
-    bands: updated.bands,
-    equalizerSettings: updated.equalizerSettings,
-  });
 }
 
 async function handleFavoritesPurge(res: ServerResponse, deps: ZonesHandlerDeps): Promise<void> {
