@@ -466,7 +466,6 @@ export class HttpService {
       mdnsPort: options.mdnsPort,
       sonnCorePeers: options.sonnCorePeers,
       alertFiles: options.alertFiles,
-      browserZoneRegistry: options.browserZoneRegistry,
       lineInApi: this.lineInApi,
       beoremoteApi: this.beoremoteApi,
       httpPort: config.port,

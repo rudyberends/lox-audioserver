@@ -53,7 +53,6 @@ type AdminApiOptions = {
   mdnsPort: MdnsPort;
   sonnCorePeers: SonnCorePeerRegistry;
   alertFiles: AlertFilesPort;
-  browserZoneRegistry: BrowserZoneRegistry;
   lineInApi: LineInApiHandler;
   beoremoteApi: BeoremoteApiHandler;
   /** Gateway port, so handlers can build client-facing URLs. */
@@ -80,8 +79,6 @@ import {
   buildZonesRoutes,
   STATE_CONTROLLER_DEFINITIONS,
 } from '@/adapters/http/adminApi/zones/zonesHandlers';
-import { buildBrowserZonesRoutes } from '@/adapters/http/adminApi/browserZones/browserZonesHandlers';
-import type { BrowserZoneRegistry } from '@/application/zones/browserZoneRegistry';
 import { buildSpotifyRoutes } from '@/adapters/http/adminApi/spotify/spotifyHandlers';
 import { buildMiscRoutes } from '@/adapters/http/adminApi/misc/miscHandlers';
 import { buildConfigRoutes } from '@/adapters/http/adminApi/config/configHandlers';
@@ -189,7 +186,6 @@ export class AdminApiHandler {
   private readonly mdns: MdnsPort;
   private readonly sonnCorePeers: SonnCorePeerRegistry;
   private readonly alertFiles: AlertFilesPort;
-  private readonly browserZoneRegistry: BrowserZoneRegistry;
   private readonly lineInApi: LineInApiHandler;
   private readonly beoremoteApi: BeoremoteApiHandler;
   private readonly httpPort: number;
@@ -225,7 +221,6 @@ export class AdminApiHandler {
     this.mdns = options.mdnsPort;
     this.sonnCorePeers = options.sonnCorePeers;
     this.alertFiles = options.alertFiles;
-    this.browserZoneRegistry = options.browserZoneRegistry;
     this.lineInApi = options.lineInApi;
     this.beoremoteApi = options.beoremoteApi;
     this.httpPort = options.httpPort;
@@ -303,12 +298,6 @@ export class AdminApiHandler {
         favoritesManager: this.favoritesManager,
         recentsManager: this.recentsManager,
         getClockOffsetMs: () => this.clockOffsetTracker.get(),
-        readJsonBody: (req, res, max) => readJsonBody(req, res, max),
-        sendJson: (res, status, payload) => sendJson(res, status, payload),
-      }),
-      ...buildBrowserZonesRoutes({
-        log: this.log,
-        registry: this.browserZoneRegistry,
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),

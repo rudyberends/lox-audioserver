@@ -47,6 +47,11 @@ unchanged (`{"bands": [ …10 ]}`); the response drops `ok` and `equalizerSettin
 a `2xx` already means it worked, and the comma-joined string was only ever there for
 the Loxone app.
 
+`POST`/`DELETE /admin/api/zones/browser` is gone as well — that was how a browser tab used to
+register itself as somewhere audio goes, and it needed an admin session to do it. It is
+`POST /api/v1/destinations/local` now, needs no session, and hands back the client id and
+socket url the old route never did. See [Destinations](#destinations).
+
 `GET /admin/api/transports/squeezelite/clients` has an answer here too, if you were using
 it to work out which of your players ended up on which zone. `output.device.id` is that
 same MAC and `output.device.connected` that same link state, per zone, from one read of
