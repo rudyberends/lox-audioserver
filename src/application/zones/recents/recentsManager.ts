@@ -50,7 +50,9 @@ export class RecentsManager {
   // Live zone-state fallback for titles that aren't on the queue item or
   // resolvable as metadata (notably radio/tunein stations, whose name only
   // lives in the now-playing state).
-  private zoneStateLookup: ((zoneId: number) => { station?: string; title?: string } | undefined) | null = null;
+  private zoneStateLookup:
+    | ((zoneId: number) => { station?: string; title?: string; name?: string } | undefined)
+    | null = null;
 
   constructor(notifier: NotifierPort, contentPort: ContentPort) {
     this.notifier = notifier;
@@ -62,7 +64,9 @@ export class RecentsManager {
   }
 
   public setZoneStateLookup(
-    lookup: ((zoneId: number) => { station?: string; title?: string } | undefined) | null,
+    lookup:
+      | ((zoneId: number) => { station?: string; title?: string; name?: string } | undefined)
+      | null,
   ): void {
     this.zoneStateLookup = lookup;
   }
@@ -201,7 +205,17 @@ export class RecentsManager {
       const station = (item.station ?? '').trim();
       if (station) return station;
       const live = this.zoneStateLookup?.(zoneId);
-      return (live?.station ?? '').trim() || (live?.title ?? '').trim() || '';
+      const liveStation = (live?.station ?? '').trim();
+      if (liveStation) return liveStation;
+      // The live title is a last resort for stations, which carry their name nowhere else.
+      // But it can be the *zone's* name: the state guard replaces a title that looks like a
+      // raw audiopath with the zone name so the Loxone app never shows an id, and a local
+      // track with no tags hits that path — which is how "Audio Player 1" ended up stored as
+      // a song title. A title equal to the zone name is that guard, not a name.
+      const liveTitle = (live?.title ?? '').trim();
+      const zoneName = (live?.name ?? '').trim();
+      if (liveTitle && liveTitle === zoneName) return '';
+      return liveTitle;
     })();
     const ownerBase =
       service.service === 'musicassistant'

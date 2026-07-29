@@ -108,7 +108,12 @@ function kindFromAudiopath(audiopath: string): ApiSourceKind | null {
  * (the native app has no null), so treat "no title and no artist" as no track.
  */
 function toTrack(state: ZoneState): ApiTrack | null {
-  const title = state.title ?? '';
+  // A title equal to the zone's own name is not a title. Playback fills the field with the
+  // zone name when a track has no metadata, because the Loxone app must show *something* there
+  // — but reporting "Audio Player 1" as a song name is worse than reporting nothing, and it
+  // propagated: recents copied it out of the live state and stored it.
+  const raw = (state.title ?? '').trim();
+  const title = raw && raw === (state.name ?? '').trim() ? '' : (state.title ?? '');
   const artist = state.artist ?? '';
   const album = state.album ?? '';
   if (!title && !artist && !album) {

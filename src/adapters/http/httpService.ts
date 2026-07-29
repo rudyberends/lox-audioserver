@@ -364,6 +364,7 @@ export class HttpService {
           start,
           limit,
           options.contentManager.getBridgeRegistry(),
+          options.zoneManager.getZoneState(zoneId)?.name ?? '',
         );
       },
       setGroup: (zoneId, members) => {

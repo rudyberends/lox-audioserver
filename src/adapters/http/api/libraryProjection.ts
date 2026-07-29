@@ -16,6 +16,7 @@
 import type { ApiFavorite, ApiFavorites, ApiRecentItem, ApiRecents } from '@/domain/zones/apiTypes';
 import type { FavoriteItem } from '@/application/zones/favorites/types';
 import { toServiceNative, type BridgeRegistry } from '@/domain/zones/bridgeIdentity';
+import { detectServiceFromAudiopath } from '@/domain/zones/audiopath';
 import type { RecentItem } from '@/application/zones/recents/recentsStore';
 
 /**
@@ -58,6 +59,35 @@ function toPublicSource(
   return `${prefix}:${unwrapped.slice('spotify:'.length)}`;
 }
 
+/**
+ * Which service a normalised source belongs to.
+ *
+ * `library` is how the store spells "not from a service", and this API says nothing rather
+ * than inventing a name for local files. The stored value is a fallback only: it is right for
+ * entries this server wrote itself and wrong for anything a Loxone client touched.
+ */
+/** A title that is really the zone's name is not a title; see toRecent. */
+function titleWithoutZoneName(title: string, zoneName: string): string {
+  const trimmed = title.trim();
+  return trimmed && trimmed === zoneName.trim() ? '' : title;
+}
+
+function serviceFromSource(source: string, stored: string | undefined): string {
+  const detected = detectServiceFromAudiopath(source);
+  if (detected !== 'library') {
+    return detected;
+  }
+  // `detectServiceFromAudiopath` never returns nothing: an unrecognised path falls through to
+  // `library`, its catch-all. So `library` means "recognised as local" *or* "no idea", and the
+  // two are worth telling apart. For something genuinely local this API says nothing rather
+  // than inventing a name; only in the no-idea case is the stored value worth consulting.
+  if (/(^|:)library(:|\/|$)/i.test(source.trim())) {
+    return '';
+  }
+  const fallback = (stored ?? '').trim().toLowerCase();
+  return fallback && fallback !== 'library' ? fallback : '';
+}
+
 function toFavorite(item: FavoriteItem, registry: BridgeRegistry): ApiFavorite {
   return {
     id: item.id,
@@ -80,15 +110,28 @@ export function toApiFavorites(
   };
 }
 
-function toRecent(item: RecentItem, registry: BridgeRegistry): ApiRecentItem {
+function toRecent(
+  item: RecentItem,
+  registry: BridgeRegistry,
+  zoneName: string,
+): ApiRecentItem {
+  const source = toPublicSource(item.audiopath, registry);
   return {
-    source: toPublicSource(item.audiopath, registry),
-    title: item.title || item.name || '',
+    source,
+    // Entries written before the zone-name guard existed have the zone's own name stored as
+    // the title: playback fills that field with it when a track has no metadata, and recents
+    // copied it out of the live state. Suppress it rather than migrate the store — a blank
+    // title is honest, and the artist and album beside it usually still identify the track.
+    title: titleWithoutZoneName(item.title || item.name || '', zoneName),
     artist: item.artist ?? '',
     album: item.album ?? '',
     coverUrl: item.coverurl ?? '',
-    // 'library' is how the store spells "not from a service"; say nothing instead.
-    service: item.service && item.service !== 'library' ? item.service : '',
+    // Derived from the normalised source rather than read from the store. The stored
+    // `service` carries whatever the writer believed at the time, which for an entry written
+    // while a Loxone client was driving is the Spotify disguise — so an Apple Music track came
+    // back as `service: "spotify"` next to an `applemusic:` source that contradicted it.
+    // The audiopath is the one field that knows.
+    service: serviceFromSource(source, item.service),
   };
 }
 
@@ -98,13 +141,15 @@ export function toApiRecents(
   start: number,
   limit: number,
   registry: BridgeRegistry,
+  /** The zone's own name, so a title that is really it can be recognised. */
+  zoneName: string,
 ): ApiRecents {
   const from = Math.max(0, start);
   return {
     zoneId,
     items: raw.items
       .slice(from, from + Math.max(0, limit))
-      .map((item) => toRecent(item, registry)),
+      .map((item) => toRecent(item, registry, zoneName)),
     start: from,
     total: raw.items.length,
   };
