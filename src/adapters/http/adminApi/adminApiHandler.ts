@@ -293,10 +293,7 @@ export class AdminApiHandler {
         zoneManager: this.zoneManager,
         favoritesManager: this.favoritesManager,
         recentsManager: this.recentsManager,
-        squeezeliteCore: this.squeezeliteCore,
         getClockOffsetMs: () => this.clockOffsetTracker.get(),
-        buildSqueezeliteAdminPlayerSnapshot: (primaryOutput, players) =>
-          buildSqueezeliteAdminPlayerSnapshot(primaryOutput as ZoneTransportConfig | undefined, players),
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),

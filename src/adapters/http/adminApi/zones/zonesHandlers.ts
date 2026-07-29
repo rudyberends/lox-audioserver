@@ -7,7 +7,6 @@ import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPrefe
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
-import type { SqueezeliteCore } from '@/adapters/outputs/squeezelite/squeezeliteCore';
 import { audioResampler } from '@/ports/types/audioFormat';
 import { sendspinCore } from '@sonn-audio/node-sendspin';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
@@ -36,12 +35,7 @@ export type ZonesHandlerDeps = {
   zoneManager: ZoneManagerFacade;
   favoritesManager: FavoritesManager;
   recentsManager: RecentsManager;
-  squeezeliteCore: SqueezeliteCore;
   getClockOffsetMs: () => Promise<number | null>;
-  buildSqueezeliteAdminPlayerSnapshot: (
-    primaryOutput: ZoneOutputLike | undefined,
-    players: SqueezeliteCore['players'],
-  ) => unknown;
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
 };
@@ -205,10 +199,6 @@ async function handleZoneStates(res: ServerResponse, deps: ZonesHandlerDeps): Pr
           : primaryOutput
             ? [primaryOutput]
             : [];
-      const squeezelitePlayer = deps.buildSqueezeliteAdminPlayerSnapshot(
-        primaryOutput ?? undefined,
-        deps.squeezeliteCore.players,
-      );
       const groupProtocol =
         techSnapshot?.transports && techSnapshot.transports.some((t) => t === 'sendspin') ? 'sendspin' : null;
       const streams = session
@@ -218,8 +208,12 @@ async function handleZoneStates(res: ServerResponse, deps: ZonesHandlerDeps): Pr
           }
         : undefined;
       const streamStats = deps.audioManager.getStreamStats(zone.id);
+      // Any registered zone has a technical snapshot, so an idle zone still reports its
+      // configured transports. This used to key on whether a squeezelite player
+      // happened to match, which meant an idle Sonos or Cast zone reported no `tech`
+      // at all while an idle squeezelite one did.
       const tech =
-        session || playbackSource || squeezelitePlayer
+        session || playbackSource || techSnapshot
           ? {
               input: playbackSource
                 ? {
@@ -252,7 +246,6 @@ async function handleZoneStates(res: ServerResponse, deps: ZonesHandlerDeps): Pr
               outputTarget: techSnapshot?.activeOutput ?? null,
               outputs: techSnapshot?.outputs ?? [],
               transports: techSnapshot?.transports ?? [],
-              player: squeezelitePlayer,
               session: session
                 ? {
                     state: session.state,

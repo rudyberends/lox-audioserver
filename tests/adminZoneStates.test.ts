@@ -50,16 +50,28 @@ function deps(mode: 'play' | 'pause' | 'stop' | null) {
       log: { warn: () => {}, info: () => {}, debug: () => {} },
       configPort: { getConfig: () => ({ zones: [{ id: 3, name: 'Kitchen' }] }) },
       audioManager: { getSession: () => undefined, getStreamStats: () => [] },
-      zoneAudioPrefs: { getEffectiveOutputSettings: () => undefined },
+      // Production always returns settings, falling back to defaults — never undefined.
+      zoneAudioPrefs: {
+        getEffectiveOutputSettings: () => ({
+          sampleRate: 44100,
+          channels: 2,
+          mp3Bitrate: '320k',
+          pcmBitDepth: 16,
+          httpProfile: 'mp3',
+          httpIcyEnabled: false,
+          httpIcyInterval: 0,
+          httpIcyName: '',
+          prebufferBytes: 0,
+          httpFallbackSeconds: 0,
+        }),
+      },
       zoneManager: {
         getState: () => state,
         getTechnicalSnapshot: () => ({ activeOutput: 'sendspin', transports: ['sendspin'] }),
       },
       favoritesManager: {},
       recentsManager: {},
-      squeezeliteCore: { players: [] },
       getClockOffsetMs: async () => 0,
-      buildSqueezeliteAdminPlayerSnapshot: () => undefined,
       readJsonBody: async () => null,
       sendJson: (_res: ServerResponse, status: number, body: unknown) => {
         sent.status = status;
@@ -140,4 +152,23 @@ test('state-controllers serves the picker its options, with a stable shape', asy
     list.some((e: { id: string }) => e.id === 'internal'),
     'internal is the default a zone falls back to',
   );
+});
+
+test('admin zone states no longer carries squeezelite player identity', async () => {
+  // It moved to /api as `output.device` (sonn-audio/core#247). Nothing of ours read it
+  // here, and leaving it would keep integrators pointed at /admin/api.
+  const sent = await fetchStates('play');
+  const json = JSON.stringify(sent.body);
+  assert.ok(!json.includes('"player"'), 'no player identity in the diagnostics payload');
+});
+
+test('an idle zone still reports its configured transports', async () => {
+  // The `tech` block used to appear only when there was a session, a playback source,
+  // or a matching squeezelite player — so an idle Sonos or Cast zone reported nothing
+  // while an idle squeezelite one did. It keys on the technical snapshot now.
+  const sent = await fetchStates(null);
+  const zone = sent.body.zones[0];
+  assert.ok(zone.tech, 'tech is present without a live session');
+  assert.deepEqual(zone.tech.transports, ['sendspin']);
+  assert.equal(zone.tech.outputTarget, 'sendspin', 'the Zones card reads this for the device name');
 });
