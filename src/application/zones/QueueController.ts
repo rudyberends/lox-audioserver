@@ -111,6 +111,32 @@ export class QueueController {
     };
   }
 
+  /**
+   * The queue as stored, without the Loxone-facing rewrites `getQueue` applies.
+   *
+   * `getQueue` collapses every service-native audiopath to `spotify:<kind>:<id>`
+   * because the native client's queue schema is fail-hard about that prefix. Any
+   * consumer that is not that client needs the real ids, so it reads this instead.
+   */
+  public getRawQueue(
+    zoneId: number,
+    start: number,
+    limit: number,
+  ): { items: QueueItem[]; start: number; total: number; currentIndex: number | null } {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx) {
+      return { items: [], start: 0, total: 0, currentIndex: null };
+    }
+    const all = ctx.queue.items;
+    const from = Math.max(0, start);
+    return {
+      items: all.slice(from, from + Math.max(0, limit)),
+      start: from,
+      total: all.length,
+      currentIndex: ctx.queueController.currentIndex(),
+    };
+  }
+
   public isLocalQueueAuthority(authority: QueueAuthority | undefined | null): boolean {
     // Provider-backed queues (Apple Music/Deezer/Tidal) are still driven by the local queue controller.
     // Treat them as "local" so auto-advance and next/prev keep working even if an output snapshot

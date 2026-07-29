@@ -14,6 +14,7 @@ import { LineInIngestWebSocket } from '@/adapters/http/streams/lineInIngestWs';
 import { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
 import { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandler';
 import { ApiHandler } from '@/adapters/http/api/apiHandler';
+import { toApiQueue } from '@/adapters/http/api/queueProjection';
 import { getZoneEqualizerBands } from '@/domain/zones/equalizer';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import type { ApiOutput, ApiVolumeLimits } from '@/domain/zones/apiTypes';
@@ -158,6 +159,30 @@ export class HttpService {
       getOutputDevice: (zoneId) => options.resolveOutputDevice(zoneId),
       getVolumeLimits: (zoneId) => options.resolveVolumeLimits(zoneId),
       getOutputProtocol: (zoneId) => options.resolveOutputProtocol(zoneId),
+      getQueue: (zoneId, start, limit) => {
+        if (!options.zoneManager.getZoneState(zoneId)) {
+          return null;
+        }
+        return toApiQueue(zoneId, options.zoneManager.getRawQueue(zoneId, start, limit));
+      },
+      queueAppend: async (zoneId, uri) => {
+        await options.zoneManager.queue.appendUri(zoneId, uri);
+      },
+      queueInsertNext: async (zoneId, uri) => {
+        await options.zoneManager.queue.insertUriAfterCurrent(zoneId, uri);
+      },
+      queuePlay: (zoneId, itemId) => {
+        if (!options.zoneManager.queue.seekInQueue(zoneId, itemId)) {
+          return false;
+        }
+        options.zoneManager.handleCommand(zoneId, 'queueplaycurrent');
+        return true;
+      },
+      queueMove: (zoneId, itemId, beforeId) =>
+        options.zoneManager.queue.moveBeforeUniqueId(zoneId, itemId, beforeId ?? 'end'),
+      queueRemove: (zoneId, itemId) => options.zoneManager.queue.removeByUniqueId(zoneId, itemId),
+      queueClear: (zoneId) => options.zoneManager.queue.clear(zoneId),
+      queueUndo: (zoneId) => options.zoneManager.queue.undo(zoneId),
       getServiceLabel: (audiopath) => options.resolveServiceLabel(audiopath),
       getEqualizerBands: (zoneId) => {
         const zone = options.configPort.getConfig().zones?.find((z) => z.id === zoneId);

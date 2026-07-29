@@ -171,6 +171,7 @@ curl -N http://server:7090/api/v1/events
 GET /api/v1/zones                   →  { "zones": [ … ] }
 GET /api/v1/zones/{id}              →  { … }              404 zone-not-found
 GET /api/v1/zones/{id}/equalizer    →  { "zoneId": 3, "bands": [ …10 ] }
+GET /api/v1/zones/{id}/queue        →  { "items": [ … ], "start": 0, "total": 42, "currentIndex": 3 }
 GET /api/v1/health                  →  { "status": "ok", "version": "…", "uptimeSec": 120 }
 ```
 
@@ -190,6 +191,16 @@ PUT  /api/v1/zones/{id}/volume     {"volume": 40}   or  {"delta": -5}
 PUT  /api/v1/zones/{id}/position   {"position": 90}
 PUT  /api/v1/zones/{id}/power      {"power": "on"}
 PUT  /api/v1/zones/{id}/equalizer  {"bands": [3,3,2,1,0,0,-1,-2,-2,-3]}
+PUT  /api/v1/zones/{id}/repeat     {"repeat": "off" | "all" | "one"}
+PUT  /api/v1/zones/{id}/shuffle    {"shuffle": true}
+
+POST   /api/v1/zones/{id}/queue    {"uri": "…"}            add to the end
+POST   /api/v1/zones/{id}/queue    {"uri": "…", "next": true}   add after what is playing
+PATCH  /api/v1/zones/{id}/queue    {"play": "<item id>"}    jump to an entry
+PATCH  /api/v1/zones/{id}/queue    {"move": "<id>", "before": "<id>"}   reorder (omit `before` for the end)
+DELETE /api/v1/zones/{id}/queue    {"id": "<item id>"}      remove one entry
+DELETE /api/v1/zones/{id}/queue    {"all": true}            clear it
+DELETE /api/v1/zones/{id}/queue    {"undo": true}           revert the last edit
 ```
 
 `pause` keeps the zone's place and `stop` gives it up: after `pause`, `play` resumes
@@ -211,6 +222,19 @@ curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"http://example/s
 curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"library://track/9"}'
 ```
 
+### The queue
+
+`GET` returns a page: `start` and `limit` (default 100, max 500) are query parameters,
+and `total` is the length of the whole queue so you know whether to ask for more.
+`currentIndex` is the entry playing now, or `null`.
+
+Each entry has an **`id` that identifies the entry, not the track** — queue the same
+track twice and you get two ids. That id is what `play`, `move` and `id` take. `source`
+is the same opaque provider id as `ApiSource.id`, so an entry can be re-queued later.
+
+Clearing the queue needs `{"all": true}` rather than an empty body: wiping a queue
+should be something you asked for, not something a missing field happened to mean.
+
 `volume` takes either an absolute value (`0`–`100`) or a signed `delta`. Use `delta` for
 remote-control style stepping: it avoids the read-then-write race that two clients
 adjusting the same zone would otherwise hit, and `volumeLimits.step` is the size a step
@@ -229,7 +253,8 @@ reflect it — write here when your own UI changes, and read here to pick up cha
 elsewhere. The server does not push your change back to you.
 
 Errors are `4xx` with `{"error":"…"}`: `zone-not-found`, `invalid-json`,
-`invalid-volume`, `invalid-position`, `invalid-power`, `invalid-uri`, `invalid-equalizer-bands`,
+`invalid-volume`, `invalid-position`, `invalid-power`, `invalid-uri`, `invalid-repeat`, `invalid-shuffle`, `invalid-equalizer-bands`,
+`invalid-queue-patch`, `invalid-queue-delete`, `queue-item-not-found`,
 `method-not-allowed`.
 
 ## Examples

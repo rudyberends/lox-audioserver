@@ -14,7 +14,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
-import type { ApiOutput, ApiVolumeLimits, ApiZoneState } from '@/domain/zones/apiTypes';
+import type { ApiOutput, ApiQueue, ApiVolumeLimits, ApiZoneState } from '@/domain/zones/apiTypes';
 import type { ZoneState } from '@/domain/zones/zoneState';
 import { createLogger } from '@/shared/logging/logger';
 
@@ -31,6 +31,20 @@ export type ApiHandlerDeps = {
    * the same way it does for a Loxone-originated play.
    */
   playContent: (zoneId: number, uri: string) => Promise<void>;
+  /** A page of a zone's queue, without the Loxone-facing rewrites. */
+  getQueue: (zoneId: number, start: number, limit: number) => ApiQueue | null;
+  /** Appends to the end of the queue. */
+  queueAppend: (zoneId: number, uri: string) => Promise<void>;
+  /** Inserts right after the entry playing now. */
+  queueInsertNext: (zoneId: number, uri: string) => Promise<void>;
+  /** Jumps to an entry by its id; false when no entry has that id. */
+  queuePlay: (zoneId: number, itemId: string) => boolean;
+  /** Moves an entry before another, or to the end when `beforeId` is null. */
+  queueMove: (zoneId: number, itemId: string, beforeId: string | null) => boolean;
+  queueRemove: (zoneId: number, itemId: string) => void;
+  queueClear: (zoneId: number) => void;
+  /** Reverts the last queue edit. */
+  queueUndo: (zoneId: number) => void;
   /** Which protocol a zone plays over right now; see ApiOutput. */
   getOutputProtocol: (zoneId: number) => string | null;
   /** The configured name of the service an audiopath belongs to, for `source.name`. */
@@ -146,6 +160,10 @@ export class ApiHandler {
         await this.handleEqualizer(req, res, method, zoneId);
         return;
       }
+      if (action === 'queue') {
+        await this.handleQueue(req, res, method, zoneId, url);
+        return;
+      }
       await this.handleZoneRoute(req, res, method, zoneId, action);
       return;
     }
@@ -255,6 +273,26 @@ export class ApiHandler {
         res.writeHead(204).end();
         return;
       }
+      case 'repeat': {
+        // The engine's own vocabulary for this is 'off' | 'all' | 'one', so the value
+        // passes straight through rather than being translated to a number here.
+        if (body.repeat !== 'off' && body.repeat !== 'all' && body.repeat !== 'one') {
+          this.sendJson(res, 400, { error: 'invalid-repeat' });
+          return;
+        }
+        this.deps.handleCommand(zoneId, 'repeat', body.repeat);
+        res.writeHead(204).end();
+        return;
+      }
+      case 'shuffle': {
+        if (typeof body.shuffle !== 'boolean') {
+          this.sendJson(res, 400, { error: 'invalid-shuffle' });
+          return;
+        }
+        this.deps.handleCommand(zoneId, 'shuffle', body.shuffle ? 'on' : 'off');
+        res.writeHead(204).end();
+        return;
+      }
       case 'power': {
         if (body.power !== 'on' && body.power !== 'off') {
           this.sendJson(res, 400, { error: 'invalid-power' });
@@ -268,6 +306,113 @@ export class ApiHandler {
         this.sendJson(res, 404, { error: 'not-found' });
         return;
     }
+  }
+
+  /**
+   * A zone's queue as one resource with four verbs, where the Loxone dialect has eight
+   * commands (queueadd, queueinsert, queueandplay, queue/play, queue/move/…/before/…,
+   * queue/remove, queue/clear, queueundo). Same capabilities, addressed by what they do
+   * to the collection rather than by their own names.
+   *
+   *   GET    ?start=&limit=   read a page
+   *   POST   {uri, next?}     add — at the end, or right after what is playing
+   *   PATCH  {play|move}      jump to an entry, or reorder one
+   *   DELETE {id?} | {undo}   remove one entry, clear the lot, or undo the last edit
+   */
+  private async handleQueue(
+    req: IncomingMessage,
+    res: ServerResponse,
+    method: string,
+    zoneId: number,
+    url: URL,
+  ): Promise<void> {
+    if (method === 'GET') {
+      const start = this.clampInt(Number(url.searchParams.get('start') ?? 0), 0, Number.MAX_SAFE_INTEGER) ?? 0;
+      const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 100), 1, 500) ?? 100;
+      const queue = this.deps.getQueue(zoneId, start, limit);
+      if (!queue) {
+        this.sendJson(res, 404, { error: 'zone-not-found' });
+        return;
+      }
+      this.sendJson(res, 200, queue);
+      return;
+    }
+
+    if (method !== 'POST' && method !== 'PATCH' && method !== 'DELETE') {
+      this.sendJson(res, 405, { error: 'method-not-allowed' });
+      return;
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'invalid-json' });
+      return;
+    }
+
+    if (method === 'POST') {
+      const uri = typeof body.uri === 'string' ? body.uri.trim() : '';
+      if (!uri) {
+        this.sendJson(res, 400, { error: 'invalid-uri' });
+        return;
+      }
+      // `next: true` is "play this after the current track" — the one placement worth
+      // naming, since anything else is just an append followed by a move.
+      if (body.next === true) {
+        await this.deps.queueInsertNext(zoneId, uri);
+      } else {
+        await this.deps.queueAppend(zoneId, uri);
+      }
+      res.writeHead(204).end();
+      return;
+    }
+
+    if (method === 'PATCH') {
+      const play = typeof body.play === 'string' ? body.play.trim() : '';
+      if (play) {
+        if (!this.deps.queuePlay(zoneId, play)) {
+          this.sendJson(res, 404, { error: 'queue-item-not-found' });
+          return;
+        }
+        res.writeHead(204).end();
+        return;
+      }
+      const move = typeof body.move === 'string' ? body.move.trim() : '';
+      if (move) {
+        // `before: null` (or absent) moves it to the end.
+        const before = typeof body.before === 'string' ? body.before.trim() || null : null;
+        if (!this.deps.queueMove(zoneId, move, before)) {
+          this.sendJson(res, 404, { error: 'queue-item-not-found' });
+          return;
+        }
+        res.writeHead(204).end();
+        return;
+      }
+      this.sendJson(res, 400, { error: 'invalid-queue-patch' });
+      return;
+    }
+
+    // DELETE
+    if (body.undo === true) {
+      this.deps.queueUndo(zoneId);
+      res.writeHead(204).end();
+      return;
+    }
+    const id = typeof body.id === 'string' ? body.id.trim() : '';
+    if (id) {
+      this.deps.queueRemove(zoneId, id);
+      res.writeHead(204).end();
+      return;
+    }
+    // No id and no undo: clear the whole queue. Explicit, since an empty DELETE body
+    // meaning "everything" should be a decision rather than an accident.
+    if (body.all === true) {
+      this.deps.queueClear(zoneId);
+      res.writeHead(204).end();
+      return;
+    }
+    this.sendJson(res, 400, { error: 'invalid-queue-delete' });
   }
 
   /**

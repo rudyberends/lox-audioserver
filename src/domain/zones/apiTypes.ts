@@ -179,3 +179,38 @@ export interface ApiZoneEqualizer {
   /** Ten gains in dB, low band first. */
   bands: number[];
 }
+
+/**
+ * One entry in a zone's queue.
+ *
+ * `id` is this entry's handle — the value you pass back to play, move or remove it.
+ * It identifies the entry, not the track: the same track queued twice has two ids.
+ */
+export interface ApiQueueItem {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  /** Seconds; 0 when unknown. */
+  duration: number;
+  coverUrl: string;
+  /** Opaque provider-native id, as on `ApiSource.id`. */
+  source: string;
+}
+
+/**
+ * A page of a zone's queue.
+ *
+ * Paged because a queue can hold thousands of entries and a client usually shows a
+ * screenful. `total` is the whole queue, so a caller knows whether to ask for more.
+ */
+export interface ApiQueue {
+  zoneId: number;
+  items: ApiQueueItem[];
+  /** Offset of the first returned item. */
+  start: number;
+  /** Length of the whole queue, not of this page. */
+  total: number;
+  /** Index of the entry currently playing, or null when nothing is. */
+  currentIndex: number | null;
+}

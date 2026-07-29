@@ -517,6 +517,11 @@ export class ZoneManager {
     return this.queueController.getQueue(zoneId, start, limit);
   }
 
+  /** The queue without the Loxone-facing rewrites; see QueueController.getRawQueue. */
+  public getRawQueue(zoneId: number, start: number, limit: number) {
+    return this.queueController.getRawQueue(zoneId, start, limit);
+  }
+
   public getZoneVolumes(zoneId: number): ZoneConfig['volumes'] | undefined {
     return this.zoneRepo.get(zoneId)?.config?.volumes;
   }

@@ -10,7 +10,7 @@
  * form of an audiopath.
  */
 import type { ZoneState } from '@/domain/zones/zoneState';
-import { AudioType } from '@/domain/zones/enums';
+import { AudioType, RepeatMode } from '@/domain/zones/enums';
 import { parseServiceNativeAudiopath } from '@/domain/zones/audiopath';
 import type {
   ApiGroup,
@@ -40,16 +40,13 @@ export function toPlaybackState(mode: ZoneState['mode']): ApiPlaybackState {
   }
 }
 
-/**
- * Loxone encodes repeat as a number whose meaning comes from its app:
- * 0 = off, 1 = repeat one, 3 = repeat all (2 is unused in practice).
- */
+/** Repeat is stored as a `RepeatMode`; 2 is unused. */
 function toRepeatMode(plrepeat: number | undefined): ApiRepeatMode {
   switch (plrepeat) {
-    case 1:
-      return 'one';
-    case 3:
+    case RepeatMode.Queue:
       return 'all';
+    case RepeatMode.Track:
+      return 'one';
     default:
       return 'off';
   }

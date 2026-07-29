@@ -88,9 +88,15 @@ type Harness = {
 };
 
 let eqBands: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+let queueOps: string[] = [];
+const queueItems = [
+  { id: 'a', title: 'One', artist: 'A', album: 'X', duration: 100, coverUrl: 'c1', source: 'applemusic:track:1' },
+  { id: 'b', title: 'Two', artist: 'B', album: 'Y', duration: 200, coverUrl: 'c2', source: 'library://track/2' },
+];
 
 function harness(): Harness {
   eqBands = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+  queueOps = [];
   const states = new Map<number, ZoneState>([[3, zoneState()]]);
   const commands: Harness['commands'] = [];
   const plays: Harness['plays'] = [];
@@ -105,6 +111,39 @@ function harness(): Harness {
     },
     getVolumeLimits: (zoneId) => (zoneId === 3 ? { max: 70, default: 20, step: 2 } : undefined),
     getOutputProtocol: () => 'sendspin',
+    getQueue: (zoneId, start, limit) =>
+      zoneId === 3
+        ? {
+            zoneId,
+            items: queueItems.slice(start, start + limit),
+            start,
+            total: queueItems.length,
+            currentIndex: 0,
+          }
+        : null,
+    queueAppend: async (zoneId, uri) => {
+      queueOps.push(`append:${uri}`);
+    },
+    queueInsertNext: async (zoneId, uri) => {
+      queueOps.push(`next:${uri}`);
+    },
+    queuePlay: (zoneId, id) => {
+      queueOps.push(`play:${id}`);
+      return queueItems.some((i) => i.id === id);
+    },
+    queueMove: (zoneId, id, before) => {
+      queueOps.push(`move:${id}>${before ?? 'end'}`);
+      return queueItems.some((i) => i.id === id);
+    },
+    queueRemove: (zoneId, id) => {
+      queueOps.push(`remove:${id}`);
+    },
+    queueClear: () => {
+      queueOps.push('clear');
+    },
+    queueUndo: () => {
+      queueOps.push('undo');
+    },
     getServiceLabel: (audiopath) => (audiopath.startsWith('applemusic:') ? 'Apple Music' : null),
     getOutputDevice: (zoneId) =>
       zoneId === 3
@@ -141,7 +180,7 @@ test('projection keeps Loxone vocabulary off the wire', () => {
   }
 
   assert.equal(api.state, 'paused');
-  assert.equal(api.repeat, 'all');
+  assert.equal(api.repeat, 'one', 'plrepeat 3 is RepeatMode.Track');
   assert.equal(api.shuffle, true);
   assert.equal(api.id, 3);
   // Position is promised in whole seconds.
@@ -712,4 +751,101 @@ test('a service-native audiopath decides the kind, not audiotype', () => {
     zoneState({ audiopath: 'library://track/9', audiotype: AudioType.File }),
   );
   assert.equal(local.source?.kind, 'track');
+});
+
+// The Loxone dialect spends eight commands on the queue (queueadd, queueinsert,
+// queueandplay, queue/play, queue/move/…/before/…, queue/remove, queue/clear,
+// queueundo). Same capabilities here, addressed by what they do to the collection.
+
+test('the queue reads as a page, with real source ids', async () => {
+  const h = harness();
+  const res = await call(h, 'GET', `${API_ROOT}/zones/3/queue`);
+  assert.equal(res.statusCode, 200);
+  const q = res.json();
+  assert.equal(q.zoneId, 3);
+  assert.equal(q.total, 2);
+  assert.equal(q.currentIndex, 0);
+  // Not collapsed to `spotify:…` the way the Loxone queue payload has to be.
+  assert.equal(q.items[0].source, 'applemusic:track:1');
+  assert.equal(q.items[0].id, 'a', 'the entry handle, for move and remove');
+});
+
+test('the queue pages', async () => {
+  const h = harness();
+  const res = await call(h, 'GET', `${API_ROOT}/zones/3/queue?start=1&limit=1`);
+  const q = res.json();
+  assert.equal(q.items.length, 1);
+  assert.equal(q.items[0].id, 'b');
+  assert.equal(q.start, 1);
+  assert.equal(q.total, 2, 'total is the whole queue, not the page');
+});
+
+test('posting to the queue appends, or inserts next', async () => {
+  const h = harness();
+  assert.equal((await call(h, 'POST', `${API_ROOT}/zones/3/queue`, { uri: 'x:1' })).statusCode, 204);
+  assert.equal(
+    (await call(h, 'POST', `${API_ROOT}/zones/3/queue`, { uri: 'x:2', next: true })).statusCode,
+    204,
+  );
+  assert.deepEqual(queueOps, ['append:x:1', 'next:x:2']);
+
+  const bad = await call(h, 'POST', `${API_ROOT}/zones/3/queue`, {});
+  assert.equal(bad.statusCode, 400);
+  assert.equal(bad.json().error, 'invalid-uri');
+});
+
+test('patching the queue jumps to an entry or reorders one', async () => {
+  const h = harness();
+  assert.equal((await call(h, 'PATCH', `${API_ROOT}/zones/3/queue`, { play: 'b' })).statusCode, 204);
+  assert.equal(
+    (await call(h, 'PATCH', `${API_ROOT}/zones/3/queue`, { move: 'a', before: 'b' })).statusCode,
+    204,
+  );
+  // No `before` means the end.
+  assert.equal((await call(h, 'PATCH', `${API_ROOT}/zones/3/queue`, { move: 'a' })).statusCode, 204);
+  assert.deepEqual(queueOps, ['play:b', 'move:a>b', 'move:a>end']);
+
+  const gone = await call(h, 'PATCH', `${API_ROOT}/zones/3/queue`, { play: 'nope' });
+  assert.equal(gone.statusCode, 404);
+  assert.equal(gone.json().error, 'queue-item-not-found');
+
+  const empty = await call(h, 'PATCH', `${API_ROOT}/zones/3/queue`, {});
+  assert.equal(empty.statusCode, 400);
+});
+
+test('deleting from the queue removes one, clears all, or undoes', async () => {
+  const h = harness();
+  assert.equal((await call(h, 'DELETE', `${API_ROOT}/zones/3/queue`, { id: 'a' })).statusCode, 204);
+  assert.equal((await call(h, 'DELETE', `${API_ROOT}/zones/3/queue`, { all: true })).statusCode, 204);
+  assert.equal((await call(h, 'DELETE', `${API_ROOT}/zones/3/queue`, { undo: true })).statusCode, 204);
+  assert.deepEqual(queueOps, ['remove:a', 'clear', 'undo']);
+
+  // Clearing everything has to be asked for, not be what an empty body happens to mean.
+  const vague = await call(h, 'DELETE', `${API_ROOT}/zones/3/queue`, {});
+  assert.equal(vague.statusCode, 400);
+  assert.equal(vague.json().error, 'invalid-queue-delete');
+});
+
+test('repeat and shuffle can be set, not only read', async () => {
+  // ZoneState reported both from the start while the API had no way to change them.
+  const h = harness();
+  for (const [mode, expected] of [['all', 'all'], ['one', 'one'], ['off', 'off']] as const) {
+    const res = await call(h, 'PUT', `${API_ROOT}/zones/3/repeat`, { repeat: mode });
+    assert.equal(res.statusCode, 204);
+    assert.deepEqual(h.commands.at(-1), { zoneId: 3, command: 'repeat', payload: expected });
+  }
+  assert.equal((await call(h, 'PUT', `${API_ROOT}/zones/3/repeat`, { repeat: 'sometimes' })).statusCode, 400);
+
+  await call(h, 'PUT', `${API_ROOT}/zones/3/shuffle`, { shuffle: true });
+  assert.equal(h.commands.at(-1)?.payload, 'on');
+  await call(h, 'PUT', `${API_ROOT}/zones/3/shuffle`, { shuffle: false });
+  assert.equal(h.commands.at(-1)?.payload, 'off');
+  assert.equal((await call(h, 'PUT', `${API_ROOT}/zones/3/shuffle`, { shuffle: 'yes' })).statusCode, 400);
+});
+
+test('repeat maps to the same numbers the engine and outputs use', () => {
+  // RepeatMode.Queue = 1 is "all", Track = 3 is "one". These were swapped here.
+  assert.equal(toApiZoneState(zoneState({ plrepeat: 1 })).repeat, 'all');
+  assert.equal(toApiZoneState(zoneState({ plrepeat: 3 })).repeat, 'one');
+  assert.equal(toApiZoneState(zoneState({ plrepeat: 0 })).repeat, 'off');
 });
