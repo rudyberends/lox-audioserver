@@ -100,6 +100,7 @@ import './mqttTopics.test';
 import './contentItemKind.test';
 import './folderPage.test';
 import './providerCapabilities.test';
+import './loxoneProjectionBoundary.test';
 import './mqttCommands.test';
 import './squeezeliteReconnect.test';
 import './loxoneZoneProjection.test';
