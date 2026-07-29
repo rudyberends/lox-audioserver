@@ -13,11 +13,11 @@ Base URL: `http://<server>:7090/api/v1`
 > admin UI: it is UI-shaped, changes freely, and is not a contract. Build your integrations on
 > `/api/v1`.
 
-### Coming from `/admin/api/zones/states`?
+### Coming from `/admin/api`?
 
-Before this API existed, that was the only way to read what a zone was playing, so
-integrations polled it. It is now what it was always meant to be — diagnostics for
-our own Admin UI — and the now-playing fields have moved here:
+Before this API existed, `/admin/api/zones/states` was the only way to read what a zone was
+playing, so integrations polled it. It is now what it was always meant to be — diagnostics
+for our own Admin UI — and the now-playing fields have moved here:
 
 | was | now |
 | --- | --- |
@@ -37,6 +37,17 @@ outside our own Admin UI should have to touch `/admin/api`. The request body is
 unchanged (`{"bands": [ …10 ]}`); the response drops `ok` and `equalizerSettings` —
 a `2xx` already means it worked, and the comma-joined string was only ever there for
 the Loxone app.
+
+`GET /admin/api/transports/squeezelite/clients` has an answer here too, if you were using
+it to work out which of your players ended up on which zone. `output.device.id` is that
+same MAC and `output.device.connected` that same link state, per zone, from one read of
+`/api/v1/zones` — see [the zone object](#zone-object). No session, no credentials.
+
+That last part is the point of all of this: **`/admin/api` needs a session and `/api/v1`
+does not.** If you are logging in — with local accounts or with Miniserver credentials — to
+read state or steer playback, you are on the wrong surface, and the login can go with it.
+`/admin/api` is the back end of our own Admin UI: it is UI-shaped, it changes without
+notice, and nothing in it is a promise to you.
 
 And you no longer need to poll: subscribe to `/api/v1/events` and the same data
 arrives on every change.
@@ -498,6 +509,12 @@ curl -N http://server:7090/api/v1/events
   surface and does not depend on one.
 - Additive changes (new fields, new `source.kind` values, new event types) are **not**
   breaking. Ignore fields and event `type`s you do not know.
+- **A device that reconnects is put back to playing by the server.** If a player drops off
+  and returns while its zone was playing, the server starts its stream again by itself —
+  the position restarts, the track and queue do not. You do not need to watch for this and
+  you should not send a stop/play (or an off/on/play) to force it. Anything doing that
+  today can drop it; if you still see a zone reporting `playing` with nothing audible after
+  a device returns, that is a bug worth reporting rather than working around.
 - **The version is in the path.** Within `v1`, fields are only ever added — nothing is
   renamed or removed under you. Anything that has to break appears as `v2`, served
   alongside `v1` rather than replacing it, so you migrate when it suits you. Calling
