@@ -105,6 +105,7 @@ import './browseRef.test';
 import './libraryProjectionSource.test';
 import './streamFormat.test';
 import './sendspinBrowserLead.test';
+import './browserZoneNaming.test';
 import './mqttCommands.test';
 import './squeezeliteReconnect.test';
 import './loxoneZoneProjection.test';

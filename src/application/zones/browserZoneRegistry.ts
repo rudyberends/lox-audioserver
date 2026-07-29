@@ -76,7 +76,9 @@ export class BrowserZoneRegistry {
       }
     }
     const zoneId = this.allocateId();
-    const name = options.name?.trim() || `Browser ${zoneId - BROWSER_ZONE_ID_BASE + 1}`;
+    const name = this.uniqueName(
+      options.name?.trim() || `Browser ${zoneId - BROWSER_ZONE_ID_BASE + 1}`,
+    );
     const finalSerial = serial || `browser-${zoneId}`;
 
     const cfg: ZoneConfig = {
@@ -119,6 +121,29 @@ export class BrowserZoneRegistry {
     for (const id of ids) {
       await this.unregister(id);
     }
+  }
+
+  /**
+   * A name no other live destination is using.
+   *
+   * Every tab sends the same name — a player has no way to know it is the second one — so
+   * without this a room list shows four entries called "This browser" and a user cannot tell
+   * which is playing. Numbering happens here rather than in the client because only the server
+   * can see the others.
+   */
+  private uniqueName(desired: string): string {
+    const taken = new Set(Array.from(this.zones.values(), (record) => record.name));
+    if (!taken.has(desired)) {
+      return desired;
+    }
+    for (let suffix = 2; suffix < 100; suffix += 1) {
+      const candidate = `${desired} ${suffix}`;
+      if (!taken.has(candidate)) {
+        return candidate;
+      }
+    }
+    // Beyond that something is registering in a loop; a duplicate name is the lesser problem.
+    return desired;
   }
 
   private allocateId(): number {
