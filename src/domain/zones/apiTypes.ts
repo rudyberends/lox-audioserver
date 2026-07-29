@@ -214,3 +214,65 @@ export interface ApiQueue {
   /** Index of the entry currently playing, or null when nothing is. */
   currentIndex: number | null;
 }
+
+/**
+ * One of a zone's favourites.
+ *
+ * `id` is the handle: pass it to play, rename or remove this favourite. The Loxone
+ * clients also carry a `slot` and a `plus` flag — a fixed position in their own grid and
+ * whether the plus button maps to it — which are properties of that UI rather than of
+ * the favourite, so neither appears here. Reordering is expressed as the order you send.
+ */
+export interface ApiFavorite {
+  id: number;
+  name: string;
+  /** Opaque provider-native id, as on `ApiSource.id`. */
+  source: string;
+  coverUrl: string;
+}
+
+/** A page of a zone's favourites. */
+export interface ApiFavorites {
+  zoneId: number;
+  items: ApiFavorite[];
+  start: number;
+  total: number;
+}
+
+/**
+ * Something a zone played before, most recent first.
+ *
+ * Deliberately not a favourite: there is no handle to rename or reorder, only enough to
+ * show it and play it again. `source` is what you hand back to `play`.
+ */
+export interface ApiRecentItem {
+  source: string;
+  title: string;
+  artist: string;
+  album: string;
+  coverUrl: string;
+  /** Which service it came from, e.g. `applemusic`; empty when local. */
+  service: string;
+}
+
+/** A page of a zone's recently played. */
+export interface ApiRecents {
+  zoneId: number;
+  items: ApiRecentItem[];
+  start: number;
+  total: number;
+}
+
+/**
+ * The result of changing a zone's group.
+ *
+ * `members` is what the group ended up as, which is not always what was asked for:
+ * grouping needs matching output protocols unless the server allows mixed groups, so a
+ * member on a different protocol is reported in `rejected` rather than silently dropped.
+ */
+export interface ApiGroupResult {
+  leader: number;
+  members: number[];
+  /** Zones that were asked for but could not join, with why. */
+  rejected: Array<{ id: number; reason: 'protocol-mismatch' | 'zone-not-found' }>;
+}

@@ -15,9 +15,10 @@ import { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
 import { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandler';
 import { ApiHandler } from '@/adapters/http/api/apiHandler';
 import { toApiQueue } from '@/adapters/http/api/queueProjection';
+import { toApiFavorites, toApiRecents } from '@/adapters/http/api/libraryProjection';
 import { getZoneEqualizerBands } from '@/domain/zones/equalizer';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
-import type { ApiOutput, ApiVolumeLimits } from '@/domain/zones/apiTypes';
+import type { ApiGroupResult, ApiOutput, ApiVolumeLimits } from '@/domain/zones/apiTypes';
 import { isLocalRequest } from '@/shared/utils/net';
 import type { StreamProxyRoute } from '@/shared/streamProxyRoute';
 import type { NotifierPort } from '@/ports/NotifierPort';
@@ -25,7 +26,10 @@ import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
-import type { GroupManagerReadPort } from '@/application/groups/groupManager';
+import type {
+  GroupManagerReadPort,
+  GroupManagerWritePort,
+} from '@/application/groups/groupManager';
 import type { ContentManager } from '@/adapters/content/contentManager';
 import type { EnginePort } from '@/ports/EnginePort';
 import type { AlertFilesPort } from '@/ports/AlertFilesPort';
@@ -114,7 +118,7 @@ export class HttpService {
       squeezeliteCore: SqueezeliteCore;
       recentsManager: RecentsManager;
       favoritesManager: FavoritesManager;
-      groupManager: GroupManagerReadPort;
+      groupManager: GroupManagerReadPort & GroupManagerWritePort;
       contentManager: ContentManager;
       audioManager: AudioManager;
       zoneAudioPrefs: ZoneAudioPreferences;
@@ -183,6 +187,85 @@ export class HttpService {
       queueRemove: (zoneId, itemId) => options.zoneManager.queue.removeByUniqueId(zoneId, itemId),
       queueClear: (zoneId) => options.zoneManager.queue.clear(zoneId),
       queueUndo: (zoneId) => options.zoneManager.queue.undo(zoneId),
+      getFavorites: async (zoneId, start, limit) => {
+        if (!options.zoneManager.getZoneState(zoneId)) {
+          return null;
+        }
+        return toApiFavorites(zoneId, await options.favoritesManager.get(zoneId, start, limit));
+      },
+      addFavorite: async (zoneId, name, uri) => {
+        const created = await options.favoritesManager.add(zoneId, name, uri);
+        return {
+          id: created.id,
+          name: created.name || created.title || '',
+          source: created.audiopath ?? '',
+          coverUrl: created.coverurl ?? '',
+        };
+      },
+      renameFavorite: async (zoneId, id, name) => {
+        await options.favoritesManager.setName(zoneId, id, name);
+      },
+      removeFavorite: async (zoneId, id) => {
+        await options.favoritesManager.remove(zoneId, id);
+      },
+      reorderFavorites: async (zoneId, ids) => {
+        await options.favoritesManager.reorder(zoneId, ids);
+      },
+      playFavorite: async (zoneId, id) => {
+        const uri = await options.favoritesManager.getAudiopathForFavorite(zoneId, id);
+        if (!uri) {
+          return false;
+        }
+        await options.zoneManager.playContent(zoneId, uri, 'api');
+        return true;
+      },
+      getRecents: async (zoneId, start, limit) => {
+        if (!options.zoneManager.getZoneState(zoneId)) {
+          return null;
+        }
+        return toApiRecents(zoneId, await options.recentsManager.get(zoneId), start, limit);
+      },
+      setGroup: (zoneId, members) => {
+        if (!options.zoneManager.getZoneState(zoneId)) {
+          return null;
+        }
+        // Empty list means "leave the group"; there is no separate verb for it.
+        if (members.length === 0) {
+          options.groupManager.removeGroup(zoneId);
+          return { leader: zoneId, members: [], rejected: [] };
+        }
+        // Same rule the Loxone path applies: grouping mirrors frames between outputs of
+        // one protocol, so a member on another cannot join unless mixed groups are on.
+        const mixedAllowed = options.configPort.getConfig().groups?.mixedGroupEnabled === true;
+        const protocolOf = (id: number) => options.resolveOutputProtocol(id);
+        const leaderProtocol = protocolOf(zoneId);
+        const rejected: ApiGroupResult['rejected'] = [];
+        const accepted: number[] = [];
+        for (const id of members) {
+          if (id === zoneId) continue;
+          if (!options.zoneManager.getZoneState(id)) {
+            rejected.push({ id, reason: 'zone-not-found' });
+            continue;
+          }
+          if (!mixedAllowed && protocolOf(id) !== leaderProtocol) {
+            rejected.push({ id, reason: 'protocol-mismatch' });
+            continue;
+          }
+          accepted.push(id);
+        }
+        const finalMembers = [zoneId, ...accepted];
+        options.groupManager.upsert({
+          leader: zoneId,
+          members: finalMembers,
+          backend: 'Unknown',
+          source: 'manual',
+          externalId: `group-${zoneId}`,
+        });
+        return { leader: zoneId, members: finalMembers, rejected };
+      },
+      clearRecents: async (zoneId) => {
+        await options.recentsManager.clear(zoneId);
+      },
       getServiceLabel: (audiopath) => options.resolveServiceLabel(audiopath),
       getEqualizerBands: (zoneId) => {
         const zone = options.configPort.getConfig().zones?.find((z) => z.id === zoneId);

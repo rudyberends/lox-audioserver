@@ -368,6 +368,12 @@ export class GroupManager {
 
 export type GroupManagerReadPort = Pick<GroupManager, 'getAllGroups'>;
 
+/**
+ * Grouping as the public API needs it. Kept separate from the read port so a consumer
+ * that only lists groups still cannot change them.
+ */
+export type GroupManagerWritePort = Pick<GroupManager, 'upsert' | 'removeGroup'>;
+
 type GroupManagerDeps = {
   notifier: NotifierPort;
   airplayGroup: AirplayGroupCoordinator;

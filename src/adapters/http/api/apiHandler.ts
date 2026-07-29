@@ -14,7 +14,16 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
-import type { ApiOutput, ApiQueue, ApiVolumeLimits, ApiZoneState } from '@/domain/zones/apiTypes';
+import type {
+  ApiFavorite,
+  ApiGroupResult,
+  ApiFavorites,
+  ApiOutput,
+  ApiQueue,
+  ApiRecents,
+  ApiVolumeLimits,
+  ApiZoneState,
+} from '@/domain/zones/apiTypes';
 import type { ZoneState } from '@/domain/zones/zoneState';
 import { createLogger } from '@/shared/logging/logger';
 
@@ -45,6 +54,24 @@ export type ApiHandlerDeps = {
   queueClear: (zoneId: number) => void;
   /** Reverts the last queue edit. */
   queueUndo: (zoneId: number) => void;
+  /** A page of a zone's favourites. */
+  getFavorites: (zoneId: number, start: number, limit: number) => Promise<ApiFavorites | null>;
+  /** Adds a favourite; returns the created one. */
+  addFavorite: (zoneId: number, name: string, uri: string) => Promise<ApiFavorite>;
+  renameFavorite: (zoneId: number, id: number, name: string) => Promise<void>;
+  removeFavorite: (zoneId: number, id: number) => Promise<void>;
+  /** Reorders the whole list to the given ids. */
+  reorderFavorites: (zoneId: number, ids: number[]) => Promise<void>;
+  /** Starts a favourite by its id; false when the zone has no such favourite. */
+  playFavorite: (zoneId: number, id: number) => Promise<boolean>;
+  /** A page of what a zone played before, most recent first. */
+  getRecents: (zoneId: number, start: number, limit: number) => Promise<ApiRecents | null>;
+  clearRecents: (zoneId: number) => Promise<void>;
+  /**
+   * Puts a zone at the head of a group with these members, or ungroups it when the list
+   * is empty. Returns what the group became, including anything rejected.
+   */
+  setGroup: (zoneId: number, members: number[]) => ApiGroupResult | null;
   /** Which protocol a zone plays over right now; see ApiOutput. */
   getOutputProtocol: (zoneId: number) => string | null;
   /** The configured name of the service an audiopath belongs to, for `source.name`. */
@@ -162,6 +189,18 @@ export class ApiHandler {
       }
       if (action === 'queue') {
         await this.handleQueue(req, res, method, zoneId, url);
+        return;
+      }
+      if (action === 'favorites') {
+        await this.handleFavorites(req, res, method, zoneId, url);
+        return;
+      }
+      if (action === 'recents') {
+        await this.handleRecents(res, method, zoneId, url);
+        return;
+      }
+      if (action === 'group') {
+        await this.handleGroup(req, res, method, zoneId);
         return;
       }
       await this.handleZoneRoute(req, res, method, zoneId, action);
@@ -413,6 +452,179 @@ export class ApiHandler {
       return;
     }
     this.sendJson(res, 400, { error: 'invalid-queue-delete' });
+  }
+
+  /**
+   * A zone's sync group, as the membership it has rather than the Loxone dialect's
+   * `dgroup/update/<id>/<csv>` plus a separate `dgroup/update/new/...` for creating one.
+   * Putting a zone at the head of a list is the same operation either way.
+   *
+   *   PUT {members: [ids…]}   group these zones behind this one
+   *   PUT {members: []}       ungroup
+   *
+   * Answers 200 rather than 204, because the result is worth reading: a member on a
+   * different output protocol cannot join unless mixed groups are enabled, and saying so
+   * beats leaving the caller to diff what it asked for against the next zone event.
+   */
+  private async handleGroup(
+    req: IncomingMessage,
+    res: ServerResponse,
+    method: string,
+    zoneId: number,
+  ): Promise<void> {
+    if (method !== 'PUT') {
+      this.sendJson(res, 405, { error: 'method-not-allowed' });
+      return;
+    }
+    let body: Record<string, unknown>;
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'invalid-json' });
+      return;
+    }
+    if (!Array.isArray(body.members)) {
+      this.sendJson(res, 400, { error: 'invalid-members' });
+      return;
+    }
+    const members = body.members.filter(
+      (v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0,
+    );
+    if (members.length !== body.members.length) {
+      this.sendJson(res, 400, { error: 'invalid-members' });
+      return;
+    }
+    const result = this.deps.setGroup(zoneId, members);
+    if (!result) {
+      this.sendJson(res, 404, { error: 'zone-not-found' });
+      return;
+    }
+    this.sendJson(res, 200, result);
+  }
+
+  /**
+   * A zone's favourites, as a collection rather than the Loxone dialect's separate
+   * roomfavs/add, /setname, /setid, /delete and roomfav/play commands.
+   *
+   *   GET    ?start=&limit=        read a page
+   *   POST   {uri, name?}          add one
+   *   PATCH  {id, name}            rename it
+   *   PATCH  {order: [ids…]}       reorder the list
+   *   PATCH  {play: id}            start it
+   *   DELETE {id}                  remove it
+   */
+  private async handleFavorites(
+    req: IncomingMessage,
+    res: ServerResponse,
+    method: string,
+    zoneId: number,
+    url: URL,
+  ): Promise<void> {
+    if (method === 'GET') {
+      const start = this.clampInt(Number(url.searchParams.get('start') ?? 0), 0, Number.MAX_SAFE_INTEGER) ?? 0;
+      const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 50), 1, 500) ?? 50;
+      const favorites = await this.deps.getFavorites(zoneId, start, limit);
+      if (!favorites) {
+        this.sendJson(res, 404, { error: 'zone-not-found' });
+        return;
+      }
+      this.sendJson(res, 200, favorites);
+      return;
+    }
+
+    if (method !== 'POST' && method !== 'PATCH' && method !== 'DELETE') {
+      this.sendJson(res, 405, { error: 'method-not-allowed' });
+      return;
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'invalid-json' });
+      return;
+    }
+
+    if (method === 'POST') {
+      const uri = typeof body.uri === 'string' ? body.uri.trim() : '';
+      if (!uri) {
+        this.sendJson(res, 400, { error: 'invalid-uri' });
+        return;
+      }
+      // The name is optional: without one the server fills in what it knows about the
+      // source, which is usually better than what a caller would invent.
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      const created = await this.deps.addFavorite(zoneId, name, uri);
+      this.sendJson(res, 201, created);
+      return;
+    }
+
+    if (method === 'PATCH') {
+      if (Array.isArray(body.order)) {
+        const ids = body.order.filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+        if (ids.length !== body.order.length) {
+          this.sendJson(res, 400, { error: 'invalid-favorite-order' });
+          return;
+        }
+        await this.deps.reorderFavorites(zoneId, ids);
+        res.writeHead(204).end();
+        return;
+      }
+      if (typeof body.play === 'number' && Number.isFinite(body.play)) {
+        if (!(await this.deps.playFavorite(zoneId, body.play))) {
+          this.sendJson(res, 404, { error: 'favorite-not-found' });
+          return;
+        }
+        res.writeHead(204).end();
+        return;
+      }
+      const id = typeof body.id === 'number' && Number.isFinite(body.id) ? body.id : null;
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      if (id === null || !name) {
+        this.sendJson(res, 400, { error: 'invalid-favorite-patch' });
+        return;
+      }
+      await this.deps.renameFavorite(zoneId, id, name);
+      res.writeHead(204).end();
+      return;
+    }
+
+    const id = typeof body.id === 'number' && Number.isFinite(body.id) ? body.id : null;
+    if (id === null) {
+      this.sendJson(res, 400, { error: 'invalid-favorite-delete' });
+      return;
+    }
+    await this.deps.removeFavorite(zoneId, id);
+    res.writeHead(204).end();
+  }
+
+  /**
+   * What a zone played before. Read-only apart from clearing: a recent entry has no
+   * handle to rename or reorder — it is history, and `source` is what you replay.
+   */
+  private async handleRecents(
+    res: ServerResponse,
+    method: string,
+    zoneId: number,
+    url: URL,
+  ): Promise<void> {
+    if (method === 'GET') {
+      const start = this.clampInt(Number(url.searchParams.get('start') ?? 0), 0, Number.MAX_SAFE_INTEGER) ?? 0;
+      const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 50), 1, 500) ?? 50;
+      const recents = await this.deps.getRecents(zoneId, start, limit);
+      if (!recents) {
+        this.sendJson(res, 404, { error: 'zone-not-found' });
+        return;
+      }
+      this.sendJson(res, 200, recents);
+      return;
+    }
+    if (method === 'DELETE') {
+      await this.deps.clearRecents(zoneId);
+      res.writeHead(204).end();
+      return;
+    }
+    this.sendJson(res, 405, { error: 'method-not-allowed' });
   }
 
   /**

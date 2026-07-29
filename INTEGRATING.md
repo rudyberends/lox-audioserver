@@ -172,6 +172,8 @@ GET /api/v1/zones                   →  { "zones": [ … ] }
 GET /api/v1/zones/{id}              →  { … }              404 zone-not-found
 GET /api/v1/zones/{id}/equalizer    →  { "zoneId": 3, "bands": [ …10 ] }
 GET /api/v1/zones/{id}/queue        →  { "items": [ … ], "start": 0, "total": 42, "currentIndex": 3 }
+GET /api/v1/zones/{id}/favorites    →  { "items": [ … ], "start": 0, "total": 8 }
+GET /api/v1/zones/{id}/recents      →  { "items": [ … ], "start": 0, "total": 20 }
 GET /api/v1/health                  →  { "status": "ok", "version": "…", "uptimeSec": 120 }
 ```
 
@@ -201,6 +203,16 @@ PATCH  /api/v1/zones/{id}/queue    {"move": "<id>", "before": "<id>"}   reorder 
 DELETE /api/v1/zones/{id}/queue    {"id": "<item id>"}      remove one entry
 DELETE /api/v1/zones/{id}/queue    {"all": true}            clear it
 DELETE /api/v1/zones/{id}/queue    {"undo": true}           revert the last edit
+
+POST   /api/v1/zones/{id}/favorites  {"uri": "…", "name": "…"}   add (name optional)
+PATCH  /api/v1/zones/{id}/favorites  {"id": 1, "name": "…"}      rename
+PATCH  /api/v1/zones/{id}/favorites  {"order": [3,1,2]}          reorder
+PATCH  /api/v1/zones/{id}/favorites  {"play": 1}                 start it
+DELETE /api/v1/zones/{id}/favorites  {"id": 1}                   remove
+DELETE /api/v1/zones/{id}/recents                                clear the history
+
+PUT    /api/v1/zones/{id}/group      {"members": [7, 9]}   group these behind this zone
+PUT    /api/v1/zones/{id}/group      {"members": []}       ungroup
 ```
 
 `pause` keeps the zone's place and `stop` gives it up: after `pause`, `play` resumes
@@ -221,6 +233,22 @@ happens server-side, so you do not need to know anything about how content is mo
 curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"http://example/stream.mp3"}'
 curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"library://track/9"}'
 ```
+
+### Favourites, recents and groups
+
+A favourite's `id` is its handle, for renaming, reordering, playing and removing. The
+Loxone clients also carry a `slot` and a `plus` flag — a position in their own button
+grid — which describe that UI rather than the favourite, so neither appears here.
+Reordering is simply the order you send.
+
+Recents are read-only apart from clearing: history has no handle to rename or reorder,
+and `source` is what you hand back to `play`.
+
+Grouping answers **200 with the resulting group**, not 204. Frame mirroring works between
+outputs of one protocol, so unless the server allows mixed groups a member on another
+protocol cannot join — it comes back under `rejected` with a reason, instead of leaving
+you to diff what you asked for against the next zone event. An empty `members` list
+ungroups; there is no separate verb for leaving.
 
 ### The queue
 
@@ -255,6 +283,8 @@ elsewhere. The server does not push your change back to you.
 Errors are `4xx` with `{"error":"…"}`: `zone-not-found`, `invalid-json`,
 `invalid-volume`, `invalid-position`, `invalid-power`, `invalid-uri`, `invalid-repeat`, `invalid-shuffle`, `invalid-equalizer-bands`,
 `invalid-queue-patch`, `invalid-queue-delete`, `queue-item-not-found`,
+`invalid-favorite-patch`, `invalid-favorite-delete`, `invalid-favorite-order`,
+`favorite-not-found`, `invalid-members`,
 `method-not-allowed`.
 
 ## Examples

@@ -89,6 +89,11 @@ type Harness = {
 
 let eqBands: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 let queueOps: string[] = [];
+let libOps: string[] = [];
+const favItems = [{ id: 1, name: 'Radio Paradise', source: 'tunein:s1', coverUrl: 'c' }];
+const recentItems = [
+  { source: 'applemusic:track:1', title: 'One', artist: 'A', album: 'X', coverUrl: 'c', service: 'applemusic' },
+];
 const queueItems = [
   { id: 'a', title: 'One', artist: 'A', album: 'X', duration: 100, coverUrl: 'c1', source: 'applemusic:track:1' },
   { id: 'b', title: 'Two', artist: 'B', album: 'Y', duration: 200, coverUrl: 'c2', source: 'library://track/2' },
@@ -97,6 +102,7 @@ const queueItems = [
 function harness(): Harness {
   eqBands = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
   queueOps = [];
+  libOps = [];
   const states = new Map<number, ZoneState>([[3, zoneState()]]);
   const commands: Harness['commands'] = [];
   const plays: Harness['plays'] = [];
@@ -110,7 +116,48 @@ function harness(): Harness {
       plays.push({ zoneId, uri });
     },
     getVolumeLimits: (zoneId) => (zoneId === 3 ? { max: 70, default: 20, step: 2 } : undefined),
-    getOutputProtocol: () => 'sendspin',
+    getOutputProtocol: (zoneId) => (zoneId === 9 ? 'sonos' : 'sendspin'),
+    getFavorites: async (zoneId, start, limit) =>
+      zoneId === 3
+        ? { zoneId, items: favItems.slice(start, start + limit), start, total: favItems.length }
+        : null,
+    addFavorite: async (zoneId, name, uri) => {
+      libOps.push(`addFav:${name || '(auto)'}:${uri}`);
+      return { id: 9, name: name || 'Auto', source: uri, coverUrl: '' };
+    },
+    renameFavorite: async (zoneId, id, name) => {
+      libOps.push(`renameFav:${id}:${name}`);
+    },
+    removeFavorite: async (zoneId, id) => {
+      libOps.push(`removeFav:${id}`);
+    },
+    reorderFavorites: async (zoneId, ids) => {
+      libOps.push(`reorderFav:${ids.join(',')}`);
+    },
+    playFavorite: async (zoneId, id) => {
+      libOps.push(`playFav:${id}`);
+      return favItems.some((f) => f.id === id);
+    },
+    getRecents: async (zoneId, start, limit) =>
+      zoneId === 3
+        ? { zoneId, items: recentItems.slice(start, start + limit), start, total: recentItems.length }
+        : null,
+    clearRecents: async () => {
+      libOps.push('clearRecents');
+    },
+    setGroup: (zoneId, members) => {
+      if (zoneId !== 3) return null;
+      if (!members.length) return { leader: zoneId, members: [], rejected: [] };
+      const rejected: Array<{ id: number; reason: 'protocol-mismatch' | 'zone-not-found' }> = [];
+      const ok: number[] = [];
+      for (const id of members) {
+        if (id === zoneId) continue;
+        if (id === 99) rejected.push({ id, reason: 'zone-not-found' });
+        else if (id === 9) rejected.push({ id, reason: 'protocol-mismatch' });
+        else ok.push(id);
+      }
+      return { leader: zoneId, members: [zoneId, ...ok], rejected };
+    },
     getQueue: (zoneId, start, limit) =>
       zoneId === 3
         ? {
@@ -848,4 +895,85 @@ test('repeat maps to the same numbers the engine and outputs use', () => {
   assert.equal(toApiZoneState(zoneState({ plrepeat: 1 })).repeat, 'all');
   assert.equal(toApiZoneState(zoneState({ plrepeat: 3 })).repeat, 'one');
   assert.equal(toApiZoneState(zoneState({ plrepeat: 0 })).repeat, 'off');
+});
+
+// Favourites, recents and grouping: the last three things the own player still needed
+// the Loxone protocol for.
+
+test('favourites read, add, rename, reorder, play and remove', async () => {
+  const h = harness();
+  const list = await call(h, 'GET', `${API_ROOT}/zones/3/favorites`);
+  assert.equal(list.statusCode, 200);
+  assert.equal(list.json().items[0].id, 1);
+  // The Loxone slot/plus pair describes their button grid, not the favourite.
+  assert.ok(!('slot' in list.json().items[0]));
+  assert.ok(!('plus' in list.json().items[0]));
+
+  const created = await call(h, 'POST', `${API_ROOT}/zones/3/favorites`, { uri: 'x:1', name: 'Mine' });
+  assert.equal(created.statusCode, 201, 'a created resource is a 201');
+  assert.equal(created.json().name, 'Mine');
+
+  // Without a name the server fills in what it knows about the source.
+  await call(h, 'POST', `${API_ROOT}/zones/3/favorites`, { uri: 'x:2' });
+  await call(h, 'PATCH', `${API_ROOT}/zones/3/favorites`, { id: 1, name: 'New' });
+  await call(h, 'PATCH', `${API_ROOT}/zones/3/favorites`, { order: [2, 1] });
+  await call(h, 'PATCH', `${API_ROOT}/zones/3/favorites`, { play: 1 });
+  await call(h, 'DELETE', `${API_ROOT}/zones/3/favorites`, { id: 1 });
+  assert.deepEqual(libOps, [
+    'addFav:Mine:x:1',
+    'addFav:(auto):x:2',
+    'renameFav:1:New',
+    'reorderFav:2,1',
+    'playFav:1',
+    'removeFav:1',
+  ]);
+});
+
+test('favourites refuse a request that says nothing', async () => {
+  const h = harness();
+  assert.equal((await call(h, 'POST', `${API_ROOT}/zones/3/favorites`, {})).statusCode, 400);
+  assert.equal((await call(h, 'PATCH', `${API_ROOT}/zones/3/favorites`, {})).statusCode, 400);
+  assert.equal((await call(h, 'DELETE', `${API_ROOT}/zones/3/favorites`, {})).statusCode, 400);
+  assert.equal((await call(h, 'PATCH', `${API_ROOT}/zones/3/favorites`, { play: 42 })).statusCode, 404);
+  assert.equal(libOps.filter((o) => !o.startsWith('playFav')).length, 0, 'nothing was applied');
+});
+
+test('recents read and clear, and carry no handle to edit', async () => {
+  const h = harness();
+  const res = await call(h, 'GET', `${API_ROOT}/zones/3/recents`);
+  assert.equal(res.statusCode, 200);
+  const item = res.json().items[0];
+  assert.equal(item.source, 'applemusic:track:1', 'what you hand back to play');
+  assert.ok(!('id' in item), 'history has nothing to rename or reorder');
+
+  assert.equal((await call(h, 'DELETE', `${API_ROOT}/zones/3/recents`)).statusCode, 204);
+  assert.deepEqual(libOps, ['clearRecents']);
+  assert.equal((await call(h, 'PUT', `${API_ROOT}/zones/3/recents`, {})).statusCode, 405);
+});
+
+test('grouping says what the group became, not just that it tried', async () => {
+  const h = harness();
+  const ok = await call(h, 'PUT', `${API_ROOT}/zones/3/group`, { members: [7] });
+  assert.equal(ok.statusCode, 200, '200 rather than 204 — the result is worth reading');
+  assert.deepEqual(ok.json(), { leader: 3, members: [3, 7], rejected: [] });
+
+  // Grouping mirrors frames between outputs of one protocol, so a zone on another is
+  // reported as rejected rather than quietly left out.
+  const mixed = await call(h, 'PUT', `${API_ROOT}/zones/3/group`, { members: [7, 9] });
+  assert.deepEqual(mixed.json().members, [3, 7]);
+  assert.deepEqual(mixed.json().rejected, [{ id: 9, reason: 'protocol-mismatch' }]);
+
+  const gone = await call(h, 'PUT', `${API_ROOT}/zones/3/group`, { members: [99] });
+  assert.deepEqual(gone.json().rejected, [{ id: 99, reason: 'zone-not-found' }]);
+});
+
+test('an empty member list ungroups, and a bad one is refused', async () => {
+  const h = harness();
+  const off = await call(h, 'PUT', `${API_ROOT}/zones/3/group`, { members: [] });
+  assert.equal(off.statusCode, 200);
+  assert.deepEqual(off.json().members, [], 'no separate verb for leaving');
+
+  assert.equal((await call(h, 'PUT', `${API_ROOT}/zones/3/group`, { members: 'nope' })).statusCode, 400);
+  assert.equal((await call(h, 'PUT', `${API_ROOT}/zones/3/group`, {})).statusCode, 400);
+  assert.equal((await call(h, 'GET', `${API_ROOT}/zones/3/group`)).statusCode, 405);
 });
