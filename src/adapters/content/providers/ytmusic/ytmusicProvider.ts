@@ -1,5 +1,6 @@
 import type { StreamingServiceConfig } from '@/domain/config/types';
 import type { ContentFolder, ContentFolderItem, ContentServiceAccount, PlaylistEntry } from '@/ports/ContentTypes';
+import { estimatedPage, knownPage, slicedPage } from '@/adapters/content/folderPage';
 import { createLogger } from '@/shared/logging/logger';
 import { DEFAULT_MIN_SEARCH_LIMIT } from '@/adapters/content/utils/searchLimits';
 import { convertCookieToNetscape } from '@/adapters/content/providers/ytmusic/ytmusicCookie';
@@ -141,52 +142,28 @@ export class YtMusicProvider {
 
     if (normalized.type === 'albums') {
       const albums = await this.fetchLibraryAlbums();
-      const page = albums.slice(start, start + cap);
-      return {
-        id: folderId,
-        name: 'Albums',
-        service: 'ytmusic',
-        start,
-        totalitems: estimateTotal(start, page.length, cap),
-        items: page,
-      };
+      return slicedPage({ id: folderId, name: 'Albums', service: 'ytmusic', start }, albums, cap);
     }
 
     if (normalized.type === 'artists') {
       const artists = await this.fetchLibraryArtists();
-      const page = artists.slice(start, start + cap);
-      return {
-        id: folderId,
-        name: 'Artists',
-        service: 'ytmusic',
-        start,
-        totalitems: estimateTotal(start, page.length, cap),
-        items: page,
-      };
+      return slicedPage({ id: folderId, name: 'Artists', service: 'ytmusic', start }, artists, cap);
     }
 
     if (normalized.type === 'popular') {
       const tracks = await this.fetchTrackSearchResults({ query: 'top hits', offset: start, limit: cap });
-      return {
-        id: folderId,
-        name: 'Popular',
-        service: 'ytmusic',
-        start,
-        totalitems: estimateTotal(start, tracks.length, cap),
-        items: tracks,
-      };
+      return estimatedPage(
+        { id: folderId, name: 'Popular', service: 'ytmusic', start, items: tracks },
+        cap,
+      );
     }
 
     if (normalized.type === 'newReleases') {
       const albums = await this.fetchTrackSearchResults({ query: 'new music', offset: start, limit: cap });
-      return {
-        id: folderId,
-        name: 'New Releases',
-        service: 'ytmusic',
-        start,
-        totalitems: estimateTotal(start, albums.length, cap),
-        items: albums,
-      };
+      return estimatedPage(
+        { id: folderId, name: 'New Releases', service: 'ytmusic', start, items: albums },
+        cap,
+      );
     }
 
     if (normalized.type === 'genres') {
@@ -214,26 +191,18 @@ export class YtMusicProvider {
 
     if (normalized.type === 'genre') {
       const tracks = await this.fetchTrackSearchResults({ query: `${normalized.q} music`, offset: start, limit: cap });
-      return {
-        id: folderId,
-        name: normalized.q.toUpperCase(),
-        service: 'ytmusic',
-        start,
-        totalitems: estimateTotal(start, tracks.length, cap),
-        items: tracks,
-      };
+      return estimatedPage(
+        { id: folderId, name: normalized.q.toUpperCase(), service: 'ytmusic', start, items: tracks },
+        cap,
+      );
     }
 
     if (normalized.type === 'artist') {
       const tracks = await this.fetchArtistTracksFromInnertube(normalized.id, start, cap);
-      return {
-        id: folderId,
-        name: 'Artist',
-        service: 'ytmusic',
-        start,
-        totalitems: estimateTotal(start, tracks.length, cap),
-        items: tracks,
-      };
+      return estimatedPage(
+        { id: folderId, name: 'Artist', service: 'ytmusic', start, items: tracks },
+        cap,
+      );
     }
 
     if (normalized.type === 'album') {
@@ -242,14 +211,10 @@ export class YtMusicProvider {
         const browseUrl = buildYtMusicBrowseUrl(normalized.id);
         tracks = await this.fetchTracksFromBrowse(browseUrl, start, cap);
       }
-      return {
-        id: folderId,
-        name: 'Album',
-        service: 'ytmusic',
-        start,
-        totalitems: estimateTotal(start, tracks.length, cap),
-        items: tracks,
-      };
+      return estimatedPage(
+        { id: folderId, name: 'Album', service: 'ytmusic', start, items: tracks },
+        cap,
+      );
     }
 
     if (normalized.type === 'track') {
@@ -307,18 +272,18 @@ export class YtMusicProvider {
         const mapped = (entries ?? [])
           .map((e: any) => this.mapSearchEntryToTrack(e))
           .filter(Boolean) as ContentFolderItem[];
-        const total =
-          typeof meta?.count === 'number'
-            ? meta.count
-            : estimateTotal(start, mapped.length, cap);
-        return {
+        const base = {
           id: folderId,
           name: meta?.title || 'Playlist',
           service: 'ytmusic',
           start,
-          totalitems: total,
           items: mapped,
         };
+        // The playlist metadata carries a real count when we managed to fetch it; the
+        // entries themselves come back a page at a time with no total attached.
+        return typeof meta?.count === 'number'
+          ? knownPage(base, meta.count)
+          : estimatedPage(base, cap);
       } finally {
         // Keep cookie file around for reuse; it will be rewritten if the cookie changes.
       }
@@ -916,12 +881,6 @@ export class YtMusicProvider {
       return [];
     }
   }
-}
-
-function estimateTotal(start: number, got: number, cap: number): number {
-  // If we returned a full page, assume there might be more; otherwise return exact.
-  if (got >= cap) return start + got + cap;
-  return start + got;
 }
 
 function extractText(value: any): string {

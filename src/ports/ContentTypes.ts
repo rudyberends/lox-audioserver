@@ -73,7 +73,28 @@ export interface ContentFolder {
   id: string;
   name: string;
   items: ContentFolderItem[];
+  /**
+   * How many items the folder holds in total — but see {@link ContentFolder.totalKnown}.
+   *
+   * Several providers cannot answer this: an upstream that pages without reporting a count
+   * leaves nothing to report. Because the field is a plain number it cannot say "unknown",
+   * so those providers guess, and they guess *differently* — two same-named `estimateTotal`
+   * helpers existed with different formulas, one adding a phantom `+1` and one a whole
+   * page. A consumer cannot tell a real total from a guess, which is why DLNA fabricates
+   * `offset + count` of its own and Subsonic pages until it sees a short page.
+   *
+   * Kept as-is for the many producers that fill it; `totalKnown` is what makes the guess
+   * visible so a consumer can stop treating it as fact.
+   */
   totalitems: number;
+  /**
+   * Whether `totalitems` is a real count.
+   *
+   * Absent means unstated, which for existing producers reads as "no promise". Set it to
+   * true only when the number came from upstream; set it to false when it is an estimate,
+   * and a consumer should page until it sees a short page rather than trust the figure.
+   */
+  totalKnown?: boolean;
   start: number;
   service?: string;
 }

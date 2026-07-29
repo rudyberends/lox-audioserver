@@ -1,5 +1,6 @@
 import type { StreamingServiceConfig } from '@/domain/config/types';
 import type { ContentFolder, ContentFolderItem, ContentServiceAccount, PlaylistEntry } from '@/ports/ContentTypes';
+import { estimatedPage, knownPage, slicedPage } from '@/adapters/content/folderPage';
 import { createLogger } from '@/shared/logging/logger';
 import { DEFAULT_MIN_SEARCH_LIMIT } from '@/adapters/content/utils/searchLimits';
 import {
@@ -99,14 +100,12 @@ export class YoutubeProvider {
 
     if (normalized.type === 'trending') {
       const tracks = await this.fetchTrending(cap);
-      const page = tracks.slice(start, start + cap);
-      return { id: folderId, name: 'Trending', service: 'youtube', start, totalitems: estimateTotal(start, page.length, cap), items: page };
+      return slicedPage({ id: folderId, name: 'Trending', service: 'youtube', start }, tracks, cap);
     }
 
     if (normalized.type === 'newReleases') {
       const tracks = await this.fetchSearchViaYtDlp('new music releases', cap);
-      const page = tracks.slice(start, start + cap);
-      return { id: folderId, name: 'New Releases', service: 'youtube', start, totalitems: estimateTotal(start, page.length, cap), items: page };
+      return slicedPage({ id: folderId, name: 'New Releases', service: 'youtube', start }, tracks, cap);
     }
 
     if (normalized.type === 'genres') {
@@ -125,15 +124,13 @@ export class YoutubeProvider {
 
     if (normalized.type === 'genre') {
       const tracks = await this.fetchSearchViaYtDlp(`${normalized.q} music`, cap);
-      const page = tracks.slice(start, start + cap);
       const name = normalized.q.charAt(0).toUpperCase() + normalized.q.slice(1);
-      return { id: folderId, name, service: 'youtube', start, totalitems: estimateTotal(start, page.length, cap), items: page };
+      return slicedPage({ id: folderId, name, service: 'youtube', start }, tracks, cap);
     }
 
     if (normalized.type === 'playlists') {
       const tracks = await this.fetchSearchViaYtDlp('popular music playlist', cap);
-      const page = tracks.slice(start, start + cap);
-      return { id: folderId, name: 'Playlists', service: 'youtube', start, totalitems: estimateTotal(start, page.length, cap), items: page };
+      return slicedPage({ id: folderId, name: 'Playlists', service: 'youtube', start }, tracks, cap);
     }
 
     if (normalized.type === 'playlist') {
@@ -146,8 +143,12 @@ export class YoutubeProvider {
         try {
           const entries = await this.apiClient.getPlaylistItems(normalized.id, cap);
           const items = entries.map((e) => this.mapApiVideoToTrack(e)).filter(Boolean) as ContentFolderItem[];
-          const page = items.slice(start, start + cap);
-          return { id: folderId, name: meta?.title || 'Playlist', service: 'youtube', start, totalitems: typeof meta?.count === 'number' ? meta.count : estimateTotal(start, page.length, cap), items: page };
+          const base = { id: folderId, name: meta?.title || 'Playlist', service: 'youtube', start };
+          // The playlist metadata carries a real count when we have it; otherwise the
+          // slice we just took is itself the whole list we fetched.
+          return typeof meta?.count === 'number'
+            ? knownPage({ ...base, items: items.slice(start, start + cap) }, meta.count)
+            : slicedPage(base, items, cap);
         } catch (err) {
           this.log.warn('youtube playlist via api failed, falling back to yt-dlp', { message: errMessage(err) });
         }
@@ -161,8 +162,11 @@ export class YoutubeProvider {
         ];
         const entries = await runYtDlpJsonLines(args, this.execOptions());
         const items = entries.map((e: any) => this.mapYtDlpEntryToTrack(e)).filter(Boolean) as ContentFolderItem[];
-        const total = typeof meta?.count === 'number' ? meta.count : estimateTotal(start, items.length, cap);
-        return { id: folderId, name: meta?.title || 'Playlist', service: 'youtube', start, totalitems: total, items };
+        const base = { id: folderId, name: meta?.title || 'Playlist', service: 'youtube', start, items };
+        // yt-dlp pages upstream, so without a metadata count there is nothing to report.
+        return typeof meta?.count === 'number'
+          ? knownPage(base, meta.count)
+          : estimatedPage(base, cap);
       } catch (err) {
         this.log.warn('youtube playlist fetch failed', { folderId, message: errMessage(err) });
         return { id: folderId, name: 'Playlist', service: 'youtube', start, totalitems: 0, items: [] };
@@ -179,7 +183,7 @@ export class YoutubeProvider {
         ];
         const entries = await runYtDlpJsonLines(args, this.execOptions());
         const items = entries.map((e: any) => this.mapYtDlpEntryToTrack(e)).filter(Boolean) as ContentFolderItem[];
-        return { id: folderId, name: 'Channel', service: 'youtube', start, totalitems: estimateTotal(start, items.length, cap), items };
+        return estimatedPage({ id: folderId, name: 'Channel', service: 'youtube', start, items }, cap);
       } catch (err) {
         this.log.warn('youtube channel fetch failed', { folderId, message: errMessage(err) });
         return { id: folderId, name: 'Channel', service: 'youtube', start, totalitems: 0, items: [] };
@@ -406,10 +410,6 @@ export class YoutubeProvider {
     };
   }
 
-}
-
-function estimateTotal(start: number, pageSize: number, cap: number): number {
-  return pageSize < cap ? start + pageSize : start + cap + 1;
 }
 
 function fallbackVideoThumb(videoId: string): string {

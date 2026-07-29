@@ -1,5 +1,6 @@
 import type { ContentFolder, ContentFolderItem, ContentServiceAccount, PlaylistEntry } from '@/ports/ContentTypes';
 import { DEFAULT_MIN_SEARCH_LIMIT } from '@/adapters/content/utils/searchLimits';
+import { estimatedPage } from '@/adapters/content/folderPage';
 import {
   SoundCloudClient,
   type SoundCloudCollection,
@@ -90,17 +91,17 @@ export class SoundCloudProvider {
       case 'root':
         return this.buildRootFolder(offset);
       case 'trending':
-        return this.buildTrackFolder(folderId, 'Trending', await this.fetchCharts('trending', pageLimit, offset), offset);
+        return this.buildFolder(folderId, 'Trending', await this.fetchCharts('trending', pageLimit, offset), offset, pageLimit);
       case 'top':
-        return this.buildTrackFolder(folderId, 'Top 50', await this.fetchCharts('top', pageLimit, offset), offset);
+        return this.buildFolder(folderId, 'Top 50', await this.fetchCharts('top', pageLimit, offset), offset, pageLimit);
       case 'likes':
-        return this.buildTrackFolder(folderId, 'Your Likes', await this.fetchLikes(pageLimit, offset), offset);
+        return this.buildFolder(folderId, 'Your Likes', await this.fetchLikes(pageLimit, offset), offset, pageLimit);
       case 'playlists':
-        return this.buildItemFolder(folderId, 'Your Playlists', await this.fetchUserPlaylists(pageLimit, offset), offset);
+        return this.buildFolder(folderId, 'Your Playlists', await this.fetchUserPlaylists(pageLimit, offset), offset, pageLimit);
       case 'playlistItem':
-        return this.buildTrackFolder(folderId, 'Playlist', await this.fetchPlaylistTracks(normalized.id, pageLimit, offset), offset);
+        return this.buildFolder(folderId, 'Playlist', await this.fetchPlaylistTracks(normalized.id, pageLimit, offset), offset, pageLimit);
       case 'artistItem':
-        return this.buildTrackFolder(folderId, 'Artist', await this.fetchArtistTracks(normalized.id, pageLimit, offset), offset);
+        return this.buildFolder(folderId, 'Artist', await this.fetchArtistTracks(normalized.id, pageLimit, offset), offset, pageLimit);
       default:
         return {
           id: folderId,
@@ -355,36 +356,21 @@ export class SoundCloudProvider {
     };
   }
 
-  private buildTrackFolder(
+  /**
+   * A page of a SoundCloud folder.
+   *
+   * SoundCloud pages by offset and never reports a collection size, so the total is an
+   * estimate. It used to be expressed as a phantom `+1` item, which read to a consumer as a
+   * real count that was always one too many; `estimatedPage` says so instead.
+   */
+  private buildFolder(
     folderId: string,
     name: string,
     items: ContentFolderItem[],
     offset: number,
+    limit: number,
   ): ContentFolder {
-    return {
-      id: folderId,
-      name,
-      service: 'soundcloud',
-      start: offset,
-      totalitems: offset + items.length + (items.length > 0 ? 1 : 0),
-      items,
-    };
-  }
-
-  private buildItemFolder(
-    folderId: string,
-    name: string,
-    items: ContentFolderItem[],
-    offset: number,
-  ): ContentFolder {
-    return {
-      id: folderId,
-      name,
-      service: 'soundcloud',
-      start: offset,
-      totalitems: offset + items.length + (items.length > 0 ? 1 : 0),
-      items,
-    };
+    return estimatedPage({ id: folderId, name, service: 'soundcloud', start: offset, items }, limit);
   }
 
   private folderLink(id: string, name: string): ContentFolderItem {
