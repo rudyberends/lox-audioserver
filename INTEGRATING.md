@@ -12,6 +12,24 @@ Base URL: `http://<server>:7090`
 > **Not to be confused with `/admin/api`.** That is the back end of this server's own
 > admin UI: it is UI-shaped, changes freely, and is not a contract. Build on `/api`.
 
+### Coming from `/admin/api/zones/states`?
+
+Before this API existed, that was the only way to read what a zone was playing, so
+integrations polled it. It is now what it was always meant to be — diagnostics for
+our own Admin UI — and the now-playing fields have moved here:
+
+| was | now |
+| --- | --- |
+| `title`, `artist`, `album` | `track.title`, `track.artist`, `track.album` |
+| `coverUrl` / `coverurl` | `track.coverUrl` |
+| `station`, `sourceName` | `source.name` (with `source.kind` telling you which) |
+| `state` (`play`/`pause`) | `state` (`playing`/`paused`/`stopped`) |
+| `powerState` (never actually sent) | `power` (`on`/`off`) |
+| `tech`, `system` | stayed — engine internals, not part of this contract |
+
+And you no longer need to poll: subscribe to `/api/events` and the same data
+arrives on every change.
+
 ## Design
 
 Two rules explain every choice below:

@@ -18,6 +18,7 @@ import { sendspinCore } from '@sonn-audio/node-sendspin';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 import { getZoneOutputConfig } from '@/adapters/http/adminApi/config/configHandlers';
 import { parseSendspinSatellites } from '@/adapters/outputs/factory';
+import { toPlaybackState } from '@/adapters/http/api/zoneProjection';
 
 export const STATE_CONTROLLER_DEFINITIONS = [
   { id: 'internal', label: 'Internal', description: 'Use internal playback state only.' },
@@ -182,6 +183,16 @@ function handleZoneStateControllerDefinitions(
   deps.sendJson(res, 200, { stateControllers: STATE_CONTROLLER_DEFINITIONS });
 }
 
+/**
+ * Per-zone diagnostics for the Admin UI: what the engine is doing, which device it
+ * reaches and how the stream is shaped.
+ *
+ * Not a now-playing feed. It used to carry title/artist/album/cover/station too,
+ * from when the Admin UI still had a small player, and third parties then polled
+ * it because there was nothing better. `/api/zones` and `/api/events` model that
+ * properly now — readable state, whole seconds, an explicit `power` — so anything
+ * wanting playback metadata belongs there, and this route stays what it is.
+ */
 async function handleZoneStates(res: ServerResponse, deps: ZonesHandlerDeps): Promise<void> {
   try {
     const cfg = deps.configPort.getConfig();
@@ -292,14 +303,10 @@ async function handleZoneStates(res: ServerResponse, deps: ZonesHandlerDeps): Pr
       return {
         id: zone.id,
         name: zone.name,
-        title: state?.title ?? '',
-        artist: state?.artist ?? '',
-        album: state?.album ?? '',
-        sourceName: state?.sourceName ?? '',
-        station: state?.station ?? '',
-        state: state?.mode ?? '',
-        coverurl: state?.coverurl ?? '',
-        coverUrl: state?.coverurl ?? '',
+        // Whether the zone is playing, so the Zones cards can show it. Deliberately
+        // not the rest of now-playing: this route is diagnostics, and title/artist/
+        // album/cover/station belong to /api/zones, which models them properly.
+        state: state ? toPlaybackState(state.mode) : 'stopped',
         transport: configuredTransports[0] ?? null,
         transports: configuredTransports,
         tech,

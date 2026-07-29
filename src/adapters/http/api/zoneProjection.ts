@@ -22,8 +22,12 @@ import type {
   ApiZoneState,
 } from '@/domain/zones/apiTypes';
 
-/** Loxone's `mode` is already a closed set; anything unexpected reads as stopped. */
-function toPlaybackState(mode: ZoneState['mode']): ApiPlaybackState {
+/**
+ * The internal `mode` is already a closed set; anything unexpected reads as stopped.
+ * Exported so the admin API's diagnostics route reports playback the same way,
+ * rather than shipping the internal spelling to a second consumer.
+ */
+export function toPlaybackState(mode: ZoneState['mode']): ApiPlaybackState {
   switch (mode) {
     case 'play':
       return 'playing';
