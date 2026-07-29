@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from './testHarness';
 import { toLoxoneZoneState } from '../src/adapters/loxone/ws/zoneStateProjection';
 import { LoxoneWsNotifier } from '../src/adapters/loxone/ws/notifier';
-import { AudioType } from '../src/domain/zones/enums';
+import { AudioEventType, AudioType, FileType } from '../src/domain/zones/enums';
 import type { ZoneState } from '../src/domain/zones/zoneState';
 
 // Loxone is a projection of the server's zone state, not its source. These tests
@@ -29,7 +29,7 @@ function zoneState(overrides: Partial<ZoneState> = {}): ZoneState {
     sourceName: 'Library',
     audiopath: 'library://track/9',
     audiotype: AudioType.File,
-    type: 2,
+    type: FileType.File,
     eq: [0,0,0,0,0,0,0,0,0,0],
     qindex: 0,
     ...overrides,
@@ -155,10 +155,21 @@ test('the connect snapshot and the steady-state broadcast send the same shape', 
   assert.equal(projected.mixedGroupEnabled, true);
 });
 
+test('loxone projection passes an alert event type through the shared type field', () => {
+  // `type` is overloaded on purpose: normally a FileType, but an AudioEventType
+  // while an alert plays. The client reads it that way and the numbering does not
+  // overlap, so the projection must not coerce it to one enum or the other.
+  const out = toLoxoneZoneState(zoneState({ type: AudioEventType.Bell }), noGroup);
+  assert.equal(out.type, AudioEventType.Bell);
+
+  const normal = toLoxoneZoneState(zoneState({ type: FileType.Playlist }), noGroup);
+  assert.equal(normal.type, FileType.Playlist);
+});
+
 test('loxone projection carries the fields the native client needs verbatim', () => {
-  const out = toLoxoneZoneState(zoneState({ type: 3, icontype: 5 }), noGroup);
+  const out = toLoxoneZoneState(zoneState({ type: FileType.Playlist, icontype: 5 }), noGroup);
   // These are still Loxone's encodings, and the client cannot read anything else.
-  assert.equal(out.type, 3);
+  assert.equal(out.type, FileType.Playlist);
   assert.equal(out.icontype, 5);
   assert.equal(out.audiotype, AudioType.File);
   assert.equal(out.playerid, 3);

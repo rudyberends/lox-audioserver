@@ -8,7 +8,7 @@
  * below that only the Loxone clients understand should ultimately be *computed*
  * here rather than carried in `ZoneState`; `mastervolume` already is.
  */
-import type { AudioType, LineInIconType } from '@/domain/zones/enums';
+import type { AudioEventType, AudioType, FileType, LineInIconType } from '@/domain/zones/enums';
 import { parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
 import type { ZoneState } from '@/domain/zones/zoneState';
 import { formatEqualizerSettings } from '@/domain/zones/equalizer';
@@ -59,7 +59,8 @@ export interface LoxoneZoneState {
   time: number;
   title: string;
   qid?: string;
-  type: number;
+  /** A `FileType`, or an `AudioEventType` while an alert plays. */
+  type: FileType | AudioEventType;
   volume: number;
   /** Player ids of every member of this zone's sync group, leader first. */
   syncedzones: number[];

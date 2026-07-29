@@ -2,15 +2,16 @@
  * -----------------------------------------------------------------------------
  * The server's own zone contract.
  * -----------------------------------------------------------------------------
- * This is the shape the public API speaks, and it is deliberately *not* the
- * shape the Loxone clients speak (`ZoneState`). Everything here has to be
- * usable by someone who has never seen a Loxone installation: readable enums
- * instead of numeric ones, seconds instead of Loxone's mixed units, `null`
- * instead of empty-string sentinels, and no browse/queue internals.
+ * This is the shape the public API speaks. It is a projection of `ZoneState`, as
+ * is the Loxone payload — two consumers, two contracts, one source.
  *
- * Loxone remains a *projection* of this contract, not its source: the adapter
- * in `src/adapters/loxone` computes its own dialect from the same zone state.
- * Nothing outside this file should grow a Loxone-specific field.
+ * Everything here has to be usable by someone who has never seen a Loxone
+ * installation: readable strings where the internal state uses Loxone's numeric
+ * enums, whole seconds, `null` instead of empty-string sentinels, an opaque
+ * `source.id`, and no browse or queue internals.
+ *
+ * Additive only. New fields and new `source.kind` values are not breaking
+ * changes; renaming or removing one is.
  * -----------------------------------------------------------------------------
  */
 

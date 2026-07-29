@@ -1,4 +1,4 @@
-import type { AudioType, LineInIconType } from '@/domain/zones/enums';
+import type { AudioEventType, AudioType, FileType, LineInIconType } from '@/domain/zones/enums';
 import type { EqualizerBands } from '@/domain/zones/equalizer';
 
 /**
@@ -19,7 +19,15 @@ export interface ZoneState {
   audiopath: string;
   /** Which kind of source is playing. `ApiSourceKind` is the public, readable form. */
   audiotype: AudioType;
-  /** Loxone leftover: duplicates `power`. */
+  /**
+   * Whether the player backing this zone is reachable — distinct from `power`,
+   * which follows playback. A Music Assistant player that goes unavailable reports
+   * `off` here while `power` still reflects what the zone was doing.
+   *
+   * Real state, not a Loxone artefact, though the two-value shape is a lossy
+   * simplification of the client's own enum (NOT_REACHABLE / OFFLINE /
+   * INITIALIZING / ONLINE) — worth widening if a caller ever needs the difference.
+   */
   clientState: 'on' | 'off';
   coverurl: string;
   duration: number;
@@ -46,8 +54,17 @@ export interface ZoneState {
   time: number;
   title: string;
   qid?: string;
-  /** Loxone leftover: numeric file/container type for the Loxone app. */
-  type: number;
+  /**
+   * What the zone is playing, as a category the client renders differently:
+   * normally a `FileType` (a single file vs a queue/playlist — line-in flips to
+   * `File` once real metadata arrives so it stops looking like a container), but
+   * while an alert plays it carries an `AudioEventType` instead (bell, alarm, TTS).
+   *
+   * The two enums share this one field because the Loxone clients read it that
+   * way; their numbering does not overlap. Real state, not an artefact — but the
+   * overload is worth splitting if anything other than the wire ever reads it.
+   */
+  type: FileType | AudioEventType;
   volume: number;
   /**
    * Player IDs of all members in this zone's sync group (leader first).

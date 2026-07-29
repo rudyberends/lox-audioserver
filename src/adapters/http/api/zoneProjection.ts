@@ -1,11 +1,13 @@
 /**
- * Projects the internal (currently Loxone-shaped) zone state onto the public API
- * contract. Every piece of Loxone vocabulary the public API must not expose is
- * translated here and nowhere else: numeric `audiotype`/`type`, the raw
- * `audiopath`, `mode`, `clientState`, and the comma-separated equalizer string.
+ * Projects the server's zone state onto the public API contract.
  *
- * As internal state migrates to neutral fields, this file shrinks — it is the
- * seam, so the public contract never has to move with it.
+ * Its counterpart is `src/adapters/loxone/ws/zoneStateProjection.ts`: both take
+ * the same internal state and shape it for one consumer. This one exists even
+ * though the internal state is no longer Loxone-shaped, because a public contract
+ * wants its own vocabulary regardless — readable enums for the numeric ones
+ * (`audiotype` -> `source.kind`), whole seconds, `null` instead of empty-string
+ * sentinels, and an opaque `source.id` so nobody comes to depend on the internal
+ * form of an audiopath.
  */
 import type { ZoneState } from '@/domain/zones/zoneState';
 import { AudioType } from '@/domain/zones/enums';
