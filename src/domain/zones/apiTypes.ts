@@ -394,6 +394,49 @@ export interface ApiAlertResult {
 }
 
 /**
+ * Somewhere audio can be sent.
+ *
+ * A zone is one kind of destination, but not the only one, and this server does not require
+ * zones at all: it can run as a DLNA source with a streaming account and nothing else. The
+ * zone concept exists because the Loxone clients need everything to be one — a browser tab
+ * playing locally was given a synthetic zone in the reserved 9000 range purely so it would
+ * be visible. That is a translation artefact, not a fact about audio.
+ *
+ * So a destination is the smaller, honest idea: an id you can play to. Zones are destinations
+ * with more attached — grouping, favourites, a queue — and keep their own routes.
+ *
+ * Called `destinations` rather than `outputs` because a zone already *has* an `output`
+ * (its protocol and device), and rather than `players` because that already means this
+ * server's own app, `tech.player`, and the `managedPlayers` setting.
+ */
+export interface ApiDestination {
+  /** Opaque; use it in `/destinations/{id}/…`. */
+  id: string;
+  name: string;
+  /**
+   * What kind of thing this is.
+   *
+   * `zone` is a configured zone, addressable through `/zones/{id}` as well. `local` is a
+   * client playing the audio itself — a browser tab — which exists only while it is
+   * connected.
+   */
+  kind: 'zone' | 'local';
+  /** How audio reaches it: `sendspin`, `snapcast`, `googlecast`, and so on. */
+  protocol: string;
+  /** Whether it is reachable right now. */
+  available: boolean;
+}
+
+/** What a client needs to start receiving audio itself. */
+export interface ApiLocalDestination extends ApiDestination {
+  kind: 'local';
+  /** The client id to announce on the audio socket, so the server knows which one you are. */
+  clientId: string;
+  /** The WebSocket to connect to. Absolute, so it works from any origin. */
+  streamUrl: string;
+}
+
+/**
  * A configured physical input a zone can be switched to.
  *
  * Server-level rather than per zone: an input is a configured source with a capture

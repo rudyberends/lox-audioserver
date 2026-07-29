@@ -17,6 +17,8 @@ import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
 import type {
   ApiAlertKind,
+  ApiDestination,
+  ApiLocalDestination,
   ApiStreamFormat,
   ApiBrowseItem,
   ApiBrowseResult,
@@ -126,6 +128,19 @@ export type ApiHandlerDeps = {
    * (sonn-audio/core#251). Only app-originated writes are forwarded.
    */
   setEqualizerBands: (zoneId: number, bands: unknown) => Promise<number[] | null>;
+  /** Everywhere audio can be sent right now. */
+  listDestinations: () => ApiDestination[];
+  /**
+   * Registers the caller as a destination that plays audio itself. Null when this runtime was
+   * built without local playback.
+   */
+  registerLocalDestination: (options: {
+    name?: string;
+    clientId?: string;
+    host?: string;
+  }) => Promise<ApiLocalDestination | null>;
+  /** Removes a local destination; false when there is no such one. */
+  removeLocalDestination: (id: string) => Promise<boolean>;
   /** Every content service, with what it can actually search. */
   listServices: () => Promise<ApiService[]>;
   /**
@@ -192,6 +207,28 @@ const BROWSE_MAX_LIMIT = 500;
  */
 const SEARCH_DEFAULT_LIMIT = 20;
 const SEARCH_MAX_LIMIT = 100;
+
+/**
+ * What you can do to a destination.
+ *
+ * Playback and nothing else. Grouping, favourites, recents and the queue are things only a
+ * configured zone has, so they stay on `/zones/…` — offering them here would promise a
+ * feature that a local destination cannot honour.
+ */
+const DESTINATION_ACTIONS = new Set([
+  'play',
+  'pause',
+  'stop',
+  'next',
+  'previous',
+  'volume',
+  'position',
+  'power',
+  'repeat',
+  'shuffle',
+  'cover',
+  'alert',
+]);
 
 /** The alert kinds this API accepts; `url` becomes a custom sound. */
 const ALERT_KINDS: ApiAlertKind[] = ['tts', 'bell', 'alarm', 'fire', 'buzzer', 'url'];
@@ -355,6 +392,29 @@ export class ApiHandler {
       return;
     }
 
+    if (pathname === '/destinations' && method === 'GET') {
+      this.sendJson(res, 200, { destinations: this.deps.listDestinations() });
+      return;
+    }
+
+    // `local` is a literal, not an id: a caller registering itself has no id yet, and this
+    // is the one route where the server assigns one.
+    if (pathname === '/destinations/local' && method === 'POST') {
+      await this.handleRegisterLocal(req, res);
+      return;
+    }
+
+    const localMatch = /^\/destinations\/local\/(.+)$/.exec(pathname);
+    if (localMatch && method === 'DELETE') {
+      const removed = await this.deps.removeLocalDestination(localMatch[1]!);
+      if (!removed) {
+        this.sendJson(res, 404, { error: 'destination-not-found' });
+        return;
+      }
+      res.writeHead(204).end();
+      return;
+    }
+
     if (pathname === '/inputs' && method === 'GET') {
       // Server-level, not per zone: an input is selectable from any zone, so hanging the
       // list off one would imply each has its own.
@@ -367,7 +427,20 @@ export class ApiHandler {
       return;
     }
 
-    const zoneMatch = /^\/zones\/(\d+)(?:\/([a-z]+))?$/.exec(pathname);
+    // A destination's id is its zone id, so `/destinations/{id}/pause` is the same command as
+    // `/zones/{id}/pause` and shares the dispatcher below rather than duplicating fourteen
+    // verbs. The two names are not redundant: a server with no zones configured still has
+    // destinations, which is the whole point of the split — zones are optional, somewhere to
+    // send audio is not.
+    //
+    // Only playback verbs are reachable this way. Grouping, favourites, recents and the queue
+    // stay on `/zones/…` because they are things only a configured zone has.
+    const destinationMatch = /^\/destinations\/(\d+)(?:\/([a-z]+))?$/.exec(pathname);
+    const zoneMatch =
+      /^\/zones\/(\d+)(?:\/([a-z]+))?$/.exec(pathname) ??
+      (destinationMatch && (!destinationMatch[2] || DESTINATION_ACTIONS.has(destinationMatch[2]))
+        ? destinationMatch
+        : null);
     if (zoneMatch) {
       const zoneId = Number(zoneMatch[1]);
       const action = zoneMatch[2];
@@ -746,6 +819,43 @@ export class ApiHandler {
       return;
     }
     this.sendJson(res, 200, result);
+  }
+
+  /**
+   * Registers the caller as a destination that plays audio itself.
+   *
+   * This is what makes zones optional: a client can be somewhere audio goes without a zone
+   * existing anywhere. It hands back a client id and a socket; nothing plays until the caller
+   * connects, so this only reserves the identity.
+   *
+   * Passing back a `clientId` reclaims an existing registration, which a page reload needs —
+   * without it every refresh would leave an orphan behind until it timed out.
+   */
+  private async handleRegisterLocal(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let body: Record<string, unknown>;
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'invalid-json' });
+      return;
+    }
+    const name = typeof body.name === 'string' ? body.name.trim() : undefined;
+    const clientId = typeof body.clientId === 'string' ? body.clientId.trim() : undefined;
+    const destination = await this.deps.registerLocalDestination({
+      ...(name ? { name } : {}),
+      ...(clientId ? { clientId } : {}),
+      // The address that reached us is the one address this caller is known to be able to
+      // use — a configured bind address may be 0.0.0.0, or an interface it cannot route to.
+      ...(req.headers.host ? { host: req.headers.host } : {}),
+    });
+    if (!destination) {
+      this.sendJson(res, 501, {
+        error: 'local-playback-unavailable',
+        message: 'This server was built without local playback.',
+      });
+      return;
+    }
+    this.sendJson(res, 201, destination);
   }
 
   /**

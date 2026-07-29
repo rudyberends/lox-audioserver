@@ -233,6 +233,20 @@ function harness(): Harness {
     },
     getInputLabel: (inputId) => (inputId === 'linein-a' ? 'BeoSound 9000' : null),
     getStreamFormat: () => null,
+    listDestinations: () => [
+      { id: '3', name: 'Kitchen', kind: 'zone' as const, protocol: 'sendspin', available: true },
+      { id: '9000', name: 'This tab', kind: 'local' as const, protocol: 'sendspin', available: true },
+    ],
+    registerLocalDestination: async (opts) => ({
+      id: '9000',
+      name: opts.name ?? 'Browser 1',
+      kind: 'local' as const,
+      protocol: 'sendspin',
+      available: true,
+      clientId: opts.clientId ?? 'browser-9000',
+      streamUrl: `ws://${opts.host ?? '127.0.0.1:7090'}/sendspin`,
+    }),
+    removeLocalDestination: async (id) => id === '9000',
     playAlert: async (request) => {
       alertCalls.push(request as unknown as Record<string, unknown>);
       return request.zoneId === 3 ? alertResult : null;
@@ -1534,4 +1548,82 @@ test('an idle zone reports neither a track nor an error', () => {
   );
   assert.equal(api.track, null);
   assert.ok(!('error' in api));
+});
+
+// This server does not require zones — it can run as a DLNA source with a streaming account
+// and nothing else. The zone concept comes from the Loxone clients, which need everything to
+// be one: a browser tab playing locally was given a synthetic zone purely so it would be
+// visible. Destinations are the smaller, honest idea: an id you can play to.
+
+test('destinations list both configured zones and clients playing locally', async () => {
+  const h = harness();
+  const res = await call(h, 'GET', `${API_ROOT}/destinations`);
+  assert.equal(res.statusCode, 200);
+  const kinds = res.json().destinations.map((d: any) => d.kind);
+  assert.deepEqual(kinds, ['zone', 'local'], 'a zone is one kind of destination, not the only');
+});
+
+test('a client can register itself as somewhere audio goes', async () => {
+  const h = harness();
+  const res = await call(h, 'POST', `${API_ROOT}/destinations/local`, { name: 'This tab' });
+  assert.equal(res.statusCode, 201);
+  const body = res.json();
+  assert.equal(body.kind, 'local');
+  // It needs both to start receiving: an identity to announce, and where to announce it.
+  assert.ok(body.clientId, 'an id to announce on the audio socket');
+  assert.match(body.streamUrl, /^ws:\/\/.+\/sendspin$/, 'and the socket to connect to');
+});
+
+test('the socket url is built from the address that reached us', async () => {
+  // A configured bind address is unusable: a server on 0.0.0.0 would hand out
+  // ws://0.0.0.0:7090, and picking an interface would be wrong for another subnet.
+  const h = harness();
+  const res = await call(h, 'POST', `${API_ROOT}/destinations/local`, {}, {
+    host: 'audio.local:7090',
+  });
+  assert.equal(res.json().streamUrl, 'ws://audio.local:7090/sendspin');
+});
+
+test('re-registering with the same clientId reclaims it', async () => {
+  // What a page reload needs: without it every refresh leaves an orphan behind until it
+  // times out.
+  const h = harness();
+  const res = await call(h, 'POST', `${API_ROOT}/destinations/local`, {
+    clientId: 'browser-mine',
+  });
+  assert.equal(res.json().clientId, 'browser-mine');
+});
+
+test('playback commands work on a destination, and are the same commands', async () => {
+  // A destination's id is its zone id, so these share one dispatcher rather than duplicating
+  // fourteen verbs — and a server with no zones configured still has destinations.
+  const h = harness();
+  assert.equal((await call(h, 'POST', `${API_ROOT}/destinations/3/pause`)).statusCode, 204);
+  assert.equal(
+    (await call(h, 'PUT', `${API_ROOT}/destinations/3/volume`, { volume: 30 })).statusCode,
+    204,
+  );
+  assert.deepEqual(h.commands, [
+    { zoneId: 3, command: 'pause', payload: undefined },
+    { zoneId: 3, command: 'volume', payload: '30' },
+  ]);
+});
+
+test('what only a zone has stays on the zone routes', async () => {
+  // Grouping, favourites, recents and the queue cannot be honoured by a local destination, so
+  // offering them there would promise a feature that does not exist.
+  const h = harness();
+  for (const action of ['group', 'favorites', 'recents', 'queue']) {
+    const res = await call(h, 'GET', `${API_ROOT}/destinations/3/${action}`);
+    assert.equal(res.statusCode, 404, action);
+  }
+  // The same thing on the zone route works.
+  assert.equal((await call(h, 'GET', `${API_ROOT}/zones/3/queue`)).statusCode, 200);
+});
+
+test('removing a local destination is refused for a zone', async () => {
+  const h = harness();
+  assert.equal((await call(h, 'DELETE', `${API_ROOT}/destinations/local/9000`)).statusCode, 204);
+  // A configured zone is not this route's to delete.
+  assert.equal((await call(h, 'DELETE', `${API_ROOT}/destinations/local/3`)).statusCode, 404);
 });

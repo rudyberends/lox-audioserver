@@ -15,6 +15,7 @@ import { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
 import { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandler';
 import { ApiHandler } from '@/adapters/http/api/apiHandler';
 import { BrowseService } from '@/adapters/http/api/browseService';
+import { DestinationService } from '@/adapters/http/api/destinationService';
 import { resolveUriFromRef } from '@/domain/media/browseRef';
 import { toApiQueue } from '@/adapters/http/api/queueProjection';
 import { toApiFavorites, toApiRecents } from '@/adapters/http/api/libraryProjection';
@@ -105,6 +106,7 @@ export class HttpService {
   private readonly beoremoteApi: BeoremoteApiHandler;
   private readonly api: ApiHandler;
   private readonly browseService: BrowseService;
+  private readonly destinationService: DestinationService;
   private readonly sendspin: SendspinGateway;
   private readonly snapcast: SnapcastGateway;
   private readonly lmsCli: LmsCliServer;
@@ -184,6 +186,12 @@ export class HttpService {
       options.lineInActivation,
     );
     this.browseService = new BrowseService(options.configPort, options.contentManager);
+    this.destinationService = new DestinationService(
+      options.zoneManager,
+      options.browserZoneRegistry,
+      config.port,
+      (zoneId) => options.resolveOutputProtocol(zoneId),
+    );
     this.api = new ApiHandler({
       eventHub: options.apiEventHub,
       getAllZoneStates: () => options.zoneManager.getAllZoneStates(),
@@ -217,6 +225,9 @@ export class HttpService {
           loxone: loxoneHealthInputs(options.configPort.getConfig()?.system?.audioserver),
         }),
       getLifecycle: () => options.lifecycle.snapshot(),
+      listDestinations: () => this.destinationService.list(),
+      registerLocalDestination: (opts) => this.destinationService.registerLocal(opts),
+      removeLocalDestination: (id) => this.destinationService.removeLocal(id),
       listServices: () => this.browseService.listServices(),
       browse: (id, start, limit) => this.browseService.browse(id, start, limit),
       describeItem: (id) => this.browseService.describeItem(id),

@@ -232,6 +232,7 @@ GET /api/v1/zones/{id}/equalizer    →  { "zoneId": 3, "bands": [ …10 ] }
 GET /api/v1/zones/{id}/queue        →  { "items": [ … ], "start": 0, "total": 42, "currentIndex": 3 }
 GET /api/v1/zones/{id}/favorites    →  { "items": [ … ], "start": 0, "total": 8 }
 GET /api/v1/zones/{id}/recents      →  { "items": [ … ], "start": 0, "total": 20 }
+GET /api/v1/destinations            →  { "destinations": [ … ] }
 GET /api/v1/services                →  { "services": [ … ] }
 GET /api/v1/browse                  →  the root: one entry per service
 GET /api/v1/browse/{id}             →  { "container": …, "items": [ … ], "start": 0, "total": 42 }
@@ -414,6 +415,54 @@ happens server-side, so you do not need to know anything about how content is mo
 curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"http://example/stream.mp3"}'
 curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"library://track/9"}'
 ```
+
+## Destinations
+
+Somewhere audio can be sent. A zone is one kind of destination, but **this server does not
+require zones at all** — it can run as a DLNA source with a streaming account and nothing
+else, and a client can play audio itself with no zone configured anywhere.
+
+```bash
+curl -s http://server:7090/api/v1/destinations
+```
+
+```json
+{ "destinations": [
+  { "id": "3",    "name": "Kitchen",  "kind": "zone",  "protocol": "sendspin", "available": true },
+  { "id": "9000", "name": "This tab", "kind": "local", "protocol": "sendspin", "available": true }
+]}
+```
+
+Playback works the same on either: `POST /destinations/{id}/play`, `/pause`, `/volume` and the
+rest are the same commands as their `/zones/{id}/…` counterparts, and a destination's id *is*
+its zone id where it has one. What only a configured zone has — grouping, favourites, recents,
+the queue — stays on `/zones/…`, because a local destination cannot honour it.
+
+### Playing audio yourself
+
+A client can be the thing that plays. Register, then connect:
+
+```bash
+curl -X POST http://server:7090/api/v1/destinations/local -d '{"name":"This tab"}'
+```
+
+```json
+{ "id": "9000", "kind": "local", "clientId": "browser-9000",
+  "streamUrl": "ws://server:7090/sendspin", "protocol": "sendspin", "available": true }
+```
+
+Then open `streamUrl` and announce `clientId` in a Sendspin `client/hello`. Audio arrives as
+PCM frames on that socket, and `POST /destinations/{id}/play` starts it. The
+[Sendspin protocol](https://github.com/Sendspin/spec) does the rest — format negotiation,
+clock sync, grouping — and `sendspin-js` implements the client side for a browser.
+
+`streamUrl` is built from the address your request arrived on, so it is reachable from wherever
+you are. Pass your own `clientId` back on a later call to reclaim the same registration — that
+is what a page reload needs, and without it every refresh leaves an orphan behind until it
+times out. The registration disappears shortly after the socket closes.
+
+`DELETE /destinations/local/{id}` removes one early. It refuses a configured zone: that is not
+this route's to delete.
 
 ## Browsing
 
@@ -749,7 +798,7 @@ it. See [Access](README.md#access) for how to enable each of these.
 
 | Surface | Use it for |
 | --- | --- |
-| `/api` | Reading zone state, controlling playback, browsing and searching — start here |
+| `/api` | Reading state, controlling playback, browsing, searching, and playing audio yourself — start here |
 | MQTT | The same state and transport controls, where a broker already exists. Nothing beyond that |
 | Subsonic (`/rest/*`) | Browsing and streaming the library with existing apps |
 | DLNA / UPnP | Renderers, and discovery by TVs and network speakers |
