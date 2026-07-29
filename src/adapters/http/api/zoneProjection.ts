@@ -113,7 +113,30 @@ function toTrack(state: ZoneState): ApiTrack | null {
   if (!title && !artist && !album) {
     return null;
   }
+  // A failure message is not a track. It is written into `title` because the Loxone app has
+  // nowhere else to show it, but reporting it here made `if (zone.track)` true for a zone
+  // playing nothing — so a UI rendered an error as a song title. It travels as `error`.
+  if (playbackError(state)) {
+    return null;
+  }
   return { title, artist, album, coverUrl: state.coverurl ?? '' };
+}
+
+/**
+ * The failure message a zone is carrying, if any.
+ *
+ * There is no error field in the internal state: a failed play writes a user-facing title and
+ * clears everything else, which is what the Loxone app renders. That combination — stopped,
+ * a title, no artist or album, and nothing loaded — is the signature, and it cannot be
+ * produced by an actual track.
+ */
+function playbackError(state: ZoneState): string | null {
+  const title = (state.title ?? '').trim();
+  if (!title || state.mode !== 'stop') {
+    return null;
+  }
+  const loaded = (state.audiopath ?? '').trim() || (state.artist ?? '').trim() || (state.album ?? '').trim();
+  return loaded ? null : title;
 }
 
 /**
@@ -227,6 +250,7 @@ export type ZoneProjectionLookups = {
 };
 
 export function toApiZoneState(state: ZoneState, lookups: ZoneProjectionLookups = {}): ApiZoneState {
+  const error = playbackError(state);
   return {
     id: state.id,
     name: state.name ?? '',
@@ -242,5 +266,7 @@ export function toApiZoneState(state: ZoneState, lookups: ZoneProjectionLookups 
     source: toSource(state, lookups.serviceLabel, lookups.inputLabel),
     group: toGroup(state),
     output: toOutput(state, lookups.device, lookups.outputProtocol),
+    // Only present when something went wrong, so `if (zone.error)` is the whole check.
+    ...(error ? { error } : {}),
   };
 }

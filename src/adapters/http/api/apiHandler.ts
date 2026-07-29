@@ -204,6 +204,20 @@ const COVER_SIZE_MIN = 32;
 const COVER_SIZE_MAX = 2000;
 
 /**
+ * Where a paged request starts.
+ *
+ * Accepts `start` and `offset` as the same thing. The response field is `start`, so that is
+ * the documented name — but `/browse` shipped reading only `offset`, and a caller reading
+ * `start` out of one response and writing `offset` into the next request is a trap worth
+ * removing rather than documenting. Both work everywhere; neither is silently ignored.
+ */
+function pagingStart(params: URLSearchParams): number {
+  const raw = params.get('start') ?? params.get('offset') ?? '0';
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/**
  * The cover size a `?size=` parameter asks for, or the now-playing default.
  *
  * Deliberately *not* clamped: an absent or nonsensical size means "no preference", and
@@ -552,7 +566,7 @@ export class ApiHandler {
     url: URL,
   ): Promise<void> {
     if (method === 'GET') {
-      const start = this.clampInt(Number(url.searchParams.get('start') ?? 0), 0, Number.MAX_SAFE_INTEGER) ?? 0;
+      const start = pagingStart(url.searchParams);
       const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 100), 1, 500) ?? 100;
       const queue = this.deps.getQueue(zoneId, start, limit);
       if (!queue) {
@@ -744,7 +758,7 @@ export class ApiHandler {
     rawId: string | undefined,
     url: URL,
   ): Promise<void> {
-    const start = this.clampInt(Number(url.searchParams.get('offset') ?? 0), 0, 1_000_000) ?? 0;
+    const start = pagingStart(url.searchParams);
     const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 0), 1, BROWSE_MAX_LIMIT)
       ?? BROWSE_DEFAULT_LIMIT;
 
@@ -1000,7 +1014,7 @@ export class ApiHandler {
     url: URL,
   ): Promise<void> {
     if (method === 'GET') {
-      const start = this.clampInt(Number(url.searchParams.get('start') ?? 0), 0, Number.MAX_SAFE_INTEGER) ?? 0;
+      const start = pagingStart(url.searchParams);
       const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 50), 1, 500) ?? 50;
       const favorites = await this.deps.getFavorites(zoneId, start, limit);
       if (!favorites) {
@@ -1088,7 +1102,7 @@ export class ApiHandler {
     url: URL,
   ): Promise<void> {
     if (method === 'GET') {
-      const start = this.clampInt(Number(url.searchParams.get('start') ?? 0), 0, Number.MAX_SAFE_INTEGER) ?? 0;
+      const start = pagingStart(url.searchParams);
       const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 50), 1, 500) ?? 50;
       const recents = await this.deps.getRecents(zoneId, start, limit);
       if (!recents) {

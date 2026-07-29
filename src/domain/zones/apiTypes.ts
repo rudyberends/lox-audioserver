@@ -134,6 +134,19 @@ export interface ApiZoneState {
   source: ApiSource | null;
   group: ApiGroup | null;
   output: ApiOutput | null;
+  /**
+   * Why the last thing this zone was asked to play did not play, or absent when nothing
+   * went wrong.
+   *
+   * `POST /play` answers `204` for a uri the server cannot resolve, because resolution is
+   * asynchronous — the call is accepted before anything has been looked up. So a failure has
+   * to surface here, and it arrives as a `zone.changed` like any other state.
+   *
+   * Before this the only trace was the failure message sitting in `track.title`, which made
+   * `if (zone.track)` — the idle check this contract offers — true for a zone playing nothing,
+   * so a UI rendered an error as a song title. It clears on the next successful play.
+   */
+  error?: string;
 }
 
 /**

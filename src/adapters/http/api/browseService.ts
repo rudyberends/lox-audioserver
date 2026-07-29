@@ -49,6 +49,19 @@ const BUCKETS: Partial<Record<ApiItemKind, readonly string[]>> = {
   episode: ['episodes', 'episode'],
 };
 
+/**
+ * Whether a listing name is really just the kind spelled out.
+ *
+ * Providers hardcode `'Album'`, `'Artist'` and `'Playlist'` as the name of the folder being
+ * listed, so a container browsed into directly reports its type where its title belongs.
+ * Matching on that is unpleasant but it is the only signal available, and the alternative —
+ * always resolving — costs a lookup on every browse.
+ */
+function looksLikeAKindName(name: string | undefined, kind: string): boolean {
+  const trimmed = (name ?? '').trim().toLowerCase();
+  return !trimmed || trimmed === kind.toLowerCase();
+}
+
 export class BrowseService {
   private readonly log = createLogger('Api', 'Browse');
 
@@ -96,12 +109,21 @@ export class BrowseService {
     if (!folder) {
       return null;
     }
+    // The provider's own listing name is often the literal 'Album' or 'Playlist' — it names
+    // the *kind*, because the Loxone app takes the title from the parent row and never asks.
+    // `describeItem` resolves the real one, so use it rather than reporting two different
+    // names for the same container depending on which route you came through.
+    const named = looksLikeAKindName(folder.name, ref.kind)
+      ? await this.describeItem(id).catch(() => null)
+      : null;
     return {
-      container: toApiContainer(
-        { id: ref.folderId, name: folder.name },
-        ref.service,
-        ref.kind,
-      ),
+      container:
+        named ??
+        toApiContainer(
+          { id: ref.folderId, name: folder.name, audiopath: ref.folderId },
+          ref.service,
+          ref.kind,
+        ),
       items: (folder.items ?? []).map((item) => toApiBrowseItem(item, ref.service)),
       start: folder.start ?? start,
       // Null when the provider could not say, rather than the guess it had to put in

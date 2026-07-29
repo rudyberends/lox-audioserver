@@ -15,6 +15,7 @@ import { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
 import { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandler';
 import { ApiHandler } from '@/adapters/http/api/apiHandler';
 import { BrowseService } from '@/adapters/http/api/browseService';
+import { resolveUriFromRef } from '@/domain/media/browseRef';
 import { toApiQueue } from '@/adapters/http/api/queueProjection';
 import { toApiFavorites, toApiRecents } from '@/adapters/http/api/libraryProjection';
 import { toApiInput } from '@/adapters/http/api/inputProjection';
@@ -189,7 +190,10 @@ export class HttpService {
         options.zoneManager.handleCommand(zoneId, command, payload),
       // 'api' as the type, so anything keying on how playback started can tell this
       // apart from a Loxone tap or a favourite.
-      playContent: (zoneId, uri) => options.zoneManager.playContent(zoneId, uri, 'api'),
+      // Accepts a browse id as well as a raw audiopath: browse hands out ids, and the guide
+      // promises they round-trip into play.
+      playContent: (zoneId, uri) =>
+        options.zoneManager.playContent(zoneId, resolveUriFromRef(uri), 'api'),
       getOutputDevice: (zoneId) => options.resolveOutputDevice(zoneId),
       getVolumeLimits: (zoneId) => options.resolveVolumeLimits(zoneId),
       getOutputProtocol: (zoneId) => options.resolveOutputProtocol(zoneId),
@@ -284,10 +288,10 @@ export class HttpService {
         return toApiQueue(zoneId, options.zoneManager.getRawQueue(zoneId, start, limit));
       },
       queueAppend: async (zoneId, uri) => {
-        await options.zoneManager.queue.appendUri(zoneId, uri);
+        await options.zoneManager.queue.appendUri(zoneId, resolveUriFromRef(uri));
       },
       queueInsertNext: async (zoneId, uri) => {
-        await options.zoneManager.queue.insertUriAfterCurrent(zoneId, uri);
+        await options.zoneManager.queue.insertUriAfterCurrent(zoneId, resolveUriFromRef(uri));
       },
       queuePlay: (zoneId, itemId) => {
         if (!options.zoneManager.queue.seekInQueue(zoneId, itemId)) {

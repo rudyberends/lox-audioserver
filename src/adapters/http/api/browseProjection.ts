@@ -33,6 +33,15 @@ const KINDS: Record<ContentItemKind, ApiItemKind> = {
   folder: 'folder',
 };
 
+/**
+ * Containers you can hand to `play` as a whole, even without an audiopath of their own.
+ *
+ * A browse section ('Albums', 'Genres') and a plain folder are navigation: there is nothing
+ * to start. An album, artist, playlist or show is a body of music with an obvious meaning
+ * for "play this".
+ */
+const PLAYABLE_CONTAINERS = new Set<ContentItemKind>(['album', 'artist', 'playlist', 'show']);
+
 function toApiKind(kind: ContentItemKind): ApiItemKind {
   return KINDS[kind] ?? 'unknown';
 }
@@ -68,7 +77,12 @@ export function toApiBrowseItem(item: ContentFolderItem, service: string): ApiBr
     browsable: container,
     // A container can carry an audiopath too — "play the whole album" — so both are true
     // for one, and a caller picks by what the user did rather than by guessing from kind.
-    playable: Boolean(audiopath),
+    //
+    // An album, artist, playlist or show with no audiopath of its own is still playable: the
+    // queue builder resolves its folder id. Without this the same album answered `true` from
+    // a search and `false` from `/items`, and a UI cannot decide what a tap does when its two
+    // sources disagree.
+    playable: Boolean(audiopath) || PLAYABLE_CONTAINERS.has(kind),
     service,
     ...(artist ? { artist } : {}),
     ...(album ? { album } : {}),
@@ -89,16 +103,25 @@ export function toApiBrowseItem(item: ContentFolderItem, service: string): ApiBr
  * already has the real name from that row. Better a plain name than a fabricated one.
  */
 export function toApiContainer(
-  folder: { id: string; name?: string },
+  folder: { id: string; name?: string; audiopath?: string },
   service: string,
   kind: ContentItemKind = 'folder',
 ): ApiBrowseItem {
+  // Playability follows the same rule as a listing row: an album or a playlist carries an
+  // audiopath meaning "play the whole thing". Hardcoding false here made `/items` contradict
+  // `/search` about the same album, and a UI cannot decide what a tap does when the two
+  // sources disagree.
+  //
+  // A container with no audiopath of its own is still playable *by kind* — the queue builder
+  // resolves an album or playlist folder id — so those say true as well. A `category` or a
+  // plain `folder` is navigation and says false.
+  const playable = Boolean((folder.audiopath ?? '').trim()) || PLAYABLE_CONTAINERS.has(kind);
   return {
     id: encodeContainerRef({ kind, service, folderId: folder.id }),
     name: (folder.name ?? '').trim(),
     kind: toApiKind(kind),
     browsable: true,
-    playable: false,
+    playable,
     service,
   };
 }

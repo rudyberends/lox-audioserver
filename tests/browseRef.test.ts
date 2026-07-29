@@ -4,6 +4,7 @@ import {
   decodeBrowseRef,
   encodeContainerRef,
   encodePlayableRef,
+  resolveUriFromRef,
 } from '../src/domain/media/browseRef';
 
 // A caller round-trips these verbatim: browse hands one out, and it goes back into browse,
@@ -95,4 +96,34 @@ test('a container id and a playable id are never confused', () => {
   assert.equal(decodeBrowseRef(container)?.target, 'container');
   assert.equal(decodeBrowseRef(playable)?.target, 'playable');
   assert.notEqual(container, playable);
+});
+
+// A browse listing hands out ids and the guide promises they round-trip into play. They did
+// not: `play` took only a raw audiopath, so browse → play was broken by exactly the route a
+// client takes. Our own player reported it as the remaining blocker.
+
+test('a playable browse id resolves to the audiopath play needs', () => {
+  const audiopath = 'applemusic:track:b64_YVM1WVRVUldaRUpS==';
+  const id = encodePlayableRef({ kind: 'track', audiopath });
+  assert.equal(resolveUriFromRef(id), audiopath);
+});
+
+test('a raw audiopath is passed through untouched', () => {
+  // It has to keep working: it is what favourites, recents and `source.id` report.
+  for (const uri of [
+    'applemusic:track:b64_YQ==',
+    'library://track/9',
+    'spotify:track:4uLU6hMCjMI75M1A2tKUQC',
+    'http://example/stream.mp3',
+    'totally:not:a:thing',
+  ]) {
+    assert.equal(resolveUriFromRef(uri), uri, uri);
+  }
+});
+
+test('a container id is not silently turned into something playable', () => {
+  // A container ref names a folder and carries no audiopath. Passing it through means it
+  // fails downstream as it would have anyway, rather than resolving to the wrong thing.
+  const id = encodeContainerRef({ kind: 'album', service: 'applemusic', folderId: 'album:1' });
+  assert.equal(resolveUriFromRef(id), id);
 });

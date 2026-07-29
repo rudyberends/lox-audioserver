@@ -104,3 +104,20 @@ export function decodeBrowseRef(id: string): BrowseRef | null {
   }
   return null;
 }
+
+/**
+ * The audiopath a caller's `uri` means, whether they sent a browse id or a raw path.
+ *
+ * Every route that takes a `uri` — play, queue append, insert-next — has to accept both. A
+ * browse listing hands out ids and the guide promises they round-trip, so refusing one there
+ * makes browse → play impossible by exactly the route a client actually takes. Meanwhile the
+ * raw form has to keep working: it is what favourites, recents and `source.id` report.
+ *
+ * A container ref resolves to its own audiopath only if it has one, which a browse id does
+ * not carry — those name a folder. So a container id is returned unchanged and fails
+ * downstream as it would have anyway, rather than being silently turned into something else.
+ */
+export function resolveUriFromRef(uri: string): string {
+  const ref = decodeBrowseRef(uri);
+  return ref?.target === 'playable' ? ref.audiopath : uri;
+}

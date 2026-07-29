@@ -117,6 +117,7 @@ changed and leave you to re-read the page you are showing.
 | `source` | object \| **null** | Where the audio comes from. |
 | `group` | object \| **null** | `null` when the zone plays on its own; `members` lists leader first. |
 | `output` | object \| **null** | `protocol` is e.g. `sendspin`, `snapcast`, `googlecast`, `dlna`, `sonos`, `airplay`. |
+| `error` | string \| *absent* | Why the last thing this zone was asked to play did not play. |
 
 `output.device` is present when the protocol identifies a specific device — for
 squeezelite that is the SlimProto MAC, i.e. what its `-m` is set to:
@@ -145,6 +146,13 @@ of this contract.
 
 `null` is used deliberately instead of empty strings, so `if (zone.track)` is enough to
 tell "playing something" from "idle".
+
+`error` is present only when something went wrong, so `if (zone.error)` is the whole check.
+It exists because `POST /play` answers `204` for a uri the server cannot resolve — resolution
+is asynchronous, so the call is accepted before anything has been looked up. The failure then
+arrives as a `zone.changed` like any other state change, which means you do not need a
+verification timer: send the play, watch the stream. `track` is `null` while a zone carries an
+error, and the error clears on the next successful play.
 
 ## Events
 
@@ -435,13 +443,14 @@ something to open *and* something to play, so branch on what the user did rather
 inferring from `kind`.
 
 `id` is **opaque**. Feed it back to `/browse/{id}`, `/items/{id}` or
-`POST /zones/{id}/play` — it round-trips exactly. Do not parse it: the encoding is not part
+`POST /zones/{id}/play` — it round-trips exactly, and the queue routes take it too. Do not parse it: the encoding is not part
 of this contract, and ids stay valid across restarts and library rescans precisely because
 they do not encode anything you should rely on.
 
 ### Paging
 
-`offset` and `limit` (default 50, max 500). `total` is the number of children — **or `null`
+`start` (or `offset` — both accepted everywhere, and the response field is `start`) and
+`limit`, default 50, max 500. `total` is the number of children — **or `null`
 when the provider cannot say**, which several streaming providers genuinely cannot. When it
 is null, keep paging until you get back fewer items than you asked for. A number here is a
 real count, not an estimate.

@@ -1488,3 +1488,49 @@ function makeNotifier() {
     notifyServiceChanged: () => {},
   };
 }
+
+// `POST /play` answers 204 for a uri it cannot resolve, because resolution is asynchronous —
+// the call is accepted before anything is looked up. So the failure has to surface in state,
+// and it used to do so only as prose in `track.title`: `if (zone.track)` was then true for a
+// zone playing nothing, and a UI rendered an error as a song title. Our own player had to run
+// verification timers because of it.
+
+test('a failed play reports an error, not a track', () => {
+  // The signature a failure leaves: stopped, a user-facing title, and nothing loaded.
+  const api = toApiZoneState(
+    zoneState({
+      mode: 'stop',
+      title: 'Playback unavailable',
+      artist: '',
+      album: '',
+      audiopath: '',
+      duration: 0,
+      time: 0,
+    }),
+  );
+  assert.equal(api.error, 'Playback unavailable');
+  assert.equal(api.track, null, 'if (zone.track) must not be true for a zone playing nothing');
+  assert.equal(api.source, null);
+});
+
+test('a real track is never mistaken for an error', () => {
+  const api = toApiZoneState(zoneState({ mode: 'play' }));
+  assert.ok(!('error' in api), 'absent, so `if (zone.error)` is the whole check');
+  assert.equal(api.track?.title, 'Song');
+});
+
+test('a stopped zone with a real track loaded is not an error', () => {
+  // Stopping after playing something leaves the track in place; only a cleared zone with a
+  // lone title is a failure.
+  const api = toApiZoneState(zoneState({ mode: 'stop' }));
+  assert.ok(!('error' in api));
+  assert.equal(api.track?.title, 'Song');
+});
+
+test('an idle zone reports neither a track nor an error', () => {
+  const api = toApiZoneState(
+    zoneState({ mode: 'stop', title: '', artist: '', album: '', audiopath: '' }),
+  );
+  assert.equal(api.track, null);
+  assert.ok(!('error' in api));
+});
