@@ -22,7 +22,7 @@ import { toApiInput } from '@/adapters/http/api/inputProjection';
 import { getZoneEqualizerBands } from '@/domain/zones/equalizer';
 import { resizeCoverUrl, resizeTuneInCoverUrl } from '@/shared/coverArt';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
-import type { ApiGroupResult, ApiOutput, ApiVolumeLimits } from '@/domain/zones/apiTypes';
+import type { ApiGroupResult, ApiOutput, ApiStreamFormat, ApiVolumeLimits } from '@/domain/zones/apiTypes';
 import { isLocalRequest } from '@/shared/utils/net';
 import type { StreamProxyRoute } from '@/shared/streamProxyRoute';
 import type { NotifierPort } from '@/ports/NotifierPort';
@@ -164,6 +164,8 @@ export class HttpService {
       resolveServiceLabel: (audiopath: string) => string | null;
       /** Names a configured line-in for `source.name`; see InputLabelLookup. */
       resolveInputLabel: (inputId: string) => string | null;
+      /** What a zone is streaming, for `format`; see toStreamFormat. */
+      resolveStreamFormat: (zoneId: number) => ApiStreamFormat | null;
       serverVersion: string;
       /** Whether the server is serving yet, for /health and /ready. */
       lifecycle: ServerLifecycle;
@@ -396,6 +398,7 @@ export class HttpService {
       },
       getServiceLabel: (audiopath) => options.resolveServiceLabel(audiopath),
       getInputLabel: (inputId) => options.resolveInputLabel(inputId),
+      getStreamFormat: (zoneId) => options.resolveStreamFormat(zoneId),
       getEqualizerBands: (zoneId) => {
         const zone = options.configPort.getConfig().zones?.find((z) => z.id === zoneId);
         return zone ? [...getZoneEqualizerBands(zone)] : null;

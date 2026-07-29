@@ -232,6 +232,7 @@ function harness(): Harness {
       return true;
     },
     getInputLabel: (inputId) => (inputId === 'linein-a' ? 'BeoSound 9000' : null),
+    getStreamFormat: () => null,
     playAlert: async (request) => {
       alertCalls.push(request as unknown as Record<string, unknown>);
       return request.zoneId === 3 ? alertResult : null;

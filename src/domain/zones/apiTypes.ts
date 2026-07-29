@@ -111,6 +111,26 @@ export interface ApiOutput {
  * A zone as the public API presents it. This is the payload of
  * `GET /api/zones`, and of every `zone.changed` event.
  */
+/**
+ * The audio format a zone is streaming.
+ *
+ * Sendspin already shows its client exactly this, and the admin UI has had it in `tech` all
+ * along — but a player built on the public API could not tell a listener what they were
+ * hearing. Diagnostics stay out: buffer sizes, restart counts and subscriber drops describe
+ * the engine's health, not the audio, and belong in the admin surface.
+ */
+export interface ApiStreamFormat {
+  /** `pcm`, `flac`, `mp3` — the encoding on the wire to the device. */
+  codec: string;
+  /** Hz, e.g. 44100 or 192000. */
+  sampleRate: number;
+  /** Bits per sample, e.g. 16 or 24. */
+  bitDepth: number;
+  channels: number;
+  /** Bits per second, when the encoder reports one. Null for a constant-rate PCM stream. */
+  bitrate: number | null;
+}
+
 export interface ApiZoneState {
   id: number;
   name: string;
@@ -134,6 +154,14 @@ export interface ApiZoneState {
   source: ApiSource | null;
   group: ApiGroup | null;
   output: ApiOutput | null;
+  /**
+   * What this zone is actually streaming right now, or null when nothing is.
+   *
+   * The audio as it leaves this server, which is not the same as the file's own format: a
+   * zone whose output cannot take 192 kHz gets it resampled, and this reports what the
+   * device is really receiving.
+   */
+  format: ApiStreamFormat | null;
   /**
    * Why the last thing this zone was asked to play did not play, or absent when nothing
    * went wrong.

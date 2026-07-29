@@ -17,6 +17,7 @@ import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
 import type {
   ApiAlertKind,
+  ApiStreamFormat,
   ApiBrowseItem,
   ApiBrowseResult,
   ApiInput,
@@ -110,6 +111,8 @@ export type ApiHandlerDeps = {
   getServiceLabel: (audiopath: string) => string | null;
   /** The configured name of a line-in, so `source.name` is not the server's MAC. */
   getInputLabel: (inputId: string) => string | null;
+  /** What a zone is streaming right now, for `format`. */
+  getStreamFormat: (zoneId: number) => ApiStreamFormat | null;
   /** What a zone's volume will accept: its cap, its power-on level and its step. */
   getVolumeLimits: (zoneId: number) => ApiVolumeLimits | undefined;
   /** Current equalizer bands for a zone, or null when the zone is unknown. */
@@ -1205,6 +1208,7 @@ export class ApiHandler {
       outputProtocol: (zoneId) => this.deps.getOutputProtocol(zoneId),
       serviceLabel: (audiopath) => this.deps.getServiceLabel(audiopath),
       inputLabel: (inputId) => this.deps.getInputLabel(inputId),
+      streamFormat: (zoneId) => this.deps.getStreamFormat(zoneId),
       volumeLimits: this.deps.getVolumeLimits(state.id),
     });
   }

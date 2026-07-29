@@ -13,6 +13,7 @@ import { resolvePlaybackSource } from '@/application/playback/sourceResolver';
 import { decodeAudiopath } from '@/domain/zones/audiopath';
 import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 import { zoneSessionKey, type SessionKey } from '@/ports/types/SessionKey';
+import type { EngineSessionStats } from '@/ports/EnginePort';
 import type { PlaybackService } from '@/application/playback/PlaybackService';
 import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import { EqualizerRestartScheduler } from '@/application/playback/EqualizerRestartScheduler';
@@ -1280,26 +1281,14 @@ export class AudioManager {
     return session ?? null;
   }
 
-  public getStreamStats(
-    zoneId: number,
-  ): Array<{
-    profile: OutputProfile;
-    bps: number | null;
-    bufferedBytes: number;
-    totalBytes: number;
-    lastUpdated: number | null;
-    subscribers: number;
-    restarts: number;
-    lastError: string | null;
-    lastErrorAt: number | null;
-    lastStderr: string | null;
-    lastStderrAt: number | null;
-    lastExitCode: number | null;
-    lastExitSignal: string | null;
-    lastExitAt: number | null;
-    subscriberDrops: number;
-    lastSubscriberDropAt: number | null;
-  }> {
+  /**
+   * Engine stats for a zone's session, one entry per encoded profile.
+   *
+   * Returns `EngineSessionStats` rather than a hand-written copy of it. The copy had drifted:
+   * it omitted `sampleRate`, `channels` and `pcmBitDepth`, so the format the engine reports
+   * was reaching callers at runtime but invisible to the type checker.
+   */
+  public getStreamStats(zoneId: number): EngineSessionStats[] {
     return this.playbackService.getSessionStats(zoneSessionKey(zoneId));
   }
 }

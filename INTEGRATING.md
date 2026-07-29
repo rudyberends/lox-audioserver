@@ -117,6 +117,7 @@ changed and leave you to re-read the page you are showing.
 | `source` | object \| **null** | Where the audio comes from. |
 | `group` | object \| **null** | `null` when the zone plays on its own; `members` lists leader first. |
 | `output` | object \| **null** | `protocol` is e.g. `sendspin`, `snapcast`, `googlecast`, `dlna`, `sonos`, `airplay`. |
+| `format` | object \| **null** | The audio this zone is streaming right now. |
 | `error` | string \| *absent* | Why the last thing this zone was asked to play did not play. |
 
 `output.device` is present when the protocol identifies a specific device — for
@@ -146,6 +147,18 @@ of this contract.
 
 `null` is used deliberately instead of empty strings, so `if (zone.track)` is enough to
 tell "playing something" from "idle".
+
+`format` is what the device is actually receiving, which is not the file's own format — a zone
+whose output cannot take 192 kHz gets it resampled, and this reports the result:
+
+```json
+"format": { "codec": "pcm", "sampleRate": 44100, "bitDepth": 16, "channels": 2, "bitrate": null }
+```
+
+`bitrate` is bits per second where the encoder reports one, and `null` for PCM, whose rate is
+constant and never announced. `format` is null when the zone is streaming nothing. Engine
+internals — buffer sizes, restart counts, subscriber drops — stay out; those describe the
+server's health rather than the audio, and live in the admin surface.
 
 `error` is present only when something went wrong, so `if (zone.error)` is the whole check.
 It exists because `POST /play` answers `204` for a uri the server cannot resolve — resolution

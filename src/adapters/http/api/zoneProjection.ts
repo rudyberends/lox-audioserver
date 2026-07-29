@@ -14,6 +14,7 @@ import { AudioType, RepeatMode } from '@/domain/zones/enums';
 import { parseServiceNativeAudiopath } from '@/domain/zones/audiopath';
 import type {
   ApiGroup,
+  ApiStreamFormat,
   ApiVolumeLimits,
   ApiOutput,
   ApiPlaybackState,
@@ -246,6 +247,11 @@ export type ZoneProjectionLookups = {
   serviceLabel?: ServiceLabelLookup;
   /** Names a configured line-in, so `source.name` is its name and not the server's MAC. */
   inputLabel?: InputLabelLookup;
+  /**
+   * What the zone is streaming. Not derivable from `ZoneState` — the format belongs to the
+   * engine session, not the zone — so it is passed in like the device and volume lookups.
+   */
+  streamFormat?: (zoneId: number) => ApiStreamFormat | null;
   volumeLimits?: ApiVolumeLimits;
 };
 
@@ -266,6 +272,7 @@ export function toApiZoneState(state: ZoneState, lookups: ZoneProjectionLookups 
     source: toSource(state, lookups.serviceLabel, lookups.inputLabel),
     group: toGroup(state),
     output: toOutput(state, lookups.device, lookups.outputProtocol),
+    format: lookups.streamFormat?.(state.id) ?? null,
     // Only present when something went wrong, so `if (zone.error)` is the whole check.
     ...(error ? { error } : {}),
   };

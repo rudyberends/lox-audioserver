@@ -8,6 +8,7 @@ import { toLoxoneAudiopath } from '@/domain/zones/bridgeIdentity';
 import { ServerLifecycle } from '@/domain/server/lifecycle';
 import { MqttPublisher } from '@/adapters/mqtt/mqttPublisher';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
+import { toStreamFormat } from '@/adapters/http/api/streamFormat';
 import { MediaServer } from '@/adapters/mediaserver/mediaServer';
 import { SubsonicApi } from '@/adapters/subsonic/subsonicApi';
 import { WebdavServer } from '@/adapters/webdav/webdavServer';
@@ -187,6 +188,12 @@ export function createRuntime(): Runtime {
     return name || null;
   };
 
+  /**
+   * What a zone is streaming, for the public `format` field. Read from the engine's session
+   * stats, which is the same source the admin UI's `tech.streamStats` uses.
+   */
+  const resolveStreamFormat = (zoneId: number) => toStreamFormat(audioManager.getStreamStats(zoneId));
+
   const apiEventHub = new ApiEventHub();
   const ports = createRuntimePorts({
     notifier: withApiEvents(new LoxoneNotifierAdapter(loxoneNotifier), apiEventHub, {
@@ -194,6 +201,7 @@ export function createRuntime(): Runtime {
       outputProtocol: resolveOutputProtocol,
       serviceLabel: resolveServiceLabel,
       inputLabel: resolveInputLabel,
+      streamFormat: resolveStreamFormat,
       volumeLimits: resolveVolumeLimits,
     }),
   });
@@ -633,6 +641,7 @@ export function createRuntime(): Runtime {
             outputProtocol: resolveOutputProtocol,
             serviceLabel: resolveServiceLabel,
             inputLabel: resolveInputLabel,
+            streamFormat: resolveStreamFormat,
             volumeLimits: resolveVolumeLimits(state.id),
           }),
         ),
@@ -705,6 +714,7 @@ export function createRuntime(): Runtime {
       resolveServiceLabel,
       resolveVolumeLimits,
       resolveInputLabel,
+      resolveStreamFormat,
       serverVersion: readBuildVersion(),
       lifecycle,
       browserZoneRegistry,

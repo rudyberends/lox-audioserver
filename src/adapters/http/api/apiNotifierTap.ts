@@ -22,6 +22,7 @@ import {
   type OutputProtocolLookup,
   type ServiceLabelLookup,
   type InputLabelLookup,
+  type ZoneProjectionLookups,
 } from '@/adapters/http/api/zoneProjection';
 
 export function withApiEvents(
@@ -34,6 +35,7 @@ export function withApiEvents(
     outputProtocol?: OutputProtocolLookup;
     serviceLabel?: ServiceLabelLookup;
     inputLabel?: InputLabelLookup;
+    streamFormat?: ZoneProjectionLookups['streamFormat'];
     volumeLimits?: (zoneId: number) => ApiVolumeLimits | undefined;
   } = {},
 ): NotifierPort {
@@ -64,6 +66,7 @@ export function withApiEvents(
             outputProtocol: lookups.outputProtocol,
             serviceLabel: lookups.serviceLabel,
             inputLabel: lookups.inputLabel,
+            streamFormat: lookups.streamFormat,
             volumeLimits: lookups.volumeLimits?.(state.id),
           }),
         );
