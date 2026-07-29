@@ -209,11 +209,16 @@ const SEARCH_DEFAULT_LIMIT = 20;
 const SEARCH_MAX_LIMIT = 100;
 
 /**
- * What you can do to a destination.
+ * What you can do through a `/destinations/…` path.
  *
- * Playback and nothing else. Grouping, favourites, recents and the queue are things only a
- * configured zone has, so they stay on `/zones/…` — offering them here would promise a
- * feature that a local destination cannot honour.
+ * Playback only — but not because a local destination lacks the rest. It *is* a zone: it
+ * appears in `GET /zones` with full state, and the queue, favourites, recents and grouping
+ * routes all work on it. So this set is about which name addresses what, not about capability.
+ *
+ * `/destinations` earns its place for the one thing `/zones` cannot express — registering a
+ * client as somewhere audio goes, and telling a zone from a tab. Playback is mirrored here so a
+ * caller that only holds a destination id never has to know it is also a zone id. Everything
+ * else lives under `/zones/…`, which is where a caller looking for the queue will look.
  */
 const DESTINATION_ACTIONS = new Set([
   'play',

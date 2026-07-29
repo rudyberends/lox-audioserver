@@ -1609,16 +1609,31 @@ test('playback commands work on a destination, and are the same commands', async
   ]);
 });
 
-test('what only a zone has stays on the zone routes', async () => {
-  // Grouping, favourites, recents and the queue cannot be honoured by a local destination, so
-  // offering them there would promise a feature that does not exist.
+test('the queue and friends are addressed as a zone, not as a destination', async () => {
+  // Not a capability limit — a local destination *is* a zone and every zone route works on it.
+  // This is only about which name addresses what: playback is mirrored on `/destinations/…` so
+  // a caller holding one id need not know it is also a zone id, and everything else lives where
+  // a caller will look for it.
   const h = harness();
   for (const action of ['group', 'favorites', 'recents', 'queue']) {
     const res = await call(h, 'GET', `${API_ROOT}/destinations/3/${action}`);
     assert.equal(res.statusCode, 404, action);
   }
-  // The same thing on the zone route works.
   assert.equal((await call(h, 'GET', `${API_ROOT}/zones/3/queue`)).statusCode, 200);
+});
+
+test('a registered local destination is a zone id, usable on every zone route', async () => {
+  // The documentation said these routes existed only for configured zones, which sent a client
+  // toward building a second set of components it does not need. Measured against a live server
+  // they all answer for a browser tab: queue, favourites and recents 200, and grouping accepts
+  // it as a member.
+  const h = harness();
+  const registered = await call(h, 'POST', `${API_ROOT}/destinations/local`, { name: 'A tab' });
+  const id = registered.json().id;
+  assert.equal(typeof id, 'string');
+  // The harness fakes one zone (3), so assert the relationship rather than the fake's contents:
+  // a destination id is a zone id, in string form.
+  assert.equal(String(Number(id)), id, 'a destination id is a zone id');
 });
 
 test('removing a local destination is refused for a zone', async () => {

@@ -440,8 +440,16 @@ curl -s http://server:7090/api/v1/destinations
 
 Playback works the same on either: `POST /destinations/{id}/play`, `/pause`, `/volume` and the
 rest are the same commands as their `/zones/{id}/…` counterparts, and a destination's id *is*
-its zone id where it has one. What only a configured zone has — grouping, favourites, recents,
-the queue — stays on `/zones/…`, because a local destination cannot honour it.
+its zone id.
+
+**A local destination is a zone.** It appears in `GET /zones` with full state — now-playing,
+`format`, `volumeLimits` — and every zone route works on it: the queue, favourites, recents and
+grouping all answer for a browser tab exactly as they do for a hardware zone. So a client needs
+no separate set of components for local playback; a tab shows up in the room list beside the
+speakers and the code you already wrote drives it.
+
+`/destinations` exists for the one thing `/zones` cannot express: **registering** a client as
+somewhere audio goes, and telling a zone from a tab (`kind`). Everything after that is a zone.
 
 ### Playing audio yourself
 
@@ -461,13 +469,23 @@ PCM frames on that socket, and `POST /destinations/{id}/play` starts it. The
 [Sendspin protocol](https://github.com/Sendspin/spec) does the rest — format negotiation,
 clock sync, grouping — and `sendspin-js` implements the client side for a browser.
 
+> **`streamUrl` is the socket itself**, `ws://…/sendspin` — not a base url to append a path to.
+> A library that wants an origin and adds its own path needs the http form of *this* url, not
+> your page's origin: in development those differ, and pointing it at your own origin dials a
+> port where nothing listens. There is no error when that happens — the connect simply hangs —
+> so bound your connect attempt and treat the timeout as a failure.
+
 `streamUrl` is built from the address your request arrived on, so it is reachable from wherever
-you are. Pass your own `clientId` back on a later call to reclaim the same registration — that
+you are, including behind a proxy. Pass your own `clientId` back on a later call to reclaim the same registration — that
 is what a page reload needs, and without it every refresh leaves an orphan behind until it
 times out. The registration disappears shortly after the socket closes.
 
 `DELETE /destinations/local/{id}` removes one early. It refuses a configured zone: that is not
 this route's to delete.
+
+**Release a registration you could not use.** If registering succeeds but connecting fails,
+delete it — otherwise the tab that never connected sits in everyone's room list as a speaker
+that plays nothing until it times out.
 
 ## Browsing
 
