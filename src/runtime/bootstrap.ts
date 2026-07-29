@@ -4,7 +4,7 @@ import { loadEnvironment } from '@/config/environment';
 import { createLogger, logManager } from '@/shared/logging/logger';
 import { createContentManager } from '@/adapters/content/contentManager';
 import { createContentAdapter } from '@/adapters/content/ContentAdapter';
-import { toLoxoneAudiopath } from '@/domain/loxone/bridgeIdentity';
+import { toLoxoneAudiopath } from '@/domain/zones/bridgeIdentity';
 import { MediaServer } from '@/adapters/mediaserver/mediaServer';
 import { SubsonicApi } from '@/adapters/subsonic/subsonicApi';
 import { WebdavServer } from '@/adapters/webdav/webdavServer';

@@ -1,7 +1,7 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { HttpPreferences, PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
-import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath } from '@/domain/zones/audiopath';
 import { isHttpUrl, resolveSessionCover } from '@/shared/coverArt';
 import { buildBaseUrl, normalizeStreamUrl, resolveAbsoluteUrl } from '@/shared/streamUrl';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';

@@ -10,7 +10,7 @@ import type {
 } from '@/ports/EngineTypes';
 export type { PlaybackSource, OutputProfile } from '@/ports/EngineTypes';
 import { resolvePlaybackSource } from '@/application/playback/sourceResolver';
-import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath } from '@/domain/zones/audiopath';
 import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 import { zoneSessionKey, type SessionKey } from '@/ports/types/SessionKey';
 import type { PlaybackService } from '@/application/playback/PlaybackService';

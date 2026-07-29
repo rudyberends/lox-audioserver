@@ -1,6 +1,6 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
-import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath } from '@/domain/zones/audiopath';
 import { RADIO_PARADISE_LABELS, RADIO_PARADISE_STREAMS } from '@/domain/radioparadise/stations';
 
 const API_PLAY_URL = 'https://api.radioparadise.com/api/play';

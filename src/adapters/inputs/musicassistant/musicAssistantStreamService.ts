@@ -4,7 +4,7 @@ import type { ZoneConfig } from '@/domain/config/types';
 import type { PlaybackSource, PlaybackMetadata } from '@/application/playback/audioManager';
 import type { QueueItem } from '@/ports/types/queueTypes';
 import { MusicAssistantApi } from '@/shared/musicassistant/musicAssistantApi';
-import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath } from '@/domain/zones/audiopath';
 import { PassThrough } from 'node:stream';
 import { generateQueueId } from '@/shared/utils/queueId';
 import { SendspinClient, type StreamFormat } from './sendspinClient';

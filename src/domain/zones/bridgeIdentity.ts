@@ -1,5 +1,5 @@
 import type { StreamingServiceConfig } from '@/domain/config/types';
-import { parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
+import { parseServiceNativeAudiopath } from '@/domain/zones/audiopath';
 import { slugFromBridgeId } from '@/domain/media/serviceIdentity';
 
 /**
@@ -9,11 +9,15 @@ import { slugFromBridgeId } from '@/domain/media/serviceIdentity';
  *
  * The real Loxone Audio Server knows only Spotify as a native streaming service.
  * Non-Spotify services are exposed to Loxone by "bridging" them under a
- * `spotify@bridge-<service>-<slug>` provider id. That bridge concept is a Loxone
- * ADAPTER detail only — the core speaks service-native. These pure functions are
- * the single place that converts between the two, backed by the bridge registry
- * derived from `content.streamingServices`. They import nothing from config/adapters;
- * the caller (which owns ConfigPort) supplies the registry.
+ * `spotify@bridge-<service>-<slug>` provider id. The core speaks service-native, so
+ * these pure functions are the single place that converts between the two, backed by
+ * the bridge registry derived from `content.streamingServices`.
+ *
+ * It sits in the domain rather than the Loxone adapter because both directions have a
+ * caller outside that adapter: anything accepting an inbound path has to normalise it
+ * to service-native (`toServiceNative`), and the registry type is part of
+ * `ContentPort`. Only `toLoxoneAudiopath` is adapter-only. They import nothing from
+ * config or adapters; the caller (which owns ConfigPort) supplies the registry.
  */
 
 export interface BridgeRegistry {

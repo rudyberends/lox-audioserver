@@ -7,7 +7,7 @@ import {
 import type { QueueItem } from '@/application/zones/zoneManager';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ContentPort } from '@/ports/ContentPort';
-import { detectLoxoneItemType, detectServiceFromAudiopath, decodeAudiopath } from '@/domain/loxone/audiopath';
+import { detectItemType, detectServiceFromAudiopath, decodeAudiopath } from '@/domain/zones/audiopath';
 import { bestEffort } from '@/shared/bestEffort';
 
 const MAX_RECENTS = 5;
@@ -253,7 +253,7 @@ export class RecentsManager {
   ): { service: string; serviceType: number; type: number } {
     const lower = (audiopath || '').toLowerCase();
     if (lower.includes('musicassistant')) {
-      const loxType = detectLoxoneItemType(audiopath, 'musicassistant');
+      const loxType = detectItemType(audiopath, 'musicassistant');
       const type = loxType === 'musicassistant_album' ? 7 : 2;
       // Expose as spotify for Loxone compatibility, but keep type from MA.
       return { service: 'spotify', serviceType: 3, type };
@@ -263,7 +263,7 @@ export class RecentsManager {
       return { service: 'linein', serviceType: 99, type: 6 };
     }
     if (detectedService === 'musicassistant') {
-      const loxType = detectLoxoneItemType(audiopath, 'musicassistant');
+      const loxType = detectItemType(audiopath, 'musicassistant');
       const type = loxType === 'musicassistant_album' ? 7 : 2;
       return { service: 'musicassistant', serviceType: 3, type };
     }

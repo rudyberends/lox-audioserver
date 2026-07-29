@@ -15,7 +15,7 @@ import {
   pickString,
   resolvePrimaryOutput,
 } from './musicassistant/maHelpers';
-import { mapMaItemsToLoxoneQueue } from './musicassistant/maQueueMirror';
+import { mapMaItemsToQueue } from './musicassistant/maQueueMirror';
 import { buildSnapshotPatch } from './musicassistant/maSnapshotBuilder';
 import { MaCommandDispatcher } from './musicassistant/maCommandDispatcher';
 
@@ -302,7 +302,7 @@ export class MusicAssistantStateController implements ZoneStateController {
     try {
       const items = await this.api.getQueueItems(queueId, 0, 200);
       const currentIndex = pickNumber(this.queueData?.current_index) ?? 0;
-      const mapped = mapMaItemsToLoxoneQueue(items, this.providerPrefix, this.zone.name);
+      const mapped = mapMaItemsToQueue(items, this.providerPrefix, this.zone.name);
       if (mapped.length === 0) {
         onQueueMirror(this.zone.id, [], 0);
         return;

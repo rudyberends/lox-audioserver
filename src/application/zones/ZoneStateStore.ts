@@ -1,5 +1,5 @@
 import type { ZoneState } from '@/domain/zones/zoneState';
-import { applyZonePatch } from '@/domain/loxone/reducer';
+import { applyZonePatch } from '@/domain/zones/reducer';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { AudioManager } from '@/application/playback/audioManager';
 import { normalizeSpotifyAudiopath } from '@/application/zones/helpers/queueHelpers';
@@ -94,7 +94,7 @@ export class ZoneStateStore {
       this.deps.isRadioAudiopath(mergedForType.audiopath, mergedForType.audiotype) &&
       !radioControllable;
     const isLineInState = this.deps.isLineInAudiopath(mergedForType.audiopath);
-    const desiredType = resolveLoxoneType(mergedForType.audiopath, mergedForType.audiotype);
+    const desiredType = resolveMediaKind(mergedForType.audiopath, mergedForType.audiotype);
     if (desiredType !== mergedForType.type) {
       patch.type = desiredType;
     }
@@ -306,7 +306,12 @@ export class ZoneStateStore {
 
 }
 
-function resolveLoxoneType(audiopath: string | undefined, audiotype?: number | null): number {
+/**
+ * Which media kind a zone should report, given what it is playing. A line-in-ish
+ * source reads as line-in, radio as a single file, everything else as a queue. Uses
+ * only domain enums — the numbering happens to be Loxone's, like the enums themselves.
+ */
+function resolveMediaKind(audiopath: string | undefined, audiotype?: number | null): FileType {
   if (audiotype === AudioType.LineIn || audiotype === AudioType.AirPlay || audiotype === AudioType.Bluetooth) {
     return FileType.LineIn;
   }

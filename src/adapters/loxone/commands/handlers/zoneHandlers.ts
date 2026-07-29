@@ -8,7 +8,7 @@ import {
 } from '@/adapters/loxone/commands/utils/commandUtils';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
-import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath } from '@/domain/zones/audiopath';
 import { isMusicAssistantAudiopath } from '@/application/zones/internal/zoneAudioHelpers';
 import type { PlaybackMetadata } from '@/application/playback/audioManager';
 import { BASE_LIBRARY, BASE_PLAYLIST, decodeLoxoneId } from '@/adapters/loxone/commands/utils/loxoneIdCodec';

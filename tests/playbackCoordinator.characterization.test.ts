@@ -6,7 +6,7 @@ import { ZoneRepository } from '../src/application/zones/ZoneRepository';
 import { PlaybackQueueNavigator } from '../src/application/playback/PlaybackQueueNavigator';
 import { buildInitialState } from '../src/application/zones/helpers/stateHelpers';
 import { normalizeSpotifyAudiopath } from '../src/application/zones/helpers/queueHelpers';
-import { applyZonePatch } from '../src/domain/loxone/reducer';
+import { applyZonePatch } from '../src/domain/zones/reducer';
 import { createZoneAudioHelpers } from '../src/application/zones/internal/zoneAudioHelpers';
 import type { ZoneConfig, AudioServerConfig, RawAudioConfig } from '../src/domain/config/types';
 import type { QueueItem } from '../src/ports/types/queueTypes';

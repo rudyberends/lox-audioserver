@@ -8,8 +8,8 @@ import type {
   RadioMenuEntry,
   ScanStatus,
 } from '@/ports/ContentTypes';
-import { decodeAudiopath, detectServiceFromAudiopath, metadataKeyVariants } from '@/domain/loxone/audiopath';
-import { buildBridgeRegistry, type BridgeRegistry } from '@/domain/loxone/bridgeIdentity';
+import { decodeAudiopath, detectServiceFromAudiopath, metadataKeyVariants } from '@/domain/zones/audiopath';
+import { buildBridgeRegistry, type BridgeRegistry } from '@/domain/zones/bridgeIdentity';
 import {
   LocalLibraryProvider,
   type LibraryCoverSample,
@@ -161,7 +161,7 @@ export class ContentManager {
    * The bridge registry for service-native ⇄ Loxone identity translation, built
    * from `content.streamingServices`. Cached until the next config refresh.
    * Callers (Loxone command intake, state/queue emit) use it with toServiceNative
-   * / toLoxoneAudiopath from `@/domain/loxone/bridgeIdentity`. "Bridge" here is
+   * / toLoxoneAudiopath from `@/domain/zones/bridgeIdentity`. "Bridge" here is
    * the Loxone-adapter concept; the accounts themselves are neutral.
    */
   public getBridgeRegistry(): BridgeRegistry {

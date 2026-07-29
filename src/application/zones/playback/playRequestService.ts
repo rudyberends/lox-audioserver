@@ -13,7 +13,7 @@ import type { RecentsManager } from '@/application/zones/recents/recentsManager'
 import type { ZoneRepository } from '@/application/zones/ZoneRepository';
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
 import { QueueController as ZoneQueueController } from '@/application/zones/QueueController';
-import { decodeAudiopath, encodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath, encodeAudiopath } from '@/domain/zones/audiopath';
 import {
   normalizeSpotifyAudiopath,
   sanitizeStation,

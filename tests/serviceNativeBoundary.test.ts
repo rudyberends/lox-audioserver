@@ -5,7 +5,7 @@ import {
   buildBridgeRegistry,
   toServiceNative,
   toLoxoneAudiopath,
-} from '../src/domain/loxone/bridgeIdentity';
+} from '../src/domain/zones/bridgeIdentity';
 import type { StreamingServiceConfig } from '../src/domain/config/types';
 import { sanitizeTitle, isUriLike } from '../src/application/zones/helpers/stateHelpers';
 import { sanitizeStation } from '../src/application/zones/helpers/queueHelpers';

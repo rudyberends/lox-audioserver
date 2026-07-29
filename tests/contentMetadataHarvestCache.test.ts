@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test } from './testHarness';
 import { ContentManager, createContentManager } from '../src/adapters/content/contentManager';
 import { CustomRadioStore } from '../src/adapters/content/providers/customRadioStore';
-import { metadataKeyVariants, normalizeProviderAudiopath } from '../src/domain/loxone/audiopath';
+import { metadataKeyVariants, normalizeProviderAudiopath } from '../src/domain/zones/audiopath';
 import type { ContentFolder, ContentFolderItem } from '../src/ports/ContentTypes';
 import type { ContentPort } from '../src/ports/ContentPort';
 import type { NotifierPort } from '../src/ports/NotifierPort';

@@ -1,4 +1,4 @@
-import { encodeAudiopath } from '@/domain/loxone/audiopath';
+import { encodeAudiopath } from '@/domain/zones/audiopath';
 import { resizeCoverUrl, COVER_ART_NOW_PLAYING_SIZE } from '@/shared/coverArt';
 import type { PlaybackMetadata } from '@/application/playback/audioManager';
 

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath } from '@/domain/zones/audiopath';
 import { resolveDataDir } from '@/shared/utils/file';
 import type { PlaybackSource } from '@/ports/EngineTypes';
 import { createLogger } from '@/shared/logging/logger';

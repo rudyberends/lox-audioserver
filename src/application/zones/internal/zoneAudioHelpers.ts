@@ -1,6 +1,6 @@
 import type { QueueItem, ZoneContext } from '@/application/zones/internal/zoneTypes';
 import { AudioEventType, AudioType, FileType } from '@/domain/zones/enums';
-import { decodeAudiopath, detectServiceFromAudiopath, encodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath, detectServiceFromAudiopath, encodeAudiopath } from '@/domain/zones/audiopath';
 import { RADIO_PARADISE_LABELS as RADIO_PARADISE_ID_LABELS, RADIO_PARADISE_PATH_LABELS } from '@/domain/radioparadise/stations';
 import { getMusicAssistantProviderId, getMusicAssistantUserId } from '@/application/zones/internal/musicAssistantProvider';
 import type { ContentPort } from '@/ports/ContentPort';

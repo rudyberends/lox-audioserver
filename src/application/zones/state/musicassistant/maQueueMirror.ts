@@ -1,15 +1,15 @@
 import type { QueueItem } from '@/ports/types/queueTypes';
 import { createQueueItem } from '@/application/zones/helpers/queueHelpers';
-import { encodeAudiopath } from '@/domain/loxone/audiopath';
+import { encodeAudiopath } from '@/domain/zones/audiopath';
 import { extractCoverUrl, pickNumber, pickRecord, pickString } from './maHelpers';
 import { COVER_ART_BROWSE_SIZE } from '@/shared/coverArt';
 
 /**
- * Map a list of MA queue items into Loxone QueueItem format. MA queue items
+ * Map a list of MA queue items into our own QueueItem shape. MA queue items
  * carry their own `media_item` with title/artist/duration/image; we project
  * those onto the fields Loxone expects, encoding the URI as audiopath.
  */
-export function mapMaItemsToLoxoneQueue(
+export function mapMaItemsToQueue(
   items: unknown[],
   providerPrefix: string,
   zoneName: string,

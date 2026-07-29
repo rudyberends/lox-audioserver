@@ -1,7 +1,7 @@
 import type { ContentFolder, ContentFolderItem, ContentItemMetadata } from '@/ports/ContentTypes';
 import type { QueueItem } from '@/ports/types/queueTypes';
 import type { PlaybackSourceResolveArgs, StreamResolution } from '@/ports/types/StreamResolution';
-import type { BridgeRegistry } from '@/domain/loxone/bridgeIdentity';
+import type { BridgeRegistry } from '@/domain/zones/bridgeIdentity';
 
 export type BuildQueueOptions = {
   maxItems?: number;

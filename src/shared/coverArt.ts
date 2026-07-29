@@ -1,5 +1,5 @@
 import type { PlaybackMetadata, PlaybackSession } from '@/ports/types/playback';
-import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath } from '@/domain/zones/audiopath';
 
 /**
  * Canonical cover-art sizing, shared by every provider/input.

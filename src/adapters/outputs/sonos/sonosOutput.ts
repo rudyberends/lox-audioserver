@@ -13,7 +13,7 @@ import { SonosClient } from '@sonn-audio/node-sonos';
 import { resolveDlnaEndpoints } from '@/adapters/outputs/dlna/dlnaDiscovery';
 import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
 import { buildBaseUrl, normalizeStreamUrl, resolveAbsoluteUrl, upsertQueryParam } from '@/shared/streamUrl';
-import { decodeAudiopath } from '@/domain/loxone/audiopath';
+import { decodeAudiopath } from '@/domain/zones/audiopath';
 import { discoverSonosDevice, resolveSonosCoordinatorHost } from '@/adapters/outputs/sonos/sonosDiscovery';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from './testHarness';
-import { inferAudiotype } from '../src/domain/loxone/audiopath';
+import { inferAudiotype } from '../src/domain/zones/audiopath';
 import { AudioType } from '../src/domain/zones/enums';
 
 test('inferAudiotype: library audiopath is File (0)', () => {

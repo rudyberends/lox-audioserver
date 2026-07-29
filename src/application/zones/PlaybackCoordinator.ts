@@ -2,7 +2,7 @@ import type { ComponentLogger } from '@/shared/logging/logger';
 import type { AudioManager, PlaybackMetadata, PlaybackSession, PlaybackSource, CoverArtPayload } from '@/application/playback/audioManager';
 import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import type { ZoneState } from '@/domain/zones/zoneState';
-import { toServiceNative } from '@/domain/loxone/bridgeIdentity';
+import { toServiceNative } from '@/domain/zones/bridgeIdentity';
 import type { QueueAuthority, ZoneContext } from '@/application/zones/internal/zoneTypes';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import type { InputsPort, MusicAssistantInputHandlers } from '@/ports/InputsPort';

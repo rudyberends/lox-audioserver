@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from './testHarness';
-import { decodeAudiopath } from '../src/domain/loxone/audiopath';
+import { decodeAudiopath } from '../src/domain/zones/audiopath';
 import { decodeTrackUri } from '../src/domain/media/trackIdentity';
 
 const wrap = (uri: string, prefix = 'library:track') =>

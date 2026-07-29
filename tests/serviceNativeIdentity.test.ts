@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from './testHarness';
-import { parseServiceNativeAudiopath, KNOWN_KINDS } from '../src/domain/loxone/audiopath';
+import { parseServiceNativeAudiopath, KNOWN_KINDS } from '../src/domain/zones/audiopath';
 import {
   buildBridgeRegistry,
   toServiceNative,
   toLoxoneAudiopath,
-} from '../src/domain/loxone/bridgeIdentity';
+} from '../src/domain/zones/bridgeIdentity';
 import {
   searchSourceFromServiceKey,
   serviceNativeKey,

@@ -8,7 +8,7 @@ import type { SoundCloudStreamResolver } from '@/adapters/content/providers/soun
 import type { ContentPort, BuildQueueOptions } from '@/ports/ContentPort';
 import type { ContentFolder, ContentFolderItem, ContentItemMetadata } from '@/ports/ContentTypes';
 import type { PlaybackSourceResolveArgs, StreamResolution } from '@/ports/types/StreamResolution';
-import { detectServiceFromAudiopath } from '@/domain/loxone/audiopath';
+import { detectServiceFromAudiopath } from '@/domain/zones/audiopath';
 import type { QueueItem } from '@/ports/types/queueTypes';
 
 type ContentStreamResolvers = {

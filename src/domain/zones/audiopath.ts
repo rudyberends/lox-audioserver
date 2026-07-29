@@ -182,9 +182,10 @@ export function detectServiceFromAudiopath(
 }
 
 /**
- * Rough item-type detection from an audiopath for Loxone semantics.
+ * Rough item-kind detection from an audiopath: track, album, playlist, artist or a
+ * radio station. Used for recents entries, which need a kind to render an icon.
  */
-export function detectLoxoneItemType(
+export function detectItemType(
   audiopath: string,
   service?: string,
 ): 'track' | 'album' | 'playlist' | 'artist' | 'tunein' | string {
@@ -284,8 +285,8 @@ export function parseServiceNativeAudiopath(
 }
 
 /**
- * Small heuristic to infer audiotype from a URI. Returns values from the
- * Loxone `AudioType` enum (File=0, Radio=1, LineIn=3, Spotify=5).
+ * Small heuristic to infer the source category from a URI, as an `AudioType`
+ * (File, Radio, LineIn, Spotify).
  */
 export function inferAudiotype(uri: string): number {
   const lower = uri.toLowerCase();

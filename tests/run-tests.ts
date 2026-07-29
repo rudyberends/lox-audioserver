@@ -99,7 +99,7 @@ import './loxoneZoneProjection.test';
 import './adminZoneStates.test';
 import './adminInfo.test';
 import type { ZoneConfig } from '../src/domain/config/types';
-import { applyZonePatch } from '../src/domain/loxone/reducer';
+import { applyZonePatch } from '../src/domain/zones/reducer';
 import type { ZoneState } from '../src/domain/zones/zoneState';
 import type { QueueItem } from '../src/ports/types/queueTypes';
 import type { PlaybackSession } from '../src/application/playback/audioManager';

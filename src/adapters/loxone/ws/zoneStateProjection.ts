@@ -9,7 +9,7 @@
  * here rather than carried in `ZoneState`; `mastervolume` already is.
  */
 import type { AudioEventType, AudioType, FileType, LineInIconType } from '@/domain/zones/enums';
-import { parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
+import { parseServiceNativeAudiopath } from '@/domain/zones/audiopath';
 import type { ZoneState } from '@/domain/zones/zoneState';
 import { formatEqualizerSettings } from '@/domain/zones/equalizer';
 
