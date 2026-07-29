@@ -13,6 +13,15 @@ Base URL: `http://<server>:7090/api/v1`
 > admin UI: it is UI-shaped, changes freely, and is not a contract. Build your integrations on
 > `/api/v1`.
 
+**This server's own player is built on nothing else.** It uses this API and only this API —
+no `/admin/api`, no port 7091, no undocumented routes — so everything described here is
+exercised by a real client rather than merely offered. That is deliberate: a contract its
+author does not use is a contract whose gaps nobody finds. Browse and search exist because
+writing it found there was no way to get from "I want to hear X" to playing X, and `source`
+on a recent is a value you can actually play because writing it found that it was not.
+
+If something here is awkward to build against, it is likely awkward for us too — say so.
+
 ### Coming from `/admin/api`?
 
 Before this API existed, `/admin/api/zones/states` was the only way to read what a zone was

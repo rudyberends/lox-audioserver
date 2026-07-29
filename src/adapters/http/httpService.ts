@@ -305,7 +305,11 @@ export class HttpService {
         if (!options.zoneManager.getZoneState(zoneId)) {
           return null;
         }
-        return toApiFavorites(zoneId, await options.favoritesManager.get(zoneId, start, limit));
+        return toApiFavorites(
+          zoneId,
+          await options.favoritesManager.get(zoneId, start, limit),
+          options.contentManager.getBridgeRegistry(),
+        );
       },
       addFavorite: async (zoneId, name, uri) => {
         const created = await options.favoritesManager.add(zoneId, name, uri);
@@ -337,7 +341,13 @@ export class HttpService {
         if (!options.zoneManager.getZoneState(zoneId)) {
           return null;
         }
-        return toApiRecents(zoneId, await options.recentsManager.get(zoneId), start, limit);
+        return toApiRecents(
+          zoneId,
+          await options.recentsManager.get(zoneId),
+          start,
+          limit,
+          options.contentManager.getBridgeRegistry(),
+        );
       },
       setGroup: (zoneId, members) => {
         if (!options.zoneManager.getZoneState(zoneId)) {

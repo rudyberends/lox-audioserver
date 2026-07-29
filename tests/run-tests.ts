@@ -102,6 +102,7 @@ import './folderPage.test';
 import './providerCapabilities.test';
 import './loxoneProjectionBoundary.test';
 import './browseRef.test';
+import './libraryProjectionSource.test';
 import './mqttCommands.test';
 import './squeezeliteReconnect.test';
 import './loxoneZoneProjection.test';
