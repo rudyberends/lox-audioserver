@@ -64,6 +64,7 @@ back after writing.
   "position": 43,
   "duration": 210,
   "volume": 40,
+  "volumeLimits": { "max": 70, "default": 20, "step": 2 },
   "repeat": "off",
   "shuffle": false,
   "track": {
@@ -72,7 +73,7 @@ back after writing.
     "album": "Album",
     "coverUrl": "http://server:7090/streams/3/…/cover"
   },
-  "source": { "kind": "track", "name": "Library", "id": "library://track/9" },
+  "source": { "kind": "track", "name": "Library", "id": "library://track/9", "seekable": true },
   "group": { "leader": 3, "members": [3, 7] },
   "output": { "protocol": "sendspin" }
 }
@@ -86,7 +87,8 @@ back after writing.
 | `power` | `on` \| `off` | |
 | `position` | number | Whole seconds into the current track. |
 | `duration` | number | Whole seconds. `0` means open-ended (live radio). |
-| `volume` | number | `0`–`100`. |
+| `volume` | number | `0`–`100`, but see `volumeLimits`. |
+| `volumeLimits` | object | `max`, `default` and `step` — what this zone's volume will actually accept. |
 | `repeat` | `off` \| `one` \| `all` | |
 | `shuffle` | boolean | |
 | `track` | object \| **null** | `null` when the zone has nothing loaded. |
@@ -112,6 +114,9 @@ tells you the current link state; the id stays put either way.
 `bluetooth`, `unknown`. **Treat the list as open**: new kinds may be added, and a client
 must not fail on one it does not recognise — that is what `unknown` is a placeholder for.
 
+`source.seekable` says whether `PUT /zones/{id}/position` will do anything — false for a
+live stream, which has no position to seek to.
+
 `source.id` is an **opaque** provider-native identifier. You may store it and pass it
 back, but do not parse it: its internal form is service-specific and explicitly not part
 of this contract.
@@ -133,11 +138,19 @@ first change arrives. A `: keep-alive` comment is sent every 25 s.
 data: {"type":"server.ready","zones":[ … ]}
 
 data: {"type":"zone.changed","zone":{ … }}
+
+data: {"type":"zone.progress","id":3,"position":44}
 ```
 
 `zone.changed` always carries the **complete zone**, never a patch — you never need to
 keep prior state to interpret an event, and a client that reconnects is immediately
 correct.
+
+`zone.progress` is the one exception: while a track plays and nothing but the clock has
+moved, only the new position is sent. A full zone is ~550 bytes and this fires once a
+second per playing zone. Anything else that changes — volume, a new track, a source
+switch — still arrives as a `zone.changed`, so **a client that ignores
+`zone.progress` stays correct**; its progress bar just moves a beat later.
 
 Browser:
 
@@ -179,9 +192,13 @@ PUT  /api/v1/zones/{id}/power      {"power": "on"}
 PUT  /api/v1/zones/{id}/equalizer  {"bands": [3,3,2,1,0,0,-1,-2,-2,-3]}
 ```
 
-`volume` takes either an absolute value (`0`–`100`, clamped) or a signed `delta`. Use
-`delta` for remote-control style stepping: it avoids the read-then-write race that two
-clients adjusting the same zone would otherwise hit.
+`volume` takes either an absolute value (`0`–`100`) or a signed `delta`. Use `delta` for
+remote-control style stepping: it avoids the read-then-write race that two clients
+adjusting the same zone would otherwise hit, and `volumeLimits.step` is the size a step
+should have.
+
+A zone can be capped: writing above `volumeLimits.max` lands on the cap rather than
+where you asked, so render your slider against `max` instead of against 100.
 
 `equalizer` takes ten gains in dB, low band first, clamped to `-6`..`+6` — the same
 range the Loxone app uses. It replies `200` with the applied bands rather than `204`,

@@ -15,6 +15,8 @@ export type ApiEventSubscriber = (event: ApiEvent) => void;
 export class ApiEventHub {
   private readonly log = createLogger('Api', 'Events');
   private readonly subscribers = new Set<ApiEventSubscriber>();
+  /** Last zone published per id, to tell a progress tick from a real change. */
+  private readonly lastPublished = new Map<number, ApiZoneState>();
 
   /** Returns an unsubscribe function; callers must invoke it on disconnect. */
   public subscribe(subscriber: ApiEventSubscriber): () => void {
@@ -31,7 +33,21 @@ export class ApiEventHub {
     return this.subscribers.size;
   }
 
+  /**
+   * Publishes a zone change, as a progress tick when the clock is the only thing that
+   * moved and as the whole zone otherwise.
+   *
+   * The comparison is against the last zone we published, so a subscriber that joined
+   * mid-track still got its full snapshot from `server.ready` first and can apply
+   * every tick after it.
+   */
   public publishZoneChanged(zone: ApiZoneState): void {
+    const previous = this.lastPublished.get(zone.id);
+    this.lastPublished.set(zone.id, zone);
+    if (previous && onlyPositionMoved(previous, zone)) {
+      this.publish({ type: 'zone.progress', id: zone.id, position: zone.position });
+      return;
+    }
     this.publish({ type: 'zone.changed', zone });
   }
 
@@ -48,4 +64,17 @@ export class ApiEventHub {
       }
     }
   }
+}
+
+/**
+ * True when two snapshots of a zone differ in nothing but `position`. Compared by
+ * serialising the rest: cheaper to keep correct than a field-by-field check that
+ * silently stops covering a field somebody adds later.
+ */
+function onlyPositionMoved(a: ApiZoneState, b: ApiZoneState): boolean {
+  if (a.position === b.position) {
+    return false;
+  }
+  const strip = (z: ApiZoneState): string => JSON.stringify({ ...z, position: 0 });
+  return strip(a) === strip(b);
 }

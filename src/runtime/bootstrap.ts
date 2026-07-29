@@ -138,12 +138,23 @@ export function createRuntime(): Runtime {
       : undefined;
   };
 
+  // What a zone's volume will accept, for the public API's `volumeLimits`. Shared by
+  // the request path and the event stream so both report the same ceiling.
+  const resolveVolumeLimits = (zoneId: number) => {
+    const v = configPort.getConfig().zones?.find((z) => z.id === zoneId)?.volumes;
+    if (!v) {
+      return undefined;
+    }
+    return { max: v.maxVolume, default: v.default, step: v.volstep };
+  };
+
   const apiEventHub = new ApiEventHub();
   const ports = createRuntimePorts({
     notifier: withApiEvents(
       new LoxoneNotifierAdapter(loxoneNotifier),
       apiEventHub,
       resolveOutputDevice,
+      resolveVolumeLimits,
     ),
   });
   const configPort = ports.config;
@@ -616,6 +627,7 @@ export function createRuntime(): Runtime {
       connectionRegistry,
       apiEventHub,
       resolveOutputDevice,
+      resolveVolumeLimits,
       serverVersion: readBuildVersion(),
       browserZoneRegistry,
       streamProxyRoutes: [

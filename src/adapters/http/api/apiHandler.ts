@@ -14,7 +14,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
-import type { ApiOutput, ApiZoneState } from '@/domain/zones/apiTypes';
+import type { ApiOutput, ApiVolumeLimits, ApiZoneState } from '@/domain/zones/apiTypes';
 import type { ZoneState } from '@/domain/zones/zoneState';
 import { createLogger } from '@/shared/logging/logger';
 
@@ -25,6 +25,8 @@ export type ApiHandlerDeps = {
   handleCommand: (zoneId: number, command: string, payload?: string) => void;
   /** Which device a zone's output plays to, when its protocol identifies one. */
   getOutputDevice: (zoneId: number) => ApiOutput['device'] | undefined;
+  /** What a zone's volume will accept: its cap, its power-on level and its step. */
+  getVolumeLimits: (zoneId: number) => ApiVolumeLimits | undefined;
   /** Current equalizer bands for a zone, or null when the zone is unknown. */
   getEqualizerBands: (zoneId: number) => number[] | null;
   /**
@@ -201,6 +203,8 @@ export class ApiHandler {
           res.writeHead(204).end();
           return;
         }
+        // Clamped to the full range here; the zone's own cap (volumeLimits.max) is
+        // applied by the command engine, so a write above it lands on the cap.
         const volume = this.clampInt(body.volume, 0, 100);
         if (volume === null) {
           this.sendJson(res, 400, { error: 'invalid-volume' });
@@ -315,7 +319,11 @@ export class ApiHandler {
   }
 
   private project(state: ZoneState): ApiZoneState {
-    return toApiZoneState(state, (zoneId) => this.deps.getOutputDevice(zoneId));
+    return toApiZoneState(
+      state,
+      (zoneId) => this.deps.getOutputDevice(zoneId),
+      this.deps.getVolumeLimits(state.id),
+    );
   }
 
   private snapshot(): ApiZoneState[] {

@@ -13,6 +13,7 @@ import type { ZoneState } from '@/domain/zones/zoneState';
 import { AudioType } from '@/domain/zones/enums';
 import type {
   ApiGroup,
+  ApiVolumeLimits,
   ApiOutput,
   ApiPlaybackState,
   ApiRepeatMode,
@@ -113,7 +114,10 @@ function toSource(state: ZoneState): ApiSource | null {
   }
   const kind = toSourceKind(state.audiotype);
   const name = (kind === 'radio' ? state.station : state.sourceName) || '';
-  return { kind, name, id };
+  // A live stream has no length, so there is nowhere to seek to. Same rule the
+  // Snapcast metadata bridge already applies.
+  const seekable = Number.isFinite(state.duration) && state.duration > 0;
+  return { kind, name, id, seekable };
 }
 
 /** Loxone leaves `syncedzones` empty (or absent) for an ungrouped zone. */
@@ -147,7 +151,11 @@ function toWholeSeconds(value: number | undefined): number {
   return Number.isFinite(value) ? Math.max(0, Math.round(value as number)) : 0;
 }
 
-export function toApiZoneState(state: ZoneState, deviceLookup?: OutputDeviceLookup): ApiZoneState {
+export function toApiZoneState(
+  state: ZoneState,
+  deviceLookup?: OutputDeviceLookup,
+  limits?: ApiVolumeLimits,
+): ApiZoneState {
   return {
     id: state.id,
     name: state.name ?? '',
@@ -156,6 +164,7 @@ export function toApiZoneState(state: ZoneState, deviceLookup?: OutputDeviceLook
     position: toWholeSeconds(state.time),
     duration: toWholeSeconds(state.duration),
     volume: toWholeSeconds(state.volume),
+    volumeLimits: limits ?? { max: 100, default: 0, step: 1 },
     repeat: toRepeatMode(state.plrepeat),
     shuffle: Boolean(state.plshuffle),
     track: toTrack(state),

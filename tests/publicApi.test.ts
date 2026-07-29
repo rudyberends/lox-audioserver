@@ -98,6 +98,7 @@ function harness(): Harness {
     getAllZoneStates: () => [...states.values()],
     getZoneState: (zoneId) => states.get(zoneId) ?? null,
     handleCommand: (zoneId, command, payload) => commands.push({ zoneId, command, payload }),
+    getVolumeLimits: (zoneId) => (zoneId === 3 ? { max: 70, default: 20, step: 2 } : undefined),
     getOutputDevice: (zoneId) =>
       zoneId === 3
         ? { id: '02:8C:54:A9:DC:AC', name: 'Test1', connected: true }
@@ -497,4 +498,88 @@ test('an unknown path under the version is a plain not-found', async () => {
   const res = await call(h, 'GET', `${API_ROOT}/nope`);
   assert.equal(res.statusCode, 404);
   assert.equal(res.json().error, 'not-found', 'not the version message');
+});
+
+// Mozart (B&O) reports what a source and a volume will accept, not just their current
+// value. Ours did not, so a client had to infer seekability from `duration === 0` and
+// discover a volume cap by writing past it.
+
+test('a zone reports what its volume will accept', async () => {
+  const h = harness();
+  const zone = (await call(h, 'GET', `${API_ROOT}/zones/3`)).json();
+  assert.deepEqual(zone.volumeLimits, { max: 70, default: 20, step: 2 });
+  assert.equal(zone.volume, 40, 'the current level is still its own field');
+});
+
+test('a source says whether it can be seeked', async () => {
+  const h = harness();
+  const track = (await call(h, 'GET', `${API_ROOT}/zones/3`)).json();
+  assert.equal(track.source.seekable, true, 'a track has a position to seek to');
+
+  // Live radio has no length, so there is nowhere to seek.
+  h.states.set(3, zoneState({ audiotype: AudioType.Radio, station: 'Radio Paradise', duration: 0 }));
+  const radio = (await call(h, 'GET', `${API_ROOT}/zones/3`)).json();
+  assert.equal(radio.source.seekable, false);
+  assert.equal(radio.duration, 0, 'which is what a client used to have to infer from');
+});
+
+test('an event reports limits and seekability like a read does', async () => {
+  const h = harness();
+  const res = new FakeResponse();
+  await h.handler.handle(makeRequest('GET', `${API_ROOT}/events`), res as unknown as ServerResponse);
+  const ready = JSON.parse(res.body.replace(/^data: /, '').trim());
+  const read = (await call(h, 'GET', `${API_ROOT}/zones/3`)).json();
+  assert.deepEqual(ready.zones[0], read);
+});
+
+// A zone.changed is ~550 bytes and a progress tick fires every second per playing
+// zone, so the clock advancing must not cost a whole zone.
+
+test('a progress tick is sent when only the position moved', () => {
+  const hub = new ApiEventHub();
+  const seen: any[] = [];
+  hub.subscribe((e) => seen.push(e));
+  const at = (time: number, extra: Partial<ZoneState> = {}) =>
+    toApiZoneState(zoneState({ time, ...extra }));
+
+  hub.publishZoneChanged(at(10));
+  assert.equal(seen[0].type, 'zone.changed', 'the first publish has nothing to compare to');
+
+  hub.publishZoneChanged(at(11));
+  hub.publishZoneChanged(at(12));
+  assert.deepEqual(
+    seen.slice(1).map((e) => [e.type, e.position]),
+    [['zone.progress', 11], ['zone.progress', 12]],
+  );
+});
+
+test('anything other than the position sends the whole zone', () => {
+  const hub = new ApiEventHub();
+  const seen: any[] = [];
+  hub.subscribe((e) => seen.push(e));
+  const at = (time: number, extra: Partial<ZoneState> = {}) =>
+    toApiZoneState(zoneState({ time, ...extra }));
+
+  hub.publishZoneChanged(at(10));
+  // Volume moved as well, so a client that ignores progress events must still see it.
+  hub.publishZoneChanged(at(11, { volume: 55 }));
+  hub.publishZoneChanged(at(12, { volume: 55, title: 'Next' }));
+
+  assert.deepEqual(seen.map((e) => e.type), ['zone.changed', 'zone.changed', 'zone.changed']);
+  assert.equal(seen[1].zone.volume, 55);
+  assert.equal(seen[2].zone.track.title, 'Next');
+});
+
+test('progress is tracked per zone, so one zone cannot mask another', () => {
+  const hub = new ApiEventHub();
+  const seen: any[] = [];
+  hub.subscribe((e) => seen.push(e));
+  hub.publishZoneChanged(toApiZoneState(zoneState({ id: 3, time: 10 })));
+  hub.publishZoneChanged(toApiZoneState(zoneState({ id: 7, time: 10 })));
+  // Zone 7's first publish is its own baseline, not a tick against zone 3.
+  assert.deepEqual(seen.map((e) => e.type), ['zone.changed', 'zone.changed']);
+
+  hub.publishZoneChanged(toApiZoneState(zoneState({ id: 7, time: 11 })));
+  assert.equal(seen[2].type, 'zone.progress');
+  assert.equal(seen[2].id, 7);
 });
