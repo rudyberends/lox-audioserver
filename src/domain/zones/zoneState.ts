@@ -52,11 +52,6 @@ export interface ZoneState {
    */
   syncedzones?: number[];
   /**
-   * Loxone leftover: master volume of the sync group (the leader's volume), 0 when
-   * ungrouped. Derivable from `syncedzones[0]`.
-   */
-  mastervolume?: number;
-  /**
    * The zone's output protocol (e.g. 'sendspin', 'snapcast', 'googlecast',
    * 'dlna', 'sonos', 'airplay', 'squeezelite'). A custom field the native Loxone
    * client ignores; our own player surfaces it as a grouping hint, since grouping

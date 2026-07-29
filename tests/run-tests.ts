@@ -95,6 +95,7 @@ import './contentMetadataHarvestCache.test';
 import './queueBuilderArtistFlatten.test';
 import './nowPlayingMetadata.test';
 import './publicApi.test';
+import './loxoneZoneProjection.test';
 import type { ZoneConfig } from '../src/domain/config/types';
 import { applyZonePatch } from '../src/domain/loxone/reducer';
 import type { ZoneState } from '../src/domain/zones/zoneState';

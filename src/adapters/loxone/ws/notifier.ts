@@ -1,7 +1,10 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { StorageConfig } from '@/adapters/content/storage/storageManager';
 import type { ZoneState } from '@/domain/zones/zoneState';
-import { parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
+import {
+  toLoxoneZoneState,
+  type LoxoneZoneState,
+} from '@/adapters/loxone/ws/zoneStateProjection';
 import type { AudioSyncGroupPayload } from '@/application/groups/types/AudioSyncGroupPayload';
 import type { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry';
 import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
@@ -51,44 +54,26 @@ export class LoxoneWsNotifier {
     this.audiopathToLoxone = translate;
   }
 
-  private enrichWithGroupContext(state: ZoneState): ZoneState {
-    const outputProtocol = this.outputProtocolLookup?.(state.playerid) ?? state.outputProtocol;
-    const mixedGroupEnabled = this.mixedGroupLookup?.() ?? state.mixedGroupEnabled;
-    // Loxone-boundary emit: translate the core's service-native audiopath back to
-    // the disguise the native client expects. No-op when the translator is unset
-    // or the path isn't a bridged service-native id.
-    const audiopath = this.audiopathToLoxone
-      ? this.audiopathToLoxone(state.audiopath)
-      : state.audiopath;
-    // Final output guard: an audiopath (service-native or spotify:/@) is never a
-    // valid title. A background-fill race can momentarily leave it in state.title;
-    // never let that leak to the client — fall back to the zone name.
-    const title = titleOrFallback(state.title, state.name);
-    // Same guard for the station line the native client renders as the source
-    // label: a container audiopath (e.g. `applemusic:playlist:...`) is not a
-    // name. Blank it so the raw id never surfaces. Pre-service-native this was
-    // implicitly blanked (the old `spotify@bridge` form matched sanitizeStation);
-    // the service-native form does not, so blank it here too.
-    const station = blankAudiopathStation(state.station);
+  /**
+   * Builds the Loxone-shaped payload for a zone. All the shaping lives in
+   * `toLoxoneZoneState`; this only gathers the context that shaping needs, which
+   * is the part that depends on the notifier's runtime lookups.
+   */
+  private projectForLoxone(state: ZoneState): LoxoneZoneState {
     const group = this.groupTracker.getGroupByZone(state.playerid);
-    if (!group) {
-      return { ...state, audiopath, title, station, syncedzones: [], mastervolume: 0, outputProtocol, mixedGroupEnabled };
-    }
-    const syncedzones = Array.from(new Set<number>([group.leader, ...group.members]));
-    const isLeader = group.leader === state.playerid;
-    const leaderVolume = isLeader
-      ? state.volume
-      : (this.zoneStateLookup?.(group.leader)?.volume ?? state.volume);
-    return {
-      ...state,
-      audiopath,
-      title,
-      station,
-      syncedzones,
-      mastervolume: clamp01to100(leaderVolume),
-      outputProtocol,
-      mixedGroupEnabled,
-    };
+    const isLeader = group?.leader === state.playerid;
+    return toLoxoneZoneState(state, {
+      group: group ? { leader: group.leader, members: group.members } : null,
+      leaderVolume:
+        !group || isLeader
+          ? state.volume
+          : (this.zoneStateLookup?.(group.leader)?.volume ?? state.volume),
+      outputProtocol: this.outputProtocolLookup?.(state.playerid) ?? state.outputProtocol,
+      mixedGroupEnabled: this.mixedGroupLookup?.() ?? state.mixedGroupEnabled,
+      // No-op when the translator is unset or the path isn't a bridged
+      // service-native id.
+      audiopathToLoxone: (audiopath) => this.audiopathToLoxone?.(audiopath) ?? audiopath,
+    });
   }
 
   private emit(payload: unknown, event: string, context?: Record<string, unknown>): void {
@@ -117,7 +102,7 @@ export class LoxoneWsNotifier {
       artist: state.artist,
       sourceName: state.sourceName,
     });
-    this.emit({ audio_event: [this.enrichWithGroupContext(state)] }, 'audio_event', {
+    this.emit({ audio_event: [this.projectForLoxone(state)] }, 'audio_event', {
       zoneId: state.playerid,
     });
   }
@@ -398,50 +383,6 @@ export class LoxoneWsNotifier {
   public notifyAudioSyncEvent(payload: AudioSyncGroupPayload[]): void {
     this.registry.broadcastMessage(JSON.stringify({ audio_sync_event: payload }));
   }
-}
-
-function clamp01to100(value: unknown): number {
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
-    return 0;
-  }
-  return Math.min(100, Math.max(0, Math.round(n)));
-}
-
-/**
- * Guard the emitted title: an audiopath is never a valid title. A background
- * queue-fill race can momentarily leave a service-native audiopath (or a
- * `spotify:`/`spotify@` id) in state.title; replace it with the zone name so the
- * raw id never reaches the client.
- */
-function titleOrFallback(title: string | undefined, zoneName: string): string {
-  const raw = (title ?? '').trim();
-  if (!raw) {
-    return raw;
-  }
-  const lower = raw.toLowerCase();
-  if (lower.startsWith('spotify:') || lower.startsWith('spotify@') || parseServiceNativeAudiopath(raw)) {
-    return zoneName;
-  }
-  return title ?? '';
-}
-
-/**
- * The station line is a human-readable source label (radio name, playlist name).
- * A raw audiopath — service-native (`applemusic:playlist:...`) or a `spotify:`/
- * `spotify@` id — is never a valid station; blank it so the client's source line
- * stays empty rather than showing the container id.
- */
-function blankAudiopathStation(station: string | undefined): string {
-  const raw = (station ?? '').trim();
-  if (!raw) {
-    return '';
-  }
-  const lower = raw.toLowerCase();
-  if (lower.startsWith('spotify:') || lower.startsWith('spotify@') || parseServiceNativeAudiopath(raw)) {
-    return '';
-  }
-  return station ?? '';
 }
 
 function buildCategory(
