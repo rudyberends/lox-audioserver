@@ -86,6 +86,8 @@ import { LoxoneNotifierAdapter } from '@/adapters/loxone/LoxoneNotifierAdapter';
 import { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { withApiEvents } from '@/adapters/http/api/apiNotifierTap';
 import { readBuildVersion } from '@/shared/serverVersion';
+import { parseServiceNativeAudiopath } from '@/domain/zones/audiopath';
+import { slugFromBridgeId } from '@/domain/media/serviceIdentity';
 import { buildSqueezeliteAdminPlayerSnapshot } from '@/adapters/http/adminApi/adminApiHandler';
 import { getZoneOutputConfig } from '@/adapters/http/adminApi/config/configHandlers';
 import { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry';
@@ -148,14 +150,35 @@ export function createRuntime(): Runtime {
     return { max: v.maxVolume, default: v.default, step: v.volstep };
   };
 
+  // Which protocol a zone plays over. The Loxone notifier resolves this the same way at
+  // emit time; the public API needs it too, since ZoneState never stores it.
+  const resolveOutputProtocol = (zoneId: number) =>
+    resolveZoneOutputProtocol(zoneManager.getTechnicalSnapshot(zoneId));
+
+  // The configured name of the service an audiopath belongs to. `state.sourceName` holds
+  // the Loxone-facing name instead, which for a bridged service is the Spotify disguise.
+  const resolveServiceLabel = (audiopath: string): string | null => {
+    const parsed = parseServiceNativeAudiopath(audiopath);
+    if (!parsed) {
+      return null;
+    }
+    const services = configPort.getConfig().content?.streamingServices ?? [];
+    const match = services.find(
+      (svc) =>
+        svc.provider === parsed.service &&
+        (parsed.slug === undefined || slugFromBridgeId(svc.id, svc.provider) === parsed.slug),
+    );
+    return match?.label ?? null;
+  };
+
   const apiEventHub = new ApiEventHub();
   const ports = createRuntimePorts({
-    notifier: withApiEvents(
-      new LoxoneNotifierAdapter(loxoneNotifier),
-      apiEventHub,
-      resolveOutputDevice,
-      resolveVolumeLimits,
-    ),
+    notifier: withApiEvents(new LoxoneNotifierAdapter(loxoneNotifier), apiEventHub, {
+      device: resolveOutputDevice,
+      outputProtocol: resolveOutputProtocol,
+      serviceLabel: resolveServiceLabel,
+      volumeLimits: resolveVolumeLimits,
+    }),
   });
   const configPort = ports.config;
   // Drive the per-session crossfade pipeline-shape from the system-wide
@@ -627,6 +650,8 @@ export function createRuntime(): Runtime {
       connectionRegistry,
       apiEventHub,
       resolveOutputDevice,
+      resolveOutputProtocol,
+      resolveServiceLabel,
       resolveVolumeLimits,
       serverVersion: readBuildVersion(),
       browserZoneRegistry,

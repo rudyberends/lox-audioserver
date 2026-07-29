@@ -11,6 +11,7 @@
  */
 import type { ZoneState } from '@/domain/zones/zoneState';
 import { AudioType } from '@/domain/zones/enums';
+import { parseServiceNativeAudiopath } from '@/domain/zones/audiopath';
 import type {
   ApiGroup,
   ApiVolumeLimits,
@@ -81,6 +82,30 @@ function toSourceKind(audiotype: number | undefined): ApiSourceKind {
 }
 
 /**
+ * The kind a service-native audiopath states outright — `applemusic:track:…` is a
+ * track whatever `audiotype` says. Returns null for anything that does not carry one,
+ * leaving `audiotype` as the fallback.
+ */
+function kindFromAudiopath(audiopath: string): ApiSourceKind | null {
+  const parsed = parseServiceNativeAudiopath(audiopath);
+  if (!parsed) {
+    return null;
+  }
+  switch (parsed.kind) {
+    case 'track':
+      return 'track';
+    case 'playlist':
+      return 'playlist';
+    case 'album':
+    case 'artist':
+      // Neither is a source kind of its own: playing one queues its tracks.
+      return 'playlist';
+    default:
+      return null;
+  }
+}
+
+/**
  * A zone with nothing loaded still carries empty strings in Loxone's state
  * (the native app has no null), so treat "no title and no artist" as no track.
  */
@@ -107,13 +132,20 @@ function toTrack(state: ZoneState): ApiTrack | null {
  * before this API existed. Emitting them would surface a MAC address as a
  * human-readable source name.
  */
-function toSource(state: ZoneState): ApiSource | null {
+function toSource(state: ZoneState, serviceLabel?: ServiceLabelLookup): ApiSource | null {
   const id = (state.audiopath ?? '').trim();
   if (!id) {
     return null;
   }
-  const kind = toSourceKind(state.audiotype);
-  const name = (kind === 'radio' ? state.station : state.sourceName) || '';
+  // Prefer the audiopath's own kind: `audiotype` is shaped for the Loxone clients, so a
+  // bridged service is reported as Spotify and then downgraded to Playlist whenever the
+  // queue is not Spotify-owned — which labels a single Apple Music track a playlist.
+  const kind = kindFromAudiopath(id) ?? toSourceKind(state.audiotype);
+  // `sourceName` carries the name the Loxone clients need, and for a bridged service
+  // that is the disguise: an Apple Music track reports "Spotify", because Spotify is
+  // the only streaming service those clients know. Name the real service here, from the
+  // audiopath, which is service-native by then.
+  const name = kind === 'radio' ? state.station || '' : serviceLabel?.(id) || state.sourceName || '';
   // A live stream has no length, so there is nowhere to seek to. Same rule the
   // Snapcast metadata bridge already applies.
   const seekable = Number.isFinite(state.duration) && state.duration > 0;
@@ -135,12 +167,26 @@ function toGroup(state: ZoneState): ApiGroup | null {
  */
 export type OutputDeviceLookup = (zoneId: number) => ApiOutput['device'] | undefined;
 
-function toOutput(state: ZoneState, deviceLookup?: OutputDeviceLookup): ApiOutput | null {
-  if (!state.outputProtocol) {
+/** Which protocol a zone currently plays over; see toOutput. */
+export type OutputProtocolLookup = (zoneId: number) => string | null;
+
+/** The configured, user-facing name of the service an audiopath belongs to. */
+export type ServiceLabelLookup = (audiopath: string) => string | null;
+
+function toOutput(
+  state: ZoneState,
+  deviceLookup?: OutputDeviceLookup,
+  protocolLookup?: OutputProtocolLookup,
+): ApiOutput | null {
+  // `state.outputProtocol` is only ever filled in by the Loxone notifier at emit time,
+  // never stored, so reading it here reported no output at all — even mid-playback.
+  // Resolve it the same way that notifier does instead.
+  const protocol = protocolLookup?.(state.id) ?? state.outputProtocol;
+  if (!protocol) {
     return null;
   }
   const device = deviceLookup?.(state.id);
-  return device ? { protocol: state.outputProtocol, device } : { protocol: state.outputProtocol };
+  return device ? { protocol, device } : { protocol };
 }
 
 /**
@@ -151,11 +197,14 @@ function toWholeSeconds(value: number | undefined): number {
   return Number.isFinite(value) ? Math.max(0, Math.round(value as number)) : 0;
 }
 
-export function toApiZoneState(
-  state: ZoneState,
-  deviceLookup?: OutputDeviceLookup,
-  limits?: ApiVolumeLimits,
-): ApiZoneState {
+export type ZoneProjectionLookups = {
+  device?: OutputDeviceLookup;
+  outputProtocol?: OutputProtocolLookup;
+  serviceLabel?: ServiceLabelLookup;
+  volumeLimits?: ApiVolumeLimits;
+};
+
+export function toApiZoneState(state: ZoneState, lookups: ZoneProjectionLookups = {}): ApiZoneState {
   return {
     id: state.id,
     name: state.name ?? '',
@@ -164,12 +213,12 @@ export function toApiZoneState(
     position: toWholeSeconds(state.time),
     duration: toWholeSeconds(state.duration),
     volume: toWholeSeconds(state.volume),
-    volumeLimits: limits ?? { max: 100, default: 0, step: 1 },
+    volumeLimits: lookups.volumeLimits ?? { max: 100, default: 0, step: 1 },
     repeat: toRepeatMode(state.plrepeat),
     shuffle: Boolean(state.plshuffle),
     track: toTrack(state),
-    source: toSource(state),
+    source: toSource(state, lookups.serviceLabel),
     group: toGroup(state),
-    output: toOutput(state, deviceLookup),
+    output: toOutput(state, lookups.device, lookups.outputProtocol),
   };
 }

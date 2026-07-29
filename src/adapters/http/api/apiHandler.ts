@@ -31,6 +31,10 @@ export type ApiHandlerDeps = {
    * the same way it does for a Loxone-originated play.
    */
   playContent: (zoneId: number, uri: string) => Promise<void>;
+  /** Which protocol a zone plays over right now; see ApiOutput. */
+  getOutputProtocol: (zoneId: number) => string | null;
+  /** The configured name of the service an audiopath belongs to, for `source.name`. */
+  getServiceLabel: (audiopath: string) => string | null;
   /** What a zone's volume will accept: its cap, its power-on level and its step. */
   getVolumeLimits: (zoneId: number) => ApiVolumeLimits | undefined;
   /** Current equalizer bands for a zone, or null when the zone is unknown. */
@@ -346,11 +350,12 @@ export class ApiHandler {
   }
 
   private project(state: ZoneState): ApiZoneState {
-    return toApiZoneState(
-      state,
-      (zoneId) => this.deps.getOutputDevice(zoneId),
-      this.deps.getVolumeLimits(state.id),
-    );
+    return toApiZoneState(state, {
+      device: (zoneId) => this.deps.getOutputDevice(zoneId),
+      outputProtocol: (zoneId) => this.deps.getOutputProtocol(zoneId),
+      serviceLabel: (audiopath) => this.deps.getServiceLabel(audiopath),
+      volumeLimits: this.deps.getVolumeLimits(state.id),
+    });
   }
 
   private snapshot(): ApiZoneState[] {

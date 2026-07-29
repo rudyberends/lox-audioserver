@@ -15,15 +15,24 @@
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import type { ApiVolumeLimits } from '@/domain/zones/apiTypes';
-import { toApiZoneState, type OutputDeviceLookup } from '@/adapters/http/api/zoneProjection';
+import {
+  toApiZoneState,
+  type OutputDeviceLookup,
+  type OutputProtocolLookup,
+  type ServiceLabelLookup,
+} from '@/adapters/http/api/zoneProjection';
 
 export function withApiEvents(
   inner: NotifierPort,
   hub: ApiEventHub,
   // Same lookup the request path uses, so an event carries the identical zone shape
   // a GET would — a client must not see `output.device` appear and disappear.
-  deviceLookup?: OutputDeviceLookup,
-  volumeLimitsLookup?: (zoneId: number) => ApiVolumeLimits | undefined,
+  lookups: {
+    device?: OutputDeviceLookup;
+    outputProtocol?: OutputProtocolLookup;
+    serviceLabel?: ServiceLabelLookup;
+    volumeLimits?: (zoneId: number) => ApiVolumeLimits | undefined;
+  } = {},
 ): NotifierPort {
   return {
     notifyZoneStateChanged: (state) => {
@@ -31,7 +40,14 @@ export function withApiEvents(
       // The public API must never be able to break Loxone delivery, so failures
       // here are contained rather than propagated to the caller.
       if (hub.subscriberCount > 0) {
-        hub.publishZoneChanged(toApiZoneState(state, deviceLookup, volumeLimitsLookup?.(state.id)));
+        hub.publishZoneChanged(
+          toApiZoneState(state, {
+            device: lookups.device,
+            outputProtocol: lookups.outputProtocol,
+            serviceLabel: lookups.serviceLabel,
+            volumeLimits: lookups.volumeLimits?.(state.id),
+          }),
+        );
       }
     },
     notifyQueueUpdated: (zoneId, queueSize) => inner.notifyQueueUpdated(zoneId, queueSize),

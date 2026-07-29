@@ -104,6 +104,8 @@ function harness(): Harness {
       plays.push({ zoneId, uri });
     },
     getVolumeLimits: (zoneId) => (zoneId === 3 ? { max: 70, default: 20, step: 2 } : undefined),
+    getOutputProtocol: () => 'sendspin',
+    getServiceLabel: (audiopath) => (audiopath.startsWith('applemusic:') ? 'Apple Music' : null),
     getOutputDevice: (zoneId) =>
       zoneId === 3
         ? { id: '02:8C:54:A9:DC:AC', name: 'Test1', connected: true }
@@ -637,4 +639,77 @@ test('the other transport verbs still take no body', async () => {
     assert.equal(res.statusCode, 204, verb);
   }
   assert.equal(h.plays.length, 0);
+});
+
+// Both of these showed up in a live payload: an Apple Music track reporting "Spotify"
+// as its source, and a zone reporting no output while audio was playing.
+
+test('a bridged service is named for itself, not for its Loxone disguise', () => {
+  // `sourceName` carries the name the Loxone clients need, and they only know Spotify —
+  // so an Apple Music track arrives labelled "Spotify". The audiopath is service-native
+  // by then, so the real name is derivable.
+  const state = zoneState({
+    audiopath: 'applemusic:track:b64_MTc4MDM4MjY5NQ==',
+    sourceName: 'Spotify',
+  });
+
+  const disguised = toApiZoneState(state);
+  assert.equal(disguised.source?.name, 'Spotify', 'without a lookup it falls back');
+
+  const named = toApiZoneState(state, {
+    serviceLabel: (p) => (p.startsWith('applemusic:') ? 'Apple Music' : null),
+  });
+  assert.equal(named.source?.name, 'Apple Music');
+  assert.equal(named.source?.id, state.audiopath, 'the id is untouched');
+});
+
+test('a playing zone reports its output', () => {
+  // `state.outputProtocol` is only ever filled in by the Loxone notifier at emit time,
+  // so reading it here reported `output: null` even mid-playback.
+  const state = zoneState({ outputProtocol: undefined });
+  assert.equal(toApiZoneState(state).output, null, 'nothing to report without a lookup');
+
+  const resolved = toApiZoneState(state, { outputProtocol: () => 'sendspin' });
+  assert.deepEqual(resolved.output, { protocol: 'sendspin' });
+});
+
+test('the resolved output still carries its device', () => {
+  const resolved = toApiZoneState(zoneState({ outputProtocol: undefined }), {
+    outputProtocol: () => 'squeezelite',
+    device: () => ({ id: '02:8C:54:A9:DC:AC', name: 'Test1', connected: true }),
+  });
+  assert.deepEqual(resolved.output, {
+    protocol: 'squeezelite',
+    device: { id: '02:8C:54:A9:DC:AC', name: 'Test1', connected: true },
+  });
+});
+
+test('a service-native audiopath decides the kind, not audiotype', () => {
+  // `audiotype` is shaped for the Loxone clients: a bridged service becomes Spotify and
+  // is then downgraded to Playlist whenever the queue is not Spotify-owned, which labels
+  // a single Apple Music track a playlist. The audiopath says what it actually is.
+  const track = toApiZoneState(
+    zoneState({
+      audiopath: 'applemusic:track:b64_MTc4MDM4MjY5NQ==',
+      audiotype: AudioType.Playlist,
+    }),
+  );
+  assert.equal(track.source?.kind, 'track');
+
+  const playlist = toApiZoneState(
+    zoneState({ audiopath: 'applemusic:playlist:pl.42', audiotype: AudioType.Playlist }),
+  );
+  assert.equal(playlist.source?.kind, 'playlist');
+
+  // An album is not a kind of its own — playing one queues its tracks.
+  const album = toApiZoneState(
+    zoneState({ audiopath: 'applemusic:album:123', audiotype: AudioType.Playlist }),
+  );
+  assert.equal(album.source?.kind, 'playlist');
+
+  // Anything without a service-native path still falls back to audiotype.
+  const local = toApiZoneState(
+    zoneState({ audiopath: 'library://track/9', audiotype: AudioType.File }),
+  );
+  assert.equal(local.source?.kind, 'track');
 });

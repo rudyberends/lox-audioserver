@@ -128,6 +128,10 @@ export class HttpService {
       resolveOutputDevice: (zoneId: number) => ApiOutput['device'] | undefined;
       /** Resolves a zone's volume cap, power-on level and step. */
       resolveVolumeLimits: (zoneId: number) => ApiVolumeLimits | undefined;
+      /** Resolves which protocol a zone plays over; see ApiOutput. */
+      resolveOutputProtocol: (zoneId: number) => string | null;
+      /** Resolves the configured name of the service an audiopath belongs to. */
+      resolveServiceLabel: (audiopath: string) => string | null;
       serverVersion: string;
       browserZoneRegistry: BrowserZoneRegistry;
       streamProxyRoutes: StreamProxyRoute[];
@@ -153,6 +157,8 @@ export class HttpService {
       playContent: (zoneId, uri) => options.zoneManager.playContent(zoneId, uri, 'api'),
       getOutputDevice: (zoneId) => options.resolveOutputDevice(zoneId),
       getVolumeLimits: (zoneId) => options.resolveVolumeLimits(zoneId),
+      getOutputProtocol: (zoneId) => options.resolveOutputProtocol(zoneId),
+      getServiceLabel: (audiopath) => options.resolveServiceLabel(audiopath),
       getEqualizerBands: (zoneId) => {
         const zone = options.configPort.getConfig().zones?.find((z) => z.id === zoneId);
         return zone ? [...getZoneEqualizerBands(zone)] : null;
