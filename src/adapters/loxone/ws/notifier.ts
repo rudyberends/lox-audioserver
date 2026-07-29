@@ -64,15 +64,15 @@ export class LoxoneWsNotifier {
    * zone twice, differently.
    */
   public projectForLoxone(state: ZoneState): LoxoneZoneState {
-    const group = this.groupTracker.getGroupByZone(state.playerid);
-    const isLeader = group?.leader === state.playerid;
+    const group = this.groupTracker.getGroupByZone(state.id);
+    const isLeader = group?.leader === state.id;
     return toLoxoneZoneState(state, {
       group: group ? { leader: group.leader, members: group.members } : null,
       leaderVolume:
         !group || isLeader
           ? state.volume
           : (this.zoneStateLookup?.(group.leader)?.volume ?? state.volume),
-      outputProtocol: this.outputProtocolLookup?.(state.playerid) ?? state.outputProtocol,
+      outputProtocol: this.outputProtocolLookup?.(state.id) ?? state.outputProtocol,
       mixedGroupEnabled: this.mixedGroupLookup?.() ?? state.mixedGroupEnabled,
       // No-op when the translator is unset or the path isn't a bridged
       // service-native id.
@@ -97,7 +97,7 @@ export class LoxoneWsNotifier {
     // The full state is broadcast frequently (often once per second for progress updates).
     // Logging the entire payload makes spam logging unusable, so keep this as a summary.
     this.log.spam('audio_event payload', {
-      zoneId: state.playerid,
+      zoneId: state.id,
       zoneName: state.name,
       mode: state.mode,
       time: state.time,
@@ -107,7 +107,7 @@ export class LoxoneWsNotifier {
       sourceName: state.sourceName,
     });
     this.emit({ audio_event: [this.projectForLoxone(state)] }, 'audio_event', {
-      zoneId: state.playerid,
+      zoneId: state.id,
     });
   }
 

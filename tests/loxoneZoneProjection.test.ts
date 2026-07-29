@@ -11,7 +11,7 @@ import type { ZoneState } from '../src/domain/zones/zoneState';
 
 function zoneState(overrides: Partial<ZoneState> = {}): ZoneState {
   return {
-    playerid: 3,
+    id: 3,
     name: 'Kitchen',
     mode: 'play',
     power: 'on',
@@ -51,7 +51,7 @@ test('loxone projection reports no sync group as empty syncedzones and zero mast
 test('loxone projection computes mastervolume from the group leader', () => {
   // ZoneState deliberately no longer carries mastervolume: only this payload needs
   // it, so the adapter derives it. A member reports the leader's volume, not its own.
-  const out = toLoxoneZoneState(zoneState({ playerid: 7, volume: 15 }), {
+  const out = toLoxoneZoneState(zoneState({ id: 7, volume: 15 }), {
     group: { leader: 3, members: [3, 7] },
     leaderVolume: 42,
     audiopathToLoxone: (p) => p,
@@ -144,7 +144,7 @@ test('the connect snapshot and the steady-state broadcast send the same shape', 
   notifier.setMixedGroupLookup(() => true);
   notifier.setAudiopathToLoxone((p) => `spotify@bridge-${p}`);
 
-  const state = zoneState({ playerid: 9, volume: 20, station: 'applemusic:playlist:pl.1' });
+  const state = zoneState({ id: 9, volume: 20, station: 'applemusic:playlist:pl.1' });
   const projected = notifier.projectForLoxone(state);
 
   assert.deepEqual(projected.syncedzones, [3, 9], 'snapshot carries the sync group');
@@ -172,6 +172,9 @@ test('loxone projection carries the fields the native client needs verbatim', ()
   assert.equal(out.type, FileType.Playlist);
   assert.equal(out.icontype, 5);
   assert.equal(out.audiotype, AudioType.File);
-  assert.equal(out.playerid, 3);
   assert.equal(out.clientState, 'on');
+  // The state calls this `id`; the wire field is `playerid` and has to stay that
+  // way — the rename was internal, the protocol did not move.
+  assert.equal(out.playerid, 3);
+  assert.ok(!('id' in out), 'the Loxone payload has no `id` key');
 });

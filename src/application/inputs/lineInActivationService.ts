@@ -372,7 +372,7 @@ export class LineInActivationService {
     const { audiotype, type } = this.resolveLineInTypes(inputId);
     const sourceName = this.resolveZoneSourceName(zoneId) ?? current.sourceName;
     const patch: Partial<ZoneState> = {
-      playerid: current.playerid,
+      id: current.id,
       name: current.name,
       volume: current.volume,
       plrepeat: 0,

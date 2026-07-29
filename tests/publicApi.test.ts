@@ -53,7 +53,7 @@ function makeRequest(method: string, url: string, body?: unknown): IncomingMessa
 
 function zoneState(overrides: Partial<ZoneState> = {}): ZoneState {
   return {
-    playerid: 3,
+    id: 3,
     name: 'Kitchen',
     mode: 'play',
     power: 'on',

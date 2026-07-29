@@ -158,7 +158,7 @@ export function toLoxoneZoneState(
     name: state.name,
     // Never populated by the server; the client treats null as "no browse context".
     parent: null,
-    playerid: state.playerid,
+    playerid: state.id,
     plrepeat: state.plrepeat,
     plshuffle: state.plshuffle,
     power: state.power,

@@ -13,6 +13,10 @@ import type { EqualizerBands } from '@/domain/zones/equalizer';
  * fields here that only one consumer understands.
  */
 export interface ZoneState {
+  /** The zone's id, matching its configuration. */
+  id: number;
+  name: string;
+
   album: string;
   artist: string;
   /** Where the audio comes from. A real domain concept, not a Loxone artefact. */
@@ -41,9 +45,6 @@ export interface ZoneState {
    */
   icontype?: LineInIconType;
   mode: 'play' | 'pause' | 'stop';
-  name: string;
-  /** Loxone leftover: this is the zone id. */
-  playerid: number;
   plrepeat: number;
   plshuffle: number;
   power: 'on' | 'off';

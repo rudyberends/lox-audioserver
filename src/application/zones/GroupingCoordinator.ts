@@ -51,7 +51,7 @@ export class GroupingCoordinator {
     patch: Partial<ZoneState>,
   ): Partial<ZoneState> {
     const {
-      playerid: _playerid,
+      id: _id,
       name: _name,
       volume: _volume,
       eq: _eq,

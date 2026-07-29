@@ -65,7 +65,7 @@ function createSource(): LineInSourcePort & {
 
 function createZones(): ZoneManagerFacade & { patches: Array<Record<string, unknown>>; played: unknown[] } {
   const state: Record<number, Record<string, unknown>> = {
-    12: { playerid: 12, name: 'Living', volume: 30, audiopath: '' },
+    12: { id: 12, name: 'Living', volume: 30, audiopath: '' },
   };
   const patches: Array<Record<string, unknown>> = [];
   const played: unknown[] = [];

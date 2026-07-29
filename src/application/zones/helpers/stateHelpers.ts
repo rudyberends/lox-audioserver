@@ -89,7 +89,7 @@ export function resolveDisplayAudiotype(
 export function buildInitialState(zone: ZoneConfig): ZoneState {
   const defaultVol = getZoneDefaultVolume(zone);
   return {
-    playerid: zone.id,
+    id: zone.id,
     name: zone.name,
     title: '',
     artist: '',

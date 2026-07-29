@@ -72,7 +72,7 @@ test('ZoneStateStore allows duration to decrease when track changes (title chang
     sourceMac: '00:00:00:00:00:00',
     config: {} as any,
     state: {
-      playerid: zoneId,
+      id: zoneId,
       name: 'Zone',
       title: 'Old',
       artist: 'Old',
@@ -193,7 +193,7 @@ test('radio metadata clears duration when controllable and duration is unavailab
     sourceMac: '00:00:00:00:00:00',
     config: {} as any,
     state: {
-      playerid: zoneId,
+      id: zoneId,
       name: 'Zone',
       title: 'Old',
       artist: 'Old',
@@ -272,7 +272,7 @@ test('ZoneStateStore clears stale session metadata on audiopath boundary change'
     sourceMac: '00:00:00:00:00:00',
     config: {} as any,
     state: {
-      playerid: zoneId,
+      id: zoneId,
       name: 'Zone',
       title: 'Old Title',
       artist: 'Old Artist',

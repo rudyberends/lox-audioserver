@@ -728,7 +728,7 @@ test('applyZonePatch merges fields', () => {
     eq: [0,0,0,0,0,0,0,0,0,0],
     mode: 'play',
     name: 'Living',
-    playerid: 1,
+    id: 1,
     plrepeat: 0,
     plshuffle: 0,
     power: 'on',
@@ -759,7 +759,7 @@ test('applyZonePatch does not mutate inputs', () => {
     eq: [0,0,0,0,0,0,0,0,0,0],
     mode: 'stop',
     name: 'Zone',
-    playerid: 2,
+    id: 2,
     plrepeat: 0,
     plshuffle: 0,
     power: 'on',
@@ -797,7 +797,7 @@ test('zone queue transitions update state and notify', async () => {
     ...noopNotifier,
     notifyQueueUpdated: (zoneId, queueSize) => notifications.queue.push({ zoneId, size: queueSize }),
     notifyZoneStateChanged: (state) =>
-      notifications.states.push({ zoneId: state.playerid, audiopath: state.audiopath, qindex: state.qindex }),
+      notifications.states.push({ zoneId: state.id, audiopath: state.audiopath, qindex: state.qindex }),
   };
   setNotifier(notifier);
 

@@ -135,7 +135,7 @@ function toWholeSeconds(value: number | undefined): number {
 
 export function toApiZoneState(state: ZoneState): ApiZoneState {
   return {
-    id: state.playerid,
+    id: state.id,
     name: state.name ?? '',
     state: toPlaybackState(state.mode),
     power: state.power === 'on' ? 'on' : 'off',
