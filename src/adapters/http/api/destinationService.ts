@@ -42,8 +42,27 @@ export class DestinationService {
     private readonly resolveProtocol: (zoneId: number) => string | null,
   ) {}
 
-  public list(): ApiDestination[] {
-    return this.zoneManager.getAllZoneStates().map((state) => ({
+  /** The client that owns a zone, or null for a configured one. */
+  public ownerOf(zoneId: number): string | null {
+    return this.browserZones?.ownerOf(zoneId) ?? null;
+  }
+
+  /**
+   * Everywhere this caller can send audio.
+   *
+   * Configured zones are shared; a local destination belongs to the browser that registered it
+   * and is filtered out for everyone else. A caller with no client id sees the zones only,
+   * which is right for a script — it has no browser to play to.
+   */
+  public list(clientId?: string): ApiDestination[] {
+    const mine = clientId?.trim() ?? '';
+    return this.zoneManager
+      .getAllZoneStates()
+      .filter((state) => {
+        const owner = this.ownerOf(state.id);
+        return !owner || owner === mine;
+      })
+      .map((state) => ({
       // A zone's destination id is its zone id as a string, so the two are trivially
       // relatable — a caller holding one can use the other's routes.
       id: String(state.id),

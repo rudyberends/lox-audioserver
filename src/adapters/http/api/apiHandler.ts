@@ -128,8 +128,13 @@ export type ApiHandlerDeps = {
    * (sonn-audio/core#251). Only app-originated writes are forwarded.
    */
   setEqualizerBands: (zoneId: number, bands: unknown) => Promise<number[] | null>;
-  /** Everywhere audio can be sent right now. */
-  listDestinations: () => ApiDestination[];
+  /** Everywhere audio can be sent right now, from this caller's point of view. */
+  listDestinations: (clientId?: string) => ApiDestination[];
+  /**
+   * The client id that owns a zone when it is a local destination, or null for a configured
+   * zone. Used to keep one browser's tab out of another's list.
+   */
+  getLocalDestinationOwner: (zoneId: number) => string | null;
   /**
    * Registers the caller as a destination that plays audio itself. Null when this runtime was
    * built without local playback.
@@ -234,6 +239,23 @@ const DESTINATION_ACTIONS = new Set([
   'cover',
   'alert',
 ]);
+
+/**
+ * Which client is asking, when it says so.
+ *
+ * A local destination is private to the browser that registered it, and the `clientId` handed
+ * back at registration is how it proves ownership — a value only that client holds. Read from a
+ * header or the query string, because an `EventSource` cannot set headers and the events stream
+ * needs the same filter as the list.
+ *
+ * Absent is not an error: a script or a home-automation system has no browser to play to, and
+ * seeing the configured zones alone is the right answer for it.
+ */
+function callerClientId(req: IncomingMessage, url: URL): string | undefined {
+  const header = req.headers['x-sonn-client-id'];
+  const fromHeader = Array.isArray(header) ? header[0] : header;
+  return (fromHeader ?? url.searchParams.get('clientId') ?? undefined) || undefined;
+}
 
 /** The alert kinds this API accepts; `url` becomes a custom sound. */
 const ALERT_KINDS: ApiAlertKind[] = ['tts', 'bell', 'alarm', 'fire', 'buzzer', 'url'];
@@ -369,7 +391,7 @@ export class ApiHandler {
     }
 
     if (pathname === '/events' && method === 'GET') {
-      this.streamEvents(req, res);
+      this.streamEvents(req, res, callerClientId(req, url));
       return;
     }
 
@@ -398,7 +420,9 @@ export class ApiHandler {
     }
 
     if (pathname === '/destinations' && method === 'GET') {
-      this.sendJson(res, 200, { destinations: this.deps.listDestinations() });
+      this.sendJson(res, 200, {
+        destinations: this.deps.listDestinations(callerClientId(req, url)),
+      });
       return;
     }
 
@@ -428,7 +452,7 @@ export class ApiHandler {
     }
 
     if (pathname === '/zones' && method === 'GET') {
-      this.sendJson(res, 200, { zones: this.snapshot() });
+      this.sendJson(res, 200, { zones: this.snapshot(callerClientId(req, url)) });
       return;
     }
 
@@ -1291,7 +1315,7 @@ export class ApiHandler {
    * library. Each stream opens with a `server.ready` snapshot so a client can
    * render before the first state change arrives.
    */
-  private streamEvents(req: IncomingMessage, res: ServerResponse): void {
+  private streamEvents(req: IncomingMessage, res: ServerResponse, clientId?: string): void {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
@@ -1303,9 +1327,26 @@ export class ApiHandler {
       res.write(`data: ${JSON.stringify(payload)}\n\n`);
     };
 
-    write({ type: 'server.ready', zones: this.snapshot() });
+    write({ type: 'server.ready', zones: this.snapshot(clientId) });
 
-    const unsubscribe = this.deps.eventHub.subscribe((event) => write(event));
+    // The same ownership filter the snapshot applies, or a caller would be told about state
+    // changes in a zone it cannot see — including someone else's browser tab.
+    const visible = (zoneId: number): boolean => {
+      const owner = this.deps.getLocalDestinationOwner(zoneId);
+      return !owner || owner === (clientId?.trim() ?? '');
+    };
+    const unsubscribe = this.deps.eventHub.subscribe((event) => {
+      const zoneId =
+        event.type === 'zone.changed' ? event.zone.id : 'id' in event ? event.id : null;
+      if (zoneId !== null && !visible(zoneId)) {
+        return;
+      }
+      if (event.type === 'server.ready') {
+        write({ ...event, zones: event.zones.filter((zone) => visible(zone.id)) });
+        return;
+      }
+      write(event);
+    });
     const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), SSE_KEEPALIVE_MS);
 
     const close = (): void => {
@@ -1328,8 +1369,29 @@ export class ApiHandler {
     });
   }
 
-  private snapshot(): ApiZoneState[] {
-    return this.deps.getAllZoneStates().map((state) => this.project(state));
+  /**
+   * The zones a caller should see.
+   *
+   * Configured zones are shared — they are rooms in a house, and everyone has a right to know
+   * the kitchen is playing. A local destination is not a room: it is somebody's browser tab,
+   * and it has no business in anyone else's list. Left visible, a phone showed up beside the
+   * speakers on a laptop, could be played to by mistake, and cluttered a list the user did not
+   * ask to grow.
+   *
+   * So a local destination is private to whoever registered it, identified by the `clientId`
+   * that registration handed back — a value only that client holds. A caller that presents
+   * none sees the configured zones alone, which is the right answer for a script or a home
+   * automation system: those have no browser to play to.
+   */
+  private snapshot(clientId?: string): ApiZoneState[] {
+    const mine = clientId?.trim() ?? '';
+    return this.deps
+      .getAllZoneStates()
+      .filter((state) => {
+        const owner = this.deps.getLocalDestinationOwner(state.id);
+        return !owner || owner === mine;
+      })
+      .map((state) => this.project(state));
   }
 
   private clampInt(value: unknown, min: number, max: number): number | null {

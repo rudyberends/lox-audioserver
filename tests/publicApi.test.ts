@@ -233,6 +233,7 @@ function harness(): Harness {
     },
     getInputLabel: (inputId) => (inputId === 'linein-a' ? 'BeoSound 9000' : null),
     getStreamFormat: () => null,
+    getLocalDestinationOwner: (zoneId) => (zoneId === 9000 ? 'browser-mine' : null),
     listDestinations: () => [
       { id: '3', name: 'Kitchen', kind: 'zone' as const, protocol: 'sendspin', available: true },
       { id: '9000', name: 'This tab', kind: 'local' as const, protocol: 'sendspin', available: true },
@@ -1660,4 +1661,65 @@ test('a real source name survives', () => {
     const api = toApiZoneState(zoneState({ sourceName: name }));
     assert.equal(api.source?.name, name, name);
   }
+});
+
+// A configured zone is a room in a house: everyone may know the kitchen is playing. A local
+// destination is somebody's browser tab, and it has no business in anyone else's list — left
+// visible, a phone showed up beside the speakers on a laptop and could be played to by mistake.
+
+test('a local destination is hidden from a caller that does not own it', async () => {
+  const h = harness();
+  h.states.set(9000, zoneState({ id: 9000, name: 'Their tab' }));
+
+  const stranger = await call(h, 'GET', `${API_ROOT}/zones`);
+  assert.deepEqual(
+    stranger.json().zones.map((z: any) => z.id),
+    [3],
+    'someone else\'s tab is not a room',
+  );
+
+  const owner = await call(h, 'GET', `${API_ROOT}/zones`, undefined, {
+    'x-sonn-client-id': 'browser-mine',
+  });
+  assert.deepEqual(owner.json().zones.map((z: any) => z.id).sort(), [3, 9000]);
+});
+
+test('a caller with no identity sees the configured zones only', async () => {
+  // Right for a script or a home-automation system: it has no browser to play to, and a list
+  // that grows with every open tab is noise to it.
+  const h = harness();
+  h.states.set(9000, zoneState({ id: 9000, name: 'A tab' }));
+  const res = await call(h, 'GET', `${API_ROOT}/zones`);
+  assert.deepEqual(res.json().zones.map((z: any) => z.id), [3]);
+});
+
+test('the wrong client id does not unlock someone else\'s tab', async () => {
+  const h = harness();
+  h.states.set(9000, zoneState({ id: 9000, name: 'Their tab' }));
+  const res = await call(h, 'GET', `${API_ROOT}/zones`, undefined, {
+    'x-sonn-client-id': 'browser-someone-else',
+  });
+  assert.deepEqual(res.json().zones.map((z: any) => z.id), [3]);
+});
+
+test('the events snapshot is filtered the same way', async () => {
+  // Otherwise a caller is told about state changes in a zone it cannot see.
+  const h = harness();
+  h.states.set(9000, zoneState({ id: 9000, name: 'Their tab' }));
+  const res = new FakeResponse();
+  await h.handler.handle(
+    makeRequest('GET', `${API_ROOT}/events`),
+    res as unknown as ServerResponse,
+  );
+  const snapshot = JSON.parse(res.body.replace(/^data: /, '').split('\n')[0]!);
+  assert.equal(snapshot.type, 'server.ready');
+  assert.deepEqual(snapshot.zones.map((z: any) => z.id), [3]);
+});
+
+test('the identity may travel in the query string as well as a header', async () => {
+  // An EventSource cannot set headers, and the stream needs the same filter as the list.
+  const h = harness();
+  h.states.set(9000, zoneState({ id: 9000, name: 'My tab' }));
+  const res = await call(h, 'GET', `${API_ROOT}/zones?clientId=browser-mine`);
+  assert.deepEqual(res.json().zones.map((z: any) => z.id).sort(), [3, 9000]);
 });

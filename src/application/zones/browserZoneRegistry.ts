@@ -112,6 +112,16 @@ export class BrowserZoneRegistry {
     return true;
   }
 
+  /**
+   * The client that owns a zone, or null when it is not a local destination.
+   *
+   * A local destination belongs to one browser: it is that person's tab, not a room in the
+   * house, so it must not appear in anyone else's list or be playable from another client.
+   */
+  public ownerOf(zoneId: number): string | null {
+    return this.zones.get(zoneId)?.serial ?? null;
+  }
+
   public list(): BrowserZoneRecord[] {
     return Array.from(this.zones.values());
   }

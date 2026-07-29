@@ -448,6 +448,14 @@ grouping all answer for a browser tab exactly as they do for a hardware zone. So
 no separate set of components for local playback; a tab shows up in the room list beside the
 speakers and the code you already wrote drives it.
 
+**But only in *your* list.** A configured zone is a room in a house and everyone may see it; a
+local destination is one person's browser and is private to it. Send the `clientId` you were
+given at registration — as an `X-Sonn-Client-Id` header, or `?clientId=` where you cannot set
+one — and you see your own tab plus the configured zones. Send nothing and you see the
+configured zones alone, which is the right answer for a script: it has no browser to play to,
+and a list that grows with every open tab elsewhere is noise. The filter applies to
+`GET /zones`, `GET /destinations` and the events stream alike.
+
 `/destinations` exists for the one thing `/zones` cannot express: **registering** a client as
 somewhere audio goes, and telling a zone from a tab (`kind`). Everything after that is a zone.
 
