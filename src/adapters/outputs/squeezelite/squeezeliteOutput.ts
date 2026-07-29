@@ -14,6 +14,14 @@ export interface SqueezeliteOutputConfig {
   latencyMs?: number;
 }
 
+/**
+ * How long to ignore further reconnect events after re-arming a stream.
+ *
+ * A single reconnect surfaces as several events (PLAYER_CONNECTED plus a name), and a
+ * flapping client produces more, so without this each one would start another stream.
+ */
+const RESUME_DEBOUNCE_MS = 1500;
+
 export const SQUEEZELITE_OUTPUT_DEFINITION: OutputConfigDefinition = {
   id: 'squeezelite',
   label: 'Squeezelite',
@@ -55,6 +63,7 @@ export class SqueezeliteOutput implements ZoneOutput {
   private pendingAutostart = false;
   private autostartTimer?: NodeJS.Timeout;
   private lastJoinAt = 0;
+  private lastResumeAt = 0;
   private lastJoinLeaderId: number | null = null;
   private readonly baseAutostartHeadroomMs = 200;
   private readonly joinAutostartHeadroomMs = 1200;
@@ -437,6 +446,7 @@ export class SqueezeliteOutput implements ZoneOutput {
       // If this is a grouped member and the leader is already playing, start pulling the leader stream.
       // Note: this may not be perfectly in sync until the next explicit group change/resync.
       void this.maybeJoinLeader('player_connected');
+      void this.maybeResumeAfterReconnect();
     }
     if (event.type === EventType.PLAYER_DISCONNECTED) {
       this.lastStatus = 'stopped';
@@ -520,6 +530,64 @@ export class SqueezeliteOutput implements ZoneOutput {
         message,
       });
     }
+  }
+
+  /**
+   * Re-arms playback for a player that reconnected while its zone was playing.
+   *
+   * A squeezelite client that drops and comes back leaves the server streaming into a
+   * socket nobody reads: the session stays alive, the zone still reports `play`, and the
+   * engine is merely paused for want of a subscriber. Nothing then tells the returning
+   * client to open a new stream, because a `strm s` is only ever sent from `playUrl` — HELO
+   * itself carries none. So the zone looked like it was playing and was silent until
+   * someone pressed stop and play.
+   *
+   * This is what sendspin already does on its own reconnect (see `onIdentified`): ask the
+   * audio manager whether the zone is playing, and if so start the stream again. The
+   * grouped case was already handled by `maybeJoinLeader`, which is why only standalone
+   * zones and group leaders were affected — and why it looked intermittent.
+   *
+   * Downstream this deletes the reason the LoxBerry Squeezelite Multi-Room plugin carries a
+   * "Save & Resume" subsystem: roughly 400 lines that watch our state and poke
+   * off → on → play to get audio back.
+   */
+  private async maybeResumeAfterReconnect(): Promise<void> {
+    // Grouped members are `maybeJoinLeader`'s job: they must rejoin the leader's byte
+    // stream rather than start their own, so doing both would fight.
+    const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
+    if (group && group.leader !== this.zoneId && group.members.length > 1) {
+      return;
+    }
+    const session = this.ports.audioManager.getSession(this.zoneId);
+    if (!session || session.state !== 'playing' || !session.playbackSource) {
+      return;
+    }
+    // A reconnect arrives as several events (PLAYER_CONNECTED plus a name), and a flapping
+    // client can produce more. Claim the window *before* the first await: the events arrive
+    // in one tick, so a check-then-set around an await lets both through and starts two
+    // streams on the same player.
+    const now = Date.now();
+    if (now - this.lastResumeAt < RESUME_DEBOUNCE_MS) {
+      return;
+    }
+    this.lastResumeAt = now;
+    const player = await this.ensurePlayer();
+    if (!player) {
+      return;
+    }
+    // Already playing means the client re-opened the stream itself; leave it alone.
+    if (player.state === PlayerState.PLAYING) {
+      return;
+    }
+    this.log.info('squeezelite player reconnected while zone was playing; restarting stream', {
+      zoneId: this.zoneId,
+      playerId: player.playerId,
+    });
+    // Deliberately `play()` rather than a second stream-building path: it already resolves
+    // the player, builds the url and sets metadata, and a copy here would drift from it.
+    // Position restarts at zero — the session's byte stream has no seekable anchor for a
+    // client that missed part of it.
+    await this.play(session);
   }
 
   private async maybeJoinLeader(source: 'group_change' | 'player_connected'): Promise<void> {
