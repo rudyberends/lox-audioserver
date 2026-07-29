@@ -82,6 +82,8 @@ export type MiscHandlerDeps = {
   onLoxoneToggle?: (enabled: boolean) => Promise<void>;
   loxoneNotifier?: LoxoneWsNotifier;
   sonnCorePeers: SonnCorePeerRegistry;
+  /** Whether this request carries a valid admin session; see handleInfo. */
+  isAuthenticated: (req: IncomingMessage) => boolean;
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
 };
@@ -274,7 +276,7 @@ export function buildMiscRoutes(deps: MiscHandlerDeps): Route[] {
     {
       method: 'GET',
       pattern: /^\/info$/,
-      handler: (_req, res) => handleInfo(res, deps, containerized),
+      handler: (req, res) => handleInfo(req, res, deps, containerized),
     },
     {
       method: 'GET',
@@ -317,15 +319,46 @@ export function buildMiscRoutes(deps: MiscHandlerDeps): Route[] {
   ];
 }
 
-function handleInfo(res: ServerResponse, deps: MiscHandlerDeps, containerized: boolean): void {
+/**
+ * Server status. Reachable without a session, because the Admin UI has to know whether
+ * to show a login form or a create-admin welcome before it can authenticate — asking
+ * an authenticated route would only ever return 401, which cannot distinguish "log in"
+ * from "fresh install".
+ *
+ * That bootstrap needs three flags. Everything else — the serial, the Miniserver's IP
+ * and serial, the installed package inventory — is only interesting once you are in,
+ * and was readable by anyone on the network for as long as the whole payload was
+ * public. So an unauthenticated caller gets the three flags and nothing more.
+ */
+function handleInfo(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: MiscHandlerDeps,
+  containerized: boolean,
+): void {
   try {
     const cfg = deps.configPort.getConfig();
+
+    // What the Admin UI reads before login, and all it reads.
+    const bootstrap = {
+      paired: !!cfg.system.audioserver.paired,
+      setupComplete: cfg.system.audioserver.setupComplete === true,
+      // Drives the admin UI: a create-admin welcome when false, login when true.
+      hasAdminUser: hasAdminUser(deps.configPort),
+    };
+
+    if (!deps.isAuthenticated(req)) {
+      deps.sendJson(res, 200, bootstrap);
+      return;
+    }
+
     const pkgVersion = readPackageVersion();
     const buildVersion = readBuildVersion(pkgVersion);
     const packages = readAddonPackageVersions();
     const player = { installed: readPlayerVersion(deps.runtimeConfig.http.publicDir) };
 
     const payload = {
+      ...bootstrap,
       version: buildVersion,
       uptime: Math.floor(process.uptime()),
       name: cfg.system.audioserver.name ?? 'Unconfigured',
@@ -336,11 +369,7 @@ function handleInfo(res: ServerResponse, deps: MiscHandlerDeps, containerized: b
       miniserverSerial: cfg.system.miniserver.serial ?? '',
       zones: cfg.zones?.length ?? 0,
       activeAdapters: cfg.system.audioserver.extensions?.length ?? 0,
-      paired: !!cfg.system.audioserver.paired,
       loxoneEnabled: cfg.system.audioserver.loxoneEnabled === true,
-      setupComplete: cfg.system.audioserver.setupComplete === true,
-      // Drives the admin UI: a create-admin welcome when false, login when true.
-      hasAdminUser: hasAdminUser(deps.configPort),
       packages,
       player,
       containerized,

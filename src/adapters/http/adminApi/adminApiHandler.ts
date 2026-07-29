@@ -272,6 +272,9 @@ export class AdminApiHandler {
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),
       ...buildMiscRoutes({
+        // Same check the auth middleware makes; /info answers either way and varies
+        // its payload instead of failing.
+        isAuthenticated: (req) => this.sessionStore.getFromRequest(req) !== null,
         log: this.log,
         configPort: this.configPort,
         groupManager: this.groupManager,
