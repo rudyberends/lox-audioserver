@@ -3,7 +3,7 @@ import { applyZonePatch } from '@/domain/loxone/reducer';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { AudioManager } from '@/application/playback/audioManager';
 import { normalizeSpotifyAudiopath } from '@/application/zones/helpers/queueHelpers';
-import { AudioType, FileType } from '@/domain/loxone/enums';
+import { AudioType, FileType } from '@/domain/zones/enums';
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 import { ZoneRepository } from '@/application/zones/ZoneRepository';
 

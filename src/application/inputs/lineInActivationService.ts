@@ -1,5 +1,5 @@
 import { createLogger } from '@/shared/logging/logger';
-import { AudioType, FileType } from '@/domain/loxone/enums';
+import { AudioType, FileType } from '@/domain/zones/enums';
 import { resolveLineInSampleRate } from '@/domain/config/lineIn';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { LineInSourcePort } from '@/ports/LineInSourcePort';

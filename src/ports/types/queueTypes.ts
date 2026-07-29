@@ -1,8 +1,11 @@
+import type { AudioType } from '@/domain/zones/enums';
+
 export interface QueueItem {
   album: string;
   artist: string;
   audiopath: string;
-  audiotype: number;
+  /** Which kind of source this item is. Same categories as `ZoneState.audiotype`. */
+  audiotype: AudioType;
   coverurl: string;
   duration: number;
   originalIndex?: number;

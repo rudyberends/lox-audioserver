@@ -14,7 +14,7 @@ type AnySonosGroup = SonosGroup | S1SonosGroup;
 type AnySonosClient = SonosClient | S1Client;
 import type { ZoneConfig } from '@/domain/config/types';
 import type { ZoneState } from '@/domain/zones/zoneState';
-import { AudioType } from '@/domain/loxone/enums';
+import { AudioType } from '@/domain/zones/enums';
 import { createLogger } from '@/shared/logging/logger';
 import type { ZoneStateController } from '@/application/zones/state/StateController';
 

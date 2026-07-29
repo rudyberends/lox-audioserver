@@ -1,5 +1,5 @@
 import type { ContentFolder, ContentFolderItem, RadioMenuEntry } from '@/ports/ContentTypes';
-import { FileType } from '@/domain/loxone/enums';
+import { FileType } from '@/domain/zones/enums';
 import {
   RADIO_PARADISE_ICON_BASE_URL,
   RADIO_PARADISE_STATIONS,

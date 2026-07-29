@@ -1,10 +1,17 @@
 /**
  * -----------------------------------------------------------------------------
- * Strong typings for Loxone-compatible audio status and event payloads.
+ * Categories the server uses to describe what a zone is playing.
  * -----------------------------------------------------------------------------
- * Every definition mirrors the shapes used by the official Audio Server UI
- * (assets/www/scripts/AppHub.js), but is implemented as enums so they can
- * be used as both types and runtime values.
+ * These are domain concepts — source kind, media kind, repeat strategy, power
+ * state — used throughout the application layer, not just by one consumer.
+ *
+ * Their *numeric values* are Loxone's, mirroring the official Audio Server UI
+ * (assets/www/scripts/AppHub.js) so the state can go onto that wire unchanged.
+ * That is a wire-compatibility detail, not a reason to treat them as Loxone
+ * types: reading `AudioType.Radio` is what makes the surrounding code legible,
+ * and `1` is only how it happens to serialise. The public API projects these
+ * onto readable strings (`ApiSourceKind`) so no integrator has to know the
+ * numbers at all.
  * -----------------------------------------------------------------------------
  */
 

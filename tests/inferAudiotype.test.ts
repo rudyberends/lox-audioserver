@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from './testHarness';
 import { inferAudiotype } from '../src/domain/loxone/audiopath';
-import { AudioType } from '../src/domain/loxone/enums';
+import { AudioType } from '../src/domain/zones/enums';
 
 test('inferAudiotype: library audiopath is File (0)', () => {
   // Regression: this previously returned 1 (Radio), causing local tracks to be

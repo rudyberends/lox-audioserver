@@ -6,7 +6,7 @@ import type { ZoneState } from '@/domain/zones/zoneState';
 import type { AlertSnapshot, ZoneContext } from '@/application/zones/internal/zoneTypes';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { NativeAlertRequest, ZoneOutput } from '@/ports/OutputsTypes';
-import { AudioType } from '@/domain/loxone/enums';
+import { AudioType } from '@/domain/zones/enums';
 import { cloneQueueState, clampVolumeForZone } from '@/application/zones/helpers/stateHelpers';
 import { buildBaseUrl } from '@/shared/streamUrl';
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';

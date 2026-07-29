@@ -1,6 +1,6 @@
 import type { ZoneConfig } from '@/domain/config/types';
 import type { ZoneState } from '@/domain/zones/zoneState';
-import { AudioType } from '@/domain/loxone/enums';
+import { AudioType } from '@/domain/zones/enums';
 import { resizeCoverUrl, COVER_ART_NOW_PLAYING_SIZE } from '@/shared/coverArt';
 
 export { findMusicAssistantBridge } from '@/shared/musicassistant/maBridgeResolver';

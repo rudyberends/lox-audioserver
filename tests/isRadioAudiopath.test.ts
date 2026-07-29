@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from './testHarness';
 import { isRadioAudiopath } from '../src/application/zones/internal/zoneAudioHelpers';
-import { AudioType } from '../src/domain/loxone/enums';
+import { AudioType } from '../src/domain/zones/enums';
 
 test('isRadioAudiopath: tunein audiopath is radio', () => {
   assert.equal(isRadioAudiopath('tunein:station:abc'), true);

@@ -4,7 +4,7 @@ import { ZoneStateStore } from '../src/application/zones/ZoneStateStore';
 import { ZoneRepository } from '../src/application/zones/ZoneRepository';
 import type { ZoneContext } from '../src/application/zones/internal/zoneTypes';
 import type { ZoneState } from '../src/domain/zones/zoneState';
-import { AudioType } from '../src/domain/loxone/enums';
+import { AudioType } from '../src/domain/zones/enums';
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 

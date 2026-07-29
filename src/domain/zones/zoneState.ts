@@ -1,3 +1,5 @@
+import type { AudioType } from '@/domain/zones/enums';
+
 /**
  * The server's internal zone state — the single source of truth every consumer
  * projects from: the public API (`ApiZoneState`), the Loxone clients, DLNA,
@@ -14,8 +16,8 @@ export interface ZoneState {
   artist: string;
   /** Where the audio comes from. A real domain concept, not a Loxone artefact. */
   audiopath: string;
-  /** Loxone leftover: numeric source category. `ApiSourceKind` is the readable form. */
-  audiotype: number;
+  /** Which kind of source is playing. `ApiSourceKind` is the public, readable form. */
+  audiotype: AudioType;
   /** Loxone leftover: duplicates `power`. */
   clientState: 'on' | 'off';
   coverurl: string;

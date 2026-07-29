@@ -9,7 +9,7 @@ import {
   sanitizeTitle,
 } from '@/application/zones/helpers/stateHelpers';
 import type { ZoneState } from '@/domain/zones/zoneState';
-import { AudioType } from '@/domain/loxone/enums';
+import { AudioType } from '@/domain/zones/enums';
 import type { QueueItem } from '@/ports/types/queueTypes';
 
 export type InputMetadataPatchArgs = {

@@ -7,7 +7,7 @@ import { ApiHandler } from '../src/adapters/http/api/apiHandler';
 import { ApiEventHub } from '../src/adapters/http/api/apiEventHub';
 import { withApiEvents } from '../src/adapters/http/api/apiNotifierTap';
 import { toApiZoneState } from '../src/adapters/http/api/zoneProjection';
-import { AudioType } from '../src/domain/loxone/enums';
+import { AudioType } from '../src/domain/zones/enums';
 import type { ZoneState } from '../src/domain/zones/zoneState';
 import type { NotifierPort } from '../src/ports/NotifierPort';
 
@@ -138,8 +138,14 @@ test('projection maps every AudioType to a readable source kind', () => {
   for (const [audiotype, kind] of cases) {
     assert.equal(toApiZoneState(zoneState({ audiotype })).source?.kind, kind);
   }
-  // An unknown/new category must degrade, never break a client's parse.
-  assert.equal(toApiZoneState(zoneState({ audiotype: 99 })).source?.kind, 'unknown');
+  // An unknown/new category must degrade, never break a client's parse. The cast
+  // is the point: `audiotype` is typed as `AudioType`, so a value outside the enum
+  // can only arrive from an older persisted state or a future member — exactly the
+  // case a client must survive.
+  assert.equal(
+    toApiZoneState(zoneState({ audiotype: 99 as AudioType })).source?.kind,
+    'unknown',
+  );
 });
 
 test('projection reports radio station as the source name', () => {

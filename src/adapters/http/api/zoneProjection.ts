@@ -8,7 +8,7 @@
  * seam, so the public contract never has to move with it.
  */
 import type { ZoneState } from '@/domain/zones/zoneState';
-import { AudioType } from '@/domain/loxone/enums';
+import { AudioType } from '@/domain/zones/enums';
 import type {
   ApiGroup,
   ApiOutput,

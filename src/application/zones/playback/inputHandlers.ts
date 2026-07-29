@@ -2,7 +2,7 @@ import type { PlaybackMetadata, PlaybackSource, CoverArtPayload } from '@/applic
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 import { clampVolumeForZone } from '@/application/zones/helpers/stateHelpers';
-import { AudioType, FileType } from '@/domain/loxone/enums';
+import { AudioType, FileType } from '@/domain/zones/enums';
 import type { ZoneState } from '@/domain/zones/zoneState';
 import type { ComponentLogger } from '@/shared/logging/logger';
 import { allowsInputCover, allowsInputMetadata, allowsInputVolume, isActiveInputMode } from '@/application/zones/playback/guards';

@@ -1,6 +1,6 @@
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
 import type { ZoneState } from '@/domain/zones/zoneState';
-import { AudioType, FileType } from '@/domain/loxone/enums';
+import { AudioType, FileType } from '@/domain/zones/enums';
 import { fallbackTitle, sanitizeTitle } from '@/application/zones/helpers/stateHelpers';
 import type { ProviderAction, ProviderPatchResult } from '@/application/zones/playback/types';
 

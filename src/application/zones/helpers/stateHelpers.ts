@@ -1,7 +1,7 @@
 import type { ZoneConfig } from '@/domain/config/types';
 import type { QueueState } from '@/application/zones/zoneManager';
 import type { ZoneState } from '@/domain/zones/zoneState';
-import { AudioType } from '@/domain/loxone/enums';
+import { AudioType } from '@/domain/zones/enums';
 import { parseServiceNativeAudiopath } from '@/domain/loxone/audiopath';
 import { formatEqualizerSettings, getZoneEqualizerBands } from '@/domain/zones/equalizer';
 

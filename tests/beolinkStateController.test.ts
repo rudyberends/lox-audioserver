@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from './testHarness';
 import { BeoLinkStateController } from '../src/application/zones/state/BeoLinkStateController';
-import { AudioType } from '../src/domain/loxone/enums';
+import { AudioType } from '../src/domain/zones/enums';
 
 function createController() {
   return new BeoLinkStateController({
