@@ -17,8 +17,8 @@ import type { LoxoneServerOptions } from '@/adapters/loxone/http/types';
 import { formatCommand } from '@/adapters/loxone/commands/utils/commandFormatter';
 import type { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry';
 import type { ServerHeartbeat } from '@/adapters/loxone/ws/serverHeartbeat';
+import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
-import { resolveZoneOutputProtocol } from '@/application/zones/outputProtocol';
 import type { ConfigPort } from '@/ports/ConfigPort';
 
 interface ServerRuntime {
@@ -36,6 +36,9 @@ export interface LoxoneHttpServiceOptions {
   processor: LoxoneCommandProcessor;
   connectionRegistry: ConnectionRegistry;
   serverHeartbeat: ServerHeartbeat;
+  /** Shapes zone state into the Loxone payload, so the connect snapshot below
+   *  sends exactly what the steady-state broadcast does. */
+  notifier: LoxoneWsNotifier;
   zoneManager: ZoneManagerFacade;
   configPort: ConfigPort;
 }
@@ -192,18 +195,17 @@ export class LoxoneHttpService {
       this.options.serverHeartbeat.emit(this.options.configPort);
     }
 
+    // A client sees nothing until something changes, and an idle zone never
+    // changes — so send the current state of every zone on connect. It goes
+    // through the same projection as the steady-state broadcast: spreading
+    // ZoneState directly (as this once did) skipped the sync-group fields and the
+    // audiopath/title/station guards, so a reconnect during grouped playback
+    // showed ungrouped zones, and a raw service-native id could surface in a
+    // field the native client renders verbatim.
     for (const state of this.options.zoneManager.getAllZoneStates()) {
       try {
-        // Enrich the connect snapshot with the output protocol + mixed-group
-        // flag so idle zones (which never emit a follow-up state change) carry
-        // them immediately.
-        const outputProtocol = resolveZoneOutputProtocol(
-          this.options.zoneManager.getTechnicalSnapshot(state.playerid),
-        );
-        const mixedGroupEnabled =
-          this.options.configPort.getConfig().groups?.mixedGroupEnabled === true;
         connection.sendUTF(
-          JSON.stringify({ audio_event: [{ ...state, outputProtocol, mixedGroupEnabled }] }),
+          JSON.stringify({ audio_event: [this.options.notifier.projectForLoxone(state)] }),
         );
       } catch {
         // connection will be cleaned up via the error/close event

@@ -58,8 +58,12 @@ export class LoxoneWsNotifier {
    * Builds the Loxone-shaped payload for a zone. All the shaping lives in
    * `toLoxoneZoneState`; this only gathers the context that shaping needs, which
    * is the part that depends on the notifier's runtime lookups.
+   *
+   * Public because the connect snapshot has to send the same shape: a client that
+   * saw a different payload on connect than on the next change would render a
+   * zone twice, differently.
    */
-  private projectForLoxone(state: ZoneState): LoxoneZoneState {
+  public projectForLoxone(state: ZoneState): LoxoneZoneState {
     const group = this.groupTracker.getGroupByZone(state.playerid);
     const isLeader = group?.leader === state.playerid;
     return toLoxoneZoneState(state, {

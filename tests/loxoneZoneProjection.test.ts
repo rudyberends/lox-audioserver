@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from './testHarness';
 import { toLoxoneZoneState } from '../src/adapters/loxone/ws/zoneStateProjection';
+import { LoxoneWsNotifier } from '../src/adapters/loxone/ws/notifier';
 import { AudioType } from '../src/domain/zones/enums';
 import type { ZoneState } from '../src/domain/zones/zoneState';
 
@@ -125,6 +126,33 @@ test('loxone projection serialises the equalizer bands to the string the app par
 test('loxone projection emits a null parent, which the server never populates', () => {
   const out = toLoxoneZoneState(zoneState(), noGroup);
   assert.equal(out.parent, null);
+});
+
+test('the connect snapshot and the steady-state broadcast send the same shape', () => {
+  // The snapshot used to spread ZoneState directly, so it skipped syncedzones,
+  // mastervolume and the audiopath/title/station guards: reconnecting during
+  // grouped playback showed ungrouped zones, and a raw service-native id could
+  // reach a field the native client renders verbatim. Both paths now go through
+  // projectForLoxone, so a client cannot see two different payloads for one zone.
+  const group = { leader: 3, members: [3, 9] };
+  const notifier = new LoxoneWsNotifier(
+    { registerConnection: () => {}, unregisterConnection: () => {}, broadcastMessage: () => {} } as any,
+    { getGroupByZone: () => group } as any,
+  );
+  notifier.setZoneStateLookup(() => zoneState({ volume: 55 }));
+  notifier.setOutputProtocolLookup(() => 'sendspin');
+  notifier.setMixedGroupLookup(() => true);
+  notifier.setAudiopathToLoxone((p) => `spotify@bridge-${p}`);
+
+  const state = zoneState({ playerid: 9, volume: 20, station: 'applemusic:playlist:pl.1' });
+  const projected = notifier.projectForLoxone(state);
+
+  assert.deepEqual(projected.syncedzones, [3, 9], 'snapshot carries the sync group');
+  assert.equal(projected.mastervolume, 55, "and the leader's volume");
+  assert.equal(projected.station, '', 'and blanks a raw id the client would render');
+  assert.equal(projected.audiopath, 'spotify@bridge-library://track/9');
+  assert.equal(projected.outputProtocol, 'sendspin');
+  assert.equal(projected.mixedGroupEnabled, true);
 });
 
 test('loxone projection carries the fields the native client needs verbatim', () => {

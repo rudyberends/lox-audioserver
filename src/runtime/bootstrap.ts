@@ -479,6 +479,7 @@ export function createRuntime(): Runtime {
         processor,
         connectionRegistry,
         serverHeartbeat,
+        notifier: loxoneNotifier,
         zoneManager,
         configPort,
       });
