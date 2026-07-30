@@ -38,7 +38,7 @@ test('the format describes the audio, not the engine', () => {
     sampleRate: 192000,
     bitDepth: 24,
     channels: 2,
-    bitrate: null,
+    bitrate: 192000 * 2 * 24,
   });
   // Buffer sizes, restart counts and subscriber drops are engine health and stay out.
   assert.deepEqual(Object.keys(format!).sort(), [
@@ -77,7 +77,7 @@ test('the API format separates native source audio from output audio', () => {
       sampleRate: 44100,
       channels: 2,
       bitDepth: 24,
-      bitrate: null,
+      bitrate: 44100 * 2 * 24,
     },
   });
 });
@@ -107,10 +107,9 @@ test('with several live profiles the most informative one is reported', () => {
   assert.equal(format?.bitDepth, 24);
 });
 
-test('an encoder bitrate is reported when there is one', () => {
-  assert.equal(toStreamFormat([stat({ profile: 'mp3', bps: 320000 })])?.bitrate, 320000);
-  // PCM is a constant rate the encoder does not report; nothing is derived.
-  assert.equal(toStreamFormat([stat({ bps: null })])?.bitrate, null);
+test('the measured encoder throughput is exposed as bits per second', () => {
+  assert.equal(toStreamFormat([stat({ profile: 'mp3', bps: 40000 })])?.bitrate, 320000);
+  assert.equal(toStreamFormat([stat({ bps: null })])?.bitrate, 44100 * 2 * 16);
 });
 
 test('a profile with no subscribers is still reported when none has any', () => {

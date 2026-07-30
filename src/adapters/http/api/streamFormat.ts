@@ -47,8 +47,14 @@ function toStreamFormat(
     sampleRate: best.sampleRate,
     bitDepth: best.pcmBitDepth,
     channels: best.channels,
-    // PCM is a constant rate the encoder does not report; derive nothing and say null.
-    bitrate: best.bps ?? null,
+    // The engine throughput counter is bytes/sec. The public contract is bits/sec.
+    // PCM is exact and should not depend on a short-lived throughput measurement.
+    bitrate:
+      best.profile === 'pcm'
+        ? best.sampleRate * best.channels * best.pcmBitDepth
+        : best.bps === null
+          ? null
+          : best.bps * 8,
   };
 }
 

@@ -64,7 +64,7 @@ function sourceFormatFor(
     sampleRate: source.sampleRate,
     channels: source.channels,
     bitDepth,
-    bitrate: (source.sampleRate * source.channels * bitDepth) / 8,
+    bitrate: source.sampleRate * source.channels * bitDepth,
   };
 }
 
