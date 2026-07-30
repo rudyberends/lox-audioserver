@@ -36,6 +36,7 @@ import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { AudioAnalysisService } from '@/application/audio/audioAnalysisService';
 import type { AudioAnalysisEvent, AudioAnalysisSubscription } from '@/application/audio/audioAnalysisService';
+import type { ApiOutputCapabilities } from '@/domain/zones/apiTypes';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
@@ -211,6 +212,8 @@ export class HttpService {
         options.zoneManager.handleCommand(zoneId, command, payload),
       setPower: (zoneId, signal) => options.zoneManager.setPower(zoneId, signal),
       powerOffImmediately: (zoneId) => options.zoneManager.powerOffImmediately(zoneId),
+      getOutputCapabilities: (zoneId) =>
+        options.zoneManager.getOutputCapabilities(zoneId) as ApiOutputCapabilities | null,
       getAudioAnalysisFormat: (zoneId) => {
         const output = options.resolveStreamFormat(zoneId)?.output;
         return output

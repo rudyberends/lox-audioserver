@@ -5,6 +5,7 @@ export type OutputCapabilities = {
   preferredOutput?: PreferredOutput | null;
   httpPreferences?: HttpPreferences | null;
   latencyMs?: number | null;
+  protocolCapabilities?: Record<string, unknown> | null;
 };
 
 export interface OutputsPort {

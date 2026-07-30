@@ -14,6 +14,8 @@ const stat = (over: Partial<EngineSessionStats>): EngineSessionStats =>
     channels: 2,
     pcmBitDepth: 16,
     bps: null,
+    bitPerfect: false,
+    dspApplied: false,
     subscribers: 1,
     bufferedBytes: 0,
     totalBytes: 0,
@@ -39,6 +41,7 @@ test('the format describes the audio, not the engine', () => {
     bitDepth: 24,
     channels: 2,
     bitrate: 192000 * 2 * 24,
+    highRes: true,
   });
   // Buffer sizes, restart counts and subscriber drops are engine health and stay out.
   assert.deepEqual(Object.keys(format!).sort(), [
@@ -46,6 +49,7 @@ test('the format describes the audio, not the engine', () => {
     'bitrate',
     'channels',
     'codec',
+    'highRes',
     'sampleRate',
   ]);
 });
@@ -65,12 +69,15 @@ test('the API format separates native source audio from output audio', () => {
     }),
   ]);
   assert.deepEqual(format, {
+    bitPerfect: false,
+    dspApplied: false,
     source: {
       codec: 'flac',
       sampleRate: 96000,
       channels: 2,
       bitDepth: 24,
       bitrate: null,
+      highRes: true,
     },
     output: {
       codec: 'pcm',
@@ -78,8 +85,23 @@ test('the API format separates native source audio from output audio', () => {
       channels: 2,
       bitDepth: 24,
       bitrate: 44100 * 2 * 24,
+      highRes: true,
     },
   });
+});
+
+test('the API exposes the engine bit-perfect decision', () => {
+  const format = toApiAudioFormat([
+    stat({
+      profile: 'pcm',
+      sampleRate: 192000,
+      channels: 2,
+      pcmBitDepth: 24,
+      bitPerfect: true,
+    }),
+  ]);
+  assert.equal(format?.bitPerfect, true);
+  assert.equal(format?.dspApplied, false);
 });
 
 test('a zone streaming nothing has no format', () => {

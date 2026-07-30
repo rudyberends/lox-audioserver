@@ -15,6 +15,10 @@ export type EngineSessionStats = {
   channels: number;
   pcmBitDepth: number;
   bps: number | null;
+  /** True only when a lossless source reaches the output without DSP or conversion. */
+  bitPerfect: boolean;
+  /** True when this server performs conversion, filtering, gain, delay or re-encoding. */
+  dspApplied: boolean;
   /** Native source format when declared or successfully probed. */
   sourceFormat?: {
     codec: string;

@@ -110,7 +110,18 @@ changed and leave you to re-read the page you are showing.
   },
   "source": { "kind": "track", "name": "Library", "id": "library://track/9", "seekable": true },
   "group": { "leader": 3, "members": [3, 7] },
-  "output": { "protocol": "sendspin" }
+  "output": {
+    "protocol": "sendspin",
+    "capabilities": {
+      "formats": [{ "codec": "pcm", "sampleRate": 44100, "bitDepth": 24, "channels": 2 }],
+      "roles": ["player@v1", "visualizer@v1", "color@v1"],
+      "visualizer": {
+        "types": ["loudness", "spectrum", "pitch"],
+        "rateMax": 30,
+        "spectrum": { "bins": 64, "scale": "log", "fMin": 40, "fMax": 16000 }
+      }
+    }
+  }
 }
 ```
 
@@ -129,6 +140,11 @@ changed and leave you to re-read the page you are showing.
 
 `track.colors` is the palette derived from the current cover artwork. It is `null` when there
 is no cover or when the artwork could not be processed.
+
+`output.capabilities` contains the capabilities negotiated with the active output client. For
+Sendspin this includes supported player formats, negotiated roles and visualizer preferences.
+It is `null` when the client is not connected. `format` remains the format currently in use;
+capabilities describe what the client can accept.
 
 `powerState.power` is the last confirmed physical power signal. `powerState.target` is the
 desired signal. When `managed` is false, no physical power action is configured and
@@ -174,8 +190,10 @@ format when it was declared by the provider or successfully probed:
 
 ```json
 "format": {
-  "source": { "codec": "flac", "sampleRate": 96000, "bitDepth": 24, "channels": 2, "bitrate": null },
-  "output": { "codec": "pcm", "sampleRate": 44100, "bitDepth": 24, "channels": 2, "bitrate": null }
+  "bitPerfect": true,
+  "dspApplied": false,
+  "source": { "codec": "flac", "sampleRate": 96000, "bitDepth": 24, "channels": 2, "bitrate": null, "highRes": true },
+  "output": { "codec": "pcm", "sampleRate": 44100, "bitDepth": 24, "channels": 2, "bitrate": null, "highRes": true }
 }
 ```
 
@@ -183,6 +201,13 @@ format when it was declared by the provider or successfully probed:
 null when the source format is unknown; `format` is null when the zone is streaming nothing. Engine
 internals — buffer sizes, restart counts, subscriber drops — stay out; those describe the
 server's health rather than the audio, and live in the admin surface.
+
+`format.bitPerfect` is true only when a lossless source reaches the output with matching sample
+rate, bit depth and channel count and without EQ, gain, pre-delay or other DSP. It is false for
+lossy sources such as MP3 and AAC, even when their output parameters happen to match.
+`format.dspApplied` indicates whether the server performed conversion, filtering, gain, delay or
+re-encoding. An AAC source can therefore be `bitPerfect: false` and `dspApplied: false`.
+`format.source.highRes` and `format.output.highRes` are true above 48 kHz or above 16-bit depth.
 
 `error` is present only when something went wrong, so `if (zone.error)` is the whole check.
 It exists because `POST /play` answers `204` for a uri the server cannot resolve — resolution

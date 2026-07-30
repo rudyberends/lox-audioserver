@@ -158,6 +158,7 @@ function harness(): Harness {
     },
     getVolumeLimits: (zoneId) => (zoneId === 3 ? { max: 70, default: 20, step: 2 } : undefined),
     getOutputProtocol: (zoneId) => (zoneId === 9 ? 'sonos' : 'sendspin'),
+    getOutputCapabilities: () => null,
     getFavorites: async (zoneId, start, limit) =>
       zoneId === 3
         ? { zoneId, items: favItems.slice(start, start + limit), start, total: favItems.length }
@@ -689,6 +690,7 @@ test('a zone reports which device its output plays to', async () => {
   assert.deepEqual(zone.output, {
     protocol: 'sendspin',
     device: { id: '02:8C:54:A9:DC:AC', name: 'Test1', connected: true },
+    capabilities: null,
   });
 });
 

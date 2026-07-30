@@ -15,8 +15,16 @@ type StreamStat = {
   channels: number;
   pcmBitDepth: number;
   bps: number | null;
+  bitPerfect: boolean;
+  dspApplied: boolean;
   subscribers: number;
-  sourceFormat?: ApiStreamFormat | null;
+  sourceFormat?: {
+    codec: string;
+    sampleRate: number;
+    channels: number;
+    bitDepth: number | null;
+    bitrate: number | null;
+  } | null;
 };
 
 function selectBest(stats: StreamStat[]): StreamStat | null {
@@ -26,6 +34,14 @@ function selectBest(stats: StreamStat[]): StreamStat | null {
     (winner, entry) => (!winner || entry.sampleRate > winner.sampleRate ? entry : winner),
     null,
   );
+}
+
+function isHighRes(sampleRate: number, bitDepth: number | null): boolean {
+  return sampleRate > 48000 || (bitDepth !== null && bitDepth > 16);
+}
+
+function withHighRes(format: Omit<ApiStreamFormat, 'highRes'>): ApiStreamFormat {
+  return { ...format, highRes: isHighRes(format.sampleRate, format.bitDepth) };
 }
 
 /**
@@ -42,7 +58,7 @@ function toStreamFormat(
   if (!best || !best.sampleRate) {
     return null;
   }
-  return {
+  return withHighRes({
     codec: best.profile,
     sampleRate: best.sampleRate,
     bitDepth: best.pcmBitDepth,
@@ -55,7 +71,7 @@ function toStreamFormat(
         : best.bps === null
           ? null
           : best.bps * 8,
-  };
+  });
 }
 
 export function toApiAudioFormat(stats: StreamStat[]): ApiAudioFormat | null {
@@ -63,8 +79,11 @@ export function toApiAudioFormat(stats: StreamStat[]): ApiAudioFormat | null {
   if (!output) {
     return null;
   }
+  const source = selectBest(stats)?.sourceFormat ?? null;
   return {
-    source: selectBest(stats)?.sourceFormat ?? null,
+    bitPerfect: selectBest(stats)?.bitPerfect === true,
+    dspApplied: selectBest(stats)?.dspApplied === true,
+    source: source ? withHighRes(source) : null,
     output,
   };
 }

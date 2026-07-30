@@ -822,6 +822,14 @@ export class ZoneManager {
     return this.stateStore.getTechnicalSnapshot(zoneId);
   }
 
+  public getOutputCapabilities(zoneId: number): Record<string, unknown> | null {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx) return null;
+    const output =
+      ctx.outputs.find((candidate) => candidate.type === ctx.activeOutput) ?? ctx.outputs[0];
+    return output ? this.outputsPort.getCapabilities(output).protocolCapabilities ?? null : null;
+  }
+
   private registerZone(config: ZoneConfig): void {
     this.zoneAudioPrefs.setPlaybackPreDelayMs(
       config.id,

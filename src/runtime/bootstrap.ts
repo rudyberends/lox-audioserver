@@ -40,6 +40,7 @@ import { EngineAdapter } from '@/adapters/engine/EngineAdapter';
 import { AudioStreamEngine } from '@/engine/audioStreamEngine';
 import { AudioAnalysisService } from '@/application/audio/audioAnalysisService';
 import { SendspinVisualizer } from '@/adapters/outputs/sendspin/sendspinVisualizer';
+import type { ApiOutputCapabilities } from '@/domain/zones/apiTypes';
 import { createZoneManager, type ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import { resolveZoneOutputProtocol } from '@/application/zones/outputProtocol';
 import type { AudioServerConfig } from '@/domain/config/types';
@@ -202,6 +203,8 @@ export function createRuntime(): Runtime {
     notifier: withApiEvents(new LoxoneNotifierAdapter(loxoneNotifier), apiEventHub, {
       device: resolveOutputDevice,
       outputProtocol: resolveOutputProtocol,
+      outputCapabilities: (zoneId) =>
+        zoneManager.getOutputCapabilities(zoneId) as ApiOutputCapabilities | null,
       serviceLabel: resolveServiceLabel,
       inputLabel: resolveInputLabel,
       streamFormat: resolveStreamFormat,
@@ -663,6 +666,8 @@ export function createRuntime(): Runtime {
           toApiZoneState(state, {
             device: resolveOutputDevice,
             outputProtocol: resolveOutputProtocol,
+            outputCapabilities: (zoneId) =>
+              zoneManager.getOutputCapabilities(zoneId) as ApiOutputCapabilities | null,
             serviceLabel: resolveServiceLabel,
             inputLabel: resolveInputLabel,
             streamFormat: resolveStreamFormat,

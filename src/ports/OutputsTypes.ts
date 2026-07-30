@@ -76,6 +76,8 @@ export interface ZoneOutput {
   getPreferredOutput?(): PreferredOutput | null;
   /** Optional estimated output latency/buffer in milliseconds. */
   getLatencyMs?(): number | null;
+  /** Protocol-specific client capabilities, when the output has negotiated them. */
+  getProtocolCapabilities?(): Record<string, unknown> | null;
   /**
    * Optional drain delay (ms) that the alert coordinator should wait after the
    * alert stream ends and before issuing the next play to this output. Used to

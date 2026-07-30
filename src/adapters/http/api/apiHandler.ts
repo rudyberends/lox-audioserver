@@ -34,6 +34,7 @@ import type {
   ApiFavorites,
   ApiOutput,
   ApiPowerState,
+  ApiOutputCapabilities,
   ApiQueue,
   ApiRecents,
   ApiVolumeLimits,
@@ -118,6 +119,7 @@ export type ApiHandlerDeps = {
   ) => { data: Buffer; mime?: string } | string | null;
   /** Which protocol a zone plays over right now; see ApiOutput. */
   getOutputProtocol: (zoneId: number) => string | null;
+  getOutputCapabilities: (zoneId: number) => ApiOutputCapabilities | null;
   /** The configured name of the service an audiopath belongs to, for `source.name`. */
   getServiceLabel: (audiopath: string) => string | null;
   /** The configured name of a line-in, so `source.name` is not the server's MAC. */
@@ -1464,6 +1466,7 @@ export class ApiHandler {
     return toApiZoneState(state, {
       device: (zoneId) => this.deps.getOutputDevice(zoneId),
       outputProtocol: (zoneId) => this.deps.getOutputProtocol(zoneId),
+      outputCapabilities: (zoneId) => this.deps.getOutputCapabilities(zoneId),
       serviceLabel: (audiopath) => this.deps.getServiceLabel(audiopath),
       inputLabel: (inputId) => this.deps.getInputLabel(inputId),
       streamFormat: (zoneId) => this.deps.getStreamFormat(zoneId),

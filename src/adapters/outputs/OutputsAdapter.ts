@@ -16,6 +16,7 @@ export class OutputsAdapter implements OutputsPort {
       preferredOutput: output.getPreferredOutput?.() ?? null,
       httpPreferences: output.getHttpPreferences?.() ?? null,
       latencyMs: output.getLatencyMs?.() ?? null,
+      protocolCapabilities: output.getProtocolCapabilities?.() ?? null,
     };
   }
 }

@@ -18,6 +18,7 @@ import type {
   ApiPowerState,
   ApiVolumeLimits,
   ApiOutput,
+  ApiOutputCapabilities,
   ApiPlaybackState,
   ApiRepeatMode,
   ApiSource,
@@ -253,6 +254,7 @@ function toOutput(
   state: ZoneState,
   deviceLookup?: OutputDeviceLookup,
   protocolLookup?: OutputProtocolLookup,
+  capabilitiesLookup?: (zoneId: number) => ApiOutputCapabilities | null,
 ): ApiOutput | null {
   // `state.outputProtocol` is only ever filled in by the Loxone notifier at emit time,
   // never stored, so reading it here reported no output at all — even mid-playback.
@@ -262,7 +264,9 @@ function toOutput(
     return null;
   }
   const device = deviceLookup?.(state.id);
-  return device ? { protocol, device } : { protocol };
+  const capabilities = capabilitiesLookup?.(state.id) ?? null;
+  const output = device ? { protocol, device } : { protocol };
+  return capabilitiesLookup ? { ...output, capabilities } : output;
 }
 
 /**
@@ -277,6 +281,7 @@ export type ZoneProjectionLookups = {
   powerState?: (zoneId: number) => ApiPowerState | null;
   device?: OutputDeviceLookup;
   outputProtocol?: OutputProtocolLookup;
+  outputCapabilities?: (zoneId: number) => ApiOutputCapabilities | null;
   serviceLabel?: ServiceLabelLookup;
   /** Names a configured line-in, so `source.name` is its name and not the server's MAC. */
   inputLabel?: InputLabelLookup;
@@ -309,7 +314,7 @@ export function toApiZoneState(state: ZoneState, lookups: ZoneProjectionLookups 
     track: toTrack(state),
     source: toSource(state, lookups.serviceLabel, lookups.inputLabel),
     group: toGroup(state),
-    output: toOutput(state, lookups.device, lookups.outputProtocol),
+    output: toOutput(state, lookups.device, lookups.outputProtocol, lookups.outputCapabilities),
     format: lookups.streamFormat?.(state.id) ?? null,
     // Only present when something went wrong, so `if (zone.error)` is the whole check.
     ...(error ? { error } : {}),

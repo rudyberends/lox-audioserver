@@ -103,6 +103,8 @@ export class AudioSession {
   /** @internal */ public startTs: number | null = null;
   private readonly sourcePreDelayMs?: number;
   private readonly sourceFormat: EngineSessionStats['sourceFormat'];
+  private readonly bitPerfect: boolean;
+  private readonly dspApplied: boolean;
   private debugTapStream?: fs.WriteStream;
   /** @internal */ public readonly pipeSource = new PipeSourceAdapter();
   /** @internal */ public directPipeMode = false;
@@ -258,6 +260,10 @@ export class AudioSession {
       this.sourcePreDelayMs,
       nativeFormat,
     );
+    const losslessSource = nativeFormat?.lossless === true ||
+      (this.sourceFormat?.codec.startsWith('pcm_') === true || this.sourceFormat?.codec === 'flac');
+    this.bitPerfect = losslessSource && this.args.isBitPerfect(this.equalizerBands);
+    this.dspApplied = !this.args.isBitPerfect(this.equalizerBands);
     this.pipeline = new TwoStagePipeline(this.log, { zoneId: this.zoneId, profile: this.profile });
     this.starter = new SessionStarter(this);
     this.crossfader = new Crossfader(this);
@@ -652,6 +658,8 @@ export class AudioSession {
       channels: this.outputSettings.channels,
       pcmBitDepth: this.outputSettings.pcmBitDepth,
       bps: this.lastBpsTs ? this.lastBps : null,
+      bitPerfect: this.bitPerfect,
+      dspApplied: this.dspApplied,
       sourceFormat: this.sourceFormat,
       bufferedBytes: this.buffer.bytes,
       totalBytes: this.totalBytes,

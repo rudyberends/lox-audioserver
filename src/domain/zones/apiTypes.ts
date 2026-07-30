@@ -116,6 +116,27 @@ export interface ApiOutput {
     /** Whether the device is connected right now. */
     connected: boolean;
   };
+  capabilities?: ApiOutputCapabilities | null;
+}
+
+export interface ApiOutputCapabilities {
+  formats: Array<{
+    codec: string;
+    sampleRate: number;
+    bitDepth: number;
+    channels: number;
+  }>;
+  roles: string[];
+  visualizer: {
+    types: string[];
+    rateMax: number;
+    spectrum: {
+      bins: number;
+      scale: string;
+      fMin: number;
+      fMax: number;
+    } | null;
+  } | null;
 }
 
 /**
@@ -138,11 +159,17 @@ export interface ApiStreamFormat {
   /** Bits per sample, e.g. 16 or 24. */
   bitDepth: number | null;
   channels: number;
-  /** Bits per second, when the encoder reports one. Null for a constant-rate PCM stream. */
+  /** Bits per second, when known; PCM is derived from its sample format. */
   bitrate: number | null;
+  /** True for sample rate above 48 kHz or bit depth above 16 bits. */
+  highRes: boolean;
 }
 
 export interface ApiAudioFormat {
+  /** True when a lossless source reaches the output without conversion or DSP. */
+  bitPerfect: boolean;
+  /** True when this server performs conversion, filtering, gain, delay or re-encoding. */
+  dspApplied: boolean;
   source: ApiStreamFormat | null;
   output: ApiStreamFormat | null;
 }

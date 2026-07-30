@@ -22,6 +22,7 @@ export type ZoneManagerFacade = Pick<
   | 'getRawQueue'
   | 'getMetadata'
   | 'getTechnicalSnapshot'
+  | 'getOutputCapabilities'
   | 'getZoneVolumes'
   | 'getOutputHandlers'
   | 'applyPatch'

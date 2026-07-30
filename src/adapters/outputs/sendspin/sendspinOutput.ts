@@ -244,6 +244,37 @@ export class SendspinOutput implements ZoneOutput {
   private resumeGate: Promise<void> | null = null;
   private resumeGateResolve: (() => void) | null = null;
 
+  public getProtocolCapabilities(): Record<string, unknown> | null {
+    const session = sendspinCore.getSessionByClientId(this.activeClientId());
+    if (!session || !this.clientConnected) {
+      return null;
+    }
+    const visualizer = sendspinCore.getVisualizerSupport(this.activeClientId());
+    return {
+      formats: session.getPlayerSupportedFormats().map((format) => ({
+        codec: format.codec,
+        sampleRate: format.sample_rate,
+        bitDepth: format.bit_depth,
+        channels: format.channels,
+      })),
+      roles: session.getRoles(),
+      visualizer: visualizer
+        ? {
+            types: [...visualizer.types],
+            rateMax: visualizer.rate_max,
+            spectrum: visualizer.spectrum
+              ? {
+                  bins: visualizer.spectrum.n_disp_bins,
+                  scale: visualizer.spectrum.scale,
+                  fMin: visualizer.spectrum.f_min,
+                  fMax: visualizer.spectrum.f_max,
+                }
+              : null,
+          }
+        : null,
+    };
+  }
+
   constructor(
     private readonly zoneId: number,
     private readonly zoneName: string,
