@@ -14,6 +14,10 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { createHash } from 'node:crypto';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
+import type {
+  AudioAnalysisEvent,
+  AudioAnalysisSubscription,
+} from '@/application/audio/audioAnalysisService';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
 import type {
   ApiAlertKind,
@@ -123,6 +127,14 @@ export type ApiHandlerDeps = {
   /** What a zone's volume will accept: its cap, its power-on level and its step. */
   getVolumeLimits: (zoneId: number) => ApiVolumeLimits | undefined;
   getPowerState?: (zoneId: number) => ApiPowerState | null;
+  getAudioAnalysisFormat: (zoneId: number) =>
+    | { sampleRate: number; channels: number; bitDepth: number }
+    | null;
+  subscribeAudioAnalysis: (
+    zoneId: number,
+    options: AudioAnalysisSubscription,
+    listener: (event: AudioAnalysisEvent) => void,
+  ) => () => void;
   /** Current equalizer bands for a zone, or null when the zone is unknown. */
   getEqualizerBands: (zoneId: number) => number[] | null;
   /**
@@ -190,6 +202,13 @@ export type ApiHandlerDeps = {
  * discovering that after integrators have shipped is too late to fix cheaply.
  */
 export const API_ROOT = '/api/v1';
+
+function serializeAnalysisEvent(event: AudioAnalysisEvent): Record<string, unknown> {
+  if (event.type === 'spectrum') {
+    return { type: event.type, bins: Array.from(event.bins), timestampUs: event.timestampUs };
+  }
+  return { ...event };
+}
 
 /**
  * The unversioned prefix this API briefly used during the 4.0 beta. Matched only so a
@@ -399,6 +418,16 @@ export class ApiHandler {
 
     if (pathname === '/events' && method === 'GET') {
       this.streamEvents(req, res);
+      return;
+    }
+
+    const analysisMatch = /^\/zones\/(\d+)\/analysis$/.exec(pathname);
+    if (analysisMatch) {
+      if (method !== 'GET') {
+        this.sendJson(res, 405, { error: 'method-not-allowed' });
+        return;
+      }
+      this.streamAnalysis(req, res, Number(analysisMatch[1]), url);
       return;
     }
 
@@ -1331,6 +1360,65 @@ export class ApiHandler {
    * library. Each stream opens with a `server.ready` snapshot so a client can
    * render before the first state change arrives.
    */
+  private streamAnalysis(
+    req: IncomingMessage,
+    res: ServerResponse,
+    zoneId: number,
+    url: URL,
+  ): void {
+    if (!this.deps.getZoneState(zoneId)) {
+      this.sendJson(res, 404, { error: 'zone-not-found' });
+      return;
+    }
+    const format = this.deps.getAudioAnalysisFormat(zoneId) ?? {
+      sampleRate: 44100,
+      channels: 2,
+      bitDepth: 16,
+    };
+    const requestedTypes = new Set(
+      (url.searchParams.get('types') ?? 'loudness,spectrum,f_peak,peak,pitch')
+        .split(',')
+        .map((value) => value.trim())
+        .filter((value) => ['loudness', 'spectrum', 'f_peak', 'peak', 'pitch'].includes(value)),
+    );
+    const rateMax = Math.max(1, Math.min(60, Number(url.searchParams.get('rate') ?? 20) || 20));
+    const bins = Math.max(4, Math.min(256, Number(url.searchParams.get('bins') ?? 32) || 32));
+    const options: AudioAnalysisSubscription = {
+      ...format,
+      rateMax,
+      feed: 'engine',
+      loudness: requestedTypes.has('loudness'),
+      fPeak: requestedTypes.has('f_peak'),
+      peak: requestedTypes.has('peak'),
+      pitch: requestedTypes.has('pitch'),
+      spectrum: requestedTypes.has('spectrum')
+        ? { n_disp_bins: bins, scale: 'log', f_min: 40, f_max: 16000 }
+        : undefined,
+    };
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    const write = (payload: unknown): void => {
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      }
+    };
+    write({ type: 'analysis.ready', zoneId, rateMax, types: [...requestedTypes] });
+    const unsubscribe = this.deps.subscribeAudioAnalysis(zoneId, options, (event) => {
+      write(serializeAnalysisEvent(event));
+    });
+    const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), SSE_KEEPALIVE_MS);
+    const close = (): void => {
+      clearInterval(keepAlive);
+      unsubscribe();
+    };
+    req.on('close', close);
+    req.on('error', close);
+  }
+
   private streamEvents(req: IncomingMessage, res: ServerResponse): void {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',

@@ -98,7 +98,15 @@ changed and leave you to re-read the page you are showing.
     "title": "Song",
     "artist": "Artist",
     "album": "Album",
-    "coverUrl": "http://server:7090/streams/3/…/cover"
+    "coverUrl": "http://server:7090/streams/3/…/cover",
+    "colors": {
+      "primary": [120, 30, 40],
+      "accent": [220, 80, 60],
+      "backgroundDark": [10, 5, 8],
+      "backgroundLight": [245, 240, 240],
+      "onDark": [255, 255, 255],
+      "onLight": [0, 0, 0]
+    }
   },
   "source": { "kind": "track", "name": "Library", "id": "library://track/9", "seekable": true },
   "group": { "leader": 3, "members": [3, 7] },
@@ -118,6 +126,9 @@ changed and leave you to re-read the page you are showing.
 | `volumeLimits` | object | `max`, `default` and `step` — what this zone's volume will actually accept. |
 | `repeat` | `off` \| `one` \| `all` | |
 | `shuffle` | boolean | |
+
+`track.colors` is the palette derived from the current cover artwork. It is `null` when there
+is no cover or when the artwork could not be processed.
 
 `powerState.power` is the last confirmed physical power signal. `powerState.target` is the
 desired signal. When `managed` is false, no physical power action is configured and
@@ -235,6 +246,28 @@ Shell:
 ```bash
 curl -N http://server:7090/api/v1/events
 ```
+
+### Realtime audio analysis
+
+For visualizers, an individual zone also exposes the central audio analysis as an SSE stream:
+
+```
+GET /api/v1/zones/{id}/analysis?types=loudness,spectrum,f_peak,peak,pitch&rate=20&bins=32
+```
+
+The stream starts with `analysis.ready`. After that, each `data:` line is one analysis event:
+
+```json
+{"type":"loudness","value":0.42,"timestampUs":1720000000000000}
+{"type":"spectrum","bins":[12,18,31],"timestampUs":1720000000050000}
+{"type":"pitch","midiQ88":17612,"confidence":0.81,"timestampUs":1720000000050000}
+```
+
+`types` selects the features, `rate` is capped at 60 events per second and `bins` controls the
+spectrum resolution. The stream is fed from the zone's PCM output, so it is independent of the
+Sendspin protocol; Sendspin and browser clients consume the same central analysis pipeline.
+Analysis is realtime data rather than zone state and is therefore deliberately not included in
+`zone.changed` or persisted in the zone object.
 
 ## Reading
 

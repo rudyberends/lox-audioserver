@@ -13,6 +13,7 @@ import { ServerLifecycle } from '../src/domain/server/lifecycle';
 import type { HealthReport } from '../src/domain/server/health';
 import type { ZoneState } from '../src/domain/zones/zoneState';
 import type { NotifierPort } from '../src/ports/NotifierPort';
+import type { AudioAnalysisEvent } from '../src/application/audio/audioAnalysisService';
 
 // This API is the contract third parties build on, so the tests below guard the
 // two promises that make it one: Loxone vocabulary never reaches the wire, and a
@@ -106,6 +107,7 @@ let zoneCover: { data: Buffer; mime?: string } | string | null = null;
 let inputSelections: Array<{ zoneId: number; inputId: string }> = [];
 let alertCalls: Array<Record<string, unknown>> = [];
 let alertResult: { success: boolean; action: 'on' | 'off'; reason?: string } | null = null;
+let analysisListener: ((event: AudioAnalysisEvent) => void) | null = null;
 let lifecycle = new ServerLifecycle();
 let health: HealthReport;
 const favItems = [{ id: 1, name: 'Radio Paradise', source: 'tunein:s1', coverUrl: 'c' }];
@@ -126,6 +128,7 @@ function harness(): Harness {
   inputSelections = [];
   alertCalls = [];
   alertResult = { success: true, action: 'on' };
+  analysisListener = null;
   lifecycle = new ServerLifecycle();
   lifecycle.markReady();
   health = {
@@ -240,6 +243,13 @@ function harness(): Harness {
     },
     getInputLabel: (inputId) => (inputId === 'linein-a' ? 'BeoSound 9000' : null),
     getStreamFormat: () => null,
+    getAudioAnalysisFormat: () => ({ sampleRate: 44100, channels: 2, bitDepth: 16 }),
+    subscribeAudioAnalysis: (_zoneId, _options, listener) => {
+      analysisListener = listener;
+      return () => {
+        analysisListener = null;
+      };
+    },
     getLocalDestinationOwner: (zoneId) => (zoneId === 9000 ? 'browser-mine' : null),
     listDestinations: () => [
       { id: '3', name: 'Kitchen', kind: 'zone' as const, protocol: 'sendspin', available: true },
@@ -392,6 +402,29 @@ test('projection exposes power only through powerState', () => {
   assert.ok(!('power' in api));
 });
 
+test('projection puts cover colors on the current track', () => {
+  const api = toApiZoneState(
+    zoneState({
+      artworkColors: {
+        primary: [120, 30, 40],
+        accent: [220, 80, 60],
+        background_dark: [10, 5, 8],
+        background_light: [245, 240, 240],
+        on_dark: [255, 255, 255],
+        on_light: [0, 0, 0],
+      },
+    }),
+  );
+  assert.deepEqual(api.track?.colors, {
+    primary: [120, 30, 40],
+    accent: [220, 80, 60],
+    backgroundDark: [10, 5, 8],
+    backgroundLight: [245, 240, 240],
+    onDark: [255, 255, 255],
+    onLight: [0, 0, 0],
+  });
+});
+
 test('GET /api/zones returns the projected snapshot', async () => {
   const h = harness();
   const res = await call(h, 'GET', `${API_ROOT}/zones`);
@@ -499,6 +532,26 @@ test('the events stream opens with a full snapshot so clients render immediately
   const first = JSON.parse(res.body.replace(/^data: /, '').trim());
   assert.equal(first.type, 'server.ready');
   assert.equal(first.zones[0].name, 'Kitchen');
+});
+
+test('the analysis stream announces its subscription and serializes spectrum bins', async () => {
+  const h = harness();
+  const res = await call(
+    h,
+    'GET',
+    `${API_ROOT}/zones/3/analysis?types=spectrum,pitch&rate=30&bins=16`,
+  );
+  assert.equal(res.statusCode, 200);
+  assert.match(String(res.headers['content-type']), /text\/event-stream/);
+  const ready = JSON.parse(res.body.split('data: ')[1].split('\n')[0]);
+  assert.deepEqual(ready, { type: 'analysis.ready', zoneId: 3, rateMax: 30, types: ['spectrum', 'pitch'] });
+
+  analysisListener?.({ type: 'spectrum', bins: new Uint16Array([1, 2, 3]), timestampUs: 123 });
+  const messages = res.body
+    .split('data: ')
+    .slice(1)
+    .map((message) => JSON.parse(message.split('\n')[0]));
+  assert.deepEqual(messages[1], { type: 'spectrum', bins: [1, 2, 3], timestampUs: 123 });
 });
 
 test('a zone change reaches the stream as a full zone, never a patch', async () => {

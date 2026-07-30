@@ -18,6 +18,7 @@ import type { AudioManager } from '@/application/playback/audioManager';
 import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import type { GroupManager } from '@/application/groups/groupManager';
+import type { AudioAnalysisService } from '@/application/audio/audioAnalysisService';
 
 type OutputState = {
   status?: 'playing' | 'paused' | 'stopped';
@@ -39,7 +40,7 @@ type AudioManagerHandle = Pick<
 
 type ZoneAudioPrefsHandle = Pick<ZoneAudioPreferences, 'getEffectiveOutputSettings'>;
 
-type ZoneManagerHandle = Pick<ZoneManagerFacade, 'getZoneState' | 'handleCommand'> & {
+type ZoneManagerHandle = Pick<ZoneManagerFacade, 'getZoneState' | 'handleCommand' | 'applyPatch'> & {
   // Outputs only drive shuffle/repeat/seek; the queue-edit ops are not exposed here.
   queue: Pick<
     ZoneManagerFacade['queue'],
@@ -51,6 +52,7 @@ type GroupManagerHandle = Pick<GroupManager, 'applySpecGroupVolume'>;
 
 export type OutputPorts = {
   engine: EnginePort;
+  audioAnalysis: AudioAnalysisService;
   audioManager: AudioManagerHandle;
   zoneAudioPrefs: ZoneAudioPrefsHandle;
   outputStreamEvents: OutputStreamEventsPort;

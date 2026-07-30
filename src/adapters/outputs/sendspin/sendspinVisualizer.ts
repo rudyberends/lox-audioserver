@@ -8,8 +8,7 @@
  *
  * Computing visualizer frames is the application's job; node-sendspin only owns
  * the wire format. This is a focused port of the reference server's feature
- * extractor: loudness + spectrum (the iconic bars); beat/pitch/peak are left
- * for later.
+ * extractor: loudness, spectrum, frequency peak, onset peak and pitch.
  */
 
 export type SpectrumScale = 'lin' | 'log' | 'mel';

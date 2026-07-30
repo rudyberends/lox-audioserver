@@ -147,6 +147,8 @@ export class AudioSession {
      * system-wide `audioserver.crossfadeSec` config.
      */
     public readonly crossfadeEnabled: boolean = true,
+    /** Receives aligned PCM frames for protocol-neutral realtime analysis. */
+    private readonly onPcmFrame?: (zoneId: SessionKey, pcm: Buffer, timestampUs: number) => void,
   ) {
     const candidate = outputSettings.prebufferBytes;
     const hardMax = 1024 * 1024 * 4;
@@ -369,6 +371,9 @@ export class AudioSession {
           }
           this.buffer.push(aligned);
           this.recordBytes(chunk.length);
+          if (this.profile === 'pcm') {
+            this.onPcmFrame?.(this.zoneId, aligned, Date.now() * 1000);
+          }
           this.writeToSubscribers(aligned);
           this.maybeApplyOutputPacing();
         },

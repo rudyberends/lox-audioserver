@@ -28,6 +28,7 @@ export function createZoneManagerProxy(
 ): OutputPorts['zoneManager'] {
   return {
     getZoneState: (zoneId) => requireZoneManager().getZoneState(zoneId),
+    applyPatch: (zoneId, patch, force) => requireZoneManager().applyPatch(zoneId, patch, force),
     handleCommand: (zoneId, command, value) => {
       requireZoneManager().handleCommand(zoneId, command, value);
     },

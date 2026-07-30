@@ -34,6 +34,8 @@ export interface ZoneState {
    */
   clientState: 'on' | 'off';
   coverurl: string;
+  /** Palette derived from the current cover artwork, when available. */
+  artworkColors?: ZoneArtworkColors | null;
   duration: number;
   /** 10-band equalizer, in dB. The Loxone payload serialises this to a string. */
   eq: EqualizerBands;
@@ -87,3 +89,12 @@ export interface ZoneState {
    */
   mixedGroupEnabled?: boolean;
 }
+
+export type ZoneArtworkColors = {
+  primary: [number, number, number];
+  accent: [number, number, number];
+  background_dark: [number, number, number];
+  background_light: [number, number, number];
+  on_dark: [number, number, number];
+  on_light: [number, number, number];
+};

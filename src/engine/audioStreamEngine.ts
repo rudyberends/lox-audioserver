@@ -27,7 +27,10 @@ export class AudioStreamEngine {
    * config flips, in-flight sessions keep their original pipeline shape and the
    * next start() picks up the new value.
    */
-  constructor(private readonly isCrossfadeEnabled: () => boolean = () => true) {}
+  constructor(
+    private readonly isCrossfadeEnabled: () => boolean = () => true,
+    private readonly onPcmFrame?: (zoneId: SessionKey, pcm: Buffer, timestampUs: number) => void,
+  ) {}
   private onSessionTerminated?: (
     zoneId: SessionKey,
     stats: EngineSessionStats | null,
@@ -69,7 +72,7 @@ export class AudioStreamEngine {
           this.sessions.delete(zoneId);
           this.onSessionTerminated?.(zoneId, stats, stopReason);
         }
-      }, effectiveOutput, equalizerBands, crossfadeEnabled);
+      }, effectiveOutput, equalizerBands, crossfadeEnabled, this.onPcmFrame);
       profileMap.set(profile, session);
       session.start();
       this.log.info('audio session started', { zoneId, source: source.kind, profile, crossfadeEnabled });
@@ -107,7 +110,7 @@ export class AudioStreamEngine {
           this.sessions.delete(zoneId);
           this.onSessionTerminated?.(zoneId, stats, stopReason);
         }
-      }, effectiveOutput, equalizerBands, crossfadeEnabled);
+      }, effectiveOutput, equalizerBands, crossfadeEnabled, this.onPcmFrame);
       profileMap.set(profile, session);
       session.start();
       this.log.info('audio session started (handoff)', { zoneId, source: source.kind, profile, crossfadeEnabled });

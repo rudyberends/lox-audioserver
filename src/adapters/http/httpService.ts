@@ -34,6 +34,8 @@ import { isLocalRequest } from '@/shared/utils/net';
 import type { StreamProxyRoute } from '@/shared/streamProxyRoute';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
+import type { AudioAnalysisService } from '@/application/audio/audioAnalysisService';
+import type { AudioAnalysisEvent, AudioAnalysisSubscription } from '@/application/audio/audioAnalysisService';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { FavoritesManager } from '@/application/zones/favorites/favoritesManager';
@@ -135,6 +137,7 @@ export class HttpService {
       spotifyManagerProvider: SpotifyServiceManagerProvider;
       customRadioStore: CustomRadioStore;
       zoneManager: ZoneManagerFacade;
+      audioAnalysis: AudioAnalysisService;
       configPort: ConfigPort;
       engine: EnginePort;
       streamEvents: StreamEvents;
@@ -208,6 +211,17 @@ export class HttpService {
         options.zoneManager.handleCommand(zoneId, command, payload),
       setPower: (zoneId, signal) => options.zoneManager.setPower(zoneId, signal),
       powerOffImmediately: (zoneId) => options.zoneManager.powerOffImmediately(zoneId),
+      getAudioAnalysisFormat: (zoneId) => {
+        const output = options.resolveStreamFormat(zoneId)?.output;
+        return output
+          ? { sampleRate: output.sampleRate, channels: output.channels, bitDepth: output.bitDepth ?? 16 }
+          : null;
+      },
+      subscribeAudioAnalysis: (
+        zoneId: number,
+        analysisOptions: AudioAnalysisSubscription,
+        listener: (event: AudioAnalysisEvent) => void,
+      ) => options.audioAnalysis.subscribe(zoneId, analysisOptions, listener),
       // 'api' as the type, so anything keying on how playback started can tell this
       // apart from a Loxone tap or a favourite.
       // Accepts a browse id as well as a raw audiopath: browse hands out ids, and the guide

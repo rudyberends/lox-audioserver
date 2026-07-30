@@ -30,7 +30,6 @@ import { probeFileFormat, type ProbedSourceFormat } from '@/engine/sourceProbe';
 import { FlacFrameSplitter } from '@/engine/flacFrameSplitter';
 import { SendspinClientSender } from '@/adapters/outputs/sendspin/sendspinClientSender';
 import { derivePalette } from '@/adapters/outputs/sendspin/artworkPalette';
-import { SendspinVisualizer, type SpectrumScale } from '@/adapters/outputs/sendspin/sendspinVisualizer';
 import {
   getStoredClientFormat,
   rememberClientFormat,
@@ -185,8 +184,8 @@ export class SendspinOutput implements ZoneOutput {
   private readonly unwatchResolvedClient: (() => void) | null;
   private currentStream: NodeJS.ReadableStream | null = null;
   private currentCoverUrl: string | null = null;
-  /** Active visualizer@v1 DSP for this stream (PCM output only); null otherwise. */
-  private visualizerDsp: SendspinVisualizer | null = null;
+  /** Subscription to the shared audio-analysis service for visualizer@v1. */
+  private unsubscribeAnalysis: (() => void) | null = null;
   private lastProgressPayload: SendspinMetadataProgress | null = null;
   private playbackState: 'playing' | 'paused' | 'stopped' = 'stopped';
   private lastSentPlaybackState: 'playing' | 'paused' | 'stopped' | null = null;
@@ -1274,10 +1273,10 @@ export class SendspinOutput implements ZoneOutput {
           jitterSamples += 1;
         }
         lastSendWallUs = serverNowUs();
-        // Feed the visualizer DSP from the same PCM frame + playhead timestamp
-        // so its frames schedule in sync with the audio (PCM output only).
-        if (isPcm && this.visualizerDsp && canSendToClient) {
-          this.visualizerDsp.push(frameData, frameTsUs);
+        // Feed the shared analyzer from the same scheduled PCM frame so
+        // visualizer events carry the exact timestamp of the audio on wire.
+        if (isPcm && this.unsubscribeAnalysis && canSendToClient) {
+          this.ports.audioAnalysis.push(this.zoneId, frameData, frameTsUs, 'scheduled-output');
         }
         const targetLeadUs = this.targetLeadUs;
         const lead = frameTsUs - serverNowUs();
@@ -1604,7 +1603,8 @@ export class SendspinOutput implements ZoneOutput {
     this.maxBufferedBytes = audioOutputSettings.prebufferBytes;
     this.activeOutputFormat = null;
     this.activeCodecHeader = null;
-    this.visualizerDsp = null;
+    this.unsubscribeAnalysis?.();
+    this.unsubscribeAnalysis = null;
     if (!preserveAnchor) {
       this.playStartUs = null;
       this.wallClockAnchorUs = null;
@@ -1991,7 +1991,8 @@ export class SendspinOutput implements ZoneOutput {
    * (loudness, spectrum, f_peak, peak, pitch — beat has no source, so skipped).
    */
   private setupVisualizer(isPcm: boolean, sampleRate: number, channels: number, bitDepth: number): void {
-    this.visualizerDsp = null;
+    this.unsubscribeAnalysis?.();
+    this.unsubscribeAnalysis = null;
     if (!isPcm) {
       return;
     }
@@ -2021,28 +2022,42 @@ export class SendspinOutput implements ZoneOutput {
       spectrum: spectrumSupport,
     });
 
-    this.visualizerDsp = new SendspinVisualizer({
+    this.unsubscribeAnalysis = this.ports.audioAnalysis.subscribe(this.zoneId, {
       sampleRate,
       channels,
       bitDepth,
       rateMax: support.rate_max,
-      emitLoudness: wantLoudness,
-      emitFpeak: wantFpeak,
-      emitPeak: wantPeak,
-      emitPitch: wantPitch,
+      feed: 'scheduled-output',
+      loudness: wantLoudness,
+      fPeak: wantFpeak,
+      peak: wantPeak,
+      pitch: wantPitch,
       spectrum: spectrumSupport
         ? {
             n_disp_bins: spectrumSupport.n_disp_bins,
-            scale: spectrumSupport.scale as SpectrumScale,
+            scale: spectrumSupport.scale as 'lin' | 'log' | 'mel',
             f_min: spectrumSupport.f_min,
             f_max: spectrumSupport.f_max,
           }
         : undefined,
-      onLoudness: (value, ts) => sendspinCore.sendVisualizerLoudness(clientId, value, ts),
-      onSpectrum: (bins, ts) => sendspinCore.sendVisualizerSpectrum(clientId, bins, ts),
-      onFpeak: (freqHz, amp, ts) => sendspinCore.sendVisualizerFpeak(clientId, freqHz, amp, ts),
-      onPeak: (strength, ts) => sendspinCore.sendVisualizerPeak(clientId, strength, ts),
-      onPitch: (midiQ88, confidence, ts) => sendspinCore.sendVisualizerPitch(clientId, midiQ88, confidence, ts),
+    }, (event) => {
+      switch (event.type) {
+        case 'loudness':
+          sendspinCore.sendVisualizerLoudness(clientId, event.value, event.timestampUs);
+          break;
+        case 'spectrum':
+          sendspinCore.sendVisualizerSpectrum(clientId, event.bins, event.timestampUs);
+          break;
+        case 'f_peak':
+          sendspinCore.sendVisualizerFpeak(clientId, event.frequencyHz, event.amplitude, event.timestampUs);
+          break;
+        case 'peak':
+          sendspinCore.sendVisualizerPeak(clientId, event.strength, event.timestampUs);
+          break;
+        case 'pitch':
+          sendspinCore.sendVisualizerPitch(clientId, event.midiQ88, event.confidence, event.timestampUs);
+          break;
+      }
     });
     this.log.debug('Sendspin visualizer@v1 active', {
       zoneId: this.zoneId,
@@ -2078,6 +2093,7 @@ export class SendspinOutput implements ZoneOutput {
         on_dark: null,
         on_light: null,
       });
+      this.ports.zoneManager.applyPatch(this.zoneId, { artworkColors: null });
     };
     try {
       const coverUrl =
@@ -2131,7 +2147,9 @@ export class SendspinOutput implements ZoneOutput {
       }
       // color@v1: push a palette derived from the same artwork so display
       // clients can theme their UI. No-op for clients without the color role.
-      sendspinCore.sendColor(clientId, derivePalette(source));
+      const palette = derivePalette(source);
+      sendspinCore.sendColor(clientId, palette);
+      this.ports.zoneManager.applyPatch(this.zoneId, { artworkColors: palette });
     } catch (error) {
       this.log.debug('Sendspin artwork fetch failed', {
         zoneId: this.zoneId,

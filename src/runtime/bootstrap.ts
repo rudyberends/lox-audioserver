@@ -38,6 +38,8 @@ import { createOutputsAdapter } from '@/adapters/outputs/OutputsAdapter';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import { EngineAdapter } from '@/adapters/engine/EngineAdapter';
 import { AudioStreamEngine } from '@/engine/audioStreamEngine';
+import { AudioAnalysisService } from '@/application/audio/audioAnalysisService';
+import { SendspinVisualizer } from '@/adapters/outputs/sendspin/sendspinVisualizer';
 import { createZoneManager, type ZoneManagerFacade } from '@/application/zones/createZoneManager';
 import { resolveZoneOutputProtocol } from '@/application/zones/outputProtocol';
 import type { AudioServerConfig } from '@/domain/config/types';
@@ -211,8 +213,27 @@ export function createRuntime(): Runtime {
   // Drive the per-session crossfade pipeline-shape from the system-wide
   // `audioserver.crossfadeSec` config: when crossfade is off (0 or empty) the
   // engine starts a single ffmpeg per file/URL zone instead of decoder+encoder.
+  const audioAnalysis = new AudioAnalysisService((options, listener) => new SendspinVisualizer({
+    sampleRate: options.sampleRate,
+    channels: options.channels,
+    bitDepth: options.bitDepth,
+    rateMax: options.rateMax,
+    emitLoudness: options.loudness === true,
+    emitFpeak: options.fPeak === true,
+    emitPeak: options.peak === true,
+    emitPitch: options.pitch === true,
+    spectrum: options.spectrum,
+    onLoudness: (value, timestampUs) => listener({ type: 'loudness', value, timestampUs }),
+    onSpectrum: (bins, timestampUs) => listener({ type: 'spectrum', bins, timestampUs }),
+    onFpeak: (frequencyHz, amplitude, timestampUs) =>
+      listener({ type: 'f_peak', frequencyHz, amplitude, timestampUs }),
+    onPeak: (strength, timestampUs) => listener({ type: 'peak', strength, timestampUs }),
+    onPitch: (midiQ88, confidence, timestampUs) =>
+      listener({ type: 'pitch', midiQ88, confidence, timestampUs }),
+  }));
   const audioStreamEngine = new AudioStreamEngine(
     () => (configPort.getSystemConfig()?.audioserver?.crossfadeSec ?? 0) > 0,
+    (zoneId, pcm, timestampUs) => audioAnalysis.push(Number(zoneId), pcm, timestampUs),
   );
   const customRadioStore = new CustomRadioStore();
   const spotifyManagerProvider = new SpotifyServiceManagerProvider(configPort);
@@ -356,6 +377,7 @@ export function createRuntime(): Runtime {
   const zoneManagerProxy = createZoneManagerProxy(requireZoneManager);
   const outputPorts: OutputPorts = {
     engine,
+    audioAnalysis,
     audioManager: {
       getSession: (zoneId) => audioManager.getSession(zoneId),
       getOutputSettings: (zoneId) => audioManager.getOutputSettings(zoneId),
@@ -686,6 +708,7 @@ export function createRuntime(): Runtime {
       spotifyManagerProvider,
       customRadioStore,
       zoneManager,
+      audioAnalysis,
       configPort,
       engine,
       streamEvents,

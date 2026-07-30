@@ -44,6 +44,17 @@ export interface ApiTrack {
   album: string;
   /** Absolute URL, or empty string when the zone has no artwork. */
   coverUrl: string;
+  /** Colors derived from the cover artwork, or null when not available. */
+  colors: ApiArtworkColors | null;
+}
+
+export interface ApiArtworkColors {
+  primary: [number, number, number];
+  accent: [number, number, number];
+  backgroundDark: [number, number, number];
+  backgroundLight: [number, number, number];
+  onDark: [number, number, number];
+  onLight: [number, number, number];
 }
 
 /** Which source the current audio came from. `null` when nothing is loaded. */

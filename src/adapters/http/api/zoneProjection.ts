@@ -126,7 +126,17 @@ function toTrack(state: ZoneState): ApiTrack | null {
   if (playbackError(state)) {
     return null;
   }
-  return { title, artist, album, coverUrl: state.coverurl ?? '' };
+  const colors = state.artworkColors
+    ? {
+        primary: state.artworkColors.primary,
+        accent: state.artworkColors.accent,
+        backgroundDark: state.artworkColors.background_dark,
+        backgroundLight: state.artworkColors.background_light,
+        onDark: state.artworkColors.on_dark,
+        onLight: state.artworkColors.on_light,
+      }
+    : null;
+  return { title, artist, album, coverUrl: state.coverurl ?? '', colors };
 }
 
 /**
