@@ -121,9 +121,10 @@ test('a raw audiopath is passed through untouched', () => {
   }
 });
 
-test('a container id is not silently turned into something playable', () => {
-  // A container ref names a folder and carries no audiopath. Passing it through means it
-  // fails downstream as it would have anyway, rather than resolving to the wrong thing.
+test('a container id resolves to a provider folder path for queue building', () => {
   const id = encodeContainerRef({ kind: 'album', service: 'applemusic', folderId: 'album:1' });
-  assert.equal(resolveUriFromRef(id), id);
+  assert.equal(resolveUriFromRef(id), 'applemusic:album:1');
+
+  const localId = encodeContainerRef({ kind: 'album', service: 'library', folderId: 'library:album:1' });
+  assert.equal(resolveUriFromRef(localId), 'library:album:1');
 });

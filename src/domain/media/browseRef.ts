@@ -113,11 +113,13 @@ export function decodeBrowseRef(id: string): BrowseRef | null {
  * makes browse → play impossible by exactly the route a client actually takes. Meanwhile the
  * raw form has to keep working: it is what favourites, recents and `source.id` report.
  *
- * A container ref resolves to its own audiopath only if it has one, which a browse id does
- * not carry — those name a folder. So a container id is returned unchanged and fails
- * downstream as it would have anyway, rather than being silently turned into something else.
+ * A container ref names a provider folder rather than a directly playable audiopath. Turn it
+ * into the provider-prefixed folder path the queue builder already understands. Native local
+ * folder ids can already carry their `library:` prefix, so do not prefix those twice.
  */
 export function resolveUriFromRef(uri: string): string {
   const ref = decodeBrowseRef(uri);
-  return ref?.target === 'playable' ? ref.audiopath : uri;
+  if (!ref) return uri;
+  if (ref.target === 'playable') return ref.audiopath;
+  return ref.folderId.startsWith(`${ref.service}:`) ? ref.folderId : `${ref.service}:${ref.folderId}`;
 }

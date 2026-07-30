@@ -89,10 +89,17 @@ export class BrowserZoneRegistry {
       volumes: { ...BROWSER_ZONE_VOLUMES },
     };
 
-    await this.zoneManager.replaceZones([cfg]);
-
     const record: BrowserZoneRecord = { zoneId, name, serial: finalSerial, registeredAt: Date.now() };
+    // Publish ownership before replacing the zone. replaceZones emits the first state/snapshot
+    // synchronously from the zone manager; registering afterwards lets a fresh browser zone
+    // briefly look like a normal room and leak into every SSE client's zone list.
     this.zones.set(zoneId, record);
+    try {
+      await this.zoneManager.replaceZones([cfg]);
+    } catch (error) {
+      this.zones.delete(zoneId);
+      throw error;
+    }
     this.log.info('browser zone registered', { zoneId, name, serial: finalSerial });
     return record;
   }

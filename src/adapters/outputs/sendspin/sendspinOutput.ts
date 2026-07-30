@@ -1280,7 +1280,9 @@ export class SendspinOutput implements ZoneOutput {
       };
 
       const emitFrame = (frameTsUs: number, frameData: Buffer, durationUs: number): void => {
-        if (token !== this.streamToken) {
+        // pause() can race an in-flight lead/capacity wait. Do not let the frame that was
+        // waiting at that moment become the small audible burst after the pause command.
+        if (token !== this.streamToken || this.paused) {
           return;
         }
         const canSendToClient = this.isOwner() && this.clientConnected && !this.externalSourceActive;
@@ -1390,7 +1392,7 @@ export class SendspinOutput implements ZoneOutput {
         durationUs: number,
         options: { skipLeadGate?: boolean } = {},
       ): Promise<void> => {
-        if (token !== this.streamToken) {
+        if (token !== this.streamToken || this.paused) {
           return;
         }
         if (this.nextFrameTimestampUs === null) {
@@ -1404,8 +1406,6 @@ export class SendspinOutput implements ZoneOutput {
           });
         }
         let timestampUs = this.nextFrameTimestampUs;
-        this.nextFrameTimestampUs += durationUs;
-        modeledTimelineUs += durationUs;
 
         if (timestampUs < serverNowUs() + sendTransmissionMarginUs) {
           const adjustUs = computeAdjustForStale(timestampUs, durationUs);
@@ -1423,9 +1423,20 @@ export class SendspinOutput implements ZoneOutput {
           await waitUntilLeadInRange(timestampUs);
           waitLeadUs += Math.max(0, serverNowUs() - before);
         }
+        if (token !== this.streamToken || this.paused) {
+          return;
+        }
         const capBefore = serverNowUs();
         await this.primary.waitForCapacity(frameData.length);
         waitCapacityUs += Math.max(0, serverNowUs() - capBefore);
+        if (token !== this.streamToken || this.paused) {
+          return;
+        }
+        // Only consume the audio timeline once the frame is actually going to be sent.
+        // A pause may win during either async wait above; reserving it earlier creates a
+        // gap when the existing stream resumes.
+        this.nextFrameTimestampUs = timestampUs + durationUs;
+        modeledTimelineUs += durationUs;
         ensureStreamStart();
         emitFrame(timestampUs, frameData, durationUs);
       };

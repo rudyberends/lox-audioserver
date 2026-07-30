@@ -55,3 +55,19 @@ test('a client that sends no name gets a distinct one anyway', async () => {
   const b = await registry.register({});
   assert.notEqual(a.name, b.name);
 });
+
+test('ownership is visible while the zone is being published', async () => {
+  let registry: BrowserZoneRegistry;
+  let publishedZoneId = 0;
+  const zones = {
+    replaceZones: async (configs: Array<{ id: number }>) => {
+      publishedZoneId = configs[0]!.id;
+      assert.equal(registry.ownerOf(publishedZoneId), 'browser-mine');
+    },
+    removeZone: async () => undefined,
+  } as unknown as ZoneManagerFacade;
+  registry = new BrowserZoneRegistry(zones);
+
+  await registry.register({ serial: 'browser-mine' });
+  assert.equal(registry.ownerOf(publishedZoneId), 'browser-mine');
+});
