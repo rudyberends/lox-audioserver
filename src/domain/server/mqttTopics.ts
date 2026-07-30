@@ -52,7 +52,11 @@ export function sanitizeTopicPrefix(prefix: string | undefined): string {
 function flatten(zone: ApiZoneState): Record<string, string> {
   const flat: Record<string, string> = {
     state: zone.state,
-    power: zone.power,
+    'power/state': zone.powerState.power,
+    'power/target': zone.powerState.target,
+    'power/managed': zone.powerState.managed ? '1' : '0',
+    'power/idleTimeoutMs':
+      zone.powerState.idleTimeoutMs == null ? '' : String(zone.powerState.idleTimeoutMs),
     position: String(zone.position),
     duration: String(zone.duration),
     volume: String(zone.volume),

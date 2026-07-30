@@ -29,7 +29,7 @@ for our own Admin UI — and the now-playing fields have moved here:
 | `coverUrl` / `coverurl` | `track.coverUrl` |
 | `station`, `sourceName` | `source.name` (with `source.kind` telling you which) |
 | `state` (`play`/`pause`) | `state` (`playing`/`paused`/`stopped`) |
-| `powerState` (never actually sent) | `power` (`on`/`off`) |
+| `powerState` | `powerState.power` (`on`/`off`) |
 | `tech`, `system` | stayed — engine internals, not part of this contract |
 
 `tech.player` moved as well: it is `output.device` here, with `mac` renamed to the
@@ -82,7 +82,12 @@ changed and leave you to re-read the page you are showing.
   "id": 3,
   "name": "Kitchen",
   "state": "playing",
-  "power": "on",
+  "powerState": {
+    "power": "on",
+    "target": "on",
+    "managed": true,
+    "idleTimeoutMs": 300000
+  },
   "position": 43,
   "duration": 210,
   "volume": 40,
@@ -106,13 +111,17 @@ changed and leave you to re-read the page you are showing.
 | `id` | number | Zone id. Stable across restarts. |
 | `name` | string | Zone name as configured. |
 | `state` | `playing` \| `paused` \| `stopped` | |
-| `power` | `on` \| `off` | |
+| `powerState` | object | `power`, `target`, `managed` and `idleTimeoutMs`; see below. |
 | `position` | number | Whole seconds into the current track. |
 | `duration` | number | Whole seconds. `0` means open-ended (live radio). |
 | `volume` | number | `0`–`100`, but see `volumeLimits`. |
 | `volumeLimits` | object | `max`, `default` and `step` — what this zone's volume will actually accept. |
 | `repeat` | `off` \| `one` \| `all` | |
 | `shuffle` | boolean | |
+
+`powerState.power` is the last confirmed physical power signal. `powerState.target` is the
+desired signal. When `managed` is false, no physical power action is configured and
+`idleTimeoutMs` is `null`.
 | `track` | object \| **null** | `null` when the zone has nothing loaded. |
 | `source` | object \| **null** | Where the audio comes from. |
 | `group` | object \| **null** | `null` when the zone plays on its own; `members` lists leader first. |
@@ -397,7 +406,9 @@ PUT    /api/v1/zones/{id}/group      {"members": [7, 9]}   group these behind th
 PUT    /api/v1/zones/{id}/group      {"members": []}       ungroup
 ```
 
-`power` is the explicit amplifier/player power command. `{"power":"off"}` switches the
+`powerState.power` is the current physical amplifier/player power. `powerState.target` is the
+desired signal, and `powerState.idleTimeoutMs` reports the automatic idle timeout. The explicit
+power command still uses `{"power":"off"}` and switches the
 configured power action immediately; it does not wait for the automatic `offDelayMs`. It also
 stops playback. The automatic switch-off caused by a normal playback state transition keeps
 using the configured delay.

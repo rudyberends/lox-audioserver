@@ -4,6 +4,7 @@ import type { ZoneState } from '@/domain/zones/zoneState';
 import { AudioType } from '@/domain/zones/enums';
 import { parseServiceNativeAudiopath } from '@/domain/zones/audiopath';
 import { getZoneEqualizerBands } from '@/domain/zones/equalizer';
+import { normalizePowerManagerConfig } from '@/application/zones/services/powerManager';
 
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -88,6 +89,7 @@ export function resolveDisplayAudiotype(
 
 export function buildInitialState(zone: ZoneConfig): ZoneState {
   const defaultVol = getZoneDefaultVolume(zone);
+  const powerManaged = normalizePowerManagerConfig(zone.powerManager ?? null).actions.length > 0;
   return {
     id: zone.id,
     name: zone.name,
@@ -110,6 +112,9 @@ export function buildInitialState(zone: ZoneConfig): ZoneState {
     station: '',
     type: 3,
     clientState: 'on',
-    power: 'on',
+    // A configured power manager has no persisted hardware state after a restart. Its
+    // initial stopped state is therefore the safe/expected OFF state; the manager updates
+    // this field again after a confirmed physical switch.
+    power: powerManaged ? 'off' : 'on',
   };
 }

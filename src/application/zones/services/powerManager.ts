@@ -19,6 +19,12 @@ const GPIOSET_BIN = 'gpioset';
 const DEFAULT_OFF_DELAY_MS = 300_000;
 
 export type PowerSignal = 0 | 1;
+export type PowerStateSnapshot = {
+  power: PowerSignal;
+  target: PowerSignal;
+  managed: boolean;
+  idleTimeoutMs: number | null;
+};
 type TimerHandle = ReturnType<typeof setTimeout>;
 
 export type NormalizedPowerConfig = {
@@ -125,6 +131,26 @@ export class PowerManager {
 
   public isSignalOn(zoneId: number): boolean {
     return this.zones.get(zoneId)?.currentSignal === 1;
+  }
+
+  public hasConfiguredActions(zoneId: number): boolean {
+    return (this.zones.get(zoneId)?.config.actions.length ?? 0) > 0;
+  }
+
+  public getState(
+    zoneId: number,
+    zoneConfig: ZoneConfig,
+    fallbackSignal: PowerSignal,
+  ): PowerStateSnapshot {
+    const normalized = normalizePowerManagerConfig(zoneConfig.powerManager ?? null);
+    const runtime = this.zones.get(zoneId);
+    const managed = normalized.actions.length > 0;
+    return {
+      power: runtime?.currentSignal ?? fallbackSignal,
+      target: runtime?.desiredSignal ?? fallbackSignal,
+      managed,
+      idleTimeoutMs: managed ? normalized.offDelayMs : null,
+    };
   }
 
   /** Apply an explicit power command immediately; automatic OFF transitions still use offDelayMs. */

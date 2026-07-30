@@ -381,6 +381,17 @@ test('projection surfaces the sync group with the leader first', () => {
   assert.deepEqual(api.group, { leader: 3, members: [3, 7, 9] });
 });
 
+test('projection exposes power only through powerState', () => {
+  const api = toApiZoneState(zoneState({ power: 'off' }));
+  assert.deepEqual(api.powerState, {
+    power: 'off',
+    target: 'off',
+    managed: false,
+    idleTimeoutMs: null,
+  });
+  assert.ok(!('power' in api));
+});
+
 test('GET /api/zones returns the projected snapshot', async () => {
   const h = harness();
   const res = await call(h, 'GET', `${API_ROOT}/zones`);

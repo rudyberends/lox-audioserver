@@ -23,7 +23,13 @@ import { toApiInput } from '@/adapters/http/api/inputProjection';
 import { getZoneEqualizerBands } from '@/domain/zones/equalizer';
 import { resizeCoverUrl, resizeTuneInCoverUrl } from '@/shared/coverArt';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
-import type { ApiGroupResult, ApiOutput, ApiStreamFormat, ApiVolumeLimits } from '@/domain/zones/apiTypes';
+import type {
+  ApiGroupResult,
+  ApiOutput,
+  ApiPowerState,
+  ApiStreamFormat,
+  ApiVolumeLimits,
+} from '@/domain/zones/apiTypes';
 import { isLocalRequest } from '@/shared/utils/net';
 import type { StreamProxyRoute } from '@/shared/streamProxyRoute';
 import type { NotifierPort } from '@/ports/NotifierPort';
@@ -160,6 +166,8 @@ export class HttpService {
       resolveOutputDevice: (zoneId: number) => ApiOutput['device'] | undefined;
       /** Resolves a zone's volume cap, power-on level and step. */
       resolveVolumeLimits: (zoneId: number) => ApiVolumeLimits | undefined;
+      /** Resolves the last confirmed and desired physical power state. */
+      resolvePowerState: (zoneId: number) => ApiPowerState | null;
       /** Resolves which protocol a zone plays over; see ApiOutput. */
       resolveOutputProtocol: (zoneId: number) => string | null;
       /** Resolves the configured name of the service an audiopath belongs to. */
@@ -207,6 +215,7 @@ export class HttpService {
         options.zoneManager.playContent(zoneId, resolveUriFromRef(uri), 'api'),
       getOutputDevice: (zoneId) => options.resolveOutputDevice(zoneId),
       getVolumeLimits: (zoneId) => options.resolveVolumeLimits(zoneId),
+      getPowerState: (zoneId) => options.resolvePowerState(zoneId),
       getOutputProtocol: (zoneId) => options.resolveOutputProtocol(zoneId),
       getHealth: () =>
         buildHealthReport({

@@ -29,6 +29,7 @@ import type {
   ApiGroupResult,
   ApiFavorites,
   ApiOutput,
+  ApiPowerState,
   ApiQueue,
   ApiRecents,
   ApiVolumeLimits,
@@ -119,6 +120,7 @@ export type ApiHandlerDeps = {
   getStreamFormat: (zoneId: number) => ApiStreamFormat | null;
   /** What a zone's volume will accept: its cap, its power-on level and its step. */
   getVolumeLimits: (zoneId: number) => ApiVolumeLimits | undefined;
+  getPowerState?: (zoneId: number) => ApiPowerState | null;
   /** Current equalizer bands for a zone, or null when the zone is unknown. */
   getEqualizerBands: (zoneId: number) => number[] | null;
   /**
@@ -1373,6 +1375,7 @@ export class ApiHandler {
       inputLabel: (inputId) => this.deps.getInputLabel(inputId),
       streamFormat: (zoneId) => this.deps.getStreamFormat(zoneId),
       volumeLimits: this.deps.getVolumeLimits(state.id),
+      powerState: (zoneId) => this.deps.getPowerState?.(zoneId) ?? null,
     });
   }
 

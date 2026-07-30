@@ -14,6 +14,7 @@ import { AudioType, RepeatMode } from '@/domain/zones/enums';
 import { parseServiceNativeAudiopath } from '@/domain/zones/audiopath';
 import type {
   ApiGroup,
+  ApiPowerState,
   ApiStreamFormat,
   ApiVolumeLimits,
   ApiOutput,
@@ -263,6 +264,7 @@ function toWholeSeconds(value: number | undefined): number {
 }
 
 export type ZoneProjectionLookups = {
+  powerState?: (zoneId: number) => ApiPowerState | null;
   device?: OutputDeviceLookup;
   outputProtocol?: OutputProtocolLookup;
   serviceLabel?: ServiceLabelLookup;
@@ -282,7 +284,12 @@ export function toApiZoneState(state: ZoneState, lookups: ZoneProjectionLookups 
     id: state.id,
     name: state.name ?? '',
     state: toPlaybackState(state.mode),
-    power: state.power === 'on' ? 'on' : 'off',
+    powerState: lookups.powerState?.(state.id) ?? {
+      power: state.power === 'on' ? 'on' : 'off',
+      target: state.power === 'on' ? 'on' : 'off',
+      managed: false,
+      idleTimeoutMs: null,
+    },
     position: toWholeSeconds(state.time),
     duration: toWholeSeconds(state.duration),
     volume: toWholeSeconds(state.volume),

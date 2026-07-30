@@ -15,7 +15,7 @@
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ApiEvent } from '@/domain/zones/apiTypes';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
-import type { ApiVolumeLimits } from '@/domain/zones/apiTypes';
+import type { ApiPowerState, ApiVolumeLimits } from '@/domain/zones/apiTypes';
 import {
   toApiZoneState,
   type OutputDeviceLookup,
@@ -37,6 +37,7 @@ export function withApiEvents(
     inputLabel?: InputLabelLookup;
     streamFormat?: ZoneProjectionLookups['streamFormat'];
     volumeLimits?: (zoneId: number) => ApiVolumeLimits | undefined;
+    powerState?: (zoneId: number) => ApiPowerState | null;
   } = {},
 ): NotifierPort {
   /**
@@ -68,6 +69,7 @@ export function withApiEvents(
             inputLabel: lookups.inputLabel,
             streamFormat: lookups.streamFormat,
             volumeLimits: lookups.volumeLimits?.(state.id),
+            powerState: lookups.powerState,
           }),
         );
       }

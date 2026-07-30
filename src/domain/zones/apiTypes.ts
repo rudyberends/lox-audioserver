@@ -10,8 +10,8 @@
  * enums, whole seconds, `null` instead of empty-string sentinels, an opaque
  * `source.id`, and no browse or queue internals.
  *
- * Additive only. New fields and new `source.kind` values are not breaking
- * changes; renaming or removing one is.
+ * This is the versioned public contract. Keep its names independent from the
+ * internal ZoneState and Loxone vocabulary.
  * -----------------------------------------------------------------------------
  */
 
@@ -136,7 +136,7 @@ export interface ApiZoneState {
   name: string;
 
   state: ApiPlaybackState;
-  power: 'on' | 'off';
+  powerState: ApiPowerState;
   /** Playback position in whole seconds. */
   position: number;
   /** Track length in whole seconds; 0 when open-ended (live radio). */
@@ -175,6 +175,17 @@ export interface ApiZoneState {
    * so a UI rendered an error as a song title. It clears on the next successful play.
    */
   error?: string;
+}
+
+export interface ApiPowerState {
+  /** Last confirmed physical power signal. */
+  power: 'on' | 'off';
+  /** Desired signal after playback rules and explicit commands are applied. */
+  target: 'on' | 'off';
+  /** Whether this zone has one or more configured physical power actions. */
+  managed: boolean;
+  /** Automatic idle timeout before switching off, in milliseconds, or null when unmanaged. */
+  idleTimeoutMs: number | null;
 }
 
 /**

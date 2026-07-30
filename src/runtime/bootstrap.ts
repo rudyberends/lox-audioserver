@@ -193,6 +193,7 @@ export function createRuntime(): Runtime {
    * stats, which is the same source the admin UI's `tech.streamStats` uses.
    */
   const resolveStreamFormat = (zoneId: number) => toStreamFormat(audioManager.getStreamStats(zoneId));
+  const resolvePowerState = (zoneId: number) => zoneManager.getPowerState(zoneId);
 
   const apiEventHub = new ApiEventHub();
   const ports = createRuntimePorts({
@@ -203,6 +204,7 @@ export function createRuntime(): Runtime {
       inputLabel: resolveInputLabel,
       streamFormat: resolveStreamFormat,
       volumeLimits: resolveVolumeLimits,
+      powerState: resolvePowerState,
     }),
   });
   const configPort = ports.config;
@@ -643,6 +645,7 @@ export function createRuntime(): Runtime {
             inputLabel: resolveInputLabel,
             streamFormat: resolveStreamFormat,
             volumeLimits: resolveVolumeLimits(state.id),
+            powerState: resolvePowerState,
           }),
         ),
       {
@@ -713,6 +716,7 @@ export function createRuntime(): Runtime {
       resolveOutputProtocol,
       resolveServiceLabel,
       resolveVolumeLimits,
+      resolvePowerState,
       resolveInputLabel,
       resolveStreamFormat,
       serverVersion: readBuildVersion(),

@@ -19,7 +19,7 @@ function zone(overrides: Partial<ApiZoneState> = {}): ApiZoneState {
     id: 3,
     name: 'Kitchen',
     state: 'playing',
-    power: 'on',
+    powerState: { power: 'on', target: 'on', managed: false, offDelayMs: null },
     position: 42,
     duration: 210,
     volume: 40,
@@ -47,6 +47,10 @@ test('a zone is published as one JSON document plus flat scalars', () => {
   // The scalars exist for consumers that cannot parse JSON — a Miniserver, a KNX
   // gateway — which is most of why the plugin had to build its own bridge.
   assert.equal(map.get('sonn/zones/3/state'), 'playing');
+  assert.equal(map.get('sonn/zones/3/power/state'), 'on');
+  assert.equal(map.get('sonn/zones/3/power/target'), 'on');
+  assert.equal(map.get('sonn/zones/3/power/managed'), '0');
+  assert.equal(map.get('sonn/zones/3/power/idleTimeoutMs'), '');
   assert.equal(map.get('sonn/zones/3/volume'), '40');
   assert.equal(map.get('sonn/zones/3/track/title'), 'Song');
   assert.equal(map.get('sonn/zones/3/source/name'), 'Apple Music');

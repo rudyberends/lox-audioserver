@@ -204,7 +204,13 @@ export class ZoneManager {
     // shared-group managers — two managers driving channels on the same relay card must not
     // open the device concurrently (#293).
     const powerExecutor = new SystemPowerManagerExecutor();
-    this.powerManager = new PowerManager(this.log, powerExecutor);
+    this.powerManager = new PowerManager(this.log, powerExecutor, (zoneId, signal) => {
+      // `ZoneState.power` is also exposed by the public API. Keep it aligned with the
+      // last successfully applied physical power signal for configured power actions.
+      if (this.powerManager.hasConfiguredActions(zoneId)) {
+        this.applyPatch(zoneId, { power: signal === 1 ? 'on' : 'off' });
+      }
+    });
     this.sharedPowerGroupManager = new SharedPowerGroupManager(this.log, powerExecutor);
     this.zoneAudioPrefs.setZonePowerStateResolver((zoneId) => this.powerManager.isSignalOn(zoneId));
     this.zoneAudioPrefs.setZoneEqualizerResolver((zoneId) => this.resolveBuiltinEqualizerBands(zoneId));
@@ -678,6 +684,26 @@ export class ZoneManager {
     }
     this.powerManager.forceSignal(zoneId, ctx.config, signal);
     return true;
+  }
+
+  public getPowerState(zoneId: number): {
+    power: 'on' | 'off';
+    target: 'on' | 'off';
+    managed: boolean;
+    idleTimeoutMs: number | null;
+  } | null {
+    const ctx = this.zoneRepo.get(zoneId);
+    const state = this.getState(zoneId);
+    if (!ctx || !state) {
+      return null;
+    }
+    const snapshot = this.powerManager.getState(zoneId, ctx.config, state.power === 'on' ? 1 : 0);
+    return {
+      power: snapshot.power === 1 ? 'on' : 'off',
+      target: snapshot.target === 1 ? 'on' : 'off',
+      managed: snapshot.managed,
+      idleTimeoutMs: snapshot.idleTimeoutMs,
+    };
   }
 
   public async startAlert(
