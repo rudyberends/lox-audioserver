@@ -308,6 +308,15 @@ export class ContentManager {
 
   // -- Local playlist editing -------------------------------------------------
 
+  public async listLocalPlaylists(
+    offset: number,
+    limit: number,
+  ): Promise<{ items: PlaylistEntry[]; total: number }> {
+    const items = await this.library.listPlaylists(offset, limit);
+    const total = this.library.getPlaylistCount();
+    return { items, total };
+  }
+
   public createLocalPlaylist(name: string): PlaylistEntry {
     this.cache.clearAll();
     return this.library.createPlaylist(name);
@@ -724,6 +733,22 @@ export class ContentManager {
     const id = String(folderId || '').trim();
     if (!id || id === 'root' || id === 'start') {
       return null;
+    }
+
+    if (service === 'library' && id.startsWith('library:playlist:')) {
+      const playlistId = Number.parseInt(id.slice('library:playlist:'.length), 10);
+      const playlist = Number.isFinite(playlistId) ? this.library.getPlaylist(playlistId) : null;
+      if (!playlist) {
+        return null;
+      }
+      return {
+        id,
+        name: playlist.name,
+        type: 7,
+        kind: 'playlist',
+        audiopath: id,
+        coverurl: playlist.coverurl || undefined,
+      };
     }
 
     if (id.includes(':')) {

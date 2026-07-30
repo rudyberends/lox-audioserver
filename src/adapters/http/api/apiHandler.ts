@@ -36,6 +36,7 @@ import type {
   ApiOutput,
   ApiPowerState,
   ApiOutputCapabilities,
+  ApiPlaylist,
   ApiQueue,
   ApiRecents,
   ApiVolumeLimits,
@@ -47,6 +48,7 @@ import { healthHttpStatus, type HealthReport } from '@/domain/server/health';
 import type { ServerLifecycleSnapshot } from '@/domain/server/lifecycle';
 import { serveCover } from '@/adapters/http/streams/serveCover';
 import { COVER_ART_NOW_PLAYING_SIZE, isHttpUrl } from '@/shared/coverArt';
+import { decodeBrowseRef } from '@/domain/media/browseRef';
 
 export type ApiHandlerDeps = {
   eventHub: ApiEventHub;
@@ -186,6 +188,13 @@ export type ApiHandlerDeps = {
     services: string[];
     limit: number;
   }) => Promise<ApiSearchResult>;
+  listPlaylists: (start: number, limit: number) => Promise<{ items: ApiPlaylist[]; total: number }>;
+  createPlaylist: (name: string) => Promise<ApiPlaylist>;
+  renamePlaylist: (id: string, name: string) => Promise<ApiPlaylist | null>;
+  deletePlaylist: (id: string) => Promise<boolean>;
+  addPlaylistItem: (playlistId: string, itemId: string) => Promise<boolean>;
+  removePlaylistItem: (playlistId: string, position: number) => Promise<boolean>;
+  movePlaylistItem: (playlistId: string, from: number, to: number) => Promise<boolean>;
   /** Every configured input, in configuration order. */
   getInputs: () => ApiInput[];
   /**
@@ -445,6 +454,17 @@ export class ApiHandler {
 
     if (pathname === '/search' && method === 'GET') {
       await this.handleSearch(res, url);
+      return;
+    }
+
+    const playlistsMatch = /^\/playlists(?:\/(.+))?$/.exec(pathname);
+    const playlistItemsMatch = /^\/playlists\/(.+)\/items$/.exec(pathname);
+    if (playlistItemsMatch) {
+      await this.handlePlaylistItems(req, res, method, playlistItemsMatch[1]!);
+      return;
+    }
+    if (playlistsMatch) {
+      await this.handlePlaylists(req, res, method, playlistsMatch[1], url);
       return;
     }
 
@@ -1019,6 +1039,135 @@ export class ApiHandler {
       return;
     }
     this.sendJson(res, 200, result);
+  }
+
+  /** Local playlist catalogue and editing surface. Playlist ids remain opaque browse ids. */
+  private async handlePlaylists(
+    req: IncomingMessage,
+    res: ServerResponse,
+    method: string,
+    rawId: string | undefined,
+    url: URL,
+  ): Promise<void> {
+    if (!rawId) {
+      if (method === 'GET') {
+        const start = pagingStart(url.searchParams);
+        const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 0), 1, BROWSE_MAX_LIMIT)
+          ?? BROWSE_DEFAULT_LIMIT;
+        this.sendJson(res, 200, await this.deps.listPlaylists(start, limit));
+        return;
+      }
+      if (method === 'POST') {
+        const body = await this.readJsonOrBadRequest(req, res);
+        if (!body) return;
+        const name = typeof body.name === 'string' ? body.name.trim() : '';
+        if (!name) {
+          this.sendJson(res, 400, { error: 'invalid-name' });
+          return;
+        }
+        this.sendJson(res, 201, await this.deps.createPlaylist(name));
+        return;
+      }
+      this.sendJson(res, 405, { error: 'method-not-allowed' });
+      return;
+    }
+
+    const playlistId = this.localPlaylistId(rawId);
+    if (!playlistId) {
+      this.sendJson(res, 404, { error: 'playlist-not-found' });
+      return;
+    }
+    const body = method === 'GET' ? null : await this.readJsonOrBadRequest(req, res);
+    if (method !== 'GET' && !body) return;
+
+    if (method === 'PATCH') {
+      const name = typeof body?.name === 'string' ? body.name.trim() : '';
+      if (!name) {
+        this.sendJson(res, 400, { error: 'invalid-name' });
+        return;
+      }
+      const playlist = await this.deps.renamePlaylist(playlistId, name);
+      if (!playlist) {
+        this.sendJson(res, 404, { error: 'playlist-not-found' });
+        return;
+      }
+      this.sendJson(res, 200, playlist);
+      return;
+    }
+    if (method === 'DELETE') {
+      if (!(await this.deps.deletePlaylist(playlistId))) {
+        this.sendJson(res, 404, { error: 'playlist-not-found' });
+        return;
+      }
+      res.writeHead(204).end();
+      return;
+    }
+    this.sendJson(res, 405, { error: 'method-not-allowed' });
+  }
+
+  private async handlePlaylistItems(
+    req: IncomingMessage,
+    res: ServerResponse,
+    method: string,
+    rawId: string,
+  ): Promise<void> {
+    const playlistId = this.localPlaylistId(rawId);
+    if (!playlistId) {
+      this.sendJson(res, 404, { error: 'playlist-not-found' });
+      return;
+    }
+    const body = await this.readJsonOrBadRequest(req, res);
+    if (!body) return;
+    if (method === 'POST') {
+      const itemId = typeof body.id === 'string' ? body.id.trim() : '';
+      if (!itemId || !(await this.deps.addPlaylistItem(playlistId, itemId))) {
+        this.sendJson(res, 400, { error: 'invalid-playlist-item' });
+        return;
+      }
+      res.writeHead(204).end();
+      return;
+    }
+    if (method === 'DELETE') {
+      const position = this.clampInt(body.position, 0, Number.MAX_SAFE_INTEGER);
+      if (position === null || !(await this.deps.removePlaylistItem(playlistId, position))) {
+        this.sendJson(res, 404, { error: 'playlist-item-not-found' });
+        return;
+      }
+      res.writeHead(204).end();
+      return;
+    }
+    if (method === 'PATCH') {
+      const from = this.clampInt(body.from, 0, Number.MAX_SAFE_INTEGER);
+      const to = this.clampInt(body.to, 0, Number.MAX_SAFE_INTEGER);
+      if (from === null || to === null || !(await this.deps.movePlaylistItem(playlistId, from, to))) {
+        this.sendJson(res, 404, { error: 'playlist-item-not-found' });
+        return;
+      }
+      res.writeHead(204).end();
+      return;
+    }
+    this.sendJson(res, 405, { error: 'method-not-allowed' });
+  }
+
+  private localPlaylistId(rawId: string): string | null {
+    const ref = decodeBrowseRef(rawId);
+    if (!ref || ref.target !== 'container' || ref.service !== 'library' || ref.kind !== 'playlist') {
+      return null;
+    }
+    const match = /^library:playlist:(\d+)$/.exec(ref.folderId);
+    return match?.[1] ?? null;
+  }
+
+  private async readJsonOrBadRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      return await this.readJsonBody(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'invalid-json' });
+      return null;
+    }
   }
 
   /**

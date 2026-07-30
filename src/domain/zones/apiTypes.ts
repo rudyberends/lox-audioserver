@@ -58,6 +58,15 @@ export interface ApiArtworkColors {
   onLight: [number, number, number];
 }
 
+/** A user-managed playlist in the local library. */
+export interface ApiPlaylist {
+  /** Opaque playlist container id; hand it back to browse and play. */
+  id: string;
+  name: string;
+  tracks: number;
+  coverUrl?: string;
+}
+
 /** Which source the current audio came from. `null` when nothing is loaded. */
 export interface ApiSource {
   kind: ApiSourceKind;

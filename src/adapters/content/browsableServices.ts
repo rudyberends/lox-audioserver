@@ -103,8 +103,9 @@ export function buildBrowsableServices(
       provider: 'library',
       title: providerTitle('library'),
       rootFolderId: 'root',
-      // The library root lists storages; the collection categories (Albums /
-      // Artists / Tracks / Folders) live under the local storage folder.
+      // The library root lists storages; the collection categories live under
+      // each storage folder. Both local and NAS storage expose albums, artists
+      // and tracks; Local Media also exposes the user-managed playlists.
       id3Probe: 'library-local',
       searchSource: 'local',
       capabilities: capabilitiesFor('library'),

@@ -17,7 +17,7 @@ import { ApiHandler } from '@/adapters/http/api/apiHandler';
 import { buildPublicAudioServersList } from '@/adapters/discovery/audioServersList';
 import { BrowseService } from '@/adapters/http/api/browseService';
 import { DestinationService } from '@/adapters/http/api/destinationService';
-import { resolveUriFromRef } from '@/domain/media/browseRef';
+import { encodeContainerRef, resolveUriFromRef } from '@/domain/media/browseRef';
 import { toApiQueue } from '@/adapters/http/api/queueProjection';
 import { toApiFavorites, toApiRecents } from '@/adapters/http/api/libraryProjection';
 import { toApiInput } from '@/adapters/http/api/inputProjection';
@@ -30,6 +30,7 @@ import type {
   ApiPowerState,
   ApiAudioFormat,
   ApiVolumeLimits,
+  ApiPlaylist,
 } from '@/domain/zones/apiTypes';
 import { isLocalRequest } from '@/shared/utils/net';
 import type { StreamProxyRoute } from '@/shared/streamProxyRoute';
@@ -262,6 +263,22 @@ export class HttpService {
       browse: (id, start, limit) => this.browseService.browse(id, start, limit),
       describeItem: (id) => this.browseService.describeItem(id),
       search: (request) => this.browseService.search(request),
+      listPlaylists: async (start, limit) => {
+        const page = await options.contentManager.listLocalPlaylists(start, limit);
+        return { items: page.items.map(toApiPlaylist), total: page.total };
+      },
+      createPlaylist: async (name) => toApiPlaylist(options.contentManager.createLocalPlaylist(name)),
+      renamePlaylist: async (id, name) => {
+        const playlist = options.contentManager.renameLocalPlaylist(Number(id), name);
+        return playlist ? toApiPlaylist(playlist) : null;
+      },
+      deletePlaylist: async (id) => options.contentManager.deleteLocalPlaylist(Number(id)),
+      addPlaylistItem: async (id, itemId) =>
+        (await options.contentManager.addItemsToLocalPlaylist(Number(id), resolveUriFromRef(itemId))) > 0,
+      removePlaylistItem: async (id, position) =>
+        options.contentManager.removeLocalPlaylistItem(Number(id), position),
+      movePlaylistItem: async (id, from, to) =>
+        options.contentManager.moveLocalPlaylistItem(Number(id), from, to),
       getInputs: () => {
         // listLineInInputs resolves ids/names/icons; controllable and metadataEnabled are
         // config flags it does not carry, so they are joined back on by id here.
@@ -847,4 +864,17 @@ export class HttpService {
       return path || '/';
     }
   }
+}
+
+function toApiPlaylist(playlist: { id: string; name: string; tracks: number; audiopath: string; coverurl?: string }): ApiPlaylist {
+  return {
+    id: encodeContainerRef({
+      kind: 'playlist',
+      service: 'library',
+      folderId: playlist.audiopath,
+    }),
+    name: playlist.name,
+    tracks: playlist.tracks,
+    ...(playlist.coverurl ? { coverUrl: playlist.coverurl } : {}),
+  };
 }

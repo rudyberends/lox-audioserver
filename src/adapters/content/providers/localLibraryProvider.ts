@@ -597,6 +597,23 @@ export class LocalLibraryProvider {
       return this.buildDriveFolder(storageId, '', offset, limit);
     }
 
+    if (normalized === 'library-local-playlists') {
+      const playlists = await this.listPlaylists(offset, limit);
+      const items: ContentFolderItem[] = playlists.map((playlist) => ({
+        id: playlist.audiopath,
+        name: playlist.name,
+        type: FILE_TYPE_FOLDER,
+        audiopath: playlist.audiopath,
+        ...(playlist.coverurl ? { coverurl: playlist.coverurl } : {}),
+        items: playlist.tracks,
+        provider: 'library',
+        origin: 'local',
+        kind: 'playlist',
+        tag: 'playlist',
+      }));
+      return this.buildFolder('library-local-playlists', 'Playlists', items, offset, limit);
+    }
+
     if (normalized.startsWith('library:album:')) {
       const key = normalized.slice('library:album:'.length);
       return this.buildAlbumTracks(key, offset, limit);
@@ -661,10 +678,10 @@ export class LocalLibraryProvider {
   ): Promise<ContentFolder> {
     const prefix = storageId === 'local' ? 'library-local' : `library-nas-${storageId}`;
     const items: ContentFolderItem[] = [
-      this.categoryItem(prefix, 'Folders', 'folders', storageId, { tag: 'nas', nas: true }),
       this.categoryItem(prefix, 'Albums', 'albums', storageId, { tag: 'nas', nas: true }),
       this.categoryItem(prefix, 'Artists', 'artists', storageId, { tag: 'nas', nas: true }),
       this.categoryItem(prefix, 'Tracks', 'tracks', storageId, { tag: 'nas', nas: true }),
+      ...(storageId === 'local' ? [this.categoryItem(prefix, 'Playlists', 'playlists', storageId)] : []),
     ];
     return this.buildFolder(prefix, label, items, offset, limit);
   }
@@ -884,7 +901,7 @@ export class LocalLibraryProvider {
   private categoryItem(
     prefix: string,
     label: string,
-    suffix: 'albums' | 'artists' | 'tracks' | 'folders',
+    suffix: 'albums' | 'artists' | 'tracks' | 'folders' | 'playlists',
     storageId: string,
     options?: { tag?: string; nas?: boolean },
   ) {
@@ -1857,6 +1874,10 @@ export class LocalLibraryProvider {
     const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
     const { items } = this.store.listPlaylists(safeOffset, safeLimit);
     return items.map((row) => this.playlistEntry(row));
+  }
+
+  public getPlaylistCount(): number {
+    return this.store.listPlaylists(0, 0).total;
   }
 
   public createPlaylist(name: string): PlaylistEntry {
