@@ -127,6 +127,15 @@ export class PowerManager {
     return this.zones.get(zoneId)?.currentSignal === 1;
   }
 
+  /** Apply an explicit power command immediately; automatic OFF transitions still use offDelayMs. */
+  public forceSignal(zoneId: number, zoneConfig: ZoneConfig, signal: PowerSignal): void {
+    const config = normalizePowerManagerConfig(zoneConfig.powerManager ?? null);
+    const runtime = this.ensureRuntime(zoneId, config);
+    runtime.config = config;
+    runtime.desiredSignal = signal;
+    this.scheduleSignal(zoneId, runtime, signal, 0);
+  }
+
   private setDesired(
     zoneId: number,
     config: NormalizedPowerConfig,

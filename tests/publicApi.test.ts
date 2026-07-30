@@ -92,6 +92,7 @@ type Harness = {
   handler: ApiHandler;
   hub: ApiEventHub;
   commands: Array<{ zoneId: number; command: string; payload?: string }>;
+  powers: Array<{ zoneId: number; signal: 0 | 1 }>;
   plays: Array<{ zoneId: number; uri: string }>;
   states: Map<number, ZoneState>;
 };
@@ -136,6 +137,7 @@ function harness(): Harness {
   };
   const states = new Map<number, ZoneState>([[3, zoneState()]]);
   const commands: Harness['commands'] = [];
+  const powers: Harness['powers'] = [];
   const plays: Harness['plays'] = [];
   const hub = new ApiEventHub();
   const handler = new ApiHandler({
@@ -143,6 +145,11 @@ function harness(): Harness {
     getAllZoneStates: () => [...states.values()],
     getZoneState: (zoneId) => states.get(zoneId) ?? null,
     handleCommand: (zoneId, command, payload) => commands.push({ zoneId, command, payload }),
+    setPower: (zoneId, signal) => {
+      if (!states.has(zoneId)) return false;
+      powers.push({ zoneId, signal });
+      return true;
+    },
     playContent: async (zoneId, uri) => {
       plays.push({ zoneId, uri });
     },
@@ -274,7 +281,7 @@ function harness(): Harness {
     serverVersion: '4.0.0-test',
     startedAt: Date.now() - 5000,
   });
-  return { handler, hub, commands, plays, states };
+  return { handler, hub, commands, powers, plays, states };
 }
 
 async function call(
@@ -435,6 +442,21 @@ test('malformed command bodies are rejected without reaching the engine', async 
   const bad = await call(h, 'PUT', `${API_ROOT}/zones/3/power`, { power: 'maybe' });
   assert.equal(bad.statusCode, 400);
   assert.equal(h.commands.length, 0, 'no invalid request may reach the zone engine');
+});
+
+test('explicit power commands bypass the automatic off delay', async () => {
+  const h = harness();
+  const off = await call(h, 'PUT', `${API_ROOT}/zones/3/power`, { power: 'off' });
+  assert.equal(off.statusCode, 204);
+  assert.deepEqual(h.powers, [{ zoneId: 3, signal: 0 }]);
+  assert.deepEqual(h.commands, [{ zoneId: 3, command: 'off', payload: undefined }]);
+
+  const on = await call(h, 'PUT', `${API_ROOT}/zones/3/power`, { power: 'on' });
+  assert.equal(on.statusCode, 204);
+  assert.deepEqual(h.powers, [
+    { zoneId: 3, signal: 0 },
+    { zoneId: 3, signal: 1 },
+  ]);
 });
 
 test('a wrong method is a 405, not a silent success', async () => {
@@ -1706,4 +1728,3 @@ test('a tab finds itself through destinations, where it is private to it', async
     'the owner sees its own',
   );
 });
-

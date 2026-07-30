@@ -46,6 +46,8 @@ export type ApiHandlerDeps = {
   getAllZoneStates: () => ZoneState[];
   getZoneState: (zoneId: number) => ZoneState | null | undefined;
   handleCommand: (zoneId: number, command: string, payload?: string) => void;
+  /** Applies an explicit power command immediately, without the automatic OFF delay. */
+  setPower: (zoneId: number, signal: 0 | 1) => boolean;
   /** Which device a zone's output plays to, when its protocol identifies one. */
   getOutputDevice: (zoneId: number) => ApiOutput['device'] | undefined;
   /**
@@ -643,7 +645,13 @@ export class ApiHandler {
           this.sendJson(res, 400, { error: 'invalid-power' });
           return;
         }
-        this.deps.handleCommand(zoneId, body.power === 'on' ? 'on' : 'off');
+        if (!this.deps.setPower(zoneId, body.power === 'on' ? 1 : 0)) {
+          this.sendJson(res, 404, { error: 'zone-not-found' });
+          return;
+        }
+        if (body.power === 'off') {
+          this.deps.handleCommand(zoneId, 'off');
+        }
         res.writeHead(204).end();
         return;
       }

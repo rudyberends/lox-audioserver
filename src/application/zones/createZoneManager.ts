@@ -27,6 +27,7 @@ export type ZoneManagerFacade = Pick<
   | 'applyPatch'
   | 'setEqualizerBands'
   | 'handleCommand'
+  | 'setPower'
   | 'inputs'
   | 'queue'
   | 'playContent'

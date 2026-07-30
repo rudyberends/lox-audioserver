@@ -198,6 +198,7 @@ export class HttpService {
       getZoneState: (zoneId) => options.zoneManager.getZoneState(zoneId),
       handleCommand: (zoneId, command, payload) =>
         options.zoneManager.handleCommand(zoneId, command, payload),
+      setPower: (zoneId, signal) => options.zoneManager.setPower(zoneId, signal),
       // 'api' as the type, so anything keying on how playback started can tell this
       // apart from a Loxone tap or a favourite.
       // Accepts a browse id as well as a raw audiopath: browse hands out ids, and the guide

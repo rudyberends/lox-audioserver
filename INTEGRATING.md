@@ -13,14 +13,9 @@ Base URL: `http://<server>:7090/api/v1`
 > admin UI: it is UI-shaped, changes freely, and is not a contract. Build your integrations on
 > `/api/v1`.
 
-**This server's own player is built on nothing else.** It uses this API and only this API —
-no `/admin/api`, no port 7091, no undocumented routes — so everything described here is
-exercised by a real client rather than merely offered. That is deliberate: a contract its
-author does not use is a contract whose gaps nobody finds. Browse and search exist because
-writing it found there was no way to get from "I want to hear X" to playing X, and `source`
-on a recent is a value you can actually play because writing it found that it was not.
-
-If something here is awkward to build against, it is likely awkward for us too — say so.
+**SONN player is built on nothing else.** It uses this API and only this API —
+no `/admin/api`, no loxone api, so everything described here is
+exercised by a real client rather than merely offered.
 
 ### Coming from `/admin/api`?
 
@@ -401,6 +396,11 @@ DELETE /api/v1/zones/{id}/recents                                clear the histo
 PUT    /api/v1/zones/{id}/group      {"members": [7, 9]}   group these behind this zone
 PUT    /api/v1/zones/{id}/group      {"members": []}       ungroup
 ```
+
+`power` is the explicit amplifier/player power command. `{"power":"off"}` switches the
+configured power action immediately; it does not wait for the automatic `offDelayMs`. It also
+stops playback. The automatic switch-off caused by a normal playback state transition keeps
+using the configured delay.
 
 `pause` keeps the zone's place and `stop` gives it up: after `pause`, `play` resumes
 where it was; after `stop` it starts over. Both let the zone's power management switch
@@ -823,20 +823,3 @@ curl -N http://server:7090/api/v1/events
   alongside `v1` rather than replacing it, so you migrate when it suits you. Calling
   `/api/...` without a version returns `404 api-version-required` and names the prefix
   to use, rather than failing in some way you have to guess at.
-
-## Choosing the right surface
-
-`/api` reads state, controls playback, and browses and searches the content this server can
-reach. Where it stops is *playing content yourself*: it hands you ids to play through a
-zone, not audio to decode. If you are building something that streams — an app with offline
-sync, a phone client — a Subsonic app already does all of that and you would be rebuilding
-it. See [Access](README.md#access) for how to enable each of these.
-
-| Surface | Use it for |
-| --- | --- |
-| `/api` | Reading state, controlling playback, browsing, searching, and playing audio yourself — start here |
-| MQTT | The same state and transport controls, where a broker already exists. Nothing beyond that |
-| Subsonic (`/rest/*`) | Browsing and streaming the library with existing apps |
-| DLNA / UPnP | Renderers, and discovery by TVs and network speakers |
-| WebDAV (`/dav`) | Adding and organising files in the library |
-| Loxone (`7091`/`7095`) | The Loxone Miniserver and native app only — not a general API |

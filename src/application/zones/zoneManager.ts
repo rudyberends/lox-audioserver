@@ -40,7 +40,11 @@ import {
   isVolumeOwnedByStateController,
 } from '@/application/zones/state/authorityPolicies';
 import type { AlertMediaResource } from '@/application/alerts/types';
-import { PowerManager, SystemPowerManagerExecutor } from '@/application/zones/services/powerManager';
+import {
+  PowerManager,
+  SystemPowerManagerExecutor,
+  type PowerSignal,
+} from '@/application/zones/services/powerManager';
 import { SharedPowerGroupManager } from '@/application/zones/services/sharedPowerGroupManager';
 import { ZoneHeartbeatService } from '@/application/zones/services/ZoneHeartbeatService';
 import { InputSourceConfigurator } from '@/application/zones/services/InputSourceConfigurator';
@@ -665,6 +669,15 @@ export class ZoneManager {
       }
     }
     this.playbackCoordinator.handleCommand(zoneId, command, payload);
+  }
+
+  public setPower(zoneId: number, signal: PowerSignal): boolean {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx) {
+      return false;
+    }
+    this.powerManager.forceSignal(zoneId, ctx.config, signal);
+    return true;
   }
 
   public async startAlert(

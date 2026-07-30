@@ -56,6 +56,30 @@ test('power manager keeps default off delay aligned with admin UI', () => {
   assert.equal(explicitImmediate.offDelayMs, 0);
 });
 
+test('explicit power commands apply immediately despite the automatic off delay', async () => {
+  const executor = new FakeExecutor();
+  const pm = new PowerManager(noopLogger, executor);
+  const zoneConfig = {
+    id: 1,
+    name: 'Living',
+    sourceMac: '00:00:00:00:00:01',
+    volumes: {} as any,
+    powerManager: {
+      url: { enabled: true, onUrl: 'http://amp/on', offUrl: 'http://amp/off' },
+    },
+  } as any;
+
+  pm.onStatePatch(1, zoneConfig, { mode: 'play' } as any, { ...baseState, mode: 'play' } as any);
+  await wait(10);
+  pm.forceSignal(1, zoneConfig, 0);
+  await wait(10);
+
+  assert.deepEqual(executor.calls, [
+    { type: 'url', signal: 1 },
+    { type: 'url', signal: 0 },
+  ]);
+});
+
 test('power manager stays active for state tracking when no config exists', async () => {
   const executor = new FakeExecutor();
   const signalUpdates: Array<{ zoneId: number; signal: 0 | 1 }> = [];
