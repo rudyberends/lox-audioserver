@@ -139,6 +139,37 @@ function pickPrimary(image: Awaited<ReturnType<typeof Jimp.read>>): Rgb {
   return bestScore > 0.05 && best ? best : average;
 }
 
+/**
+ * Pick a second vivid colour that is actually present in the artwork. Keeping
+ * it away from the primary hue gives the UI some separation without inventing
+ * a complementary colour that may not occur anywhere in the cover.
+ */
+function pickAccent(image: Awaited<ReturnType<typeof Jimp.read>>, primary: Rgb): Rgb {
+  const sample = image.clone().resize({ w: 16, h: 16 });
+  const [primaryHue] = rgbToHsl(primary);
+  let best: Rgb | null = null;
+  let bestScore = -1;
+
+  for (let y = 0; y < sample.height; y += 1) {
+    for (let x = 0; x < sample.width; x += 1) {
+      const { r, g, b, a } = intToRGBA(sample.getPixelColor(x, y));
+      if (a < 128) continue;
+      const color: Rgb = [r, g, b];
+      const [h, s, l] = rgbToHsl(color);
+      if (s < 0.25 || l < 0.12 || l > 0.9) continue;
+
+      const hueDistance = Math.min(Math.abs(h - primaryHue), 1 - Math.abs(h - primaryHue));
+      const score = s * (0.5 + hueDistance) * (1 - Math.abs(l - 0.5) * 1.2);
+      if (score > bestScore) {
+        bestScore = score;
+        best = color;
+      }
+    }
+  }
+
+  return best ?? primary;
+}
+
 /** Subtly tint `base` (white/black) toward the hue, but only if all required pairs stay >= MIN_CONTRAST. */
 function tintedOn(base: Rgb, hue: number, background: Rgb, contrastAgainst: Rgb): Rgb {
   const tint = hslToRgb([hue, 0.5, base === WHITE ? 0.9 : 0.12]);
@@ -152,8 +183,7 @@ function tintedOn(base: Rgb, hue: number, background: Rgb, contrastAgainst: Rgb)
 export function derivePalette(image: Awaited<ReturnType<typeof Jimp.read>>): ArtworkPalette {
   const primary = pickPrimary(image);
   const [h, s] = rgbToHsl(primary);
-  // Complementary hue with a guaranteed-vivid saturation/lightness for the accent.
-  const accent = hslToRgb([(h + 0.5) % 1, Math.max(0.5, s), 0.55]);
+  const accent = pickAccent(image, primary);
 
   const backgroundDark = toDarkBackground(hslToRgb([h, Math.min(0.6, Math.max(0.25, s)), 0.18]));
   const backgroundLight = toLightBackground(hslToRgb([h, Math.min(0.5, Math.max(0.2, s)), 0.9]));

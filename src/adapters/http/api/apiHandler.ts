@@ -1388,7 +1388,10 @@ export class ApiHandler {
     const options: AudioAnalysisSubscription = {
       ...format,
       rateMax,
-      feed: 'engine',
+      // Drive Sendspin from the PCM timeline that is actually sent to the output. The
+      // engine feed can be ahead by the output buffer, which makes a browser visualizer
+      // visibly lead the music. Other outputs currently expose the engine timeline.
+      feed: this.deps.getOutputProtocol(zoneId) === 'sendspin' ? 'scheduled-output' : 'engine',
       loudness: requestedTypes.has('loudness'),
       fPeak: requestedTypes.has('f_peak'),
       peak: requestedTypes.has('peak'),
