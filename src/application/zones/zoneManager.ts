@@ -686,6 +686,15 @@ export class ZoneManager {
     return true;
   }
 
+  /** Stops playback and switches the configured physical power action off immediately. */
+  public powerOffImmediately(zoneId: number): boolean {
+    if (!this.setPower(zoneId, 0)) {
+      return false;
+    }
+    this.handleCommand(zoneId, 'off');
+    return true;
+  }
+
   public getPowerState(zoneId: number): {
     power: 'on' | 'off';
     target: 'on' | 'off';

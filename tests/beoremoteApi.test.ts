@@ -114,6 +114,11 @@ function createHarness(options: {
         powerSignals.push({ zoneId, signal });
         return zoneId === 12;
       },
+      powerOffImmediately: (zoneId: number) => {
+        powerSignals.push({ zoneId, signal: 0 });
+        commands.push({ zoneId, command: 'off' });
+        return zoneId === 12;
+      },
       getZoneState: () => ({ audiopath: zoneAudiopath.value }),
     } as any,
     lineIn: {

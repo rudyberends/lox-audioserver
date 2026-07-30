@@ -328,12 +328,9 @@ export class BeoremoteApiHandler {
     action: Exclude<BeoremoteKeyAction, { kind: 'unassigned' }>,
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
     if (action.kind === 'standby') {
-      if (!this.deps.zoneManager.setPower(zoneId, 0)) {
+      if (!this.deps.zoneManager.powerOffImmediately(zoneId)) {
         return { ok: false, reason: 'zone-not-found' };
       }
-      // Stop playback as well as switching the configured power action immediately.
-      // The direct setPower call bypasses offDelay.
-      this.deps.zoneManager.handleCommand(zoneId, 'off');
       return { ok: true };
     }
 

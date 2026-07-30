@@ -49,6 +49,8 @@ export type ApiHandlerDeps = {
   handleCommand: (zoneId: number, command: string, payload?: string) => void;
   /** Applies an explicit power command immediately, without the automatic OFF delay. */
   setPower: (zoneId: number, signal: 0 | 1) => boolean;
+  /** Stops playback and applies an immediate physical power-off. */
+  powerOffImmediately?: (zoneId: number) => boolean;
   /** Which device a zone's output plays to, when its protocol identifies one. */
   getOutputDevice: (zoneId: number) => ApiOutput['device'] | undefined;
   /**
@@ -647,11 +649,14 @@ export class ApiHandler {
           this.sendJson(res, 400, { error: 'invalid-power' });
           return;
         }
-        if (!this.deps.setPower(zoneId, body.power === 'on' ? 1 : 0)) {
+        const applied = body.power === 'off' && this.deps.powerOffImmediately
+          ? this.deps.powerOffImmediately(zoneId)
+          : this.deps.setPower(zoneId, body.power === 'on' ? 1 : 0);
+        if (!applied) {
           this.sendJson(res, 404, { error: 'zone-not-found' });
           return;
         }
-        if (body.power === 'off') {
+        if (body.power === 'off' && !this.deps.powerOffImmediately) {
           this.deps.handleCommand(zoneId, 'off');
         }
         res.writeHead(204).end();
