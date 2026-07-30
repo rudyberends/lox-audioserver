@@ -42,7 +42,11 @@ export type NormalizedGpioConfig = {
 
 export type NormalizedUrlConfig = {
   onUrl: string;
+  onMethod: string;
+  onBody: string | null;
   offUrl: string;
+  offMethod: string;
+  offBody: string | null;
 };
 
 export type NormalizedUdpConfig = {
@@ -323,7 +327,9 @@ export class SystemPowerManagerExecutor implements PowerManagerExecutor {
     if (!target) {
       return;
     }
-    await requestUrl(target);
+    const method = signal === 1 ? config.onMethod : config.offMethod;
+    const body = signal === 1 ? config.onBody : config.offBody;
+    await requestUrl(target, method, body);
   }
 
   private async sendUdp(config: NormalizedUdpConfig, signal: PowerSignal): Promise<void> {
@@ -467,11 +473,35 @@ function normalizeUrl(raw: ZoneUrlPowerConfig | null): NormalizedUrlConfig | nul
   }
   return {
     onUrl,
+    onMethod: normalizeHttpMethod(raw.onMethod),
+    onBody: normalizeRequestBody(raw.onBody),
     offUrl,
+    offMethod: normalizeHttpMethod(raw.offMethod),
+    offBody: normalizeRequestBody(raw.offBody),
   };
 }
 
-async function requestUrl(rawTarget: string, redirects = 0): Promise<void> {
+function normalizeHttpMethod(raw: string | undefined): string {
+  const method = raw?.trim().toUpperCase();
+  return method || 'GET';
+}
+
+function normalizeRequestBody(raw: unknown): string | null {
+  if (raw === undefined || raw === null) {
+    return null;
+  }
+  if (typeof raw === 'string') {
+    return raw;
+  }
+  return JSON.stringify(raw);
+}
+
+async function requestUrl(
+  rawTarget: string,
+  method = 'GET',
+  body: string | null = null,
+  redirects = 0,
+): Promise<void> {
   if (redirects > 5) {
     throw new Error('too many redirects');
   }
@@ -491,12 +521,15 @@ async function requestUrl(rawTarget: string, redirects = 0): Promise<void> {
         hostname: target.hostname,
         port: target.port,
         path: `${target.pathname}${target.search}`,
-        method: 'GET',
+        method,
         timeout: 8000,
         rejectUnauthorized: isHttps ? false : undefined,
         headers: {
           accept: '*/*',
           'user-agent': 'sonn-core-power-manager',
+          ...(body !== null
+            ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) }
+            : {}),
           ...(authorization ? { authorization } : {}),
         },
       },
@@ -505,7 +538,7 @@ async function requestUrl(rawTarget: string, redirects = 0): Promise<void> {
         if (code >= 300 && code < 400 && res.headers.location) {
           const location = new URL(res.headers.location, target).toString();
           res.resume();
-          resolve(requestUrl(location, redirects + 1));
+          resolve(requestUrl(location, method, body, redirects + 1));
           return;
         }
         res.resume();
@@ -518,7 +551,7 @@ async function requestUrl(rawTarget: string, redirects = 0): Promise<void> {
     );
     req.on('timeout', () => req.destroy(new Error('request timeout')));
     req.on('error', reject);
-    req.end();
+    req.end(body ?? undefined);
   });
 }
 

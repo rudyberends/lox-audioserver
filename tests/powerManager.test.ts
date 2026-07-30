@@ -243,6 +243,55 @@ test('system power manager reports URL client errors as failures', async () => {
   );
 });
 
+test('system power manager supports method and JSON body for an off-only URL', async () => {
+  const executor = new SystemPowerManagerExecutor();
+  let method: string | undefined;
+  let contentType: string | undefined;
+  let body = '';
+  await withHttpServer(
+    (req, res) => {
+      method = req.method;
+      contentType = req.headers['content-type'];
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => {
+        res.writeHead(200);
+        res.end('ok');
+      });
+    },
+    async (baseUrl) => {
+      const config = normalizePowerManagerConfig({
+        url: {
+          enabled: true,
+          onUrl: '',
+          offUrl: `${baseUrl}/BeoDevice/powerManagement/standby`,
+          offMethod: 'PUT',
+          offBody: { standby: { powerState: 'standby' } },
+        },
+      });
+      assert.deepEqual(config.actions, [
+        {
+          type: 'url',
+          config: {
+            onUrl: '',
+            onMethod: 'GET',
+            onBody: null,
+            offUrl: `${baseUrl}/BeoDevice/powerManagement/standby`,
+            offMethod: 'PUT',
+            offBody: '{"standby":{"powerState":"standby"}}',
+          },
+        },
+      ]);
+      await executor.execute(config.actions[0], 0);
+      await executor.execute(config.actions[0], 1);
+    },
+  );
+
+  assert.equal(method, 'PUT');
+  assert.equal(contentType, 'application/json');
+  assert.equal(body, '{"standby":{"powerState":"standby"}}');
+});
+
 test('power manager applies off delay and cancels pending off when play resumes', async () => {
   const executor = new FakeExecutor();
   const pm = new PowerManager(noopLogger, executor);

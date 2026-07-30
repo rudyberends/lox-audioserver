@@ -303,6 +303,21 @@ pause switches off), `playbackPreDelayMs` inserts a pre-delay so an amp can wake
 and `offDelayMs` delays switching off so short gaps don't cycle the amplifier (default 5 minutes, or set
 `offDelayEnabled: false` for immediate).
 
+For HTTP power control, `url.offMethod` and `url.offBody` can be used for devices that need more than a
+simple GET. The method defaults to `GET`; a configured body is sent as JSON. The ON side is optional, for
+example for an autosensing amplifier:
+
+```json
+{
+  "url": {
+    "enabled": true,
+    "offUrl": "http://192.168.1.43:8080/BeoDevice/powerManagement/standby",
+    "offMethod": "PUT",
+    "offBody": { "standby": { "powerState": "standby" } }
+  }
+}
+```
+
 ## Configuring
 
 Open the Admin UI at `http://<server-ip>:7090`. On first launch it asks you to create an admin account.

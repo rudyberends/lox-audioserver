@@ -481,8 +481,16 @@ export interface ZoneUrlPowerConfig {
   enabled?: boolean;
   /** URL to call when zone starts playing. */
   onUrl?: string;
+  /** HTTP method for the ON request; defaults to GET. */
+  onMethod?: string;
+  /** Optional request body for the ON request. Objects/arrays are JSON encoded. */
+  onBody?: unknown;
   /** URL to call when zone stops/pauses. */
   offUrl?: string;
+  /** HTTP method for the OFF request; defaults to GET. */
+  offMethod?: string;
+  /** Optional request body for the OFF request. Objects/arrays are JSON encoded. */
+  offBody?: unknown;
   /** Optional custom curl binary path. */
   curlPath?: string;
   /** Use --insecure for HTTPS calls (default true to match MS4L behavior). */
