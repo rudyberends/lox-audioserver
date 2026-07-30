@@ -126,7 +126,7 @@ desired signal. When `managed` is false, no physical power action is configured 
 | `source` | object \| **null** | Where the audio comes from. |
 | `group` | object \| **null** | `null` when the zone plays on its own; `members` lists leader first. |
 | `output` | object \| **null** | `protocol` is e.g. `sendspin`, `snapcast`, `googlecast`, `dlna`, `sonos`, `airplay`. |
-| `format` | object \| **null** | The audio this zone is streaming right now. |
+| `format` | object \| **null** | The source audio and output audio format. |
 | `error` | string \| *absent* | Why the last thing this zone was asked to play did not play. |
 
 `output.device` is present when the protocol identifies a specific device — for
@@ -157,15 +157,19 @@ of this contract.
 `null` is used deliberately instead of empty strings, so `if (zone.track)` is enough to
 tell "playing something" from "idle".
 
-`format` is what the device is actually receiving, which is not the file's own format — a zone
-whose output cannot take 192 kHz gets it resampled, and this reports the result:
+`format.output` is what the device is actually receiving, which is not the file's own format — a
+zone whose output cannot take 192 kHz gets it resampled. `format.source` is the native source
+format when it was declared by the provider or successfully probed:
 
 ```json
-"format": { "codec": "pcm", "sampleRate": 44100, "bitDepth": 16, "channels": 2, "bitrate": null }
+"format": {
+  "source": { "codec": "flac", "sampleRate": 96000, "bitDepth": 24, "channels": 2, "bitrate": null },
+  "output": { "codec": "pcm", "sampleRate": 44100, "bitDepth": 24, "channels": 2, "bitrate": null }
+}
 ```
 
-`bitrate` is bits per second where the encoder reports one, and `null` for PCM, whose rate is
-constant and never announced. `format` is null when the zone is streaming nothing. Engine
+`bitrate` is bits per second where it is known, and `null` when it is unavailable. `source` is
+null when the source format is unknown; `format` is null when the zone is streaming nothing. Engine
 internals — buffer sizes, restart counts, subscriber drops — stay out; those describe the
 server's health rather than the audio, and live in the admin surface.
 

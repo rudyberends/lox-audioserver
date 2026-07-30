@@ -14,8 +14,8 @@ import { AudioType, RepeatMode } from '@/domain/zones/enums';
 import { parseServiceNativeAudiopath } from '@/domain/zones/audiopath';
 import type {
   ApiGroup,
+  ApiAudioFormat,
   ApiPowerState,
-  ApiStreamFormat,
   ApiVolumeLimits,
   ApiOutput,
   ApiPlaybackState,
@@ -274,7 +274,7 @@ export type ZoneProjectionLookups = {
    * What the zone is streaming. Not derivable from `ZoneState` — the format belongs to the
    * engine session, not the zone — so it is passed in like the device and volume lookups.
    */
-  streamFormat?: (zoneId: number) => ApiStreamFormat | null;
+  streamFormat?: (zoneId: number) => ApiAudioFormat | null;
   volumeLimits?: ApiVolumeLimits;
 };
 

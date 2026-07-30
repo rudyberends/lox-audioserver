@@ -19,7 +19,7 @@ import type {
   ApiAlertKind,
   ApiDestination,
   ApiLocalDestination,
-  ApiStreamFormat,
+  ApiAudioFormat,
   ApiBrowseItem,
   ApiBrowseResult,
   ApiInput,
@@ -119,7 +119,7 @@ export type ApiHandlerDeps = {
   /** The configured name of a line-in, so `source.name` is not the server's MAC. */
   getInputLabel: (inputId: string) => string | null;
   /** What a zone is streaming right now, for `format`. */
-  getStreamFormat: (zoneId: number) => ApiStreamFormat | null;
+  getStreamFormat: (zoneId: number) => ApiAudioFormat | null;
   /** What a zone's volume will accept: its cap, its power-on level and its step. */
   getVolumeLimits: (zoneId: number) => ApiVolumeLimits | undefined;
   getPowerState?: (zoneId: number) => ApiPowerState | null;

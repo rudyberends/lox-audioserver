@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from './testHarness';
-import { toStreamFormat } from '../src/adapters/http/api/streamFormat';
+import { toApiAudioFormat, toStreamFormat } from '../src/adapters/http/api/streamFormat';
 import type { EngineSessionStats } from '../src/ports/EnginePort';
 
 // Sendspin already shows its client the codec, rate, depth and channel count, and the admin
@@ -48,6 +48,38 @@ test('the format describes the audio, not the engine', () => {
     'codec',
     'sampleRate',
   ]);
+});
+
+test('the API format separates native source audio from output audio', () => {
+  const format = toApiAudioFormat([
+    stat({
+      sampleRate: 44100,
+      pcmBitDepth: 24,
+      sourceFormat: {
+        codec: 'flac',
+        sampleRate: 96000,
+        channels: 2,
+        bitDepth: 24,
+        bitrate: null,
+      },
+    }),
+  ]);
+  assert.deepEqual(format, {
+    source: {
+      codec: 'flac',
+      sampleRate: 96000,
+      channels: 2,
+      bitDepth: 24,
+      bitrate: null,
+    },
+    output: {
+      codec: 'pcm',
+      sampleRate: 44100,
+      channels: 2,
+      bitDepth: 24,
+      bitrate: null,
+    },
+  });
 });
 
 test('a zone streaming nothing has no format', () => {

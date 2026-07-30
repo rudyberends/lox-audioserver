@@ -15,6 +15,14 @@ export type EngineSessionStats = {
   channels: number;
   pcmBitDepth: number;
   bps: number | null;
+  /** Native source format when declared or successfully probed. */
+  sourceFormat?: {
+    codec: string;
+    sampleRate: number;
+    channels: number;
+    bitDepth: number | null;
+    bitrate: number | null;
+  } | null;
   bufferedBytes: number;
   totalBytes: number;
   lastUpdated: number | null;

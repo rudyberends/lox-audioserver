@@ -125,10 +125,15 @@ export interface ApiStreamFormat {
   /** Hz, e.g. 44100 or 192000. */
   sampleRate: number;
   /** Bits per sample, e.g. 16 or 24. */
-  bitDepth: number;
+  bitDepth: number | null;
   channels: number;
   /** Bits per second, when the encoder reports one. Null for a constant-rate PCM stream. */
   bitrate: number | null;
+}
+
+export interface ApiAudioFormat {
+  source: ApiStreamFormat | null;
+  output: ApiStreamFormat | null;
 }
 
 export interface ApiZoneState {
@@ -161,7 +166,7 @@ export interface ApiZoneState {
    * zone whose output cannot take 192 kHz gets it resampled, and this reports what the
    * device is really receiving.
    */
-  format: ApiStreamFormat | null;
+  format: ApiAudioFormat | null;
   /**
    * Why the last thing this zone was asked to play did not play, or absent when nothing
    * went wrong.

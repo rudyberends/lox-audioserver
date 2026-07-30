@@ -7,7 +7,26 @@
  * buffer sizes, restart counts and subscriber drops are engine health, not something a
  * listener is hearing.
  */
-import type { ApiStreamFormat } from '@/domain/zones/apiTypes';
+import type { ApiAudioFormat, ApiStreamFormat } from '@/domain/zones/apiTypes';
+
+type StreamStat = {
+  profile: string;
+  sampleRate: number;
+  channels: number;
+  pcmBitDepth: number;
+  bps: number | null;
+  subscribers: number;
+  sourceFormat?: ApiStreamFormat | null;
+};
+
+function selectBest(stats: StreamStat[]): StreamStat | null {
+  const live = stats.filter((entry) => entry.subscribers > 0);
+  const candidates = live.length > 0 ? live : stats;
+  return candidates.reduce<StreamStat | null>(
+    (winner, entry) => (!winner || entry.sampleRate > winner.sampleRate ? entry : winner),
+    null,
+  );
+}
 
 /**
  * A zone can have several encoded profiles alive at once — a Cast device pulling MP3 while
@@ -17,21 +36,9 @@ import type { ApiStreamFormat } from '@/domain/zones/apiTypes';
  */
 export
 function toStreamFormat(
-  stats: Array<{
-    profile: string;
-    sampleRate: number;
-    channels: number;
-    pcmBitDepth: number;
-    bps: number | null;
-    subscribers: number;
-  }>,
+  stats: StreamStat[],
 ): ApiStreamFormat | null {
-  const live = stats.filter((entry) => entry.subscribers > 0);
-  const candidates = live.length > 0 ? live : stats;
-  const best = candidates.reduce<(typeof candidates)[number] | null>(
-    (winner, entry) => (!winner || entry.sampleRate > winner.sampleRate ? entry : winner),
-    null,
-  );
+  const best = selectBest(stats);
   if (!best || !best.sampleRate) {
     return null;
   }
@@ -45,3 +52,13 @@ function toStreamFormat(
   };
 }
 
+export function toApiAudioFormat(stats: StreamStat[]): ApiAudioFormat | null {
+  const output = toStreamFormat(stats);
+  if (!output) {
+    return null;
+  }
+  return {
+    source: selectBest(stats)?.sourceFormat ?? null,
+    output,
+  };
+}

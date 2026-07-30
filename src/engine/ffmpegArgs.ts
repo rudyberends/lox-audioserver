@@ -43,6 +43,7 @@ export interface SourceNativeFormat {
    * stream is still not touching it.
    */
   lossless: boolean;
+  codecName?: string;
 }
 
 /**

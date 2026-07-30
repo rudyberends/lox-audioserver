@@ -8,7 +8,7 @@ import { toLoxoneAudiopath } from '@/domain/zones/bridgeIdentity';
 import { ServerLifecycle } from '@/domain/server/lifecycle';
 import { MqttPublisher } from '@/adapters/mqtt/mqttPublisher';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
-import { toStreamFormat } from '@/adapters/http/api/streamFormat';
+import { toApiAudioFormat } from '@/adapters/http/api/streamFormat';
 import { MediaServer } from '@/adapters/mediaserver/mediaServer';
 import { SubsonicApi } from '@/adapters/subsonic/subsonicApi';
 import { WebdavServer } from '@/adapters/webdav/webdavServer';
@@ -192,7 +192,7 @@ export function createRuntime(): Runtime {
    * What a zone is streaming, for the public `format` field. Read from the engine's session
    * stats, which is the same source the admin UI's `tech.streamStats` uses.
    */
-  const resolveStreamFormat = (zoneId: number) => toStreamFormat(audioManager.getStreamStats(zoneId));
+  const resolveStreamFormat = (zoneId: number) => toApiAudioFormat(audioManager.getStreamStats(zoneId));
   const resolvePowerState = (zoneId: number) => zoneManager.getPowerState(zoneId);
 
   const apiEventHub = new ApiEventHub();

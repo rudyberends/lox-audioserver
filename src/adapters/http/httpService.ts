@@ -27,7 +27,7 @@ import type {
   ApiGroupResult,
   ApiOutput,
   ApiPowerState,
-  ApiStreamFormat,
+  ApiAudioFormat,
   ApiVolumeLimits,
 } from '@/domain/zones/apiTypes';
 import { isLocalRequest } from '@/shared/utils/net';
@@ -174,8 +174,8 @@ export class HttpService {
       resolveServiceLabel: (audiopath: string) => string | null;
       /** Names a configured line-in for `source.name`; see InputLabelLookup. */
       resolveInputLabel: (inputId: string) => string | null;
-      /** What a zone is streaming, for `format`; see toStreamFormat. */
-      resolveStreamFormat: (zoneId: number) => ApiStreamFormat | null;
+      /** What a zone is streaming, for `format`; see toApiAudioFormat. */
+      resolveStreamFormat: (zoneId: number) => ApiAudioFormat | null;
       serverVersion: string;
       /** Whether the server is serving yet, for /health and /ready. */
       lifecycle: ServerLifecycle;

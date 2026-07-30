@@ -36,6 +36,38 @@ const MAX_RESTART_ATTEMPTS = 5;
 const RESTART_BACKOFF_STEP_MS = 100;
 const RESTART_BACKOFF_MAX_MS = 500;
 
+function pcmBitDepthFor(format: string): 16 | 24 | 32 {
+  if (format === 's16le' || format === 's16be') return 16;
+  if (format === 's24le') return 24;
+  return 32;
+}
+
+function sourceFormatFor(
+  source: PlaybackSource,
+  nativeFormat: SourceNativeFormat | undefined,
+): EngineSessionStats['sourceFormat'] {
+  if (nativeFormat) {
+    return {
+      codec: nativeFormat.codecName ?? 'unknown',
+      sampleRate: nativeFormat.sampleRate,
+      channels: nativeFormat.channels,
+      bitDepth: nativeFormat.bitDepth,
+      bitrate: null,
+    };
+  }
+  if (source.kind !== 'pipe' || !source.sampleRate || !source.channels || !source.format) {
+    return null;
+  }
+  const bitDepth = pcmBitDepthFor(source.format);
+  return {
+    codec: 'pcm',
+    sampleRate: source.sampleRate,
+    channels: source.channels,
+    bitDepth,
+    bitrate: (source.sampleRate * source.channels * bitDepth) / 8,
+  };
+}
+
 export class AudioSession {
   // ─── Internals exposed for SessionStarter and Crossfader ─────────────────
   // The fields and helpers below carry `@internal` semantics: they are public
@@ -70,6 +102,7 @@ export class AudioSession {
   private lastExitAt: number | null = null;
   /** @internal */ public startTs: number | null = null;
   private readonly sourcePreDelayMs?: number;
+  private readonly sourceFormat: EngineSessionStats['sourceFormat'];
   private debugTapStream?: fs.WriteStream;
   /** @internal */ public readonly pipeSource = new PipeSourceAdapter();
   /** @internal */ public directPipeMode = false;
@@ -206,6 +239,7 @@ export class AudioSession {
           channels: declared.channels,
           bitDepth: declared.bitDepth ?? null,
           lossless: declared.lossless,
+          codecName: declared.codecName,
         };
       }
       if (this.source.kind === 'file') {
@@ -213,6 +247,7 @@ export class AudioSession {
       }
       return undefined;
     })();
+    this.sourceFormat = sourceFormatFor(this.source, nativeFormat);
     this.args = new FfmpegArgBuilder(
       this.source,
       this.profile,
@@ -612,6 +647,7 @@ export class AudioSession {
       channels: this.outputSettings.channels,
       pcmBitDepth: this.outputSettings.pcmBitDepth,
       bps: this.lastBpsTs ? this.lastBps : null,
+      sourceFormat: this.sourceFormat,
       bufferedBytes: this.buffer.bytes,
       totalBytes: this.totalBytes,
       lastUpdated: this.lastBpsTs || null,

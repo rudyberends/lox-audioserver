@@ -15,14 +15,13 @@
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ApiEvent } from '@/domain/zones/apiTypes';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
-import type { ApiPowerState, ApiVolumeLimits } from '@/domain/zones/apiTypes';
+import type { ApiAudioFormat, ApiPowerState, ApiVolumeLimits } from '@/domain/zones/apiTypes';
 import {
   toApiZoneState,
   type OutputDeviceLookup,
   type OutputProtocolLookup,
   type ServiceLabelLookup,
   type InputLabelLookup,
-  type ZoneProjectionLookups,
 } from '@/adapters/http/api/zoneProjection';
 
 export function withApiEvents(
@@ -35,7 +34,7 @@ export function withApiEvents(
     outputProtocol?: OutputProtocolLookup;
     serviceLabel?: ServiceLabelLookup;
     inputLabel?: InputLabelLookup;
-    streamFormat?: ZoneProjectionLookups['streamFormat'];
+    streamFormat?: (zoneId: number) => ApiAudioFormat | null;
     volumeLimits?: (zoneId: number) => ApiVolumeLimits | undefined;
     powerState?: (zoneId: number) => ApiPowerState | null;
   } = {},
