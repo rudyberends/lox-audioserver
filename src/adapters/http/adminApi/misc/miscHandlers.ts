@@ -388,7 +388,7 @@ function handleInfo(
 /**
  * Lists every audioserver the Miniserver knows about (see buildAudioServersList). Used by the admin
  * UI to offer a "switch audioserver" control — the browser then re-points at the chosen server's
- * /admin/. The player gets the same list over the `sonn/audioservers` command instead.
+ * /admin/.
  */
 function handleAudioServers(res: ServerResponse, deps: MiscHandlerDeps): void {
   try {

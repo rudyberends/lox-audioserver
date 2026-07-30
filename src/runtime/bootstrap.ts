@@ -581,7 +581,6 @@ export function createRuntime(): Runtime {
         fadeController: fadeControllerPort,
         alerts: alertsPort,
         contentManager,
-        sonnCorePeers,
       });
     }
 

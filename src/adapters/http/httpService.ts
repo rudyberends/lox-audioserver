@@ -14,6 +14,7 @@ import { LineInIngestWebSocket } from '@/adapters/http/streams/lineInIngestWs';
 import { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
 import { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandler';
 import { ApiHandler } from '@/adapters/http/api/apiHandler';
+import { buildPublicAudioServersList } from '@/adapters/discovery/audioServersList';
 import { BrowseService } from '@/adapters/http/api/browseService';
 import { DestinationService } from '@/adapters/http/api/destinationService';
 import { resolveUriFromRef } from '@/domain/media/browseRef';
@@ -347,6 +348,8 @@ export class HttpService {
       queueRemove: (zoneId, itemId) => options.zoneManager.queue.removeByUniqueId(zoneId, itemId),
       queueClear: (zoneId) => options.zoneManager.queue.clear(zoneId),
       queueUndo: (zoneId) => options.zoneManager.queue.undo(zoneId),
+      handoff: (sourceId, targetId) => options.zoneManager.handoff(sourceId, targetId),
+      listAudioServers: () => buildPublicAudioServersList(options.configPort, options.sonnCorePeers),
       getFavorites: async (zoneId, start, limit) => {
         if (!options.zoneManager.getZoneState(zoneId)) {
           return null;

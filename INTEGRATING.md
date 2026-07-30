@@ -304,6 +304,7 @@ GET /api/v1/zones/{id}/queue        →  { "items": [ … ], "start": 0, "total"
 GET /api/v1/zones/{id}/favorites    →  { "items": [ … ], "start": 0, "total": 8 }
 GET /api/v1/zones/{id}/recents      →  { "items": [ … ], "start": 0, "total": 20 }
 GET /api/v1/destinations            →  { "destinations": [ … ] }
+GET /api/v1/audio-servers           →  { "selfId": "…", "servers": [ … ] }
 GET /api/v1/services                →  { "services": [ … ] }
 GET /api/v1/browse                  →  the root: one entry per service
 GET /api/v1/browse/{id}             →  { "container": …, "items": [ … ], "start": 0, "total": 42 }
@@ -454,6 +455,8 @@ DELETE /api/v1/zones/{id}/queue    {"id": "<item id>"}      remove one entry
 DELETE /api/v1/zones/{id}/queue    {"all": true}            clear it
 DELETE /api/v1/zones/{id}/queue    {"undo": true}           revert the last edit
 
+POST   /api/v1/zones/{id}/handoff  {"targetZoneId": 7}      move playback to another zone
+
 POST   /api/v1/zones/{id}/alert      {"kind": "tts", "text": "…"}   say or play something
 DELETE /api/v1/zones/{id}/alert      {"kind": "alarm"}              stop it
 
@@ -492,6 +495,41 @@ happens server-side, so you do not need to know anything about how content is mo
 # Start a stream, then a track this zone reported playing earlier
 curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"http://example/stream.mp3"}'
 curl -X POST http://server:7090/api/v1/zones/3/play -d '{"uri":"library://track/9"}'
+```
+
+`handoff` is a server-side queue transfer. It moves the complete queue, including its order,
+current index, repeat/shuffle settings and current position, to the target zone. The source is
+stopped and cleared only as part of the same operation; the client must not rebuild the queue
+itself. Both zones must exist and must be different, and the source must have a queue. A successful
+handoff returns `204`; an impossible transfer returns `404` with
+`{"error":"handoff-not-possible"}`.
+
+```bash
+curl -X POST http://server:7090/api/v1/zones/3/handoff \
+  -H 'Content-Type: application/json' \
+  -d '{"targetZoneId":7}'
+```
+
+### Audioservers
+
+`GET /api/v1/audio-servers` lists the audioservers known from the installation configuration.
+`selfId` is the MAC id of the current server. Each entry identifies whether it is a sonn core or
+a regular Loxone audioserver. This is a discovery resource, not a playback target: use
+`/destinations` and `/zones` for audio routing.
+
+```json
+{
+  "selfId": "001122AABBCC",
+  "servers": [
+    {
+      "id": "001122AABBCC",
+      "name": "Living room server",
+      "host": "sonn-living",
+      "self": true,
+      "kind": "sonn-core"
+    }
+  ]
+}
 ```
 
 ## Destinations
@@ -781,6 +819,7 @@ elsewhere. The server does not push your change back to you.
 Errors are `4xx` with `{"error":"…"}`: `zone-not-found`, `invalid-json`,
 `invalid-volume`, `invalid-position`, `invalid-power`, `invalid-uri`, `invalid-repeat`, `invalid-shuffle`, `invalid-equalizer-bands`,
 `invalid-queue-patch`, `invalid-queue-delete`, `queue-item-not-found`,
+`invalid-target-zone`, `handoff-not-possible`, `handoff-failed`,
 `invalid-favorite-patch`, `invalid-favorite-delete`, `invalid-favorite-order`,
 `favorite-not-found`, `invalid-members`,
 `invalid-alert-kind`, `invalid-text`, `invalid-zones`,

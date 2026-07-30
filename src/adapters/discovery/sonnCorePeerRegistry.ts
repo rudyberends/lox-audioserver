@@ -1,5 +1,6 @@
 import { createLogger } from '@/shared/logging/logger';
 import type { MdnsBrowser, MdnsPort, MdnsServiceRecord } from '@/ports/MdnsPort';
+import { normalizeMacId } from '@/shared/utils/mac';
 
 const LOX_AUDIO_MDNS_TYPE = 'sonncore';
 
@@ -13,6 +14,7 @@ const LOX_AUDIO_MDNS_TYPE = 'sonncore';
 export class SonnCorePeerRegistry {
   private readonly log = createLogger('Http', 'SonnCorePeers');
   private readonly macs = new Set<string>();
+  private readonly hosts = new Set<string>();
   private browser: MdnsBrowser | null = null;
 
   constructor(private readonly mdns: MdnsPort) {}
@@ -21,9 +23,15 @@ export class SonnCorePeerRegistry {
     if (this.browser) return;
     this.browser = this.mdns.browse({ type: LOX_AUDIO_MDNS_TYPE, protocol: 'tcp' }, (service) => {
       const mac = this.readMac(service);
-      if (mac && !this.macs.has(mac)) {
-        this.macs.add(mac);
-        this.log.debug('discovered sonn-core peer', { mac, host: service.host });
+      const addresses = [service.host, ...(service.addresses ?? [])]
+        .map((value) => this.normalizeHost(value))
+        .filter((value): value is string => value !== null);
+      const newMac = mac !== null && !this.macs.has(mac);
+      const newHost = addresses.some((host) => !this.hosts.has(host));
+      if (mac) this.macs.add(mac);
+      for (const host of addresses) this.hosts.add(host);
+      if (newMac || newHost) {
+        this.log.debug('discovered sonn-core peer', { mac, host: service.host, addresses });
       }
     });
   }
@@ -34,14 +42,23 @@ export class SonnCorePeerRegistry {
   }
 
   /** True when an audioserver with this macId advertises itself as sonn-core over mDNS. */
-  public has(macId: string): boolean {
-    return this.macs.has(macId.trim().toUpperCase());
+  public has(macId: string, ...addresses: Array<string | null | undefined>): boolean {
+    const normalized = normalizeMacId(macId);
+    if (normalized !== null && this.macs.has(normalized)) return true;
+    return addresses.some((address) => {
+      const host = this.normalizeHost(address);
+      return host !== null && this.hosts.has(host);
+    });
   }
 
   private readMac(service: MdnsServiceRecord): string | null {
-    const raw = service.txt?.mac;
+    const raw = service.txt?.mac ?? service.txt?.macId;
     if (typeof raw !== 'string') return null;
-    const mac = raw.trim().toUpperCase();
-    return mac || null;
+    return normalizeMacId(raw);
+  }
+
+  private normalizeHost(value: string | null | undefined): string | null {
+    const normalized = value?.trim().toLowerCase().replace(/\.$/, '');
+    return normalized || null;
   }
 }

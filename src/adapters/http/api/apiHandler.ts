@@ -24,6 +24,7 @@ import type {
   ApiDestination,
   ApiLocalDestination,
   ApiAudioFormat,
+  ApiAudioServers,
   ApiBrowseItem,
   ApiBrowseResult,
   ApiInput,
@@ -78,6 +79,8 @@ export type ApiHandlerDeps = {
   queueClear: (zoneId: number) => void;
   /** Reverts the last queue edit. */
   queueUndo: (zoneId: number) => void;
+  /** Moves the complete queue and current playback position to another zone. */
+  handoff: (sourceId: number, targetId: number) => Promise<boolean>;
   /** A page of a zone's favourites. */
   getFavorites: (zoneId: number, start: number, limit: number) => Promise<ApiFavorites | null>;
   /** Adds a favourite; returns the created one. */
@@ -91,6 +94,8 @@ export type ApiHandlerDeps = {
   /** A page of what a zone played before, most recent first. */
   getRecents: (zoneId: number, start: number, limit: number) => Promise<ApiRecents | null>;
   clearRecents: (zoneId: number) => Promise<void>;
+  /** Lists the audioservers known through the Loxone installation configuration. */
+  listAudioServers: () => ApiAudioServers;
   /**
    * Puts a zone at the head of a group with these members, or ungroups it when the list
    * is empty. Returns what the group became, including anything rejected.
@@ -489,6 +494,11 @@ export class ApiHandler {
       return;
     }
 
+    if (pathname === '/audio-servers' && method === 'GET') {
+      this.sendJson(res, 200, this.deps.listAudioServers());
+      return;
+    }
+
     if (pathname === '/zones' && method === 'GET') {
       this.sendJson(res, 200, { zones: this.snapshot() });
       return;
@@ -572,6 +582,38 @@ export class ApiHandler {
         return;
       }
       this.sendJson(res, 200, this.project(state));
+      return;
+    }
+
+    if (action === 'handoff') {
+      if (method !== 'POST') {
+        this.sendJson(res, 405, { error: 'method-not-allowed' });
+        return;
+      }
+      let body: Record<string, unknown>;
+      try {
+        body = await this.readJsonBody(req);
+      } catch {
+        this.sendJson(res, 400, { error: 'invalid-json' });
+        return;
+      }
+      const targetZoneId = this.clampInt(body.targetZoneId, 0, Number.MAX_SAFE_INTEGER);
+      if (targetZoneId === null) {
+        this.sendJson(res, 400, { error: 'invalid-target-zone' });
+        return;
+      }
+      let moved: boolean;
+      try {
+        moved = await this.deps.handoff(zoneId, targetZoneId);
+      } catch {
+        this.sendJson(res, 500, { error: 'handoff-failed' });
+        return;
+      }
+      if (!moved) {
+        this.sendJson(res, 404, { error: 'handoff-not-possible' });
+        return;
+      }
+      res.writeHead(204).end();
       return;
     }
 

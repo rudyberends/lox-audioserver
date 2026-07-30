@@ -481,6 +481,20 @@ export interface ApiDestination {
   available: boolean;
 }
 
+/** An audioserver known through the installation configuration. */
+export interface ApiAudioServer {
+  id: string;
+  name: string | null;
+  host: string | null;
+  self: boolean;
+  kind: 'sonn-core' | 'loxone';
+}
+
+export interface ApiAudioServers {
+  selfId: string | null;
+  servers: ApiAudioServer[];
+}
+
 /** What a client needs to start receiving audio itself. */
 export interface ApiLocalDestination extends ApiDestination {
   kind: 'local';

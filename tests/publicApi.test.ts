@@ -95,6 +95,7 @@ type Harness = {
   commands: Array<{ zoneId: number; command: string; payload?: string }>;
   powers: Array<{ zoneId: number; signal: 0 | 1 }>;
   plays: Array<{ zoneId: number; uri: string }>;
+  handoffs: Array<{ sourceId: number; targetId: number }>;
   states: Map<number, ZoneState>;
 };
 
@@ -142,6 +143,7 @@ function harness(): Harness {
   const commands: Harness['commands'] = [];
   const powers: Harness['powers'] = [];
   const plays: Harness['plays'] = [];
+  const handoffs: Harness['handoffs'] = [];
   const hub = new ApiEventHub();
   const handler = new ApiHandler({
     eventHub: hub,
@@ -233,6 +235,11 @@ function harness(): Harness {
     queueUndo: () => {
       queueOps.push('undo');
     },
+    handoff: async (sourceId, targetId) => {
+      handoffs.push({ sourceId, targetId });
+      return true;
+    },
+    listAudioServers: () => ({ selfId: 'SELF', servers: [] }),
     getInputs: () => [
       { id: 'linein-a', name: 'BeoSound 9000', icon: 'cd-player', controllable: true, reportsMetadata: true },
       { id: 'linein-b', name: 'Turntable', icon: 'turntable', controllable: false, reportsMetadata: false },
@@ -292,7 +299,7 @@ function harness(): Harness {
     serverVersion: '4.0.0-test',
     startedAt: Date.now() - 5000,
   });
-  return { handler, hub, commands, powers, plays, states };
+  return { handler, hub, commands, powers, plays, handoffs, states };
 }
 
 async function call(
@@ -724,6 +731,20 @@ test('the API is served under a versioned path', async () => {
   assert.equal((await call(h, 'GET', `${API_ROOT}/health`)).statusCode, 200);
   assert.equal((await call(h, 'GET', `${API_ROOT}/zones`)).statusCode, 200);
   assert.equal((await call(h, 'GET', `${API_ROOT}/zones/3`)).statusCode, 200);
+});
+
+test('audio servers are part of the public API', async () => {
+  const h = harness();
+  const res = await call(h, 'GET', `${API_ROOT}/audio-servers`);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), { selfId: 'SELF', servers: [] });
+});
+
+test('handoff moves playback through the public API', async () => {
+  const h = harness();
+  const res = await call(h, 'POST', `${API_ROOT}/zones/3/handoff`, { targetZoneId: 7 });
+  assert.equal(res.statusCode, 204);
+  assert.deepEqual(h.handoffs, [{ sourceId: 3, targetId: 7 }]);
 });
 
 test('an unversioned request is told where the API went', async () => {

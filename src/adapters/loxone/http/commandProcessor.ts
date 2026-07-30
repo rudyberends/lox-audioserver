@@ -18,7 +18,6 @@ import type { LineInActivationService } from '@/application/inputs/lineInActivat
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { LoxoneConfigService } from '@/adapters/loxone/services/loxoneConfigService';
-import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
 
 export interface LoxoneCommandProcessorOptions {
   onRestart?: () => Promise<boolean>;
@@ -36,7 +35,6 @@ export interface LoxoneCommandProcessorOptions {
   fadeController: FadeControllerPort;
   alerts: AlertsPort;
   contentManager: ContentManager;
-  sonnCorePeers: SonnCorePeerRegistry;
 }
 
 /**
@@ -65,7 +63,6 @@ export class LoxoneCommandProcessor {
       fadeController: options.fadeController,
       alerts: options.alerts,
       contentManager: options.contentManager,
-      sonnCorePeers: options.sonnCorePeers,
     });
   }
 
