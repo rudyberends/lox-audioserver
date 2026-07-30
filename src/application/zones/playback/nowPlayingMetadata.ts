@@ -5,6 +5,7 @@ type QueueItemMetadata = {
   artist?: string;
   album?: string;
   coverurl?: string;
+  animatedCoverUrl?: string;
   duration?: number;
 };
 
@@ -13,6 +14,7 @@ export type SelectedNowPlayingMetadata = {
   artist: string;
   album: string;
   coverurl?: string;
+  animatedCoverUrl?: string;
   duration?: number;
 };
 
@@ -50,6 +52,7 @@ export function selectQueuePlaybackMetadata(
     coverurl: itemFirst
       ? current.coverurl || enriched?.coverurl
       : enriched?.coverurl || current.coverurl,
+    animatedCoverUrl: current.animatedCoverUrl || enriched?.animatedCoverUrl,
     duration:
       itemFirst && typeof current.duration === 'number' && current.duration > 0
         ? current.duration

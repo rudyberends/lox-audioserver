@@ -137,7 +137,14 @@ function toTrack(state: ZoneState): ApiTrack | null {
         onLight: state.artworkColors.on_light,
       }
     : null;
-  return { title, artist, album, coverUrl: state.coverurl ?? '', colors };
+  return {
+    title,
+    artist,
+    album,
+    coverUrl: state.coverurl ?? '',
+    ...(state.animatedCoverUrl ? { animatedCoverUrl: state.animatedCoverUrl } : {}),
+    colors,
+  };
 }
 
 /**

@@ -18,6 +18,7 @@ function toItem(item: QueueItem): ApiQueueItem {
     album: item.album ?? '',
     duration: Number.isFinite(item.duration) ? Math.max(0, Math.round(item.duration)) : 0,
     coverUrl: item.coverurl ?? '',
+    ...(item.animatedCoverUrl ? { animatedCoverUrl: item.animatedCoverUrl } : {}),
     source: item.audiopath ?? '',
   };
 }

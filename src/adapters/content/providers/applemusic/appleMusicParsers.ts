@@ -81,6 +81,29 @@ export function extractArtwork(attrs: any, size: number = COVER_ART_NOW_PLAYING_
   return '';
 }
 
+/** Extract Apple's web-player motion artwork while keeping the normal image as fallback. */
+export function extractAnimatedArtwork(attrs: any): string {
+  const editorialVideo = attrs?.editorialVideo;
+  for (const key of ['motionDetailSquare', 'motionDetailTall', 'motionMediumVideo16x9']) {
+    const candidate = editorialVideo?.[key];
+    const url = findVideoUrl(candidate);
+    if (url) return url;
+  }
+  return '';
+}
+
+function findVideoUrl(value: unknown, depth = 0): string {
+  if (depth > 3 || value == null) return '';
+  if (typeof value === 'string') return /^https?:\/\//i.test(value) ? value : '';
+  if (typeof value !== 'object') return '';
+  const record = value as Record<string, unknown>;
+  for (const key of ['video', 'videoUrl', 'hlsUrl', 'url', 'URL', 'src', 'href']) {
+    const url = findVideoUrl(record[key], depth + 1);
+    if (url) return url;
+  }
+  return '';
+}
+
 export function mapTrack(providerId: string, track: any): ContentFolderItem {
   const attrs = track?.attributes ?? track;
   const id = encodeId(track?.id ?? attrs?.id ?? '');
@@ -88,6 +111,8 @@ export function mapTrack(providerId: string, track: any): ContentFolderItem {
   const artist = attrs?.artistName ?? '';
   const album = attrs?.albumName ?? '';
   const cover = extractArtwork(attrs);
+  const albumAttrs = track?.relationships?.albums?.data?.[0]?.attributes;
+  const animatedCover = extractAnimatedArtwork(attrs) || extractAnimatedArtwork(albumAttrs);
   return {
     id: makeUri(providerId, 'track', id),
     audiopath: makeUri(providerId, 'track', id),
@@ -97,6 +122,7 @@ export function mapTrack(providerId: string, track: any): ContentFolderItem {
     album,
     coverurl: cover,
     thumbnail: cover,
+    ...(animatedCover ? { animatedCoverUrl: animatedCover } : {}),
     type: FileType.File,
     tag: 'track',
     kind: 'track',
@@ -119,6 +145,7 @@ export function mapLibraryTrack(providerId: string, track: any): ContentFolderIt
   const artist = attrs?.artistName ?? libAttrs?.artistName ?? '';
   const album = attrs?.albumName ?? libAttrs?.albumName ?? '';
   const cover = extractArtwork(attrs) || extractArtwork(libAttrs);
+  const animatedCover = extractAnimatedArtwork(attrs) || extractAnimatedArtwork(libAttrs);
   const durationMs = typeof attrs?.durationInMillis === 'number'
     ? attrs.durationInMillis
     : libAttrs?.durationInMillis;
@@ -131,6 +158,7 @@ export function mapLibraryTrack(providerId: string, track: any): ContentFolderIt
     album,
     coverurl: cover,
     thumbnail: cover,
+    ...(animatedCover ? { animatedCoverUrl: animatedCover } : {}),
     type: FileType.File,
     tag: 'track',
     kind: 'track',
@@ -146,6 +174,7 @@ export function mapAlbum(providerId: string, album: any): ContentFolderItem {
   const name = attrs?.name ?? 'Album';
   const artist = attrs?.artistName ?? '';
   const cover = extractArtwork(attrs);
+  const animatedCover = extractAnimatedArtwork(attrs);
   return {
     id: makeUri(providerId, 'album', id),
     audiopath: makeUri(providerId, 'album', id),
@@ -154,6 +183,7 @@ export function mapAlbum(providerId: string, album: any): ContentFolderItem {
     artist,
     coverurl: cover,
     thumbnail: cover,
+    ...(animatedCover ? { animatedCoverUrl: animatedCover } : {}),
     type: FileType.PlaylistBrowsable,
     tag: 'album',
     kind: 'album',
@@ -170,6 +200,7 @@ export function mapLibraryAlbum(providerId: string, album: any): ContentFolderIt
   const name = attrs?.name ?? libAttrs?.name ?? 'Album';
   const artist = attrs?.artistName ?? libAttrs?.artistName ?? '';
   const cover = extractArtwork(attrs) || extractArtwork(libAttrs);
+  const animatedCover = extractAnimatedArtwork(attrs) || extractAnimatedArtwork(libAttrs);
   return {
     id: makeUri(providerId, 'library-album', id),
     audiopath: makeUri(providerId, 'library-album', id),
@@ -178,6 +209,7 @@ export function mapLibraryAlbum(providerId: string, album: any): ContentFolderIt
     artist,
     coverurl: cover,
     thumbnail: cover,
+    ...(animatedCover ? { animatedCoverUrl: animatedCover } : {}),
     type: FileType.PlaylistBrowsable,
     tag: 'album',
     kind: 'album',
@@ -190,6 +222,7 @@ export function mapArtist(providerId: string, artistObj: any): ContentFolderItem
   const id = encodeId(artistObj?.id ?? attrs?.id ?? '');
   const name = attrs?.name ?? 'Artist';
   const cover = extractArtwork(attrs);
+  const animatedCover = extractAnimatedArtwork(attrs);
   return {
     id: makeUri(providerId, 'artist', id),
     audiopath: makeUri(providerId, 'artist', id),
@@ -198,6 +231,7 @@ export function mapArtist(providerId: string, artistObj: any): ContentFolderItem
     artist: name,
     coverurl: cover,
     thumbnail: cover,
+    ...(animatedCover ? { animatedCoverUrl: animatedCover } : {}),
     type: FileType.PlaylistBrowsable,
     tag: 'artist',
     kind: 'artist',
@@ -213,6 +247,7 @@ export function mapLibraryArtist(providerId: string, artistObj: any): ContentFol
   const id = encodeId(artistObj?.id ?? attrs?.id ?? '');
   const name = attrs?.name ?? 'Artist';
   const cover = extractArtwork(attrs);
+  const animatedCover = extractAnimatedArtwork(attrs);
   return {
     id: makeUri(providerId, 'library-artist', id),
     audiopath: makeUri(providerId, 'library-artist', id),
@@ -221,6 +256,7 @@ export function mapLibraryArtist(providerId: string, artistObj: any): ContentFol
     artist: name,
     coverurl: cover,
     thumbnail: cover,
+    ...(animatedCover ? { animatedCoverUrl: animatedCover } : {}),
     type: FileType.PlaylistBrowsable,
     tag: 'artist',
     kind: 'artist',
@@ -233,6 +269,7 @@ export function mapPlaylist(providerId: string, playlist: any): ContentFolderIte
   const id = encodeId(playlist?.id ?? attrs?.id ?? '');
   const name = attrs?.name ?? 'Playlist';
   const cover = extractArtwork(attrs);
+  const animatedCover = extractAnimatedArtwork(attrs);
   return {
     id: makeUri(providerId, 'playlist', id),
     audiopath: makeUri(providerId, 'playlist', id),
@@ -242,6 +279,7 @@ export function mapPlaylist(providerId: string, playlist: any): ContentFolderIte
     owner_id: attrs?.curatorName || '',
     coverurl: cover,
     thumbnail: cover,
+    ...(animatedCover ? { animatedCoverUrl: animatedCover } : {}),
     type: FileType.PlaylistBrowsable,
     tag: 'playlist',
     kind: 'playlist',
@@ -257,6 +295,7 @@ export function mapLibraryPlaylist(providerId: string, playlist: any): ContentFo
   const id = encodeId(playlist?.id ?? attrs?.id ?? '');
   const name = attrs?.name ?? 'Playlist';
   const cover = extractArtwork(attrs);
+  const animatedCover = extractAnimatedArtwork(attrs);
   return {
     id: makeUri(providerId, 'library-playlist', id),
     audiopath: makeUri(providerId, 'library-playlist', id),
@@ -266,6 +305,7 @@ export function mapLibraryPlaylist(providerId: string, playlist: any): ContentFo
     owner_id: attrs?.curatorName || attrs?.creatorName || '',
     coverurl: cover,
     thumbnail: cover,
+    ...(animatedCover ? { animatedCoverUrl: animatedCover } : {}),
     type: FileType.PlaylistBrowsable,
     tag: 'playlist',
     kind: 'playlist',

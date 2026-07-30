@@ -130,6 +130,7 @@ export function createQueueItem(
     audiopath: normalizedUri,
     audiotype: inferredType,
     coverurl: metadata?.coverurl ?? '',
+    ...(metadata?.animatedCoverUrl ? { animatedCoverUrl: metadata.animatedCoverUrl } : {}),
     duration,
     qindex: 0,
     station,
@@ -157,6 +158,7 @@ export async function mapFolderItemsToQueue(
     audiopath: normalizeSpotifyAudiopath(item.audiopath ?? item.id ?? ''),
     audiotype: audioType,
     coverurl: item.coverurl ?? item.thumbnail ?? '',
+    ...(item.animatedCoverUrl ? { animatedCoverUrl: item.animatedCoverUrl } : {}),
     duration: Math.round(
       (Number(item.duration ?? 0) ?? 0) > 0
         ? Number(item.duration ?? 0)

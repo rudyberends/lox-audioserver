@@ -23,6 +23,17 @@ const BEARER_TOKEN_TTL_MS = 30 * 60 * 1000;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+function appleLocalizedText(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (!value || typeof value !== 'object') return '';
+  const record = value as Record<string, unknown>;
+  for (const key of ['standard', 'default', 'en-US', 'en', 'nl-NL', 'nl']) {
+    const candidate = record[key];
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  }
+  return Object.values(record).find((candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0)?.trim() ?? '';
+}
+
 type SearchResult = {
   tracks?: ContentFolderItem[];
   albums?: ContentFolderItem[];
@@ -249,7 +260,7 @@ export class AppleMusicProvider {
     }
     const item = normalized.source === 'library'
       ? await this.lookup(`${APPLE_MUSIC_API_BASE}/me/library/songs/${encodeURIComponent(id)}?include=catalog`)
-      : await this.lookup(`${APPLE_MUSIC_API_BASE}/catalog/${await this.ensureStorefront()}/songs/${encodeURIComponent(id)}`);
+      : await this.lookup(`${APPLE_MUSIC_API_BASE}/catalog/${await this.ensureStorefront()}/songs/${encodeURIComponent(id)}?include=albums`);
     if (!item) {
       return null;
     }
@@ -313,7 +324,8 @@ export class AppleMusicProvider {
   /* Mapping helpers                                                          */
   /* ------------------------------------------------------------------------ */
 
-  private buildRootFolder(offset: number): ContentFolder {
+  private async buildRootFolder(offset: number): Promise<ContentFolder> {
+    const sections = await this.fetchHomeSections();
     return {
       id: 'root',
       name: this.displayLabel,
@@ -335,7 +347,39 @@ export class AppleMusicProvider {
         this.folderLink('recent', 'Recently Added'),
         this.folderLink('songs', 'Songs'),
       ],
+      sections,
     };
+  }
+
+  /** Preserve Apple's Home shelves instead of flattening them into one duplicate-prone list. */
+  private async fetchHomeSections(): Promise<NonNullable<ContentFolder['sections']>> {
+    const data = await this.fetchRecommendationsData().catch((error) => {
+      this.log.warn('apple music home recommendations failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    });
+    const groups = Array.isArray(data?.data) ? data.data : [];
+    const allSeen = new Set<string>();
+    const sections: Array<{ id: string; name: string; items: ContentFolderItem[] } | null> = groups
+      .map((group: any, index: number) => {
+        const contents = group?.relationships?.contents?.data;
+        if (!Array.isArray(contents)) return null;
+        const items: ContentFolderItem[] = [];
+        const seen = new Set<string>();
+        for (const entry of contents) {
+          const mapped = mapRecommendationItem(this.audiopathPrefix, entry);
+          if (!mapped || seen.has(mapped.id) || allSeen.has(mapped.id)) continue;
+          seen.add(mapped.id);
+          allSeen.add(mapped.id);
+          items.push(mapped);
+        }
+        if (!items.length) return null;
+        const attrs = group?.attributes ?? {};
+        const name = appleLocalizedText(attrs.name) || appleLocalizedText(attrs.title);
+        return { id: String(group?.id ?? `home-${index}`), name: name || 'Recommended for you', items };
+      });
+    return sections.filter((section): section is { id: string; name: string; items: ContentFolderItem[] } => section !== null);
   }
 
   private folderLink(id: string, name: string): ContentFolderItem {
@@ -459,16 +503,17 @@ export class AppleMusicProvider {
   /* ------------------------------------------------------------------------ */
 
   private async fetchJson<T>(url: string, retryAuth = true): Promise<T | null> {
+    const requestUrl = this.withMotionArtwork(url);
     const maxAttempts = 3;
     let lastStatus = 0;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         const headers = await this.buildAuthHeaders();
-        let res = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
+        let res = await fetch(requestUrl, { headers, signal: AbortSignal.timeout(15_000) });
         if ((res.status === 401 || res.status === 403) && retryAuth && attempt === 0) {
           await this.refreshBearerToken();
           const retryHeaders = await this.buildAuthHeaders();
-          res = await fetch(url, { headers: retryHeaders, signal: AbortSignal.timeout(15_000) });
+          res = await fetch(requestUrl, { headers: retryHeaders, signal: AbortSignal.timeout(15_000) });
         }
         if (res.ok) {
           return (await res.json()) as T;
@@ -477,7 +522,7 @@ export class AppleMusicProvider {
         // Transient: rate-limited (429), gateway/overload (500/503/504) → back off and retry.
         if (this.isTransientStatus(res.status) && attempt < maxAttempts - 1) {
           const waitMs = this.computeRetryDelay(res, attempt);
-          this.log.debug('apple music request retrying', { url, status: res.status, attempt: attempt + 1, waitMs });
+          this.log.debug('apple music request retrying', { url: requestUrl, status: res.status, attempt: attempt + 1, waitMs });
           await sleep(waitMs);
           continue;
         }
@@ -488,14 +533,28 @@ export class AppleMusicProvider {
           await sleep(this.computeRetryDelay(null, attempt));
           continue;
         }
-        this.log.warn('apple music request failed', { url, message: err instanceof Error ? err.message : String(err) });
+        this.log.warn('apple music request failed', { url: requestUrl, message: err instanceof Error ? err.message : String(err) });
         return null;
       }
     }
     if (lastStatus) {
-      this.log.warn('apple music request gave up after retries', { url, status: lastStatus });
+      this.log.warn('apple music request gave up after retries', { url: requestUrl, status: lastStatus });
     }
     return null;
+  }
+
+  /** Apple keeps motion artwork behind an extended attribute on every resource type. */
+  private withMotionArtwork(url: string): string {
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname === 'amp-api.music.apple.com') {
+        parsed.searchParams.set('extend', 'editorialVideo');
+        return parsed.toString();
+      }
+    } catch {
+      /* Keep the original URL for the existing error path. */
+    }
+    return url;
   }
 
   private isTransientStatus(status: number): boolean {
@@ -713,14 +772,12 @@ export class AppleMusicProvider {
     offset: number,
     allowedTypes?: Set<string>,
   ): Promise<{ items: ContentFolderItem[]; total?: number }> {
-    const url = new URL(`${APPLE_MUSIC_API_BASE}/me/recommendations`);
+    const data = await this.fetchRecommendationsData();
     // `limit`/`offset` on /me/recommendations page the recommendation GROUPS,
     // not the items inside them — and Apple returns an empty payload when the
     // limit exceeds its (~30) maximum. So fetch the groups with a safe fixed
     // limit, flatten + filter their contents, then page the flattened items
     // client-side. (Previously the caller's limit≥50 hit the cap → no content.)
-    url.searchParams.set('limit', '30');
-    const data = await this.fetchJson<any>(url.toString());
     const groups = Array.isArray(data?.data) ? data.data : [];
     const all: ContentFolderItem[] = [];
     for (const group of groups) {
@@ -745,6 +802,14 @@ export class AppleMusicProvider {
       items,
       total: all.length,
     };
+  }
+
+  private async fetchRecommendationsData(): Promise<any> {
+    const url = new URL(`${APPLE_MUSIC_API_BASE}/me/recommendations`);
+    url.searchParams.set('limit', '30');
+    // Motion artwork is an extended Apple attribute used by the web player.
+    url.searchParams.set('extend', 'editorialVideo');
+    return this.fetchJson<any>(url.toString());
   }
 
   /**

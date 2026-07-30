@@ -418,6 +418,7 @@ export class PlayRequestService {
         artist: metadata?.artist?.trim() || '',
         album: metadata?.album?.trim() || '',
         coverurl: metadata?.coverurl,
+        animatedCoverUrl: metadata?.animatedCoverUrl,
         duration: metadata?.duration,
         audiopath: metadata?.audiopath ?? audiopath,
         trackId: metadata?.trackId,

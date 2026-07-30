@@ -125,6 +125,15 @@ export class BrowseService {
           ref.kind,
         ),
       items: (folder.items ?? []).map((item) => toApiBrowseItem(item, ref.service)),
+      ...(folder.sections?.length
+        ? {
+            sections: folder.sections.map((section) => ({
+              id: section.id,
+              name: section.name,
+              items: section.items.map((item) => toApiBrowseItem(item, ref.service)),
+            })),
+          }
+        : {}),
       start: folder.start ?? start,
       // Null when the provider could not say, rather than the guess it had to put in
       // `totalitems`. A consumer pages until it gets a short page instead of trusting a

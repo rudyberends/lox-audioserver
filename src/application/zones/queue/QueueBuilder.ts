@@ -74,7 +74,7 @@ export async function buildQueueForRequest(args: {
         ? request.isMusicAssistant
           ? request.parentContext.parent
           : sanitizeStation(request.parentContext.parent, item.audiopath)
-        : item.station,
+        : item.station || enrichedMetadata?.station || '',
     }))
     : [
       createQueueItem(
@@ -94,7 +94,7 @@ export async function buildQueueForRequest(args: {
       artist: '',
       album: '',
       duration: 0,
-      station: request.stationValue ?? item.station ?? '',
+      station: request.stationValue || enrichedMetadata?.station || item.station || '',
     }));
   }
 

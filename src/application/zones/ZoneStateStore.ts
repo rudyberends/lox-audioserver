@@ -244,12 +244,13 @@ export class ZoneStateStore {
         'artist' in patch ||
         'album' in patch ||
         'coverurl' in patch ||
+        'animatedCoverUrl' in patch ||
         'station' in patch ||
         'audiopath' in patch;
       if (hasMetadataUpdate) {
         const base = session.metadata ?? { title: '', artist: '', album: '' };
         const selectString = (
-          key: 'title' | 'artist' | 'album' | 'coverurl' | 'audiopath' | 'station',
+          key: 'title' | 'artist' | 'album' | 'coverurl' | 'animatedCoverUrl' | 'audiopath' | 'station',
         ): string | undefined => {
           if (key === 'station' && !('station' in patch)) {
             return typeof ctx.state.station === 'string' ? ctx.state.station : '';
@@ -278,6 +279,7 @@ export class ZoneStateStore {
           artist: selectString('artist') ?? '',
           album: selectString('album') ?? '',
           coverurl: selectString('coverurl'),
+          animatedCoverUrl: selectString('animatedCoverUrl'),
           duration: selectDuration(),
           audiopath: selectString('audiopath'),
           station: selectString('station'),
@@ -293,6 +295,7 @@ export class ZoneStateStore {
           prev.artist === nextMetadata.artist &&
           prev.album === nextMetadata.album &&
           prev.coverurl === nextMetadata.coverurl &&
+          prev.animatedCoverUrl === nextMetadata.animatedCoverUrl &&
           prev.duration === nextMetadata.duration &&
           prev.audiopath === nextMetadata.audiopath &&
           prev.station === nextMetadata.station;

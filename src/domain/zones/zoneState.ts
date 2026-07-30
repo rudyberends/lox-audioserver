@@ -34,6 +34,8 @@ export interface ZoneState {
    */
   clientState: 'on' | 'off';
   coverurl: string;
+  /** Optional motion artwork for clients that support it; legacy outputs ignore it. */
+  animatedCoverUrl?: string;
   /** Palette derived from the current cover artwork, when available. */
   artworkColors?: ZoneArtworkColors | null;
   duration: number;

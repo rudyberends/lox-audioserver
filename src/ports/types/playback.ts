@@ -6,6 +6,7 @@ export interface PlaybackMetadata {
   artist: string;
   album: string;
   coverurl?: string;
+  animatedCoverUrl?: string;
   duration?: number;
   isRadio?: boolean;
   /**

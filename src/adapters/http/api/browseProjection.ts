@@ -68,6 +68,7 @@ export function toApiBrowseItem(item: ContentFolderItem, service: string): ApiBr
   const artist = (item.artist ?? '').trim();
   const album = (item.album ?? '').trim();
   const cover = (item.coverurl ?? '').trim() || (item.thumbnail ?? '').trim();
+  const animatedCover = (item.animatedCoverUrl ?? '').trim();
   const duration = Number(item.duration);
 
   return {
@@ -88,6 +89,7 @@ export function toApiBrowseItem(item: ContentFolderItem, service: string): ApiBr
     ...(album ? { album } : {}),
     ...(Number.isFinite(duration) && duration > 0 ? { duration: Math.round(duration) } : {}),
     ...(cover ? { coverUrl: cover } : {}),
+    ...(animatedCover ? { animatedCoverUrl: animatedCover } : {}),
   };
 }
 

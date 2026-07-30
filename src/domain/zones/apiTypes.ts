@@ -44,6 +44,7 @@ export interface ApiTrack {
   album: string;
   /** Absolute URL, or empty string when the zone has no artwork. */
   coverUrl: string;
+  animatedCoverUrl?: string;
   /** Colors derived from the cover artwork, or null when not available. */
   colors: ApiArtworkColors | null;
 }
@@ -327,6 +328,7 @@ export interface ApiQueueItem {
   /** Seconds; 0 when unknown. */
   duration: number;
   coverUrl: string;
+  animatedCoverUrl?: string;
   /** Opaque provider-native id, as on `ApiSource.id`. */
   source: string;
 }
@@ -589,6 +591,8 @@ export interface ApiBrowseItem {
   /** Seconds, when known. */
   duration?: number;
   coverUrl?: string;
+  /** Optional animated artwork URL; clients should fall back to coverUrl. */
+  animatedCoverUrl?: string;
 }
 
 /** A page of children. */
@@ -596,6 +600,8 @@ export interface ApiBrowseResult {
   /** The container that was listed, or null for the root, which has no id. */
   container: ApiBrowseItem | null;
   items: ApiBrowseItem[];
+  /** Optional grouped content, used by feed-style services such as Apple Music Home. */
+  sections?: ApiBrowseSection[];
   start: number;
   /**
    * How many children the container holds, or **null when the provider cannot say**.
@@ -604,6 +610,12 @@ export interface ApiBrowseResult {
    * a count. When it is null, page until you get fewer items than you asked for.
    */
   total: number | null;
+}
+
+export interface ApiBrowseSection {
+  id: string;
+  name: string;
+  items: ApiBrowseItem[];
 }
 
 /** Search results, grouped by kind. */

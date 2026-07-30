@@ -622,7 +622,8 @@ curl -s http://server:7090/api/v1/browse
 curl -s "http://server:7090/api/v1/browse/<id>?offset=0&limit=50"
 ```
 
-Every service appears **under its own name** — `applemusic`, `soundcloud`, `library`. There
+Every service appears **under its own name** — `applemusic`, `soundcloud`, `library`, `radio`. The
+`radio` service contains Radio Paradise, TuneIn Presets and Custom Streams. There
 is no Spotify disguise here. That disguise exists because the Loxone clients know exactly
 one streaming service; it is a translation in that adapter and it stops there.
 

@@ -7,6 +7,7 @@ export interface QueueItem {
   /** Which kind of source this item is. Same categories as `ZoneState.audiotype`. */
   audiotype: AudioType;
   coverurl: string;
+  animatedCoverUrl?: string;
   duration: number;
   originalIndex?: number;
   qindex: number;

@@ -57,6 +57,12 @@ export async function enrichMetadata(args: {
     assignText('artist');
     assignText('album');
     assignText('coverurl');
+    if (!merged.animatedCoverUrl && incomingMeta.animatedCoverUrl) {
+      merged.animatedCoverUrl = incomingMeta.animatedCoverUrl;
+    }
+    if ((!merged.station || !merged.station.trim()) && incomingMeta.station?.trim()) {
+      merged.station = incomingMeta.station.trim();
+    }
     if (typeof incomingMeta.duration === 'number' && incomingMeta.duration > 0) {
       const current = typeof merged.duration === 'number' ? merged.duration : 0;
       if (!current || current <= 0) {
@@ -69,11 +75,18 @@ export async function enrichMetadata(args: {
     return merged;
   };
 
+  // Radio has no duration to resolve, but it still needs station metadata such as cover art.
+  // Resolve it when the request did not already carry artwork; TuneIn/custom streams are
+  // resolved by URL in ContentManager and return the now-playing-sized cover.
   const shouldResolveMetadata =
-    !isRadio &&
-    (!enrichedMetadata?.duration ||
-      ((isMusicAssistant || isAppleMusic) &&
-        (!enrichedMetadata || !enrichedMetadata.title || !enrichedMetadata.artist)));
+    (isRadio && !enrichedMetadata?.coverurl) ||
+    (!isRadio &&
+      (!enrichedMetadata?.duration ||
+        ((isMusicAssistant || isAppleMusic) &&
+          (!enrichedMetadata ||
+            !enrichedMetadata.title ||
+            !enrichedMetadata.artist ||
+            (isAppleMusic && !enrichedMetadata.animatedCoverUrl)))));
 
   if (shouldResolveMetadata) {
     try {

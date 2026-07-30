@@ -321,6 +321,7 @@ export class TuneInProvider {
     let name = item.text;
     if (name) {
       name = name.replace(/^(?:\d+\.\d+ \| )?(.+?)(?: \([^)]+\))?$/, '$1'); // removes frequency and genre if present in name
+      name = this.repairUtf8Mojibake(name);
     } else {
       name = 'Unknown station';
     }
@@ -331,6 +332,17 @@ export class TuneInProvider {
       stream,
       coverurl,
     } satisfies RadioStation;
+  }
+
+  /** TuneIn occasionally returns UTF-8 bytes decoded as Latin-1 (e.g. BublÃ©). */
+  private repairUtf8Mojibake(value: string): string {
+    if (!/[ÃÂâð]/.test(value)) return value;
+    try {
+      const repaired = Buffer.from(value, 'latin1').toString('utf8');
+      return repaired.includes('\uFFFD') ? value : repaired;
+    } catch {
+      return value;
+    }
   }
 
   private normalizeStreamUrl(streamUrl: string | undefined): string {

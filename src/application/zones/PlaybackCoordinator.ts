@@ -431,6 +431,7 @@ export class PlaybackCoordinator {
         artist: resolved.track?.artist ?? base.artist ?? '',
         album: resolved.track?.album ?? base.album ?? '',
         coverurl: resolved.track?.coverurl ?? base.coverurl ?? '',
+        animatedCoverUrl: base.animatedCoverUrl,
         duration: resolved.track?.durationSec ?? base.duration,
         station: base.station ?? resolved.stationLabel,
         audiopath,

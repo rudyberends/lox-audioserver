@@ -237,6 +237,48 @@ export class ContentManager {
     return this.tunein.getMenuEntries();
   }
 
+  /** Public browse tree for the built-in Radio service. */
+  public async getRadioFolder(
+    folderId: string,
+    offset: number,
+    limit: number,
+  ): Promise<ContentFolder | null> {
+    if (folderId === 'start') {
+      const menu = await this.getRadios();
+      const items: ContentFolderItem[] = [];
+      if (this.isRadioParadiseEnabled()) {
+        items.push({ id: 'radioparadise', name: 'Radio Paradise', type: 7, kind: 'category' });
+      }
+      items.push(
+        ...menu.map((entry) => ({
+          id: entry.cmd === 'local' ? 'tunein' : entry.cmd,
+          name: entry.name,
+          type: 7,
+          kind: 'category' as const,
+        })),
+      );
+      return {
+        id: 'start',
+        name: 'Radio',
+        items: items.slice(offset, offset + limit),
+        totalitems: items.length,
+        start: offset,
+      };
+    }
+    if (folderId === 'radioparadise') {
+      return this.isRadioParadiseEnabled()
+        ? this.radioParadise.getFolder('start', offset, limit)
+        : null;
+    }
+    if (folderId === 'tunein') {
+      return this.tunein.getFolder('local', 'start', offset, limit);
+    }
+    if (folderId === 'custom') {
+      return this.tunein.getFolder('custom', 'start', offset, limit);
+    }
+    return null;
+  }
+
   /** Add a manually-defined custom radio stream (native `audio/cfg/radios/add`). */
   public async addCustomRadio(
     name: string,
@@ -424,6 +466,7 @@ export class ContentManager {
       artist: (item.artist ?? '').trim(),
       album: (item.album ?? '').trim(),
       coverurl: item.coverurl ?? '',
+      ...(item.animatedCoverUrl ? { animatedCoverUrl: item.animatedCoverUrl } : {}),
       duration: typeof item.duration === 'number' && item.duration > 0 ? Math.round(item.duration) : undefined,
     };
     const expiresAt = Date.now() + this.metadataTtlMs;
@@ -821,6 +864,7 @@ export class ContentManager {
             artist: track.artist ?? '',
             album: track.album ?? '',
             coverurl: track.coverurl ?? '',
+            ...(track.animatedCoverUrl ? { animatedCoverUrl: track.animatedCoverUrl } : {}),
             duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
           };
         }
@@ -853,6 +897,7 @@ export class ContentManager {
             artist: track.artist ?? '',
             album: track.album ?? '',
             coverurl: track.coverurl ?? '',
+            ...(track.animatedCoverUrl ? { animatedCoverUrl: track.animatedCoverUrl } : {}),
             duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
           };
         }

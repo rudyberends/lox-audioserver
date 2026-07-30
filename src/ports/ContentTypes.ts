@@ -47,6 +47,8 @@ export interface ContentFolderItem {
   type: number;
   audiopath?: string;
   coverurl?: string;
+  /** Optional Apple motion-artwork video URL for clients that support it. */
+  animatedCoverUrl?: string;
   items?: number;
   title?: string;
   thumbnail?: string;
@@ -97,6 +99,14 @@ export interface ContentFolder {
   totalKnown?: boolean;
   start: number;
   service?: string;
+  /** Optional grouped content for a home/feed-style browse surface. */
+  sections?: ContentFolderSection[];
+}
+
+export interface ContentFolderSection {
+  id: string;
+  name: string;
+  items: ContentFolderItem[];
 }
 
 export interface PlaylistEntry {
@@ -133,6 +143,7 @@ export interface ContentItemMetadata {
   artist: string;
   album: string;
   coverurl?: string;
+  animatedCoverUrl?: string;
   duration?: number;
   station?: string;
 }

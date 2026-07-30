@@ -458,7 +458,9 @@ export function deriveRadioStationLabel(audiopath: string | undefined): string |
       const label = RADIO_PARADISE_PATH_LABELS.get(path);
       return label || 'Radio Paradise';
     }
-    return host || undefined;
+    // A stream host is transport metadata, not a station name. TuneIn/custom
+    // metadata resolves the human-readable station separately.
+    return undefined;
   } catch {
     return undefined;
   }

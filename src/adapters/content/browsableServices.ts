@@ -112,9 +112,9 @@ export function buildBrowsableServices(
     });
   }
 
-  // This "radio" browsable service surfaces Radio Paradise; hide it when RP is
-  // disabled so our own player/DLNA root drops the tile (not just its contents).
-  if (permitted('radio') && config.getConfig().content?.radio?.radioParadise?.enabled !== false) {
+  // One Radio root contains Radio Paradise, TuneIn presets and custom streams. Keep the
+  // grouping here so clients do not need to know that these are backed by different providers.
+  if (permitted('radio')) {
     services.push({
       key: 'radio',
       provider: 'radio',
@@ -125,8 +125,7 @@ export function buildBrowsableServices(
       searchSource: null,
       // Radio is browsable but its providers do not answer a general search.
       capabilities: capabilitiesFor('radio'),
-      browse: (cm, folderId, offset, limit) =>
-        cm.getServiceFolder('radioparadise', 'radioparadise', folderId, offset, limit),
+      browse: (cm, folderId, offset, limit) => cm.getRadioFolder(folderId, offset, limit),
     });
   }
 

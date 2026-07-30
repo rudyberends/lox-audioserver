@@ -53,6 +53,7 @@ export function buildInputMetadataPatch(args: InputMetadataPatchArgs): Partial<Z
   assignPatch('artist', metadata.artist);
   assignPatch('album', metadata.album);
   assignPatch('coverurl', metadata.coverurl as string | undefined);
+  patch.animatedCoverUrl = metadata.animatedCoverUrl;
   assignPatch('audiopath', metadata.audiopath);
   if (metadata.coverurl && typeof stateIcontype === 'number') {
     patch.icontype = undefined;
@@ -275,6 +276,7 @@ export function buildQueueItemPlaybackPatch(
     artist: item.artist,
     album: item.album,
     coverurl: item.coverurl,
+    animatedCoverUrl: item.animatedCoverUrl,
     audiopath: item.audiopath,
     station: item.station,
     qindex: index,
@@ -303,6 +305,7 @@ export function buildMatchedOutputUriPatch(
     artist: item.artist,
     album: item.album,
     coverurl: item.coverurl,
+    animatedCoverUrl: item.animatedCoverUrl,
     audiopath: item.audiopath,
     station: item.station,
     qindex: index,
