@@ -1308,7 +1308,10 @@ export class SendspinOutput implements ZoneOutput {
         lastSendWallUs = serverNowUs();
         // Feed the shared analyzer from the same scheduled PCM frame so
         // visualizer events carry the exact timestamp of the audio on wire.
-        if (isPcm && this.unsubscribeAnalysis && canSendToClient) {
+        // The public API can subscribe to this timeline even when the Sendspin client did not
+        // negotiate visualizer@v1 (the web player currently does not). The central analyzer is
+        // therefore independent from the optional Sendspin visualizer role.
+        if (isPcm && canSendToClient) {
           this.ports.audioAnalysis.push(this.zoneId, frameData, frameTsUs, 'scheduled-output');
         }
         const targetLeadUs = this.targetLeadUs;

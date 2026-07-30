@@ -20,6 +20,10 @@ import { discoverSonosDevices } from '@/adapters/outputs/sonos/sonosDiscovery';
 import { discoverSpotifyConnectDevices } from '@/adapters/content/providers/spotify/spotifyConnectDiscovery';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 
+/** Browser tabs are ephemeral local destinations, not physical output devices. */
+const isBrowserClient = (clientId: unknown): boolean =>
+  typeof clientId === 'string' && clientId.trim().startsWith('browser-');
+
 const HIDDEN_TRANSPORT_IDS = new Set(['spotify', 'sendspin-cast']);
 
 export type StateControllerDefinition = {
@@ -377,6 +381,7 @@ async function handleSendspinDiscovery(
       .listClients()
       .filter((client) => (roles.length ? roles.some((role) => client.roles.includes(role)) : true))
       .filter((client) => typeof client.clientId === 'string' && client.clientId.trim().length > 0)
+      .filter((client) => !isBrowserClient(client.clientId))
       .map((client) => {
         const clientId = client.clientId;
         const controls = clientId
@@ -479,6 +484,7 @@ async function handleSendspinSourceDiscovery(
     const clients = sendspinCore
       .listClients()
       .filter((client) => client.roles.includes('source@v1'))
+      .filter((client) => !isBrowserClient(client.clientId))
       .map((client) => {
         const clientId = client.clientId;
         const controls = clientId
