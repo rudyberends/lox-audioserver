@@ -29,6 +29,8 @@ export type BeoremoteKeyAction =
   | { kind: 'lineIn'; inputId: string }
   /** Start a radio station by audiopath. */
   | { kind: 'radio'; audiopath: string }
+  /** Put the zone into standby, including an immediate configured power-off action. */
+  | { kind: 'standby' }
   /** Known key with nothing bound to it yet — reported apart from an unknown code. */
   | { kind: 'unassigned'; label: string };
 
@@ -91,7 +93,6 @@ export function defaultFavoriteSlot(button: AssignableButton): number {
  * 0x41–0x45 is almost certainly the navigation ring.
  */
 const OBSERVED_UNASSIGNED: Record<number, string> = {
-  0x30: 'unknown-30',
   0x41: 'nav-41',
   0x42: 'nav-42',
   0x43: 'nav-43',
@@ -104,6 +105,9 @@ const OBSERVED_UNASSIGNED: Record<number, string> = {
  * they are per-zone configurable and resolved through {@link resolveKeyAction}.
  */
 const KEY_ACTIONS: Record<number, BeoremoteKeyAction> = {
+  // Standby / power off
+  0x30: { kind: 'standby' },
+
   // Transport
   0xb0: { kind: 'transport', command: 'play' },
   0xb1: { kind: 'transport', command: 'pause' },

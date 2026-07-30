@@ -327,6 +327,16 @@ export class BeoremoteApiHandler {
     zoneId: number,
     action: Exclude<BeoremoteKeyAction, { kind: 'unassigned' }>,
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (action.kind === 'standby') {
+      if (!this.deps.zoneManager.setPower(zoneId, 0)) {
+        return { ok: false, reason: 'zone-not-found' };
+      }
+      // Stop playback as well as switching the configured power action immediately.
+      // The direct setPower call bypasses offDelay.
+      this.deps.zoneManager.handleCommand(zoneId, 'off');
+      return { ok: true };
+    }
+
     if (action.kind === 'transport') {
       // Straight into the existing layer, which already decides between a line-in's
       // bridge and the local queue. That decision must not be duplicated here.

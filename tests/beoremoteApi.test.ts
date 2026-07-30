@@ -54,6 +54,7 @@ function createHarness(options: {
   const activatedLineIns: Array<{ zoneId: number; inputId: string }> = [];
   const sentCommands: Array<{ inputId: string; command: string; args: string[] }> = [];
   const commands: Array<{ zoneId: number; command: string }> = [];
+  const powerSignals: Array<{ zoneId: number; signal: 0 | 1 }> = [];
   const zoneAudiopath = { value: options.audiopath ?? '' };
   // A zone owns its remote: enabling it there is what turns the integration on.
   const config: any = {
@@ -109,6 +110,10 @@ function createHarness(options: {
       handleCommand: (zoneId: number, command: string) => {
         commands.push({ zoneId, command });
       },
+      setPower: (zoneId: number, signal: 0 | 1) => {
+        powerSignals.push({ zoneId, signal });
+        return zoneId === 12;
+      },
       getZoneState: () => ({ audiopath: zoneAudiopath.value }),
     } as any,
     lineIn: {
@@ -121,7 +126,7 @@ function createHarness(options: {
       },
     } as any,
   });
-  return { handler, played, config, activatedLineIns, sentCommands, commands, zoneAudiopath };
+  return { handler, played, config, activatedLineIns, sentCommands, commands, powerSignals, zoneAudiopath };
 }
 
 async function call(
@@ -164,6 +169,15 @@ test('selecting a favorite starts it on the zone', async () => {
   });
   assert.equal(res.statusCode, 200);
   assert.deepEqual(played, [{ zoneId: 12, audiopath: 'spotify:playlist:42', type: 'favorite' }]);
+});
+
+test('standby key 0x30 powers the zone off immediately', async () => {
+  const { handler, commands, powerSignals } = createHarness();
+  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0x30' });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(powerSignals, [{ zoneId: 12, signal: 0 }]);
+  assert.deepEqual(commands, [{ zoneId: 12, command: 'off' }]);
+  assert.equal(res.json().action, 'standby');
 });
 
 test('selecting a submenu station starts it', async () => {

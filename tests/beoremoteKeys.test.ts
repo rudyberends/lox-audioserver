@@ -21,6 +21,10 @@ test('transport keys map to the four transport verbs', () => {
   assert.deepEqual(resolveKeyAction(0xb6), { kind: 'transport', command: 'previous' });
 });
 
+test('0x30 is the fixed standby key', () => {
+  assert.deepEqual(resolveKeyAction(0x30), { kind: 'standby' });
+});
+
 test('the second step pair is an alias, not a replacement', () => {
   // A different physical control reporting the same intent. Both pairs stay live
   // because a remote may send either.
