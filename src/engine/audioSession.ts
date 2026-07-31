@@ -672,13 +672,13 @@ export class AudioSession {
     if (this.sourceFormat) {
       return;
     }
-    const match = /Stream #\d+:\d+(?:\[[^\]]*\])?(?:\([^)]*\))?: Audio: ([A-Za-z0-9_]+)[^,]*, (\d+) Hz, ([^,]+)(?:, ([a-z0-9]+))?(?:, (\d+) kb\/s)?/.exec(
-      message,
+    const match = /Stream #\d+:\d+(?:\[[^\]]*\])?(?:\([^)]*\))?: Audio: ([A-Za-z0-9_]+)[^,]*, (\d+) Hz, ([^,]+?)(?:, ([a-z0-9]+)(?: \((\d+) bit\))?)?(?:, (\d+) kb\/s)?$/.exec(
+      message.trim(),
     );
     if (!match) {
       return;
     }
-    const [, codec, rate, layout, sampleFmt, kbps] = match;
+    const [, codec, rate, layout, sampleFmt, rawBits, kbps] = match;
     const sampleRate = Number(rate);
     if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
       return;
@@ -689,19 +689,24 @@ export class AudioSession {
         ? 2
         : Number(/^(\d+)/.exec(layout ?? '')?.[1] ?? 2);
     /*
-     * Depth only for codecs that have one to preserve.
+     * Depth: only what ffmpeg actually states about the *recording*.
      *
-     * A lossy stream's decoder sample format (`fltp`) describes ffmpeg's float pipeline, not the
-     * recording — reporting 32 bits for an AAC would be the padding mistake in a different place.
+     * The decoder's sample format is not the file's depth. FLAC has no 24-bit sample format, so a 24-bit
+     * file decodes to `s32` — reading that as 32 bits is the padding mistake in a new place, and it made
+     * a 24-bit master report "32-bit → 24-bit, depth reduced". When ffmpeg knows the real width it says so
+     * in parentheses (`s32 (24 bit)`); otherwise only `s16` is unambiguous, and anything else stays null.
+     * A lossy codec has no original depth at all — `fltp` describes ffmpeg's float pipeline, not the
+     * recording.
      */
     const lossless = ['flac', 'alac', 'pcm', 'wav', 'aiff'].some((name) => codec?.startsWith(name));
-    const bitDepth = lossless
-      ? sampleFmt === 's16' || sampleFmt === 's16p'
-        ? 16
-        : sampleFmt === 's32' || sampleFmt === 's32p'
-          ? 32
-          : null
-      : null;
+    const statedBits = rawBits ? Number(rawBits) : null;
+    const bitDepth = !lossless
+      ? null
+      : statedBits && Number.isFinite(statedBits)
+        ? statedBits
+        : sampleFmt === 's16' || sampleFmt === 's16p'
+          ? 16
+          : null;
     this.sourceFormat = {
       codec: codec ?? 'unknown',
       sampleRate,
