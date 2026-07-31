@@ -101,6 +101,16 @@ export class AudioSession {
   private lastExitSignal: string | null = null;
   private lastExitAt: number | null = null;
   /** @internal */ public startTs: number | null = null;
+  /**
+   * When this session object was created.
+   *
+   * Not the same as `startTs` (when ffmpeg was last spawned, which a restart moves): this is the identity
+   * of the session, and it is what lets a consumer tell a *replacement* from the session it replaced.
+   * Starting a track with a new output format briefly leaves both alive — the manager starts one with the
+   * zone's stored format and the output restarts it with the negotiated one — and a reader that cannot
+   * order them describes whichever the map yields first.
+   */
+  private readonly createdAt = Date.now();
   private readonly sourcePreDelayMs?: number;
   private sourceFormat: EngineSessionStats['sourceFormat'];
   private readonly bitPerfect: boolean;
@@ -723,6 +733,7 @@ export class AudioSession {
   public getStats(): EngineSessionStats {
     const drops = this.fanout.drops;
     return {
+      startedAt: this.createdAt,
       profile: this.profile,
       sampleRate: this.outputSettings.sampleRate,
       channels: this.outputSettings.channels,

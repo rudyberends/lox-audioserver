@@ -5,6 +5,14 @@ import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 import type { SessionKey } from '@/ports/types/SessionKey';
 
 export type EngineSessionStats = {
+  /**
+   * When the session was created, as epoch ms.
+   *
+   * Lets a consumer order overlapping sessions. Starting a track whose format differs from the zone's
+   * stored one leaves two alive for a moment — see `AudioSession.createdAt` — and without this the API
+   * described whichever came first out of the map, which was the one being torn down.
+   */
+  startedAt: number;
   profile: OutputProfile;
   /**
    * The format this session actually encodes at. Callers must compare this — not

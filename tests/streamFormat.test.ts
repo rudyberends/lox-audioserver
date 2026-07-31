@@ -9,6 +9,8 @@ import type { EngineSessionStats } from '../src/ports/EnginePort';
 
 const stat = (over: Partial<EngineSessionStats>): EngineSessionStats =>
   ({
+    // Same instant unless a test says otherwise: siblings, not replacements.
+    startedAt: 1_000,
     profile: 'pcm',
     sampleRate: 44100,
     channels: 2,
@@ -141,6 +143,49 @@ test('the API reports the engine chain, with crossfade merged in from the sessio
     // so the projection is where the two meet.
     crossfading: true,
   });
+});
+
+test('a replacement session wins over the one it replaced', () => {
+  // Starting a 192 kHz file in a zone whose stored format is 48 kHz leaves both alive for a moment: the
+  // manager starts at 48, the output restarts at 192. The newer object is the survivor, and describing
+  // the older one is how a hi-res FLAC came out as "48 kHz".
+  const format = toApiAudioFormat([
+    stat({
+      startedAt: 1_000,
+      profile: 'pcm',
+      sampleRate: 48000,
+      pcmBitDepth: 24,
+      sourceFormat: { codec: 'flac', sampleRate: 192000, channels: 2, bitDepth: 24, bitrate: null },
+    }),
+    stat({
+      startedAt: 1_400,
+      profile: 'pcm',
+      sampleRate: 192000,
+      pcmBitDepth: 24,
+      sourceFormat: { codec: 'flac', sampleRate: 192000, channels: 2, bitDepth: 24, bitrate: null },
+    }),
+  ]);
+  assert.equal(format?.output.sampleRate, 192000);
+});
+
+test('a lower-rate replacement still wins — newest is the survivor, not the best', () => {
+  // The same mechanism in reverse: a 44.1 kHz track started after a 192 kHz one. Preferring the higher
+  // rate here would keep describing the track that already stopped.
+  const format = toApiAudioFormat([
+    stat({ startedAt: 5_000, profile: 'pcm', sampleRate: 192000, pcmBitDepth: 24 }),
+    stat({ startedAt: 5_900, profile: 'pcm', sampleRate: 44100, pcmBitDepth: 24 }),
+  ]);
+  assert.equal(format?.output.sampleRate, 44100);
+});
+
+test('profiles started together are compared on their audio, not their clock', () => {
+  // A Cast device on MP3 beside sendspin on PCM: milliseconds apart, so the rate decides.
+  const format = toApiAudioFormat([
+    stat({ startedAt: 9_000, profile: 'mp3', sampleRate: 44100, pcmBitDepth: 16, bps: 32000 }),
+    stat({ startedAt: 9_020, profile: 'pcm', sampleRate: 96000, pcmBitDepth: 24 }),
+  ]);
+  assert.equal(format?.output.codec, 'pcm');
+  assert.equal(format?.output.sampleRate, 96000);
 });
 
 test('a 24-bit container around a lossy source is not high-res', () => {

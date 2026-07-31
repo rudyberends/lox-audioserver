@@ -10,6 +10,8 @@
 import type { ApiAudioFormat, ApiProcessingChain, ApiStreamFormat } from '@/domain/zones/apiTypes';
 
 type StreamStat = {
+  /** When the session was created; see `selectBest`. Optional so older callers and tests still fit. */
+  startedAt?: number;
   profile: string;
   sampleRate: number;
   channels: number;
@@ -38,20 +40,32 @@ type StreamStat = {
  * So one has to be chosen, in this order:
  *
  *  1. **Someone is listening to it.** A session with subscribers is the one being heard.
- *  2. **The highest sample rate.** Between two people are hearing, the better stream is the more
- *     informative answer to "what am I hearing".
- *  3. **It knows what it is playing.** The tie-breaker that made this comment necessary: an Apple Music
- *     track produced two 44.1 kHz sessions, the first without the provider's declared source format and
- *     the second with it, and a rate comparison alone kept the first — so the API reported "source not
- *     reported" for a track whose format the provider had stated up front. Between otherwise-equal
- *     sessions, the one that can describe its source is strictly more useful.
+ *  2. **The one that replaced the other.** Starting a track whose format differs from the zone's stored
+ *     one leaves two sessions alive for a moment: the manager starts at the stored format and the output
+ *     restarts at the negotiated one. They are the *same* audio, and the newer object is the survivor —
+ *     so a session more than `REPLACEMENT_MS` newer wins outright. Without this the API described the one
+ *     being torn down, which is how a 192 kHz FLAC came out as "48 kHz" and an Apple track as "source not
+ *     reported".
+ *  3. **The highest sample rate.** Between profiles started together — a Cast device on MP3 while
+ *     sendspin takes PCM — the better stream is the more informative answer to "what am I hearing".
+ *  4. **It knows what it is playing.** Between otherwise-equal sessions, the one that can describe its
+ *     source is strictly more useful.
+ *
+ * The margin in (2) is what keeps (3) meaningful: profiles started together are milliseconds apart and
+ * must be compared on their audio, not on their clock.
  */
+/** How much newer a session must be to count as a replacement rather than a sibling. */
+const REPLACEMENT_MS = 250;
 function selectBest(stats: StreamStat[]): StreamStat | null {
   const live = stats.filter((entry) => entry.subscribers > 0);
   const candidates = live.length > 0 ? live : stats;
   return candidates.reduce<StreamStat | null>((winner, entry) => {
     if (!winner) {
       return entry;
+    }
+    const age = (entry.startedAt ?? 0) - (winner.startedAt ?? 0);
+    if (Math.abs(age) >= REPLACEMENT_MS) {
+      return age > 0 ? entry : winner;
     }
     if (entry.sampleRate !== winner.sampleRate) {
       return entry.sampleRate > winner.sampleRate ? entry : winner;
