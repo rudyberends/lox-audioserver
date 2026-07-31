@@ -39,12 +39,69 @@ function selectBest(stats: StreamStat[]): StreamStat | null {
   );
 }
 
-function isHighRes(sampleRate: number, bitDepth: number | null): boolean {
+/** Codecs that carry every sample of their input. A lossy codec cannot be high-resolution audio. */
+const LOSSLESS_CODECS = new Set(['pcm', 'flac', 'alac', 'wav', 'aiff', 'dsd']);
+
+function isLossless(codec: string): boolean {
+  const name = codec.toLowerCase();
+  return LOSSLESS_CODECS.has(name) || name.startsWith('pcm_');
+}
+
+/** Whether a format's own numbers exceed CD: better than 48 kHz, or deeper than 16 bits. */
+function exceedsCd(sampleRate: number, bitDepth: number | null): boolean {
   return sampleRate > 48000 || (bitDepth !== null && bitDepth > 16);
 }
 
-function withHighRes(format: Omit<ApiStreamFormat, 'highRes'>): ApiStreamFormat {
-  return { ...format, highRes: isHighRes(format.sampleRate, format.bitDepth) };
+/**
+ * High-resolution is a claim about the *audio*, not about the container it travels in.
+ *
+ * This used to be `rate > 48k || depth > 16` on whatever format was being described, which made every
+ * output of this server high-res: the PCM sink carries 24-bit samples, so a 44.1 kHz AAC decode padded
+ * into a 24-bit container was reported as high-res audio. It is a fat box around CD-or-worse content.
+ *
+ * Two functions rather than one with a nullable source, because the two questions are genuinely
+ * different and collapsing them is what made the first attempt wrong: for a *source*, its own numbers
+ * are the origin of the claim; for an *output*, they are a claim to be checked against the origin.
+ */
+
+/** The source's own numbers, and only lossless codecs can be better than CD. */
+function sourceIsHighRes(format: Omit<ApiStreamFormat, 'highRes'>): boolean {
+  return isLossless(format.codec) && exceedsCd(format.sampleRate, format.bitDepth);
+}
+
+/**
+ * The output is high-res only when the information in it can be:
+ *
+ *  - **Lossless on both ends.** An encoder that threw samples away did so before we saw them; no rate
+ *    or depth downstream puts them back.
+ *  - **Better than CD in a dimension the source supports.** Depth counts only when the source was
+ *    deeper than 16 bits (otherwise it is padding), and rate only when the source ran above 48 kHz
+ *    (otherwise it is upsampling). Keeping 24 bits while dropping 96 kHz to 48 kHz is still high-res —
+ *    the depth survived — which is why the dimensions are judged separately rather than together.
+ *  - **Known.** With no source reported there is nothing to back the claim with, and an unbackable
+ *    claim is the one thing this field must not make.
+ */
+function outputIsHighRes(
+  format: Omit<ApiStreamFormat, 'highRes'>,
+  source: Omit<ApiStreamFormat, 'highRes'> | null,
+): boolean {
+  if (!isLossless(format.codec) || !source || !isLossless(source.codec)) {
+    return false;
+  }
+  const deeperThanCd = format.bitDepth !== null && format.bitDepth > 16 && (source.bitDepth ?? 0) > 16;
+  const fasterThanCd = format.sampleRate > 48000 && source.sampleRate > 48000;
+  return deeperThanCd || fasterThanCd;
+}
+
+function withSourceHighRes(format: Omit<ApiStreamFormat, 'highRes'>): ApiStreamFormat {
+  return { ...format, highRes: sourceIsHighRes(format) };
+}
+
+function withOutputHighRes(
+  format: Omit<ApiStreamFormat, 'highRes'>,
+  source: Omit<ApiStreamFormat, 'highRes'> | null,
+): ApiStreamFormat {
+  return { ...format, highRes: outputIsHighRes(format, source) };
 }
 
 /**
@@ -61,7 +118,9 @@ function toStreamFormat(
   if (!best || !best.sampleRate) {
     return null;
   }
-  return withHighRes({
+  // The source is what the output's high-res claim is checked against — see `outputIsHighRes`.
+  const source = best.sourceFormat ?? null;
+  return withOutputHighRes({
     codec: best.profile,
     sampleRate: best.sampleRate,
     bitDepth: best.pcmBitDepth,
@@ -74,7 +133,7 @@ function toStreamFormat(
         : best.bps === null
           ? null
           : best.bps * 8,
-  });
+  }, source);
 }
 
 export function toApiAudioFormat(stats: StreamStat[]): ApiAudioFormat | null {
@@ -94,7 +153,7 @@ export function toApiAudioFormat(stats: StreamStat[]): ApiAudioFormat | null {
   return {
     bitPerfect: best?.bitPerfect === true,
     dspApplied: best?.dspApplied === true,
-    source: source ? withHighRes(source) : null,
+    source: source ? withSourceHighRes(source) : null,
     output,
     // Crossfading lives on the session rather than in the arg builder's description — it is a state,
     // not a configuration — so it is merged in here, where both are on the same object.

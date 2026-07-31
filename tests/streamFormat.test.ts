@@ -34,13 +34,21 @@ const stat = (over: Partial<EngineSessionStats>): EngineSessionStats =>
   }) as EngineSessionStats;
 
 test('the format describes the audio, not the engine', () => {
-  const format = toStreamFormat([stat({ sampleRate: 192000, pcmBitDepth: 24 })]);
+  const format = toStreamFormat([
+    stat({
+      sampleRate: 192000,
+      pcmBitDepth: 24,
+      sourceFormat: { codec: 'flac', sampleRate: 192000, channels: 2, bitDepth: 24, bitrate: null },
+    }),
+  ]);
   assert.deepEqual(format, {
     codec: 'pcm',
     sampleRate: 192000,
     bitDepth: 24,
     channels: 2,
     bitrate: 192000 * 2 * 24,
+    // Backed by the source: 192 kHz/24-bit FLAC in, so the numbers on the way out mean something. The
+    // same output with no reported source makes no claim — see the test below.
     highRes: true,
   });
   // Buffer sizes, restart counts and subscriber drops are engine health and stay out.
@@ -133,6 +141,53 @@ test('the API reports the engine chain, with crossfade merged in from the sessio
     // so the projection is where the two meet.
     crossfading: true,
   });
+});
+
+test('a 24-bit container around a lossy source is not high-res', () => {
+  // The case that started this: Apple Music's AAC decoded into the PCM sink, which carries 24-bit
+  // samples. Every number in the output format says "better than CD" and none of the audio does.
+  const format = toApiAudioFormat([
+    stat({
+      profile: 'pcm',
+      sampleRate: 44100,
+      pcmBitDepth: 24,
+      sourceFormat: { codec: 'aac', sampleRate: 44100, channels: 2, bitDepth: null, bitrate: 256000 },
+    }),
+  ]);
+  assert.equal(format?.output.highRes, false, 'padding is not resolution');
+  assert.equal(format?.source?.highRes, false, 'a lossy source is never high-res');
+});
+
+test('depth surviving a rate reduction is still high-res', () => {
+  const format = toApiAudioFormat([
+    stat({
+      profile: 'flac',
+      sampleRate: 48000,
+      pcmBitDepth: 24,
+      sourceFormat: { codec: 'flac', sampleRate: 96000, channels: 2, bitDepth: 24, bitrate: null },
+    }),
+  ]);
+  assert.equal(format?.output.highRes, true, '24 bits survived, so the output is still better than CD');
+  assert.equal(format?.source?.highRes, true);
+});
+
+test('upsampling a CD-rate lossless source does not make it high-res', () => {
+  const format = toApiAudioFormat([
+    stat({
+      profile: 'pcm',
+      sampleRate: 96000,
+      pcmBitDepth: 16,
+      sourceFormat: { codec: 'flac', sampleRate: 44100, channels: 2, bitDepth: 16, bitrate: null },
+    }),
+  ]);
+  assert.equal(format?.output.highRes, false, 'the extra samples were invented');
+});
+
+test('without a reported source the output makes no high-res claim', () => {
+  const format = toApiAudioFormat([
+    stat({ profile: 'pcm', sampleRate: 96000, pcmBitDepth: 24, sourceFormat: null }),
+  ]);
+  assert.equal(format?.output.highRes, false, 'a claim that cannot be backed is not made');
 });
 
 test('the API exposes the engine bit-perfect decision', () => {
