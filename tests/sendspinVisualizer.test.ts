@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { Jimp } from 'jimp';
 import { test } from './testHarness';
-import { SendspinVisualizer } from '../src/adapters/outputs/sendspin/sendspinVisualizer';
+import { SendspinVisualizer, windowSizeFor } from '../src/adapters/outputs/sendspin/sendspinVisualizer';
 import { derivePalette, type Rgb } from '../src/adapters/outputs/sendspin/artworkPalette';
 
 const SAMPLE_RATE = 48_000;
@@ -57,6 +57,42 @@ test('visualizer: loudness rises with amplitude and is zero on silence', () => {
   assert.ok(quiet > 0, 'audible signal must be non-zero');
 });
 
+test('visualizer: the wire value is a dB position, not an amplitude', () => {
+  /*
+   * The encoding consumers get wrong, in both directions. The u16 is where the level sits in the
+   * [-60, 0] dBFS window, linear in dB — not a linear amplitude. A client that takes 20·log10 of it
+   * reads a true -20 dBFS as -3.5 and paints it at 94% of the height, so everything looks clipped
+   * and a solo voice draws the same flat wall as a full mix. (That is exactly what the player did.)
+   *
+   * Pinned by measuring known levels: halving the amplitude is -6 dB, which must move the value by
+   * a tenth of full scale (6 of the 60 dB window) — a linear-amplitude encoding would halve it.
+   */
+  const levelOf = (amp: number): number => {
+    let seen = -1;
+    const dsp = new SendspinVisualizer(baseOpts({ emitLoudness: true, onLoudness: (v) => { seen = v; } }));
+    dsp.push(sineMono16(1000, amp, WINDOW), 0);
+    return seen;
+  };
+  const toDb = (value: number): number => -60 + (value / 65535) * 60;
+
+  // A full-scale sine is -3.01 dBFS RMS. Nothing may ever read above it.
+  const full = toDb(levelOf(1));
+  assert.ok(Math.abs(full - -3.01) < 0.6, `full-scale sine reads ${full.toFixed(2)} dBFS (expect ~-3)`);
+
+  const half = toDb(levelOf(0.5));
+  assert.ok(Math.abs(half - (full - 6.02)) < 0.3, `halving amplitude is -6 dB (${full.toFixed(2)} -> ${half.toFixed(2)})`);
+
+  // And the encoding is linear in dB: equal dB steps are equal steps in the value.
+  const steps = [1, 0.5, 0.25, 0.125].map(levelOf);
+  const deltas = steps.slice(1).map((v, i) => steps[i]! - v);
+  for (const delta of deltas) {
+    assert.ok(
+      Math.abs(delta - (6.02 / 60) * 65535) < 400,
+      `each -6 dB step moves ~${((6.02 / 60) * 65535).toFixed(0)} counts, got ${delta.toFixed(0)}`,
+    );
+  }
+});
+
 // --- f_peak -----------------------------------------------------------------
 
 test('visualizer: f_peak locates the dominant tone', () => {
@@ -89,6 +125,155 @@ test('visualizer: spectrum concentrates energy in the tone band', () => {
   // Linear bin centers across [fMin,fMax]; the winning bin must straddle ~1000 Hz.
   const center = fMin + ((argmax + 0.5) / nBins) * (fMax - fMin);
   assert.ok(Math.abs(center - 1000) < (fMax - fMin) / nBins, `peak bin center ${center}Hz near 1000Hz`);
+});
+
+test('visualizer: every display bin can carry a value, however narrow its band', () => {
+  /*
+   * The regression this locks down: the FFT->display mapping left low display bins empty
+   * because a log scale makes them narrower than the FFT's 23 Hz resolution. Measured on a
+   * playing zone, 5 of 48 bars could never light up — at 40 Hz the first band is 5.3 Hz wide.
+   *
+   * White noise excites every band, so any bin still reading zero is unreachable by
+   * construction rather than merely silent — held over several windows, because one
+   * realization of noise has nulls a single-bin band can fall into.
+   */
+  const nBins = 48;
+  const held = new Uint16Array(nBins);
+  const dsp = new SendspinVisualizer(baseOpts({
+    spectrum: { n_disp_bins: nBins, scale: 'log', f_min: 40, f_max: 16_000 },
+    onSpectrum: (b) => {
+      for (let i = 0; i < nBins; i += 1) if (b[i]! > held[i]!) held[i] = b[i]!;
+    },
+  }));
+  // Deterministic pseudo-noise: a fixed LCG, so a failure is reproducible.
+  let seed = 12345;
+  for (let w = 0; w < 8; w += 1) {
+    const noise = Buffer.alloc(WINDOW * 2);
+    for (let i = 0; i < WINDOW; i += 1) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      noise.writeInt16LE(Math.round(((seed / 0x7fffffff) * 2 - 1) * 12000), i * 2);
+    }
+    dsp.push(noise, w * 200_000);
+  }
+  const dead = [...held].map((v, i) => (v === 0 ? i : -1)).filter((i) => i >= 0);
+  assert.deepEqual(dead, [], 'no display bin is structurally unreachable');
+});
+
+test('visualizer: a tone lands in the display bin whose band contains it', () => {
+  // Bands are log-spaced, so the check is the band's own edges rather than a linear centre.
+  const nBins = 48;
+  const fMin = 40;
+  const fMax = 16_000;
+  for (const freq of [110, 440, 2000, 8000]) {
+    let bins: Uint16Array | null = null;
+    const dsp = new SendspinVisualizer(baseOpts({
+      spectrum: { n_disp_bins: nBins, scale: 'log', f_min: fMin, f_max: fMax },
+      onSpectrum: (b) => { bins = Uint16Array.from(b); },
+    }));
+    dsp.push(sineMono16(freq, 0.6, WINDOW), 0);
+    const out = bins!;
+    let argmax = 0;
+    for (let i = 1; i < out.length; i += 1) if (out[i]! > out[argmax]!) argmax = i;
+    const edge = (i: number): number => fMin * (fMax / fMin) ** (i / nBins);
+    // Within one band either way: a Hann window spreads a tone over its neighbours.
+    assert.ok(
+      freq >= edge(argmax - 1) && freq <= edge(argmax + 2),
+      `${freq}Hz peaked at bin ${argmax} (${edge(argmax).toFixed(0)}-${edge(argmax + 1).toFixed(0)}Hz)`,
+    );
+  }
+});
+
+test('visualizer: frequency resolution holds at high sample rates', () => {
+  /*
+   * The window is a duration, not a sample count. A fixed 2048 points resolves 21 Hz at 44.1 kHz
+   * but only 94 Hz at 192 kHz — the whole bass register inside one FFT bin, on exactly the files
+   * this server exists to pass through untouched. Scaling the window with the rate keeps the
+   * resolution (and so the look of the display) the same everywhere.
+   */
+  for (const rate of [44_100, 48_000, 96_000, 192_000]) {
+    const window = windowSizeFor(rate);
+    assert.ok(Number.isInteger(Math.log2(window)), `${window} is a power of two (radix-2 FFT)`);
+    const hzPerBin = rate / window;
+    assert.ok(hzPerBin >= 18 && hzPerBin <= 26, `${rate} Hz resolves ${hzPerBin.toFixed(1)} Hz per bin`);
+  }
+
+  // And it holds in practice: a bass tone at 192 kHz still lands in its own band.
+  const nBins = 48;
+  const fMin = 40;
+  const fMax = 16_000;
+  const rate = 192_000;
+  const window = windowSizeFor(rate);
+  let bins: Uint16Array | null = null;
+  const dsp = new SendspinVisualizer({
+    ...baseOpts({
+      spectrum: { n_disp_bins: nBins, scale: 'log', f_min: fMin, f_max: fMax },
+      onSpectrum: (b) => { bins = Uint16Array.from(b); },
+    }),
+    sampleRate: rate,
+  });
+  const tone = Buffer.alloc(window * 2);
+  for (let i = 0; i < window; i += 1) {
+    tone.writeInt16LE(Math.round(0.6 * Math.sin((2 * Math.PI * 110 * i) / rate) * 32767), i * 2);
+  }
+  dsp.push(tone, 0);
+  const out = bins!;
+  let argmax = 0;
+  for (let i = 1; i < out.length; i += 1) if (out[i]! > out[argmax]!) argmax = i;
+  const edge = (i: number): number => fMin * (fMax / fMin) ** (i / nBins);
+  assert.ok(
+    110 >= edge(argmax - 1) && 110 <= edge(argmax + 2),
+    `110Hz at ${rate}Hz peaked at bin ${argmax} (${edge(argmax).toFixed(0)}-${edge(argmax + 1).toFixed(0)}Hz)`,
+  );
+});
+
+test('visualizer: level survives channels in opposite phase', () => {
+  /*
+   * L and R inverted is what a hard-panned or deliberately wide stereo mix looks like at
+   * some frequencies. The mid mix cancels it to nothing; the level must not, or the meter
+   * reads silence over music.
+   */
+  const samples = WINDOW;
+  const buf = Buffer.alloc(samples * 2 * 2);
+  for (let i = 0; i < samples; i += 1) {
+    const s = Math.round(0.5 * Math.sin((2 * Math.PI * 1000 * i) / SAMPLE_RATE) * 32767);
+    buf.writeInt16LE(s, i * 4);
+    buf.writeInt16LE(-s, i * 4 + 2);
+  }
+  let loudness = -1;
+  const dsp = new SendspinVisualizer(baseOpts({
+    channels: 2,
+    emitLoudness: true,
+    onLoudness: (v) => { loudness = v; },
+  }));
+  dsp.push(buf, 0);
+  assert.ok(loudness > 0, `anti-phase stereo must still read a level (got ${loudness})`);
+});
+
+test('visualizer: bar fall time follows wall-clock, not the frame rate', () => {
+  /*
+   * The decay used to be a fixed factor per emitted frame, so the same music held its bars
+   * three times as long at 10 fps as at 30. Compare the same elapsed time at two rates.
+   */
+  const decayedAt = (rateMax: number): number => {
+    const frames: Uint16Array[] = [];
+    const dsp = new SendspinVisualizer(baseOpts({
+      rateMax,
+      spectrum: { n_disp_bins: 16, scale: 'log', f_min: 40, f_max: 16_000 },
+      onSpectrum: (b) => frames.push(Uint16Array.from(b)),
+    }));
+    const step = Math.floor(1_000_000 / rateMax);
+    dsp.push(sineMono16(1000, 0.6, WINDOW), 0);
+    // 200 ms of silence, delivered at that rate.
+    for (let t = step; t <= 200_000; t += step) dsp.push(Buffer.alloc(WINDOW * 2), t);
+    const last = frames[frames.length - 1]!;
+    return Math.max(...last);
+  };
+  const slow = decayedAt(10);
+  const fast = decayedAt(30);
+  assert.ok(
+    Math.abs(slow - fast) < 0.02 * 65535,
+    `same elapsed time must decay alike (10fps ${slow} vs 30fps ${fast})`,
+  );
 });
 
 // --- pitch ------------------------------------------------------------------
