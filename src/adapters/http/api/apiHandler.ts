@@ -357,6 +357,30 @@ function pagingStart(params: URLSearchParams): number {
 }
 
 /**
+ * How many items a paged request wants.
+ *
+ * An absent `limit` means the default, and getting that right is the whole reason this is a function.
+ * Written inline as `clampInt(Number(params.get('limit') ?? 0), 1, MAX) ?? DEFAULT` it reads as
+ * "clamp it, or fall back" — but `0` is a finite number, so the clamp pinned it to the *minimum* and
+ * the `??` never fired. A caller who omitted the parameter got one item per page out of `/browse`,
+ * `/search` and `/playlists`, which looks like an empty library rather than a paging default.
+ *
+ * Same rule as `?size=`: a missing or nonsensical value means "no preference" and gets the default,
+ * rather than being silently turned into the nearest bound.
+ */
+function pagingLimit(params: URLSearchParams, fallback: number, max: number): number {
+  const raw = params.get('limit');
+  if (raw === null || raw.trim() === '') {
+    return fallback;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 1) {
+    return fallback;
+  }
+  return Math.min(max, Math.floor(value));
+}
+
+/**
  * The cover size a `?size=` parameter asks for, or the now-playing default.
  *
  * Deliberately *not* clamped: an absent or nonsensical size means "no preference", and
@@ -858,7 +882,7 @@ export class ApiHandler {
   ): Promise<void> {
     if (method === 'GET') {
       const start = pagingStart(url.searchParams);
-      const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 100), 1, 500) ?? 100;
+      const limit = pagingLimit(url.searchParams, 100, 500);
       const queue = this.deps.getQueue(zoneId, start, limit);
       if (!queue) {
         this.sendJson(res, 404, { error: 'zone-not-found' });
@@ -1144,8 +1168,7 @@ export class ApiHandler {
     url: URL,
   ): Promise<void> {
     const start = pagingStart(url.searchParams);
-    const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 0), 1, BROWSE_MAX_LIMIT)
-      ?? BROWSE_DEFAULT_LIMIT;
+    const limit = pagingLimit(url.searchParams, BROWSE_DEFAULT_LIMIT, BROWSE_MAX_LIMIT);
 
     if (!rawId) {
       const services = await this.deps.listServices();
@@ -1186,8 +1209,7 @@ export class ApiHandler {
     if (!rawId) {
       if (method === 'GET') {
         const start = pagingStart(url.searchParams);
-        const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 0), 1, BROWSE_MAX_LIMIT)
-          ?? BROWSE_DEFAULT_LIMIT;
+        const limit = pagingLimit(url.searchParams, BROWSE_DEFAULT_LIMIT, BROWSE_MAX_LIMIT);
         this.sendJson(res, 200, await this.deps.listPlaylists(start, limit));
         return;
       }
@@ -1342,8 +1364,7 @@ export class ApiHandler {
       .split(',')
       .map((service) => service.trim().toLowerCase())
       .filter(Boolean);
-    const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 0), 1, SEARCH_MAX_LIMIT)
-      ?? SEARCH_DEFAULT_LIMIT;
+    const limit = pagingLimit(url.searchParams, SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT);
 
     this.sendJson(res, 200, await this.deps.search({ query, kinds, services, limit }));
   }
@@ -1529,7 +1550,7 @@ export class ApiHandler {
   ): Promise<void> {
     if (method === 'GET') {
       const start = pagingStart(url.searchParams);
-      const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 50), 1, 500) ?? 50;
+      const limit = pagingLimit(url.searchParams, 50, 500);
       const favorites = await this.deps.getFavorites(zoneId, start, limit);
       if (!favorites) {
         this.sendJson(res, 404, { error: 'zone-not-found' });
@@ -1617,7 +1638,7 @@ export class ApiHandler {
   ): Promise<void> {
     if (method === 'GET') {
       const start = pagingStart(url.searchParams);
-      const limit = this.clampInt(Number(url.searchParams.get('limit') ?? 50), 1, 500) ?? 50;
+      const limit = pagingLimit(url.searchParams, 50, 500);
       const recents = await this.deps.getRecents(zoneId, start, limit);
       if (!recents) {
         this.sendJson(res, 404, { error: 'zone-not-found' });

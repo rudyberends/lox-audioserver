@@ -98,6 +98,7 @@ type Harness = {
   plays: Array<{ zoneId: number; uri: string }>;
   handoffs: Array<{ sourceId: number; targetId: number }>;
   states: Map<number, ZoneState>;
+  browseAsks: Array<{ id: string; start: number; limit: number }>;
 };
 
 let eqBands: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -110,6 +111,8 @@ let inputSelections: Array<{ zoneId: number; inputId: string }> = [];
 let alertCalls: Array<Record<string, unknown>> = [];
 let alertResult: { success: boolean; action: 'on' | 'off'; reason?: string } | null = null;
 let analysisListener: ((event: AudioAnalysisEvent) => void) | null = null;
+// What the browse route passed on, so the paging a caller *did not* ask for can be checked.
+let browseAsks: Array<{ id: string; start: number; limit: number }> = [];
 /** What the delay route passed to the setter, so a test can assert the clamp and the target. */
 let delaysSet: Array<{ zoneId: number; delayMs: number; clientId: string | null }> = [];
 let lifecycle = new ServerLifecycle();
@@ -318,12 +321,20 @@ function harness(): Harness {
       eqBands = bands.map((b) => Math.min(6, Math.max(-6, Math.round(b as number))));
       return [...eqBands];
     },
+    listServices: async () => [
+      { id: 'library', name: 'Library', rootId: 'b1.c.category.library.root', searchableKinds: [] },
+    ],
+    browse: async (id, start, limit) => {
+      browseAsks.push({ id, start, limit });
+      return { container: null, items: [], start, total: 0 };
+    },
     getHealth: () => health,
     getLifecycle: () => lifecycle.snapshot(),
     serverVersion: '4.0.0-test',
     startedAt: Date.now() - 5000,
   });
-  return { handler, hub, commands, powers, plays, handoffs, states };
+  browseAsks = [];
+  return { handler, hub, commands, powers, plays, handoffs, states, browseAsks };
 }
 
 async function call(
@@ -1977,5 +1988,42 @@ test('a tab finds itself through destinations, where it is private to it', async
   assert.ok(
     mine.json().destinations.some((d: any) => d.kind === 'local'),
     'the owner sees its own',
+  );
+});
+
+/*
+ * Paging a caller did not ask for.
+ *
+ * `/browse`, `/search` and `/playlists` document a default page size, and read it as
+ * `clampInt(Number(params.get('limit') ?? 0), 1, MAX) ?? DEFAULT` — which never reached the default,
+ * because `0` is a finite number and clamping it hit the *minimum*. Omitting the parameter returned
+ * one item per page, which reads as a nearly empty library rather than as a paging bug: the response
+ * is well-formed, the total is right, and only the second page reveals anything is wrong.
+ */
+test('an omitted limit means the default page, not one item', async () => {
+  const h = harness();
+  const id = 'b1.c.folder.library.local';
+
+  await call(h, 'GET', `${API_ROOT}/browse/${id}`);
+  assert.equal(h.browseAsks.at(-1)?.limit, 50, 'no limit asked for means the default');
+
+  await call(h, 'GET', `${API_ROOT}/browse/${id}?limit=3`);
+  assert.equal(h.browseAsks.at(-1)?.limit, 3, 'a limit that was asked for is honoured');
+
+  await call(h, 'GET', `${API_ROOT}/browse/${id}?limit=9999`);
+  assert.equal(h.browseAsks.at(-1)?.limit, 500, 'and capped');
+
+  // Nonsense is "no preference", the same rule `?size=` follows, rather than the nearest bound.
+  await call(h, 'GET', `${API_ROOT}/browse/${id}?limit=nonsense`);
+  assert.equal(h.browseAsks.at(-1)?.limit, 50);
+
+  await call(h, 'GET', `${API_ROOT}/browse/${id}?limit=0`);
+  assert.equal(h.browseAsks.at(-1)?.limit, 50);
+
+  // `start` is separate and already worked; asserted here so the pair stays a pair.
+  await call(h, 'GET', `${API_ROOT}/browse/${id}?start=40`);
+  assert.deepEqual(
+    { start: h.browseAsks.at(-1)?.start, limit: h.browseAsks.at(-1)?.limit },
+    { start: 40, limit: 50 },
   );
 });
