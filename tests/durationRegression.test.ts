@@ -356,11 +356,15 @@ test('ZoneStateStore clears stale session metadata on audiopath boundary change'
   });
 
   assert.equal(metadataUpdates.length, 1);
+  // Whole-object equality on purpose: the claim is that *nothing* from the old track survives the
+  // boundary, so a metadata field added later should fail here until someone has decided whether it
+  // needs clearing too. `animatedCoverUrl` was such a field, and it does.
   assert.deepEqual(metadataUpdates[0], {
     title: 'New Title',
     artist: 'New Artist',
     album: '',
     coverurl: '',
+    animatedCoverUrl: '',
     duration: 0,
     audiopath: 'spotify:track:new',
     station: '',
