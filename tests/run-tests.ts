@@ -31,6 +31,7 @@ import './playbackCoordinator.characterization.test';
 import './webdavPaths.test';
 import './beoremoteMenu.test';
 import './beoremoteApi.test';
+import './sonnClientApi.test';
 import './beoremoteKeys.test';
 import './localLibraryStore.rollup.test';
 import './mdnsAdvertisedAddresses.test';

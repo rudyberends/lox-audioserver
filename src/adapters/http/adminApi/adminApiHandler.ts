@@ -54,6 +54,7 @@ type AdminApiOptions = {
   sonnCorePeers: SonnCorePeerRegistry;
   alertFiles: AlertFilesPort;
   lineInApi: LineInApiHandler;
+  sonnClientApi: SonnClientApiHandler;
   beoremoteApi: BeoremoteApiHandler;
   /** Gateway port, so handlers can build client-facing URLs. */
   httpPort: number;
@@ -83,7 +84,9 @@ import { buildSpotifyRoutes } from '@/adapters/http/adminApi/spotify/spotifyHand
 import { buildMiscRoutes } from '@/adapters/http/adminApi/misc/miscHandlers';
 import { buildConfigRoutes } from '@/adapters/http/adminApi/config/configHandlers';
 import { buildLineInRoutes } from '@/adapters/http/adminApi/linein/lineInAdminHandlers';
+import { buildSonnClientRoutes } from '@/adapters/http/adminApi/sonnclients/sonnClientAdminHandlers';
 import type { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
+import type { SonnClientApiHandler } from '@/adapters/http/sonnClientApi/sonnClientApiHandler';
 import { buildBeoremoteRoutes } from '@/adapters/http/adminApi/beoremote/beoremoteAdminHandlers';
 import type { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandler';
 import {
@@ -187,6 +190,7 @@ export class AdminApiHandler {
   private readonly sonnCorePeers: SonnCorePeerRegistry;
   private readonly alertFiles: AlertFilesPort;
   private readonly lineInApi: LineInApiHandler;
+  private readonly sonnClientApi: SonnClientApiHandler;
   private readonly beoremoteApi: BeoremoteApiHandler;
   private readonly httpPort: number;
   private readonly clockOffsetTracker = new ClockOffsetTracker(this.log);
@@ -222,6 +226,7 @@ export class AdminApiHandler {
     this.sonnCorePeers = options.sonnCorePeers;
     this.alertFiles = options.alertFiles;
     this.lineInApi = options.lineInApi;
+    this.sonnClientApi = options.sonnClientApi;
     this.beoremoteApi = options.beoremoteApi;
     this.httpPort = options.httpPort;
     this.routes = this.buildRoutes();
@@ -356,6 +361,13 @@ export class AdminApiHandler {
       ...buildLineInRoutes({
         log: this.log,
         lineInApi: this.lineInApi,
+        sendJson: (res, status, payload) => sendJson(res, status, payload),
+      }),
+      ...buildSonnClientRoutes({
+        log: this.log,
+        configPort: this.configPort,
+        sonnClientApi: this.sonnClientApi,
+        readJsonBody: (req, res, max) => readJsonBody(req, res, max),
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),
       ...buildBeoremoteRoutes({

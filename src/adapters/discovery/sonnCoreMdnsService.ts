@@ -37,6 +37,10 @@ export class SonnCoreMdnsService implements MdnsLifecycleService {
         linein: '/api/linein',
         linein_register: '/api/linein/bridges/register',
         linein_status: '/api/linein/bridges/{bridge_id}/status',
+        // Where a Sonn Client registers and polls. Advertised even though the client has these as
+        // defaults, so the paths can move without needing a release on every speaker.
+        client_register: '/api/sonnclients/register',
+        client_status: '/api/sonnclients/{device_id}/status',
         mac: mac ? mac.toUpperCase() : undefined,
       },
     });

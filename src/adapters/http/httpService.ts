@@ -13,6 +13,7 @@ import { AudioStreamHandler } from '@/adapters/http/streams/audioStreamHandler';
 import { AudioProxyHandler } from '@/adapters/http/streams/audioProxyHandler';
 import { LineInIngestWebSocket } from '@/adapters/http/streams/lineInIngestWs';
 import { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
+import { SonnClientApiHandler } from '@/adapters/http/sonnClientApi/sonnClientApiHandler';
 import { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandler';
 import { ApiHandler } from '@/adapters/http/api/apiHandler';
 import { buildPublicAudioServersList } from '@/adapters/discovery/audioServersList';
@@ -115,6 +116,7 @@ export class HttpService {
   private readonly streamProxyRoutes: StreamProxyRoute[];
   private readonly lineInIngestWs: LineInIngestWebSocket;
   private readonly lineInApi: LineInApiHandler;
+  private readonly sonnClientApi: SonnClientApiHandler;
   private readonly beoremoteApi: BeoremoteApiHandler;
   private readonly api: ApiHandler;
   private readonly browseService: BrowseService;
@@ -200,6 +202,7 @@ export class HttpService {
       options.lineInMetadataService,
       options.lineInActivation,
     );
+    this.sonnClientApi = new SonnClientApiHandler(options.configPort, config.port);
     this.browseService = new BrowseService(options.configPort, options.contentManager);
     this.destinationService = new DestinationService(
       options.zoneManager,
@@ -532,6 +535,7 @@ export class HttpService {
       sonnCorePeers: options.sonnCorePeers,
       alertFiles: options.alertFiles,
       lineInApi: this.lineInApi,
+      sonnClientApi: this.sonnClientApi,
       beoremoteApi: this.beoremoteApi,
       httpPort: config.port,
     });
@@ -813,6 +817,11 @@ export class HttpService {
 
     if (this.lineInApi.matches(pathname)) {
       await this.lineInApi.handle(req, res, pathname);
+      return;
+    }
+
+    if (this.sonnClientApi.matches(pathname)) {
+      await this.sonnClientApi.handle(req, res, pathname);
       return;
     }
 

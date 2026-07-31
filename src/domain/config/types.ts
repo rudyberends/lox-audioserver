@@ -11,6 +11,11 @@ export interface AudioServerConfig {
    * reach this server's music.
    */
   mqtt?: MqttConfig;
+  /**
+   * Devices running Sonn Client. Top-level for the same reason `mqtt` is: these are machines this
+   * server administers, not another way to reach its music.
+   */
+  sonnClients?: SonnClientsConfig;
   updatedAt?: string;
 }
 
@@ -735,6 +740,131 @@ export interface LineInBridgeConfig {
     sample_rates?: number[];
   }>;
   last_seen?: string;
+}
+
+/**
+ * Devices running Sonn Client — a Pi (or comparable) that speaks nothing but Sendspin and takes its
+ * entire configuration from here.
+ *
+ * The point of this section is that the device holds no settings of its own beyond its identity.
+ * Which sound card it plays through, what the room is called, its output delay, whether volume is
+ * done in software or by an amplifier: all of it lives here and is pushed down on the device's next
+ * poll. Nobody has to open a terminal on a speaker to change something.
+ */
+export interface SonnClientsConfig {
+  /** How often a device should poll for its desired state. Defaults to 5s, clamped 1-60s. */
+  pollIntervalMs?: number;
+  /** Per-device configuration, keyed by the device's own stable id. */
+  devices?: SonnClientDeviceConfig[];
+  /**
+   * Software the client installs on request — currently only B&O's patched BlueZ, which is what
+   * makes a Beoremote One serve menus. Declared once and offered to whichever devices ask for the
+   * features that need it.
+   */
+  components?: SonnClientComponentConfig[];
+}
+
+export interface SonnClientDeviceConfig {
+  /** The device's stable id, as it registers itself. */
+  deviceId: string;
+  /** Friendly name for the device as a whole; a player without a name of its own inherits it. */
+  name?: string;
+  /** False stops this device playing anything without forgetting how it was set up. */
+  enabled?: boolean;
+  /** Sendspin players, one per sound card. A device with two DACs serves two rooms. */
+  players?: SonnClientPlayerConfig[];
+  /** Capture devices offered to the server as selectable line-in sources. */
+  sources?: SonnClientSourceConfig[];
+  /** Beoremote One support for this device. */
+  beoremote?: SonnClientBeoremoteConfig | null;
+  /** Components this device should have installed. Names must exist in `components`. */
+  requiredComponents?: string[];
+  /** Last registration, recorded so the admin UI can show a device that is currently offline. */
+  lastSeen?: string;
+  hostname?: string;
+  ip?: string;
+  mac?: string;
+  model?: string;
+  version?: string;
+}
+
+export interface SonnClientPlayerConfig {
+  /**
+   * Sendspin client id. This is what a zone's output configuration points at, so it has to stay
+   * stable for as long as the room is expected to keep working.
+   */
+  clientId: string;
+  name?: string;
+  /** Output device id as the client reported it; absent means the host default. */
+  output?: string;
+  enabled?: boolean;
+  /** Delay the speaker's own chain adds after its audio port, in ms. */
+  delayMs?: number;
+  /** Starting volume. A seed, not a setpoint: live volume travels over Sendspin. */
+  volume?: number;
+  muted?: boolean;
+  /**
+   * Drive volume through this command on the device instead of attenuating in software. For a
+   * speaker with real volume of its own; the client leaves its own mixer at unity.
+   */
+  volumeHook?: string;
+  /** Codec preference order. Absent means everything the client can decode. */
+  codecs?: string[];
+  /** Pin the advertised format. Only for hardware that genuinely accepts one rate. */
+  sampleRate?: number;
+  bitDepth?: number;
+  channels?: number;
+  bufferMs?: number;
+  requiredLeadTimeMs?: number;
+}
+
+export interface SonnClientSourceConfig {
+  /** Sendspin client id, which the line-in input's `source.clientId` must match. */
+  clientId: string;
+  name?: string;
+  /** Capture device id as the client reported it. */
+  input?: string;
+  enabled?: boolean;
+  sampleRate?: number;
+  bitDepth?: number;
+  channels?: number;
+  frameMs?: number;
+  /** Level below which the input counts as silent, in dBFS. */
+  thresholdDb?: number;
+  /** How long a level change must persist before it is reported. */
+  holdMs?: number;
+  /** Transport controls this input's hardware accepts. */
+  controls?: string[];
+  /**
+   * Script on the device that turns a control into something the hardware understands — a
+   * MasterLink telegram, a relay, an IR blast. Without it an input that has to be switched on
+   * stays silent, because nothing produces audio until it is on.
+   */
+  controlHook?: string;
+  /** Capture continuously instead of waiting to be asked. */
+  alwaysOn?: boolean;
+}
+
+export interface SonnClientBeoremoteConfig {
+  enabled?: boolean;
+  /** Zone whose menu the remote shows and whose keys it drives. */
+  zoneId?: number;
+  /** How often the device re-reads the menu, in ms. */
+  menuPollMs?: number;
+  /** Player whose volume the remote's volume keys move. Absent means the device's first. */
+  volumePlayer?: string;
+  /** Volume points per key press, on the 0-100 scale. */
+  volumeStep?: number;
+}
+
+export interface SonnClientComponentConfig {
+  /** Known name; currently only `beoremote-bluetoothd`. */
+  name: string;
+  version?: string;
+  /** Where the device fetches it. One per architecture, keyed by the client's target triple. */
+  urls?: Record<string, string>;
+  /** Hex sha256 per architecture. Required: this installs a daemon that owns the Bluetooth adapter. */
+  sha256?: Record<string, string>;
 }
 
 export interface RawAudioConfig {
