@@ -112,11 +112,49 @@ the same word this section does: see [Integrating with sonn core](INTEGRATING.md
 - Sonos
 - AirPlay
 - DLNA / UPnP renderers
+- **Sendspin** — the preferred one, see below
 - Snapcast
-- Sendspin
 - Squeezelite
 - Spotify Connect
 - Music Assistant players
+
+#### The goal: your file, unchanged, at the speaker
+
+sonn core is built around one idea: the audio that leaves your library should reach the player exactly as
+it was recorded. Every step in between — resampling, changing bit depth, re-encoding, gain — can only
+lose something or alter it, so the server's job is to do none of them unless something makes that
+impossible.
+
+**Sendspin is the only output where that can be guaranteed**, because it is the only one whose format is
+negotiated per track. A Sendspin client tells the server which sample rates and bit depths it accepts,
+and the server then follows the *source*: a 24-bit/192 kHz FLAC is streamed as 24-bit/192 kHz, a 16-bit
+CD rip as 16-bit/44.1 kHz, with no resampler in the path at all. Play the same album to a fixed-format
+output and the server has to convert it to whatever that device accepts.
+
+Sendspin with a **USB DAC** is therefore the perfect audio path: the file's own samples travel over the
+network, the client hands them to the DAC untouched, and the DAC clocks them at the rate they were
+recorded at. Nothing in the chain gets a vote.
+
+The other outputs take a fixed format, so playing anything that does not match it means a conversion.
+That is not a defect — it is what those protocols are — and the conversion is a good one (SoX resampler,
+28-bit precision). It is simply not the same as *not converting*.
+
+Two things deliberately stay out of the audio path either way:
+
+- **Volume** is applied by the device, not by the server, so turning it down costs no resolution.
+- **The equalizer and crossfade** are per zone and off by default. Switching either one on is a choice to
+  process the audio, and the player says so while it is on.
+
+You can see all of this per zone in the web player's technical view: it names the source format, every
+stage that touched the audio, and the verdict — *bit-perfect*, *untouched* (a lossy source we did not
+make worse), or *altered*, with the reason. If it says "resampled — this output is fixed at 48 kHz", that
+is the output's ceiling talking, not a setting you missed.
+
+#### And if you just want music
+
+Then use whatever output you already have. A Chromecast in the kitchen, an old Sonos, a pair of Snapcast
+speakers on a Raspberry Pi — all of it works, all of it sounds good, and none of it needs a thought about
+sample rates. The signal path is there for the day you get curious, not a bar you have to clear.
 
 ### Receivers
 
