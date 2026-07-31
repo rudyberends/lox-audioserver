@@ -119,6 +119,7 @@ export class LocalLibraryStore {
   private static readonly SCHEMA_V4 = 4; // adds artist_covers sidecar table
   private static readonly SCHEMA_V5 = 5; // adds user-editable playlists
   private static readonly SCHEMA_V6 = 6; // adds materialized album rollup
+  private static readonly SCHEMA_V7 = 7; // adds track_waveforms sidecar table
 
   public constructor(options: { dbPath?: string } = {}) {
     this.dbPath = options.dbPath ?? resolveDataDir('music', 'library.db');
@@ -160,6 +161,66 @@ export class LocalLibraryStore {
       cover: entry.cover,
       relPath: entry.relPath,
       mtime: typeof entry.mtime === 'number' ? entry.mtime : null,
+    });
+  }
+
+  /**
+   * A stored waveform, or null when there is none for this exact file.
+   *
+   * The size and mtime are compared rather than trusted: the row is keyed by path, and a path is not
+   * a promise about its contents. A caller that cannot stat the file passes nothing and gets whatever
+   * is stored, which is the right trade for a picture.
+   */
+  public getWaveform(
+    path: string,
+    file?: { size: number; mtimeMs: number },
+  ): { buckets: Uint8Array; durationMs: number | null } | null {
+    const db = this.requireDb();
+    const row = db
+      .prepare(
+        'SELECT buckets, duration_ms AS durationMs, file_size AS fileSize, file_mtime AS fileMtime'
+        + ' FROM track_waveforms WHERE path = ?',
+      )
+      .get(path) as
+      | { buckets: Buffer; durationMs: number | null; fileSize: number | null; fileMtime: number | null }
+      | undefined;
+    if (!row) {
+      return null;
+    }
+    if (file && row.fileSize !== null && row.fileMtime !== null) {
+      const changed = row.fileSize !== file.size || row.fileMtime !== Math.round(file.mtimeMs);
+      if (changed) {
+        return null;
+      }
+    }
+    return { buckets: new Uint8Array(row.buckets), durationMs: row.durationMs };
+  }
+
+  public upsertWaveform(entry: {
+    path: string;
+    buckets: Uint8Array;
+    durationMs: number | null;
+    file?: { size: number; mtimeMs: number };
+  }): void {
+    const db = this.requireDb();
+    db.prepare(
+      `
+      INSERT INTO track_waveforms (path, buckets, duration_ms, file_size, file_mtime, computed_at)
+      VALUES (@path, @buckets, @durationMs, @fileSize, @fileMtime, @computedAt)
+      ON CONFLICT(path) DO UPDATE SET
+        buckets = excluded.buckets,
+        duration_ms = excluded.duration_ms,
+        file_size = excluded.file_size,
+        file_mtime = excluded.file_mtime,
+        computed_at = excluded.computed_at
+    `,
+    ).run({
+      path: entry.path,
+      buckets: Buffer.from(entry.buckets),
+      durationMs: entry.durationMs,
+      fileSize: entry.file?.size ?? null,
+      fileMtime: entry.file ? Math.round(entry.file.mtimeMs) : null,
+      computedAt: Date.now(),
     });
   }
 
@@ -907,6 +968,35 @@ export class LocalLibraryStore {
       // Existing databases get their rollup filled immediately, so the first
       // browse after an upgrade is not empty.
       this.rebuildAlbumRollup();
+    }
+
+    /*
+     * Prepared waveforms, keyed by the file they were computed from.
+     *
+     * A sidecar rather than a column on `tracks`, for the same reason `artist_covers` is one: a scan
+     * rewrites `tracks`, and an envelope that took a whole-file decode to produce should not be thrown
+     * away because the folder was rescanned. Keyed by the *file* rather than by an audiopath, which is
+     * what makes it one row per track: the same file is addressed as a raw `library://` path and as an
+     * opaque browse id, and both must find the shape the other computed. It also covers a file that is
+     * not in the index at all — a share that has not been scanned yet still gets a waveform the first
+     * time it is played.
+     *
+     * `file_size` and `file_mtime` are the invalidation: a re-encoded or replaced file keeps its path,
+     * and serving the old shape for new audio is worse than having none.
+     */
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS track_waveforms (
+        path TEXT PRIMARY KEY,
+        buckets BLOB NOT NULL,
+        duration_ms INTEGER,
+        file_size INTEGER,
+        file_mtime INTEGER,
+        computed_at INTEGER NOT NULL
+      );
+    `);
+
+    if (userVersion < LocalLibraryStore.SCHEMA_V7) {
+      db.pragma(`user_version = ${LocalLibraryStore.SCHEMA_V7}`);
     }
   }
 

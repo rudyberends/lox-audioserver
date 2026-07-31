@@ -70,6 +70,17 @@ export class ContentManager {
   private spotify: SpotifyServiceManager | null = null;
   private readonly spotifyManagerProvider: SpotifyServiceManagerProvider;
   private readonly library: LocalLibraryProvider;
+
+  /** The library's waveform sidecar, for whoever prepares and serves them. */
+  public get waveformStore(): {
+    getWaveform: LocalLibraryProvider['waveforms']['get'];
+    upsertWaveform: LocalLibraryProvider['waveforms']['upsert'];
+  } {
+    return {
+      getWaveform: (path, file) => this.library.waveforms.get(path, file),
+      upsertWaveform: (entry) => this.library.waveforms.upsert(entry),
+    };
+  }
   private tunein: TuneInProvider;
   private radioParadise: RadioParadiseProvider;
   private readonly cache = new ContentCacheManager();

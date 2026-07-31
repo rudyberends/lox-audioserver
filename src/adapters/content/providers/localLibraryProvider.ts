@@ -119,6 +119,23 @@ export class LocalLibraryProvider {
   private readonly log = createLogger('Content', 'Library');
   private readonly baseDir = resolveDataDir('music');
   private readonly store = new LocalLibraryStore();
+
+  /**
+   * The waveform sidecar, exposed as the two operations a caller needs.
+   *
+   * Narrow on purpose: the store is this provider's own and stays that way, but a prepared waveform is
+   * keyed by a file path and has nothing to do with browsing — so rather than handing out the database,
+   * this hands out the two statements that touch that one table.
+   */
+  public readonly waveforms = {
+    get: (path: string, file?: { size: number; mtimeMs: number }) => this.store.getWaveform(path, file),
+    upsert: (entry: {
+      path: string;
+      buckets: Uint8Array;
+      durationMs: number | null;
+      file?: { size: number; mtimeMs: number };
+    }) => this.store.upsertWaveform(entry),
+  };
   private notifier: NotifierPort;
   private readonly configPort: ConfigPort;
   private scanStatus: ScanStatus = 0;

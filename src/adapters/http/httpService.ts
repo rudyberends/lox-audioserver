@@ -179,6 +179,7 @@ export class HttpService {
       resolvePowerState: (zoneId: number) => ApiPowerState | null;
       /** Resolves which protocol a zone plays over; see ApiOutput. */
       resolveOutputProtocol: (zoneId: number) => string | null;
+      waveforms: { get: (audiopath: string) => { buckets: number[]; durationMs: number | null } | null };
       /** Resolves the configured name of the service an audiopath belongs to. */
       resolveServiceLabel: (audiopath: string) => string | null;
       /** Names a configured line-in for `source.name`; see InputLabelLookup. */
@@ -221,6 +222,7 @@ export class HttpService {
       getOutputCapabilities: (zoneId) =>
         options.zoneManager.getOutputCapabilities(zoneId) as ApiOutputCapabilities | null,
       getOutputSync: (zoneId) => options.zoneManager.getOutputSyncStatus(zoneId),
+      getWaveform: (audiopath) => options.waveforms.get(audiopath),
       getGroup: (zoneId) => options.zoneManager.getGroupMembership(zoneId),
       // The same setter the admin route uses, so both transports write the config identically.
       setOutputDelay: (zoneId, delayMs, clientId) =>

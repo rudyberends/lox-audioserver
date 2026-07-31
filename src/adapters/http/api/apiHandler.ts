@@ -21,6 +21,7 @@ import {
   type AudioAnalysisSubscription,
 } from '@/application/audio/audioAnalysisService';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
+import { resolveUriFromRef } from '@/domain/media/browseRef';
 import {
   OUTPUT_DELAY_MAX_MS,
   OUTPUT_DELAY_MIN_MS,
@@ -137,6 +138,13 @@ export type ApiHandlerDeps = {
   getOutputCapabilities: (zoneId: number) => ApiOutputCapabilities | null;
   /** How the output is timed against its device; null when the protocol has no clock agreement. */
   getOutputSync: (zoneId: number) => ApiOutputSync | null;
+  /**
+   * The prepared waveform for an audiopath, or null when there is none.
+   *
+   * Null covers both "this can never have one" (a stream) and "not yet" (a file being decoded), which
+   * the caller cannot and need not tell apart: both mean draw what you have and ask again later.
+   */
+  getWaveform: (audiopath: string) => { buckets: number[]; durationMs: number | null } | null;
   /** Which zones play as one, leader first. Not derivable from zone state; see toGroup. */
   getGroup: (zoneId: number) => { leader: number; members: number[] } | null;
   /**
@@ -466,6 +474,36 @@ export class ApiHandler {
      * no GET here: a caller reading the zone already has it, and a second spelling of the same
      * value is a second thing to keep true.
      */
+    /*
+     * A waveform belongs to the audio, not to the room playing it.
+     *
+     * Hence a `uri` query rather than `/zones/{id}/waveform`: the same track has the same shape in
+     * every room, so keyed by zone it would be the same bytes under a dozen URLs and uncacheable in a
+     * browser. `source.id` on a zone is exactly what goes in here.
+     */
+    if (pathname === '/waveform') {
+      if (method !== 'GET') {
+        this.sendJson(res, 405, { error: 'method-not-allowed' });
+        return;
+      }
+      const uri = (url.searchParams.get('uri') ?? '').trim();
+      if (!uri) {
+        this.sendJson(res, 400, { error: 'missing-uri' });
+        return;
+      }
+      const waveform = this.deps.getWaveform(resolveUriFromRef(uri));
+      if (!waveform) {
+        // 404 rather than an empty array: "no shape for this audio" is a different answer from "a
+        // shape that happens to be silent", and a client drawing the second would draw a flat line.
+        this.sendJson(res, 404, { error: 'no-waveform' });
+        return;
+      }
+      // Immutable for a day: the bytes are derived from a file that, if it changes, changes its
+      // audiopath's size and mtime and therefore gets recomputed under a new response.
+      this.sendJson(res, 200, { uri, ...waveform }, { 'cache-control': 'private, max-age=86400' });
+      return;
+    }
+
     const delayMatch = /^\/zones\/(\d+)\/output\/delay$/.exec(pathname);
     if (delayMatch) {
       if (method !== 'PUT') {
@@ -1860,11 +1898,18 @@ export class ApiHandler {
     return parsed as Record<string, unknown>;
   }
 
-  private sendJson(res: ServerResponse, status: number, payload: unknown): void {
+  /** `headers` is for the few responses that are cacheable; everything else is state and is not. */
+  private sendJson(
+    res: ServerResponse,
+    status: number,
+    payload: unknown,
+    headers: Record<string, string> = {},
+  ): void {
     const body = JSON.stringify(payload);
     res.writeHead(status, {
       'Content-Type': 'application/json; charset=utf-8',
       'Content-Length': Buffer.byteLength(body),
+      ...headers,
     });
     res.end(body);
   }

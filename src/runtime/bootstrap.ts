@@ -39,6 +39,7 @@ import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import { EngineAdapter } from '@/adapters/engine/EngineAdapter';
 import { AudioStreamEngine } from '@/engine/audioStreamEngine';
 import { AudioAnalysisService } from '@/application/audio/audioAnalysisService';
+import { WaveformService } from '@/application/audio/waveformService';
 import { SendspinVisualizer } from '@/adapters/outputs/sendspin/sendspinVisualizer';
 import type { ApiOutputCapabilities } from '@/domain/zones/apiTypes';
 import { createZoneManager, type ZoneManagerFacade } from '@/application/zones/createZoneManager';
@@ -355,6 +356,14 @@ export function createRuntime(): Runtime {
     spotifyManagerProvider,
     customRadioStore,
   });
+  /*
+   * Prepared waveforms, over the library's own sidecar table.
+   *
+   * One instance for the server: it holds the in-flight set, so a track starting in two rooms at once
+   * is decoded once and both get the same stored bytes.
+   */
+  const waveformService = new WaveformService(contentManager.waveformStore);
+
   const contentAdapter = createContentAdapter(contentManager, {
     appleMusic: appleMusicStreamResolver,
     deezer: deezerStreamResolver,
@@ -710,6 +719,14 @@ export function createRuntime(): Runtime {
       customRadioStore,
       zoneManager,
       audioAnalysis,
+      /*
+       * Prepared waveforms.
+       *
+       * Constructed here rather than inside the HTTP layer because it owns a decode queue and a cache:
+       * one instance per server, shared by every zone and every client, so a track playing in two rooms
+       * is scanned once.
+       */
+      waveforms: waveformService,
       configPort,
       engine,
       streamEvents,
