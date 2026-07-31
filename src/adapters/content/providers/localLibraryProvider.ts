@@ -698,6 +698,9 @@ export class LocalLibraryProvider {
       this.categoryItem(prefix, 'Albums', 'albums', storageId, { tag: 'nas', nas: true }),
       this.categoryItem(prefix, 'Artists', 'artists', storageId, { tag: 'nas', nas: true }),
       this.categoryItem(prefix, 'Tracks', 'tracks', storageId, { tag: 'nas', nas: true }),
+      // The one way in that does not depend on tags: a share whose files are named well and tagged
+      // badly is still browsable by the folders someone filed it into.
+      this.categoryItem(prefix, 'Folders', 'folders', storageId, { tag: 'nas', nas: true }),
       ...(storageId === 'local' ? [this.categoryItem(prefix, 'Playlists', 'playlists', storageId)] : []),
     ];
     return this.buildFolder(prefix, label, items, offset, limit);
