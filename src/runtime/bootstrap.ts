@@ -94,7 +94,7 @@ import { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { withApiEvents } from '@/adapters/http/api/apiNotifierTap';
 import { readBuildVersion } from '@/shared/serverVersion';
 import { parseServiceNativeAudiopath } from '@/domain/zones/audiopath';
-import { slugFromBridgeId } from '@/domain/media/serviceIdentity';
+import { serviceLabelForAudiopath } from '@/domain/media/serviceIdentity';
 import { buildSqueezeliteAdminPlayerSnapshot } from '@/adapters/http/adminApi/adminApiHandler';
 import { getZoneOutputConfig } from '@/adapters/http/adminApi/config/configHandlers';
 import { ConnectionRegistry } from '@/adapters/loxone/ws/connectionRegistry';
@@ -164,19 +164,12 @@ export function createRuntime(): Runtime {
 
   // The configured name of the service an audiopath belongs to. `state.sourceName` holds
   // the Loxone-facing name instead, which for a bridged service is the Spotify disguise.
-  const resolveServiceLabel = (audiopath: string): string | null => {
-    const parsed = parseServiceNativeAudiopath(audiopath);
-    if (!parsed) {
-      return null;
-    }
-    const services = configPort.getConfig().content?.streamingServices ?? [];
-    const match = services.find(
-      (svc) =>
-        svc.provider === parsed.service &&
-        (parsed.slug === undefined || slugFromBridgeId(svc.id, svc.provider) === parsed.slug),
+  const resolveServiceLabel = (audiopath: string): string | null =>
+    serviceLabelForAudiopath(
+      audiopath,
+      configPort.getConfig().content?.streamingServices,
+      parseServiceNativeAudiopath,
     );
-    return match?.label ?? null;
-  };
 
   /**
    * The configured name of a line-in. `state.sourceName` holds the server's MAC for these,

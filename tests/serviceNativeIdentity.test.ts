@@ -10,6 +10,7 @@ import {
   searchSourceFromServiceKey,
   serviceNativeKey,
   slugFromBridgeId,
+  serviceLabelForAudiopath,
 } from '../src/domain/media/serviceIdentity';
 import { buildBrowsableServices } from '../src/adapters/content/browsableServices';
 import type { ConfigPort } from '../src/ports/ConfigPort';
@@ -242,4 +243,53 @@ test('a service-native key with an account resolves to that account', async () =
   // The search grammar's `@` form has to land on the same account.
   const viaSearchForm = await manager.getFolder('applemusic', 'bbb222', 'root', 0, 1);
   assert.equal(viaSearchForm?.name, 'Apple B');
+});
+
+
+// --- serviceLabelForAudiopath -----------------------------------------------
+
+/** The parser the real caller passes in, reduced to what these cases need. */
+const parseNative = (path: string): { service: string; slug?: string } | null => {
+  const match = /^([a-z]+)(?:@([a-z0-9]+))?:/.exec(path);
+  if (!match) return null;
+  return match[2] ? { service: match[1]!, slug: match[2] } : { service: match[1]! };
+};
+
+const SERVICES = [
+  { id: 'bridge-applemusic-p0gngd', provider: 'applemusic', label: 'Apple Music' },
+  { id: 'bridge-spotify-abc123', provider: 'spotify', label: 'Spotify' },
+];
+
+test('a local library track is named, rather than falling through to nothing', () => {
+  /*
+   * The gap this closes: a `library://` audiopath is not service-native, so nothing matched and the
+   * name fell through to `sourceName` — which for a local file holds this server's routing MAC and is
+   * deliberately blanked. The source ended up with no name at all, and the player showed the *kind*
+   * instead: a chip reading "TRACK" over a record in your own library.
+   */
+  assert.equal(
+    serviceLabelForAudiopath("library://local/Coldplay/01 - Don't Panic.flac", SERVICES, parseNative),
+    'Library',
+  );
+  // Whichever share it was indexed from, and whatever case the scheme arrives in.
+  assert.equal(serviceLabelForAudiopath('LIBRARY://nas/x.flac', SERVICES, parseNative), 'Library');
+});
+
+test('a streaming service is still named from its configured label', () => {
+  assert.equal(serviceLabelForAudiopath('applemusic:track:b64_x', SERVICES, parseNative), 'Apple Music');
+  assert.equal(serviceLabelForAudiopath('spotify:track:4uLU6h', SERVICES, parseNative), 'Spotify');
+  // The account slug has to match when the audiopath carries one.
+  assert.equal(
+    serviceLabelForAudiopath('applemusic@p0gngd:track:b64_x', SERVICES, parseNative),
+    'Apple Music',
+  );
+  assert.equal(serviceLabelForAudiopath('applemusic@other:track:b64_x', SERVICES, parseNative), null);
+});
+
+test('nothing nameable answers null rather than an invented label', () => {
+  assert.equal(serviceLabelForAudiopath('', SERVICES, parseNative), null);
+  assert.equal(serviceLabelForAudiopath('   ', SERVICES, parseNative), null);
+  // A configured-but-unknown provider, and a path with no scheme at all.
+  assert.equal(serviceLabelForAudiopath('tidal:track:1', SERVICES, parseNative), null);
+  assert.equal(serviceLabelForAudiopath('/music/song.flac', SERVICES, parseNative), null);
 });
