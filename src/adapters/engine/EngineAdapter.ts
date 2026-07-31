@@ -2,7 +2,6 @@ import type { AudioStreamEngine } from '@/engine/audioStreamEngine';
 import { AudioSession } from '@/engine/audioSession';
 import type { EngineHandoffOptions, EngineLocalSession, EnginePort } from '@/ports/EnginePort';
 import type {
-  EngineInputSpec,
   EngineOutputSpec,
   EngineStartOptions,
   PlaybackSource,
@@ -10,6 +9,7 @@ import type {
 } from '@/ports/EngineTypes';
 import { audioOutputSettings, type AudioOutputSettings } from '@/ports/types/audioFormat';
 import type { SessionKey } from '@/ports/types/SessionKey';
+import { toPlaybackSource } from '@/ports/playbackSourceMapping';
 
 export class EngineAdapter implements EnginePort {
   constructor(private readonly engine: AudioStreamEngine) {}
@@ -32,7 +32,7 @@ export class EngineAdapter implements EnginePort {
       return;
     }
     const { zoneId, input, outputs, equalizer } = keyOrOptions;
-    const playbackSource = this.toPlaybackSource(input);
+    const playbackSource = toPlaybackSource(input);
     const { profiles: resolvedProfiles, outputSettings: resolvedSettings } = this.resolveOutputSpecs(outputs);
     const eqBands = equalizer?.bands ?? null;
     this.engine.start(zoneId, playbackSource, resolvedProfiles, resolvedSettings, eqBands);
@@ -64,7 +64,7 @@ export class EngineAdapter implements EnginePort {
       return;
     }
     const { zoneId, input, outputs, handoff, equalizer } = keyOrOptions;
-    const playbackSource = this.toPlaybackSource(input);
+    const playbackSource = toPlaybackSource(input);
     const { profiles: resolvedProfiles, outputSettings: resolvedSettings } = this.resolveOutputSpecs(outputs);
     const eqBands = equalizer?.bands ?? null;
     this.engine.startWithHandoff(
@@ -121,48 +121,6 @@ export class EngineAdapter implements EnginePort {
     return new AudioSession(key, source, profile, onTerminated, outputSettings);
   }
 
-  private toPlaybackSource(input: EngineInputSpec): PlaybackSource {
-    switch (input.kind) {
-      case 'url':
-        return {
-          kind: 'url',
-          url: input.url,
-          preDelayMs: input.preDelayMs,
-          headers: input.headers,
-          decryptionKey: input.decryptionKey,
-          tlsVerifyHost: input.tlsVerifyHost,
-          inputFormat: input.inputFormat,
-          logLevel: input.logLevel,
-          startAtSec: input.startAtSec,
-          realTime: input.realTime,
-          lowLatency: input.lowLatency,
-          restartOnFailure: input.restartOnFailure,
-        };
-      case 'pipe':
-        return {
-          kind: 'pipe',
-          path: input.path,
-          preDelayMs: input.preDelayMs,
-          format: input.format,
-          sampleRate: input.sampleRate,
-          channels: input.channels,
-          realTime: input.realTime,
-          stream: input.stream,
-        };
-      case 'file':
-        return {
-          kind: 'file',
-          path: input.path,
-          loop: input.loop,
-          preDelayMs: input.preDelayMs,
-          startAtSec: input.startAtSec,
-        };
-      case 'silence':
-        throw new Error('EngineInputSpec kind "silence" is not supported by the audio engine.');
-      default:
-        throw new Error('Unknown EngineInputSpec.');
-    }
-  }
 
   private resolveOutputSpecs(
     outputs: EngineOutputSpec[] | undefined,

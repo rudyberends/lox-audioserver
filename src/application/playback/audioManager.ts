@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import type { PassThrough } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import type {
-  EngineInputSpec,
   EngineOutputSpec,
   EngineStartOptions,
   PlaybackSource,
@@ -18,6 +17,7 @@ import type { PlaybackService } from '@/application/playback/PlaybackService';
 import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import { EqualizerRestartScheduler } from '@/application/playback/EqualizerRestartScheduler';
 
+import { toEngineInputSpec } from '@/ports/playbackSourceMapping';
 import type {
   PlaybackMetadata,
   AudioStreamHandle,
@@ -697,62 +697,6 @@ export class AudioManager {
     };
   }
 
-  /**
-   * A resolved source, as the engine takes it.
-   *
-   * Hand-copied field by field, which is how two of them went missing: `nativeFormat` and `gainDb` were
-   * declared by providers, typed on both sides, and never carried across — so Apple Music's "44.1 kHz
-   * AAC-LC stereo, lossy" arrived at the engine as *unknown* (the API then reported "source not
-   * reported" for every Apple track, and the resampler ran on samples that did not need it), and a
-   * provider's loudness normalisation was silently discarded.
-   *
-   * Kept explicit rather than spread: the two shapes genuinely differ and a spread would carry
-   * whatever a caller happened to attach. But every field the engine's type accepts belongs here, and a
-   * new one belongs here in the same commit that adds it.
-   */
-  private toEngineInputSpec(source: PlaybackSource): EngineInputSpec {
-    switch (source.kind) {
-      case 'url':
-        return {
-          kind: 'url',
-          url: source.url,
-          preDelayMs: source.preDelayMs,
-          headers: source.headers,
-          decryptionKey: source.decryptionKey,
-          tlsVerifyHost: source.tlsVerifyHost,
-          inputFormat: source.inputFormat,
-          logLevel: source.logLevel,
-          startAtSec: source.startAtSec,
-          realTime: source.realTime,
-          lowLatency: source.lowLatency,
-          restartOnFailure: source.restartOnFailure,
-          gainDb: source.gainDb,
-          nativeFormat: source.nativeFormat,
-        };
-      case 'pipe':
-        return {
-          kind: 'pipe',
-          path: source.path,
-          preDelayMs: source.preDelayMs,
-          format: source.format,
-          sampleRate: source.sampleRate,
-          channels: source.channels,
-          realTime: source.realTime,
-          stream: source.stream,
-        };
-      case 'file':
-        return {
-          kind: 'file',
-          path: source.path,
-          loop: source.loop,
-          preDelayMs: source.preDelayMs,
-          startAtSec: source.startAtSec,
-          realTime: source.realTime,
-        };
-      default:
-        throw new Error('Unknown PlaybackSource.');
-    }
-  }
 
   private buildEngineOutputSpecs(
     profiles: OutputProfile[],
@@ -779,7 +723,7 @@ export class AudioManager {
   ): EngineStartOptions {
     const options: EngineStartOptions = {
       zoneId: zoneSessionKey(zoneId),
-      input: this.toEngineInputSpec(playbackSource),
+      input: toEngineInputSpec(playbackSource),
       outputs: this.buildEngineOutputSpecs(profiles, outputSettings),
     };
     if (typeof handoff !== 'undefined') {

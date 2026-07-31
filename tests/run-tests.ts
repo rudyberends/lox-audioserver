@@ -104,6 +104,7 @@ import './loxoneProjectionBoundary.test';
 import './browseRef.test';
 import './libraryProjectionSource.test';
 import './streamFormat.test';
+import './playbackSourceMapping.test';
 import './audioAnalysisService.test';
 import './sendspinBrowserLead.test';
 import './browserZoneNaming.test';
