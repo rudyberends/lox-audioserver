@@ -102,7 +102,7 @@ export class AudioSession {
   private lastExitAt: number | null = null;
   /** @internal */ public startTs: number | null = null;
   private readonly sourcePreDelayMs?: number;
-  private readonly sourceFormat: EngineSessionStats['sourceFormat'];
+  private sourceFormat: EngineSessionStats['sourceFormat'];
   private readonly bitPerfect: boolean;
   private readonly dspApplied: boolean;
   private debugTapStream?: fs.WriteStream;
@@ -386,6 +386,7 @@ export class AudioSession {
         onStderr: (message: string) => {
           this.lastStderrLine = message;
           this.lastStderrAt = Date.now();
+          this.observeSourceFormat(message);
           this.log.debug('ffmpeg stderr', { zoneId: this.zoneId, message });
         },
         onExit: (code, signal) => {
@@ -647,6 +648,70 @@ export class AudioSession {
             }
           : null,
       sessionBufferedBytes: this.buffer.bytes,
+    });
+  }
+
+  /**
+   * Fill in the source format from ffmpeg's own probe, when nobody could tell us.
+   *
+   * A stream URL arrives with a native format only if its provider declares one. Apple Music does;
+   * TuneIn and most radio do not — so the API reported "source not reported" for the whole track while
+   * ffmpeg had already printed the answer on stderr and we had asked it not to (see `getLogLevel`, which
+   * raises the level to `info` for exactly this case).
+   *
+   * The line looks like:
+   *   `Stream #0:0: Audio: aac (LC) ([mp4a / 0x6134706D]), 44100 Hz, stereo, fltp, 256 kb/s`
+   *
+   * **It cannot change the passthrough decision.** `bitPerfect`/`dspApplied` were settled when the
+   * command line was built, and ffmpeg is already running it: a resampler that is in the args stays in
+   * the args, so learning the rate afterwards must not start claiming a bypass that did not happen. This
+   * only fills in what is *reported*. A provider that declares its format up front is still the only way
+   * to actually skip the resampler — which is why the declaration matters and this is the fallback.
+   */
+  private observeSourceFormat(message: string): void {
+    if (this.sourceFormat) {
+      return;
+    }
+    const match = /Stream #\d+:\d+(?:\[[^\]]*\])?(?:\([^)]*\))?: Audio: ([A-Za-z0-9_]+)[^,]*, (\d+) Hz, ([^,]+)(?:, ([a-z0-9]+))?(?:, (\d+) kb\/s)?/.exec(
+      message,
+    );
+    if (!match) {
+      return;
+    }
+    const [, codec, rate, layout, sampleFmt, kbps] = match;
+    const sampleRate = Number(rate);
+    if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+      return;
+    }
+    const channels = layout?.includes('mono')
+      ? 1
+      : layout?.includes('stereo')
+        ? 2
+        : Number(/^(\d+)/.exec(layout ?? '')?.[1] ?? 2);
+    /*
+     * Depth only for codecs that have one to preserve.
+     *
+     * A lossy stream's decoder sample format (`fltp`) describes ffmpeg's float pipeline, not the
+     * recording — reporting 32 bits for an AAC would be the padding mistake in a different place.
+     */
+    const lossless = ['flac', 'alac', 'pcm', 'wav', 'aiff'].some((name) => codec?.startsWith(name));
+    const bitDepth = lossless
+      ? sampleFmt === 's16' || sampleFmt === 's16p'
+        ? 16
+        : sampleFmt === 's32' || sampleFmt === 's32p'
+          ? 32
+          : null
+      : null;
+    this.sourceFormat = {
+      codec: codec ?? 'unknown',
+      sampleRate,
+      channels: Number.isFinite(channels) && channels > 0 ? channels : 2,
+      bitDepth,
+      bitrate: kbps ? Number(kbps) * 1000 : null,
+    };
+    this.log.debug('source format read from ffmpeg', {
+      zoneId: this.zoneId,
+      format: this.sourceFormat,
     });
   }
 

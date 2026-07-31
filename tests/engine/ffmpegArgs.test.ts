@@ -70,8 +70,25 @@ test('buildOutputArgs(flac) ends with -f flac and includes compression_level', (
   assert.ok(args.includes('-compression_level'));
 });
 
-test('getLogLevel defaults to error; respects source.logLevel for url', () => {
-  assert.equal(makeBuilder({ kind: 'file', path: '/tmp/x' }).getLogLevel(), 'error');
+test('getLogLevel is quiet unless the source format is unknown', () => {
+  // `info` is how the input banner gets printed, which is the only way to learn the native format of a
+  // stream whose provider did not declare one — `AudioSession.observeSourceFormat` reads it. A source we
+  // already know stays quiet, and an explicit request from the caller always wins.
+  assert.equal(
+    new FfmpegArgBuilder({ kind: 'file', path: '/tmp/x' }, 'mp3', defaultOutput, false, undefined, {
+      sampleRate: 44100,
+      channels: 2,
+      bitDepth: 16,
+      lossless: true,
+    }).getLogLevel(),
+    'error',
+    'a probed source needs no banner',
+  );
+  assert.equal(
+    makeBuilder({ kind: 'file', path: '/tmp/x' }).getLogLevel(),
+    'info',
+    'an unknown source is worth one banner',
+  );
   assert.equal(
     makeBuilder({ kind: 'url', url: 'http://x', logLevel: 'verbose' }).getLogLevel(),
     'verbose',

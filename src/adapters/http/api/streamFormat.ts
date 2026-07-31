@@ -30,13 +30,37 @@ type StreamStat = {
   } | null;
 };
 
+/**
+ * Which of a zone's live sessions to describe.
+ *
+ * A zone can have several encoded profiles alive at once — a Cast device pulling MP3 while sendspin
+ * takes PCM — and starting a track can leave two sessions of the *same* profile briefly overlapping.
+ * So one has to be chosen, in this order:
+ *
+ *  1. **Someone is listening to it.** A session with subscribers is the one being heard.
+ *  2. **The highest sample rate.** Between two people are hearing, the better stream is the more
+ *     informative answer to "what am I hearing".
+ *  3. **It knows what it is playing.** The tie-breaker that made this comment necessary: an Apple Music
+ *     track produced two 44.1 kHz sessions, the first without the provider's declared source format and
+ *     the second with it, and a rate comparison alone kept the first — so the API reported "source not
+ *     reported" for a track whose format the provider had stated up front. Between otherwise-equal
+ *     sessions, the one that can describe its source is strictly more useful.
+ */
 function selectBest(stats: StreamStat[]): StreamStat | null {
   const live = stats.filter((entry) => entry.subscribers > 0);
   const candidates = live.length > 0 ? live : stats;
-  return candidates.reduce<StreamStat | null>(
-    (winner, entry) => (!winner || entry.sampleRate > winner.sampleRate ? entry : winner),
-    null,
-  );
+  return candidates.reduce<StreamStat | null>((winner, entry) => {
+    if (!winner) {
+      return entry;
+    }
+    if (entry.sampleRate !== winner.sampleRate) {
+      return entry.sampleRate > winner.sampleRate ? entry : winner;
+    }
+    if (!winner.sourceFormat && entry.sourceFormat) {
+      return entry;
+    }
+    return winner;
+  }, null);
 }
 
 /** Codecs that carry every sample of their input. A lossy codec cannot be high-resolution audio. */

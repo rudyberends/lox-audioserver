@@ -201,7 +201,20 @@ export class FfmpegArgBuilder {
     if (this.source.kind === 'url' && this.source.logLevel) {
       return this.source.logLevel;
     }
-    return 'error';
+    /*
+     * `info` when — and only when — nobody could tell us what the source is.
+     *
+     * A stream URL arrives with no native format unless its provider declares one, and Apple Music,
+     * TuneIn and most radio do not: the API then reports "source not reported" for the whole track while
+     * ffmpeg has printed the answer on its own stderr and we asked it not to. At `info` the input banner
+     * (`Stream #0:0: Audio: aac (LC), 44100 Hz, stereo, fltp, 256 kb/s`) is printed and
+     * `AudioSession.observeSourceFormat` reads it.
+     *
+     * `-nostats` keeps the rest quiet, so this costs one banner rather than a progress line every half
+     * second — see `sessionStarter`. Sources we already know (probed files, declared streams) stay at
+     * `error`, so nothing changes for them.
+     */
+    return this.sourceNativeFormat ? 'error' : 'info';
   }
 
   /** Single-stage input args based on source kind. */

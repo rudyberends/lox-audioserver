@@ -697,6 +697,19 @@ export class AudioManager {
     };
   }
 
+  /**
+   * A resolved source, as the engine takes it.
+   *
+   * Hand-copied field by field, which is how two of them went missing: `nativeFormat` and `gainDb` were
+   * declared by providers, typed on both sides, and never carried across — so Apple Music's "44.1 kHz
+   * AAC-LC stereo, lossy" arrived at the engine as *unknown* (the API then reported "source not
+   * reported" for every Apple track, and the resampler ran on samples that did not need it), and a
+   * provider's loudness normalisation was silently discarded.
+   *
+   * Kept explicit rather than spread: the two shapes genuinely differ and a spread would carry
+   * whatever a caller happened to attach. But every field the engine's type accepts belongs here, and a
+   * new one belongs here in the same commit that adds it.
+   */
   private toEngineInputSpec(source: PlaybackSource): EngineInputSpec {
     switch (source.kind) {
       case 'url':
@@ -713,6 +726,8 @@ export class AudioManager {
           realTime: source.realTime,
           lowLatency: source.lowLatency,
           restartOnFailure: source.restartOnFailure,
+          gainDb: source.gainDb,
+          nativeFormat: source.nativeFormat,
         };
       case 'pipe':
         return {

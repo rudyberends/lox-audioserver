@@ -131,7 +131,9 @@ export class SessionStarter {
       '-i', 'pipe:0',
     ];
     const args = [
-      '-hide_banner', '-loglevel', s.args.getLogLevel(),
+      // `-nostats` because the log level may be `info` purely to get the input banner (see
+      // `getLogLevel`), and info-level progress lines would otherwise arrive twice a second.
+      '-hide_banner', '-nostats', '-loglevel', s.args.getLogLevel(),
       ...inputArgs,
       ...s.args.buildOutputArgs(s.equalizerBands),
       'pipe:1',
@@ -237,7 +239,9 @@ export class SessionStarter {
   public startSingleStage(): void {
     const s = this.session;
     const args = [
-      '-hide_banner', '-loglevel', s.args.getLogLevel(),
+      // `-nostats` because the log level may be `info` purely to get the input banner (see
+      // `getLogLevel`), and info-level progress lines would otherwise arrive twice a second.
+      '-hide_banner', '-nostats', '-loglevel', s.args.getLogLevel(),
       ...s.args.buildInputArgs(),
       ...s.args.buildOutputArgs(s.equalizerBands),
       'pipe:1',
