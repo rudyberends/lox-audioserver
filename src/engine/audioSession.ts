@@ -660,6 +660,10 @@ export class AudioSession {
       bps: this.lastBpsTs ? this.lastBps : null,
       bitPerfect: this.bitPerfect,
       dspApplied: this.dspApplied,
+      // Described from the live equalizer bands rather than from the ones this session started with:
+      // a band moved mid-track restarts ffmpeg, and until it does the chain in the args is the old one.
+      processing: this.args.describeProcessing(this.equalizerBands),
+      crossfading: this.crossfadeActive,
       sourceFormat: this.sourceFormat,
       bufferedBytes: this.buffer.bytes,
       totalBytes: this.totalBytes,

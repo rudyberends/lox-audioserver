@@ -7,7 +7,7 @@
  * buffer sizes, restart counts and subscriber drops are engine health, not something a
  * listener is hearing.
  */
-import type { ApiAudioFormat, ApiStreamFormat } from '@/domain/zones/apiTypes';
+import type { ApiAudioFormat, ApiProcessingChain, ApiStreamFormat } from '@/domain/zones/apiTypes';
 
 type StreamStat = {
   profile: string;
@@ -17,6 +17,9 @@ type StreamStat = {
   bps: number | null;
   bitPerfect: boolean;
   dspApplied: boolean;
+  /** The engine's description of its own filter chain; see `ApiProcessingChain`. */
+  processing?: Omit<ApiProcessingChain, 'crossfading'> | null;
+  crossfading?: boolean;
   subscribers: number;
   sourceFormat?: {
     codec: string;
@@ -79,11 +82,24 @@ export function toApiAudioFormat(stats: StreamStat[]): ApiAudioFormat | null {
   if (!output) {
     return null;
   }
-  const source = selectBest(stats)?.sourceFormat ?? null;
+  /*
+   * One session decides all of it.
+   *
+   * `selectBest` was being called four times, which is not just wasteful: with several profiles alive
+   * (a Cast device on MP3 while sendspin takes PCM) each call could in principle answer differently, and
+   * a verdict from one session beside a chain from another would be a readout that contradicts itself.
+   */
+  const best = selectBest(stats);
+  const source = best?.sourceFormat ?? null;
   return {
-    bitPerfect: selectBest(stats)?.bitPerfect === true,
-    dspApplied: selectBest(stats)?.dspApplied === true,
+    bitPerfect: best?.bitPerfect === true,
+    dspApplied: best?.dspApplied === true,
     source: source ? withHighRes(source) : null,
     output,
+    // Crossfading lives on the session rather than in the arg builder's description — it is a state,
+    // not a configuration — so it is merged in here, where both are on the same object.
+    processing: best?.processing
+      ? { ...best.processing, crossfading: best.crossfading === true }
+      : null,
   };
 }

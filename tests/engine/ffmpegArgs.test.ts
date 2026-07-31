@@ -100,3 +100,45 @@ test('buildPcmDecoderArgsForSource(file) keeps -re and outputs s16le', () => {
   assert.ok(args.includes('/tmp/fade.mp3'));
   assert.ok(args.includes('s16le'));
 });
+
+test('describeProcessing reports an untouched chain as untouched', () => {
+  const builder = new FfmpegArgBuilder(
+    { kind: 'file', path: '/x.flac' },
+    'pcm',
+    defaultOutput,
+    false,
+    undefined,
+    { sampleRate: 44100, channels: 2, bitDepth: 16, lossless: true, codecName: 'flac' },
+  );
+  assert.deepEqual(builder.describeProcessing(null), {
+    resampled: false,
+    resampler: null,
+    requantised: false,
+    channelsRemapped: false,
+    reencoded: false,
+    equalizer: null,
+    gainDb: null,
+    delayMs: null,
+  });
+});
+
+test('describeProcessing names every stage that actually runs', () => {
+  const builder = new FfmpegArgBuilder(
+    { kind: 'url', url: 'https://x/y.m4a', gainDb: -3.5 },
+    'aac',
+    { ...defaultOutput, sampleRate: 48000, fixedGainDb: 2 },
+    false,
+    120,
+    { sampleRate: 44100, channels: 1, bitDepth: 24, lossless: true, codecName: 'flac' },
+  );
+  const chain = builder.describeProcessing([0, 3, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.equal(chain.resampled, true, 'a rate mismatch runs the resampler');
+  assert.deepEqual(chain.resampler, { name: 'soxr', precision: 28, cutoff: 0.97 });
+  assert.equal(chain.requantised, true, 'a 24-bit source into a 16-bit sink is requantised');
+  assert.equal(chain.channelsRemapped, true, 'a mono source into a stereo sink is remapped');
+  assert.equal(chain.reencoded, true, 'aac re-encodes by definition');
+  assert.deepEqual(chain.equalizer, { bands: [0, 3, 0, 0, 0, 0, 0, 0, 0, 0] });
+  assert.deepEqual(chain.gainDb, { source: -3.5, output: 2 });
+  assert.equal(chain.delayMs, 120);
+});
+

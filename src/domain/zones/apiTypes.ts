@@ -175,6 +175,44 @@ export interface ApiStreamFormat {
   highRes: boolean;
 }
 
+/**
+ * Every way this server can alter the audio, named.
+ *
+ * `dspApplied` says *whether* something happened; this says what. Every field is a fact the engine
+ * already had — it is produced by the object that builds the ffmpeg command line, from the same inputs,
+ * so a stage cannot claim to be absent while its filter is on the command line.
+ *
+ * All of it is **additive and optional**: a client that ignores `processing` keeps working, and an older
+ * server that does not send it is indistinguishable from one whose chain is empty *except* by its
+ * absence — which is why the field is `null`-able rather than defaulted to a chain of `false`.
+ *
+ * Deliberately not here: the zone's volume. That is applied at the device, not in this pipeline, so
+ * listing it as processing would claim an alteration this server did not make.
+ */
+export interface ApiProcessingChain {
+  /** The resampler ran: rate, channels or depth changed, or a filter forced the path. */
+  resampled: boolean;
+  /** Which resampler and how it was configured, when it ran. */
+  resampler: { name: string; precision: number; cutoff: number } | null;
+  /** The sample depth changed — the source declared one and the output carries another. */
+  requantised: boolean;
+  /** The channel count changed: a downmix or an upmix. */
+  channelsRemapped: boolean;
+  /** The output codec re-encodes rather than carrying samples (`aac`, `mp3`, `opus`). */
+  reencoded: boolean;
+  /** The zone's 10-band equalizer, when any band is off zero. Gains in dB, low band first. */
+  equalizer: { bands: number[] } | null;
+  /**
+   * Gain in dB by origin: the source's own loudness normalisation (Spotify sends one) and the output's
+   * fixed trim. Absent when both are zero.
+   */
+  gainDb: { source: number; output: number } | null;
+  /** Pre-delay in ms, for aligning this source against another output. Absent when none. */
+  delayMs: number | null;
+  /** True while a crossfade is blending, which requantises by definition. */
+  crossfading: boolean;
+}
+
 export interface ApiAudioFormat {
   /** True when a lossless source reaches the output without conversion or DSP. */
   bitPerfect: boolean;
@@ -182,6 +220,8 @@ export interface ApiAudioFormat {
   dspApplied: boolean;
   source: ApiStreamFormat | null;
   output: ApiStreamFormat | null;
+  /** What was done to the audio, stage by stage. Null when the engine cannot say. */
+  processing: ApiProcessingChain | null;
 }
 
 export interface ApiZoneState {

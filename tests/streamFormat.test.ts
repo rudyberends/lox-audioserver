@@ -87,6 +87,51 @@ test('the API format separates native source audio from output audio', () => {
       bitrate: 44100 * 2 * 24,
       highRes: true,
     },
+    // Null rather than a chain of `false`: a session that did not describe its stages and a session
+    // that did nothing are different claims, and the player renders them differently.
+    processing: null,
+  });
+});
+
+test('the API reports the engine chain, with crossfade merged in from the session', () => {
+  const format = toApiAudioFormat([
+    stat({
+      profile: 'flac',
+      sampleRate: 48000,
+      pcmBitDepth: 16,
+      dspApplied: true,
+      crossfading: true,
+      processing: {
+        resampled: true,
+        resampler: { name: 'soxr', precision: 28, cutoff: 0.97 },
+        requantised: true,
+        channelsRemapped: false,
+        reencoded: false,
+        equalizer: { bands: [0, 2, 0, 0, 0, 0, 0, -1, 0, 0] },
+        gainDb: { source: -3.2, output: 0 },
+        delayMs: 120,
+      },
+      sourceFormat: {
+        codec: 'flac',
+        sampleRate: 96000,
+        channels: 2,
+        bitDepth: 24,
+        bitrate: null,
+      },
+    }),
+  ]);
+  assert.deepEqual(format?.processing, {
+    resampled: true,
+    resampler: { name: 'soxr', precision: 28, cutoff: 0.97 },
+    requantised: true,
+    channelsRemapped: false,
+    reencoded: false,
+    equalizer: { bands: [0, 2, 0, 0, 0, 0, 0, -1, 0, 0] },
+    gainDb: { source: -3.2, output: 0 },
+    delayMs: 120,
+    // Not part of the arg builder's description — it is a state of the session, not a configuration —
+    // so the projection is where the two meet.
+    crossfading: true,
   });
 });
 

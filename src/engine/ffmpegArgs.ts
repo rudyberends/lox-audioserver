@@ -47,6 +47,41 @@ export interface SourceNativeFormat {
 }
 
 /**
+ * Every way this server can alter the audio, as data.
+ *
+ * The player's signal path used to be built from two booleans (`bitPerfect`, `dspApplied`), which is
+ * enough to say *whether* something happened and nothing about what — and "DSP applied" over a chain
+ * that might have resampled, requantised, gained, delayed, equalised or re-encoded is exactly the
+ * vagueness a technical readout exists to remove.
+ *
+ * It is produced by the same object that builds the command line, from the same fields, so a stage
+ * cannot be described as absent while its filter is in the args. Anything added to `buildFilterArgs`
+ * or `buildOutputArgs` belongs here in the same commit.
+ */
+export interface ProcessingChain {
+  /** soxr engaged: rate, channel count or depth had to change (or a filter forced the path). */
+  resampled: boolean;
+  /** The resampler's own settings, when it ran. */
+  resampler: { name: string; precision: number; cutoff: number } | null;
+  /** Sample depth changed — the source declared one and the output carries another. */
+  requantised: boolean;
+  /** Channel count changed: a downmix or an upmix. */
+  channelsRemapped: boolean;
+  /** The output codec re-encodes rather than carrying samples (aac, mp3, opus). */
+  reencoded: boolean;
+  /** The zone's 10-band equalizer, when any band is off zero. */
+  equalizer: { bands: number[] } | null;
+  /**
+   * Gain in dB, split by where it comes from: the source's own loudness normalisation (Spotify sends
+   * one) and the output's fixed trim. `0` means untouched — this is not the zone's volume, which the
+   * player applies at the device and never here.
+   */
+  gainDb: { source: number; output: number } | null;
+  /** Pre-delay in ms, for aligning a source against another output. */
+  delayMs: number | null;
+}
+
+/**
  * Builds the ffmpeg command-line for an audio session. All state needed by the
  * various build* helpers (source, profile, output settings, alert flag,
  * pre-delay) is supplied in the constructor; only EQ bands vary per call.
@@ -115,6 +150,51 @@ export class FfmpegArgBuilder {
       return false;
     }
     return true;
+  }
+
+  /**
+   * What this session does to the audio, stage by stage.
+   *
+   * Read straight off the same inputs `buildFilterArgs` uses. `resampled` mirrors the *actual*
+   * condition in that method rather than "rate differs", because a filter chain forces the resampler
+   * even when the rates match — which is true and would otherwise be reported as a passthrough.
+   */
+  public describeProcessing(equalizerBands: ReadonlyArray<number> | null): ProcessingChain {
+    const native = this.sourceNativeFormat;
+    const { sampleRate, channels, pcmBitDepth, fixedGainDb } = this.outputSettings;
+    const sourceGainDb = this.source.kind === 'url' ? this.source.gainDb : undefined;
+    const eqChain = buildEqualizerFilterChain(equalizerBands);
+
+    const pipeSourceSampleRate =
+      this.source.kind === 'pipe' ? this.source.sampleRate ?? sampleRate : null;
+    const pipeSourceChannels = this.source.kind === 'pipe' ? this.source.channels ?? channels : null;
+    const pipeSourceFormat = this.source.kind === 'pipe' ? this.source.format ?? 's16le' : null;
+    const canBypassResampleForPipe =
+      (this.profile === 'pcm' || this.profile === 'flac') &&
+      this.source.kind === 'pipe' &&
+      pipeSourceFormat === 's16le' &&
+      pipeSourceSampleRate === sampleRate &&
+      pipeSourceChannels === channels;
+    const resampled =
+      audioResampler.name === 'soxr' &&
+      !canBypassResampleForPipe &&
+      !this.isBitPerfect(equalizerBands);
+
+    const gainSource =
+      typeof sourceGainDb === 'number' && Number.isFinite(sourceGainDb) ? sourceGainDb : 0;
+    const gainOutput = Number.isFinite(fixedGainDb) ? fixedGainDb : 0;
+
+    return {
+      resampled,
+      resampler: resampled ? { ...audioResampler } : null,
+      // Only a *declared* depth can be lost; a lossy source has no original depth to preserve.
+      requantised: native?.bitDepth != null && native.bitDepth !== pcmBitDepth,
+      channelsRemapped: native != null && native.channels !== channels,
+      reencoded: this.profile === 'aac' || this.profile === 'mp3' || this.profile === 'opus',
+      equalizer: eqChain ? { bands: [...(equalizerBands ?? [])] } : null,
+      gainDb: gainSource !== 0 || gainOutput !== 0 ? { source: gainSource, output: gainOutput } : null,
+      delayMs: this.sourcePreDelayMs && this.sourcePreDelayMs > 0 ? this.sourcePreDelayMs : null,
+    };
   }
 
   public getLogLevel(): string {

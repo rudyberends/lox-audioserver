@@ -1,4 +1,5 @@
 import type { PassThrough } from 'node:stream';
+import type { ProcessingChain } from '@/engine/ffmpegArgs';
 import type { EngineHandoffSpec, EngineStartOptions, OutputProfile, PlaybackSource } from '@/ports/EngineTypes';
 import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 import type { SessionKey } from '@/ports/types/SessionKey';
@@ -19,6 +20,15 @@ export type EngineSessionStats = {
   bitPerfect: boolean;
   /** True when this server performs conversion, filtering, gain, delay or re-encoding. */
   dspApplied: boolean;
+  /**
+   * *What* it performs, stage by stage — see `ProcessingChain`.
+   *
+   * `dspApplied` answers "did anything touch this"; a listener with good speakers wants the next
+   * question answered too, and the session already knows every part of it.
+   */
+  processing?: ProcessingChain | null;
+  /** True while the two-stage crossfade path is blending, which requantises by definition. */
+  crossfading?: boolean;
   /** Native source format when declared or successfully probed. */
   sourceFormat?: {
     codec: string;
