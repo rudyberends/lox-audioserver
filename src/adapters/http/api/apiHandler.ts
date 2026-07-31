@@ -14,11 +14,18 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { createHash } from 'node:crypto';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
-import type {
-  AudioAnalysisEvent,
-  AudioAnalysisSubscription,
+import {
+  ANALYSIS_DB_FLOOR,
+  ANALYSIS_FULL_SCALE,
+  type AudioAnalysisEvent,
+  type AudioAnalysisSubscription,
 } from '@/application/audio/audioAnalysisService';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
+import {
+  OUTPUT_DELAY_MAX_MS,
+  OUTPUT_DELAY_MIN_MS,
+  parseOutputDelayMs,
+} from '@/adapters/http/outputDelay';
 import type {
   ApiAlertKind,
   ApiDestination,
@@ -36,6 +43,7 @@ import type {
   ApiOutput,
   ApiPowerState,
   ApiOutputCapabilities,
+  ApiOutputSync,
   ApiPlaylist,
   ApiQueue,
   ApiRecents,
@@ -127,6 +135,20 @@ export type ApiHandlerDeps = {
   /** Which protocol a zone plays over right now; see ApiOutput. */
   getOutputProtocol: (zoneId: number) => string | null;
   getOutputCapabilities: (zoneId: number) => ApiOutputCapabilities | null;
+  /** How the output is timed against its device; null when the protocol has no clock agreement. */
+  getOutputSync: (zoneId: number) => ApiOutputSync | null;
+  /** Which zones play as one, leader first. Not derivable from zone state; see toGroup. */
+  getGroup: (zoneId: number) => { leader: number; members: number[] } | null;
+  /**
+   * Persist and apply a zone's output delay. `clientId` targets one Sendspin satellite instead of
+   * the zone's own output. `applied` is false when no live output took it — the value is still
+   * stored, so a device connecting later gets it.
+   */
+  setOutputDelay: (
+    zoneId: number,
+    delayMs: number,
+    clientId?: string | null,
+  ) => Promise<{ delayMs: number; applied: boolean }>;
   /** The configured name of the service an audiopath belongs to, for `source.name`. */
   getServiceLabel: (audiopath: string) => string | null;
   /** The configured name of a line-in, so `source.name` is not the server's MAC. */
@@ -434,6 +456,23 @@ export class ApiHandler {
 
     if (pathname === '/events' && method === 'GET') {
       this.streamEvents(req, res);
+      return;
+    }
+
+    /*
+     * The delay is the one output setting this API writes.
+     *
+     * A read of it comes back inside `output.sync` with everything needed to judge it, so there is
+     * no GET here: a caller reading the zone already has it, and a second spelling of the same
+     * value is a second thing to keep true.
+     */
+    const delayMatch = /^\/zones\/(\d+)\/output\/delay$/.exec(pathname);
+    if (delayMatch) {
+      if (method !== 'PUT') {
+        this.sendJson(res, 405, { error: 'method-not-allowed' });
+        return;
+      }
+      await this.handleOutputDelay(req, res, Number(delayMatch[1]));
       return;
     }
 
@@ -923,6 +962,63 @@ export class ApiHandler {
    * different output protocol cannot join unless mixed groups are enabled, and saying so
    * beats leaving the caller to diff what it asked for against the next zone event.
    */
+  /**
+   * Sets the delay a zone's speaker chain adds after its audio output.
+   *
+   * The one control an installer needs that is not a playback verb, and it points the opposite way
+   * from what its name suggests: the client *subtracts* it from every timestamp, so raising it makes
+   * that room play **earlier** — which is how a room that arrives late is brought into line. It
+   * describes hardware downstream of the device (an amplifier, an active speaker), so a room that
+   * arrives early has nothing to declare and the protocol has no negative form. It is persisted
+   * *and* applied live — Sendspin pushes it without restarting the stream.
+   *
+   * `clientId` targets one satellite (a subwoofer under a pair of speakers needs its own offset)
+   * rather than the zone's output. `applied: false` means the value was stored but no live output
+   * took it: the zone's protocol has no delay, or the named satellite is not configured. That is a
+   * 200, not an error — the config is the durable part, and a device that connects later gets it.
+   */
+  private async handleOutputDelay(
+    req: IncomingMessage,
+    res: ServerResponse,
+    zoneId: number,
+  ): Promise<void> {
+    if (!this.deps.getZoneState(zoneId)) {
+      this.sendJson(res, 404, { error: 'zone-not-found' });
+      return;
+    }
+    let body: Record<string, unknown>;
+    try {
+      body = await this.readJsonBody(req);
+    } catch {
+      this.sendJson(res, 400, { error: 'invalid-json' });
+      return;
+    }
+    const delayMs = parseOutputDelayMs(body.delayMs);
+    if (delayMs === null) {
+      this.sendJson(res, 400, {
+        error: 'invalid-delay',
+        detail: `delayMs must be a number between ${OUTPUT_DELAY_MIN_MS} and ${OUTPUT_DELAY_MAX_MS}`,
+      });
+      return;
+    }
+    const clientId =
+      typeof body.clientId === 'string' && body.clientId.trim() ? body.clientId.trim() : null;
+    const result = await this.deps.setOutputDelay(zoneId, delayMs, clientId);
+    /*
+     * Announce it, because nothing else will.
+     *
+     * The delay lives in config, not in `ZoneState`, so writing it fires no state change and no
+     * event — while `output.sync.delayMs` says it did change. Every client that had the zone in
+     * hand would keep showing the old number until something unrelated happened, which is what the
+     * player did: the slider snapped back to where it was and only a reload told the truth.
+     */
+    const state = this.deps.getZoneState(zoneId);
+    if (state) {
+      this.deps.eventHub.publishZoneChanged(this.project(state));
+    }
+    this.sendJson(res, 200, { ...result, clientId });
+  }
+
   private async handleGroup(
     req: IncomingMessage,
     res: ServerResponse,
@@ -1563,11 +1659,6 @@ export class ApiHandler {
       this.sendJson(res, 404, { error: 'zone-not-found' });
       return;
     }
-    const format = this.deps.getAudioAnalysisFormat(zoneId) ?? {
-      sampleRate: 44100,
-      channels: 2,
-      bitDepth: 16,
-    };
     const requestedTypes = new Set(
       (url.searchParams.get('types') ?? 'loudness,spectrum,f_peak,peak,pitch')
         .split(',')
@@ -1576,21 +1667,9 @@ export class ApiHandler {
     );
     const rateMax = Math.max(1, Math.min(60, Number(url.searchParams.get('rate') ?? 20) || 20));
     const bins = Math.max(4, Math.min(256, Number(url.searchParams.get('bins') ?? 32) || 32));
-    const options: AudioAnalysisSubscription = {
-      ...format,
-      rateMax,
-      // Drive Sendspin from the PCM timeline that is actually sent to the output. The
-      // engine feed can be ahead by the output buffer, which makes a browser visualizer
-      // visibly lead the music. Other outputs currently expose the engine timeline.
-      feed: this.deps.getOutputProtocol(zoneId) === 'sendspin' ? 'scheduled-output' : 'engine',
-      loudness: requestedTypes.has('loudness'),
-      fPeak: requestedTypes.has('f_peak'),
-      peak: requestedTypes.has('peak'),
-      pitch: requestedTypes.has('pitch'),
-      spectrum: requestedTypes.has('spectrum')
-        ? { n_disp_bins: bins, scale: 'log', f_min: 40, f_max: 16000 }
-        : undefined,
-    };
+    const spectrum = requestedTypes.has('spectrum')
+      ? ({ n_disp_bins: bins, scale: 'log', f_min: 40, f_max: 16000 } as const)
+      : undefined;
     res.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
       'cache-control': 'no-cache, no-transform',
@@ -1602,14 +1681,70 @@ export class ApiHandler {
         res.write(`data: ${JSON.stringify(payload)}\n\n`);
       }
     };
-    write({ type: 'analysis.ready', zoneId, rateMax, types: [...requestedTypes] });
-    const unsubscribe = this.deps.subscribeAudioAnalysis(zoneId, options, (event) => {
-      write(serializeAnalysisEvent(event));
+
+    /*
+     * The analyzer is built for one PCM format and cannot be retuned, because the format
+     * decides how the bytes are read and where the FFT bins land. Sonn follows the source,
+     * so that format changes *per track*: a 44.1/16 analyzer handed a 192/24 stream reads
+     * every third byte as a sample and reports noise. The sendspin output re-arms its own
+     * analyzer on each stream start; this stream lives across tracks, so it has to notice
+     * the change itself and rebuild — announcing the new geometry as it does.
+     */
+    let unsubscribeAnalysis: (() => void) | null = null;
+    let armedFor = '';
+    const arm = (): void => {
+      const format = this.deps.getAudioAnalysisFormat(zoneId) ?? {
+        sampleRate: 44100,
+        channels: 2,
+        bitDepth: 16,
+      };
+      const signature = `${format.sampleRate}/${format.channels}/${format.bitDepth}`;
+      if (signature === armedFor) {
+        return;
+      }
+      armedFor = signature;
+      unsubscribeAnalysis?.();
+      const options: AudioAnalysisSubscription = {
+        ...format,
+        rateMax,
+        // Drive Sendspin from the PCM timeline that is actually sent to the output. The
+        // engine feed can be ahead by the output buffer, which makes a browser visualizer
+        // visibly lead the music. Other outputs currently expose the engine timeline.
+        feed: this.deps.getOutputProtocol(zoneId) === 'sendspin' ? 'scheduled-output' : 'engine',
+        loudness: requestedTypes.has('loudness'),
+        fPeak: requestedTypes.has('f_peak'),
+        peak: requestedTypes.has('peak'),
+        pitch: requestedTypes.has('pitch'),
+        spectrum,
+      };
+      // Everything a consumer needs to turn these numbers back into dB and Hz. Without it a
+      // client has to hardcode the same constants and drift when this end changes them.
+      write({
+        type: 'analysis.ready',
+        zoneId,
+        rateMax,
+        types: [...requestedTypes],
+        format,
+        floorDb: ANALYSIS_DB_FLOOR,
+        fullScale: ANALYSIS_FULL_SCALE,
+        spectrum: spectrum ?? null,
+      });
+      unsubscribeAnalysis = this.deps.subscribeAudioAnalysis(zoneId, options, (event) => {
+        write(serializeAnalysisEvent(event));
+      });
+    };
+    arm();
+
+    const unsubscribeZone = this.deps.eventHub.subscribe((event) => {
+      if (event.type === 'zone.changed' && event.zone.id === zoneId) {
+        arm();
+      }
     });
     const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), SSE_KEEPALIVE_MS);
     const close = (): void => {
       clearInterval(keepAlive);
-      unsubscribe();
+      unsubscribeZone();
+      unsubscribeAnalysis?.();
     };
     req.on('close', close);
     req.on('error', close);
@@ -1661,6 +1796,8 @@ export class ApiHandler {
       device: (zoneId) => this.deps.getOutputDevice(zoneId),
       outputProtocol: (zoneId) => this.deps.getOutputProtocol(zoneId),
       outputCapabilities: (zoneId) => this.deps.getOutputCapabilities(zoneId),
+      outputSync: (zoneId) => this.deps.getOutputSync(zoneId),
+      group: (zoneId) => this.deps.getGroup(zoneId),
       serviceLabel: (audiopath) => this.deps.getServiceLabel(audiopath),
       inputLabel: (inputId) => this.deps.getInputLabel(inputId),
       streamFormat: (zoneId) => this.deps.getStreamFormat(zoneId),

@@ -11,7 +11,7 @@ import { audioResampler } from '@/ports/types/audioFormat';
 import { sendspinCore } from '@sonn-audio/node-sendspin';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 import { getZoneOutputConfig } from '@/adapters/http/adminApi/config/configHandlers';
-import { parseSendspinSatellites } from '@/adapters/outputs/factory';
+import { parseOutputDelayMs, setOutputDelayMs } from '@/adapters/http/outputDelay';
 import { toPlaybackState } from '@/adapters/http/api/zoneProjection';
 
 export const STATE_CONTROLLER_DEFINITIONS = [
@@ -114,40 +114,22 @@ async function handleZoneOutputLatency(
 ): Promise<void> {
   const body = (await deps.readJsonBody(req, res)) as { latencyMs?: unknown; clientId?: unknown } | null;
   if (!body) return;
-  const raw = body.latencyMs;
-  const num = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
-  if (!Number.isFinite(num)) {
+  const clamped = parseOutputDelayMs(body.latencyMs);
+  if (clamped === null) {
     deps.sendJson(res, 400, { error: 'invalid-latency' });
     return;
   }
-  const clamped = Math.max(0, Math.min(10_000, Math.round(num)));
   // A clientId targets a specific Sendspin satellite's delay; otherwise the primary output.
   const clientId = typeof body.clientId === 'string' && body.clientId.trim() ? body.clientId.trim() : null;
 
-  // Persist to zone-config without triggering replaceZones — latency is a live, benign tweak.
-  await deps.configPort.updateConfig((cfg) => {
-    const zone = cfg.zones?.find((z) => z.id === zoneId);
-    if (!zone) return;
-    const primary = getZoneOutputConfig(zone) as Record<string, unknown> | null;
-    if (!primary) return;
-    const mirrors: Record<string, unknown>[] = [primary];
-    const transports = (zone as { transports?: Record<string, unknown>[] }).transports;
-    if (Array.isArray(transports) && transports[0]) mirrors.push(transports[0]);
-    const output = (zone as { output?: Record<string, unknown> }).output;
-    if (output) mirrors.push(output);
-
-    if (clientId) {
-      // Update just this satellite's latency in the rich array (normalised across mirrors).
-      const primaryClientId = typeof primary.clientId === 'string' ? primary.clientId : '';
-      const sats = parseSendspinSatellites(primary.satellites, primaryClientId);
-      const next = sats.map((s) => (s.clientId === clientId ? { ...s, latencyMs: clamped } : s));
-      for (const m of mirrors) m.satellites = next;
-    } else {
-      for (const m of mirrors) m.latencyMs = clamped;
-    }
-  });
-
-  const applied = deps.zoneManager.setOutputLatency(zoneId, clamped, clientId ?? undefined);
+  // Persisted and applied by the shared setter, which the public API calls too — the config
+  // mirroring is the part that must not exist twice. No replaceZones: the delay is a live tweak.
+  const { applied } = await setOutputDelayMs(
+    { configPort: deps.configPort, setOutputLatency: (id, ms, target) => deps.zoneManager.setOutputLatency(id, ms, target) },
+    zoneId,
+    clamped,
+    clientId,
+  );
   deps.sendJson(res, 200, { latencyMs: clamped, clientId, applied });
 }
 

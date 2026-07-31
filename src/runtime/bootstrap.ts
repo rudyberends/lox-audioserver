@@ -205,6 +205,10 @@ export function createRuntime(): Runtime {
       outputProtocol: resolveOutputProtocol,
       outputCapabilities: (zoneId) =>
         zoneManager.getOutputCapabilities(zoneId) as ApiOutputCapabilities | null,
+      // Same lookup the request path uses: without it a GET carried `output.sync` and an event
+      // did not, which is the field-appears-and-disappears failure this tap exists to prevent.
+      outputSync: (zoneId) => zoneManager.getOutputSyncStatus(zoneId),
+      group: (zoneId) => zoneManager.getGroupMembership(zoneId),
       serviceLabel: resolveServiceLabel,
       inputLabel: resolveInputLabel,
       streamFormat: resolveStreamFormat,

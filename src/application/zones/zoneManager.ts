@@ -22,8 +22,9 @@ import { SpotifyInputAdapter } from '@/application/playback/adapters/SpotifyInpu
 import { registerPlayer, unregisterPlayer, clearPlayers } from '@/application/playback/playerRegistry';
 import type { RecentsManager } from '@/application/zones/recents/recentsManager';
 import type { MixedGroupCoordinator } from '@/application/groups/mixedGroupController';
+import { getGroupByZone } from '@/application/groups/groupTracker';
 import type { OutputsPort } from '@/ports/OutputsPort';
-import type { ZoneOutput } from '@/ports/OutputsTypes';
+import type { OutputSyncStatus, ZoneOutput } from '@/ports/OutputsTypes';
 import type { InputsPort } from '@/ports/InputsPort';
 import type {
   QueueItem,
@@ -828,6 +829,35 @@ export class ZoneManager {
     const output =
       ctx.outputs.find((candidate) => candidate.type === ctx.activeOutput) ?? ctx.outputs[0];
     return output ? this.outputsPort.getCapabilities(output).protocolCapabilities ?? null : null;
+  }
+
+  /**
+   * Which zones play as one, leader first, or null when this zone plays on its own.
+   *
+   * From the group tracker — the same authority the grouping commands and the Loxone projection use.
+   * It is deliberately not read off `ZoneState`: `syncedzones` is typed there but never assigned, so
+   * anything trusting it reports "not grouped" for every zone forever.
+   */
+  public getGroupMembership(zoneId: number): { leader: number; members: number[] } | null {
+    const group = getGroupByZone(zoneId);
+    if (!group || group.members.length <= 1) {
+      return null;
+    }
+    return { leader: group.leader, members: [...group.members] };
+  }
+
+  /**
+   * How the active output is timed against its device, or null when the protocol cannot say.
+   *
+   * The active output rather than all of them: a zone plays through one, and reporting a list
+   * would imply a choice the caller does not have. See [[OutputSyncStatus]] for what it carries.
+   */
+  public getOutputSyncStatus(zoneId: number): OutputSyncStatus | null {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx) return null;
+    const output =
+      ctx.outputs.find((candidate) => candidate.type === ctx.activeOutput) ?? ctx.outputs[0];
+    return output?.getSyncStatus?.() ?? null;
   }
 
   private registerZone(config: ZoneConfig): void {

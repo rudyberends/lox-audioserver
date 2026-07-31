@@ -22,7 +22,12 @@ import {
   type SendspinGroupCommand,
   type SendspinPlayerStateUpdate,
 } from '@sonn-audio/node-sendspin';
-import type { PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
+import type {
+  PreferredOutput,
+  OutputConfigDefinition,
+  OutputSyncStatus,
+  ZoneOutput,
+} from '@/ports/OutputsTypes';
 import type { SendspinSession } from '@sonn-audio/node-sendspin';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import type { PlaybackSource } from '@/ports/EngineTypes';
@@ -56,6 +61,9 @@ type ClientDeclaredFormat = {
 // disconnect due to conflicting metadata/stream commands.
 const sendspinClientOwners = new Map<string, number>(); // clientId -> zoneId
 const sendspinOutputsByZoneId = new Map<number, SendspinOutput>();
+/** The window `leadMinMs` is measured over: long enough to be meaningful, short enough to be now. */
+const LEAD_WINDOW_US = 2_000_000;
+
 const STREAM_PLAYER_ROLE = 'player';
 
 /** A listen-only satellite client fed the same audio as the zone (e.g. a subwoofer). */
@@ -150,10 +158,15 @@ export const SENDSPIN_OUTPUT_DEFINITION: OutputConfigDefinition = {
     },
     {
       id: 'latencyMs',
-      label: 'Latency (ms)',
+      label: 'Speaker delay (ms)',
       type: 'text',
       placeholder: '0',
-      description: 'Optional client-side static playback delay (0-5000 ms). Higher = sound is later.',
+      // Not "sound is later". The client subtracts this from each timestamp, so it plays *earlier*
+      // by this much — it exists to cancel delay that happens after its audio port. Raise it for a
+      // room that arrives late; a room that arrives early has nothing to declare.
+      description:
+        'Delay added after this speaker\'s audio output — an amplifier or active speaker, 0-5000 ms. '
+        + 'The player compensates by playing that much earlier, so raise it for a room that arrives late.',
     },
     {
       id: 'satellites',
@@ -189,7 +202,14 @@ export class SendspinOutput implements ZoneOutput {
   private lastProgressPayload: SendspinMetadataProgress | null = null;
   private playbackState: 'playing' | 'paused' | 'stopped' = 'stopped';
   private lastSentPlaybackState: 'playing' | 'paused' | 'stopped' | null = null;
+  /** What the client last reported about its clock. Reporting only; see handleClientState. */
   private clientState: 'synchronized' | 'error' | 'external_source' | null = null;
+  /**
+   * The state whose *transition* has been acted on (the external_source stream teardown).
+   * Separate from `clientState` because reacting is gated on the connect guard and reporting is
+   * not — a client that only ever says `synchronized` must still be reported as such.
+   */
+  private reactedClientState: 'synchronized' | 'error' | 'external_source' | null = null;
   private externalSourceActive = false;
   private restartTimer: NodeJS.Timeout | null = null;
   private bufferedChunks: Array<{ data: Buffer; timestampUs: number }> = [];
@@ -230,13 +250,74 @@ export class SendspinOutput implements ZoneOutput {
   private activeCodecHeader: string | null = null;
   private anchorLeadUs: number;
   // Keep target lead aligned with the configured anchor for low-latency playback.
-  private readonly targetLeadUs: number;
+  /**
+   * How far ahead of a frame's timestamp it is handed over — derived, not stored.
+   *
+   * The client's `static_delay_ms` is *subtracted* from the timestamp before it schedules playback
+   * (spec: "Clients subtract their static_delay_ms from server timestamps before scheduling
+   * playback"), so it does not move when audio is heard — it moves the deadline by which the client
+   * must already hold the frame. Leaving the lead alone therefore spends the setting out of our own
+   * buffer: at a 200 ms static delay a 250-350 ms lead becomes 50-150 ms of real headroom, and past
+   * the lead the deadline is in the past before the frame arrives.
+   *
+   * So the lead grows with it, which is exactly what the spec asks for — "Servers factor in each
+   * client's static_delay_ms when calculating how far ahead to send audio, keeping effective buffer
+   * headroom constant" — and the wait loop, the prebuffer and the reported target all follow from
+   * here for free.
+   *
+   * Sized by whichever of the two known values is larger — what we asked for, and what the client
+   * last reported. Neither can be trusted to be current: a client reports its own persisted value on
+   * connect and (in the reference implementation at least) never mentions it again after applying a
+   * `set_static_delay`, so after a write ours is the newer number while its own may be a value we
+   * have never seen — an installer's 300 ms for the amplifier it is wired to. Taking the larger
+   * over-buffers at worst, which costs a little latency; taking the smaller runs the client dry.
+   */
+  private get targetLeadUs(): number {
+    const configured = this.configuredLatencyMs;
+    const reported = this.reportedStaticDelayMs();
+    return this.anchorLeadUs + Math.max(configured, reported ?? 0) * 1000;
+  }
+
+  /**
+   * The static delay the client last declared, or null if it never has.
+   *
+   * Its own truth, and not the same thing as what we configured: it persists this locally across
+   * reboots, may keep a separate value per audio output, and is only obliged to honour a
+   * `set_static_delay` it listed in `supported_commands`. Where the two disagree, both are worth
+   * seeing — hence a separate field on the public status rather than one "effective" number.
+   */
+  private reportedStaticDelayMs(): number | null {
+    const reported = sendspinCore
+      .getSessionByClientId(this.activeClientId())
+      ?.getPlayerTiming?.().staticDelayMs;
+    return typeof reported === 'number' && reported >= 0 ? reported : null;
+  }
   private lastMetadataSignature: string | null = null;
   private lastStreamSignature: string | null = null;
   private pcmRemainder: Buffer | null = null;
   private lastPlayRequestAtMs: number | null = null;
   private firstFrameLogged = false;
   private lastStreamStartSentAtMs: number | null = null;
+  /**
+   * Timing of the stream in flight, kept for `getSyncStatus`.
+   *
+   * These numbers are produced by the send loop anyway — it has to know the lead to decide
+   * whether to wait — and used to reach nothing but `log.spam` every hundredth frame. Held as
+   * one object so a reader can never see the lead from one frame beside the jitter from
+   * another, and cleared on teardown so a stopped stream reports nothing rather than the last
+   * thing it managed.
+   */
+  private streamTiming: {
+    leadUs: number;
+    /** Envelope of the window in progress, and the last completed window's spread. */
+    windowStartTsUs: number;
+    windowMinUs: number;
+    windowMaxUs: number;
+    floorUs: number | null;
+    driftUs: number | null;
+  } | null = null;
+  /** The band the send loop holds the lead in: [targetLead, targetLead + this]. See startStream. */
+  private leadMarginUs = 100_000;
   private streamToken = 0;
   private hooksStop: (() => void) | null = null;
   private resolvedHooksStop: (() => void) | null = null;
@@ -283,7 +364,6 @@ export class SendspinOutput implements ZoneOutput {
     private readonly ports: OutputPorts,
   ) {
     this.anchorLeadUs = SendspinOutput.resolveAnchorLeadUs(config.clientId ?? '');
-    this.targetLeadUs = this.anchorLeadUs;
     this.primary = new SendspinClientSender(
       config.clientId,
       normalizeSendspinLatencyMs(config.latencyMs),
@@ -319,6 +399,7 @@ export class SendspinOutput implements ZoneOutput {
         this.activeSession = sendspinSession;
         this.clientConnected = true;
         this.clientState = null;
+        this.reactedClientState = null;
         this.externalSourceActive = false;
         // Reconnect (e.g. Connect churn on track change) seeds the stream default,
         // but if the client already negotiated a real format keep that. After a lox
@@ -370,6 +451,7 @@ export class SendspinOutput implements ZoneOutput {
         this.lastLoggedClientState = null;
         this.lastLoggedMuted = null;
         this.clientState = null;
+        this.reactedClientState = null;
         this.externalSourceActive = false;
         // Invalidate stream signature so the next startStream() rebuilds the
         // pipeline from scratch instead of reusing a stale consumeStream loop.
@@ -556,9 +638,42 @@ export class SendspinOutput implements ZoneOutput {
     };
   }
 
+  /**
+   * How long audio keeps playing after the engine stops feeding us — the end guard's input.
+   *
+   * Just the lead: a frame stamped T is heard at T however early it was handed over, and the lead
+   * already includes the client's static delay (see `targetLeadUs`). This used to add the static
+   * delay on top of a lead that did not contain it, which came to the same number; it is spelled
+   * out here so the two cannot drift apart.
+   */
   public getLatencyMs(): number {
-    const leadMs = Math.max(0, Math.round(this.targetLeadUs / 1000));
-    return leadMs + this.configuredLatencyMs;
+    return Math.max(0, Math.round(this.targetLeadUs / 1000));
+  }
+
+  /**
+   * The timing relationship with this client, for anyone who wants to see it.
+   *
+   * `state` is the client's own verdict, which is the only party that can give one: the clock is
+   * negotiated by it asking us for the time (`client/time`) and running its own filter over the
+   * answers, so *we* never compute an offset — we only learn whether it locked on. The rest is our
+   * side of the bargain, measured while sending.
+   */
+  public getSyncStatus(): OutputSyncStatus {
+    const timing = this.streamTiming;
+    const round = (us: number): number => Math.round(us / 1000);
+    return {
+      state: this.clientState ?? 'unknown',
+      // What this server asked for. Deliberately not the reported value: a client that applies the
+      // command without re-announcing its state would make a slider bound to this snap back to the
+      // old number, and the reference client does exactly that.
+      delayMs: this.configuredLatencyMs,
+      deviceDelayMs: this.reportedStaticDelayMs(),
+      targetLeadMs: Math.max(0, round(this.targetLeadUs)),
+      leadMarginMs: round(this.leadMarginUs),
+      leadMs: timing ? round(timing.leadUs) : null,
+      leadMinMs: timing && timing.floorUs !== null ? round(timing.floorUs) : null,
+      driftMs: timing && timing.driftUs !== null ? round(timing.driftUs) : null,
+    };
   }
 
   /** Hot-update the primary static delay; pushes the new value to the live client. */
@@ -740,16 +855,29 @@ export class SendspinOutput implements ZoneOutput {
       return;
     }
     this.lastClientStateSignature = signature;
+    const nextState =
+      update.state === 'synchronized' || update.state === 'error' || update.state === 'external_source'
+        ? update.state
+        : null;
+    /*
+     * Record what the client said before the connect guard below, not after.
+     *
+     * A client typically reports `synchronized` once — on connect — and then only speaks up again
+     * when its volume or mute changes. The guard exists to stop that first message applying the
+     * client's volume over the zone's default, but it used to `return` past the state as well, so
+     * the reported clock state was thrown away in the one message that carries it and
+     * `getSyncStatus` answered "unknown" for a perfectly synchronised speaker.
+     */
+    if (nextState) {
+      this.clientState = nextState;
+    }
     // Skip the very first client state to avoid the client overriding the zone's default volume on connect.
     if (!this.initialClientStateSkipped) {
       this.initialClientStateSkipped = true;
       return;
     }
-    const nextState =
-      update.state === 'synchronized' || update.state === 'error' || update.state === 'external_source'
-        ? update.state
-        : null;
-    if (nextState && nextState !== this.clientState) {
+    if (nextState && nextState !== this.reactedClientState) {
+      this.reactedClientState = nextState;
       this.clientState = nextState;
       if (nextState === 'external_source') {
         this.log.info('Sendspin client entered external_source', {
@@ -1230,7 +1358,7 @@ export class SendspinOutput implements ZoneOutput {
           : chosenFormat.codec === AudioCodec.FLAC
             ? Math.floor((512 * 1_000_000) / sampleRate)
             : 0;
-      const overbufferMarginUs = 100_000; // keep lead tight around target
+      const overbufferMarginUs = this.leadMarginUs; // keep lead tight around target
       const prepareBufferMarginUs = Math.max(500_000, Math.min(2_500_000, this.targetLeadUs));
       const sendTransmissionMarginUs = 100_000; // align with MA send margin (network + client processing)
       const targetBufferUs = this.targetLeadUs;
@@ -1344,6 +1472,51 @@ export class SendspinOutput implements ZoneOutput {
         }
 
         chunkCount += 1;
+        // Every frame, not every hundredth: this is what `getSyncStatus` reports, and a reader
+        // asking "is it in sync right now" must not be answered with a number from 2 seconds ago.
+        /*
+         * Track how far the lead *wanders*, not how irregular the sends are.
+         *
+         * The send loop bursts frames until the lead fills its band and then sleeps up to 200 ms on
+         * purpose, so the interval between sends deviates by more than 100 ms as a matter of design
+         * — reporting that as "jitter" said "your audio is unsteady" about a sender working exactly
+         * as intended. What a reader actually wants to know is whether the lead is being held: it
+         * measured a 6 ms spread over 12 s on a healthy stream, and a sender falling behind widens
+         * that immediately.
+         */
+        const leadNowUs = frameTsUs - serverNowUs();
+        const previous = this.streamTiming;
+        const driftUs =
+          this.playStartUs !== null ? frameTsUs - this.playStartUs - modeledTimelineUs : null;
+        /*
+         * A rolling window, and what comes out of it is the *floor*.
+         *
+         * The lead sweeps its whole band by design — the loop bursts until it reaches the top, then
+         * waits — so the widest-minus-narrowest spread is just the band width and says nothing. The
+         * lowest lead does say something: while it stays at or above the target the client never runs
+         * out of audio. A window rather than the whole stream, so the number answers "is it holding
+         * now" instead of reporting the start-up ramp forever; the last completed window is reported,
+         * so the value does not depend on how far into one a reader happens to look.
+         */
+        if (!previous || frameTsUs - previous.windowStartTsUs >= LEAD_WINDOW_US) {
+          this.streamTiming = {
+            leadUs: leadNowUs,
+            windowStartTsUs: frameTsUs,
+            windowMinUs: leadNowUs,
+            windowMaxUs: leadNowUs,
+            floorUs: previous ? previous.windowMinUs : null,
+            driftUs,
+          };
+        } else {
+          this.streamTiming = {
+            leadUs: leadNowUs,
+            windowStartTsUs: previous.windowStartTsUs,
+            windowMinUs: Math.min(previous.windowMinUs, leadNowUs),
+            windowMaxUs: Math.max(previous.windowMaxUs, leadNowUs),
+            floorUs: previous.floorUs,
+            driftUs,
+          };
+        }
         if (chunkCount <= 3 || chunkCount % 100 === 0) {
           const avgJitterUs = jitterSamples ? Math.round(jitterSumUs / jitterSamples) : 0;
           const leadNow = frameTsUs - serverNowUs();
@@ -1648,6 +1821,9 @@ export class SendspinOutput implements ZoneOutput {
     this.maxBufferedBytes = audioOutputSettings.prebufferBytes;
     this.activeOutputFormat = null;
     this.activeCodecHeader = null;
+    // No stream, no timing: the alternative is reporting the last frame of a finished stream as
+    // if it were the current state of one.
+    this.streamTiming = null;
     this.unsubscribeAnalysis?.();
     this.unsubscribeAnalysis = null;
     if (!preserveAnchor) {

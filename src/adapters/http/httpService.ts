@@ -6,6 +6,7 @@ import type { HttpServerConfig } from '@/config/http';
 import { AdminApiHandler } from '@/adapters/http/adminApi/adminApiHandler';
 import { MusicStreamingHandler } from '@/adapters/http/music/musicStreamingHandler';
 import { StaticFileHandler } from '@/adapters/http/static/staticFileHandler';
+import { setOutputDelayMs } from '@/adapters/http/outputDelay';
 import { SendspinGateway } from '@/adapters/http/sendspin/sendspinGateway';
 import { SnapcastGateway } from '@/adapters/http/snapcast/snapcastGateway';
 import { AudioStreamHandler } from '@/adapters/http/streams/audioStreamHandler';
@@ -216,6 +217,20 @@ export class HttpService {
       powerOffImmediately: (zoneId) => options.zoneManager.powerOffImmediately(zoneId),
       getOutputCapabilities: (zoneId) =>
         options.zoneManager.getOutputCapabilities(zoneId) as ApiOutputCapabilities | null,
+      getOutputSync: (zoneId) => options.zoneManager.getOutputSyncStatus(zoneId),
+      getGroup: (zoneId) => options.zoneManager.getGroupMembership(zoneId),
+      // The same setter the admin route uses, so both transports write the config identically.
+      setOutputDelay: (zoneId, delayMs, clientId) =>
+        setOutputDelayMs(
+          {
+            configPort: options.configPort,
+            setOutputLatency: (id, ms, target) =>
+              options.zoneManager.setOutputLatency(id, ms, target),
+          },
+          zoneId,
+          delayMs,
+          clientId,
+        ),
       getAudioAnalysisFormat: (zoneId) => {
         const output = options.resolveStreamFormat(zoneId)?.output;
         return output

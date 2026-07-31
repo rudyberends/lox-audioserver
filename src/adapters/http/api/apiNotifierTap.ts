@@ -15,7 +15,13 @@
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ApiEvent } from '@/domain/zones/apiTypes';
 import type { ApiEventHub } from '@/adapters/http/api/apiEventHub';
-import type { ApiAudioFormat, ApiOutputCapabilities, ApiPowerState, ApiVolumeLimits } from '@/domain/zones/apiTypes';
+import type {
+  ApiAudioFormat,
+  ApiOutputCapabilities,
+  ApiOutputSync,
+  ApiPowerState,
+  ApiVolumeLimits,
+} from '@/domain/zones/apiTypes';
 import {
   toApiZoneState,
   type OutputDeviceLookup,
@@ -33,6 +39,8 @@ export function withApiEvents(
     device?: OutputDeviceLookup;
     outputProtocol?: OutputProtocolLookup;
     outputCapabilities?: (zoneId: number) => ApiOutputCapabilities | null;
+    outputSync?: (zoneId: number) => ApiOutputSync | null;
+    group?: (zoneId: number) => { leader: number; members: number[] } | null;
     serviceLabel?: ServiceLabelLookup;
     inputLabel?: InputLabelLookup;
     streamFormat?: (zoneId: number) => ApiAudioFormat | null;
@@ -66,6 +74,8 @@ export function withApiEvents(
             device: lookups.device,
             outputProtocol: lookups.outputProtocol,
             outputCapabilities: lookups.outputCapabilities,
+            outputSync: lookups.outputSync,
+            group: lookups.group,
             serviceLabel: lookups.serviceLabel,
             inputLabel: lookups.inputLabel,
             streamFormat: lookups.streamFormat,

@@ -95,6 +95,7 @@ import './contentMetadataHarvestCache.test';
 import './queueBuilderArtistFlatten.test';
 import './nowPlayingMetadata.test';
 import './publicApi.test';
+import './outputDelay.test';
 import './serverHealth.test';
 import './mqttTopics.test';
 import './contentItemKind.test';

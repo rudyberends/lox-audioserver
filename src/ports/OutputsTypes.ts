@@ -11,6 +11,83 @@ export type PreferredOutput = {
 };
 
 /**
+ * How this output's audio is timed against the device it plays on.
+ *
+ * Two different things live here and they are worth keeping apart. `state` and `delayMs` are the
+ * *agreement*: the device says whether it locked onto our clock, and `delayMs` is the delay its own
+ * chain adds after the audio port, which it compensates for by playing earlier. The rest is the
+ * *measurement* of how well we are holding up our end — how far ahead of the playhead frames are
+ * handed over, how regularly, and whether our modelled timeline is slipping against the frame
+ * clock. All of it was already computed to schedule audio; it just had nowhere to go but the log.
+ *
+ * Every field except `delayMs` is null while nothing is streaming: they describe a stream in
+ * flight, and reporting the last stream's numbers as if they were current would be worse than
+ * saying nothing.
+ */
+export type OutputSyncStatus = {
+  /**
+   * What the device reports about its own clock lock. 'unknown' when it has not said yet;
+   * 'external_source' means it switched to its own input and is not playing ours.
+   */
+  state: 'synchronized' | 'error' | 'external_source' | 'unknown';
+  /**
+   * Delay this device's chain adds *after* its audio output, in ms — an amplifier or active speaker.
+   *
+   * Not an offset that makes the room play later. The client subtracts it from every timestamp
+   * (spec: "Clients subtract their static_delay_ms from server timestamps before scheduling
+   * playback"), so it plays that much *earlier* and the sound lands on time despite the downstream
+   * delay. Raise it for a room that arrives late; a room that arrives early has nothing to declare.
+   * Positive only — the protocol has no negative form and states none should ever be needed.
+   *
+   * This is the value *this server* asked for. `deviceDelayMs` is what the device says it has.
+   */
+  delayMs: number;
+  /**
+   * The static delay the device last declared, or null if it never has.
+   *
+   * Not the same fact as `delayMs`, and not a confirmation of it. A client applies `set_static_delay`
+   * immediately — that is the protocol — and simply does not mention the value again until the next
+   * state message it sends for some other reason, so this trails a write by design. Watching the two
+   * converge tells you nothing except that you just changed something.
+   *
+   * What it is good for: a client persists this locally and may hold a value nobody here asked for —
+   * an installer's offset for the amplifier it is wired to — which is why the send-ahead is sized by
+   * the larger of the two. Whether a client accepts the command at all is a separate question, and
+   * its advertised `supported_commands` answers that one, not this number.
+   */
+  deviceDelayMs: number | null;
+  /** The bottom of the band frames are scheduled in: the least lead the sender will allow. */
+  targetLeadMs: number;
+  /**
+   * How far above the target the sender is allowed to run before it backpressures.
+   *
+   * Reported because without it `leadMs` reads as an error. The loop only waits once the lead
+   * exceeds target + this, so it *settles at the top of the band* — a healthy sender sits at
+   * `targetLeadMs + leadMarginMs`, not at `targetLeadMs`, and comparing against the target alone
+   * makes a by-design 100 ms look like 100 ms of trouble.
+   */
+  leadMarginMs: number;
+  /** The lead achieved on the most recent frame. Healthy inside [target, target + margin]. */
+  leadMs: number | null;
+  /**
+   * The lowest lead seen in the last couple of seconds — the floor, and the only health signal here.
+   *
+   * Two earlier attempts at this measured designed behaviour and read as faults. Send-interval
+   * "jitter" measured the loop's deliberate sleep (>100 ms, on a perfectly steady stream). The
+   * spread between the highest and lowest lead measured the backpressure sawtooth: the loop bursts
+   * frames until the lead reaches the top of its band and then waits, so per-frame leads sweep the
+   * whole band and the spread simply *is* the band width (~100 ms, always).
+   *
+   * The floor is what is left, and it is the thing that matters: while it stays at or above
+   * `targetLeadMs` the client always has audio in hand. A floor sinking toward zero is a server
+   * losing the race, and that is audible as dropouts.
+   */
+  leadMinMs: number | null;
+  /** Our modelled timeline against the frame clock. A number that keeps growing means slipping. */
+  driftMs: number | null;
+};
+
+/**
  * A request to play an alert as a native overlay on an output (e.g. Sonos AudioClip).
  * The output ducks the current playback, plays the clip, and restores playback itself —
  * the engine stream is never stopped. Only non-looping alerts are offered this way.
@@ -87,6 +164,14 @@ export interface ZoneOutput {
   getAlertHandoffDrainMs?(): number | null;
   /** Optional hot-update for output latency (e.g. snapcast/squeezelite/sendspin). */
   setLatencyMs?(ms: number): Promise<void> | void;
+  /**
+   * Optional timing relationship with the device, for outputs that have one to report.
+   *
+   * Only protocols that schedule audio against a shared clock can answer this — Sendspin
+   * negotiates one with the client and the client says whether it locked on. An output that
+   * just hands bytes to a renderer has nothing to say and should not implement it.
+   */
+  getSyncStatus?(): OutputSyncStatus | null;
   /** Optional HTTP streaming preferences for outputs that pull via HTTP (e.g. DLNA/Cast). */
   getHttpPreferences?(): HttpPreferences | null;
   /**

@@ -12,6 +12,7 @@ import { COVER_ART_NOW_PLAYING_SIZE } from '../src/shared/coverArt';
 import { ServerLifecycle } from '../src/domain/server/lifecycle';
 import type { HealthReport } from '../src/domain/server/health';
 import type { ZoneState } from '../src/domain/zones/zoneState';
+import type { ApiOutputSync } from '../src/domain/zones/apiTypes';
 import type { NotifierPort } from '../src/ports/NotifierPort';
 import type { AudioAnalysisEvent } from '../src/application/audio/audioAnalysisService';
 
@@ -109,6 +110,8 @@ let inputSelections: Array<{ zoneId: number; inputId: string }> = [];
 let alertCalls: Array<Record<string, unknown>> = [];
 let alertResult: { success: boolean; action: 'on' | 'off'; reason?: string } | null = null;
 let analysisListener: ((event: AudioAnalysisEvent) => void) | null = null;
+/** What the delay route passed to the setter, so a test can assert the clamp and the target. */
+let delaysSet: Array<{ zoneId: number; delayMs: number; clientId: string | null }> = [];
 let lifecycle = new ServerLifecycle();
 let health: HealthReport;
 const favItems = [{ id: 1, name: 'Radio Paradise', source: 'tunein:s1', coverUrl: 'c' }];
@@ -130,6 +133,7 @@ function harness(): Harness {
   alertCalls = [];
   alertResult = { success: true, action: 'on' };
   analysisListener = null;
+  delaysSet = [];
   lifecycle = new ServerLifecycle();
   lifecycle.markReady();
   health = {
@@ -161,6 +165,26 @@ function harness(): Harness {
     getVolumeLimits: (zoneId) => (zoneId === 3 ? { max: 70, default: 20, step: 2 } : undefined),
     getOutputProtocol: (zoneId) => (zoneId === 9 ? 'sonos' : 'sendspin'),
     getOutputCapabilities: () => null,
+    // Ungrouped: several tests below assert `group: null`, and the projection's own group handling
+    // is covered directly in `toApiZoneState` tests rather than through the handler.
+    getGroup: () => null,
+    getOutputSync: (zoneId) =>
+      zoneId === 3
+        ? {
+            state: 'synchronized' as const,
+            delayMs: 40,
+            deviceDelayMs: 40,
+            targetLeadMs: 250,
+            leadMarginMs: 100,
+            leadMs: 268,
+            leadMinMs: 252,
+            driftMs: -2,
+          }
+        : null,
+    setOutputDelay: async (zoneId, delayMs, clientId) => {
+      delaysSet.push({ zoneId, delayMs, clientId: clientId ?? null });
+      return { delayMs, applied: zoneId === 3 };
+    },
     getFavorites: async (zoneId, start, limit) =>
       zoneId === 3
         ? { zoneId, items: favItems.slice(start, start + limit), start, total: favItems.length }
@@ -399,6 +423,27 @@ test('projection surfaces the sync group with the leader first', () => {
   assert.deepEqual(api.group, { leader: 3, members: [3, 7, 9] });
 });
 
+test('the group comes from the group tracker, because zone state never carries it', () => {
+  /*
+   * The gap this closes: `syncedzones` is typed on `ZoneState` and *never assigned* — the Loxone
+   * projection computes it per emit and puts it on its own payload. So this API answered
+   * `group: null` for every zone, always, and grouping was invisible on it. Nothing failed; you had
+   * to group two rooms and read one back to find out.
+   */
+  const grouped = toApiZoneState(zoneState({ id: 3 }), {
+    group: (zoneId) => (zoneId === 3 ? { leader: 28, members: [28, 27] } : null),
+  });
+  assert.deepEqual(grouped.group, { leader: 28, members: [28, 27] }, 'leader first, as the tracker has it');
+
+  // A lone zone is not a group of one: `if (zone.group)` has to mean "playing with others".
+  assert.equal(
+    toApiZoneState(zoneState({ id: 3 }), { group: () => ({ leader: 3, members: [3] }) }).group,
+    null,
+    'a group of one is no group',
+  );
+  assert.equal(toApiZoneState(zoneState({ id: 3 }), { group: () => null }).group, null);
+});
+
 test('projection exposes power only through powerState', () => {
   const api = toApiZoneState(zoneState({ power: 'off' }));
   assert.deepEqual(api.powerState, {
@@ -552,7 +597,24 @@ test('the analysis stream announces its subscription and serializes spectrum bin
   assert.equal(res.statusCode, 200);
   assert.match(String(res.headers['content-type']), /text\/event-stream/);
   const ready = JSON.parse(res.body.split('data: ')[1].split('\n')[0]);
-  assert.deepEqual(ready, { type: 'analysis.ready', zoneId: 3, rateMax: 30, types: ['spectrum', 'pitch'] });
+  /*
+   * The geometry is part of the announcement, not something a client mirrors by hand: the u16
+   * amplitudes mean nothing without the dB window they span, and the bins mean nothing without the
+   * frequency range they were binned over. A player that guessed drew 1 kHz at 26% of the width
+   * where it belonged at 54%.
+   */
+  assert.deepEqual(ready, {
+    type: 'analysis.ready',
+    zoneId: 3,
+    rateMax: 30,
+    types: ['spectrum', 'pitch'],
+    // The fallback: this harness reports no stream format, and a consumer still has to be told
+    // what the analyzer was built for rather than being left to assume.
+    format: { sampleRate: 44100, channels: 2, bitDepth: 16 },
+    floorDb: -60,
+    fullScale: 65535,
+    spectrum: { n_disp_bins: 16, scale: 'log', f_min: 40, f_max: 16000 },
+  });
 
   analysisListener?.({ type: 'spectrum', bins: new Uint16Array([1, 2, 3]), timestampUs: 123 });
   const messages = res.body
@@ -560,6 +622,55 @@ test('the analysis stream announces its subscription and serializes spectrum bin
     .slice(1)
     .map((message) => JSON.parse(message.split('\n')[0]));
   assert.deepEqual(messages[1], { type: 'spectrum', bins: [1, 2, 3], timestampUs: 123 });
+});
+
+test('a zone reports how its audio is timed against the device', async () => {
+  /*
+   * Two different things live in `sync` and the distinction is the point: `state` and `delayMs` are
+   * the agreement with the device, the rest is how well the server is keeping it. A protocol with
+   * no clock says nothing at all — an absent `sync` must not read as "out of sync".
+   */
+  const h = harness();
+  const res = await call(h, 'GET', `${API_ROOT}/zones/3`);
+  assert.deepEqual(JSON.parse(res.body).output.sync, {
+    state: 'synchronized',
+    delayMs: 40,
+    deviceDelayMs: 40,
+    targetLeadMs: 250,
+    leadMarginMs: 100,
+    leadMs: 268,
+    leadMinMs: 252,
+    driftMs: -2,
+  });
+});
+
+test('the output delay is settable, clamped, and reports whether it reached a live output', async () => {
+  const h = harness();
+  const res = await call(h, 'PUT', `${API_ROOT}/zones/3/output/delay`, { delayMs: 120 });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(JSON.parse(res.body), { delayMs: 120, applied: true, clientId: null });
+  assert.deepEqual(delaysSet, [{ zoneId: 3, delayMs: 120, clientId: null }]);
+
+  // Out of range is clamped rather than refused: the caller asked for "as far as it goes".
+  await call(h, 'PUT', `${API_ROOT}/zones/3/output/delay`, { delayMs: 99_999 });
+  assert.equal(delaysSet[1]?.delayMs, 10_000);
+  await call(h, 'PUT', `${API_ROOT}/zones/3/output/delay`, { delayMs: -5 });
+  assert.equal(delaysSet[2]?.delayMs, 0);
+
+  // A satellite gets its own offset — a subwoofer needs a different one from the speakers above it.
+  await call(h, 'PUT', `${API_ROOT}/zones/3/output/delay`, { delayMs: 30, clientId: 'sub-living' });
+  assert.deepEqual(delaysSet[3], { zoneId: 3, delayMs: 30, clientId: 'sub-living' });
+
+  // Not a number is a refusal, not a silent 0: that would move the speaker without being asked.
+  const bad = await call(h, 'PUT', `${API_ROOT}/zones/3/output/delay`, { delayMs: 'soon' });
+  assert.equal(bad.statusCode, 400);
+  assert.equal(JSON.parse(bad.body).error, 'invalid-delay');
+  assert.equal(delaysSet.length, 4, 'a rejected value never reaches the setter');
+
+  const missing = await call(h, 'PUT', `${API_ROOT}/zones/77/output/delay`, { delayMs: 10 });
+  assert.equal(missing.statusCode, 404);
+  const wrongMethod = await call(h, 'GET', `${API_ROOT}/zones/3/output/delay`);
+  assert.equal(wrongMethod.statusCode, 405);
 });
 
 test('a zone change reaches the stream as a full zone, never a patch', async () => {
@@ -698,6 +809,16 @@ test('a zone reports which device its output plays to', async () => {
     protocol: 'sendspin',
     device: { id: '02:8C:54:A9:DC:AC', name: 'Test1', connected: true },
     capabilities: null,
+    sync: {
+      state: 'synchronized',
+      delayMs: 40,
+      deviceDelayMs: 40,
+      targetLeadMs: 250,
+      leadMarginMs: 100,
+      leadMs: 268,
+      leadMinMs: 252,
+      driftMs: -2,
+    },
   });
 });
 
@@ -846,6 +967,49 @@ test('anything other than the position sends the whole zone', () => {
   assert.deepEqual(seen.map((e) => e.type), ['zone.changed', 'zone.changed', 'zone.changed']);
   assert.equal(seen[1].zone.volume, 55);
   assert.equal(seen[2].zone.track.title, 'Next');
+});
+
+test('a moving lead or jitter is a reading, not a zone change', () => {
+  /*
+   * `output.sync` carries live measurements — the achieved lead, the jitter, the drift — and they
+   * change on every frame. Counting them as a difference would make every one-second position tick
+   * a full `zone.changed`, which is the traffic a progress tick exists to avoid. The *agreement*
+   * (locked or not, the configured delay, the lead being aimed at) is state and must still get one.
+   */
+  const hub = new ApiEventHub();
+  const seen: any[] = [];
+  hub.subscribe((e) => seen.push(e));
+  const at = (time: number, sync: Partial<ApiOutputSync> = {}) =>
+    toApiZoneState(zoneState({ time }), {
+      outputProtocol: () => 'sendspin',
+      outputSync: () => ({
+        state: 'synchronized',
+        delayMs: 0,
+        deviceDelayMs: 0,
+        targetLeadMs: 250,
+        leadMarginMs: 100,
+        leadMs: 264,
+        leadMinMs: 251,
+        driftMs: -1,
+        ...sync,
+      }),
+    });
+
+  hub.publishZoneChanged(at(10));
+  assert.equal(seen[0].type, 'zone.changed');
+
+  // The clock ticked and every measurement moved with it: still just a progress tick.
+  hub.publishZoneChanged(at(11, { leadMs: 331, leadMinMs: 243, driftMs: -25 }));
+  assert.equal(seen[1].type, 'zone.progress', 'measurements alone are not a change');
+
+  // The delay was set: that is state, and every client has to hear it.
+  hub.publishZoneChanged(at(12, { leadMs: 302, delayMs: 60 }));
+  assert.equal(seen[2].type, 'zone.changed', 'the configured delay is state');
+  assert.equal(seen[2].zone.output.sync.delayMs, 60);
+
+  // So is losing the clock.
+  hub.publishZoneChanged(at(13, { leadMs: 288, delayMs: 60, state: 'error' }));
+  assert.equal(seen[3].type, 'zone.changed', 'losing the lock is state');
 });
 
 test('progress is tracked per zone, so one zone cannot mask another', () => {

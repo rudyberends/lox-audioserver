@@ -127,6 +127,75 @@ export interface ApiOutput {
     connected: boolean;
   };
   capabilities?: ApiOutputCapabilities | null;
+  /**
+   * How this zone's audio is timed against the device, for protocols that can say.
+   *
+   * Null for outputs that just hand bytes to a renderer and have no clock agreement to report —
+   * an absent `sync` means "this protocol cannot answer", not "it is out of sync".
+   */
+  sync?: ApiOutputSync | null;
+}
+
+/**
+ * The timing relationship with the device.
+ *
+ * `state` and `delayMs` are the agreement: the device reports whether it locked onto the shared
+ * clock, and `delayMs` is the delay its own chain adds after the audio port — settable, see
+ * `PUT /zones/{id}/output/delay`. The rest is the measurement of how well the server is holding
+ * its end up, and every one of those is null while nothing is streaming, because they describe a
+ * stream in flight.
+ *
+ * Read `leadMs` against the **band** `[targetLeadMs, targetLeadMs + leadMarginMs]`, not against the
+ * target alone. The sender only backpressures at the top of that band, so a healthy stream settles
+ * near `targetLeadMs + leadMarginMs` — comparing to the target by itself makes a by-design 100 ms
+ * look like 100 ms of trouble. What tells you it is *healthy* is `leadMinMs` — the floor holding at or above the target; a `driftMs` that
+ * keeps growing is a timeline slipping rather than one bad moment.
+ */
+export interface ApiOutputSync {
+  /**
+   * The device's own verdict on its clock. 'unknown' until it has said; 'external_source' means it
+   * switched to its own input and is not playing what this zone sends.
+   */
+  state: 'synchronized' | 'error' | 'external_source' | 'unknown';
+  /**
+   * Delay this device's chain adds *after* its audio output, in ms — an amplifier or active speaker.
+   *
+   * Raising it makes that room play **earlier**, not later: the client subtracts it from every
+   * timestamp and so compensates for the delay downstream of it. Use it on a room that arrives late.
+   * Positive only. See `PUT /zones/{id}/output/delay`.
+   *
+   * This is what this server asked for; `deviceDelayMs` is what the device says it has.
+   */
+  delayMs: number;
+  /**
+   * The delay the device last declared for itself, or null if it never has.
+   *
+   * Not a confirmation of `delayMs`. A device applies the command immediately — that is how the
+   * protocol works — and does not mention the value until the next state message it sends for some
+   * other reason, so this trails every write by design; do not build a "not applied yet" indicator
+   * on the difference. It is here because a device can hold a value nobody asked it for, persisted
+   * locally for the amplifier it is wired to. Whether it accepts the command at all is answered by
+   * its advertised `supported_commands`.
+   */
+  deviceDelayMs: number | null;
+  /** The bottom of the band frames are scheduled in: the least lead the sender allows. */
+  targetLeadMs: number;
+  /** How far above the target the sender may run before it backpressures. See above. */
+  leadMarginMs: number;
+  /** The lead achieved on the most recent frame, or null when not streaming. */
+  leadMs: number | null;
+  /**
+   * The lowest lead seen in the last couple of seconds — the floor.
+   *
+   * The health signal, and deliberately not a spread or a send-interval jitter: the sender bursts
+   * frames until the lead reaches the top of its band and then waits, so both of those measure a
+   * designed oscillation and read as faults on a perfectly steady stream. While this floor stays at
+   * or above `targetLeadMs`, the client always has audio in hand; a floor sinking toward zero is
+   * audible as dropouts.
+   */
+  leadMinMs: number | null;
+  /** The modelled timeline against the frame clock; a growing value means slipping. */
+  driftMs: number | null;
 }
 
 export interface ApiOutputCapabilities {

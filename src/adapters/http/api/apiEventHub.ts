@@ -78,14 +78,34 @@ export class ApiEventHub {
 }
 
 /**
- * True when two snapshots of a zone differ in nothing but `position`. Compared by
- * serialising the rest: cheaper to keep correct than a field-by-field check that
+ * True when two snapshots of a zone differ in nothing but `position` and the live timing readings.
+ *
+ * Compared by serialising the rest: cheaper to keep correct than a field-by-field check that
  * silently stops covering a field somebody adds later.
+ *
+ * `output.sync`'s measurements — the achieved lead, its floor, the drift — are *readings*, not
+ * state. They change on every frame, so counting them as a difference would turn every one-second
+ * position tick into a full `zone.changed`, which is the exact traffic `zone.progress` exists to
+ * avoid. What stays compared is the part that is genuinely state: whether the device is locked to
+ * the clock, the delay configured for it, and the band the lead is held in. A change in any of those is
+ * a zone change and clients hear about it immediately.
  */
 function onlyPositionMoved(a: ApiZoneState, b: ApiZoneState): boolean {
   if (a.position === b.position) {
     return false;
   }
-  const strip = (z: ApiZoneState): string => JSON.stringify({ ...z, position: 0 });
+  const strip = (z: ApiZoneState): string =>
+    JSON.stringify({
+      ...z,
+      position: 0,
+      ...(z.output?.sync
+        ? {
+            output: {
+              ...z.output,
+              sync: { ...z.output.sync, leadMs: 0, leadMinMs: 0, driftMs: 0 },
+            },
+          }
+        : {}),
+    });
   return strip(a) === strip(b);
 }

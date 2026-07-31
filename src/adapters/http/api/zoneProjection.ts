@@ -19,6 +19,7 @@ import type {
   ApiVolumeLimits,
   ApiOutput,
   ApiOutputCapabilities,
+  ApiOutputSync,
   ApiPlaybackState,
   ApiRepeatMode,
   ApiSource,
@@ -237,13 +238,33 @@ function withoutRoutingTag(sourceName: string | undefined): string {
 }
 
 /** Loxone leaves `syncedzones` empty (or absent) for an ungrouped zone. */
-function toGroup(state: ZoneState): ApiGroup | null {
+/**
+ * Which zones play as one, leader first.
+ *
+ * Read from a lookup rather than from `ZoneState`, because it is not in there. `state.syncedzones`
+ * is typed on `ZoneState` and never assigned: the Loxone projection *computes* it per emit from the
+ * group tracker and puts it on its own payload. So this used to answer `null` for every zone, always
+ * — grouping simply was not visible on this API, and the only way to notice was to group two rooms
+ * and read the zone back.
+ *
+ * The lookup is the group tracker, the same authority the Loxone side and the grouping commands use,
+ * so all three agree by construction rather than by two projections happening to match.
+ */
+function toGroup(state: ZoneState, groupLookup?: GroupLookup): ApiGroup | null {
+  const group = groupLookup?.(state.id);
+  if (group && group.members.length > 1) {
+    return { leader: group.leader, members: [...group.members] };
+  }
+  // Kept as a fallback for any caller that does hand a state carrying it.
   const members = state.syncedzones ?? [];
   if (members.length === 0) {
     return null;
   }
   return { leader: members[0]!, members: [...members] };
 }
+
+/** A zone's group, leader first, or null/undefined when it plays on its own. */
+export type GroupLookup = (zoneId: number) => { leader: number; members: number[] } | null | undefined;
 
 /**
  * The device identity is not in ZoneState — it comes from the zone's output config
@@ -262,6 +283,7 @@ function toOutput(
   deviceLookup?: OutputDeviceLookup,
   protocolLookup?: OutputProtocolLookup,
   capabilitiesLookup?: (zoneId: number) => ApiOutputCapabilities | null,
+  syncLookup?: (zoneId: number) => ApiOutputSync | null,
 ): ApiOutput | null {
   // `state.outputProtocol` is only ever filled in by the Loxone notifier at emit time,
   // never stored, so reading it here reported no output at all — even mid-playback.
@@ -273,7 +295,10 @@ function toOutput(
   const device = deviceLookup?.(state.id);
   const capabilities = capabilitiesLookup?.(state.id) ?? null;
   const output = device ? { protocol, device } : { protocol };
-  return capabilitiesLookup ? { ...output, capabilities } : output;
+  const withCapabilities = capabilitiesLookup ? { ...output, capabilities } : output;
+  // Only present when a lookup was supplied at all: a projection built without one is not
+  // claiming the output has no clock, it simply was not asked.
+  return syncLookup ? { ...withCapabilities, sync: syncLookup(state.id) } : withCapabilities;
 }
 
 /**
@@ -289,6 +314,10 @@ export type ZoneProjectionLookups = {
   device?: OutputDeviceLookup;
   outputProtocol?: OutputProtocolLookup;
   outputCapabilities?: (zoneId: number) => ApiOutputCapabilities | null;
+  /** How the output is timed against its device; null for protocols with no clock agreement. */
+  outputSync?: (zoneId: number) => ApiOutputSync | null;
+  /** Which zones play as one. Not in `ZoneState`; see toGroup. */
+  group?: GroupLookup;
   serviceLabel?: ServiceLabelLookup;
   /** Names a configured line-in, so `source.name` is its name and not the server's MAC. */
   inputLabel?: InputLabelLookup;
@@ -320,8 +349,14 @@ export function toApiZoneState(state: ZoneState, lookups: ZoneProjectionLookups 
     shuffle: Boolean(state.plshuffle),
     track: toTrack(state),
     source: toSource(state, lookups.serviceLabel, lookups.inputLabel),
-    group: toGroup(state),
-    output: toOutput(state, lookups.device, lookups.outputProtocol, lookups.outputCapabilities),
+    group: toGroup(state, lookups.group),
+    output: toOutput(
+      state,
+      lookups.device,
+      lookups.outputProtocol,
+      lookups.outputCapabilities,
+      lookups.outputSync,
+    ),
     format: lookups.streamFormat?.(state.id) ?? null,
     // Only present when something went wrong, so `if (zone.error)` is the whole check.
     ...(error ? { error } : {}),

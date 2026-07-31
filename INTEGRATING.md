@@ -170,6 +170,41 @@ It is reported whether or not the zone is playing and whether or not the device 
 reachable, so you can map your own devices onto zones from a single read. `connected`
 tells you the current link state; the id stays put either way.
 
+`output.sync` says how this zone's audio is timed against the device, for protocols that keep a
+shared clock. It is `null` or absent for the rest: an output that just hands bytes to a renderer has
+no clock agreement to report on, so **an absent `sync` does not mean "out of sync"**.
+
+```json
+"output": {
+  "protocol": "sendspin",
+  "sync": {
+    "state": "synchronized",
+    "delayMs": 0,
+    "targetLeadMs": 250,
+    "leadMs": 334,
+    "jitterAvgMs": 34,
+    "jitterMaxMs": 99,
+    "driftMs": -25
+  }
+}
+```
+
+Two different things live in there. `state` and `delayMs` are the **agreement**: the device reports
+whether it locked onto the clock (`synchronized`, `error`, `external_source` when it switched to its
+own input, or `unknown` before it has said), and `delayMs` is the delay its own chain adds after the
+audio port — raising it makes the room play *earlier*, see below. The rest is the **measurement** of how well the server is keeping its end, and each is `null`
+while nothing is streaming, because they describe a stream in flight.
+
+Read `leadMs` against `targetLeadMs`: every frame is scheduled to arrive that far ahead of when it
+must be heard, so a lead well under target is a server falling behind rather than a device problem.
+`driftMs` compares the server's modelled timeline against the frame clock — a value that keeps
+growing is a slipping timeline; one that sits still is fine, whatever its sign.
+
+Only the agreement is treated as state. A change in `state`, `delayMs` or `targetLeadMs` arrives as
+a `zone.changed`; the measurements move every frame and would turn every progress tick into a full
+zone, so they ride along on whatever `zone.changed` comes next rather than causing one. Poll
+`GET /zones/{id}` if you want them live.
+
 `source.kind` is one of `track`, `radio`, `playlist`, `linein`, `airplay`, `spotify`,
 `bluetooth`, `unknown`. **Treat the list as open**: new kinds may be added, and a client
 must not fail on one it does not recognise — that is what `unknown` is a placeholder for.
@@ -786,6 +821,55 @@ outputs of one protocol, so unless the server allows mixed groups a member on an
 protocol cannot join — it comes back under `rejected` with a reason, instead of leaving
 you to diff what you asked for against the next zone event. An empty `members` list
 ungroups; there is no separate verb for leaving.
+
+### Output delay
+
+`PUT /zones/{id}/output/delay` with `{"delayMs": 60}` declares how much delay a zone's speaker chain
+adds *after* its audio output — an amplifier, an active speaker. It is the only output setting this
+API writes.
+
+**It points the opposite way from its name.** The client subtracts the value from every timestamp
+before scheduling playback, so raising it makes that room play **earlier**, compensating for the
+delay downstream of it. That is what lines up a room arriving late; a room arriving *early* has
+nothing to declare, and the protocol has no negative form (`0–5000` at the device). To pull a group
+together, raise the value on the room that lags — not on the one that leads.
+
+The server keeps its own send-ahead in step: it schedules that client's audio further in advance by
+the same amount, so the buffer headroom stays what it was. You can see that in `output.sync` —
+`targetLeadMs` grows with `delayMs`.
+
+The value is **persisted and applied live**: Sendspin pushes it to the client without restarting the
+stream, so it is audible immediately and survives a reboot. Out-of-range values are clamped to
+0–10000 ms rather than refused, because "as far as it goes" is a real request; a value that is not a
+number is a `400`, because moving a speaker by accident is worse than an error.
+
+One caveat: the device owns this setting. It persists it locally, may keep a different value per
+audio output, and only honours the command if it advertised support for it — so what you write here
+is a request. `output.sync` therefore reports both sides: `delayMs` is what this server asked for and
+`deviceDelayMs` is what the device last declared, or `null` if it never has.
+
+`deviceDelayMs` is **not** a confirmation of `delayMs`. A device applies the command immediately —
+that is how the protocol works — and does not mention the value until the next state message it sends
+for some other reason, so the two differ after every write until something else happens. Do not build
+a "not applied yet" indicator on the difference; it only tells you that you just wrote.
+
+What it is good for is the case where a device holds a value nobody here asked for, persisted locally
+for the amplifier it is wired to. Whether a device accepts the command at all is a different question,
+answered by the `supported_commands` it advertises.
+
+Pass `clientId` to target one Sendspin satellite instead of the zone's own output — a subwoofer
+under a pair of speakers needs its own offset.
+
+```
+PUT /zones/3/output/delay   {"delayMs": 60}
+    -> 200 {"delayMs": 60, "applied": true, "clientId": null}
+```
+
+`applied: false` means the value was stored but no live output took it: the zone's protocol has no
+delay, or the named satellite is not configured. That is a success, not a failure — the config is
+the durable part, and a device connecting later picks it up. There is no `GET`: the current value is
+`output.sync.delayMs` on the zone, and a second spelling of one value is a second thing to keep
+true. The write publishes a `zone.changed`, so every other client sees it without polling.
 
 ### The queue
 
