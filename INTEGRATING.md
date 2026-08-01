@@ -180,10 +180,11 @@ no clock agreement to report on, so **an absent `sync` does not mean "out of syn
   "sync": {
     "state": "synchronized",
     "delayMs": 0,
+    "deviceDelayMs": null,
     "targetLeadMs": 250,
+    "leadMarginMs": 150,
     "leadMs": 334,
-    "jitterAvgMs": 34,
-    "jitterMaxMs": 99,
+    "leadMinMs": 271,
     "driftMs": -25
   }
 }
@@ -192,11 +193,25 @@ no clock agreement to report on, so **an absent `sync` does not mean "out of syn
 Two different things live in there. `state` and `delayMs` are the **agreement**: the device reports
 whether it locked onto the clock (`synchronized`, `error`, `external_source` when it switched to its
 own input, or `unknown` before it has said), and `delayMs` is the delay its own chain adds after the
-audio port — raising it makes the room play *earlier*, see below. The rest is the **measurement** of how well the server is keeping its end, and each is `null`
-while nothing is streaming, because they describe a stream in flight.
+audio port — raising it makes the room play *earlier*, see below. `deviceDelayMs` is what the device
+says it has, which is not a confirmation of `delayMs`: a device applies the command at once but only
+mentions the value in its next state message, so this trails every write by design. Do not build a
+"not applied yet" indicator on the difference.
 
-Read `leadMs` against `targetLeadMs`: every frame is scheduled to arrive that far ahead of when it
-must be heard, so a lead well under target is a server falling behind rather than a device problem.
+The rest is the **measurement** of how well the server is keeping its end, and each is `null` while
+nothing is streaming, because they describe a stream in flight.
+
+Frames are scheduled to arrive inside a **band**, not at a single target: `targetLeadMs` is its
+floor — the least lead the sender allows — and `leadMarginMs` is how far above that it may run
+before it backpressures. `leadMs` is the lead the most recent frame achieved, so it oscillates
+through the band by design as the sender bursts and then waits.
+
+**`leadMinMs` is the health signal**, not `leadMs`: the lowest lead seen over the last couple of
+seconds. While that floor stays at or above `targetLeadMs` the client always has audio in hand; a
+floor sinking toward zero is what a listener hears as dropouts. It is deliberately a floor rather
+than a jitter average or spread — those measure the designed oscillation above and report a
+perfectly steady stream as a fault.
+
 `driftMs` compares the server's modelled timeline against the frame clock — a value that keeps
 growing is a slipping timeline; one that sits still is fine, whatever its sign.
 
@@ -228,7 +243,18 @@ format when it was declared by the provider or successfully probed:
   "bitPerfect": true,
   "dspApplied": false,
   "source": { "codec": "flac", "sampleRate": 96000, "bitDepth": 24, "channels": 2, "bitrate": null, "highRes": true },
-  "output": { "codec": "pcm", "sampleRate": 44100, "bitDepth": 24, "channels": 2, "bitrate": null, "highRes": true }
+  "output": { "codec": "pcm", "sampleRate": 44100, "bitDepth": 24, "channels": 2, "bitrate": null, "highRes": true },
+  "processing": {
+    "resampled": true,
+    "resampler": { "name": "soxr", "precision": 28, "cutoff": 0.91 },
+    "requantised": false,
+    "channelsRemapped": false,
+    "reencoded": false,
+    "equalizer": null,
+    "gainDb": null,
+    "delayMs": null,
+    "crossfading": false
+  }
 }
 ```
 
@@ -243,6 +269,28 @@ lossy sources such as MP3 and AAC, even when their output parameters happen to m
 `format.dspApplied` indicates whether the server performed conversion, filtering, gain, delay or
 re-encoding. An AAC source can therefore be `bitPerfect: false` and `dspApplied: false`.
 `format.source.highRes` and `format.output.highRes` are true above 48 kHz or above 16-bit depth.
+
+`format.processing` is `dspApplied` itemised — what was done to the audio, stage by stage, so a
+client can show *why* a stream is not bit-perfect rather than only that it is not.
+
+| field | meaning |
+| --- | --- |
+| `resampled` | The resampler ran: rate, channels or depth changed, or a filter forced the path. |
+| `resampler` | Which one and how it was configured, when it ran. `null` otherwise. |
+| `requantised` | The sample depth changed — the source declared one, the output carries another. |
+| `channelsRemapped` | The channel count changed: a downmix or an upmix. |
+| `reencoded` | The output codec re-encodes rather than carrying samples (`aac`, `mp3`, `opus`). |
+| `equalizer` | The zone's 10-band EQ, when any band is off zero. Gains in dB, low band first. |
+| `gainDb` | Gain by origin: `source` is the provider's own loudness normalisation (Spotify sends one), `output` a fixed trim. `null` when both are zero. |
+| `delayMs` | Pre-delay for aligning this source against another output. `null` when none. |
+| `crossfading` | True while a crossfade is blending, which requantises by definition. |
+
+It is **`null`-able rather than defaulted to a chain of `false`**, and the distinction carries
+information: `null` means the engine cannot say, so a server that does not report a chain stays
+distinguishable from one whose chain is genuinely empty.
+
+The zone's volume is deliberately not in here. It is applied at the device rather than in this
+pipeline, so listing it as processing would claim an alteration this server did not make.
 
 `error` is present only when something went wrong, so `if (zone.error)` is the whole check.
 It exists because `POST /play` answers `204` for a uri the server cannot resolve — resolution
@@ -329,6 +377,34 @@ Sendspin protocol; Sendspin and browser clients consume the same central analysi
 Analysis is realtime data rather than zone state and is therefore deliberately not included in
 `zone.changed` or persisted in the zone object.
 
+### Waveforms
+
+The other half of the same job, for the shape of a whole track rather than the sound of this
+instant — a scrubber that shows where the loud parts are.
+
+```bash
+curl -s "http://server:7090/api/v1/waveform?uri=<source id>"
+```
+
+```json
+{ "uri": "library://local/…/01 - Don't Panic.flac", "buckets": [0, 3, 11, 42, 40, 38, …], "durationMs": 224000 }
+```
+
+**Keyed by `uri`, not by zone** — deliberately. The same track has the same shape in every room,
+so hanging it off `/zones/{id}/waveform` would serve identical bytes under a dozen URLs and make
+it uncacheable in a browser. A zone's `source.id` is exactly what goes in here, and the response
+echoes it back so a late reply can be matched to the track that is playing *now*.
+
+It is served `Cache-Control: private, max-age=86400`. That is safe to lean on rather than
+re-fetching: the bytes derive from a file whose size and mtime are part of its audiopath, so a
+file that changes is recomputed under a different response rather than staling this one.
+
+`404 no-waveform` means there is no shape to draw, and covers two cases a caller can neither
+tell apart nor needs to: a live stream that can never have one, and a file not yet analysed.
+Both mean *draw what you have and ask again later*, so treat it as an empty state rather than an
+error — and note that an empty `buckets` array would be a different answer, a track that really
+is silent. A missing or blank `uri` is `400 missing-uri`.
+
 ## Reading
 
 ```
@@ -345,6 +421,8 @@ GET /api/v1/browse                  →  the root: one entry per service
 GET /api/v1/browse/{id}             →  { "container": …, "items": [ … ], "start": 0, "total": 42 }
 GET /api/v1/items/{id}              →  one item                404 not-found
 GET /api/v1/search?q=…              →  { "items": { "track": [ … ] }, … }
+GET /api/v1/playlists               →  { "items": [ … ], "total": 1 }
+GET /api/v1/waveform?uri=…          →  { "uri": …, "buckets": [ … ] }   404 no-waveform
 GET /api/v1/inputs                  →  { "inputs": [ … ] }
 GET /api/v1/health                  →  { "status": "ok"|"degraded"|"unhealthy", … }
 GET /api/v1/ready                   →  { "ready": true, "phase": "ready" }   503 when not
@@ -413,6 +491,12 @@ Neither endpoint needs a session.
 remote CDN, a data uri, or a url only reachable from the server. That is fine if you read
 state and update an `<img>` each time, but not if you want one address you can point a
 wall panel or a Loxone visualisation at and forget about.
+
+`animatedCoverUrl` sits beside it on a track, a queue entry and a browse item, when the provider
+has motion artwork for that release. It is **absent rather than empty** when there is none, which
+is the common case — so treat it as an enhancement over `coverUrl` and never as a replacement:
+`coverUrl` is always the one to fall back to, and a client that ignores `animatedCoverUrl`
+entirely is correct, just stiller.
 
 `GET /api/v1/zones/{id}/cover` is that address. It names only the zone, returns the image
 bytes, and follows whatever that zone is playing:
@@ -662,6 +746,40 @@ Every service appears **under its own name** — `applemusic`, `soundcloud`, `li
 is no Spotify disguise here. That disguise exists because the Loxone clients know exactly
 one streaming service; it is a translation in that adapter and it stops there.
 
+```json
+{ "services": [
+  { "id": "applemusic", "name": "Apple Music",
+    "rootId": "b1.c.category.YXBwbGVtdXNpYw.cm9vdA",
+    "searchableKinds": ["track", "album", "artist", "playlist"] }
+]}
+```
+
+`rootId` is the id to browse that service's top level — `GET /browse/{rootId}` — so you can jump
+straight into one service without walking the root listing. `searchableKinds` is what its search
+can actually answer; **empty means it cannot search at all**, which is why asking `radio` for
+tracks returns nothing rather than failing.
+
+`GET /browse` with no id lists the services themselves, so a client that just wants a tree can
+start there and never read `/services`.
+
+### Sections
+
+A listing may carry a `sections` array alongside `items`, when the provider groups its own
+children — an Apple Music root does, the browse root does not:
+
+```json
+{ "container": { … }, "items": [ … ], "sections": [ { "id": "…", "name": "Recently Added", "items": [ … ] } ], "start": 0, "total": 8 }
+```
+
+**`sections` is not a grouping of `items` — it is separate content.** On the Apple Music root the
+two do not overlap at all: `items` holds the eight menu entries you can walk into (Albums,
+Artists, Playlists…), while `sections` holds eighty-odd editorial rows (New Releases, Recently
+Played, Made For You). A client that renders only `items` shows a menu and silently drops
+everything the provider actually put on its front page.
+
+So render both, in either order, and expect no duplicates. `total` counts `items`; section
+contents are whole and not paged.
+
 ### Items
 
 ```json
@@ -736,6 +854,45 @@ rather than assuming they are alike. `service` narrows which providers are asked
 
 `services` in the response says who answered, with `failed: true` on any that errored — so
 a provider outage looks like a partial answer rather than "no matches".
+
+### Playlists
+
+Playlists you make here, on the local library. Streaming services keep their own — those are
+read-only and appear through `/browse` like any other container.
+
+```
+GET    /api/v1/playlists          ?start=&limit=   →  { "items": [ … ], "total": 1 }
+POST   /api/v1/playlists          {"name": "…"}    →  201 with the playlist
+PATCH  /api/v1/playlists/{id}     {"name": "…"}    →  200, renamed
+DELETE /api/v1/playlists/{id}                      →  204
+
+POST   /api/v1/playlists/{id}/items  {"id": "<item id>"}        append
+PATCH  /api/v1/playlists/{id}/items  {"from": 0, "to": 3}       move
+DELETE /api/v1/playlists/{id}/items  {"position": 0}            remove
+```
+
+```json
+{ "id": "b1.c.playlist.bGlicmFyeQ.…", "name": "Sunday", "tracks": 5,
+  "coverUrl": "http://server:7090/music/local/…/cover.jpg" }
+```
+
+A playlist's `id` **is a browse id**, so `GET /browse/{id}` lists its tracks and
+`POST /zones/{id}/play` with it plays the lot. There is no separate "read a playlist" route
+because there does not need to be one.
+
+Two things differ from the queue, and both catch people out:
+
+- **Entries are addressed by position, not by an id.** `{"position": 0}` removes the first
+  track; `{"from": 0, "to": 3}` moves it. A queue hands out a per-entry id because the same
+  track can sit in it twice and you must be able to say which; a playlist is edited as a list,
+  so the index is the handle. Read the playlist back after a move rather than assuming your
+  own arithmetic matched.
+- **Only library tracks can be added.** Handing it an `applemusic:` or `soundcloud:` item id
+  answers `400 invalid-playlist-item`. A local playlist stores local audio; a streaming track
+  is not the server's to keep, and a reference that dies when a subscription lapses would be
+  worse than the refusal.
+
+Errors: `invalid-name`, `playlist-not-found`, `invalid-playlist-item`, `playlist-item-not-found`.
 
 ### Inputs
 
