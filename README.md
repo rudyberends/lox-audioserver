@@ -4,9 +4,6 @@
 music — local files, streaming services, radio, line-in — and plays it in sync on the speakers you
 already own, over almost any protocol they speak.
 
-It also includes a complete Loxone Audio Server implementation, so a Miniserver can drive it exactly
-like the real thing.
-
 > **Status: 4.0 beta.** In active use and actively developed. Releases are tagged from the `beta`
 > branch, and breaking changes can still land between betas — check the release notes before updating.
 
@@ -51,8 +48,7 @@ server — the web player, Loxone, DLNA devices and Subsonic apps alike.
 
 ### Streaming services
 
-- **Spotify** — first-class, multi-account
-- **Apple Music**, **Tidal**, **Deezer**, **YouTube Music**, **YouTube**, **SoundCloud**
+- **Spotify**, **Apple Music**, **Tidal**, **Deezer**, **YouTube Music**, **YouTube**, **SoundCloud**
 - **Music Assistant** (as a source, exposing its own providers)
 
 Each configured account becomes its own browsable service, so several accounts of the same service can
@@ -90,7 +86,7 @@ Zones are optional. Skip this section entirely if you only want to serve your co
 devices — that is what Access does. Loxone is the exception: it drives zones by design, so with the
 Loxone integration on, zones are always active and come from the Miniserver.
 
-A zone is a single device you play music on, named after the room it stands in. Adding zones gets you:
+A zone is a single device you play music on. Adding zones gets you:
 
 - **Central control**: every zone in one place, in the web player, the Admin UI, or a Loxone app
 - **Grouping**: several zones in sync
@@ -103,9 +99,6 @@ Each zone plays to exactly one device, plus:
 
 You can add up to 24 zones, the same ceiling a Loxone Audio Server has.
 
-"Player" in this document only ever means the built-in web player — the app a person uses. The API uses
-the same word this section does: see [Integrating with sonn core](INTEGRATING.md).
-
 ### Outputs
 
 - Google Cast (Chromecast)
@@ -115,7 +108,6 @@ the same word this section does: see [Integrating with sonn core](INTEGRATING.md
 - **Sendspin** — the preferred one, see below
 - Snapcast
 - Squeezelite
-- Spotify Connect
 - Music Assistant players
 
 #### The goal: your file, unchanged, at the speaker
@@ -125,7 +117,7 @@ it was recorded. Every step in between — resampling, changing bit depth, re-en
 lose something or alter it, so the server's job is to do none of them unless something makes that
 impossible.
 
-**Sendspin is the only output where that can be guaranteed**, because it is the only one whose format is
+**Sendspin is THE output where that can be guaranteed**, because its format is
 negotiated per track. A Sendspin client tells the server which sample rates and bit depths it accepts,
 and the server then follows the *source*: a 24-bit/192 kHz FLAC is streamed as 24-bit/192 kHz, a 16-bit
 CD rip as 16-bit/44.1 kHz, with no resampler in the path at all. Play the same album to a fixed-format
@@ -152,7 +144,7 @@ is the output's ceiling talking, not a setting you missed.
 
 #### And if you just want music
 
-Then use whatever output you already have. A Chromecast in the kitchen, an old Sonos, a pair of Snapcast
+Then don't worry about all of this and use whatever output you already have. A Chromecast in the kitchen, an old Sonos, a pair of Snapcast
 speakers on a Raspberry Pi — all of it works, all of it sounds good, and none of it needs a thought about
 sample rates. The signal path is there for the day you get curious, not a bar you have to clear.
 
