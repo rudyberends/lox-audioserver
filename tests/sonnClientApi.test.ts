@@ -203,6 +203,45 @@ test('what the admin UI saves is what the device is told, on its next poll', asy
   assert.equal(desired.beoremote.zone_id, 28);
 });
 
+test('how a speaker applies volume reaches the device, and nonsense does not', async () => {
+  const { call, admin } = createHarness();
+  await call('POST', '/api/sonnclients/register', REGISTRATION);
+
+  await admin('PUT', '/sonnclients/sonn-kitchen-9e2f', {
+    players: [
+      {
+        clientId: 'sonn-kitchen-9e2f',
+        output: 'alsa:hw:CARD=CDCACM,DEV=0',
+        volumeControl: 'ALSA',
+        mixerElement: 'PCM',
+        mixerMapped: false,
+      },
+      {
+        clientId: 'sonn-kitchen-9e2f-2',
+        output: 'alsa:hw:CARD=DAC,DEV=0',
+        volumeControl: 'whatever the next version calls it',
+      },
+    ],
+  });
+
+  const desired = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', {
+      state: 'connected',
+      players: [],
+    })
+  ).json();
+
+  assert.equal(desired.players[0].volume_control, 'alsa');
+  assert.equal(desired.players[0].mixer_element, 'PCM');
+  // False is a decision, not an absence: this is the setting that keeps a mixer calibrated in dB
+  // from having a second perceptual curve laid on top of it.
+  assert.equal(desired.players[0].mixer_mapped, false);
+
+  // An unknown route becomes absent rather than an error, which the device reads as "decide for
+  // yourself" -- the sane outcome for a setting the hardware knows more about than this config does.
+  assert.equal(desired.players[1].volume_control, undefined);
+});
+
 test('a disabled device keeps polling and is told to play nothing', async () => {
   const { call, admin } = createHarness();
   await call('POST', '/api/sonnclients/register', REGISTRATION);
