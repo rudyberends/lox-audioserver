@@ -300,6 +300,9 @@ export class SonnClientApiHandler {
       buffer_ms: player.bufferMs,
       required_lead_time_ms: player.requiredLeadTimeMs,
       volume_hook: player.volumeHook,
+      volume_control: player.volumeControl,
+      mixer_element: player.mixerElement,
+      mixer_mapped: player.mixerMapped,
     };
   }
 

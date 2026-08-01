@@ -808,6 +808,26 @@ export interface SonnClientPlayerConfig {
    * speaker with real volume of its own; the client leaves its own mixer at unity.
    */
   volumeHook?: string;
+  /**
+   * Where the speaker applies volume.
+   *
+   * `auto` (the default) uses the sound card's own mixer when it has one and software gain when it
+   * does not — a speaker with real volume of its own should use it, and attenuating in software
+   * costs resolution the card would not have cost. The rest are for the exceptions: a card with a
+   * mixer nobody wants driven (`software`), or one where the script is the real control (`hook`).
+   */
+  volumeControl?: 'auto' | 'software' | 'alsa' | 'hook';
+  /** ALSA mixer element to drive. Absent means the device picks one. */
+  mixerElement?: string;
+  /**
+   * Whether volume percentages are spread perceptually across the mixer's range.
+   *
+   * Absent means the device works it out by reading the mixer, which is right for both kinds of
+   * hardware: a mixer that is linear in register steps needs the mapping, one already calibrated in
+   * dB (a B&O BeoLab reports 0-90 spanning -90..0 dB) must be addressed directly, or the percentage
+   * no longer corresponds to a known attenuation. Set it only for a card that reads wrongly.
+   */
+  mixerMapped?: boolean;
   /** Codec preference order. Absent means everything the client can decode. */
   codecs?: string[];
   /** Pin the advertised format. Only for hardware that genuinely accepts one rate. */

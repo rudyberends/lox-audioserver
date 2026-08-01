@@ -274,6 +274,9 @@ function sanitizePlayers(value: unknown): SonnClientPlayerConfig[] {
       volume: optionalNumber(entry.volume, 0, 100),
       muted: entry.muted === undefined ? undefined : entry.muted === true,
       volumeHook: optionalString(entry.volumeHook),
+      volumeControl: sanitizeVolumeControl(entry.volumeControl),
+      mixerElement: optionalString(entry.mixerElement),
+      mixerMapped: entry.mixerMapped === undefined ? undefined : entry.mixerMapped === true,
       codecs: asArray(entry.codecs)
         .map((codec) => optionalString(codec))
         .filter((codec): codec is string => !!codec),
@@ -284,6 +287,22 @@ function sanitizePlayers(value: unknown): SonnClientPlayerConfig[] {
       requiredLeadTimeMs: optionalNumber(entry.requiredLeadTimeMs, 0, 30_000),
     } satisfies SonnClientPlayerConfig;
   });
+}
+
+/**
+ * Where a speaker applies volume, or nothing at all.
+ *
+ * An unknown value becomes `undefined` rather than an error: absent means "decide on the device",
+ * which is the sane behaviour for a setting whose whole point is that the hardware knows better than
+ * this config file does.
+ */
+function sanitizeVolumeControl(
+  value: unknown,
+): SonnClientPlayerConfig['volumeControl'] | undefined {
+  const control = optionalString(value)?.toLowerCase();
+  return control === 'auto' || control === 'software' || control === 'alsa' || control === 'hook'
+    ? control
+    : undefined;
 }
 
 function sanitizeSources(value: unknown): SonnClientSourceConfig[] {
