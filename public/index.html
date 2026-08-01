@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>sonn</title>
+    <link rel="icon" type="image/svg+xml" href="/admin/favicon.svg" />
+    <!--
+      The front door.
+
+      `/` used to 302 into the console with `?chooser=1`, which handed the question "player or admin?" to
+      one of the two answers — so the console had to boot, sign you in and then ask where you wanted to be.
+      It is a question with two links in it, so it is a page with two links on it, served by the server
+      that owns both of them.
+
+      Deliberately one file with nothing in it: no script, no framework, no request that leaves this box.
+      An audioserver on a LAN with no route out has to be able to draw its own front door.
+    -->
+    <style>
+      /*
+       * The product's two faces, from the copies in `public/assets/fonts`.
+       *
+       * Both players and the console self-host the same pair; this page cannot reach either of their
+       * bundles (their filenames carry a build hash) so it keeps its own copy at a stable path. Typography
+       * is the strongest signal that these are one system, and the one screen that introduces all three of
+       * them should not be the one rendered in Arial.
+       */
+      @font-face {
+        font-family: 'Hanken Grotesk';
+        src: url('/assets/fonts/hanken-grotesk-var.woff2') format('woff2');
+        font-weight: 100 900;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: 'JetBrains Mono';
+        src: url('/assets/fonts/jetbrains-mono-var.woff2') format('woff2');
+        font-weight: 100 900;
+        font-display: swap;
+      }
+
+      /* The mark flies from here into whichever of the two you pick — see the same rule in both bundles. */
+      @view-transition {
+        navigation: auto;
+      }
+
+      :root {
+        --bg: #0a0c10;
+        --text: #edeef0;
+        --muted: #9ca3af;
+        --dim: #6b7280;
+        --accent: #4ade80;
+        --line: rgb(255 255 255 / 14%);
+        --sans: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', Helvetica, Arial, sans-serif;
+        --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+        --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+        color-scheme: dark;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        display: grid;
+        place-items: center;
+        min-height: 100svh;
+        margin: 0;
+        padding: 32px;
+        background: var(--bg);
+        /* The same faint glow overhead that both destinations have, so arriving is not a change of room. */
+        background-image: radial-gradient(120% 80% at 50% -10%, rgb(74 222 128 / 6%), transparent 60%);
+        color: var(--text);
+        font-family: var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      main {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        animation: rise 0.7s var(--ease) both;
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+      }
+
+      .mark {
+        width: 74px;
+        height: 59px;
+        color: var(--accent);
+        view-transition-name: sonn-mark;
+      }
+
+      .word {
+        margin: 20px 0 0;
+        font-size: 34px;
+        font-weight: 800;
+        letter-spacing: -0.04em;
+      }
+
+      /*
+       * A sentence, so it is set as one.
+       *
+       * The engraved mono caps in this product are for *labels* — `github`, `docs`, `technical`. What a
+       * thing is gets said in its own case, the same way `sonn` is not shouted either. The second half is
+       * a fact rather than a claim, so it steps back a shade rather than getting a line of its own.
+       */
+      .tag {
+        margin: 12px 0 0;
+        font-size: clamp(14px, 1.5vw, 16px);
+        color: var(--muted);
+        text-align: center;
+        text-wrap: balance;
+      }
+
+      .tag-quiet {
+        color: var(--dim);
+      }
+
+      /* Two doors either side of one hairline — the construction both corners of the product use. */
+      .doors {
+        display: flex;
+        align-items: stretch;
+        gap: clamp(28px, 6vw, 64px);
+        margin-top: clamp(44px, 9vh, 84px);
+      }
+
+      .door {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 9px;
+        padding: 10px 6px;
+        color: inherit;
+        text-decoration: none;
+        transition: transform 0.3s var(--ease);
+      }
+
+      .door:hover,
+      .door:focus-visible {
+        transform: translateY(-3px);
+      }
+
+      .door:focus-visible {
+        outline: 2px solid rgb(74 222 128 / 50%);
+        outline-offset: 6px;
+        border-radius: 4px;
+      }
+
+      .door-name {
+        font-size: clamp(26px, 5vw, 38px);
+        font-weight: 800;
+        letter-spacing: -0.035em;
+        color: var(--muted);
+        transition: color 0.2s;
+      }
+
+      .door:hover .door-name,
+      .door:focus-visible .door-name {
+        color: var(--text);
+      }
+
+      .door-sub {
+        max-width: 25ch;
+        /* Let the browser even out the two lines rather than filling the first and orphaning the rest. */
+        text-wrap: balance;
+        font-size: 12.5px;
+        line-height: 1.45;
+        color: var(--dim);
+        text-align: center;
+        transition: color 0.2s;
+      }
+
+      .door:hover .door-sub,
+      .door:focus-visible .door-sub {
+        color: var(--muted);
+      }
+
+      .rule {
+        width: 1px;
+        align-self: stretch;
+        background: var(--line);
+      }
+
+      /* On a phone the pair stacks, and the hairline lies down with it. */
+      @media (max-width: 520px) {
+        .doors {
+          flex-direction: column;
+          gap: 26px;
+        }
+
+        .rule {
+          width: 100%;
+          height: 1px;
+          align-self: auto;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        main {
+          animation: none;
+        }
+
+        .door {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <!-- The roofline over the level meter: the same drawing both bundles open with. -->
+      <svg class="mark" viewBox="8 12 84 68" aria-hidden="true" fill="currentColor">
+        <path d="M14 46 L50 18 L86 46" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
+        <rect x="20" y="63.1" width="2.17" height="5.78" rx="1.08" opacity="0.4" />
+        <rect x="25.78" y="59.5" width="2.17" height="13.01" rx="1.08" opacity="0.6" />
+        <rect x="31.57" y="61.66" width="2.17" height="8.67" rx="1.08" opacity="0.8" />
+        <rect x="37.35" y="58.05" width="2.17" height="15.9" rx="1.08" />
+        <rect x="46.03" y="56.6" width="2.89" height="18.8" rx="1.45" />
+        <rect x="54.69" y="58.05" width="2.17" height="15.9" rx="1.08" />
+        <rect x="60.48" y="60.94" width="2.17" height="10.12" rx="1.08" opacity="0.9" />
+        <rect x="66.26" y="58.77" width="2.17" height="14.46" rx="1.08" opacity="0.8" />
+        <rect x="72.05" y="62.38" width="2.17" height="7.23" rx="1.08" opacity="0.7" />
+        <rect x="77.83" y="63.83" width="2.17" height="4.34" rx="1.08" opacity="0.6" />
+      </svg>
+
+      <h1 class="word">sonn</h1>
+      <p class="tag">
+        Multiroom audio for your whole home. <span class="tag-quiet">Open source.</span>
+      </p>
+
+      <nav class="doors">
+        <a class="door" href="/player/">
+          <span class="door-name">Player</span>
+          <span class="door-sub">Listen in this browser, or control every room.</span>
+        </a>
+        <span class="rule" aria-hidden="true"></span>
+        <a class="door" href="/admin/">
+          <span class="door-name">Admin</span>
+          <span class="door-sub">Set up and manage your sonn core.</span>
+        </a>
+      </nav>
+    </main>
+  </body>
+</html>

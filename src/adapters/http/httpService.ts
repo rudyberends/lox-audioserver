@@ -713,11 +713,15 @@ export class HttpService {
       return;
     }
 
-    if (pathname === '/') {
-      res.writeHead(302, { Location: '/admin/?chooser=1' });
-      res.end();
-      return;
-    }
+    /*
+     * `/` is a page, not a redirect.
+     *
+     * It used to 302 into `/admin/?chooser=1`, which handed the question "player or admin?" to one of the
+     * two answers: the console had to boot and sign you in before it could ask you where you wanted to be,
+     * and the chooser it drew was a whole screen inside a bundle that exists for something else. The
+     * question has two links in it, so it is `public/index.html` — one file, no script, served by the
+     * server that owns both destinations. Falls through to the static handler below.
+     */
 
     if (pathname === '/sendspin') {
       res.writeHead(426, { 'Content-Type': 'text/plain' });
