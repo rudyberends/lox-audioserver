@@ -116,6 +116,7 @@ import './squeezeliteReconnect.test';
 import './loxoneZoneProjection.test';
 import './adminZoneStates.test';
 import './adminInfo.test';
+import './updateCheck.test';
 import './coverArtTuneIn.test';
 import type { ZoneConfig } from '../src/domain/config/types';
 import { applyZonePatch } from '../src/domain/zones/reducer';

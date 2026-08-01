@@ -20,8 +20,32 @@ import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
 import { buildAudioServersList } from '@/adapters/discovery/audioServersList';
 import { defaultConfig } from '@/adapters/http/adminApi/config/configHandlers';
+import { fetchUpstreamJson } from '@/adapters/http/adminApi/misc/upstreamJson';
+import { createUpdateChecker } from '@/adapters/http/adminApi/misc/updateCheck';
 
 const ADDON_PACKAGE_PREFIX = '@sonn-audio/node-';
+
+function ttlFromEnv(name: string, fallbackMs: number): number {
+  const raw = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw * 1000 : fallbackMs;
+}
+
+/**
+ * One checker for the whole process, so every admin browser, tab and device behind one
+ * IP shares a single set of upstream queries instead of each spending from the same
+ * GitHub budget on every page load.
+ *
+ * GitHub release lookups are rate-limited (60 req/h per IP unauthenticated, 5000 with
+ * a `GITHUB_TOKEN`) so core/UI/player tags refresh on a slow cadence. npm has no such
+ * limit, so component packages refresh fast — that is where "new version → button
+ * within ~a minute, no page refresh" comes from. Both TTLs are overridable (seconds).
+ */
+const updateChecker = createUpdateChecker({
+  fetchJson: fetchUpstreamJson,
+  declaredPackages: () => readDeclaredAddonPackages(),
+  githubTtlMs: ttlFromEnv('UPDATE_CHECK_GITHUB_TTL_S', 15 * 60 * 1000),
+  npmTtlMs: ttlFromEnv('UPDATE_CHECK_NPM_TTL_S', 60 * 1000),
+});
 
 type AdminUiUpdateRequest = { release?: string };
 
@@ -290,9 +314,8 @@ export function buildMiscRoutes(deps: MiscHandlerDeps): Route[] {
           }
         })();
         try {
-          // Caching, coalescing and stale-on-failure are handled per part inside
-          // ensureGithubPart / ensureNpmPart.
-          deps.sendJson(res, 200, await performUpdateCheck(force));
+          // Caching, coalescing, backoff and stale-on-failure live in the checker.
+          deps.sendJson(res, 200, await updateChecker.check(force));
         } catch (err) {
           deps.log.warn('update check failed', { err });
           deps.sendJson(res, 502, { error: 'update-check-failed' });
@@ -830,227 +853,12 @@ function detectReleaseChannel(): ReleaseChannel {
   return readPackageVersion().includes('-') ? 'beta' : 'stable';
 }
 
-/** Fetches and parses JSON over HTTPS, following redirects. */
-async function fetchJson(url: string, redirects = 0): Promise<unknown> {
-  if (redirects > 5) {
-    throw new Error(`Too many redirects while fetching ${url}`);
-  }
-  return new Promise((resolveOuter, rejectOuter) => {
-    const request = https.get(
-      url,
-      { headers: { 'User-Agent': 'sonn-core-bundle-fetch', Accept: 'application/vnd.github+json' } },
-      (response) => {
-        const status = response.statusCode ?? 0;
-        if ([301, 302, 303, 307, 308].includes(status) && response.headers.location) {
-          response.resume();
-          resolveOuter(fetchJson(response.headers.location, redirects + 1));
-          return;
-        }
-        if (status !== 200) {
-          response.resume();
-          rejectOuter(new Error(`GitHub API request failed (${status}) for ${url}`));
-          return;
-        }
-        let body = '';
-        response.setEncoding('utf8');
-        response.on('data', (chunk) => {
-          body += chunk;
-        });
-        response.on('end', () => {
-          try {
-            resolveOuter(JSON.parse(body));
-          } catch (err) {
-            rejectOuter(err instanceof Error ? err : new Error(String(err)));
-          }
-        });
-      },
-    );
-    request.on('error', rejectOuter);
-    request.setTimeout(4000, () => request.destroy(new Error(`Request timed out for ${url}`)));
-  });
-}
-
-// ---- Update availability check ----
-// Done server-side and cached so every admin browser/tab/device behind one IP
-// shares a single set of upstream queries, instead of each hammering GitHub
-// (60 req/h per IP, unauthenticated) and npm on every page load.
-
-type UpdateCheckLatest = {
-  core: string | null;
-  corePrerelease: string | null;
-  ui: string | null;
-  player: string | null;
-  components: Record<string, string>;
-  componentDescriptions: Record<string, string>;
-};
-
-type UpdateCheckResult = { latest: UpdateCheckLatest; checkedAt: string };
-
-// GitHub release lookups are rate-limited (60 req/h per IP, unauthenticated) so
-// the core/UI/player tags refresh on a slow cadence. npm has no such limit, so
-// component packages refresh fast — that is where "new version → button within
-// ~a minute, no page refresh" responsiveness comes from. Each part is cached and
-// coalesced, so concurrent browser polls never fan out into duplicate upstream
-// requests. Both TTLs are overridable via env (seconds).
-const GITHUB_CHECK_TTL_MS = ttlFromEnv('UPDATE_CHECK_GITHUB_TTL_S', 15 * 60 * 1000);
-const NPM_CHECK_TTL_MS = ttlFromEnv('UPDATE_CHECK_NPM_TTL_S', 60 * 1000);
-
-type GithubPart = { core: string | null; corePrerelease: string | null; ui: string | null; player: string | null };
-type NpmPart = { components: Record<string, string>; componentDescriptions: Record<string, string> };
-
-let githubCache: { data: GithubPart; at: number } | null = null;
-let npmCache: { data: NpmPart; at: number } | null = null;
-let githubInFlight: Promise<GithubPart> | null = null;
-let npmInFlight: Promise<NpmPart> | null = null;
-
-function ttlFromEnv(name: string, fallbackMs: number): number {
-  const raw = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isFinite(raw) && raw > 0 ? raw * 1000 : fallbackMs;
-}
-
-function stripV(tag: string | null | undefined): string | null {
-  const trimmed = (tag ?? '').trim().replace(/^v/i, '');
-  return trimmed || null;
-}
-
-async function fetchRepoLatestTag(repo: string): Promise<string | null> {
-  const base = `https://api.github.com/repos/${repo}`;
-  const tryUrl = async (url: string, pick: (data: unknown) => string | null): Promise<string | null> => {
-    try {
-      return pick(await fetchJson(url));
-    } catch {
-      return null;
-    }
-  };
-  return (
-    (await tryUrl(`${base}/releases/latest`, (d) => (d as { tag_name?: string })?.tag_name ?? null)) ??
-    (await tryUrl(`${base}/releases?per_page=1`, (d) =>
-      Array.isArray(d) ? (d[0] as { tag_name?: string })?.tag_name ?? null : null,
-    )) ??
-    (await tryUrl(`${base}/tags?per_page=1`, (d) =>
-      Array.isArray(d) ? (d[0] as { name?: string })?.name ?? null : null,
-    ))
-  );
-}
-
-async function fetchRepoLatestPrerelease(repo: string): Promise<string | null> {
-  try {
-    const data = await fetchJson(`https://api.github.com/repos/${repo}/releases?per_page=20`);
-    if (!Array.isArray(data)) return null;
-    const found = data.find(
-      (r) => r && typeof r === 'object' && (r as { prerelease?: boolean }).prerelease && !(r as { draft?: boolean }).draft,
-    );
-    return found ? (found as { tag_name?: string }).tag_name ?? null : null;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchNpmLatest(name: string): Promise<{ version: string | null; description: string | null }> {
-  try {
-    const data = (await fetchJson(`https://registry.npmjs.org/${name}`)) as {
-      'dist-tags'?: { latest?: string };
-      description?: string;
-    };
-    return { version: data['dist-tags']?.latest ?? null, description: data.description ?? null };
-  } catch {
-    return { version: null, description: null };
-  }
-}
-
-/** GitHub release tags for core/UI/player. Each lookup fails soft (null). */
-async function fetchGithubPart(): Promise<GithubPart> {
-  const [coreTag, corePrereleaseTag, uiTag, playerTag] = await Promise.all([
-    fetchRepoLatestTag('sonn-audio/core'),
-    fetchRepoLatestPrerelease('sonn-audio/core'),
-    fetchRepoLatestTag('sonn-audio/adminui'),
-    fetchRepoLatestTag('sonn-audio/player'),
-  ]);
-  return {
-    core: stripV(coreTag),
-    corePrerelease: stripV(corePrereleaseTag),
-    ui: stripV(uiTag),
-    player: stripV(playerTag),
-  };
-}
-
-/** Latest npm versions for the declared component packages. */
-async function fetchNpmPart(): Promise<NpmPart> {
-  const components: Record<string, string> = {};
-  const componentDescriptions: Record<string, string> = {};
-  await Promise.all(
-    Object.keys(readDeclaredAddonPackages()).map(async (name) => {
-      const { version, description } = await fetchNpmLatest(name);
-      if (version) components[name] = version;
-      if (description) componentDescriptions[name] = description;
-    }),
-  );
-  return { components, componentDescriptions };
-}
-
-/** Returns the cached part when fresh; otherwise refreshes (coalescing concurrent
- *  callers onto one fetch) and serves stale data if the refresh fails. */
-async function ensureGithubPart(force: boolean): Promise<GithubPart> {
-  if (!force && githubCache && Date.now() - githubCache.at < GITHUB_CHECK_TTL_MS) {
-    return githubCache.data;
-  }
-  if (!githubInFlight) {
-    githubInFlight = fetchGithubPart()
-      .then((data) => {
-        githubCache = { data, at: Date.now() };
-        return data;
-      })
-      .catch((err) => {
-        if (githubCache) return githubCache.data;
-        throw err;
-      })
-      .finally(() => {
-        githubInFlight = null;
-      });
-  }
-  return githubInFlight;
-}
-
-async function ensureNpmPart(force: boolean): Promise<NpmPart> {
-  if (!force && npmCache && Date.now() - npmCache.at < NPM_CHECK_TTL_MS) {
-    return npmCache.data;
-  }
-  if (!npmInFlight) {
-    npmInFlight = fetchNpmPart()
-      .then((data) => {
-        npmCache = { data, at: Date.now() };
-        return data;
-      })
-      .catch((err) => {
-        if (npmCache) return npmCache.data;
-        throw err;
-      })
-      .finally(() => {
-        npmInFlight = null;
-      });
-  }
-  return npmInFlight;
-}
-
-async function performUpdateCheck(force: boolean): Promise<UpdateCheckResult> {
-  const [github, npm] = await Promise.all([ensureGithubPart(force), ensureNpmPart(force)]);
-  return {
-    latest: {
-      core: github.core,
-      corePrerelease: github.corePrerelease,
-      ui: github.ui,
-      player: github.player,
-      components: npm.components,
-      componentDescriptions: npm.componentDescriptions,
-    },
-    checkedAt: new Date().toISOString(),
-  };
-}
-
 /** Newest prerelease tag that actually carries a server-dist asset — older betas
  *  predating this feature are skipped so we never resolve to a 404. */
 async function fetchLatestPrereleaseTag(): Promise<string | null> {
-  const data = await fetchJson(`https://api.github.com/repos/${SERVER_REPO}/releases?per_page=30`);
+  const data = await fetchUpstreamJson(
+    `https://api.github.com/repos/${SERVER_REPO}/releases?per_page=30`,
+  );
   if (!Array.isArray(data)) return null;
   for (const entry of data) {
     if (!entry || typeof entry !== 'object') continue;
