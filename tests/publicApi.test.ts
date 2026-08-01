@@ -352,6 +352,30 @@ async function call(
   return res;
 }
 
+/**
+ * Open one of the SSE routes, run the body against it, and close it afterwards.
+ *
+ * An SSE route holds a keep-alive timer for as long as its request is open, and only a `close` on
+ * the request clears it. A real client closing its connection emits that; a `Readable.from()` never
+ * does, so a stream a test opens stays open forever — and one repeating timer is enough to keep the
+ * whole suite's process from ever exiting, long after the last test passed. Closing here happens in
+ * a `finally` so a failing assertion reports as a failure instead of hanging the run.
+ */
+async function withStream(
+  h: Harness,
+  url: string,
+  body: (res: FakeResponse) => void | Promise<void>,
+): Promise<void> {
+  const req = makeRequest('GET', url);
+  const res = new FakeResponse();
+  await h.handler.handle(req, res as unknown as ServerResponse);
+  try {
+    await body(res);
+  } finally {
+    req.emit('close');
+  }
+}
+
 test('projection keeps Loxone vocabulary off the wire', () => {
   const api = toApiZoneState(zoneState({ mode: 'pause', plrepeat: 3, plshuffle: 1, time: 42.7 }));
 
@@ -585,54 +609,52 @@ test('GET /api/health reports status, version and uptime', async () => {
 
 test('the events stream opens with a full snapshot so clients render immediately', async () => {
   const h = harness();
-  const res = new FakeResponse();
-  await h.handler.handle(
-    makeRequest('GET', `${API_ROOT}/events`),
-    res as unknown as ServerResponse,
-  );
-  assert.equal(res.statusCode, 200);
-  assert.match(String(res.headers['Content-Type']), /text\/event-stream/);
+  await withStream(h, `${API_ROOT}/events`, (res) => {
+    assert.equal(res.statusCode, 200);
+    assert.match(String(res.headers['Content-Type']), /text\/event-stream/);
 
-  const first = JSON.parse(res.body.replace(/^data: /, '').trim());
-  assert.equal(first.type, 'server.ready');
-  assert.equal(first.zones[0].name, 'Kitchen');
+    const first = JSON.parse(res.body.replace(/^data: /, '').trim());
+    assert.equal(first.type, 'server.ready');
+    assert.equal(first.zones[0].name, 'Kitchen');
+  });
 });
 
 test('the analysis stream announces its subscription and serializes spectrum bins', async () => {
   const h = harness();
-  const res = await call(
+  await withStream(
     h,
-    'GET',
     `${API_ROOT}/zones/3/analysis?types=spectrum,pitch&rate=30&bins=16`,
-  );
-  assert.equal(res.statusCode, 200);
-  assert.match(String(res.headers['content-type']), /text\/event-stream/);
-  const ready = JSON.parse(res.body.split('data: ')[1].split('\n')[0]);
-  /*
-   * The geometry is part of the announcement, not something a client mirrors by hand: the u16
-   * amplitudes mean nothing without the dB window they span, and the bins mean nothing without the
-   * frequency range they were binned over. A player that guessed drew 1 kHz at 26% of the width
-   * where it belonged at 54%.
-   */
-  assert.deepEqual(ready, {
-    type: 'analysis.ready',
-    zoneId: 3,
-    rateMax: 30,
-    types: ['spectrum', 'pitch'],
-    // The fallback: this harness reports no stream format, and a consumer still has to be told
-    // what the analyzer was built for rather than being left to assume.
-    format: { sampleRate: 44100, channels: 2, bitDepth: 16 },
-    floorDb: -60,
-    fullScale: 65535,
-    spectrum: { n_disp_bins: 16, scale: 'log', f_min: 40, f_max: 16000 },
-  });
+    (res) => {
+      assert.equal(res.statusCode, 200);
+      assert.match(String(res.headers['content-type']), /text\/event-stream/);
+      const ready = JSON.parse(res.body.split('data: ')[1].split('\n')[0]);
+      /*
+       * The geometry is part of the announcement, not something a client mirrors by hand: the u16
+       * amplitudes mean nothing without the dB window they span, and the bins mean nothing without
+       * the frequency range they were binned over. A player that guessed drew 1 kHz at 26% of the
+       * width where it belonged at 54%.
+       */
+      assert.deepEqual(ready, {
+        type: 'analysis.ready',
+        zoneId: 3,
+        rateMax: 30,
+        types: ['spectrum', 'pitch'],
+        // The fallback: this harness reports no stream format, and a consumer still has to be told
+        // what the analyzer was built for rather than being left to assume.
+        format: { sampleRate: 44100, channels: 2, bitDepth: 16 },
+        floorDb: -60,
+        fullScale: 65535,
+        spectrum: { n_disp_bins: 16, scale: 'log', f_min: 40, f_max: 16000 },
+      });
 
-  analysisListener?.({ type: 'spectrum', bins: new Uint16Array([1, 2, 3]), timestampUs: 123 });
-  const messages = res.body
-    .split('data: ')
-    .slice(1)
-    .map((message) => JSON.parse(message.split('\n')[0]));
-  assert.deepEqual(messages[1], { type: 'spectrum', bins: [1, 2, 3], timestampUs: 123 });
+      analysisListener?.({ type: 'spectrum', bins: new Uint16Array([1, 2, 3]), timestampUs: 123 });
+      const messages = res.body
+        .split('data: ')
+        .slice(1)
+        .map((message) => JSON.parse(message.split('\n')[0]));
+      assert.deepEqual(messages[1], { type: 'spectrum', bins: [1, 2, 3], timestampUs: 123 });
+    },
+  );
 });
 
 test('a zone reports how its audio is timed against the device', async () => {
@@ -686,18 +708,18 @@ test('the output delay is settable, clamped, and reports whether it reached a li
 
 test('a zone change reaches the stream as a full zone, never a patch', async () => {
   const h = harness();
-  const res = new FakeResponse();
-  await h.handler.handle(makeRequest('GET', `${API_ROOT}/events`), res as unknown as ServerResponse);
-  res.body = '';
+  await withStream(h, `${API_ROOT}/events`, (res) => {
+    res.body = '';
 
-  h.hub.publishZoneChanged(toApiZoneState(zoneState({ title: 'Next song' })));
+    h.hub.publishZoneChanged(toApiZoneState(zoneState({ title: 'Next song' })));
 
-  const event = JSON.parse(res.body.replace(/^data: /, '').trim());
-  assert.equal(event.type, 'zone.changed');
-  assert.equal(event.zone.track.title, 'Next song');
-  // A full zone means clients need no prior state to interpret an event.
-  assert.equal(event.zone.volume, 40);
-  assert.equal(event.zone.state, 'playing');
+    const event = JSON.parse(res.body.replace(/^data: /, '').trim());
+    assert.equal(event.type, 'zone.changed');
+    assert.equal(event.zone.track.title, 'Next song');
+    // A full zone means clients need no prior state to interpret an event.
+    assert.equal(event.zone.volume, 40);
+    assert.equal(event.zone.state, 'playing');
+  });
 });
 
 test('closing a stream unsubscribes it', async () => {
@@ -846,11 +868,11 @@ test('an event describes a zone exactly as a read does', async () => {
   // If the event stream omitted output.device, a client would watch it appear and
   // disappear depending on which path it last heard from.
   const h = harness();
-  const res = new FakeResponse();
-  await h.handler.handle(makeRequest('GET', `${API_ROOT}/events`), res as unknown as ServerResponse);
-  const ready = JSON.parse(res.body.replace(/^data: /, '').trim());
-  const read = (await call(h, 'GET', `${API_ROOT}/zones/3`)).json();
-  assert.deepEqual(ready.zones[0], read, 'snapshot and read agree');
+  await withStream(h, `${API_ROOT}/events`, async (res) => {
+    const ready = JSON.parse(res.body.replace(/^data: /, '').trim());
+    const read = (await call(h, 'GET', `${API_ROOT}/zones/3`)).json();
+    assert.deepEqual(ready.zones[0], read, 'snapshot and read agree');
+  });
 });
 
 // The path carries the version. Additive changes are safe without one, but a field
@@ -935,11 +957,11 @@ test('a source says whether it can be seeked', async () => {
 
 test('an event reports limits and seekability like a read does', async () => {
   const h = harness();
-  const res = new FakeResponse();
-  await h.handler.handle(makeRequest('GET', `${API_ROOT}/events`), res as unknown as ServerResponse);
-  const ready = JSON.parse(res.body.replace(/^data: /, '').trim());
-  const read = (await call(h, 'GET', `${API_ROOT}/zones/3`)).json();
-  assert.deepEqual(ready.zones[0], read);
+  await withStream(h, `${API_ROOT}/events`, async (res) => {
+    const ready = JSON.parse(res.body.replace(/^data: /, '').trim());
+    const read = (await call(h, 'GET', `${API_ROOT}/zones/3`)).json();
+    assert.deepEqual(ready.zones[0], read);
+  });
 });
 
 // A zone.changed is ~550 bytes and a progress tick fires every second per playing
@@ -1971,13 +1993,10 @@ test('the events snapshot leaves them out too', async () => {
   // Repeating a tab's state here would give every listener churn about somebody else's browser.
   const h = harness();
   h.states.set(9000, zoneState({ id: 9000, name: 'A tab' }));
-  const res = new FakeResponse();
-  await h.handler.handle(
-    makeRequest('GET', `${API_ROOT}/events`),
-    res as unknown as ServerResponse,
-  );
-  const snapshot = JSON.parse(res.body.replace(/^data: /, '').split('\n')[0]!);
-  assert.deepEqual(snapshot.zones.map((z: any) => z.id), [3]);
+  await withStream(h, `${API_ROOT}/events`, (res) => {
+    const snapshot = JSON.parse(res.body.replace(/^data: /, '').split('\n')[0]!);
+    assert.deepEqual(snapshot.zones.map((z: any) => z.id), [3]);
+  });
 });
 
 test('a tab finds itself through destinations, where it is private to it', async () => {

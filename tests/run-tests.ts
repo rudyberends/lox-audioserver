@@ -1216,6 +1216,15 @@ async function run(): Promise<void> {
   if (failures > 0) {
     process.exitCode = 1;
   }
+
+  /*
+   * The opposite failure mode to the guards above: a test that leaves a repeating timer or an open
+   * socket behind keeps the loop alive after the last result is in, and the run never ends. That is
+   * worse in CI than a failing test — `npm test` sits there until the job's own timeout hours later,
+   * with a green summary already printed. The verdict is complete at this point, so say it and go.
+   * The write callback fires once stdout has drained, so a piped or redirected summary is not cut off.
+   */
+  process.stdout.write('', () => process.exit(process.exitCode ?? 0));
 }
 
 void run();
