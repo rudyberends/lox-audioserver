@@ -80,7 +80,12 @@ async function mountStorage(cfg: StorageConfig, dir: string): Promise<void> {
   }
 
   const unc = `//${cfg.server}/${cfg.folder}`;
-  const options: string[] = ['rw', 'file_mode=0644', 'dir_mode=0755', 'iocharset=utf8'];
+  // No iocharset here: CIFS already defaults to UTF-8. Forcing iocharset=utf8
+  // breaks mounts on Linux 6.6+, where nls_utf8 is built into the kernel instead
+  // of a loadable module, so mount.cifs aborts with "iocharset utf8 not found"
+  // before any SMB negotiation (#321). A share that needs a different charset can
+  // still pass iocharset=… through the per-storage options field below.
+  const options: string[] = ['rw', 'file_mode=0644', 'dir_mode=0755'];
   const inlineCreds: string[] = [];
   let credentialsPath: string | undefined;
 
@@ -155,7 +160,7 @@ async function mountStorage(cfg: StorageConfig, dir: string): Promise<void> {
   } catch (primaryErr) {
     // If credentials file was used, try inline username/password as a fallback (matches simple CLI mount).
     if (inlineCreds.length) {
-      const inlineOptions = ['rw', 'file_mode=0644', 'dir_mode=0755', 'iocharset=utf8', ...inlineCreds];
+      const inlineOptions = ['rw', 'file_mode=0644', 'dir_mode=0755', ...inlineCreds];
       try {
         await tryMountWithFallback(inlineOptions);
         return;
