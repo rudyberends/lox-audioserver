@@ -19,6 +19,9 @@
     <link rel="preload" href="assets/fonts/hanken-grotesk-var.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="assets/fonts/jetbrains-mono-var.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="assets/site.css" />
+    <!-- The one inline script: mark the page as scripted before first paint, so entrance
+         states only ever hide things when something is actually going to reveal them. -->
+    <script>document.documentElement.classList.add('js');</script>
   </head>
   <body>
     <!-- Reading progress — a hairline of accent across the very top. -->
@@ -64,28 +67,35 @@
     <main id="top">
       <!-- ============================================================= hero -->
       <section class="hero">
-        <!-- The identity, as weather: aurora overhead, a live spectrum along the ground. -->
+        <!-- The identity, as weather: aurora overhead, a 3D sea of samples along the ground. -->
         <div class="hero-aurora" aria-hidden="true"></div>
-        <canvas class="hero-spectrum" id="spectrum" aria-hidden="true"></canvas>
+        <canvas class="hero-wave" id="wave" aria-hidden="true"></canvas>
 
         <div class="wrap hero-in">
-          <div class="hero-copy">
-            <!-- The mark, alive: the same 10-bar meter the logo is built from, actually metering. -->
+          <div class="hero-copy" id="hero-copy">
+            <!-- The mark draws itself: roofline first, then its meter rises into place. -->
             <svg class="hero-mark" id="hero-mark" viewBox="8 12 84 68" aria-hidden="true" fill="currentColor">
-              <path d="M14 46 L50 18 L86 46" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
-              <rect x="20" y="63.1" width="2.17" height="5.78" rx="1.08" opacity="0.4" />
-              <rect x="25.78" y="59.5" width="2.17" height="13.01" rx="1.08" opacity="0.6" />
-              <rect x="31.57" y="61.66" width="2.17" height="8.67" rx="1.08" opacity="0.8" />
-              <rect x="37.35" y="58.05" width="2.17" height="15.9" rx="1.08" />
-              <rect x="46.03" y="56.6" width="2.89" height="18.8" rx="1.45" />
-              <rect x="54.69" y="58.05" width="2.17" height="15.9" rx="1.08" />
-              <rect x="60.48" y="60.94" width="2.17" height="10.12" rx="1.08" opacity="0.9" />
-              <rect x="66.26" y="58.77" width="2.17" height="14.46" rx="1.08" opacity="0.8" />
-              <rect x="72.05" y="62.38" width="2.17" height="7.23" rx="1.08" opacity="0.7" />
-              <rect x="77.83" y="63.83" width="2.17" height="4.34" rx="1.08" opacity="0.6" />
+              <path id="mark-roof" class="mark-roof" d="M14 46 L50 18 L86 46" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
+              <g class="mark-bars">
+                <rect x="20" y="63.1" width="2.17" height="5.78" rx="1.08" opacity="0.4" />
+                <rect x="25.78" y="59.5" width="2.17" height="13.01" rx="1.08" opacity="0.6" />
+                <rect x="31.57" y="61.66" width="2.17" height="8.67" rx="1.08" opacity="0.8" />
+                <rect x="37.35" y="58.05" width="2.17" height="15.9" rx="1.08" />
+                <rect x="46.03" y="56.6" width="2.89" height="18.8" rx="1.45" />
+                <rect x="54.69" y="58.05" width="2.17" height="15.9" rx="1.08" />
+                <rect x="60.48" y="60.94" width="2.17" height="10.12" rx="1.08" opacity="0.9" />
+                <rect x="66.26" y="58.77" width="2.17" height="14.46" rx="1.08" opacity="0.8" />
+                <rect x="72.05" y="62.38" width="2.17" height="7.23" rx="1.08" opacity="0.7" />
+                <rect x="77.83" y="63.83" width="2.17" height="4.34" rx="1.08" opacity="0.6" />
+              </g>
             </svg>
 
-            <h1>One server.<br />Every room.<br /><em>Your speakers.</em></h1>
+            <!-- Each line steps out from behind its own baseline, one after the other. -->
+            <h1>
+              <span class="line" style="--l: 0"><span class="line-in">One server.</span></span>
+              <span class="line" style="--l: 1"><span class="line-in">Every room.</span></span>
+              <span class="line" style="--l: 2"><span class="line-in"><em>Your speakers.</em></span></span>
+            </h1>
 
             <p class="lede">
               sonn collects your music — local library, Spotify, Apple&nbsp;Music, Tidal, radio, even the
@@ -430,121 +440,133 @@
               it just works.
             </p>
           </div>
+        </div>
 
-          <!--
-            The mark, unfolded. The logo is a roofline over a level meter; this is the same
-            drawing with the rooms put back in — and the server in the basement, where it lives.
-          -->
-          <figure class="house rise" aria-label="A house with five rooms playing music from one sonn server in the basement">
-            <svg viewBox="0 0 640 476" role="img">
-              <!-- roofline — the logo's own stroke -->
-              <path class="h-roof" d="M36 168 L320 30 L604 168" />
+        <!--
+          The mark, unfolded — as scrollytelling. The logo is a roofline over a level meter;
+          scroll, and this drawing performs its own construction: the roof draws itself, the
+          server boots in the basement, packets rise, and the rooms come online one by one.
+          Without JS (or with reduced motion) the finished scene simply stands there.
+        -->
+        <div class="scrolly" id="house-scrolly">
+          <div class="scrolly-pin">
+            <div class="wrap">
+              <figure class="house" aria-label="A house with five rooms playing music from one sonn server in the basement">
+                <svg viewBox="0 0 640 476" role="img">
+                  <!-- roofline — the logo's own stroke, drawn live -->
+                  <path class="h-roof" id="h-roof" d="M36 168 L320 30 L604 168" />
 
-              <!-- shell -->
-              <rect class="h-wall" x="68" y="168" width="504" height="276" rx="6" />
-              <line class="h-line" x1="68" y1="288" x2="572" y2="288" />
-              <line class="h-line" x1="68" y1="400" x2="572" y2="400" />
-              <!-- upstairs dividers -->
-              <line class="h-line" x1="236" y1="168" x2="236" y2="288" />
-              <line class="h-line" x1="404" y1="168" x2="404" y2="288" />
-              <!-- downstairs divider -->
-              <line class="h-line" x1="320" y1="288" x2="320" y2="400" />
+                  <!-- shell -->
+                  <g class="h-shell" id="h-shell">
+                    <rect class="h-wall" x="68" y="168" width="504" height="276" rx="6" />
+                    <line class="h-line" x1="68" y1="288" x2="572" y2="288" />
+                    <line class="h-line" x1="68" y1="400" x2="572" y2="400" />
+                    <line class="h-line" x1="236" y1="168" x2="236" y2="288" />
+                    <line class="h-line" x1="404" y1="168" x2="404" y2="288" />
+                    <line class="h-line" x1="320" y1="288" x2="320" y2="400" />
+                  </g>
 
-              <!-- packet risers: the audio leaving the basement for each room -->
-              <g class="h-risers" aria-hidden="true">
-                <line class="h-riser" x1="152" y1="400" x2="152" y2="252" />
-                <line class="h-riser" x1="320" y1="400" x2="320" y2="252" />
-                <line class="h-riser" x1="488" y1="400" x2="488" y2="252" />
-                <line class="h-riser" x1="194" y1="400" x2="194" y2="360" />
-                <line class="h-riser" x1="446" y1="400" x2="446" y2="360" />
-                <circle class="h-pkt" cx="152" cy="396" r="2.2" style="--dy: -140px; --dur: 3.4s; --del: 0s" />
-                <circle class="h-pkt" cx="320" cy="396" r="2.2" style="--dy: -140px; --dur: 3.4s; --del: 1.3s" />
-                <circle class="h-pkt" cx="488" cy="396" r="2.2" style="--dy: -140px; --dur: 3.4s; --del: 2.2s" />
-                <circle class="h-pkt" cx="194" cy="396" r="2.2" style="--dy: -32px; --dur: 1.9s; --del: 0.6s" />
-                <circle class="h-pkt" cx="446" cy="396" r="2.2" style="--dy: -32px; --dur: 1.9s; --del: 1.6s" />
-              </g>
+                  <!-- packet risers: the audio leaving the basement for each room -->
+                  <g class="h-risers" id="h-risers" aria-hidden="true">
+                    <line class="h-riser" x1="152" y1="400" x2="152" y2="252" />
+                    <line class="h-riser" x1="320" y1="400" x2="320" y2="252" />
+                    <line class="h-riser" x1="488" y1="400" x2="488" y2="252" />
+                    <line class="h-riser" x1="194" y1="400" x2="194" y2="360" />
+                    <line class="h-riser" x1="446" y1="400" x2="446" y2="360" />
+                    <circle class="h-pkt" cx="152" cy="396" r="2.2" style="--dy: -140px; --dur: 3.4s; --del: 0s" />
+                    <circle class="h-pkt" cx="320" cy="396" r="2.2" style="--dy: -140px; --dur: 3.4s; --del: 1.3s" />
+                    <circle class="h-pkt" cx="488" cy="396" r="2.2" style="--dy: -140px; --dur: 3.4s; --del: 2.2s" />
+                    <circle class="h-pkt" cx="194" cy="396" r="2.2" style="--dy: -32px; --dur: 1.9s; --del: 0.6s" />
+                    <circle class="h-pkt" cx="446" cy="396" r="2.2" style="--dy: -32px; --dur: 1.9s; --del: 1.6s" />
+                  </g>
 
-              <!-- upstairs: bedroom (idle) · study (line-in) · bath -->
-              <g class="h-room">
-                <text class="h-label" x="86" y="192">bedroom</text>
-                <text class="h-sub" x="86" y="206">idle · amp off</text>
-                <g class="h-meter is-idle" transform="translate(138 236)">
-                  <rect x="0" y="-10" width="3" height="10" rx="1.5" />
-                  <rect x="7" y="-14" width="3" height="14" rx="1.5" />
-                  <rect x="14" y="-8" width="3" height="8" rx="1.5" />
-                  <rect x="21" y="-12" width="3" height="12" rx="1.5" />
-                </g>
-                <circle class="h-spk is-idle" cx="152" cy="248" r="3.4" />
-              </g>
-              <g class="h-room">
-                <text class="h-label" x="254" y="192">study</text>
-                <text class="h-sub" x="254" y="206">turntable · line-in</text>
-                <g class="h-meter" transform="translate(306 236)">
-                  <rect class="m m1" x="0" y="-10" width="3" height="10" rx="1.5" />
-                  <rect class="m m2" x="7" y="-14" width="3" height="14" rx="1.5" />
-                  <rect class="m m3" x="14" y="-8" width="3" height="8" rx="1.5" />
-                  <rect class="m m4" x="21" y="-12" width="3" height="12" rx="1.5" />
-                </g>
-                <circle class="h-spk" cx="320" cy="248" r="3.4" />
-                <circle class="h-ring" cx="320" cy="248" r="3.4" />
-              </g>
-              <g class="h-room">
-                <text class="h-label" x="422" y="192">bath</text>
-                <text class="h-sub" x="422" y="206">airplay receiver</text>
-                <g class="h-meter" transform="translate(474 236)">
-                  <rect class="m m2" x="0" y="-10" width="3" height="10" rx="1.5" />
-                  <rect class="m m4" x="7" y="-14" width="3" height="14" rx="1.5" />
-                  <rect class="m m1" x="14" y="-8" width="3" height="8" rx="1.5" />
-                  <rect class="m m3" x="21" y="-12" width="3" height="12" rx="1.5" />
-                </g>
-                <circle class="h-spk" cx="488" cy="248" r="3.4" />
-                <circle class="h-ring" cx="488" cy="248" r="3.4" />
-              </g>
+                  <!-- upstairs: bedroom (idle) · study (line-in) · bath -->
+                  <g class="h-room" data-room="bedroom">
+                    <text class="h-label" x="86" y="192">bedroom</text>
+                    <text class="h-sub" x="86" y="206">idle · amp off</text>
+                    <g class="h-meter is-idle" transform="translate(138 236)">
+                      <rect x="0" y="-10" width="3" height="10" rx="1.5" />
+                      <rect x="7" y="-14" width="3" height="14" rx="1.5" />
+                      <rect x="14" y="-8" width="3" height="8" rx="1.5" />
+                      <rect x="21" y="-12" width="3" height="12" rx="1.5" />
+                    </g>
+                    <circle class="h-spk is-idle" cx="152" cy="248" r="3.4" />
+                  </g>
+                  <g class="h-room" data-room="study">
+                    <text class="h-label" x="254" y="192">study</text>
+                    <text class="h-sub" x="254" y="206">turntable · line-in</text>
+                    <g class="h-meter" transform="translate(306 236)">
+                      <rect class="m m1" x="0" y="-10" width="3" height="10" rx="1.5" />
+                      <rect class="m m2" x="7" y="-14" width="3" height="14" rx="1.5" />
+                      <rect class="m m3" x="14" y="-8" width="3" height="8" rx="1.5" />
+                      <rect class="m m4" x="21" y="-12" width="3" height="12" rx="1.5" />
+                    </g>
+                    <circle class="h-spk" cx="320" cy="248" r="3.4" />
+                    <circle class="h-ring" cx="320" cy="248" r="3.4" />
+                  </g>
+                  <g class="h-room" data-room="bath">
+                    <text class="h-label" x="422" y="192">bath</text>
+                    <text class="h-sub" x="422" y="206">airplay receiver</text>
+                    <g class="h-meter" transform="translate(474 236)">
+                      <rect class="m m2" x="0" y="-10" width="3" height="10" rx="1.5" />
+                      <rect class="m m4" x="7" y="-14" width="3" height="14" rx="1.5" />
+                      <rect class="m m1" x="14" y="-8" width="3" height="8" rx="1.5" />
+                      <rect class="m m3" x="21" y="-12" width="3" height="12" rx="1.5" />
+                    </g>
+                    <circle class="h-spk" cx="488" cy="248" r="3.4" />
+                    <circle class="h-ring" cx="488" cy="248" r="3.4" />
+                  </g>
 
-              <!-- downstairs: living room + kitchen, grouped and in sync -->
-              <g class="h-room">
-                <text class="h-label" x="86" y="312">living room</text>
-                <text class="h-sub" x="86" y="326">sendspin · 24/96</text>
-                <g class="h-meter is-grouped" transform="translate(180 372)">
-                  <rect class="m m1" x="0" y="-10" width="3" height="10" rx="1.5" />
-                  <rect class="m m2" x="7" y="-14" width="3" height="14" rx="1.5" />
-                  <rect class="m m3" x="14" y="-8" width="3" height="8" rx="1.5" />
-                  <rect class="m m4" x="21" y="-12" width="3" height="12" rx="1.5" />
-                </g>
-                <circle class="h-spk is-grouped" cx="194" cy="384" r="3.4" />
-                <circle class="h-ring is-grouped" cx="194" cy="384" r="3.4" />
-              </g>
-              <g class="h-room">
-                <text class="h-label" x="338" y="312">kitchen</text>
-                <text class="h-sub" x="338" y="326">chromecast</text>
-                <!-- identical delays on purpose: grouped rooms march in step -->
-                <g class="h-meter is-grouped" transform="translate(432 372)">
-                  <rect class="m m1" x="0" y="-10" width="3" height="10" rx="1.5" />
-                  <rect class="m m2" x="7" y="-14" width="3" height="14" rx="1.5" />
-                  <rect class="m m3" x="14" y="-8" width="3" height="8" rx="1.5" />
-                  <rect class="m m4" x="21" y="-12" width="3" height="12" rx="1.5" />
-                </g>
-                <circle class="h-spk is-grouped" cx="446" cy="384" r="3.4" />
-                <circle class="h-ring is-grouped" cx="446" cy="384" r="3.4" />
-              </g>
+                  <!-- downstairs: living room + kitchen, grouped and in sync -->
+                  <g class="h-room" data-room="living">
+                    <text class="h-label" x="86" y="312">living room</text>
+                    <text class="h-sub" x="86" y="326">sendspin · 24/96</text>
+                    <g class="h-meter is-grouped" transform="translate(180 372)">
+                      <rect class="m m1" x="0" y="-10" width="3" height="10" rx="1.5" />
+                      <rect class="m m2" x="7" y="-14" width="3" height="14" rx="1.5" />
+                      <rect class="m m3" x="14" y="-8" width="3" height="8" rx="1.5" />
+                      <rect class="m m4" x="21" y="-12" width="3" height="12" rx="1.5" />
+                    </g>
+                    <circle class="h-spk is-grouped" cx="194" cy="384" r="3.4" />
+                    <circle class="h-ring is-grouped" cx="194" cy="384" r="3.4" />
+                  </g>
+                  <g class="h-room" data-room="kitchen">
+                    <text class="h-label" x="338" y="312">kitchen</text>
+                    <text class="h-sub" x="338" y="326">chromecast</text>
+                    <!-- identical delays on purpose: grouped rooms march in step -->
+                    <g class="h-meter is-grouped" transform="translate(432 372)">
+                      <rect class="m m1" x="0" y="-10" width="3" height="10" rx="1.5" />
+                      <rect class="m m2" x="7" y="-14" width="3" height="14" rx="1.5" />
+                      <rect class="m m3" x="14" y="-8" width="3" height="8" rx="1.5" />
+                      <rect class="m m4" x="21" y="-12" width="3" height="12" rx="1.5" />
+                    </g>
+                    <circle class="h-spk is-grouped" cx="446" cy="384" r="3.4" />
+                    <circle class="h-ring is-grouped" cx="446" cy="384" r="3.4" />
+                  </g>
 
-              <!-- the group, drawn: one marching line between the two speakers -->
-              <path class="h-group" d="M206 384 H434" />
-              <text class="h-group-label" x="320" y="376">grouped · in sync</text>
+                  <!-- the group, drawn: one marching line between the two speakers -->
+                  <g class="h-groupline" id="h-groupline">
+                    <path class="h-group" d="M206 384 H434" />
+                    <text class="h-group-label" x="320" y="376">grouped · in sync</text>
+                  </g>
 
-              <!-- the basement: where the server lives -->
-              <g class="h-core">
-                <rect class="h-core-box" x="68" y="400" width="504" height="44" />
-                <circle class="h-core-dot" cx="94" cy="422" r="3" />
-                <text class="h-core-name" x="108" y="426">sonn core</text>
-                <text class="h-core-meta" x="546" y="426" text-anchor="end">24 zones max · :7090</text>
-              </g>
-            </svg>
-            <figcaption class="house-caption mono">
-              the mark, unfolded — a roofline over a level meter, with the rooms put back in
-            </figcaption>
-          </figure>
+                  <!-- the basement: where the server lives -->
+                  <g class="h-core" id="h-core">
+                    <rect class="h-core-box" x="68" y="400" width="504" height="44" />
+                    <circle class="h-core-dot" cx="94" cy="422" r="3" />
+                    <text class="h-core-name" x="108" y="426">sonn core</text>
+                    <text class="h-core-meta" x="546" y="426" text-anchor="end">24 zones max · :7090</text>
+                  </g>
+                </svg>
+                <figcaption class="house-caption mono" id="house-caption">
+                  the mark, unfolded — a roofline over a level meter, with the rooms put back in
+                </figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
 
+        <div class="wrap">
           <div class="tiles rise" aria-label="Supported outputs">
             <div class="tile star">
               <span class="glyph">SP</span>
@@ -835,8 +857,12 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
       </section>
 
       <!-- ========================================================= closing -->
-      <section class="closing">
-        <span class="closing-word" aria-hidden="true">sonn</span>
+      <section class="closing" id="closing">
+        <!-- The name of the thing, poster-sized: engraved outline that fills with light as you arrive. -->
+        <span class="closing-word" aria-hidden="true">
+          <i class="cw-outline">sonn</i>
+          <i class="cw-fill" id="cw-fill">sonn</i>
+        </span>
         <div class="wrap rise">
           <p class="eyebrow eyebrow-center">open source · self-hosted · yours</p>
           <h2 class="h2">Your music deserves a server this good.</h2>
@@ -920,26 +946,60 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
 
     <script>
       /*
-       * All of it optional: the page reads perfectly with JS off. What's here is the live layer —
-       * the spectrum, the meters, the signal-path simulator, tabs, copy — with no dependency.
+       * All of it optional: the page reads perfectly with JS off — every hidden entrance
+       * state is gated behind the `js` class stamped in <head>, so nothing can hide without
+       * something standing by to reveal it. What's here is the live layer: one shared rAF
+       * loop drives the meters, the 3D wave, the scroll choreography and the parallax, so
+       * there is exactly one place the page spends energy per frame.
        */
       'use strict';
 
       const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const hoverable = matchMedia('(hover: hover)').matches;
+      const clamp01 = (v) => Math.max(0, Math.min(1, v));
+      const $ = (id) => document.getElementById(id);
 
-      // --- top bar gains its glass once the page moves; the progress hairline follows --------
-      const bar = document.getElementById('bar');
-      const progress = document.getElementById('progress');
-      const onScroll = () => {
-        bar.classList.toggle('stuck', window.scrollY > 8);
-        const max = document.documentElement.scrollHeight - innerHeight;
-        progress.style.transform = `scaleX(${max > 0 ? Math.min(1, window.scrollY / max) : 0})`;
+      /* ============================== the one frame loop ============================== */
+      // Everything animated by script registers a task here. Tasks receive the timestamp
+      // and the cached scroll position; heavy tasks throttle themselves.
+      const tasks = [];
+      let scrollY = window.scrollY;
+      addEventListener('scroll', () => (scrollY = window.scrollY), { passive: true });
+      const loop = (t) => {
+        for (const task of tasks) task(t);
+        requestAnimationFrame(loop);
       };
-      onScroll();
-      addEventListener('scroll', onScroll, { passive: true });
-      addEventListener('resize', onScroll, { passive: true });
+      requestAnimationFrame(loop);
 
-      // --- reveal on scroll, with a stagger inside each batch --------------------------------
+      /* ============================== bar, progress, parallax ========================= */
+      const bar = $('bar');
+      const progress = $('progress');
+      {
+        let lastY = -1;
+        tasks.push(() => {
+          if (scrollY === lastY) return;
+          lastY = scrollY;
+          bar.classList.toggle('stuck', scrollY > 8);
+          const max = document.documentElement.scrollHeight - innerHeight;
+          progress.style.transform = `scaleX(${max > 0 ? clamp01(scrollY / max) : 0})`;
+        });
+      }
+
+      // The hero recedes as you leave it: copy and cards drift at different speeds.
+      if (!reduced) {
+        const copy = $('hero-copy');
+        const stack = $('stack');
+        let lastY = -1;
+        tasks.push(() => {
+          if (scrollY === lastY || scrollY > innerHeight * 1.4) return;
+          lastY = scrollY;
+          copy.style.transform = `translateY(${(scrollY * 0.16).toFixed(1)}px)`;
+          copy.style.opacity = clamp01(1 - scrollY / (innerHeight * 0.9)).toFixed(3);
+          stack.style.setProperty('--drift', `${(scrollY * 0.07).toFixed(1)}px`);
+        });
+      }
+
+      /* ============================== reveal on scroll ================================ */
       let batch = 0;
       let batchAt = 0;
       const io = new IntersectionObserver(
@@ -959,47 +1019,56 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
       );
       document.querySelectorAll('.rise').forEach((el) => io.observe(el));
 
-      // --- the level meters, alive — including the logo's own bars ---------------------------
-      // Each bar gets its own phase so no two meters ever march in step.
+      /* ============================== the mark draws itself =========================== */
+      // Roofline first — a pen stroke — then the meter bars rise under it, then the
+      // headline steps out line by line. The CSS holds the choreography; this only
+      // measures the path and fires the class.
+      {
+        const roof = $('mark-roof');
+        const len = roof.getTotalLength();
+        roof.style.strokeDasharray = String(len);
+        roof.style.strokeDashoffset = reduced ? '0' : String(len);
+        requestAnimationFrame(() => document.documentElement.classList.add('hero-go'));
+      }
+
+      /* ============================== live level meters ================================ */
       if (!reduced) {
         const bars = [];
         document.querySelectorAll('.meter[data-meter] i').forEach((el, i) => {
           bars.push({ el, phase: Math.PI * 2 * (i / 10) + i * 1.7, min: 0.12 });
         });
         // The hero mark IS a level meter, so it meters: gentle, around its designed shape.
-        document.querySelectorAll('#hero-mark rect').forEach((el, i) => {
+        document.querySelectorAll('#hero-mark .mark-bars rect').forEach((el, i) => {
           el.style.transformBox = 'fill-box';
           el.style.transformOrigin = 'center bottom';
           bars.push({ el, phase: i * 1.13, min: 0.45, soft: true });
         });
         let last = 0;
-        const tick = (t) => {
-          if (t - last > 66) {
-            last = t;
-            for (const b of bars) {
-              let v =
-                0.25 +
-                0.38 * Math.abs(Math.sin(t / 640 + b.phase)) +
-                0.3 * Math.abs(Math.sin(t / 210 + b.phase * 2.3));
-              if (b.soft) v = b.min + (1 - b.min) * (0.55 + 0.45 * Math.sin(t / 520 + b.phase));
-              b.el.style.transform = `scaleY(${Math.max(b.min, Math.min(1, v)).toFixed(3)})`;
-            }
+        tasks.push((t) => {
+          if (t - last < 66) return;
+          last = t;
+          for (const b of bars) {
+            let v =
+              0.25 +
+              0.38 * Math.abs(Math.sin(t / 640 + b.phase)) +
+              0.3 * Math.abs(Math.sin(t / 210 + b.phase * 2.3));
+            if (b.soft) v = b.min + (1 - b.min) * (0.55 + 0.45 * Math.sin(t / 520 + b.phase));
+            b.el.style.transform = `scaleY(${Math.max(b.min, Math.min(1, v)).toFixed(3)})`;
           }
-          requestAnimationFrame(tick);
-        };
-        requestAnimationFrame(tick);
+        });
       }
 
-      // --- the hero spectrum: the mark's meter, as weather ------------------------------------
-      // A field of bars along the ground, layered sines, drawn at 15fps — cheap and calm.
-      const canvas = document.getElementById('spectrum');
+      /* ============================== the sea of samples =============================== */
+      // A 3D field of points along the hero's ground — a perspective projection done by
+      // hand, because a dependency would be heavier than the arithmetic. Each point is a
+      // sample; the surface is the waveform the house floats on.
+      const canvas = $('wave');
       if (canvas && !reduced) {
         const ctx = canvas.getContext('2d');
         let w = 0;
         let h = 0;
-        let dpr = 1;
         const size = () => {
-          dpr = Math.min(devicePixelRatio || 1, 2);
+          const dpr = Math.min(devicePixelRatio || 1, 2);
           w = canvas.clientWidth;
           h = canvas.clientHeight;
           canvas.width = w * dpr;
@@ -1008,41 +1077,62 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
         };
         size();
         addEventListener('resize', size, { passive: true });
+
+        const ROWS = 24;
+        const FOV = 340;
         let last = 0;
-        const draw = (t) => {
-          requestAnimationFrame(draw);
-          if (t - last < 66) return;
+        tasks.push((t) => {
+          if (t - last < 50 || scrollY > innerHeight) return; // 20fps, and only while visible
           last = t;
           ctx.clearRect(0, 0, w, h);
-          const bw = 3;
-          const gap = 6;
-          const n = Math.ceil(w / (bw + gap));
-          for (let i = 0; i < n; i++) {
-            const x = i * (bw + gap);
-            const v =
-              0.32 * Math.abs(Math.sin(i * 0.31 + t / 900)) +
-              0.42 * Math.abs(Math.sin(i * 0.13 - t / 1400)) +
-              0.26 * Math.abs(Math.sin(i * 0.47 + t / 500));
-            const bh = 8 + v * (h - 16);
-            ctx.fillStyle = `rgba(74, 222, 128, ${(0.03 + v * 0.09).toFixed(3)})`;
-            ctx.beginPath();
-            ctx.roundRect(x, h - bh, bw, bh, 1.5);
-            ctx.fill();
+          const cx = w / 2;
+          const horizon = h * 0.18;
+          const cols = Math.min(110, Math.ceil(w / 14));
+          for (let r = ROWS - 1; r >= 0; r--) {
+            const z = 40 + r * 34;
+            const p = FOV / (FOV + z);
+            for (let c = 0; c <= cols; c++) {
+              const x = (c - cols / 2) * 26;
+              const y =
+                13 * Math.sin(x * 0.016 + t / 900) +
+                10 * Math.sin(z * 0.03 - t / 700) +
+                6 * Math.sin((x + z) * 0.02 + t / 500);
+              const sx = cx + x * p * (w / 900);
+              const sy = horizon + (78 + y) * p * 1.9;
+              const a = (0.04 + 0.30 * p) * (0.55 + y / 40);
+              if (a <= 0.012) continue;
+              ctx.fillStyle = c % 9 === 0 ? `rgba(45,212,191,${a.toFixed(3)})` : `rgba(74,222,128,${a.toFixed(3)})`;
+              const s = Math.max(1, 2.6 * p);
+              ctx.fillRect(sx - s / 2, sy - s / 2, s, s);
+            }
           }
-        };
-        requestAnimationFrame(draw);
+        });
       }
 
-      // --- the hero stack leans with the pointer ----------------------------------------------
-      const stack = document.getElementById('stack');
-      if (stack && !reduced && matchMedia('(hover: hover)').matches) {
+      /* ============================== magnetic buttons ================================= */
+      // Buttons lean toward the hand that reaches for them — a few pixels, spring back.
+      if (hoverable && !reduced) {
+        document.querySelectorAll('.btn, .cmd').forEach((btn) => {
+          btn.addEventListener('pointermove', (e) => {
+            const r = btn.getBoundingClientRect();
+            const dx = (e.clientX - r.left - r.width / 2) / (r.width / 2);
+            const dy = (e.clientY - r.top - r.height / 2) / (r.height / 2);
+            btn.style.transform = `translate(${(dx * 4).toFixed(1)}px, ${(dy * 3 - 2).toFixed(1)}px)`;
+          });
+          btn.addEventListener('pointerleave', () => {
+            btn.style.transform = '';
+          });
+        });
+      }
+
+      /* ============================== stack tilt & card spotlight ====================== */
+      const stack = $('stack');
+      if (stack && hoverable && !reduced) {
         const damp = 9;
         stack.addEventListener('pointermove', (e) => {
           const r = stack.getBoundingClientRect();
-          const rx = ((e.clientY - r.top) / r.height - 0.5) * -damp;
-          const ry = ((e.clientX - r.left) / r.width - 0.5) * damp;
-          stack.style.setProperty('--rx', `${rx.toFixed(2)}deg`);
-          stack.style.setProperty('--ry', `${ry.toFixed(2)}deg`);
+          stack.style.setProperty('--rx', `${(((e.clientY - r.top) / r.height - 0.5) * -damp).toFixed(2)}deg`);
+          stack.style.setProperty('--ry', `${(((e.clientX - r.left) / r.width - 0.5) * damp).toFixed(2)}deg`);
         });
         stack.addEventListener('pointerleave', () => {
           stack.style.setProperty('--rx', '0deg');
@@ -1050,8 +1140,7 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
         });
       }
 
-      // --- cards catch the light where the pointer is -----------------------------------------
-      if (matchMedia('(hover: hover)').matches) {
+      if (hoverable) {
         addEventListener(
           'pointermove',
           (e) => {
@@ -1065,7 +1154,84 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
         );
       }
 
-      // --- the signal-path simulator -----------------------------------------------------------
+      /* ============================== the house, scroll-told =========================== */
+      // The scene builds in the order the product does: the roof draws (the mark), the
+      // server boots in the basement, packets rise, rooms come online, the group forms.
+      // Scrubbed by scroll, so the reader conducts it — backwards works too.
+      {
+        const wrap = $('house-scrolly');
+        const roof = wrap.querySelector('.h-roof');
+        const roofLen = roof.getTotalLength();
+        roof.style.strokeDasharray = String(roofLen);
+
+        const shell = $('h-shell');
+        const core = $('h-core');
+        const risers = $('h-risers');
+        const groupline = $('h-groupline');
+        const caption = $('house-caption');
+        const rooms = {};
+        wrap.querySelectorAll('.h-room').forEach((g) => (rooms[g.dataset.room] = g));
+
+        // stage: [start, end] in scroll progress; ease each locally
+        const span = (p, a, b) => clamp01((p - a) / (b - a));
+        const parts = [
+          { el: shell, a: 0.16, b: 0.26 },
+          { el: core, a: 0.24, b: 0.32 },
+          { el: risers, a: 0.32, b: 0.4 },
+          { el: rooms.living, a: 0.4, b: 0.48 },
+          { el: rooms.kitchen, a: 0.48, b: 0.56 },
+          { el: groupline, a: 0.56, b: 0.63 },
+          { el: rooms.study, a: 0.63, b: 0.71 },
+          { el: rooms.bath, a: 0.71, b: 0.79 },
+          { el: rooms.bedroom, a: 0.79, b: 0.87 },
+          { el: caption, a: 0.88, b: 0.96 },
+        ];
+
+        const apply = (p) => {
+          roof.style.strokeDashoffset = String(roofLen * (1 - span(p, 0.02, 0.2)));
+          for (const { el, a, b } of parts) {
+            const v = span(p, a, b);
+            el.style.opacity = v.toFixed(3);
+            el.style.transform = `translateY(${((1 - v) * 10).toFixed(1)}px)`;
+          }
+        };
+
+        if (reduced) {
+          // No choreography: the finished drawing, standing still.
+          apply(1);
+          roof.style.strokeDashoffset = '0';
+        } else {
+          document.documentElement.classList.add('scrolly-on');
+          let lastP = -1;
+          tasks.push(() => {
+            const r = wrap.getBoundingClientRect();
+            const total = r.height - innerHeight;
+            if (total <= 0) return apply(1);
+            const p = clamp01(-r.top / total);
+            if (Math.abs(p - lastP) < 0.0015) return;
+            lastP = p;
+            apply(p);
+          });
+        }
+      }
+
+      /* ============================== the closing word fills =========================== */
+      // The engraved "sonn" floods with the accent as the section takes the screen.
+      if (!reduced) {
+        const closing = $('closing');
+        const fill = $('cw-fill');
+        let lastP = -1;
+        tasks.push(() => {
+          const r = closing.getBoundingClientRect();
+          if (r.top > innerHeight || r.bottom < 0) return;
+          const p = clamp01((innerHeight - r.top) / (innerHeight + r.height * 0.6));
+          if (Math.abs(p - lastP) < 0.002) return;
+          lastP = p;
+          fill.style.clipPath = `inset(${((1 - p) * 100).toFixed(1)}% 0 0 0)`;
+        });
+      }
+
+      /* ============================== the signal-path simulator ======================== */
       // Mirrors the rules the server actually applies; see README "The goal: your
       // file, unchanged, at the speaker".
       const SOURCES = {
@@ -1075,7 +1241,6 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
       };
       const state = { src: 'hires', out: 'sendspin', eq: false };
 
-      const $ = (id) => document.getElementById(id);
       const verdictIcons = {
         check: '<path d="M20 6L9 17l-5-5"/>',
         wave: '<path d="M3 12h3l2-7 4 14 3-10 2 3h4"/>',
@@ -1166,7 +1331,7 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
       );
       render();
 
-      // --- API tabs ------------------------------------------------------------------------------
+      /* ============================== API tabs ========================================= */
       document.querySelectorAll('.slab-tab').forEach((tab) =>
         tab.addEventListener('click', () => {
           document.querySelectorAll('.slab-tab').forEach((t) => t.setAttribute('aria-selected', 'false'));
@@ -1176,7 +1341,7 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
         }),
       );
 
-      // --- scrollspy: the bar knows where you are --------------------------------------------------
+      /* ============================== scrollspy ======================================== */
       const navLinks = [...document.querySelectorAll('.bar-nav a')];
       const byId = Object.fromEntries(navLinks.map((a) => [a.getAttribute('href').slice(1), a]));
       const spy = new IntersectionObserver(
@@ -1196,13 +1361,13 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
         if (el) spy.observe(el);
       });
 
-      // --- copy the quick-start command ------------------------------------------------------------
+      /* ============================== copy the quick-start command ===================== */
       document.querySelectorAll('.cmd[data-copy]').forEach((btn) =>
         btn.addEventListener('click', async () => {
           try {
             await navigator.clipboard.writeText(btn.dataset.copy);
             btn.classList.add('copied');
-            btn.querySelector('.copy').textContent = 'copied';
+            btn.querySelector('.copy').textContent = '✓ copied';
             setTimeout(() => {
               btn.classList.remove('copied');
               btn.querySelector('.copy').textContent = 'copy';
