@@ -1,5 +1,10 @@
 # Integrating with sonn core
 
+> This file is the public API's single source of truth, kept next to the code it describes.
+> The website renders it, chapter by chapter, at
+> [sonn-audio.github.io/docs/reference](https://sonn-audio.github.io/docs/reference/).
+
+
 How to read and control sonn core from your own software — a home-automation system, a
 script, a wall display, a plugin.
 
