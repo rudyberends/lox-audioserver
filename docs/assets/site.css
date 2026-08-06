@@ -425,9 +425,86 @@ section[data-num]::before {
   color: var(--accent);
 }
 
+/* --- the burger: three meter bars that become a cross ---------------------- */
+
+.bar-burger {
+  display: none;
+  position: relative;
+  width: 38px;
+  height: 38px;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: none;
+  cursor: pointer;
+}
+
+.bar-burger i {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--muted);
+  transition:
+    transform 0.3s var(--ease),
+    opacity 0.2s,
+    background 0.2s;
+}
+
+.bar-burger i:nth-child(1) { top: 12px; }
+.bar-burger i:nth-child(2) { top: 18px; }
+.bar-burger i:nth-child(3) { top: 24px; }
+
+.bar-burger[aria-expanded='true'] i {
+  background: var(--accent);
+}
+
+.bar-burger[aria-expanded='true'] i:nth-child(1) {
+  transform: translateY(6px) rotate(45deg);
+}
+
+.bar-burger[aria-expanded='true'] i:nth-child(2) {
+  opacity: 0;
+}
+
+.bar-burger[aria-expanded='true'] i:nth-child(3) {
+  transform: translateY(-6px) rotate(-45deg);
+}
+
 @media (max-width: 900px) {
   .bar-nav {
+    position: absolute;
+    top: 57px;
+    left: 0;
+    right: 0;
     display: none;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px var(--pad) 16px;
+    border-bottom: 1px solid var(--line-soft);
+    background: rgb(10 12 16 / 94%);
+    backdrop-filter: blur(16px);
+  }
+
+  .bar-nav.open {
+    display: flex;
+  }
+
+  .bar-nav a {
+    padding: 11px;
+    font-size: 15px;
+    border-bottom: 1px solid var(--line-soft);
+    border-radius: 0;
+  }
+
+  .bar-nav a::after {
+    display: none;
+  }
+
+  .bar-burger {
+    display: block;
   }
 }
 
@@ -1975,6 +2052,188 @@ section[data-num]::before {
 @media (max-width: 900px) {
   .split {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- the pairing: miniserver ⇄ sonn, handshake on a wire -------------------- */
+
+.pairing {
+  display: grid;
+  grid-template-columns: auto minmax(60px, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  margin-top: 26px;
+  padding: 18px 20px;
+  border: 1px solid var(--line-soft);
+  border-radius: 13px;
+  background: var(--surface);
+}
+
+.pair-box {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
+
+.pair-k {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.pair-ico {
+  width: 34px;
+  height: 34px;
+  color: var(--muted);
+}
+
+/* The whole scene breathes on an 6s cycle: reach out, answer, go green, hold. */
+.pair-mark {
+  color: var(--dim);
+  animation: pair-green 6s var(--ease) infinite;
+}
+
+@keyframes pair-green {
+  0%,
+  38% {
+    color: var(--dim);
+  }
+
+  55%,
+  92% {
+    color: var(--accent);
+    filter: drop-shadow(0 0 10px rgb(74 222 128 / 45%));
+  }
+
+  100% {
+    color: var(--dim);
+  }
+}
+
+.pair-wire {
+  position: relative;
+  height: 1px;
+  background: var(--line);
+}
+
+.pair-pkt {
+  position: absolute;
+  top: -1.5px;
+  left: 0;
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0;
+  animation: pair-go 6s linear infinite;
+}
+
+.pair-pkt.fro {
+  animation-name: pair-back;
+}
+
+@keyframes pair-go {
+  2% {
+    opacity: 0;
+    left: 0;
+  }
+
+  6%,
+  22% {
+    opacity: 1;
+  }
+
+  26% {
+    opacity: 0;
+    left: calc(100% - 18px);
+  }
+
+  100% {
+    opacity: 0;
+    left: calc(100% - 18px);
+  }
+}
+
+@keyframes pair-back {
+  0%,
+  28% {
+    opacity: 0;
+    left: calc(100% - 18px);
+  }
+
+  32%,
+  46% {
+    opacity: 1;
+  }
+
+  52%,
+  100% {
+    opacity: 0;
+    left: 0;
+  }
+}
+
+.pair-status {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+/* The label answers the animation: "pairing…" while the packets fly, then green. */
+.pair-status::after {
+  content: 'pairing…';
+  animation: pair-label 6s step-end infinite;
+}
+
+.pair-status {
+  font-size: 0; /* hide the fallback text node; the ::after carries the live label */
+}
+
+.pair-status::after {
+  font-size: 9px;
+}
+
+@keyframes pair-label {
+  0% {
+    content: 'pairing…';
+    color: var(--dim);
+  }
+
+  55% {
+    content: 'paired ✓';
+    color: var(--accent);
+  }
+
+  92% {
+    content: 'pairing…';
+    color: var(--dim);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pair-pkt {
+    animation: none;
+    opacity: 0.4;
+    left: 40%;
+  }
+
+  .pair-mark {
+    animation: none;
+    color: var(--accent);
+  }
+
+  .pair-status::after {
+    animation: none;
+    content: 'paired ✓';
+    color: var(--accent);
   }
 }
 
