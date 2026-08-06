@@ -21,6 +21,9 @@
     <link rel="stylesheet" href="assets/site.css" />
   </head>
   <body>
+    <!-- Reading progress — a hairline of accent across the very top. -->
+    <div class="progress" id="progress" aria-hidden="true"></div>
+
     <!-- ============================================================ top bar -->
     <header class="bar" id="bar">
       <div class="wrap bar-in">
@@ -61,9 +64,14 @@
     <main id="top">
       <!-- ============================================================= hero -->
       <section class="hero">
+        <!-- The identity, as weather: aurora overhead, a live spectrum along the ground. -->
+        <div class="hero-aurora" aria-hidden="true"></div>
+        <canvas class="hero-spectrum" id="spectrum" aria-hidden="true"></canvas>
+
         <div class="wrap hero-in">
-          <div>
-            <svg class="hero-mark" viewBox="8 12 84 68" aria-hidden="true" fill="currentColor">
+          <div class="hero-copy">
+            <!-- The mark, alive: the same 10-bar meter the logo is built from, actually metering. -->
+            <svg class="hero-mark" id="hero-mark" viewBox="8 12 84 68" aria-hidden="true" fill="currentColor">
               <path d="M14 46 L50 18 L86 46" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
               <rect x="20" y="63.1" width="2.17" height="5.78" rx="1.08" opacity="0.4" />
               <rect x="25.78" y="59.5" width="2.17" height="13.01" rx="1.08" opacity="0.6" />
@@ -91,7 +99,7 @@
                 <span>docker compose up -d</span>
                 <span class="copy">copy</span>
               </button>
-              <a class="btn" href="#start">Get started</a>
+              <a class="btn btn-primary" href="#start">Get started</a>
             </div>
 
             <p class="hero-facts">
@@ -102,55 +110,92 @@
             </p>
           </div>
 
-          <!-- The room board: the thing the player's sidebar is, as a poster. -->
-          <div class="panel rise" aria-hidden="true">
-            <div class="panel-bar"><i class="dot"></i>zones · live</div>
-            <div class="room" data-live>
-              <span class="room-icon">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 9h4l5-5v16l-5-5H4V9zm12.5-.6a5 5 0 010 7.2l-1.1-1.1a3.5 3.5 0 000-5l1.1-1.1z" /></svg>
-              </span>
-              <span>
-                <span class="room-name">Living room</span>
-                <span class="room-now">Bon Iver — Holocene · 24-bit / 96 kHz</span>
-              </span>
-              <span class="meter" data-meter><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+          <!--
+            The room board, with the player's technical view peeking out behind it — the two
+            cards the product actually draws, stacked like they came off a desk.
+          -->
+          <div class="stack" id="stack" aria-hidden="true">
+            <div class="stack-back">
+              <p class="stack-back-k">technical · living room</p>
+              <p class="stack-back-v">
+                <span class="chiplet perfect">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                  bit-perfect
+                </span>
+                <span class="mono">FLAC · 24-bit / 192 kHz</span>
+              </p>
+              <p class="stack-back-f mono">source → sendspin → usb dac · no resampler in the path</p>
             </div>
-            <div class="room" data-live>
-              <span class="room-icon">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 9h4l5-5v16l-5-5H4V9zm12.5-.6a5 5 0 010 7.2l-1.1-1.1a3.5 3.5 0 000-5l1.1-1.1z" /></svg>
-              </span>
-              <span>
-                <span class="room-name">Kitchen <span class="quiet">+ Terrace</span></span>
-                <span class="room-now">Radio Paradise · Main Mix</span>
-              </span>
-              <span class="tag-chip ok">grouped</span>
+
+            <div class="panel stack-front">
+              <div class="panel-bar">
+                <i class="dot"></i>zones · live
+                <span class="panel-bar-right mono">4 rooms · 1 group</span>
+              </div>
+              <div class="room" data-live>
+                <span class="room-icon">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 9h4l5-5v16l-5-5H4V9zm12.5-.6a5 5 0 010 7.2l-1.1-1.1a3.5 3.5 0 000-5l1.1-1.1z" /></svg>
+                </span>
+                <span class="room-main">
+                  <span class="room-name">Living room</span>
+                  <span class="room-now">Bon Iver — Holocene · 24-bit / 96 kHz</span>
+                  <span class="room-progress"><i></i></span>
+                </span>
+                <span class="meter" data-meter><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+              </div>
+              <div class="room" data-live>
+                <span class="room-icon">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 9h4l5-5v16l-5-5H4V9zm12.5-.6a5 5 0 010 7.2l-1.1-1.1a3.5 3.5 0 000-5l1.1-1.1z" /></svg>
+                </span>
+                <span class="room-main">
+                  <span class="room-name">Kitchen <span class="quiet">+ Terrace</span></span>
+                  <span class="room-now">Radio Paradise · Main Mix</span>
+                </span>
+                <span class="tag-chip ok">grouped</span>
+              </div>
+              <div class="room" data-live>
+                <span class="room-icon">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3a4 4 0 014 4v5a4 4 0 01-8 0V7a4 4 0 014-4zm-7 9h2a5 5 0 0010 0h2a7 7 0 01-6 6.93V21h-2v-2.07A7 7 0 015 12z" /></svg>
+                </span>
+                <span class="room-main">
+                  <span class="room-name">Study</span>
+                  <span class="room-now">Turntable · line-in · Shazam: Nina Simone</span>
+                </span>
+                <span class="tag-chip">line-in</span>
+              </div>
+              <div class="room">
+                <span class="room-icon">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4a1 1 0 011 1v6.59l3.7 3.7-1.41 1.42L11 12.4V5a1 1 0 011-1zm0-2a10 10 0 100 20 10 10 0 000-20z" /></svg>
+                </span>
+                <span class="room-main">
+                  <span class="room-name">Bedroom</span>
+                  <span class="room-now">Idle · amp off · wakes on play</span>
+                </span>
+                <span class="meter idle"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+              </div>
             </div>
-            <div class="room" data-live>
-              <span class="room-icon">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3a4 4 0 014 4v5a4 4 0 01-8 0V7a4 4 0 014-4zm-7 9h2a5 5 0 0010 0h2a7 7 0 01-6 6.93V21h-2v-2.07A7 7 0 015 12z" /></svg>
-              </span>
-              <span>
-                <span class="room-name">Study</span>
-                <span class="room-now">Turntable · line-in · Shazam: Nina Simone</span>
-              </span>
-              <span class="tag-chip">line-in</span>
-            </div>
-            <div class="room">
-              <span class="room-icon">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4a1 1 0 011 1v6.59l3.7 3.7-1.41 1.42L11 12.4V5a1 1 0 011-1zm0-2a10 10 0 100 20 10 10 0 000-20z" /></svg>
-              </span>
-              <span>
-                <span class="room-name">Bedroom</span>
-                <span class="room-now">Idle · amp off · wakes on play</span>
-              </span>
-              <span class="meter idle"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
-            </div>
+          </div>
+        </div>
+
+        <!-- Everything it speaks, on one slowly turning belt. -->
+        <div class="marquee" aria-hidden="true">
+          <div class="marquee-track">
+            <span>spotify</span><i></i><span>apple music</span><i></i><span>tidal</span><i></i><span>deezer</span><i></i>
+            <span>youtube music</span><i></i><span>soundcloud</span><i></i><span>tunein</span><i></i><span>radio paradise</span><i></i>
+            <span>airplay</span><i></i><span>chromecast</span><i></i><span>sonos</span><i></i><span>snapcast</span><i></i>
+            <span>squeezelite</span><i></i><span>dlna</span><i></i><span>sendspin</span><i></i><span>spotify connect</span><i></i>
+            <span>music assistant</span><i></i><span>subsonic</span><i></i><span>loxone</span><i></i><span>mqtt</span><i></i>
+            <span>spotify</span><i></i><span>apple music</span><i></i><span>tidal</span><i></i><span>deezer</span><i></i>
+            <span>youtube music</span><i></i><span>soundcloud</span><i></i><span>tunein</span><i></i><span>radio paradise</span><i></i>
+            <span>airplay</span><i></i><span>chromecast</span><i></i><span>sonos</span><i></i><span>snapcast</span><i></i>
+            <span>squeezelite</span><i></i><span>dlna</span><i></i><span>sendspin</span><i></i><span>spotify connect</span><i></i>
+            <span>music assistant</span><i></i><span>subsonic</span><i></i><span>loxone</span><i></i><span>mqtt</span><i></i>
           </div>
         </div>
       </section>
 
       <!-- ======================================================== two ways -->
-      <section id="two-ways">
+      <section id="two-ways" data-num="01">
         <div class="wrap">
           <div class="section-head rise">
             <p class="eyebrow">one server, two shapes</p>
@@ -162,7 +207,7 @@
           </div>
 
           <div class="doors rise">
-            <div>
+            <div class="door-panel">
               <p class="door-num">01 / content only</p>
               <h3 class="door-title">Serve your music to everything</h3>
               <p class="door-sub">
@@ -184,7 +229,7 @@
 
             <span class="rule" aria-hidden="true"></span>
 
-            <div>
+            <div class="door-panel">
               <p class="door-num">02 / multiroom</p>
               <h3 class="door-title">Or own the rooms yourself</h3>
               <p class="door-sub">
@@ -207,7 +252,7 @@
       </section>
 
       <!-- ===================================================== signal path -->
-      <section id="signal">
+      <section id="signal" data-num="02">
         <div class="wrap">
           <div class="section-head rise">
             <p class="eyebrow">the signal path</p>
@@ -304,7 +349,7 @@
       </section>
 
       <!-- ========================================================= content -->
-      <section id="content">
+      <section id="content" data-num="03">
         <div class="wrap">
           <div class="section-head rise">
             <p class="eyebrow">content</p>
@@ -374,7 +419,7 @@
       </section>
 
       <!-- =========================================================== zones -->
-      <section id="zones">
+      <section id="zones" data-num="04">
         <div class="wrap">
           <div class="section-head rise">
             <p class="eyebrow">zones &amp; outputs</p>
@@ -385,6 +430,120 @@
               it just works.
             </p>
           </div>
+
+          <!--
+            The mark, unfolded. The logo is a roofline over a level meter; this is the same
+            drawing with the rooms put back in — and the server in the basement, where it lives.
+          -->
+          <figure class="house rise" aria-label="A house with five rooms playing music from one sonn server in the basement">
+            <svg viewBox="0 0 640 476" role="img">
+              <!-- roofline — the logo's own stroke -->
+              <path class="h-roof" d="M36 168 L320 30 L604 168" />
+
+              <!-- shell -->
+              <rect class="h-wall" x="68" y="168" width="504" height="276" rx="6" />
+              <line class="h-line" x1="68" y1="288" x2="572" y2="288" />
+              <line class="h-line" x1="68" y1="400" x2="572" y2="400" />
+              <!-- upstairs dividers -->
+              <line class="h-line" x1="236" y1="168" x2="236" y2="288" />
+              <line class="h-line" x1="404" y1="168" x2="404" y2="288" />
+              <!-- downstairs divider -->
+              <line class="h-line" x1="320" y1="288" x2="320" y2="400" />
+
+              <!-- packet risers: the audio leaving the basement for each room -->
+              <g class="h-risers" aria-hidden="true">
+                <line class="h-riser" x1="152" y1="400" x2="152" y2="252" />
+                <line class="h-riser" x1="320" y1="400" x2="320" y2="252" />
+                <line class="h-riser" x1="488" y1="400" x2="488" y2="252" />
+                <line class="h-riser" x1="194" y1="400" x2="194" y2="360" />
+                <line class="h-riser" x1="446" y1="400" x2="446" y2="360" />
+                <circle class="h-pkt" cx="152" cy="396" r="2.2" style="--dy: -140px; --dur: 3.4s; --del: 0s" />
+                <circle class="h-pkt" cx="320" cy="396" r="2.2" style="--dy: -140px; --dur: 3.4s; --del: 1.3s" />
+                <circle class="h-pkt" cx="488" cy="396" r="2.2" style="--dy: -140px; --dur: 3.4s; --del: 2.2s" />
+                <circle class="h-pkt" cx="194" cy="396" r="2.2" style="--dy: -32px; --dur: 1.9s; --del: 0.6s" />
+                <circle class="h-pkt" cx="446" cy="396" r="2.2" style="--dy: -32px; --dur: 1.9s; --del: 1.6s" />
+              </g>
+
+              <!-- upstairs: bedroom (idle) · study (line-in) · bath -->
+              <g class="h-room">
+                <text class="h-label" x="86" y="192">bedroom</text>
+                <text class="h-sub" x="86" y="206">idle · amp off</text>
+                <g class="h-meter is-idle" transform="translate(138 236)">
+                  <rect x="0" y="-10" width="3" height="10" rx="1.5" />
+                  <rect x="7" y="-14" width="3" height="14" rx="1.5" />
+                  <rect x="14" y="-8" width="3" height="8" rx="1.5" />
+                  <rect x="21" y="-12" width="3" height="12" rx="1.5" />
+                </g>
+                <circle class="h-spk is-idle" cx="152" cy="248" r="3.4" />
+              </g>
+              <g class="h-room">
+                <text class="h-label" x="254" y="192">study</text>
+                <text class="h-sub" x="254" y="206">turntable · line-in</text>
+                <g class="h-meter" transform="translate(306 236)">
+                  <rect class="m m1" x="0" y="-10" width="3" height="10" rx="1.5" />
+                  <rect class="m m2" x="7" y="-14" width="3" height="14" rx="1.5" />
+                  <rect class="m m3" x="14" y="-8" width="3" height="8" rx="1.5" />
+                  <rect class="m m4" x="21" y="-12" width="3" height="12" rx="1.5" />
+                </g>
+                <circle class="h-spk" cx="320" cy="248" r="3.4" />
+                <circle class="h-ring" cx="320" cy="248" r="3.4" />
+              </g>
+              <g class="h-room">
+                <text class="h-label" x="422" y="192">bath</text>
+                <text class="h-sub" x="422" y="206">airplay receiver</text>
+                <g class="h-meter" transform="translate(474 236)">
+                  <rect class="m m2" x="0" y="-10" width="3" height="10" rx="1.5" />
+                  <rect class="m m4" x="7" y="-14" width="3" height="14" rx="1.5" />
+                  <rect class="m m1" x="14" y="-8" width="3" height="8" rx="1.5" />
+                  <rect class="m m3" x="21" y="-12" width="3" height="12" rx="1.5" />
+                </g>
+                <circle class="h-spk" cx="488" cy="248" r="3.4" />
+                <circle class="h-ring" cx="488" cy="248" r="3.4" />
+              </g>
+
+              <!-- downstairs: living room + kitchen, grouped and in sync -->
+              <g class="h-room">
+                <text class="h-label" x="86" y="312">living room</text>
+                <text class="h-sub" x="86" y="326">sendspin · 24/96</text>
+                <g class="h-meter is-grouped" transform="translate(180 372)">
+                  <rect class="m m1" x="0" y="-10" width="3" height="10" rx="1.5" />
+                  <rect class="m m2" x="7" y="-14" width="3" height="14" rx="1.5" />
+                  <rect class="m m3" x="14" y="-8" width="3" height="8" rx="1.5" />
+                  <rect class="m m4" x="21" y="-12" width="3" height="12" rx="1.5" />
+                </g>
+                <circle class="h-spk is-grouped" cx="194" cy="384" r="3.4" />
+                <circle class="h-ring is-grouped" cx="194" cy="384" r="3.4" />
+              </g>
+              <g class="h-room">
+                <text class="h-label" x="338" y="312">kitchen</text>
+                <text class="h-sub" x="338" y="326">chromecast</text>
+                <!-- identical delays on purpose: grouped rooms march in step -->
+                <g class="h-meter is-grouped" transform="translate(432 372)">
+                  <rect class="m m1" x="0" y="-10" width="3" height="10" rx="1.5" />
+                  <rect class="m m2" x="7" y="-14" width="3" height="14" rx="1.5" />
+                  <rect class="m m3" x="14" y="-8" width="3" height="8" rx="1.5" />
+                  <rect class="m m4" x="21" y="-12" width="3" height="12" rx="1.5" />
+                </g>
+                <circle class="h-spk is-grouped" cx="446" cy="384" r="3.4" />
+                <circle class="h-ring is-grouped" cx="446" cy="384" r="3.4" />
+              </g>
+
+              <!-- the group, drawn: one marching line between the two speakers -->
+              <path class="h-group" d="M206 384 H434" />
+              <text class="h-group-label" x="320" y="376">grouped · in sync</text>
+
+              <!-- the basement: where the server lives -->
+              <g class="h-core">
+                <rect class="h-core-box" x="68" y="400" width="504" height="44" />
+                <circle class="h-core-dot" cx="94" cy="422" r="3" />
+                <text class="h-core-name" x="108" y="426">sonn core</text>
+                <text class="h-core-meta" x="546" y="426" text-anchor="end">24 zones max · :7090</text>
+              </g>
+            </svg>
+            <figcaption class="house-caption mono">
+              the mark, unfolded — a roofline over a level meter, with the rooms put back in
+            </figcaption>
+          </figure>
 
           <div class="tiles rise" aria-label="Supported outputs">
             <div class="tile star">
@@ -464,7 +623,7 @@
       </section>
 
       <!-- ==================================================== integrations -->
-      <section id="integrations">
+      <section id="integrations" data-num="05">
         <div class="wrap">
           <div class="split">
             <div class="rise">
@@ -489,13 +648,14 @@
 
             <div class="rise">
               <p class="eyebrow">home assistant &amp; your own tools</p>
-              <h2 class="h2" style="font-size: clamp(24px, 3vw, 34px)">And it plays well with the rest of the house.</h2>
-              <p class="lede" style="font-size: 15.5px">
+              <h2 class="h2 h2-sub">And it plays well with the rest of the house.</h2>
+              <p class="lede lede-sub">
                 An optional MQTT surface publishes every zone as retained topics — whole objects as JSON,
                 single fields as plain scalars — so Home&nbsp;Assistant, Node-RED or a KNX gateway consume
                 it with no code at all. Control works the same way: publish a value, done.
               </p>
               <div class="slab mt-m">
+                <div class="slab-chrome" aria-hidden="true"><i></i><i></i><i></i><span>mqtt · retained</span></div>
                 <pre><span class="c-com"># state, retained — connect late, see everything</span>
 sonn/zones/3                <span class="c-str">{"name":"Kitchen","state":"playing",…}</span>
 sonn/zones/3/state          <span class="c-str">playing</span>
@@ -520,7 +680,7 @@ sonn/zones/3/track/title    <span class="c-str">Song</span>
       </section>
 
       <!-- ============================================================= api -->
-      <section id="api">
+      <section id="api" data-num="06">
         <div class="wrap">
           <div class="section-head rise">
             <p class="eyebrow">for builders</p>
@@ -533,6 +693,7 @@ sonn/zones/3/track/title    <span class="c-str">Song</span>
           </div>
 
           <div class="slab mt-l rise">
+            <div class="slab-chrome" aria-hidden="true"><i></i><i></i><i></i><span>curl — sonn /api/v1</span></div>
             <div class="slab-tabs" role="tablist" aria-label="API examples">
               <button class="slab-tab" role="tab" aria-selected="true" data-tab="t-zones">zones</button>
               <button class="slab-tab" role="tab" aria-selected="false" data-tab="t-control">control</button>
@@ -549,14 +710,14 @@ sonn/zones/3/track/title    <span class="c-str">Song</span>
   <span class="c-str">"state"</span>: <span class="c-str">"playing"</span>,
   <span class="c-str">"track"</span>: <span class="c-key">{</span> <span class="c-str">"title"</span>: <span class="c-str">"Song"</span>, <span class="c-str">"artist"</span>: <span class="c-str">"Artist"</span>, <span class="c-str">"coverUrl"</span>: <span class="c-str">"…"</span> <span class="c-key">}</span>,
   <span class="c-str">"output"</span>: <span class="c-key">{</span> <span class="c-str">"protocol"</span>: <span class="c-str">"sendspin"</span>, <span class="c-str">"format"</span>: <span class="c-key">{</span> <span class="c-str">"sampleRate"</span>: 192000, <span class="c-str">"bitDepth"</span>: 24 <span class="c-key">}</span> <span class="c-key">}</span>
-<span class="c-key">}</span></pre>
+<span class="c-key">}</span><span class="cursor" aria-hidden="true"></span></pre>
 
             <pre id="t-control" hidden><span class="c-com"># Pause the kitchen, then turn it down a notch</span>
 <span class="c-cmd">curl</span> -X PUT http://server:7090/api/v1/zones/3/state  -d <span class="c-str">'{"state":"paused"}'</span>
 <span class="c-cmd">curl</span> -X PUT http://server:7090/api/v1/zones/3/volume -d <span class="c-str">'{"volume":"-5"}'</span>
 
 <span class="c-com"># Say something in the kitchen; the music ducks and returns</span>
-<span class="c-cmd">curl</span> -X POST http://server:7090/api/v1/zones/3/announce -d <span class="c-str">'{"text":"Dinner!"}'</span></pre>
+<span class="c-cmd">curl</span> -X POST http://server:7090/api/v1/zones/3/announce -d <span class="c-str">'{"text":"Dinner!"}'</span><span class="cursor" aria-hidden="true"></span></pre>
 
             <pre id="t-events" hidden><span class="c-com"># Follow every change — one subscription, no polling, ever</span>
 <span class="c-cmd">curl</span> -N http://server:7090/api/v1/events
@@ -564,7 +725,7 @@ sonn/zones/3/track/title    <span class="c-str">Song</span>
 event: <span class="c-str">zone.changed</span>
 data: <span class="c-key">{</span><span class="c-str">"id"</span>:3,<span class="c-str">"state"</span>:<span class="c-str">"playing"</span>,<span class="c-str">"volume"</span>:40,…<span class="c-key">}</span>
 
-<span class="c-com"># Every command is followed by an event — write, and watch it land.</span></pre>
+<span class="c-com"># Every command is followed by an event — write, and watch it land.</span><span class="cursor" aria-hidden="true"></span></pre>
 
             <pre id="t-analysis" hidden><span class="c-com"># Realtime audio analysis, straight off the stream — up to 60 fps</span>
 <span class="c-cmd">curl</span> -N <span class="c-str">'http://server:7090/api/v1/zones/3/analysis?types=loudness,spectrum,pitch'</span>
@@ -572,7 +733,7 @@ data: <span class="c-key">{</span><span class="c-str">"id"</span>:3,<span class=
 data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class="c-str">"spectrum"</span>,<span class="c-str">"bins"</span>:[12,48,97,…]<span class="c-key">}</span>
 data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class="c-str">"pitch"</span>,<span class="c-str">"midiQ88"</span>:17408<span class="c-key">}</span>
 
-<span class="c-com"># Build a VU meter, a wall visualizer, a beat-synced light scene.</span></pre>
+<span class="c-com"># Build a VU meter, a wall visualizer, a beat-synced light scene.</span><span class="cursor" aria-hidden="true"></span></pre>
           </div>
 
           <div class="cols cols-3 mt-m">
@@ -602,7 +763,7 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
       </section>
 
       <!-- =========================================================== start -->
-      <section id="start">
+      <section id="start" data-num="07">
         <div class="wrap">
           <div class="section-head rise">
             <p class="eyebrow">get started</p>
@@ -616,12 +777,13 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
           <div class="split mt-l">
             <div class="rise">
               <div class="slab">
+                <div class="slab-chrome" aria-hidden="true"><i></i><i></i><i></i><span>quick start</span></div>
                 <pre><span class="c-com"># docker-compose.yml is in the repo — or:</span>
 <span class="c-cmd">docker</span> run -d \
   --name sonn-core \
   --network host \
   -v $(pwd)/data:/app/data \
-  ghcr.io/sonn-audio/core:latest</pre>
+  ghcr.io/sonn-audio/core:latest<span class="cursor" aria-hidden="true"></span></pre>
               </div>
               <p class="door-note">
                 Then open <code>http://&lt;server-ip&gt;:7090</code>, create your admin account, and walk
@@ -674,8 +836,9 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
 
       <!-- ========================================================= closing -->
       <section class="closing">
+        <span class="closing-word" aria-hidden="true">sonn</span>
         <div class="wrap rise">
-          <p class="eyebrow" style="justify-content: center">open source · self-hosted · yours</p>
+          <p class="eyebrow eyebrow-center">open source · self-hosted · yours</p>
           <h2 class="h2">Your music deserves a server this good.</h2>
           <p class="lede">
             No subscription, no cloud dependency, no speakers to replace. An audioserver on your LAN with
@@ -758,21 +921,35 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
     <script>
       /*
        * All of it optional: the page reads perfectly with JS off. What's here is the live layer —
-       * the meters, the signal-path simulator, tabs, copy — in a hundred lines, no dependency.
+       * the spectrum, the meters, the signal-path simulator, tabs, copy — with no dependency.
        */
       'use strict';
 
-      // --- top bar gains its glass once the page moves ------------------------
+      const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      // --- top bar gains its glass once the page moves; the progress hairline follows --------
       const bar = document.getElementById('bar');
-      const onScroll = () => bar.classList.toggle('stuck', window.scrollY > 8);
+      const progress = document.getElementById('progress');
+      const onScroll = () => {
+        bar.classList.toggle('stuck', window.scrollY > 8);
+        const max = document.documentElement.scrollHeight - innerHeight;
+        progress.style.transform = `scaleX(${max > 0 ? Math.min(1, window.scrollY / max) : 0})`;
+      };
       onScroll();
       addEventListener('scroll', onScroll, { passive: true });
+      addEventListener('resize', onScroll, { passive: true });
 
-      // --- reveal on scroll ----------------------------------------------------
+      // --- reveal on scroll, with a stagger inside each batch --------------------------------
+      let batch = 0;
+      let batchAt = 0;
       const io = new IntersectionObserver(
         (entries) => {
+          const now = performance.now();
+          if (now - batchAt > 150) batch = 0;
+          batchAt = now;
           for (const e of entries) {
             if (e.isIntersecting) {
+              e.target.style.transitionDelay = `${Math.min(batch++ * 70, 420)}ms`;
               e.target.classList.add('in');
               io.unobserve(e.target);
             }
@@ -782,24 +959,30 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
       );
       document.querySelectorAll('.rise').forEach((el) => io.observe(el));
 
-      // --- the level meters, alive --------------------------------------------
-      // Each bar gets its own phase so the two meters never march in step.
-      const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      // --- the level meters, alive — including the logo's own bars ---------------------------
+      // Each bar gets its own phase so no two meters ever march in step.
       if (!reduced) {
         const bars = [];
-        document.querySelectorAll('.meter[data-meter] i').forEach((bar, i) => {
-          bars.push({ el: bar, phase: Math.PI * 2 * (i / 10) + i * 1.7 });
+        document.querySelectorAll('.meter[data-meter] i').forEach((el, i) => {
+          bars.push({ el, phase: Math.PI * 2 * (i / 10) + i * 1.7, min: 0.12 });
+        });
+        // The hero mark IS a level meter, so it meters: gentle, around its designed shape.
+        document.querySelectorAll('#hero-mark rect').forEach((el, i) => {
+          el.style.transformBox = 'fill-box';
+          el.style.transformOrigin = 'center bottom';
+          bars.push({ el, phase: i * 1.13, min: 0.45, soft: true });
         });
         let last = 0;
         const tick = (t) => {
           if (t - last > 66) {
             last = t;
             for (const b of bars) {
-              const v =
+              let v =
                 0.25 +
                 0.38 * Math.abs(Math.sin(t / 640 + b.phase)) +
                 0.3 * Math.abs(Math.sin(t / 210 + b.phase * 2.3));
-              b.el.style.transform = `scaleY(${Math.min(1, v).toFixed(3)})`;
+              if (b.soft) v = b.min + (1 - b.min) * (0.55 + 0.45 * Math.sin(t / 520 + b.phase));
+              b.el.style.transform = `scaleY(${Math.max(b.min, Math.min(1, v)).toFixed(3)})`;
             }
           }
           requestAnimationFrame(tick);
@@ -807,7 +990,82 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
         requestAnimationFrame(tick);
       }
 
-      // --- the signal-path simulator -------------------------------------------
+      // --- the hero spectrum: the mark's meter, as weather ------------------------------------
+      // A field of bars along the ground, layered sines, drawn at 15fps — cheap and calm.
+      const canvas = document.getElementById('spectrum');
+      if (canvas && !reduced) {
+        const ctx = canvas.getContext('2d');
+        let w = 0;
+        let h = 0;
+        let dpr = 1;
+        const size = () => {
+          dpr = Math.min(devicePixelRatio || 1, 2);
+          w = canvas.clientWidth;
+          h = canvas.clientHeight;
+          canvas.width = w * dpr;
+          canvas.height = h * dpr;
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        };
+        size();
+        addEventListener('resize', size, { passive: true });
+        let last = 0;
+        const draw = (t) => {
+          requestAnimationFrame(draw);
+          if (t - last < 66) return;
+          last = t;
+          ctx.clearRect(0, 0, w, h);
+          const bw = 3;
+          const gap = 6;
+          const n = Math.ceil(w / (bw + gap));
+          for (let i = 0; i < n; i++) {
+            const x = i * (bw + gap);
+            const v =
+              0.32 * Math.abs(Math.sin(i * 0.31 + t / 900)) +
+              0.42 * Math.abs(Math.sin(i * 0.13 - t / 1400)) +
+              0.26 * Math.abs(Math.sin(i * 0.47 + t / 500));
+            const bh = 8 + v * (h - 16);
+            ctx.fillStyle = `rgba(74, 222, 128, ${(0.03 + v * 0.09).toFixed(3)})`;
+            ctx.beginPath();
+            ctx.roundRect(x, h - bh, bw, bh, 1.5);
+            ctx.fill();
+          }
+        };
+        requestAnimationFrame(draw);
+      }
+
+      // --- the hero stack leans with the pointer ----------------------------------------------
+      const stack = document.getElementById('stack');
+      if (stack && !reduced && matchMedia('(hover: hover)').matches) {
+        const damp = 9;
+        stack.addEventListener('pointermove', (e) => {
+          const r = stack.getBoundingClientRect();
+          const rx = ((e.clientY - r.top) / r.height - 0.5) * -damp;
+          const ry = ((e.clientX - r.left) / r.width - 0.5) * damp;
+          stack.style.setProperty('--rx', `${rx.toFixed(2)}deg`);
+          stack.style.setProperty('--ry', `${ry.toFixed(2)}deg`);
+        });
+        stack.addEventListener('pointerleave', () => {
+          stack.style.setProperty('--rx', '0deg');
+          stack.style.setProperty('--ry', '0deg');
+        });
+      }
+
+      // --- cards catch the light where the pointer is -----------------------------------------
+      if (matchMedia('(hover: hover)').matches) {
+        addEventListener(
+          'pointermove',
+          (e) => {
+            const el = e.target.closest?.('.card, .tile, .door-panel');
+            if (!el) return;
+            const r = el.getBoundingClientRect();
+            el.style.setProperty('--mx', `${e.clientX - r.left}px`);
+            el.style.setProperty('--my', `${e.clientY - r.top}px`);
+          },
+          { passive: true },
+        );
+      }
+
+      // --- the signal-path simulator -----------------------------------------------------------
       // Mirrors the rules the server actually applies; see README "The goal: your
       // file, unchanged, at the speaker".
       const SOURCES = {
@@ -850,6 +1108,11 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
         const label = $('verdict-label');
         const why = $('verdict-why');
         const svg = badge.querySelector('svg');
+
+        // A little pop so a changed verdict is seen changing.
+        badge.classList.remove('pop');
+        void badge.offsetWidth;
+        badge.classList.add('pop');
 
         if (state.eq) {
           badge.dataset.v = 'altered';
@@ -903,7 +1166,7 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
       );
       render();
 
-      // --- API tabs -------------------------------------------------------------
+      // --- API tabs ------------------------------------------------------------------------------
       document.querySelectorAll('.slab-tab').forEach((tab) =>
         tab.addEventListener('click', () => {
           document.querySelectorAll('.slab-tab').forEach((t) => t.setAttribute('aria-selected', 'false'));
@@ -913,7 +1176,27 @@ data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class=
         }),
       );
 
-      // --- copy the quick-start command ------------------------------------------
+      // --- scrollspy: the bar knows where you are --------------------------------------------------
+      const navLinks = [...document.querySelectorAll('.bar-nav a')];
+      const byId = Object.fromEntries(navLinks.map((a) => [a.getAttribute('href').slice(1), a]));
+      const spy = new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) {
+            const link = byId[e.target.id];
+            if (link && e.isIntersecting) {
+              navLinks.forEach((a) => a.classList.remove('now'));
+              link.classList.add('now');
+            }
+          }
+        },
+        { rootMargin: '-40% 0px -55% 0px' },
+      );
+      Object.keys(byId).forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) spy.observe(el);
+      });
+
+      // --- copy the quick-start command ------------------------------------------------------------
       document.querySelectorAll('.cmd[data-copy]').forEach((btn) =>
         btn.addEventListener('click', async () => {
           try {
