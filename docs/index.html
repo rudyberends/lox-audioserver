@@ -1,0 +1,934 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>sonn — multiroom audio for your whole home</title>
+    <meta
+      name="description"
+      content="sonn is an open-source audio server: your music, streaming services, radio and line-in, served to any app or played in sync across every room — on the speakers you already own. Full Loxone Audio Server emulation included."
+    />
+    <meta property="og:title" content="sonn — multiroom audio for your whole home" />
+    <meta
+      property="og:description"
+      content="The ultimate audio server. Run it as a pure content server, or as a full multiroom system with fixed zones. Loxone and Home Assistant friendly. Open source."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" type="image/svg+xml" href="assets/sonn-mark.svg" />
+    <link rel="preload" href="assets/fonts/hanken-grotesk-var.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="assets/fonts/jetbrains-mono-var.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="assets/site.css" />
+  </head>
+  <body>
+    <!-- ============================================================ top bar -->
+    <header class="bar" id="bar">
+      <div class="wrap bar-in">
+        <a class="bar-brand" href="#top" aria-label="sonn — back to top">
+          <svg viewBox="8 12 84 68" aria-hidden="true" fill="currentColor">
+            <path d="M14 46 L50 18 L86 46" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
+            <rect x="20" y="63.1" width="2.17" height="5.78" rx="1.08" opacity="0.4" />
+            <rect x="25.78" y="59.5" width="2.17" height="13.01" rx="1.08" opacity="0.6" />
+            <rect x="31.57" y="61.66" width="2.17" height="8.67" rx="1.08" opacity="0.8" />
+            <rect x="37.35" y="58.05" width="2.17" height="15.9" rx="1.08" />
+            <rect x="46.03" y="56.6" width="2.89" height="18.8" rx="1.45" />
+            <rect x="54.69" y="58.05" width="2.17" height="15.9" rx="1.08" />
+            <rect x="60.48" y="60.94" width="2.17" height="10.12" rx="1.08" opacity="0.9" />
+            <rect x="66.26" y="58.77" width="2.17" height="14.46" rx="1.08" opacity="0.8" />
+            <rect x="72.05" y="62.38" width="2.17" height="7.23" rx="1.08" opacity="0.7" />
+            <rect x="77.83" y="63.83" width="2.17" height="4.34" rx="1.08" opacity="0.6" />
+          </svg>
+          sonn
+        </a>
+        <nav class="bar-nav" aria-label="Sections">
+          <a href="#two-ways">Two ways</a>
+          <a href="#signal">Signal path</a>
+          <a href="#content">Content</a>
+          <a href="#zones">Zones</a>
+          <a href="#integrations">Loxone &amp; HA</a>
+          <a href="#api">API</a>
+          <a href="#start">Get started</a>
+        </nav>
+        <a class="btn btn-sm" href="https://github.com/sonn-audio/core" rel="noopener">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+          </svg>
+          GitHub
+        </a>
+      </div>
+    </header>
+
+    <main id="top">
+      <!-- ============================================================= hero -->
+      <section class="hero">
+        <div class="wrap hero-in">
+          <div>
+            <svg class="hero-mark" viewBox="8 12 84 68" aria-hidden="true" fill="currentColor">
+              <path d="M14 46 L50 18 L86 46" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
+              <rect x="20" y="63.1" width="2.17" height="5.78" rx="1.08" opacity="0.4" />
+              <rect x="25.78" y="59.5" width="2.17" height="13.01" rx="1.08" opacity="0.6" />
+              <rect x="31.57" y="61.66" width="2.17" height="8.67" rx="1.08" opacity="0.8" />
+              <rect x="37.35" y="58.05" width="2.17" height="15.9" rx="1.08" />
+              <rect x="46.03" y="56.6" width="2.89" height="18.8" rx="1.45" />
+              <rect x="54.69" y="58.05" width="2.17" height="15.9" rx="1.08" />
+              <rect x="60.48" y="60.94" width="2.17" height="10.12" rx="1.08" opacity="0.9" />
+              <rect x="66.26" y="58.77" width="2.17" height="14.46" rx="1.08" opacity="0.8" />
+              <rect x="72.05" y="62.38" width="2.17" height="7.23" rx="1.08" opacity="0.7" />
+              <rect x="77.83" y="63.83" width="2.17" height="4.34" rx="1.08" opacity="0.6" />
+            </svg>
+
+            <h1>One server.<br />Every room.<br /><em>Your speakers.</em></h1>
+
+            <p class="lede">
+              sonn collects your music — local library, Spotify, Apple&nbsp;Music, Tidal, radio, even the
+              turntable — and plays it in sync on the speakers you already own, over almost any protocol
+              they speak. Or skip the rooms entirely and serve your content to every app in the house.
+            </p>
+
+            <div class="actions">
+              <button class="cmd" type="button" data-copy="docker compose up -d" aria-label="Copy: docker compose up -d">
+                <span class="sig">$</span>
+                <span>docker compose up -d</span>
+                <span class="copy">copy</span>
+              </button>
+              <a class="btn" href="#start">Get started</a>
+            </div>
+
+            <p class="hero-facts">
+              <span><i class="dot" aria-hidden="true"></i>open source</span>
+              <span>apache-2.0</span>
+              <span>self-hosted</span>
+              <span>4.0 beta</span>
+            </p>
+          </div>
+
+          <!-- The room board: the thing the player's sidebar is, as a poster. -->
+          <div class="panel rise" aria-hidden="true">
+            <div class="panel-bar"><i class="dot"></i>zones · live</div>
+            <div class="room" data-live>
+              <span class="room-icon">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 9h4l5-5v16l-5-5H4V9zm12.5-.6a5 5 0 010 7.2l-1.1-1.1a3.5 3.5 0 000-5l1.1-1.1z" /></svg>
+              </span>
+              <span>
+                <span class="room-name">Living room</span>
+                <span class="room-now">Bon Iver — Holocene · 24-bit / 96 kHz</span>
+              </span>
+              <span class="meter" data-meter><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+            </div>
+            <div class="room" data-live>
+              <span class="room-icon">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 9h4l5-5v16l-5-5H4V9zm12.5-.6a5 5 0 010 7.2l-1.1-1.1a3.5 3.5 0 000-5l1.1-1.1z" /></svg>
+              </span>
+              <span>
+                <span class="room-name">Kitchen <span class="quiet">+ Terrace</span></span>
+                <span class="room-now">Radio Paradise · Main Mix</span>
+              </span>
+              <span class="tag-chip ok">grouped</span>
+            </div>
+            <div class="room" data-live>
+              <span class="room-icon">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3a4 4 0 014 4v5a4 4 0 01-8 0V7a4 4 0 014-4zm-7 9h2a5 5 0 0010 0h2a7 7 0 01-6 6.93V21h-2v-2.07A7 7 0 015 12z" /></svg>
+              </span>
+              <span>
+                <span class="room-name">Study</span>
+                <span class="room-now">Turntable · line-in · Shazam: Nina Simone</span>
+              </span>
+              <span class="tag-chip">line-in</span>
+            </div>
+            <div class="room">
+              <span class="room-icon">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4a1 1 0 011 1v6.59l3.7 3.7-1.41 1.42L11 12.4V5a1 1 0 011-1zm0-2a10 10 0 100 20 10 10 0 000-20z" /></svg>
+              </span>
+              <span>
+                <span class="room-name">Bedroom</span>
+                <span class="room-now">Idle · amp off · wakes on play</span>
+              </span>
+              <span class="meter idle"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================================================== two ways -->
+      <section id="two-ways">
+        <div class="wrap">
+          <div class="section-head rise">
+            <p class="eyebrow">one server, two shapes</p>
+            <h2 class="h2">Content server, or whole-home system. Or both.</h2>
+            <p class="lede">
+              A fresh install starts with no zones and nothing shared. What you switch on decides what it
+              becomes — and you can change your mind later without starting over.
+            </p>
+          </div>
+
+          <div class="doors rise">
+            <div>
+              <p class="door-num">01 / content only</p>
+              <h3 class="door-title">Serve your music to everything</h3>
+              <p class="door-sub">
+                Point your library, streaming accounts and radio at sonn, switch on how you want to reach
+                it, and every app and device in the house can browse and play — no rooms to configure,
+                nothing to manage per device.
+              </p>
+              <ul class="door-list">
+                <li>DLNA / UPnP MediaServer — smart TVs, receivers, network speakers</li>
+                <li>Subsonic API — Symfonium, Amperfy, DSub and friends</li>
+                <li>Network drive (WebDAV) — drag albums in with Finder or Explorer</li>
+                <li>Built-in web player, from any browser on the network</li>
+              </ul>
+              <p class="door-note">
+                Streaming services included: a DLNA TV can browse your Apple&nbsp;Music or Tidal account
+                straight from the couch.
+              </p>
+            </div>
+
+            <span class="rule" aria-hidden="true"></span>
+
+            <div>
+              <p class="door-num">02 / multiroom</p>
+              <h3 class="door-title">Or own the rooms yourself</h3>
+              <p class="door-sub">
+                Add fixed zones — up to 24, one per room — and sonn drives the speakers directly: named
+                rooms, synchronized groups, one place to control the whole house.
+              </p>
+              <ul class="door-list">
+                <li>Central control from the web player, Admin UI or a Loxone app</li>
+                <li>Group any rooms to play in perfect sync</li>
+                <li>Per-zone equalizer, volume limits, favorites and recents</li>
+                <li>Amp power switching over GPIO or USB relay, per zone or shared</li>
+              </ul>
+              <p class="door-note">
+                With the Loxone integration on, the Miniserver supplies the zones — sonn behaves as a
+                full Loxone Audio Server.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================================================== signal path -->
+      <section id="signal">
+        <div class="wrap">
+          <div class="section-head rise">
+            <p class="eyebrow">the signal path</p>
+            <h2 class="h2">Your file, unchanged, at the speaker.</h2>
+            <p class="lede">
+              sonn is built around one idea: the audio that leaves your library should reach the player
+              exactly as it was recorded. Every stage that could touch it is visible per zone — and the
+              server does none of them unless something makes that impossible. Try it:
+            </p>
+          </div>
+
+          <div class="sig-wrap rise">
+            <div class="sig-controls">
+              <div class="sig-group">
+                <h4>source</h4>
+                <div class="chips" role="radiogroup" aria-label="Source format">
+                  <button class="chip" role="radio" aria-checked="true" data-src="hires">FLAC 24/192</button>
+                  <button class="chip" role="radio" aria-checked="false" data-src="cd">CD rip 16/44.1</button>
+                  <button class="chip" role="radio" aria-checked="false" data-src="lossy">Stream 320 kbps</button>
+                </div>
+              </div>
+              <div class="sig-group">
+                <h4>output</h4>
+                <div class="chips" role="radiogroup" aria-label="Output type">
+                  <button class="chip" role="radio" aria-checked="true" data-out="sendspin">Sendspin + USB DAC</button>
+                  <button class="chip" role="radio" aria-checked="false" data-out="fixed">Chromecast / Sonos</button>
+                </div>
+              </div>
+              <div class="sig-group">
+                <h4>processing</h4>
+                <div class="chips">
+                  <button class="chip" aria-pressed="false" data-eq>Equalizer</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="sig-stage-wrap">
+              <div class="chain" id="chain">
+                <div class="node">
+                  <p class="node-k">source</p>
+                  <p class="node-v" id="n-src">Library</p>
+                  <p class="node-f" id="n-src-f">FLAC · 24-bit / 192 kHz</p>
+                </div>
+                <span class="link" style="--d: 0s"></span>
+                <div class="node" id="n-resample">
+                  <p class="node-k">resampler</p>
+                  <p class="node-v">SoX · 28-bit</p>
+                  <p class="node-f" id="n-resample-f">bypassed</p>
+                </div>
+                <span class="link" style="--d: 0.5s"></span>
+                <div class="node" id="n-eq">
+                  <p class="node-k">equalizer</p>
+                  <p class="node-v">10-band</p>
+                  <p class="node-f" id="n-eq-f">bypassed</p>
+                </div>
+                <span class="link" style="--d: 1s"></span>
+                <div class="node" id="n-vol">
+                  <p class="node-k">volume</p>
+                  <p class="node-v">On the device</p>
+                  <p class="node-f">never in the stream</p>
+                </div>
+                <span class="link" style="--d: 1.5s"></span>
+                <div class="node endpoint">
+                  <p class="node-k" id="n-out-k">sendspin</p>
+                  <p class="node-v" id="n-out">USB DAC</p>
+                  <p class="node-f" id="n-out-f">24-bit / 192 kHz</p>
+                </div>
+              </div>
+
+              <div class="verdict">
+                <span class="verdict-badge" data-v="perfect" id="verdict">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg>
+                  <span id="verdict-label">bit-perfect</span>
+                </span>
+                <p class="verdict-why" id="verdict-why">
+                  Sendspin negotiates the format per track, so the server follows the source: the file's own
+                  samples travel over the network and the DAC clocks them at the rate they were recorded at.
+                  Nothing in the chain gets a vote.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <p class="sig-foot rise">
+            This is not a diagram we drew for the website — it is the technical view the web player shows
+            for every zone, live: the source format, every stage that touched the audio, and the verdict.
+            <em>Bit-perfect</em>, <em>untouched</em>, or <em>altered</em> — with the reason. And if you just
+            want music: use whatever output you already have. All of it works, all of it sounds good, and
+            none of it needs a thought about sample rates.
+          </p>
+        </div>
+      </section>
+
+      <!-- ========================================================= content -->
+      <section id="content">
+        <div class="wrap">
+          <div class="section-head rise">
+            <p class="eyebrow">content</p>
+            <h2 class="h2">Everything you listen to, in one place.</h2>
+            <p class="lede">
+              Every source is available to every consumer of the server — the web player, Loxone, DLNA
+              devices and Subsonic apps alike. Configure it once, reach it from everywhere.
+            </p>
+          </div>
+
+          <div class="cols cols-3 mt-l">
+            <div class="card rise">
+              <span class="card-ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 7l9-4 9 4v10l-9 4-9-4V7z" /><path d="M3 7l9 4 9-4M12 11v10" />
+                </svg>
+              </span>
+              <h3>Local library</h3>
+              <p>
+                Folders and network shares, indexed by tags into albums, artists and tracks — with cover
+                art, and artist pictures fetched automatically.
+              </p>
+              <ul>
+                <li>Incremental indexing — a dropped file just appears</li>
+                <li>Add music by drag-and-drop, or over the network drive</li>
+                <li>Browse, search and manage from the Admin UI</li>
+              </ul>
+            </div>
+
+            <div class="card rise">
+              <span class="card-ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" /><path d="M8 9.5c2.5-.9 5.5-.7 8 .8M8.3 12.7c2-.7 4.4-.5 6.4.7M8.6 15.7c1.6-.5 3.4-.4 5 .5" />
+                </svg>
+              </span>
+              <h3>Streaming services</h3>
+              <p>
+                Spotify, Apple Music, Tidal, Deezer, YouTube Music, YouTube, SoundCloud — and Music
+                Assistant as a source, exposing its own providers.
+              </p>
+              <ul>
+                <li>Several accounts of one service can coexist</li>
+                <li>Each account is its own browsable service</li>
+                <li>Served on to Loxone, DLNA and Subsonic too</li>
+              </ul>
+            </div>
+
+            <div class="card rise">
+              <span class="card-ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 11a8 8 0 0116 0" /><path d="M2 18a10 10 0 0120 0" opacity="0.5" /><circle cx="12" cy="17" r="2.4" fill="currentColor" stroke="none" />
+                </svg>
+              </span>
+              <h3>Radio &amp; line-in</h3>
+              <p>
+                The TuneIn directory, Radio Paradise, your own streams — plus the turntable or CD player,
+                through any zone in the house.
+              </p>
+              <ul>
+                <li>Line-in with optional Shazam track recognition</li>
+                <li>Play/pause and skip reach the actual CD changer</li>
+                <li>TTS and alert sounds, Loxone-native when paired</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =========================================================== zones -->
+      <section id="zones">
+        <div class="wrap">
+          <div class="section-head rise">
+            <p class="eyebrow">zones &amp; outputs</p>
+            <h2 class="h2">The speakers you already own are the system.</h2>
+            <p class="lede">
+              A zone is one device in one room. sonn speaks to nearly anything that can make sound — and a
+              zone can also <em>receive</em>: point AirPlay or Spotify&nbsp;Connect at an old amplifier, and
+              it just works.
+            </p>
+          </div>
+
+          <div class="tiles rise" aria-label="Supported outputs">
+            <div class="tile star">
+              <span class="glyph">SP</span>
+              <span><b>Sendspin</b><small>bit-perfect</small></span>
+            </div>
+            <div class="tile">
+              <span class="glyph">CC</span>
+              <span><b>Chromecast</b><small>google cast</small></span>
+            </div>
+            <div class="tile">
+              <span class="glyph">SN</span>
+              <span><b>Sonos</b><small>native</small></span>
+            </div>
+            <div class="tile">
+              <span class="glyph">AP</span>
+              <span><b>AirPlay</b><small>output + receiver</small></span>
+            </div>
+            <div class="tile">
+              <span class="glyph">DL</span>
+              <span><b>DLNA / UPnP</b><small>renderers</small></span>
+            </div>
+            <div class="tile">
+              <span class="glyph">SC</span>
+              <span><b>Snapcast</b><small>diy multiroom</small></span>
+            </div>
+            <div class="tile">
+              <span class="glyph">SQ</span>
+              <span><b>Squeezelite</b><small>lms players</small></span>
+            </div>
+            <div class="tile">
+              <span class="glyph">MA</span>
+              <span><b>Music Assistant</b><small>players</small></span>
+            </div>
+          </div>
+
+          <dl class="rows rise">
+            <div class="row">
+              <dt>Receivers</dt>
+              <dd>
+                A receiver lets a phone play <em>to</em> a zone. Spotify Connect, AirPlay, DLNA and line-in
+                land on the server, which sends them on to that zone's output — so a pair of Snapcast
+                speakers on a Raspberry&nbsp;Pi shows up as an AirPlay target with no support of its own.
+              </dd>
+            </div>
+            <div class="row">
+              <dt>Grouping</dt>
+              <dd>
+                Any rooms play in sync, regrouped on the fly. The kitchen joins the terrace for dinner and
+                leaves again after — from the app, the wall panel, or a Loxone scene.
+              </dd>
+            </div>
+            <div class="row">
+              <dt>Power management</dt>
+              <dd>
+                A zone can wake its amplifier before the first note and switch it off after the music
+                stops — GPIO or USB relay, per zone or per shared amp group, with pre-delays and off-delays
+                so short gaps never cycle the hardware.
+              </dd>
+            </div>
+            <div class="row">
+              <dt>Bang &amp; Olufsen remotes</dt>
+              <dd>
+                A Beoremote One can own a room: the server builds the menu it shows — favorites, radio, the
+                turntable — and play, pause and skip route to whatever the room is playing.
+              </dd>
+            </div>
+            <div class="row">
+              <dt>This browser is a room</dt>
+              <dd>
+                The web player registers itself as a local destination: select it and play, and it plays
+                here — driven by exactly the same controls as the hardware zones.
+              </dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <!-- ==================================================== integrations -->
+      <section id="integrations">
+        <div class="wrap">
+          <div class="split">
+            <div class="rise">
+              <p class="eyebrow">loxone</p>
+              <h2 class="h2">A drop-in Loxone Audio&nbsp;Server.</h2>
+              <p class="lede">
+                Not an add-on that talks to Loxone — a complete Audioserver implementation. Pair it with a
+                Miniserver and it behaves like the real thing: zones, sources, favorites, alerts and the
+                native Loxone app, with up to 24 zones — the same ceiling as the original.
+              </p>
+              <ol class="steps">
+                <li><span>Choose <em>Loxone integrated</em> under Zones — the server starts listening immediately.</span></li>
+                <li><span>Add the Audio Server in Loxone Config with the serial and host from the Admin UI.</span></li>
+                <li><span>Deploy and reboot the Miniserver. The icon turns green, and your zones arrive.</span></li>
+              </ol>
+              <p class="door-note">
+                Non-Spotify services are presented to the Miniserver as virtual Spotify accounts — the only
+                vocabulary Loxone clients have for them. Everywhere else they keep their own name.
+                Disconnecting takes effect without a restart, and your own zones return.
+              </p>
+            </div>
+
+            <div class="rise">
+              <p class="eyebrow">home assistant &amp; your own tools</p>
+              <h2 class="h2" style="font-size: clamp(24px, 3vw, 34px)">And it plays well with the rest of the house.</h2>
+              <p class="lede" style="font-size: 15.5px">
+                An optional MQTT surface publishes every zone as retained topics — whole objects as JSON,
+                single fields as plain scalars — so Home&nbsp;Assistant, Node-RED or a KNX gateway consume
+                it with no code at all. Control works the same way: publish a value, done.
+              </p>
+              <div class="slab mt-m">
+                <pre><span class="c-com"># state, retained — connect late, see everything</span>
+sonn/zones/3                <span class="c-str">{"name":"Kitchen","state":"playing",…}</span>
+sonn/zones/3/state          <span class="c-str">playing</span>
+sonn/zones/3/track/title    <span class="c-str">Song</span>
+
+<span class="c-com"># control — a value, or a relative nudge</span>
+<span class="c-cmd">mosquitto_pub</span> -t 'sonn/zones/3/set/volume' -m <span class="c-str">'+5'</span>
+<span class="c-cmd">mosquitto_pub</span> -t 'sonn/zones/3/cmd' -m <span class="c-str">'{"power":"on","volume":40}'</span></pre>
+              </div>
+              <div class="callout pending mt-m">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" /><path d="M12 8v4l2.5 2.5" />
+                </svg>
+                <span>
+                  A native Home&nbsp;Assistant integration is on the roadmap. Today, HA already talks to
+                  sonn over MQTT and the HTTP API — the native component will make it one-click.
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================================= api -->
+      <section id="api">
+        <div class="wrap">
+          <div class="section-head rise">
+            <p class="eyebrow">for builders</p>
+            <h2 class="h2">An API a <code>curl</code> one-liner is a first-class client of.</h2>
+            <p class="lede">
+              Commands are plain HTTP, and reading state never requires polling: subscribe to the event
+              stream once and you are told about every change. No handshake, no correlation ids, no SDK to
+              install — a five-line shell script is a complete integration.
+            </p>
+          </div>
+
+          <div class="slab mt-l rise">
+            <div class="slab-tabs" role="tablist" aria-label="API examples">
+              <button class="slab-tab" role="tab" aria-selected="true" data-tab="t-zones">zones</button>
+              <button class="slab-tab" role="tab" aria-selected="false" data-tab="t-control">control</button>
+              <button class="slab-tab" role="tab" aria-selected="false" data-tab="t-events">events</button>
+              <button class="slab-tab" role="tab" aria-selected="false" data-tab="t-analysis">live analysis</button>
+            </div>
+
+            <pre id="t-zones"><span class="c-com"># What is playing everywhere?</span>
+<span class="c-cmd">curl</span> http://server:7090/api/v1/zones
+
+<span class="c-key">{</span>
+  <span class="c-str">"id"</span>: 3,
+  <span class="c-str">"name"</span>: <span class="c-str">"Kitchen"</span>,
+  <span class="c-str">"state"</span>: <span class="c-str">"playing"</span>,
+  <span class="c-str">"track"</span>: <span class="c-key">{</span> <span class="c-str">"title"</span>: <span class="c-str">"Song"</span>, <span class="c-str">"artist"</span>: <span class="c-str">"Artist"</span>, <span class="c-str">"coverUrl"</span>: <span class="c-str">"…"</span> <span class="c-key">}</span>,
+  <span class="c-str">"output"</span>: <span class="c-key">{</span> <span class="c-str">"protocol"</span>: <span class="c-str">"sendspin"</span>, <span class="c-str">"format"</span>: <span class="c-key">{</span> <span class="c-str">"sampleRate"</span>: 192000, <span class="c-str">"bitDepth"</span>: 24 <span class="c-key">}</span> <span class="c-key">}</span>
+<span class="c-key">}</span></pre>
+
+            <pre id="t-control" hidden><span class="c-com"># Pause the kitchen, then turn it down a notch</span>
+<span class="c-cmd">curl</span> -X PUT http://server:7090/api/v1/zones/3/state  -d <span class="c-str">'{"state":"paused"}'</span>
+<span class="c-cmd">curl</span> -X PUT http://server:7090/api/v1/zones/3/volume -d <span class="c-str">'{"volume":"-5"}'</span>
+
+<span class="c-com"># Say something in the kitchen; the music ducks and returns</span>
+<span class="c-cmd">curl</span> -X POST http://server:7090/api/v1/zones/3/announce -d <span class="c-str">'{"text":"Dinner!"}'</span></pre>
+
+            <pre id="t-events" hidden><span class="c-com"># Follow every change — one subscription, no polling, ever</span>
+<span class="c-cmd">curl</span> -N http://server:7090/api/v1/events
+
+event: <span class="c-str">zone.changed</span>
+data: <span class="c-key">{</span><span class="c-str">"id"</span>:3,<span class="c-str">"state"</span>:<span class="c-str">"playing"</span>,<span class="c-str">"volume"</span>:40,…<span class="c-key">}</span>
+
+<span class="c-com"># Every command is followed by an event — write, and watch it land.</span></pre>
+
+            <pre id="t-analysis" hidden><span class="c-com"># Realtime audio analysis, straight off the stream — up to 60 fps</span>
+<span class="c-cmd">curl</span> -N <span class="c-str">'http://server:7090/api/v1/zones/3/analysis?types=loudness,spectrum,pitch'</span>
+
+data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class="c-str">"spectrum"</span>,<span class="c-str">"bins"</span>:[12,48,97,…]<span class="c-key">}</span>
+data: <span class="c-key">{</span><span class="c-str">"type"</span>:<span class="c-str">"pitch"</span>,<span class="c-str">"midiQ88"</span>:17408<span class="c-key">}</span>
+
+<span class="c-com"># Build a VU meter, a wall visualizer, a beat-synced light scene.</span></pre>
+          </div>
+
+          <div class="cols cols-3 mt-m">
+            <div class="card rise">
+              <h3>Open by design</h3>
+              <p>
+                Apache-2.0, on GitHub. The public API is documented down to the field, and the web player is
+                built on it and nothing else — if the contract can't carry a real player, that's a bug.
+              </p>
+            </div>
+            <div class="card rise">
+              <h3>Events over polling</h3>
+              <p>
+                Two tabs, a wall panel and the Loxone app all agree, because everyone renders the same
+                <code>zone.changed</code>. An edit made anywhere shows up everywhere, with no code of yours involved.
+              </p>
+            </div>
+            <div class="card rise">
+              <h3>MQTT too</h3>
+              <p>
+                Same state, second surface: retained topics a Miniserver or KNX gateway can read without
+                parsing JSON. Both run at once and cannot disagree — they publish from the same source.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =========================================================== start -->
+      <section id="start">
+        <div class="wrap">
+          <div class="section-head rise">
+            <p class="eyebrow">get started</p>
+            <h2 class="h2">Running before the coffee is.</h2>
+            <p class="lede">
+              One container, host networking so it can discover your speakers, one folder that holds
+              everything. Back up that folder and you have backed up the install.
+            </p>
+          </div>
+
+          <div class="split mt-l">
+            <div class="rise">
+              <div class="slab">
+                <pre><span class="c-com"># docker-compose.yml is in the repo — or:</span>
+<span class="c-cmd">docker</span> run -d \
+  --name sonn-core \
+  --network host \
+  -v $(pwd)/data:/app/data \
+  ghcr.io/sonn-audio/core:latest</pre>
+              </div>
+              <p class="door-note">
+                Then open <code>http://&lt;server-ip&gt;:7090</code>, create your admin account, and walk
+                the three steps: <strong>Content</strong> — add your music. <strong>Access</strong> — switch
+                on how to reach it. <strong>Zones</strong> — only if you want rooms. Steps one and two are
+                already a working audio server.
+              </p>
+            </div>
+
+            <div class="rise">
+              <table class="ports">
+                <thead>
+                  <tr>
+                    <th>port</th>
+                    <th>carries</th>
+                    <th>when</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>7090</td>
+                    <td>Admin UI, web player, API, Subsonic, WebDAV, DLNA, audio streams</td>
+                    <td>always</td>
+                  </tr>
+                  <tr>
+                    <td>7091</td>
+                    <td>Loxone native app protocol</td>
+                    <td>loxone on</td>
+                  </tr>
+                  <tr>
+                    <td>7095</td>
+                    <td>Loxone Miniserver protocol</td>
+                    <td>loxone on</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div class="callout mt-m">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" /><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5" />
+                </svg>
+                <span>
+                  Prefer bare metal? It runs directly on Node.js&nbsp;20+ — clone, <code>npm install</code>,
+                  <code>npm run build</code>, <code>npm start</code>.
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================= closing -->
+      <section class="closing">
+        <div class="wrap rise">
+          <p class="eyebrow" style="justify-content: center">open source · self-hosted · yours</p>
+          <h2 class="h2">Your music deserves a server this good.</h2>
+          <p class="lede">
+            No subscription, no cloud dependency, no speakers to replace. An audioserver on your LAN with
+            no route out still draws its own front door.
+          </p>
+          <div class="actions">
+            <a class="btn btn-primary" href="https://github.com/sonn-audio/core" rel="noopener">
+              <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+              </svg>
+              Get sonn on GitHub
+            </a>
+            <a class="btn" href="#start">Quick start</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- =========================================================== footer -->
+    <footer>
+      <div class="wrap foot-in">
+        <div>
+          <p class="foot-brand">
+            <svg viewBox="8 12 84 68" aria-hidden="true" fill="currentColor">
+              <path d="M14 46 L50 18 L86 46" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
+              <rect x="20" y="63.1" width="2.17" height="5.78" rx="1.08" opacity="0.4" />
+              <rect x="25.78" y="59.5" width="2.17" height="13.01" rx="1.08" opacity="0.6" />
+              <rect x="31.57" y="61.66" width="2.17" height="8.67" rx="1.08" opacity="0.8" />
+              <rect x="37.35" y="58.05" width="2.17" height="15.9" rx="1.08" />
+              <rect x="46.03" y="56.6" width="2.89" height="18.8" rx="1.45" />
+              <rect x="54.69" y="58.05" width="2.17" height="15.9" rx="1.08" />
+              <rect x="60.48" y="60.94" width="2.17" height="10.12" rx="1.08" opacity="0.9" />
+              <rect x="66.26" y="58.77" width="2.17" height="14.46" rx="1.08" opacity="0.8" />
+              <rect x="72.05" y="62.38" width="2.17" height="7.23" rx="1.08" opacity="0.7" />
+              <rect x="77.83" y="63.83" width="2.17" height="4.34" rx="1.08" opacity="0.6" />
+            </svg>
+            sonn
+          </p>
+          <p class="foot-note">
+            Multiroom audio for your whole home. Open source, self-hosted, and built to leave your music
+            exactly as it was recorded.
+          </p>
+        </div>
+        <div class="foot-col">
+          <h5>product</h5>
+          <ul>
+            <li><a href="#two-ways">Two ways to run it</a></li>
+            <li><a href="#signal">The signal path</a></li>
+            <li><a href="#zones">Zones &amp; outputs</a></li>
+            <li><a href="#integrations">Loxone &amp; Home Assistant</a></li>
+          </ul>
+        </div>
+        <div class="foot-col">
+          <h5>developers</h5>
+          <ul>
+            <li><a href="https://github.com/sonn-audio/core/blob/main/INTEGRATING.md" rel="noopener">Integrating with sonn</a></li>
+            <li><a href="https://github.com/sonn-audio/core/blob/main/README.md" rel="noopener">Documentation</a></li>
+            <li><a href="https://github.com/sonn-audio/core" rel="noopener">Source on GitHub</a></li>
+            <li><a href="https://github.com/sonn-audio/core/issues" rel="noopener">Issues &amp; support</a></li>
+          </ul>
+        </div>
+        <div class="foot-col">
+          <h5>project</h5>
+          <ul>
+            <li><a href="https://github.com/sonn-audio/core/blob/main/LICENSE" rel="noopener">Apache-2.0 license</a></li>
+            <li><a href="https://github.com/sonn-audio/core/blob/main/CONTRIBUTING.md" rel="noopener">Contributing</a></li>
+            <li><a href="https://github.com/sonn-audio/core/releases" rel="noopener">Releases</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="wrap">
+        <p class="foot-legal">
+          sonn is an independent open-source project. Loxone is a trademark of Loxone Electronics GmbH;
+          Sonos, Apple, Spotify, Tidal, Deezer, Google and all other product names are trademarks of their
+          respective owners. sonn is not affiliated with or endorsed by any of them.
+        </p>
+      </div>
+    </footer>
+
+    <script>
+      /*
+       * All of it optional: the page reads perfectly with JS off. What's here is the live layer —
+       * the meters, the signal-path simulator, tabs, copy — in a hundred lines, no dependency.
+       */
+      'use strict';
+
+      // --- top bar gains its glass once the page moves ------------------------
+      const bar = document.getElementById('bar');
+      const onScroll = () => bar.classList.toggle('stuck', window.scrollY > 8);
+      onScroll();
+      addEventListener('scroll', onScroll, { passive: true });
+
+      // --- reveal on scroll ----------------------------------------------------
+      const io = new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) {
+            if (e.isIntersecting) {
+              e.target.classList.add('in');
+              io.unobserve(e.target);
+            }
+          }
+        },
+        { threshold: 0.12 },
+      );
+      document.querySelectorAll('.rise').forEach((el) => io.observe(el));
+
+      // --- the level meters, alive --------------------------------------------
+      // Each bar gets its own phase so the two meters never march in step.
+      const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (!reduced) {
+        const bars = [];
+        document.querySelectorAll('.meter[data-meter] i').forEach((bar, i) => {
+          bars.push({ el: bar, phase: Math.PI * 2 * (i / 10) + i * 1.7 });
+        });
+        let last = 0;
+        const tick = (t) => {
+          if (t - last > 66) {
+            last = t;
+            for (const b of bars) {
+              const v =
+                0.25 +
+                0.38 * Math.abs(Math.sin(t / 640 + b.phase)) +
+                0.3 * Math.abs(Math.sin(t / 210 + b.phase * 2.3));
+              b.el.style.transform = `scaleY(${Math.min(1, v).toFixed(3)})`;
+            }
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }
+
+      // --- the signal-path simulator -------------------------------------------
+      // Mirrors the rules the server actually applies; see README "The goal: your
+      // file, unchanged, at the speaker".
+      const SOURCES = {
+        hires: { name: 'Library', fmt: 'FLAC · 24-bit / 192 kHz', rate: '24-bit / 192 kHz', lossless: true },
+        cd: { name: 'Library', fmt: 'FLAC · 16-bit / 44.1 kHz', rate: '16-bit / 44.1 kHz', lossless: true },
+        lossy: { name: 'Streaming', fmt: 'AAC · 320 kbps', rate: '16-bit / 44.1 kHz', lossless: false },
+      };
+      const state = { src: 'hires', out: 'sendspin', eq: false };
+
+      const $ = (id) => document.getElementById(id);
+      const verdictIcons = {
+        check: '<path d="M20 6L9 17l-5-5"/>',
+        wave: '<path d="M3 12h3l2-7 4 14 3-10 2 3h4"/>',
+      };
+
+      function render() {
+        const src = SOURCES[state.src];
+        const sendspin = state.out === 'sendspin';
+        const converts = !sendspin; // fixed-format outputs take 48 kHz, so anything else converts
+
+        $('n-src').textContent = src.name;
+        $('n-src-f').textContent = src.fmt;
+
+        const resample = $('n-resample');
+        resample.classList.toggle('bypass', !converts);
+        resample.classList.toggle('touches', converts);
+        $('n-resample-f').textContent = converts ? '→ 16-bit / 48 kHz' : 'bypassed';
+
+        const eq = $('n-eq');
+        eq.classList.toggle('bypass', !state.eq);
+        eq.classList.toggle('touches', state.eq);
+        $('n-eq-f').textContent = state.eq ? 'active — your choice' : 'bypassed';
+
+        $('n-out-k').textContent = sendspin ? 'sendspin' : 'cast / sonos';
+        $('n-out').textContent = sendspin ? 'USB DAC' : 'Speaker';
+        $('n-out-f').textContent = converts ? '16-bit / 48 kHz' : src.rate;
+
+        // The three verdicts the player's technical view hands out, with the reason.
+        const badge = $('verdict');
+        const label = $('verdict-label');
+        const why = $('verdict-why');
+        const svg = badge.querySelector('svg');
+
+        if (state.eq) {
+          badge.dataset.v = 'altered';
+          label.textContent = 'altered';
+          svg.innerHTML = verdictIcons.wave;
+          why.textContent =
+            'The equalizer is on — a per-zone choice to process the audio, off by default, and the player says so while it is on. Switch it off and the path below returns.';
+        } else if (converts) {
+          badge.dataset.v = 'altered';
+          label.textContent = 'altered';
+          svg.innerHTML = verdictIcons.wave;
+          why.textContent =
+            'Resampled — this output is fixed at 48 kHz. That is the output’s ceiling talking, not a setting you missed, and the conversion is a good one: SoX at 28-bit precision.';
+        } else if (!src.lossless) {
+          badge.dataset.v = 'untouched';
+          label.textContent = 'untouched';
+          svg.innerHTML = verdictIcons.check;
+          why.textContent =
+            'A lossy source we did not make worse: the stream is passed through as delivered, with no second encode and no resampler in the path.';
+        } else {
+          badge.dataset.v = 'perfect';
+          label.textContent = 'bit-perfect';
+          svg.innerHTML = verdictIcons.check;
+          why.textContent =
+            'Sendspin negotiates the format per track, so the server follows the source: the file’s own samples travel over the network and the DAC clocks them at the rate they were recorded at. Nothing in the chain gets a vote.';
+        }
+      }
+
+      document.querySelectorAll('[data-src]').forEach((chip) =>
+        chip.addEventListener('click', () => {
+          document.querySelectorAll('[data-src]').forEach((c) => c.setAttribute('aria-checked', 'false'));
+          chip.setAttribute('aria-checked', 'true');
+          state.src = chip.dataset.src;
+          render();
+        }),
+      );
+      document.querySelectorAll('[data-out]').forEach((chip) =>
+        chip.addEventListener('click', () => {
+          document.querySelectorAll('[data-out]').forEach((c) => c.setAttribute('aria-checked', 'false'));
+          chip.setAttribute('aria-checked', 'true');
+          state.out = chip.dataset.out;
+          render();
+        }),
+      );
+      document.querySelectorAll('[data-eq]').forEach((chip) =>
+        chip.addEventListener('click', () => {
+          state.eq = !state.eq;
+          chip.setAttribute('aria-pressed', String(state.eq));
+          render();
+        }),
+      );
+      render();
+
+      // --- API tabs -------------------------------------------------------------
+      document.querySelectorAll('.slab-tab').forEach((tab) =>
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.slab-tab').forEach((t) => t.setAttribute('aria-selected', 'false'));
+          tab.setAttribute('aria-selected', 'true');
+          document.querySelectorAll('.slab > pre').forEach((p) => (p.hidden = true));
+          document.getElementById(tab.dataset.tab).hidden = false;
+        }),
+      );
+
+      // --- copy the quick-start command ------------------------------------------
+      document.querySelectorAll('.cmd[data-copy]').forEach((btn) =>
+        btn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(btn.dataset.copy);
+            btn.classList.add('copied');
+            btn.querySelector('.copy').textContent = 'copied';
+            setTimeout(() => {
+              btn.classList.remove('copied');
+              btn.querySelector('.copy').textContent = 'copy';
+            }, 1600);
+          } catch {
+            /* clipboard blocked — the command is right there to select */
+          }
+        }),
+      );
+    </script>
+  </body>
+</html>
