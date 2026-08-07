@@ -1,9 +1,9 @@
 # sonn core
 
-**sonn core** is a complete multiroom audio solution: a self-hosted audio server that collects your
-music — local files, streaming services, radio, line-in — and plays it in sync on the speakers you
-already own, over almost any protocol they speak. Run it as a pure content server, or as a whole-home
-multiroom system with fixed zones. Fully Loxone compatible, Home Assistant friendly.
+**The open audio server.** sonn core is a complete multiroom audio solution: a self-hosted server
+that collects your music — local files, streaming services, radio, line-in — and plays it in sync on
+the speakers you already own, over almost any protocol they speak. Run it as a pure content server,
+or as a whole-home multiroom system with fixed zones. Fully Loxone compatible, Home Assistant friendly.
 
 > **Status: 4.0 beta.** In active use and actively developed. Releases are tagged from the `beta`
 > branch, and breaking changes can still land between betas — check the release notes before updating.
