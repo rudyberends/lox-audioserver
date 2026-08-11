@@ -29,8 +29,15 @@ import { createLogger } from '@/shared/logging/logger';
 
 const log = createLogger('Content', 'About');
 
-/** MusicBrainz search score below which a match is treated as the wrong entity. */
-const MIN_SCORE = 90;
+/**
+ * How many candidates to weigh before deciding which entity was meant.
+ *
+ * One is not enough, and the failure is quiet: a search for *The Fat of the Land* scores
+ * *The Fat of the Land 25th Anniversary – Remixes* at 100, which is a perfectly good match for a
+ * different record. Asking for a handful and preferring the one whose title actually is the one
+ * asked for costs the same single request.
+ */
+const CANDIDATES = 10;
 
 /**
  * How many related acts to carry out of MusicBrainz.
@@ -81,11 +88,13 @@ export async function fetchArtistStory(artist: string): Promise<AboutStory | nul
     return null;
   }
 
-  const search = await musicBrainzJson<{ artists?: Array<{ id?: string; score?: number }> }>(
-    'artist',
-    { query: `artist:"${escapeMusicBrainzQuery(trimmed)}"`, limit: '1' },
-  );
-  const mbid = pickMbid(search?.artists);
+  const search = await musicBrainzJson<{
+    artists?: Array<{ id?: string; score?: number; name?: string }>;
+  }>('artist', {
+    query: `artist:"${escapeMusicBrainzQuery(trimmed)}"`,
+    limit: String(CANDIDATES),
+  });
+  const mbid = pickMbid(search?.artists, trimmed, (candidate) => candidate.name);
   if (!mbid) {
     return null;
   }
@@ -129,14 +138,33 @@ export async function fetchAlbumStory(
     return null;
   }
 
+  // The artist is a hint, not a filter. Anded in, it *removed* the right answer: MusicBrainz
+  // credits The Prodigy's own album to "Prodigy", so `AND artist:"The Prodigy"` left only a
+  // remix edition released under the other spelling — a perfect-scoring match for the wrong
+  // record. As a loose term it merely ranks the right one up, and the check below decides.
   const terms = [`releasegroup:"${escapeMusicBrainzQuery(trimmed)}"`];
   if (artist?.trim()) {
     terms.push(`artist:"${escapeMusicBrainzQuery(artist.trim())}"`);
   }
   const search = await musicBrainzJson<{
-    'release-groups'?: Array<{ id?: string; score?: number }>;
-  }>('release-group', { query: terms.join(' AND '), limit: '1' });
-  const mbid = pickMbid(search?.['release-groups']);
+    'release-groups'?: Array<{
+      id?: string;
+      score?: number;
+      title?: string;
+      'artist-credit'?: Array<{ name?: string; artist?: { name?: string } }>;
+    }>;
+  }>('release-group', { query: terms.join(' '), limit: String(CANDIDATES) });
+  const mbid = pickMbid(
+    search?.['release-groups'],
+    trimmed,
+    (candidate) => candidate.title,
+    artist
+      ? (candidate) =>
+        (candidate['artist-credit'] ?? [])
+          .map((credit) => credit.artist?.name ?? credit.name ?? '')
+          .some((name) => sameAct(name, artist))
+      : undefined,
+  );
   if (!mbid) {
     return null;
   }
@@ -151,13 +179,54 @@ export async function fetchAlbumStory(
   return { description: prose.text, source: prose.source, relatedNames: [] };
 }
 
-/** The best match, or null when the best is not good enough to be the right entity. */
-function pickMbid(candidates: Array<{ id?: string; score?: number }> | undefined): string | null {
-  const best = candidates?.[0];
-  if (!best?.id || Number(best.score ?? 0) < MIN_SCORE) {
-    return null;
+/**
+ * The candidate that is actually the thing asked for, or null.
+ *
+ * Not by score — by name. MusicBrainz ranks a remix edition of the same title at 100 and the
+ * album itself at 69, so a score threshold keeps the wrong record and throws away the right one.
+ * The title (and the credit, where the caller knows it) is the check instead: loose enough to
+ * survive punctuation and accents, and no looser, because a near miss here is a biography of the
+ * wrong band — which reads as data and is worse than the blank page it replaced.
+ */
+function pickMbid<T extends { id?: string; score?: number }>(
+  candidates: T[] | undefined,
+  wanted: string,
+  titleOf: (candidate: T) => string | undefined,
+  byArtist?: (candidate: T) => boolean,
+): string | null {
+  const target = normalizeTitle(wanted);
+  for (const candidate of candidates ?? []) {
+    if (!candidate.id) {
+      continue;
+    }
+    if (normalizeTitle(titleOf(candidate) ?? '') !== target) {
+      continue;
+    }
+    if (byArtist && !byArtist(candidate)) {
+      continue;
+    }
+    return candidate.id;
   }
-  return best.id;
+  return null;
+}
+
+/**
+ * Whether two credits name the same act.
+ *
+ * A leading article is dropped on both sides because catalogues disagree about it constantly —
+ * *The Prodigy* on Apple Music is *Prodigy* in MusicBrainz — and no two different bands are told
+ * apart by it alone.
+ */
+function sameAct(a: string, b: string): boolean {
+  return normalizeTitle(a.replace(/^the\s+/i, '')) === normalizeTitle(b.replace(/^the\s+/i, ''));
+}
+
+function normalizeTitle(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '');
 }
 
 function dedupeNames(names: string[]): string[] {
