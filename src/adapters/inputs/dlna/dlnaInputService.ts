@@ -5,7 +5,13 @@ import type { AirplayController } from '@/ports/InputsPort';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import { buildBaseUrl } from '@/shared/streamUrl';
 import { resolveCoverHost } from '@/shared/utils/net';
-import { SsdpAdvertiser, UpnpMediaRenderer, RENDERER_PATHS } from '@sonn-audio/node-upnp';
+import type { ZoneState } from '@/domain/zones/zoneState';
+import {
+  SsdpAdvertiser,
+  UpnpMediaRenderer,
+  RENDERER_PATHS,
+  type TransportState,
+} from '@sonn-audio/node-upnp';
 import { DlnaRendererHandler } from '@/adapters/inputs/dlna/dlnaRendererHandler';
 
 /** Absolute path prefix for one zone's renderer, under the shared HTTP server. */
@@ -21,7 +27,25 @@ function rendererUdn(zoneId: number): string {
 type ZoneRenderer = {
   renderer: UpnpMediaRenderer;
   name: string;
+  /** Last position/duration the zone reported, for GetPositionInfo. Null until it plays. */
+  timing: { elapsed: number; duration: number } | null;
 };
+
+/**
+ * How a zone's playback mode reads as a UPnP transport state. `STOPPED` and
+ * `NO_MEDIA_PRESENT` are both "not playing", and the difference matters to a
+ * control point: the first offers a play button, the second tells it there is
+ * nothing to press it for.
+ */
+function transportStateFor(state: ZoneState): TransportState {
+  if (state.mode === 'play') {
+    return 'PLAYING';
+  }
+  if (state.mode === 'pause') {
+    return 'PAUSED_PLAYBACK';
+  }
+  return state.audiopath ? 'STOPPED' : 'NO_MEDIA_PRESENT';
+}
 
 /**
  * Per-zone DLNA MediaRenderer input. Mirrors AirplayInputService: it syncs one
@@ -75,12 +99,16 @@ export class DlnaInputService {
         existing.name = name; // friendlyName() closure reads this live
         continue;
       }
-      const entry: ZoneRenderer = { renderer: null as unknown as UpnpMediaRenderer, name };
+      const entry: ZoneRenderer = {
+        renderer: null as unknown as UpnpMediaRenderer,
+        name,
+        timing: null,
+      };
       const renderer = new UpnpMediaRenderer({
         udn: rendererUdn(zone.id),
         friendlyName: () => entry.name,
         baseUrl: () => `${this.baseUrl()}${rendererBasePath(zone.id)}`,
-        handler: new DlnaRendererHandler(zone.id, controller),
+        handler: new DlnaRendererHandler(zone.id, controller, () => entry.timing),
         identity: {
           manufacturer: 'Sonn Audio',
           modelName: 'Sonn Audio',
@@ -124,9 +152,26 @@ export class DlnaInputService {
     }
   }
 
-  /** Optionally reflect a zone's volume back to its renderer's RenderingControl. */
-  public reflectVolume(zoneId: number, volumePercent: number): void {
-    this.instances.get(zoneId)?.renderer.reflectVolume(volumePercent);
+  /**
+   * Reflect a zone's own state onto its renderer, so a subscribed control point is
+   * told what the zone is actually doing — not just what that control point cast at
+   * it. Playback started from our app, a pause from a Loxone panel and a queue
+   * advance all happen outside UPnP; without this the renderer reports the state it
+   * was last *asked* for, which for a zone that never received a cast is `STOPPED`
+   * forever.
+   *
+   * Cheap enough to call on every zone change: both reflect calls dedupe internally
+   * (`setState` returns early on an unchanged state, so no GENA event is sent), and
+   * zones without a renderer fall out on the map lookup.
+   */
+  public reflectZoneState(state: ZoneState): void {
+    const entry = this.instances.get(state.id);
+    if (!entry) {
+      return;
+    }
+    entry.timing = { elapsed: state.time, duration: state.duration };
+    entry.renderer.reflectTransportState(transportStateFor(state));
+    entry.renderer.reflectVolume(state.volume);
   }
 
   // ── HTTP dispatch (registered on the gateway for /dlna-renderer/*) ────────────

@@ -93,6 +93,7 @@ import { fadeController } from '@/application/zones/fadeController';
 import { LoxoneNotifierAdapter } from '@/adapters/loxone/LoxoneNotifierAdapter';
 import { ApiEventHub } from '@/adapters/http/api/apiEventHub';
 import { withApiEvents } from '@/adapters/http/api/apiNotifierTap';
+import { withDlnaReflection } from '@/adapters/inputs/dlna/dlnaNotifierTap';
 import { readBuildVersion } from '@/shared/serverVersion';
 import { parseServiceNativeAudiopath } from '@/domain/zones/audiopath';
 import { serviceLabelForAudiopath } from '@/domain/media/serviceIdentity';
@@ -194,21 +195,28 @@ export function createRuntime(): Runtime {
 
   const apiEventHub = new ApiEventHub();
   const ports = createRuntimePorts({
-    notifier: withApiEvents(new LoxoneNotifierAdapter(loxoneNotifier), apiEventHub, {
-      device: resolveOutputDevice,
-      outputProtocol: resolveOutputProtocol,
-      outputCapabilities: (zoneId) =>
-        zoneManager.getOutputCapabilities(zoneId) as ApiOutputCapabilities | null,
-      // Same lookup the request path uses: without it a GET carried `output.sync` and an event
-      // did not, which is the field-appears-and-disappears failure this tap exists to prevent.
-      outputSync: (zoneId) => zoneManager.getOutputSyncStatus(zoneId),
-      group: (zoneId) => zoneManager.getGroupMembership(zoneId),
-      serviceLabel: resolveServiceLabel,
-      inputLabel: resolveInputLabel,
-      streamFormat: resolveStreamFormat,
-      volumeLimits: resolveVolumeLimits,
-      powerState: resolvePowerState,
-    }),
+    // Two taps on the one zone-change signal: the public API's event stream, and the
+    // per-zone DLNA renderers. Neither is a second source of truth — both project the
+    // same `ZoneState` the Loxone notifier gets. The DLNA service is resolved lazily
+    // because it is constructed below, from the config port these ports hand out.
+    notifier: withDlnaReflection(
+      withApiEvents(new LoxoneNotifierAdapter(loxoneNotifier), apiEventHub, {
+        device: resolveOutputDevice,
+        outputProtocol: resolveOutputProtocol,
+        outputCapabilities: (zoneId) =>
+          zoneManager.getOutputCapabilities(zoneId) as ApiOutputCapabilities | null,
+        // Same lookup the request path uses: without it a GET carried `output.sync` and an event
+        // did not, which is the field-appears-and-disappears failure this tap exists to prevent.
+        outputSync: (zoneId) => zoneManager.getOutputSyncStatus(zoneId),
+        group: (zoneId) => zoneManager.getGroupMembership(zoneId),
+        serviceLabel: resolveServiceLabel,
+        inputLabel: resolveInputLabel,
+        streamFormat: resolveStreamFormat,
+        volumeLimits: resolveVolumeLimits,
+        powerState: resolvePowerState,
+      }),
+      () => dlnaInputService,
+    ),
   });
   const configPort = ports.config;
   // Drive the per-session crossfade pipeline-shape from the system-wide

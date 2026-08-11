@@ -23,7 +23,19 @@ export class DlnaRendererHandler implements RendererHandler {
   constructor(
     private readonly zoneId: number,
     private readonly controller: AirplayController,
+    /**
+     * The zone's own position, or null when it is not known. Without it the module
+     * answers GetPositionInfo from wall-clock since its last Play, which is only
+     * right while this control point is the sole thing driving the zone — a seek
+     * from our app, a queue advance or a pause from a Loxone panel all leave that
+     * estimate drifting.
+     */
+    private readonly position: () => { elapsed: number; duration: number } | null = () => null,
   ) {}
+
+  public getPosition(): { elapsed: number; duration: number } | null {
+    return this.position();
+  }
 
   public onSetUri(_uri: string, metadata: ParsedDidlObject | null): void {
     this.parsed = metadata;
