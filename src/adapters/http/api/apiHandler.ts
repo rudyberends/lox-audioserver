@@ -577,7 +577,14 @@ export class ApiHandler {
       return;
     }
 
-    const itemMatch = /^\/items\/(.+)$/.exec(pathname);
+    // One segment, not `.+`: an id is opaque, so a greedy match cannot tell an id from an id
+    // followed by a sub-resource. It swallowed `/items/{id}/about` — a route this server does
+    // not have — into the id and answered *200* with a mangled item, which is worse than not
+    // having the route at all: a caller that correctly treats 404 as "no such surface" got a
+    // body of the wrong shape instead. Anything under an item now falls through to the 404 at
+    // the end, which is the honest answer until such a route exists. Ids containing a slash are
+    // percent-encoded by the caller and never appear literally here.
+    const itemMatch = /^\/items\/([^/]+)$/.exec(pathname);
     if (itemMatch && method === 'GET') {
       await this.handleItem(res, itemMatch[1]!);
       return;
