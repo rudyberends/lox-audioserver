@@ -80,6 +80,30 @@ writing: `zone.changed` for anything that alters a zone's state, and `queue.chan
 `favorites.changed` or `recents.changed` for the collections — those say *that* something
 changed and leave you to re-read the page you are showing.
 
+## Finding the server
+
+The server advertises itself over mDNS, so an integration can offer to set itself up
+instead of asking someone to type in an address:
+
+```
+_sonncore._tcp.local.
+```
+
+The instance name is the server's configured name. The TXT record carries:
+
+| key | meaning |
+| --- | --- |
+| `id` | Stable identity, the same value `GET /api/v1/audio-servers` reports as `selfId`. Key your configuration on this — **not** on the instance name, which is a display name someone can change, and not on the address. |
+| `version` | What is running, if you need to know whether a surface exists yet. |
+| `api` | Path prefix of the versioned API on this server, e.g. `/api/v1`. Follow it rather than hard-coding the prefix, and you land on the contract this server actually serves. |
+| `mac` | The server's routing MAC. Present for our own speaker clients; `id` is the value to identify a server by. |
+
+The remaining keys are registration paths used by our own clients (line-in bridges,
+Sonn Clients) and are not part of this contract.
+
+Discovery is a convenience, never a requirement: everything below works against a
+host and port you already know, which is what a Docker setup on another network needs.
+
 ## Zone object
 
 ```json

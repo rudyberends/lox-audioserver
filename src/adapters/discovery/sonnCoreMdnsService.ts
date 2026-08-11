@@ -2,6 +2,8 @@ import type { HttpServerConfig } from '@/config/http';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { MdnsPort } from '@/ports/MdnsPort';
 import { resolveMdnsHost } from '@/shared/utils/net';
+import { normalizeMacId } from '@/shared/utils/mac';
+import { readBuildVersion } from '@/shared/serverVersion';
 import { SonnCoreMdnsAdvertiser } from '@/adapters/discovery/sonnCoreMdnsAdvertiser';
 import type { MdnsLifecycleService } from '@/adapters/discovery/mdnsLifecycle';
 import { API_ROOT } from '@/adapters/http/api/apiHandler';
@@ -34,6 +36,16 @@ export class SonnCoreMdnsService implements MdnsLifecycleService {
         // Versioned, so a client that finds us over mDNS lands on the contract it was
         // built against rather than on whatever the newest one happens to be.
         api: API_ROOT,
+        /**
+         * This server's identity, byte-identical to `selfId` from
+         * `GET /api/v1/audio-servers`. A discovering client needs something stable to
+         * recognise us by across restarts and address changes — a Home Assistant config
+         * flow keys its entry on it — and the instance name will not do: it is the
+         * configured display name and changes when someone renames the server.
+         */
+        id: normalizeMacId(mac) ?? undefined,
+        /** What is running, so a client can tell whether a surface it needs exists yet. */
+        version: readBuildVersion(),
         linein: '/api/linein',
         linein_register: '/api/linein/bridges/register',
         linein_status: '/api/linein/bridges/{bridge_id}/status',
