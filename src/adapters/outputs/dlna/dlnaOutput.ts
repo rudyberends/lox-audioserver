@@ -18,6 +18,13 @@ import {
   type DlnaRenderingEvent,
 } from '@sonn-audio/node-upnp';
 
+/**
+ * Sink MIME types that mean "this renderer can take our FLAC". `audio/x-flac` is the older spelling and
+ * still what several renderers publish; the LPCM types are lossless too but not what we send, so they
+ * do not qualify.
+ */
+const LOSSLESS_SINK_TYPES = new Set(['audio/flac', 'audio/x-flac']);
+
 export interface DlnaOutputConfig {
   host?: string;
   controlUrl?: string;
@@ -70,7 +77,7 @@ export const DLNA_OUTPUT_DEFINITION: OutputConfigDefinition = {
       type: 'text',
       placeholder: 'auto',
       description:
-        "Set to 'lossless' if this speaker can play FLAC — the music then reaches it unchanged instead of being converted to MP3. Leave on 'auto' (or set 'mp3') if you are not sure: a speaker that cannot play FLAC stays silent.",
+        "Leave this on 'auto': the server asks the speaker which formats it plays and sends the music unchanged (FLAC) whenever it can, instead of converting it to MP3. Set 'lossless' to insist, or 'mp3' if the speaker answers wrongly or the network cannot keep up.",
     },
   ],
 };
@@ -123,6 +130,13 @@ export class DlnaOutput implements ZoneOutput {
   private readonly streamFormat: StreamFormatPreference;
   /** Set once this renderer has actually failed on a lossless stream; outranks the preference. */
   private losslessFailed = false;
+  /**
+   * What the renderer said it accepts, from its ConnectionManager. `undefined` = not asked yet,
+   * `null` = asked and it would not say — both mean "do not assume", which is why they are distinct
+   * from `false`.
+   */
+  private losslessSupported?: boolean | null;
+  private capabilityProbe?: Promise<void>;
 
   constructor(
     private readonly zoneId: number,
@@ -150,6 +164,12 @@ export class DlnaOutput implements ZoneOutput {
       commandTimeoutMs: 2500,
       logger: this.log,
     });
+    // Ask a *known* renderer what it accepts straight away, so the answer is in before the first track.
+    // With only auto-discovery configured we wait for playback to trigger discovery rather than firing
+    // SSDP for a capability question; the probe then runs on the first play().
+    if (host || controlUrl) {
+      this.probeCapabilities();
+    }
     if (controlUrl) {
       this.log.info('DLNA output configured with manual control URL', {
         zoneId: this.zoneId,
@@ -173,6 +193,7 @@ export class DlnaOutput implements ZoneOutput {
   }
 
   public async play(session: PlaybackSession): Promise<void> {
+    this.probeCapabilities();
     if (!session.playbackSource) {
       this.log.debug('DLNA output skipped', { zoneId: this.zoneId, source: session.source });
       return;
@@ -291,19 +312,46 @@ export class DlnaOutput implements ZoneOutput {
   }
 
   /**
-   * Lossless when the owner has said this renderer takes it, MP3 otherwise.
+   * Lossless when this renderer says it can decode it, MP3 otherwise.
    *
-   * `auto` deliberately still means MP3 here. A DLNA renderer publishes what it accepts in its
-   * ConnectionManager's `SinkProtocolInfo`, and until we ask it (that belongs in the UPnP module, not
-   * in this adapter) guessing would trade a re-encode for silence — a renderer that cannot decode the
-   * stream simply plays nothing, with no way for the owner to see why. Set `streamFormat: "lossless"`
-   * on the output to take it: everything below already follows the choice.
+   * The answer comes from the device itself — `GetProtocolInfo`'s sink list — because a renderer that
+   * cannot decode what it is given does not complain, it plays silence. Until that answer is in, `auto`
+   * resolves to MP3: the query is asynchronous and this is not, so the first session after a restart may
+   * still be MP3 and the next one lossless. An explicit `streamFormat` skips the wait entirely.
    */
   private streamProfile(): StreamProfileChoice {
     return chooseStreamProfile({
       preference: this.streamFormat,
-      losslessSupported: null,
+      losslessSupported: this.losslessSupported ?? null,
       losslessFailed: this.losslessFailed,
+    });
+  }
+
+  /**
+   * Ask the renderer once what it accepts. Best-effort and fire-and-forget: playback never waits on it,
+   * and a device that stays silent keeps the MP3 default.
+   */
+  private probeCapabilities(): void {
+    if (this.capabilityProbe || this.losslessSupported !== undefined) {
+      return;
+    }
+    this.capabilityProbe = (async () => {
+      const types = await this.cp.getSinkContentTypes();
+      if (!types) {
+        this.losslessSupported = null;
+        return;
+      }
+      this.losslessSupported = types.some((type) => LOSSLESS_SINK_TYPES.has(type.split(';')[0]!.trim()));
+      this.log.info('DLNA renderer sound-format support resolved', {
+        zoneId: this.zoneId,
+        zone: this.zoneName,
+        lossless: this.losslessSupported,
+        types,
+        streamFormat: this.streamFormat,
+        using: this.streamProfile(),
+      });
+    })().catch(() => {
+      this.losslessSupported = null;
     });
   }
 
