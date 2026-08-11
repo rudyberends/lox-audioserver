@@ -47,6 +47,42 @@ export interface SourceNativeFormat {
 }
 
 /**
+ * The dither applied at the one place samples lose width: the final conversion into a 16-bit
+ * integer output. Without it that conversion is plain rounding, which turns quantisation error
+ * into signal-correlated distortion instead of noise — audible on quiet passages and fades.
+ *
+ * Only at 16 bits. A 24-bit output quantises 8 bits lower than any playback chain's own noise
+ * floor, so dither there would be noise for nothing.
+ */
+const DITHER_METHOD = 'triangular_hp';
+
+/**
+ * One stage of the output filter chain.
+ *
+ * The command line and the `ProcessingChain` description are both *rendered from this array*, which is
+ * what makes the two impossible to disagree. They used to be two parallel computations over the same
+ * fields — and they did diverge: the resampler was described as running with our soxr settings while
+ * the filter that actually converted the rate was one ffmpeg auto-inserted behind our backs.
+ */
+type FilterStage =
+  /** Run the DSP in float. Without it a 16-bit source makes ffmpeg negotiate s16p for the biquads. */
+  | { kind: 'float' }
+  | { kind: 'delay'; ms: number }
+  | { kind: 'gain'; db: number; origin: 'source' | 'output' }
+  | { kind: 'equalizer'; bands: number[]; chain: string }
+  /**
+   * The single terminal conversion: rate, layout and sample format in one soxr pass.
+   *
+   * `osr` is load-bearing and must always be set. Without it this filter is free to keep the input
+   * rate — the EQ downstream accepts any — and ffmpeg then auto-inserts its *own* `aresample` with
+   * default options to reach the output rate. The result was that switching on a single EQ band
+   * silently swapped soxr at precision 28 for stock swr.
+   */
+  | { kind: 'resample'; osr: number; osf: string | null; dither: string | null; async: boolean };
+
+type ResampleStage = Extract<FilterStage, { kind: 'resample' }>;
+
+/**
  * Every way this server can alter the audio, as data.
  *
  * The player's signal path used to be built from two booleans (`bitPerfect`, `dspApplied`), which is
@@ -54,9 +90,9 @@ export interface SourceNativeFormat {
  * that might have resampled, requantised, gained, delayed, equalised or re-encoded is exactly the
  * vagueness a technical readout exists to remove.
  *
- * It is produced by the same object that builds the command line, from the same fields, so a stage
- * cannot be described as absent while its filter is in the args. Anything added to `buildFilterArgs`
- * or `buildOutputArgs` belongs here in the same commit.
+ * Read straight off the `FilterStage[]` that produced the command line, so a stage cannot be described
+ * as absent while its filter is in the args, nor described with settings the running filter does not
+ * have. Anything added to `buildFilterChain` belongs here in the same commit.
  */
 export interface ProcessingChain {
   /** soxr engaged: rate, channel count or depth had to change (or a filter forced the path). */
@@ -79,6 +115,8 @@ export interface ProcessingChain {
   gainDb: { source: number; output: number } | null;
   /** Pre-delay in ms, for aligning a source against another output. */
   delayMs: number | null;
+  /** Dither method used at the final requantisation, or null when nothing lost width. */
+  dither: string | null;
 }
 
 /**
@@ -153,47 +191,40 @@ export class FfmpegArgBuilder {
   }
 
   /**
-   * What this session does to the audio, stage by stage.
+   * What this session does to the audio, stage by stage — derived from the chain that runs.
    *
-   * Read straight off the same inputs `buildFilterArgs` uses. `resampled` mirrors the *actual*
-   * condition in that method rather than "rate differs", because a filter chain forces the resampler
-   * even when the rates match — which is true and would otherwise be reported as a passthrough.
+   * `requantised` and `channelsRemapped` compare the source against the output rather than reading a
+   * stage, because they are facts about the *material*: a 24-bit master carried in a 16-bit output lost
+   * width no matter which filter did it.
    */
   public describeProcessing(equalizerBands: ReadonlyArray<number> | null): ProcessingChain {
     const native = this.sourceNativeFormat;
-    const { sampleRate, channels, pcmBitDepth, fixedGainDb } = this.outputSettings;
-    const sourceGainDb = this.source.kind === 'url' ? this.source.gainDb : undefined;
-    const eqChain = buildEqualizerFilterChain(equalizerBands);
-
-    const pipeSourceSampleRate =
-      this.source.kind === 'pipe' ? this.source.sampleRate ?? sampleRate : null;
-    const pipeSourceChannels = this.source.kind === 'pipe' ? this.source.channels ?? channels : null;
-    const pipeSourceFormat = this.source.kind === 'pipe' ? this.source.format ?? 's16le' : null;
-    const canBypassResampleForPipe =
-      (this.profile === 'pcm' || this.profile === 'flac') &&
-      this.source.kind === 'pipe' &&
-      pipeSourceFormat === 's16le' &&
-      pipeSourceSampleRate === sampleRate &&
-      pipeSourceChannels === channels;
-    const resampled =
-      audioResampler.name === 'soxr' &&
-      !canBypassResampleForPipe &&
-      !this.isBitPerfect(equalizerBands);
-
-    const gainSource =
-      typeof sourceGainDb === 'number' && Number.isFinite(sourceGainDb) ? sourceGainDb : 0;
-    const gainOutput = Number.isFinite(fixedGainDb) ? fixedGainDb : 0;
+    const { channels, pcmBitDepth } = this.outputSettings;
+    const stages = this.buildFilterChain(equalizerBands);
+    const resample = stages.find((stage): stage is ResampleStage => stage.kind === 'resample');
+    const equalizer = stages.find(
+      (stage): stage is Extract<FilterStage, { kind: 'equalizer' }> => stage.kind === 'equalizer',
+    );
+    const delay = stages.find(
+      (stage): stage is Extract<FilterStage, { kind: 'delay' }> => stage.kind === 'delay',
+    );
+    const gains = stages.filter(
+      (stage): stage is Extract<FilterStage, { kind: 'gain' }> => stage.kind === 'gain',
+    );
+    const gainSource = gains.find((gain) => gain.origin === 'source')?.db ?? 0;
+    const gainOutput = gains.find((gain) => gain.origin === 'output')?.db ?? 0;
 
     return {
-      resampled,
-      resampler: resampled ? { ...audioResampler } : null,
+      resampled: Boolean(resample),
+      resampler: resample ? { ...audioResampler } : null,
       // Only a *declared* depth can be lost; a lossy source has no original depth to preserve.
       requantised: native?.bitDepth != null && native.bitDepth !== pcmBitDepth,
       channelsRemapped: native != null && native.channels !== channels,
       reencoded: this.profile === 'aac' || this.profile === 'mp3' || this.profile === 'opus',
-      equalizer: eqChain ? { bands: [...(equalizerBands ?? [])] } : null,
-      gainDb: gainSource !== 0 || gainOutput !== 0 ? { source: gainSource, output: gainOutput } : null,
-      delayMs: this.sourcePreDelayMs && this.sourcePreDelayMs > 0 ? this.sourcePreDelayMs : null,
+      equalizer: equalizer ? { bands: [...equalizer.bands] } : null,
+      gainDb: gains.length ? { source: gainSource, output: gainOutput } : null,
+      delayMs: delay ? delay.ms : null,
+      dither: resample?.dither ?? null,
     };
   }
 
@@ -272,8 +303,8 @@ export class FfmpegArgBuilder {
 
   /** Single-stage output args with EQ + resample + pre-delay filters. */
   public buildOutputArgs(equalizerBands: ReadonlyArray<number> | null): string[] {
-    const { sampleRate, channels, pcmBitDepth, mp3Bitrate, fixedGainDb } = this.outputSettings;
-    const filterArgs = this.buildFilterArgs(equalizerBands, fixedGainDb);
+    const { sampleRate, channels, pcmBitDepth, mp3Bitrate } = this.outputSettings;
+    const filterArgs = this.buildFilterArgs(equalizerBands);
 
     switch (this.profile) {
       case 'aac': {
@@ -294,7 +325,7 @@ export class FfmpegArgBuilder {
       }
       case 'flac': {
         return ['-vn', '-acodec', 'flac', '-compression_level', '0', '-frame_size', '512',
-          '-sample_fmt', flacSampleFormat(pcmBitDepth),
+          '-sample_fmt', sampleFormatForDepth(pcmBitDepth),
           '-ar', String(sampleRate), '-ac', String(channels),
           ...filterArgs, '-f', 'flac'];
       }
@@ -317,10 +348,15 @@ export class FfmpegArgBuilder {
    * Note the two-stage path exists for crossfade, and crossfade blending itself
    * requantises — so this path is never bit-perfect. It is merely no longer
    * truncating.
+   *
+   * The rate conversion into the bus happens *here*, so this is where soxr and the dither belong.
+   * Without them the decoder reached the bus rate through ffmpeg's stock resampler and rounded into
+   * the bus depth undithered, while the session reported soxr at precision 28.
    */
   public buildPcmDecoderArgs(): string[] {
     const { sampleRate, channels, pcmBitDepth } = this.outputSettings;
     const pcmOut = [
+      ...this.buildBusResampleArgs(),
       '-vn', '-acodec', pcmCodecFromBitDepth(pcmBitDepth),
       '-ar', String(sampleRate), '-ac', String(channels),
       '-f', pcmFormatFromBitDepth(pcmBitDepth), 'pipe:1',
@@ -360,7 +396,8 @@ export class FfmpegArgBuilder {
   /** Decoder args for a fade-in source during an inline crossfade. */
   public buildPcmDecoderArgsForSource(source: FadeInSource): string[] {
     const { sampleRate, channels, pcmBitDepth } = this.outputSettings;
-    const pcmOut = ['-vn', '-acodec', pcmCodecFromBitDepth(pcmBitDepth),
+    const pcmOut = [...this.buildBusResampleArgs(),
+      '-vn', '-acodec', pcmCodecFromBitDepth(pcmBitDepth),
       '-ar', String(sampleRate), '-ac', String(channels),
       '-f', pcmFormatFromBitDepth(pcmBitDepth), 'pipe:1'];
     const log = ['-hide_banner', '-loglevel', this.getLogLevel()];
@@ -380,9 +417,16 @@ export class FfmpegArgBuilder {
     ];
   }
 
-  /** Two-stage encoder args: PCM on stdin → output profile on stdout. */
-  public buildPcmEncoderArgs(): string[] {
-    const { sampleRate, channels, pcmBitDepth, mp3Bitrate, fixedGainDb } = this.outputSettings;
+  /**
+   * Two-stage encoder args: PCM on stdin → output profile on stdout.
+   *
+   * Carries the *whole* DSP chain, because this is the only stage of the two-stage path that can. It
+   * used to carry the pre-delay and the output trim and silently drop the rest: enabling crossfade
+   * therefore turned off the zone's equalizer and the source's loudness normalisation, while
+   * `describeProcessing` still listed both.
+   */
+  public buildPcmEncoderArgs(equalizerBands: ReadonlyArray<number> | null = null): string[] {
+    const { sampleRate, channels, pcmBitDepth, mp3Bitrate } = this.outputSettings;
     // -fflags nobuffer / -analyzeduration 0: without these, FFmpeg buffers ~5 s of raw
     // PCM from pipe:0 before producing its first output frame (probing raw input).
     // Since we fully specify the format, probing is unnecessary and wastes startup time.
@@ -394,21 +438,14 @@ export class FfmpegArgBuilder {
       '-ar', String(sampleRate), '-ac', String(channels), '-i', 'pipe:0',
     ];
 
-    const filters: string[] = [];
-    if (this.sourcePreDelayMs && this.sourcePreDelayMs > 0) {
-      filters.push(`adelay=delays=${this.sourcePreDelayMs}:all=1`);
-    }
-    if (Number.isFinite(fixedGainDb) && fixedGainDb !== 0) {
-      filters.push(`volume=${fixedGainDb}dB`);
-    }
-    const filterArgs = filters.length ? ['-af', filters.join(',')] : [];
+    const filterArgs = this.buildFilterArgs(equalizerBands, { fromBus: true });
     const log = ['-hide_banner', '-loglevel', this.getLogLevel()];
     const base = [...log, ...pcmIn, ...filterArgs];
 
     switch (this.profile) {
       case 'flac':
         return [...base, '-acodec', 'flac', '-compression_level', '0', '-frame_size', '512',
-          '-sample_fmt', flacSampleFormat(pcmBitDepth),
+          '-sample_fmt', sampleFormatForDepth(pcmBitDepth),
           '-ar', String(sampleRate), '-ac', String(channels), '-f', 'flac', 'pipe:1'];
       case 'aac': {
         const br = mp3Bitrate || '160k';
@@ -435,67 +472,163 @@ export class FfmpegArgBuilder {
     }
   }
 
-  private buildFilterArgs(
+  /**
+   * The output filter chain, as data. Single source of truth for both the `-af` argument and
+   * `describeProcessing`.
+   *
+   * Order is deliberate: float first, then every DSP stage, then one terminal conversion. The DSP used
+   * to sit *after* an `aresample` that was meant to do the rate conversion, which cost twice — the
+   * biquads ran at whatever integer format the neighbouring links negotiated (s16p for the common
+   * 16-bit source, measurably noisier than float), and the resample the args described never happened
+   * because a filter downstream was free to keep the input rate.
+   *
+   * @param fromBus When true the input is our own intermediate PCM (two-stage encoder), already at the
+   *   output rate and depth. There is then nothing to convert unless a DSP stage widened it to float.
+   */
+  private buildFilterChain(
     equalizerBands: ReadonlyArray<number> | null,
-    fixedGainDb: number,
-  ): string[] {
-    const filters: string[] = [];
-    const pipeSourceSampleRate =
-      this.source.kind === 'pipe' ? this.source.sampleRate ?? this.outputSettings.sampleRate : null;
-    const pipeSourceChannels =
-      this.source.kind === 'pipe' ? this.source.channels ?? this.outputSettings.channels : null;
-    const pipeSourceFormat = this.source.kind === 'pipe' ? this.source.format ?? 's16le' : null;
-    const canBypassResampleForPipe =
-      (this.profile === 'pcm' || this.profile === 'flac') &&
-      this.source.kind === 'pipe' &&
-      pipeSourceFormat === 's16le' &&
-      pipeSourceSampleRate === this.outputSettings.sampleRate &&
-      pipeSourceChannels === this.outputSettings.channels;
+    { fromBus = false }: { fromBus?: boolean } = {},
+  ): FilterStage[] {
+    const { sampleRate, pcmBitDepth, fixedGainDb } = this.outputSettings;
 
+    const dsp: FilterStage[] = [];
     if (this.sourcePreDelayMs && this.sourcePreDelayMs > 0) {
-      filters.push(`adelay=delays=${Math.max(0, Math.round(this.sourcePreDelayMs))}:all=1`);
+      dsp.push({ kind: 'delay', ms: Math.max(0, Math.round(this.sourcePreDelayMs)) });
     }
     // Source-level loudness gain (e.g. Spotify volume normalisation). Composes
-    // with the per-output fixedGainDb below rather than replacing it.
+    // with the per-output fixedGainDb rather than replacing it.
     const sourceGainDb = this.source.kind === 'url' ? this.source.gainDb : undefined;
     if (typeof sourceGainDb === 'number' && Number.isFinite(sourceGainDb) && sourceGainDb !== 0) {
-      filters.push(`volume=${sourceGainDb.toFixed(2)}dB`);
+      dsp.push({ kind: 'gain', db: sourceGainDb, origin: 'source' });
     }
     if (Number.isFinite(fixedGainDb) && fixedGainDb !== 0) {
-      filters.push(`volume=${fixedGainDb}dB`);
-    }
-    // Nothing about this session alters the audio, so the resampler would be a
-    // pure no-op. Holds for lossy sources too — see isBitPerfect.
-    const canBypassResampleForSource = this.isBitPerfect(equalizerBands);
-
-    if (audioResampler.name === 'soxr' && !canBypassResampleForPipe && !canBypassResampleForSource) {
-      // For live pipe inputs (e.g. librespot), ffmpeg's async resampling can build up
-      // noticeable startup latency before first output chunk. Keep resampling enabled
-      // but disable async clock correction for pipe sources.
-      const asyncPart = this.source.kind === 'pipe' ? '' : ':async=1';
-      filters.push(
-        `aresample=resampler=soxr:precision=${audioResampler.precision}:cutoff=${audioResampler.cutoff}${asyncPart}`,
-      );
+      dsp.push({ kind: 'gain', db: fixedGainDb, origin: 'output' });
     }
     const eqChain = buildEqualizerFilterChain(equalizerBands);
     if (eqChain) {
-      filters.push(eqChain);
+      dsp.push({ kind: 'equalizer', bands: [...(equalizerBands ?? [])], chain: eqChain });
     }
-    return filters.length ? ['-af', filters.join(',')] : [];
+
+    // Nothing alters the audio and nothing needs converting: no filter at all. `isBitPerfect` holds
+    // for lossy sources too (see its docstring); the pipe case covers a librespot-style feed that
+    // already arrives in exactly the output format.
+    if (!dsp.length && (fromBus || this.isBitPerfect(equalizerBands) || this.pipeMatchesOutput())) {
+      return [];
+    }
+
+    const stages: FilterStage[] = [];
+    if (dsp.length) {
+      stages.push({ kind: 'float' });
+      stages.push(...dsp);
+    }
+    // Integer profiles get their sample format pinned here so the requantisation happens once, in
+    // soxr, with dither — rather than as an undithered afterthought in the encoder. Lossy encoders
+    // take float natively, so pinning a format for them would only add a round trip.
+    const integerOutput = this.profile === 'pcm' || this.profile === 'flac';
+    const osf = integerOutput ? sampleFormatForDepth(pcmBitDepth) : null;
+    stages.push({
+      kind: 'resample',
+      osr: sampleRate,
+      osf,
+      dither: osf === 's16' ? DITHER_METHOD : null,
+      // For live pipe inputs (e.g. librespot), ffmpeg's async clock correction can build up
+      // noticeable startup latency before the first output chunk.
+      async: this.source.kind !== 'pipe',
+    });
+    return stages;
+  }
+
+  /**
+   * The conversion into the two-stage intermediate bus: soxr at our settings, dithered when the bus
+   * is 16-bit. No DSP — that runs in the encoder, which is the stage crossfade leaves attached.
+   */
+  private buildBusResampleArgs(): string[] {
+    const osf = sampleFormatForDepth(this.outputSettings.pcmBitDepth);
+    return [
+      '-af',
+      renderFilterStage({
+        kind: 'resample',
+        osr: this.outputSettings.sampleRate,
+        osf,
+        dither: osf === 's16' ? DITHER_METHOD : null,
+        async: this.source.kind !== 'pipe',
+      }),
+    ];
+  }
+
+  /** A pipe source that already arrives in exactly the output format needs no conversion. */
+  private pipeMatchesOutput(): boolean {
+    if (this.source.kind !== 'pipe') {
+      return false;
+    }
+    if (this.profile !== 'pcm' && this.profile !== 'flac') {
+      return false;
+    }
+    return (
+      (this.source.format ?? 's16le') === 's16le' &&
+      (this.source.sampleRate ?? this.outputSettings.sampleRate) === this.outputSettings.sampleRate &&
+      (this.source.channels ?? this.outputSettings.channels) === this.outputSettings.channels &&
+      this.outputSettings.pcmBitDepth === 16
+    );
+  }
+
+  private buildFilterArgs(
+    equalizerBands: ReadonlyArray<number> | null,
+    options: { fromBus?: boolean } = {},
+  ): string[] {
+    const stages = this.buildFilterChain(equalizerBands, options);
+    return stages.length ? ['-af', stages.map(renderFilterStage).join(',')] : [];
   }
 }
 
+function renderFilterStage(stage: FilterStage): string {
+  switch (stage.kind) {
+    case 'float':
+      return 'aformat=sample_fmts=fltp';
+    case 'delay':
+      return `adelay=delays=${stage.ms}:all=1`;
+    case 'gain':
+      return `volume=${formatDb(stage.db)}dB`;
+    case 'equalizer':
+      return stage.chain;
+    case 'resample': {
+      const parts = [
+        `aresample=resampler=${audioResampler.name}`,
+        `precision=${audioResampler.precision}`,
+        `cutoff=${audioResampler.cutoff}`,
+        `osr=${stage.osr}`,
+      ];
+      if (stage.osf) {
+        parts.push(`osf=${stage.osf}`);
+      }
+      if (stage.dither) {
+        parts.push(`dither_method=${stage.dither}`);
+      }
+      if (stage.async) {
+        parts.push('async=1');
+      }
+      return parts.join(':');
+    }
+  }
+}
+
+function formatDb(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
+
 /**
- * ffmpeg's FLAC encoder accepts only s16 and s32 as sample formats — there is no
- * s24. For 24-bit output we pass s32 and let the encoder derive a 24-bit
- * bits_per_raw_sample from the input's actual precision.
+ * The ffmpeg *sample format* that carries a given output depth.
  *
- * Pinning this matters: without an explicit -sample_fmt the encoder negotiates
- * the format with the *decoder*, so a 24-bit source produced a 24-bit FLAC even
- * when the client had negotiated 16-bit. The STREAMINFO header we forward in
- * stream/start would then disagree with the frames, and the client decodes noise.
+ * There is no s24: 24-bit lives in an s32 container, both for the FLAC encoder and for pcm_s24le,
+ * which take s16 or s32 only. The final 8-bit narrowing to a 24-bit container is left to the encoder —
+ * it lands below any playback noise floor, which is also why it is not dithered.
+ *
+ * Pinning this matters for FLAC: without an explicit -sample_fmt the encoder negotiates the format
+ * with the *decoder*, so a 24-bit source produced a 24-bit FLAC even when the client had negotiated
+ * 16-bit. The STREAMINFO header we forward in stream/start would then disagree with the frames, and
+ * the client decodes noise.
  */
-function flacSampleFormat(bitDepth: number): string {
+function sampleFormatForDepth(bitDepth: number): string {
   return bitDepth === 16 ? 's16' : 's32';
 }
 

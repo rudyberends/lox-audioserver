@@ -278,6 +278,11 @@ export interface ApiProcessingChain {
   gainDb: { source: number; output: number } | null;
   /** Pre-delay in ms, for aligning this source against another output. Absent when none. */
   delayMs: number | null;
+  /**
+   * The dither used where samples lose width — the conversion into a 16-bit output. Null when nothing
+   * narrowed, so a `resampled` chain with `dither: null` is a rate change that kept its precision.
+   */
+  dither: string | null;
   /** True while a crossfade is blending, which requantises by definition. */
   crossfading: boolean;
 }

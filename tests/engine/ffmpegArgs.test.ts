@@ -136,6 +136,7 @@ test('describeProcessing reports an untouched chain as untouched', () => {
     equalizer: null,
     gainDb: null,
     delayMs: null,
+    dither: null,
   });
 });
 
@@ -158,4 +159,125 @@ test('describeProcessing names every stage that actually runs', () => {
   assert.deepEqual(chain.gainDb, { source: -3.5, output: 2 });
   assert.equal(chain.delayMs, 120);
 });
+
+/** The filter chain of a single-stage session, as one string. */
+function filterChain(builder: FfmpegArgBuilder, bands: number[] | null): string {
+  const args = builder.buildOutputArgs(bands);
+  const idx = args.indexOf('-af');
+  return idx === -1 ? '' : args[idx + 1] ?? '';
+}
+
+const EQ_BANDS = [0, 3, 0, 0, 0, -2, 0, 0, 0, 0];
+const LOSSLESS_16_44 = {
+  sampleRate: 44100, channels: 2, bitDepth: 16, lossless: true, codecName: 'flac',
+};
+
+test('DSP runs in float, not in the source’s integer format', () => {
+  // A 16-bit source at the output rate made ffmpeg negotiate s16p for the whole biquad cascade:
+  // measured 17 dB above the 16-bit noise floor versus the same EQ in float, for no CPU saving worth
+  // having. `aformat` must therefore come first, before any filter that could pick the format.
+  const chain = filterChain(
+    makeBuilderWithNative('pcm', LOSSLESS_16_44),
+    EQ_BANDS,
+  );
+  assert.ok(chain.startsWith('aformat=sample_fmts=fltp,'), chain);
+});
+
+test('the resampler is last and pins its output rate', () => {
+  // Without osr this filter may keep the input rate — the EQ downstream accepts any — and ffmpeg
+  // auto-inserts its own aresample with default options to reach the output. Switching on one EQ band
+  // then silently replaced soxr at precision 28 with stock swr.
+  const chain = filterChain(
+    new FfmpegArgBuilder({ kind: 'file', path: '/x.flac' }, 'pcm', defaultOutput, false, undefined, {
+      sampleRate: 96000, channels: 2, bitDepth: 24, lossless: true,
+    }),
+    EQ_BANDS,
+  );
+  const stages = chain.split(',');
+  const last = stages[stages.length - 1] ?? '';
+  assert.ok(last.startsWith('aresample=resampler=soxr'), last);
+  assert.ok(last.includes('osr=44100'), last);
+  assert.equal(
+    stages.filter((stage) => stage.startsWith('aresample')).length,
+    1,
+    'one conversion, at the end',
+  );
+});
+
+test('a 16-bit output is dithered; a lossy output is left in float', () => {
+  const toPcm16 = filterChain(makeBuilderWithNative('pcm', LOSSLESS_16_44), EQ_BANDS);
+  assert.ok(toPcm16.includes('osf=s16'), toPcm16);
+  assert.ok(toPcm16.includes('dither_method=triangular_hp'), toPcm16);
+
+  // mp3/aac/opus encoders take float natively, so pinning an integer format would only add a round trip.
+  const toMp3 = filterChain(makeBuilderWithNative('mp3', LOSSLESS_16_44), EQ_BANDS);
+  assert.ok(!toMp3.includes('osf='), toMp3);
+  assert.ok(!toMp3.includes('dither_method'), toMp3);
+});
+
+test('a 24-bit output carries no dither and describes itself that way', () => {
+  const at24 = { ...defaultOutput, pcmBitDepth: 24 as const };
+  const builder = new FfmpegArgBuilder({ kind: 'file', path: '/x.flac' }, 'pcm', at24, false, undefined, {
+    sampleRate: 96000, channels: 2, bitDepth: 24, lossless: true,
+  });
+  const chain = filterChain(builder, null);
+  assert.ok(chain.includes('osf=s32'), chain);
+  assert.ok(!chain.includes('dither_method'), chain);
+  assert.equal(builder.describeProcessing(null).dither, null);
+});
+
+test('a bit-perfect session has no filter chain at all', () => {
+  const builder = makeBuilderWithNative('pcm', LOSSLESS_16_44);
+  assert.equal(filterChain(builder, null), '');
+  assert.equal(builder.describeProcessing(null).resampled, false);
+});
+
+test('describeProcessing cannot claim a resampler the chain does not run', () => {
+  // The description is rendered from the same stage list as the args, so the two agree by construction.
+  const builder = makeBuilderWithNative('pcm', LOSSLESS_16_44);
+  for (const bands of [null, EQ_BANDS]) {
+    const chain = filterChain(builder, bands);
+    const described = builder.describeProcessing(bands);
+    assert.equal(chain.includes('aresample'), described.resampled);
+    assert.equal(chain.includes('dither_method'), described.dither !== null);
+    assert.equal(chain.includes('equalizer='), described.equalizer !== null);
+  }
+});
+
+test('the two-stage encoder applies the EQ and the source gain', () => {
+  // Both used to be dropped silently: enabling crossfade switched the zone's equalizer and Spotify's
+  // loudness normalisation off while the API kept reporting them.
+  const builder = new FfmpegArgBuilder(
+    { kind: 'url', url: 'https://x/y.m4a', gainDb: -3.5 },
+    'flac', defaultOutput, false, undefined,
+  );
+  const args = builder.buildPcmEncoderArgs(EQ_BANDS);
+  const idx = args.indexOf('-af');
+  assert.notEqual(idx, -1, 'the encoder stage carries the DSP chain');
+  const chain = args[idx + 1] ?? '';
+  assert.ok(chain.includes('equalizer=f=63'), chain);
+  assert.ok(chain.includes('volume=-3.50dB'), chain);
+  assert.ok(chain.startsWith('aformat=sample_fmts=fltp,'), chain);
+});
+
+test('the two-stage decoder resamples with soxr into the bus', () => {
+  // The decoder is the stage that changes rate, so soxr and the dither belong there rather than in the
+  // encoder, which only ever sees bus-rate PCM.
+  const args = new FfmpegArgBuilder(
+    { kind: 'file', path: '/x.flac' }, 'flac', defaultOutput, false, undefined,
+  ).buildPcmDecoderArgs();
+  const chain = args[args.indexOf('-af') + 1] ?? '';
+  assert.ok(chain.includes('resampler=soxr'), chain);
+  assert.ok(chain.includes('osr=44100'), chain);
+  assert.ok(chain.includes('dither_method=triangular_hp'), chain);
+});
+
+function makeBuilderWithNative(
+  profile: 'mp3' | 'flac' | 'pcm' | 'aac' | 'opus',
+  native: { sampleRate: number; channels: number; bitDepth: number | null; lossless: boolean; codecName?: string },
+): FfmpegArgBuilder {
+  return new FfmpegArgBuilder(
+    { kind: 'file', path: '/x.flac' }, profile, defaultOutput, false, undefined, native,
+  );
+}
 

@@ -275,7 +275,7 @@ export class SessionStarter {
     s.log.debug('spawning ffmpeg (decoder)', { zoneId: s.zoneId, args: decoderArgs, profile: s.profile });
     s.pipeline.startDecoder(decoderArgs, () => s.crossfadeActive);
 
-    const encoderArgs = s.args.buildPcmEncoderArgs();
+    const encoderArgs = s.args.buildPcmEncoderArgs(s.equalizerBands);
     s.log.debug('spawning ffmpeg (encoder)', { zoneId: s.zoneId, args: encoderArgs, profile: s.profile });
     s.process = s.spawnFfmpeg(encoderArgs, {
       logFirstChunk: true,
