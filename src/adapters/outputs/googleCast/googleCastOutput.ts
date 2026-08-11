@@ -5,6 +5,13 @@ import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { HttpPreferences, PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import { isHttpUrl } from '@/shared/coverArt';
 import { buildBaseUrl, resolveStreamUrl } from '@/shared/streamUrl';
+import {
+  chooseStreamProfile,
+  parseStreamFormatPreference,
+  streamProfileContentType,
+  type StreamFormatPreference,
+  type StreamProfileChoice,
+} from '@/domain/outputs/streamProfilePolicy';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import type { CastDevice, DiscoveredDevice, MediaStatusModel } from '@sonn-audio/node-googlecast';
 import { loadGoogleCastModule } from '@/adapters/outputs/googleCast/googlecastLoader';
@@ -13,6 +20,8 @@ const DEFAULT_MEDIA_RECEIVER_APP_ID = 'CC1AD845';
 export interface GoogleCastOutputConfig {
   host: string;
   name?: string;
+  /** `auto` (lossless, with fallback), `lossless`, or `lossy`. See GoogleCastOutput.streamProfile. */
+  streamFormat?: string;
   useSendspin?: boolean;
   sendspinNamespace?: string;
   sendspinPlayerId?: string;
@@ -23,7 +32,16 @@ export const GOOGLE_CAST_OUTPUT_DEFINITION: OutputConfigDefinition = {
   id: 'googleCast',
   label: 'Google Cast',
   description: 'Stream to a Google Cast device using the default media receiver.',
-  fields: [],
+  fields: [
+    {
+      id: 'streamFormat',
+      label: 'Sound quality',
+      type: 'text',
+      placeholder: 'auto',
+      description:
+        "Chromecast plays FLAC, so this sends the music unchanged by default. Set it to 'mp3' if the network cannot keep up — the server also falls back on its own if the device refuses the stream.",
+    },
+  ],
 };
 
 export class GoogleCastOutput implements ZoneOutput {
@@ -39,6 +57,9 @@ export class GoogleCastOutput implements ZoneOutput {
   private loadInFlightSignature: string | null = null;
   private loadToken = 0;
   private lastLoadTimeoutAt = 0;
+  private readonly streamFormat: StreamFormatPreference;
+  /** Set once this receiver has actually refused a lossless stream. */
+  private losslessFailed = false;
   private lastLoadReconnectAt = 0;
   private lastMediaSessionId: number | null = null;
   private lastMetadataSignature: string | null = null;
@@ -59,7 +80,9 @@ export class GoogleCastOutput implements ZoneOutput {
     private readonly zoneName: string,
     private readonly config: GoogleCastOutputConfig,
     private readonly ports: OutputPorts,
-  ) {}
+  ) {
+    this.streamFormat = parseStreamFormatPreference(config.streamFormat);
+  }
 
   public isReady(): boolean {
     return this.connected;
@@ -213,8 +236,26 @@ export class GoogleCastOutput implements ZoneOutput {
   }
 
   public getPreferredOutput(): PreferredOutput {
-    // Cast typically prefers MP3/AAC streams; stick with MP3 profile at 44.1kHz.
-    return { profile: 'mp3', sampleRate: 44100, channels: 2, prebufferBytes: 1024 * 256 };
+    return {
+      profile: this.streamProfile(),
+      sampleRate: 44100,
+      channels: 2,
+      prebufferBytes: 1024 * 256,
+    };
+  }
+
+  /**
+   * Lossless by default: every Cast audio device since the original Chromecast Audio decodes FLAC, and
+   * the receiver *tells us* when a load fails, so unlike a DLNA renderer this endpoint can be trusted to
+   * report its own limits. A failed lossless load flips {@link losslessFailed} and the next session falls
+   * back to MP3, so a device that turns out not to manage it costs one failed start, once.
+   */
+  private streamProfile(): StreamProfileChoice {
+    return chooseStreamProfile({
+      preference: this.streamFormat,
+      losslessSupported: true,
+      losslessFailed: this.losslessFailed,
+    });
   }
 
   public getHttpPreferences(): HttpPreferences {
@@ -550,7 +591,7 @@ export class GoogleCastOutput implements ZoneOutput {
     const streamType = 'LIVE';
     return {
       contentId: streamUrl,
-      contentType: 'audio/mpeg',
+      contentType: streamProfileContentType(this.streamProfile()),
       streamType,
       duration: normalizedDuration,
       metadata: {
@@ -579,7 +620,7 @@ export class GoogleCastOutput implements ZoneOutput {
       baseUrl,
       zoneId: this.zoneId,
       streamPath: session.stream?.url,
-      defaultExt: 'mp3',
+      defaultExt: this.streamProfile() === 'flac' ? 'flac' : 'mp3',
     });
     const coverUrl = this.resolveCoverUrl(session);
     const meta = (session.metadata ?? {}) as {
@@ -616,7 +657,7 @@ export class GoogleCastOutput implements ZoneOutput {
       baseUrl,
       zoneId: this.zoneId,
       streamPath: session.stream?.url,
-      defaultExt: 'mp3',
+      defaultExt: this.streamProfile() === 'flac' ? 'flac' : 'mp3',
       // Prime sends buffered audio immediately, which typically shortens cast "BUFFERING" time.
       prime,
       primeMode: 'upsert',
@@ -652,6 +693,16 @@ export class GoogleCastOutput implements ZoneOutput {
       const message = (loadErr as { message?: string } | null)?.message ?? '';
       if (typeof message === 'string' && message.toLowerCase().includes('request timed out')) {
         this.lastLoadTimeoutAt = Date.now();
+      }
+      // A receiver that cannot take the lossless stream says so here. Remember it, so the next session
+      // is MP3 rather than another silent start; the device's own evidence outranks our assumption.
+      if (!this.losslessFailed && this.streamProfile() === 'flac') {
+        this.losslessFailed = true;
+        this.log.warn('Google Cast rejected the lossless stream; falling back to mp3 for this device', {
+          zoneId: this.zoneId,
+          host: this.config.host,
+          message,
+        });
       }
       this.log.warn('Google Cast load error', {
         zoneId: this.zoneId,

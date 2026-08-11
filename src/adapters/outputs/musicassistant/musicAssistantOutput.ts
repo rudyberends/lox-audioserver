@@ -14,10 +14,18 @@ import {
   findMusicAssistantBridge,
 } from '@/shared/musicassistant/maBridgeResolver';
 import { resolveActiveMaPlayerId } from '@/shared/musicassistant/maPlayerResolver';
+import {
+  chooseStreamProfile,
+  parseStreamFormatPreference,
+  type StreamFormatPreference,
+  type StreamProfileChoice,
+} from '@/domain/outputs/streamProfilePolicy';
 
 export interface MusicAssistantOutputConfig {
   bridgeId: string;
   playerId: string;
+  /** `auto` (lossless here), `lossless`, or `lossy` for a link that cannot carry it. */
+  streamFormat?: string;
 }
 
 export const MUSIC_ASSISTANT_OUTPUT_DEFINITION: OutputConfigDefinition = {
@@ -40,6 +48,14 @@ export const MUSIC_ASSISTANT_OUTPUT_DEFINITION: OutputConfigDefinition = {
       required: true,
       description: 'Identifier of the target Music Assistant player.',
     },
+    {
+      id: 'streamFormat',
+      label: 'Sound quality',
+      type: 'text',
+      placeholder: 'auto',
+      description:
+        "Music Assistant plays FLAC, so this sends the music unchanged by default. Set it to 'mp3' only if the link to Music Assistant cannot carry it.",
+    },
   ],
 };
 
@@ -48,6 +64,7 @@ export class MusicAssistantOutput implements ZoneOutput {
   private readonly log = createLogger('Output', 'MAplayer');
   private readonly playerId: string;
   private readonly bridgeId: string;
+  private readonly streamFormat: StreamFormatPreference;
   private api: MusicAssistantApi | null;
   private unavailableReason: string | null = null;
   private loggedReason: string | null = null;
@@ -60,6 +77,7 @@ export class MusicAssistantOutput implements ZoneOutput {
   ) {
     this.bridgeId = config.bridgeId;
     this.playerId = config.playerId;
+    this.streamFormat = parseStreamFormatPreference(config.streamFormat);
     this.api = this.acquireApi();
   }
 
@@ -69,15 +87,26 @@ export class MusicAssistantOutput implements ZoneOutput {
   }
 
   public getPreferredOutput(): PreferredOutput {
-    // MP3 over HTTP — universal client support, no codec-header mid-stream issues.
-    return { profile: 'mp3', sampleRate: 44100, channels: 2 };
+    // FLAC, because Music Assistant's fetcher is ffmpeg: it decodes FLAC natively and then re-encodes
+    // for whatever it is feeding (AirPlay, Sonos, a Cast group). Handing it MP3 capped that whole chain
+    // at 256 kbit and added a lossy generation MA cannot undo. Lossless costs about 970 kbit/s on a LAN.
+    return { profile: this.streamProfile(), sampleRate: 44100, channels: 2 };
   }
 
   public getHttpPreferences(): HttpPreferences {
-    // For continuous live streaming use chunked transfer-encoding without a
-    // Content-Length header. ICY is off because MA's media fetcher is ffmpeg
-    // (it parses raw audio frames; ICY metadata would corrupt the stream).
+    // Chunked without a Content-Length: this is a continuous live stream, and FLAC's length cannot be
+    // derived from a duration anyway. ICY is off because MA parses raw audio frames — ICY metadata
+    // interleaved into them would corrupt the stream.
     return { httpProfile: 'chunked', icyEnabled: false };
+  }
+
+  /**
+   * MA is the one endpoint whose capability we know for certain rather than by inference: it is the
+   * project we compared this engine against, and its media fetcher is ffmpeg. Still honours an explicit
+   * `streamFormat: "lossy"` for a link that cannot carry it.
+   */
+  private streamProfile(): StreamProfileChoice {
+    return chooseStreamProfile({ preference: this.streamFormat, losslessSupported: true });
   }
 
   public async play(session: PlaybackSession): Promise<void> {
@@ -171,7 +200,8 @@ export class MusicAssistantOutput implements ZoneOutput {
     const url = resolveStreamUrl({
       baseUrl,
       zoneId: this.zoneId,
-      defaultExt: 'mp3',
+      // The extension selects which profile the stream handler serves, so it has to follow the choice.
+      defaultExt: this.streamProfile() === 'flac' ? 'flac' : 'mp3',
       // Cache-bust per session id so MA refetches when our session rotates.
       prime: session?.stream?.id ?? Date.now(),
     });

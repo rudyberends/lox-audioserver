@@ -1,3 +1,10 @@
+import {
+  chooseStreamProfile,
+  parseStreamFormatPreference,
+  streamProfileNeedsChunked,
+  type StreamFormatPreference,
+  type StreamProfileChoice,
+} from '@/domain/outputs/streamProfilePolicy';
 import { createLogger } from '@/shared/logging/logger';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import type { HttpPreferences, PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
@@ -16,6 +23,8 @@ export interface DlnaOutputConfig {
   controlUrl?: string;
   autoDiscover?: boolean | string;
   deviceName?: string;
+  /** `lossless` sends FLAC, `mp3` forces MP3, `auto` (default) sends MP3 — see DlnaOutput.streamProfile. */
+  streamFormat?: string;
 }
 
 export const DLNA_OUTPUT_DEFINITION: OutputConfigDefinition = {
@@ -54,6 +63,14 @@ export const DLNA_OUTPUT_DEFINITION: OutputConfigDefinition = {
       placeholder: 'Living Room',
       description:
         'Used to match a discovered renderer by its friendly name. If omitted, the zone name is used.',
+    },
+    {
+      id: 'streamFormat',
+      label: 'Sound quality',
+      type: 'text',
+      placeholder: 'auto',
+      description:
+        "Set to 'lossless' if this speaker can play FLAC — the music then reaches it unchanged instead of being converted to MP3. Leave on 'auto' (or set 'mp3') if you are not sure: a speaker that cannot play FLAC stays silent.",
     },
   ],
 };
@@ -103,6 +120,9 @@ export class DlnaOutput implements ZoneOutput {
   private lastKnownVolume?: number;
   private lastKnownMuted?: boolean;
   private eventsSubscribed = false;
+  private readonly streamFormat: StreamFormatPreference;
+  /** Set once this renderer has actually failed on a lossless stream; outranks the preference. */
+  private losslessFailed = false;
 
   constructor(
     private readonly zoneId: number,
@@ -111,6 +131,7 @@ export class DlnaOutput implements ZoneOutput {
     private readonly ports: OutputPorts,
   ) {
     const host = typeof config.host === 'string' ? config.host.trim() : '';
+    this.streamFormat = parseStreamFormatPreference(config.streamFormat);
     const autoDiscover = isAutoDiscoverEnabled(config.autoDiscover);
     // Fall back to the zone name so auto-discovery can match a renderer by friendly name.
     const deviceName =
@@ -254,13 +275,36 @@ export class DlnaOutput implements ZoneOutput {
   }
 
   public getPreferredOutput(): PreferredOutput {
-    // DLNA renderers often accept MP3/PCM; prefer MP3 to reduce bandwidth unless group/lead needs PCM.
-    return { profile: 'mp3', sampleRate: 44100, channels: 2 };
+    return { profile: this.streamProfile(), sampleRate: 44100, channels: 2 };
   }
 
   public getHttpPreferences(): HttpPreferences {
-    // Many DLNA renderers prefer explicit content-length; disable ICY.
-    return { httpProfile: 'forced_content_length', icyEnabled: false };
+    // Many DLNA renderers prefer an explicit Content-Length, and a strict one (B&O) reads a
+    // length-less response as a live stream. FLAC cannot honour that: it is variable-bitrate, so a
+    // length derived from the track duration would be a guess, and a body ending short of its
+    // advertised length is what clipped the tail off Cast playback. Lossless therefore goes out chunked.
+    const profile = this.streamProfile();
+    return {
+      httpProfile: streamProfileNeedsChunked(profile) ? 'chunked' : 'forced_content_length',
+      icyEnabled: false,
+    };
+  }
+
+  /**
+   * Lossless when the owner has said this renderer takes it, MP3 otherwise.
+   *
+   * `auto` deliberately still means MP3 here. A DLNA renderer publishes what it accepts in its
+   * ConnectionManager's `SinkProtocolInfo`, and until we ask it (that belongs in the UPnP module, not
+   * in this adapter) guessing would trade a re-encode for silence — a renderer that cannot decode the
+   * stream simply plays nothing, with no way for the owner to see why. Set `streamFormat: "lossless"`
+   * on the output to take it: everything below already follows the choice.
+   */
+  private streamProfile(): StreamProfileChoice {
+    return chooseStreamProfile({
+      preference: this.streamFormat,
+      losslessSupported: null,
+      losslessFailed: this.losslessFailed,
+    });
   }
 
   /** Start the GENA event subscription once, so device-side volume flows into zone state. */
@@ -314,12 +358,18 @@ export class DlnaOutput implements ZoneOutput {
       ? 'object.item.audioItem.audioBroadcast'
       : 'object.item.audioItem.musicTrack';
     const durationAttr = duration ? ` duration="${duration}"` : '';
-    // DLNA.ORG_PN=MP3 names the profile in the 4th protocolInfo field. Strict sinks
-    // (B&O) validate it and can refuse an item's now-playing metadata when no
-    // recognized profile is present — the same fix applied to the MediaServer's
-    // <res>. OP=00 stays consistent with the stream's Accept-Ranges: none.
+    // The 4th protocolInfo field names the DLNA profile. Strict sinks (B&O) validate it and can refuse
+    // an item's now-playing metadata when no recognized profile is present — the same fix applied to the
+    // MediaServer's <res>. OP=00 stays consistent with the stream's Accept-Ranges: none.
+    //
+    // FLAC has no DLNA profile name (it is not in the DLNA media-format tables at all), so the field is
+    // left empty rather than filled with an invented token: a sink that validates it would reject a
+    // profile that does not exist. The MIME type still has to match what the stream actually sends, or
+    // the renderer decodes the wrong thing.
     const protocolInfo =
-      'http-get:*:audio/mpeg:DLNA.ORG_PN=MP3;DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=8D500000000000000000000000000000';
+      this.streamProfile() === 'flac'
+        ? 'http-get:*:audio/flac:DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=8D500000000000000000000000000000'
+        : 'http-get:*:audio/mpeg:DLNA.ORG_PN=MP3;DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=8D500000000000000000000000000000';
     const art = cover ? `<upnp:albumArtURI>${escapeXml(cover)}</upnp:albumArtURI>` : '';
     return `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="0" parentID="-1" restricted="1"><dc:title>${escapeXml(title)}</dc:title><dc:creator>${escapeXml(artist)}</dc:creator><upnp:artist>${escapeXml(artist)}</upnp:artist><upnp:album>${escapeXml(album)}</upnp:album>${art}<upnp:class>${mediaClass}</upnp:class><res${durationAttr} protocolInfo="${protocolInfo}">${escapeXml(uri)}</res></item></DIDL-Lite>`;
   }

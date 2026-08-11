@@ -12,6 +12,13 @@ import type {
 import { SonosClient } from '@sonn-audio/node-sonos';
 import { resolveDlnaEndpoints } from '@/adapters/outputs/dlna/dlnaDiscovery';
 import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
+import {
+  chooseStreamProfile,
+  parseStreamFormatPreference,
+  streamProfileNeedsChunked,
+  type StreamFormatPreference,
+  type StreamProfileChoice,
+} from '@/domain/outputs/streamProfilePolicy';
 import { buildBaseUrl, normalizeStreamUrl, resolveAbsoluteUrl, upsertQueryParam } from '@/shared/streamUrl';
 import { decodeAudiopath } from '@/domain/zones/audiopath';
 import { discoverSonosDevice, resolveSonosCoordinatorHost } from '@/adapters/outputs/sonos/sonosDiscovery';
@@ -19,6 +26,8 @@ import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 
 export interface SonosOutputConfig {
   host?: string;
+  /** `lossless` sends FLAC, `mp3`/`auto` (default) sends MP3 — see SonosOutput.streamProfile. */
+  streamFormat?: string;
   controlUrl?: string;
   autoDiscover?: boolean | string;
   networkScan?: boolean | string;
@@ -79,12 +88,21 @@ export const SONOS_OUTPUT_DEFINITION: OutputConfigDefinition = {
       description:
         'When SSDP discovery returns no devices, allow scanning the local subnet for Sonos status pages (true/false).',
     },
+    {
+      id: 'streamFormat',
+      label: 'Sound quality',
+      type: 'text',
+      placeholder: 'auto',
+      description:
+        "Sonos players can play FLAC. Set this to 'lossless' to send the music unchanged instead of converting it to MP3; leave it on 'auto' if radio streams or this speaker misbehave.",
+    },
   ],
 };
 
 export class SonosOutput implements ZoneOutput {
   public readonly type = 'sonos';
   private readonly log = createLogger('Output', 'Sonos');
+  private readonly streamFormat: StreamFormatPreference;
   private readonly controllers = new Set<AbortController>();
   private readonly commandTimeoutMs = 2500;
   private readonly slowCommandMs = 1200;
@@ -121,6 +139,7 @@ export class SonosOutput implements ZoneOutput {
     private readonly ports: OutputPorts,
   ) {
     this.host = typeof config.host === 'string' ? config.host.trim() : '';
+    this.streamFormat = parseStreamFormatPreference(config.streamFormat);
     this.autoDiscover = parseBoolDefaultTrue(config.autoDiscover);
     this.networkScan = parseBoolDefaultFalse(config.networkScan);
     this.householdId =
@@ -468,12 +487,28 @@ export class SonosOutput implements ZoneOutput {
   }
 
   public getPreferredOutput(): PreferredOutput {
-    // MP3 is the most compatible Sonos ingest format and enables radio-mode URIs (x-rincon-mp3radio://).
-    return { profile: 'mp3', sampleRate: 44100, channels: 2 };
+    return { profile: this.streamProfile(), sampleRate: 44100, channels: 2 };
   }
 
   public getHttpPreferences(): HttpPreferences {
-    return { httpProfile: 'forced_content_length', icyEnabled: false };
+    // FLAC is variable-bitrate, so no honest Content-Length can be derived from a duration.
+    return {
+      httpProfile: streamProfileNeedsChunked(this.streamProfile())
+        ? 'chunked'
+        : 'forced_content_length',
+      icyEnabled: false,
+    };
+  }
+
+  /**
+   * Sonos players do decode FLAC, but `auto` still means MP3 here for two reasons that have nothing to
+   * do with the codec: MP3 is what enables radio-mode ingest (`x-rincon-mp3radio://`, which
+   * `buildTransportUri` selects on the extension and skips for anything else), and a live length-less
+   * FLAC stream over that path has not been tried on Sonos hardware. Set `streamFormat: "lossless"` to
+   * take it — everything downstream, including the DIDL MIME type, already follows the extension.
+   */
+  private streamProfile(): StreamProfileChoice {
+    return chooseStreamProfile({ preference: this.streamFormat, losslessSupported: null });
   }
 
   public getAlertHandoffDrainMs(): number {
