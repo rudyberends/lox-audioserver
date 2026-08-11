@@ -71,15 +71,12 @@ type MbRelation = {
  * teachers are all relations, and every one of them would arrive as a tile under a heading that
  * promises music you might play next. An allowlist rather than a denylist, because the set of
  * musical relations is small and known while the set of everything else keeps growing.
+ *
+ * `tribute` and `supporting musician` were in this set and are not any more. Adele's only
+ * qualifying relation was a tribute act, so her shelf held one tile: a covers band nobody asked
+ * about. A session player is the same mistake one step further from the music.
  */
-const MUSICAL_RELATIONS = new Set([
-  'member of band',
-  'collaboration',
-  'founder',
-  'supporting musician',
-  'subgroup',
-  'tribute',
-]);
+const MUSICAL_RELATIONS = new Set(['member of band', 'collaboration', 'founder', 'subgroup']);
 
 /** The story about an artist, or null when MusicBrainz cannot even identify them. */
 export async function fetchArtistStory(artist: string): Promise<AboutStory | null> {

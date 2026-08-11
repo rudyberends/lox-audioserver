@@ -859,7 +859,10 @@ Three things worth knowing:
 - **`similar` are real items**, with ids that go straight back into `/browse/{id}` or
   `POST /zones/{id}/play`. A related act this server has no copy of is *absent* rather than
   listed as a name you cannot open. The list is often empty, and empty is a legitimate answer:
-  it means the neighbours exist in the world but not in this house.
+  it means the neighbours exist in the world but not in this house. Where the service has an
+  editorial answer of its own — Apple Music does — that is what you get, because "who else would
+  I like" is a catalogue owner's question; otherwise it falls back to the acts the metadata
+  source relates, which is a weaker claim (a band's own line-up, not music beside it).
 - **`source` is not decoration.** The prose comes from freely licensed sources that require
   attribution, so if you show the description, show the credit.
 - **The first ask may 404 and the second may not.** Assembling a story means several

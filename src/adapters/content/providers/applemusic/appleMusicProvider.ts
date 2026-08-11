@@ -270,6 +270,47 @@ export class AppleMusicProvider {
     return normalized.source === 'library' ? mapLibraryTrack(this.audiopathPrefix, item) : mapTrack(this.audiopathPrefix, item);
   }
 
+  /**
+   * The artists Apple itself puts beside this one.
+   *
+   * Worth asking the provider rather than deriving it: "who else would I like" is editorial data
+   * that a catalogue owner has and a metadata database does not. MusicBrainz can only tell us who
+   * *played in* a band — factually related, but a shelf of former members is not a shelf of music
+   * to try next.
+   *
+   * A library artist has to be turned into a catalogue artist first: `similar-artists` is a
+   * catalogue view, and the id in a library id is Apple's private library id. Empty is a normal
+   * answer — a local upload has no catalogue counterpart to ask about.
+   */
+  public async getRelatedArtists(folderId: string, limit: number): Promise<ContentFolderItem[]> {
+    const normalized = this.normalizeFolderId(folderId);
+    if (normalized.type !== 'artistItem') {
+      return [];
+    }
+    const catalogId =
+      normalized.source === 'catalog'
+        ? normalized.id
+        : await this.resolveCatalogArtistId(normalized.id);
+    if (!catalogId) {
+      return [];
+    }
+    const storefront = await this.ensureStorefront();
+    const url =
+      `${APPLE_MUSIC_API_BASE}/catalog/${storefront}/artists/${encodeURIComponent(catalogId)}` +
+      `/view/similar-artists?limit=${Math.max(1, Math.min(APPLE_MAX_PAGE, limit))}`;
+    const data = await this.fetchJson<any>(url);
+    const items = Array.isArray(data?.data) ? data.data : [];
+    return items.map((entry: unknown) => mapArtist(this.audiopathPrefix, entry));
+  }
+
+  /** The catalogue id behind a library artist, or null when Apple has none for it. */
+  private async resolveCatalogArtistId(libraryArtistId: string): Promise<string | null> {
+    const url = `${APPLE_MUSIC_API_BASE}/me/library/artists/${encodeURIComponent(libraryArtistId)}?include=catalog`;
+    const data = await this.fetchJson<any>(url);
+    const catalog = data?.data?.[0]?.relationships?.catalog?.data?.[0]?.id;
+    return typeof catalog === 'string' && catalog ? catalog : null;
+  }
+
   public async search(query: string, limits: Record<string, number>, maxLimit: number): Promise<{ result: SearchResult; providerId: string; user: string }> {
     const limit = Math.min(
       Math.max(...(Object.values(limits).length ? Object.values(limits) : [maxLimit]), DEFAULT_MIN_SEARCH_LIMIT),

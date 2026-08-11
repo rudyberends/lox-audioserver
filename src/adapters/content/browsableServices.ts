@@ -1,6 +1,6 @@
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { ContentManager } from '@/adapters/content/contentManager';
-import type { ContentFolder } from '@/ports/ContentTypes';
+import type { ContentFolder, ContentFolderItem } from '@/ports/ContentTypes';
 import type { ProviderCapabilities } from '@/ports/ProviderCapabilities';
 import { capabilitiesFor } from '@/adapters/content/providerCapabilities';
 import {
@@ -50,6 +50,17 @@ export type BrowsableService = {
     offset: number,
     limit: number,
   ) => Promise<ContentFolder | null>;
+  /**
+   * The artists this service itself puts beside one of its own, when it has the notion.
+   *
+   * Absent for the local library and the radio tile, and that absence is the point: "who else
+   * would I like" is editorial data a catalogue owner has and a folder of files does not.
+   */
+  relatedArtists?: (
+    cm: ContentManager,
+    folderId: string,
+    limit: number,
+  ) => Promise<ContentFolderItem[]>;
 };
 
 const PROVIDER_TITLES: Record<string, string> = {
@@ -153,6 +164,7 @@ export function buildBrowsableServices(
       capabilities: capabilitiesFor(provider),
       browse: (cm, folderId, offset, limit) =>
         cm.getServiceFolder(key, key, folderId, offset, limit),
+      relatedArtists: (cm, folderId, limit) => cm.getRelatedArtists(key, key, folderId, limit),
     });
   }
 

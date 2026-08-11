@@ -210,6 +210,7 @@ export class HttpService {
     this.browseService = new BrowseService(options.configPort, options.contentManager);
     this.aboutService = new AboutService({
       describeItem: (id) => this.browseService.describeItem(id),
+      relatedArtists: (id, limit) => this.browseService.relatedArtists(id, limit),
       search: (request) => this.browseService.search(request),
       store: new AboutStore(),
     });

@@ -221,3 +221,87 @@ test('about: a slow story does not hold the request open', async () => {
   const second = await service.describeAbout(item.id);
   assert.equal(second?.description, 'Late.');
 });
+
+test('about: the service is asked for related artists before the metadata source is', async () => {
+  const { store } = fakeStore();
+  const item = artistItem();
+  const searched: string[] = [];
+  const service = new AboutService({
+    describeItem: async () => item,
+    relatedArtists: async () => [
+      { ...artistItem({ id: 'am:zztop', name: 'ZZ Top' }) },
+      { ...artistItem({ id: 'am:aerosmith', name: 'Aerosmith' }) },
+    ],
+    search: async (request) => {
+      searched.push(request.query);
+      return searchHit(request.query);
+    },
+    store,
+    source: {
+      fetchArtistStory: async () => ({
+        description: 'A band.',
+        source: null,
+        // What MusicBrainz has is the line-up, which is not what the shelf asks for.
+        relatedNames: ['Bon Scott', 'Phil Rudd'],
+      }),
+      fetchAlbumStory: async () => null,
+    },
+  });
+
+  const about = await service.describeAbout(item.id);
+  assert.deepEqual(
+    about?.similar.map((entry) => entry.name),
+    ['ZZ Top', 'Aerosmith'],
+  );
+  assert.deepEqual(searched, [], 'no provider search when the service answered itself');
+});
+
+test('about: a service with no such notion falls back to the relations', async () => {
+  const { store } = fakeStore();
+  const item = artistItem({ service: 'library' });
+  const service = new AboutService({
+    describeItem: async () => item,
+    // What the local library answers: it has no editorial notion of a neighbour.
+    relatedArtists: async () => [],
+    search: async (request) => searchHit(request.query),
+    store,
+    source: {
+      fetchArtistStory: async () => ({
+        description: 'A band.',
+        source: null,
+        relatedNames: ['Bon Scott'],
+      }),
+      fetchAlbumStory: async () => null,
+    },
+  });
+
+  const about = await service.describeAbout(item.id);
+  assert.deepEqual(
+    about?.similar.map((entry) => entry.name),
+    ['Bon Scott'],
+  );
+});
+
+test('about: an accent is a different artist, not the same one spelled loosely', async () => {
+  const { store } = fakeStore();
+  const item = artistItem();
+  const service = new AboutService({
+    describeItem: async () => item,
+    relatedArtists: async () => [],
+    // Apple answers a search for "Julia Martin" with a different artist whose name carries an
+    // accent. Folding accents away put that stranger on Adele's shelf.
+    search: async () => searchHit('Julia Martín'),
+    store,
+    source: {
+      fetchArtistStory: async () => ({
+        description: 'A singer.',
+        source: null,
+        relatedNames: ['Julia Martin'],
+      }),
+      fetchAlbumStory: async () => null,
+    },
+  });
+
+  const about = await service.describeAbout(item.id);
+  assert.deepEqual(about?.similar, []);
+});

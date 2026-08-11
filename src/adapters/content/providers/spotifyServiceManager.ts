@@ -297,6 +297,29 @@ export class SpotifyServiceManager {
   }
 
   /**
+   * The artists a provider itself puts beside one of its own — when it can say.
+   *
+   * Optional on purpose: this is editorial data, and only a catalogue owner has it. A provider
+   * without the notion answers nothing and the caller falls back to what it can derive, which is
+   * how a feature can be per-service without every service having to grow it.
+   */
+  public async getRelatedArtists(
+    service: string,
+    user: string,
+    folderId: string,
+    limit: number,
+  ): Promise<ContentFolderItem[]> {
+    const provider = this.resolveProvider(service, user);
+    if (!provider || typeof (provider as { getRelatedArtists?: unknown }).getRelatedArtists !== 'function') {
+      return [];
+    }
+    const capable = provider as {
+      getRelatedArtists(folderId: string, limit: number): Promise<ContentFolderItem[]>;
+    };
+    return await capable.getRelatedArtists(this.sanitizeSpotifyId(folderId), limit);
+  }
+
+  /**
    * Resolve a single track for the given service/user combination.
    */
   public async getTrack(

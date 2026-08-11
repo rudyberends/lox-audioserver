@@ -117,9 +117,14 @@ export class BrowseService {
       ? await this.describeItem(id).catch(() => null)
       : null;
     return {
-      container:
-        named ??
-        toApiContainer(
+      container: named
+        ? // Its name, cover and artist — but not its id or kind. `describeItem` re-encodes the id
+      // from what the *content layer* resolved the folder to, which for several providers is
+      // `album` for an artist, so answering with it would hand the caller back a different id
+      // than it asked with, labelled as the wrong kind. A client that then uses `container.id`
+      // (the player does, for `/about`) is holding an artist page addressed as an album.
+        { ...named, id, kind: ref.kind }
+        : toApiContainer(
           { id: ref.folderId, name: folder.name, audiopath: ref.folderId },
           ref.service,
           ref.kind,
@@ -127,12 +132,12 @@ export class BrowseService {
       items: (folder.items ?? []).map((item) => toApiBrowseItem(item, ref.service)),
       ...(folder.sections?.length
         ? {
-            sections: folder.sections.map((section) => ({
-              id: section.id,
-              name: section.name,
-              items: section.items.map((item) => toApiBrowseItem(item, ref.service)),
-            })),
-          }
+          sections: folder.sections.map((section) => ({
+            id: section.id,
+            name: section.name,
+            items: section.items.map((item) => toApiBrowseItem(item, ref.service)),
+          })),
+        }
         : {}),
       start: folder.start ?? start,
       // Null when the provider could not say, rather than the guess it had to put in
@@ -140,6 +145,34 @@ export class BrowseService {
       // number that two providers used to compute differently.
       total: folder.totalKnown === false ? null : folder.totalitems,
     };
+  }
+
+  /**
+   * The artists the item's own service puts beside it — empty when it has no such notion.
+   *
+   * Asked of the service the id came from, never fanned out: a shelf under an Apple Music artist
+   * that opens local files behaves differently per tile, and a service that cannot answer should
+   * cost nothing rather than a search across every account in the house.
+   */
+  public async relatedArtists(id: string, limit: number): Promise<ApiBrowseItem[]> {
+    const ref = decodeBrowseRef(id);
+    if (!ref || ref.target !== 'container') {
+      return [];
+    }
+    const service = this.serviceByKey(ref.service);
+    if (!service?.relatedArtists) {
+      return [];
+    }
+    const items = await service
+      .relatedArtists(this.contentManager, ref.folderId, limit)
+      .catch((error: unknown) => {
+        this.log.debug('related artists failed', {
+          service: ref.service,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return [] as ContentFolderItem[];
+      });
+    return items.map((item) => toApiBrowseItem(item, ref.service));
   }
 
   /**

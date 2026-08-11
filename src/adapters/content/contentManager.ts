@@ -75,12 +75,13 @@ export class ContentManager {
   public get waveformStore(): {
     getWaveform: LocalLibraryProvider['waveforms']['get'];
     upsertWaveform: LocalLibraryProvider['waveforms']['upsert'];
-  } {
+    } {
     return {
       getWaveform: (path, file) => this.library.waveforms.get(path, file),
       upsertWaveform: (entry) => this.library.waveforms.upsert(entry),
     };
   }
+
   private tunein: TuneInProvider;
   private radioParadise: RadioParadiseProvider;
   private readonly cache = new ContentCacheManager();
@@ -527,6 +528,21 @@ export class ContentManager {
       return entry.value;
     }
     return null;
+  }
+
+  /**
+   * The artists the provider itself puts beside this one, or nothing when it has no such notion.
+   *
+   * Uncached: it is asked once per artist per month behind the about cache, so a second cache in
+   * front of it would only add a way for the two to disagree.
+   */
+  public getRelatedArtists(
+    service: string,
+    user: string,
+    folderId: string,
+    limit: number,
+  ): Promise<ContentFolderItem[]> {
+    return this.requireSpotify().getRelatedArtists(service, user, folderId, limit);
   }
 
   public getServiceTrack(

@@ -98,6 +98,7 @@ import './queueBuilderArtistFlatten.test';
 import './nowPlayingMetadata.test';
 import './publicApi.test';
 import './itemAbout.test';
+import './browseContainerIdentity.test';
 import './outputDelay.test';
 import './waveform.test';
 import './serverHealth.test';

@@ -9,10 +9,13 @@
  * - **The prose** comes from `aboutSource` (MusicBrainz → Wikidata → Wikipedia) and is about an
  *   artist, not about a provider's copy of one. It is cached under the name alone, so the same
  *   biography serves the local library's Björk and Apple Music's.
- * - **`similar`** must be *items*, not captions: ids the caller can browse and play. So the
- *   related names the source found are searched back through the provider the item itself came
- *   from, and whatever this house has no copy of is dropped. That resolution is cached per
- *   service, because it is a different answer per service.
+ * - **`similar`** comes from the service itself where it can say — Apple Music has an editorial
+ *   *similar artists* view, and "who else would I like" is a catalogue owner's answer, not a
+ *   metadata database's. MusicBrainz only knows who *played in* a band, so a shelf built from it
+ *   is a list of former members: factually beside the artist, not music to try next. It is the
+ *   fallback for services with no notion of the kind, and it stays strict about names.
+ *   Either way the entries are *items*, not captions: ids the caller can browse and play, and a
+ *   name this house has no copy of is dropped rather than listed.
  *
  * **A cold request does not wait indefinitely.** Assembling a story is four rate-limited upstream
  * calls plus a search per related act, which is seconds — longer than a browse page should ever
@@ -43,6 +46,11 @@ export type AboutSourcePort = {
 
 export type AboutServiceDeps = {
   describeItem(id: string): Promise<ApiBrowseItem | null>;
+  /**
+   * The service's own related artists, when it has them. Optional: a server wired without it
+   * simply falls back to what the metadata source can derive.
+   */
+  relatedArtists?(id: string, limit: number): Promise<ApiBrowseItem[]>;
   search(request: {
     query: string;
     kinds: string[];
@@ -127,7 +135,7 @@ export class AboutService {
           this.deps.store.put(key, null);
           return null;
         }
-        const similar = await this.resolveSimilar(item, story.relatedNames);
+        const similar = await this.similarFor(kind, item, story.relatedNames);
         const about: ApiItemAbout = {
           description: story.description,
           similar,
@@ -185,6 +193,29 @@ export class AboutService {
     return kind === 'album'
       ? await this.source.fetchAlbumStory(name, item.artist ?? null)
       : await this.source.fetchArtistStory(name);
+  }
+
+  /**
+   * The shelf, from the best source that can fill it.
+   *
+   * The service first, because it is the only one that can answer the question the shelf actually
+   * asks. Only when it has nothing — a local folder of files, a provider without the notion — do
+   * the metadata source's relations get resolved, and those are a weaker claim: they are people
+   * connected to the act rather than music beside it.
+   */
+  private async similarFor(
+    kind: string,
+    item: ApiBrowseItem,
+    relatedNames: string[],
+  ): Promise<ApiBrowseItem[]> {
+    if (kind === 'artist' && this.deps.relatedArtists) {
+      const native = await this.deps.relatedArtists(item.id, MAX_SIMILAR).catch(() => []);
+      const usable = native.filter((entry) => entry.id !== item.id && entry.name.trim());
+      if (usable.length > 0) {
+        return usable.slice(0, MAX_SIMILAR);
+      }
+    }
+    return await this.resolveSimilar(item, relatedNames);
   }
 
   /**
@@ -249,8 +280,10 @@ export class AboutService {
  * Whether a search hit is really the artist that was asked for.
  *
  * Providers answer a search for an unknown name with their closest guess rather than nothing, so
- * the name has to be checked. Compared loosely — case, punctuation and `The` differ constantly
- * between a MusicBrainz name and a provider's — but not so loosely that a different act passes.
+ * the name has to be checked. Case, punctuation and a leading `The` are ignored, because
+ * catalogues disagree about all three constantly — but **accents are not**. Folding them let
+ * *Julia Martin* match a different artist called *Julia Martín*, and on a shelf that says these
+ * belong together a stranger is worse than a gap.
  */
 function namesMatch(a: string, b: string): boolean {
   return normalizeName(a) === normalizeName(b);
@@ -259,8 +292,7 @@ function namesMatch(a: string, b: string): boolean {
 function normalizeName(value: string): string {
   return value
     .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .normalize('NFC')
     .replace(/^the\s+/, '')
-    .replace(/[^a-z0-9]+/g, '');
+    .replace(/[^\p{L}\p{N}]+/gu, '');
 }
