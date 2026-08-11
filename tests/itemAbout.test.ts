@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from './testHarness';
 import { AboutService } from '../src/adapters/http/api/aboutService';
+import { EnrichmentUnavailable } from '../src/adapters/content/enrichment/musicBrainz';
 import type { AboutStore } from '../src/adapters/content/enrichment/aboutStore';
 import { encodeContainerRef } from '../src/domain/media/browseRef';
 import type { ApiBrowseItem, ApiSearchResult } from '../src/domain/zones/apiTypes';
@@ -304,4 +305,34 @@ test('about: an accent is a different artist, not the same one spelled loosely',
 
   const about = await service.describeAbout(item.id);
   assert.deepEqual(about?.similar, []);
+});
+
+test('about: a source that could not be reached is not remembered as a miss', async () => {
+  const { store, rows } = fakeStore();
+  const item = artistItem();
+  let asked = 0;
+  const service = new AboutService({
+    describeItem: async () => item,
+    relatedArtists: async () => [],
+    search: async () => emptySearch,
+    store,
+    source: {
+      fetchArtistStory: async () => {
+        asked += 1;
+        if (asked === 1) {
+          // Rate-limited, or a dropped connection — the question was never answered.
+          throw new EnrichmentUnavailable('musicbrainz 503');
+        }
+        return { description: 'A band.', source: null, relatedNames: [] };
+      },
+      fetchAlbumStory: async () => null,
+    },
+  });
+
+  assert.equal(await service.describeAbout(item.id), null, 'nothing to show yet');
+  assert.equal(rows.size, 0, 'and nothing filed away about it');
+
+  const second = await service.describeAbout(item.id);
+  assert.equal(second?.description, 'A band.', 'the next visit asks again');
+  assert.equal(asked, 2);
 });

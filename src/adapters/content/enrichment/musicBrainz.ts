@@ -46,10 +46,25 @@ export async function waitForMusicBrainzSlot(): Promise<void> {
 }
 
 /**
- * One rate-limited MusicBrainz call, or null when it did not answer usefully.
+ * Raised when the question could not be asked, as opposed to answered with "nothing".
  *
- * Null rather than a throw for every failure a caller cannot act on differently — an unknown
- * artist, a 503, a timeout — because the only response to any of them is "no story here".
+ * The distinction is the whole point of the type: a caller that caches a miss for a week must not
+ * cache a rate-limited minute as one. Anything transient — 429, 5xx, a dropped connection, a
+ * timeout — arrives as this rather than as an empty answer.
+ */
+export class EnrichmentUnavailable extends Error {
+  public constructor(detail: string) {
+    super(`enrichment source unavailable: ${detail}`);
+    this.name = 'EnrichmentUnavailable';
+  }
+}
+
+/**
+ * One rate-limited MusicBrainz call.
+ *
+ * Null means MusicBrainz answered and had nothing — an unknown artist. A failure to *reach* it
+ * throws {@link EnrichmentUnavailable} instead, because the two deserve opposite treatment
+ * upstream: one is a fact worth remembering, the other is a minute worth forgetting.
  */
 export async function musicBrainzJson<T>(
   path: string,
@@ -65,17 +80,23 @@ export async function musicBrainzJson<T>(
     const response = await fetch(url.toString(), {
       headers: { 'User-Agent': MUSICBRAINZ_USER_AGENT, Accept: 'application/json' },
     });
+    if (response.status === 404) {
+      return null;
+    }
     if (!response.ok) {
       log.debug('musicbrainz request failed', { path, status: response.status });
-      return null;
+      throw new EnrichmentUnavailable(`musicbrainz ${response.status}`);
     }
     return (await response.json()) as T;
   } catch (error) {
+    if (error instanceof EnrichmentUnavailable) {
+      throw error;
+    }
     log.debug('musicbrainz request error', {
       path,
       message: error instanceof Error ? error.message : String(error),
     });
-    return null;
+    throw new EnrichmentUnavailable(error instanceof Error ? error.message : String(error));
   }
 }
 

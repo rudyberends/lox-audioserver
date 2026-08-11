@@ -21,6 +21,7 @@
  * a caption.
  */
 import {
+  EnrichmentUnavailable,
   escapeMusicBrainzQuery,
   musicBrainzJson,
   MUSICBRAINZ_USER_AGENT,
@@ -336,21 +337,34 @@ async function wikipediaIntro(
   };
 }
 
+/**
+ * One Wikidata or Wikipedia call.
+ *
+ * Same contract as {@link musicBrainzJson}: null is an answer ("no such page"), and an
+ * unreachable source throws, so a bad minute is not filed away as a fact for a week.
+ */
 async function getJson<T>(url: URL): Promise<T | null> {
   try {
     const response = await fetch(url.toString(), {
       headers: { 'User-Agent': MUSICBRAINZ_USER_AGENT, Accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000),
     });
+    if (response.status === 404) {
+      return null;
+    }
     if (!response.ok) {
       log.debug('enrichment request failed', { host: url.host, status: response.status });
-      return null;
+      throw new EnrichmentUnavailable(`${url.host} ${response.status}`);
     }
     return (await response.json()) as T;
   } catch (error) {
+    if (error instanceof EnrichmentUnavailable) {
+      throw error;
+    }
     log.debug('enrichment request error', {
       host: url.host,
       message: error instanceof Error ? error.message : String(error),
     });
-    return null;
+    throw new EnrichmentUnavailable(error instanceof Error ? error.message : String(error));
   }
 }

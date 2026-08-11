@@ -30,8 +30,17 @@ import { decodeBrowseRef } from '@/domain/media/browseRef';
 import type { ApiBrowseItem, ApiItemAbout, ApiSearchResult } from '@/domain/zones/apiTypes';
 import { createLogger } from '@/shared/logging/logger';
 
-/** How long the route waits for a cold story before answering "nothing yet". */
-const DEADLINE_MS = 3_000;
+/**
+ * How long the route waits for a cold story before answering "nothing yet".
+ *
+ * Measured rather than guessed: a cold artist takes two rate-limited MusicBrainz calls, a Wikidata
+ * lookup, a Wikipedia extract and one provider call — 2.7 to 2.8 seconds when nothing else is
+ * queued. Three seconds therefore *usually* made it and sometimes did not, which is the worst
+ * possible answer: the panel appeared or not depending on what else was asking. Eight leaves room
+ * for a busy queue and still lands inside the player's own ten-second request timeout, and nothing
+ * is blocked meanwhile — the listing has already rendered; only this panel is outstanding.
+ */
+const DEADLINE_MS = 8_000;
 
 /** How many resolved neighbours are worth a shelf. Beyond this the row is a directory. */
 const MAX_SIMILAR = 8;
@@ -153,7 +162,11 @@ export class AboutService {
         });
         return about;
       } catch (error) {
-        this.log.debug('about fill failed', {
+        // Deliberately *not* remembered. A source that could not be reached has told us nothing
+        // about this artist, and writing a miss here would file a rate-limited minute away as a
+        // fact for a week — which is exactly what happened to one artist during development: a
+        // transient failure left an empty panel on a page Wikipedia had an article for.
+        this.log.debug('about fill failed, not cached', {
           key,
           message: error instanceof Error ? error.message : String(error),
         });
