@@ -117,6 +117,12 @@ export interface ProcessingChain {
   delayMs: number | null;
   /** Dither method used at the final requantisation, or null when nothing lost width. */
   dither: string | null;
+  /**
+   * Attenuation applied ahead of a boosting equalizer so it cannot clip, in dB (negative). Null when
+   * nothing needed it — a flat or cut-only curve, or a chain where the equalizer runs on ffmpeg's
+   * command line and no headroom is managed at all.
+   */
+  headroomDb: number | null;
 }
 
 /**
@@ -225,6 +231,9 @@ export class FfmpegArgBuilder {
       gainDb: gains.length ? { source: gainSource, output: gainOutput } : null,
       delayMs: delay ? delay.ms : null,
       dither: resample?.dither ?? null,
+      // Headroom is managed by our own DSP stage, so only a session running that topology can fill this
+      // in; see AudioSession.getStats.
+      headroomDb: null,
     };
   }
 
@@ -578,7 +587,7 @@ export class FfmpegArgBuilder {
    * is not optional even though `-ar` is set: without a filter that pins `osr`, ffmpeg reaches the
    * output rate through an auto-inserted resampler with default options.
    */
-  public buildF32DecoderArgs(): string[] {
+  public buildF32DecoderArgs(options: { fromStdin?: boolean } = {}): string[] {
     const { sampleRate, channels } = this.outputSettings;
     const filters: string[] = [];
     if (this.sourcePreDelayMs && this.sourcePreDelayMs > 0) {
@@ -593,9 +602,14 @@ export class FfmpegArgBuilder {
         async: this.source.kind !== 'pipe',
       }),
     );
+    // A live pipe source arrives as a stream on our side, so its input is stdin rather than the path
+    // the source object carries (which names the producer, not a readable file).
+    const inputArgs = options.fromStdin
+      ? this.buildInputArgs().map((arg, index, all) => (all[index - 1] === '-i' ? 'pipe:0' : arg))
+      : this.buildInputArgs();
     return [
       '-hide_banner', '-nostats', '-loglevel', this.getLogLevel(),
-      ...this.buildInputArgs(),
+      ...inputArgs,
       '-af', filters.join(','),
       '-vn', '-acodec', 'pcm_f32le', '-ar', String(sampleRate), '-ac', String(channels),
       '-f', 'f32le', 'pipe:1',

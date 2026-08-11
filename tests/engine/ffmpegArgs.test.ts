@@ -137,6 +137,7 @@ test('describeProcessing reports an untouched chain as untouched', () => {
     gainDb: null,
     delayMs: null,
     dither: null,
+    headroomDb: null,
   });
 });
 

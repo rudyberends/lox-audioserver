@@ -85,6 +85,8 @@ export class SessionStarter {
         s.cleanup();
       }
     });
+    // A restart re-adopts a stream that a previous topology may have left paused.
+    s.pipeSource.resume();
   }
 
   /**
@@ -260,7 +262,7 @@ export class SessionStarter {
    * lives inside a process whose command line is fixed for its lifetime, so an EQ change is a
    * coefficient swap instead of a respawn with a re-seek.
    */
-  public startEngineDsp(): void {
+  public startEngineDsp(sourceStream?: NodeJS.ReadableStream): void {
     const s = this.session;
     const spec = s.args.engineDspSpec(s.equalizerBands) ?? { gainDb: 0, bands: null };
     const dsp = new PcmDspStage({
@@ -275,12 +277,13 @@ export class SessionStarter {
     s.engineDspMode = true;
     s.startTs = Date.now();
 
-    const decoderArgs = s.args.buildF32DecoderArgs();
+    const decoderArgs = s.args.buildF32DecoderArgs({ fromStdin: Boolean(sourceStream) });
     s.log.debug('spawning ffmpeg (engine-dsp decoder)', {
       zoneId: s.zoneId,
       args: decoderArgs,
       profile: s.profile,
       gainDb: spec.gainDb,
+      headroomDb: dsp.headroomDb,
       equalizer: spec.bands ? [...spec.bands] : null,
     });
     const decoder = s.pipeline.spawnDecoder(decoderArgs, {
@@ -293,6 +296,36 @@ export class SessionStarter {
       },
     });
     decoder.stdout.pipe(dsp);
+
+    if (sourceStream) {
+      // A live producer (librespot, line-in) feeds the decoder's stdin. Its end must close that stdin so
+      // ffmpeg flushes, and its errors must not be raised on a pipe nobody is reading.
+      s.pipeSource.adopt(sourceStream);
+      s.pipeTarget = decoder.stdin;
+      sourceStream.pipe(decoder.stdin);
+      decoder.stdin.on('error', (err: NodeJS.ErrnoException) => {
+        if (err?.code === 'EPIPE') {
+          s.log.debug('engine dsp decoder stdin closed (EPIPE)', { zoneId: s.zoneId });
+        } else {
+          s.log.warn('engine dsp decoder stdin error', { zoneId: s.zoneId, message: err.message });
+        }
+      });
+      s.pipeSource.onError((err: unknown) => {
+        s.log.warn('pipe source error', {
+          zoneId: s.zoneId,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        decoder.stdin.destroy();
+      });
+      s.pipeSource.onEndOrClose(() => {
+        s.log.debug('pipe source ended', { zoneId: s.zoneId, profile: s.profile });
+        if (!s.ending && !decoder.stdin.destroyed) {
+          decoder.stdin.end();
+        }
+      });
+      // A restart re-adopts a stream that a previous topology may have left paused.
+      s.pipeSource.resume();
+    }
     dsp.on('error', (err: Error) => {
       s.log.warn('engine dsp stage error', { zoneId: s.zoneId, message: err.message });
       if (!s.ending) {

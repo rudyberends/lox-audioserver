@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import type { PassThrough } from 'node:stream';
+import { PassThrough } from 'node:stream';
 import { test } from '../testHarness';
 import { AudioSession, type OutputProfile } from '../../src/engine/audioSession';
 import type { AudioOutputSettings } from '../../src/engine/audioFormat';
@@ -146,6 +146,78 @@ test('a lossy encoder is fed float, not requantised integers', async () => {
   // Four bytes per sample: the float came through untouched by a pointless 16-bit round trip.
   assert.equal(total, 512 * 2 * 4);
   session.stop(true);
+});
+
+/** A live producer, the shape librespot and line-in hand us. */
+function pipeSession(bands: number[] | null): { session: AudioSession; stream: PassThrough } {
+  const stream = new PassThrough();
+  const session = new AudioSession(
+    1,
+    {
+      kind: 'pipe',
+      path: 'librespot',
+      stream,
+      format: 's16le',
+      sampleRate: SR,
+      channels: 2,
+    },
+    'pcm',
+    () => {},
+    OUTPUT,
+    bands,
+    false,
+  );
+  return { session, stream };
+}
+
+test('a format-matched live source with EQ no longer takes the passthrough', async () => {
+  // It used to: `canDirectPassthrough` compares formats only, so a Spotify zone whose format happened to
+  // match the output silently played with its equalizer ignored.
+  const { session, stream } = pipeSession(EQ);
+  session.start();
+  assert.equal(session.directPipeMode, false, 'a passthrough cannot apply an equalizer');
+  assert.equal(session.engineDspMode, true);
+  assert.ok(session.dsp);
+
+  const decoderInput: Buffer[] = [];
+  (session.pipeline.decoder!.stdin as unknown as PassThrough).on('data', (chunk: Buffer) => {
+    decoderInput.push(chunk);
+  });
+  stream.write(Buffer.alloc(4096));
+  await settle();
+  assert.ok(
+    decoderInput.reduce((sum, chunk) => sum + chunk.length, 0) > 0,
+    'the producer feeds the decoder’s stdin',
+  );
+  session.stop(true);
+  stream.end();
+});
+
+test('a matched live source without EQ still gets the ffmpeg-free passthrough', () => {
+  const { session, stream } = pipeSession(null);
+  session.start();
+  assert.equal(session.directPipeMode, true, 'nothing to do means no ffmpeg at all');
+  assert.equal(session.engineDspMode, false);
+  session.stop(true);
+  stream.end();
+});
+
+test('switching the EQ on during a passthrough swaps the topology instead of doing nothing', async () => {
+  // A passthrough has no filter to change and no process to kill, so the restart used to return early
+  // and the slider did nothing at all until the next track.
+  const { session, stream } = pipeSession(null);
+  session.start();
+  assert.equal(session.directPipeMode, true);
+
+  session.restartForEqualizer(EQ);
+  await settle();
+
+  assert.equal(session.engineDspMode, true, 'the equalizer brought a stage with it');
+  assert.equal(session.directPipeMode, false);
+  assert.ok(session.dsp);
+  assert.ok(session.dsp!.headroomDb < 0, 'and the headroom that its boost needs');
+  session.stop(true);
+  stream.end();
 });
 
 test('without DSP the session keeps the untouched single-stage path', () => {

@@ -86,6 +86,16 @@ export class TwoStagePipeline {
     const proc = this.decoder;
     if (!proc) return;
     proc.stdout.removeAllListeners();
+    // Drain stdout to nowhere, or an ffmpeg blocked in write() on a pipe nobody reads never reaches the
+    // point where it acts on the signal below.
+    proc.stdout.resume();
+    // Close stdin for the same reason on the other side: a decoder fed by a live producer sits in a
+    // blocking read() and only notices SIGTERM once that returns, so it would take the full SIGKILL
+    // timeout to die. EOF lets it flush and exit at once — measured 2.5 s down to ~40 ms for a topology
+    // swap that has to wait for this exit.
+    if (!proc.stdin.destroyed) {
+      proc.stdin.end();
+    }
     this.decoder = undefined;
     proc.kill('SIGTERM');
     // Escalate to SIGKILL if it does not exit (e.g. wedged in an -reconnect loop

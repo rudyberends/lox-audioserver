@@ -35,6 +35,11 @@ export interface PcmDspOptions {
   gainDb?: number;
   bands?: ReadonlyArray<number> | null;
   /**
+   * Attenuate ahead of a boosting equalizer so it cannot clip — see {@link equalizerHeadroomDb}.
+   * Defaults on: a boost that clips is not a boost anyone wants.
+   */
+  headroom?: boolean;
+  /**
    * Frames over which a coefficient change is faded in. A biquad's state belongs to its coefficients,
    * so swapping them under a running filter steps the output — audible as a click on every slider
    * move. Both chains run during the fade and the outputs are mixed, which is inaudible and costs
@@ -87,6 +92,97 @@ function peakingCoefficients(
   target[offset + 4] = (1 - alpha / a) / a0;
 }
 
+/** Coefficients for every audible band, packed five per section. Returns how many sections there are. */
+function fillBandCoefficients(
+  target: Float64Array,
+  bands: ReadonlyArray<number> | null | undefined,
+  sampleRate: number,
+): number {
+  let active = 0;
+  for (let index = 0; index < BAND_COUNT; index += 1) {
+    const gainDb = Number(bands?.[index] ?? 0);
+    if (!bandIsAudible(gainDb)) {
+      continue;
+    }
+    peakingCoefficients(
+      target,
+      active * COEFFS_PER_BAND,
+      EQUALIZER_BAND_FREQUENCIES[index]!,
+      BAND_Q,
+      gainDb,
+      sampleRate,
+    );
+    active += 1;
+  }
+  return active;
+}
+
+/**
+ * Peak of the cascade's magnitude response, in dB — the exact amount by which this curve can push a
+ * full-scale signal past full scale.
+ *
+ * Not the largest band gain: adjacent peaking filters overlap, so three neighbouring +6 dB bands lift
+ * more than 6 dB between them. Evaluated numerically on a log grid because that is the honest answer
+ * and it costs a fraction of a millisecond, once per curve change.
+ */
+export function equalizerPeakGainDb(
+  bands: ReadonlyArray<number> | null | undefined,
+  sampleRate: number,
+): number {
+  const coefficients = new Float64Array(BAND_COUNT * COEFFS_PER_BAND);
+  const sections = fillBandCoefficients(coefficients, bands, sampleRate);
+  if (!sections) {
+    return 0;
+  }
+  const points = 512;
+  const lowest = 10;
+  const highest = sampleRate / 2;
+  let peak = 0;
+  for (let point = 0; point < points; point += 1) {
+    const frequency = lowest * Math.pow(highest / lowest, point / (points - 1));
+    const w = (2 * Math.PI * frequency) / sampleRate;
+    const cos1 = Math.cos(w);
+    const sin1 = Math.sin(w);
+    const cos2 = Math.cos(2 * w);
+    const sin2 = Math.sin(2 * w);
+    let magnitude = 1;
+    for (let section = 0; section < sections; section += 1) {
+      const c = section * COEFFS_PER_BAND;
+      const numeratorReal = coefficients[c]! + coefficients[c + 1]! * cos1 + coefficients[c + 2]! * cos2;
+      const numeratorImaginary = -coefficients[c + 1]! * sin1 - coefficients[c + 2]! * sin2;
+      const denominatorReal = 1 + coefficients[c + 3]! * cos1 + coefficients[c + 4]! * cos2;
+      const denominatorImaginary = -coefficients[c + 3]! * sin1 - coefficients[c + 4]! * sin2;
+      magnitude *= Math.sqrt(
+        (numeratorReal * numeratorReal + numeratorImaginary * numeratorImaginary) /
+          (denominatorReal * denominatorReal + denominatorImaginary * denominatorImaginary),
+      );
+    }
+    if (magnitude > peak) {
+      peak = magnitude;
+    }
+  }
+  return 20 * Math.log10(peak);
+}
+
+/**
+ * How much to attenuate ahead of a boosting equalizer so it cannot clip.
+ *
+ * A boost has to come from somewhere. The alternatives were to let it clip — broadband distortion on
+ * exactly the loud passages people notice — or to catch the overs with a limiter, which means putting a
+ * dynamics processor in a hi-fi path and accepting gain pumping on material that never asked for it.
+ * This is the third option and the one measuring instruments agree with: attenuate by exactly the peak
+ * of the curve, so the maths cannot overflow and nothing else about the signal changes. The cost is
+ * level, which the zone's own volume control gives back, and it is reported as `headroomDb` so a
+ * readout can say where it went. A cut-only curve needs nothing and gets nothing.
+ */
+export function equalizerHeadroomDb(
+  bands: ReadonlyArray<number> | null | undefined,
+  sampleRate: number,
+): number {
+  const peak = equalizerPeakGainDb(bands, sampleRate);
+  return peak > 0 ? -peak : 0;
+}
+
 /**
  * A cascade of peaking biquads in transposed direct form II, one state pair per band per channel.
  *
@@ -98,6 +194,12 @@ class BiquadBank {
   private readonly s1: Float64Array;
   private readonly s2: Float64Array;
   private activeBands = 0;
+  /**
+   * Headroom for this curve, folded in here rather than into the stage's own gain so that a curve
+   * change carries its trim with it — the ramp then covers both, instead of stepping the level.
+   */
+  private trim = 1;
+  private trimDb = 0;
 
   constructor(
     private readonly channels: number,
@@ -111,31 +213,21 @@ class BiquadBank {
     return this.activeBands === 0;
   }
 
-  public configure(bands: ReadonlyArray<number> | null | undefined): void {
+  public get headroomDb(): number {
+    return this.trimDb;
+  }
+
+  public configure(bands: ReadonlyArray<number> | null | undefined, headroom: boolean): void {
     this.s1.fill(0);
     this.s2.fill(0);
-    let active = 0;
-    for (let index = 0; index < BAND_COUNT; index += 1) {
-      const gainDb = Number(bands?.[index] ?? 0);
-      if (!bandIsAudible(gainDb)) {
-        continue;
-      }
-      peakingCoefficients(
-        this.coefficients,
-        active * COEFFS_PER_BAND,
-        EQUALIZER_BAND_FREQUENCIES[index]!,
-        BAND_Q,
-        gainDb,
-        this.sampleRate,
-      );
-      active += 1;
-    }
-    this.activeBands = active;
+    this.activeBands = fillBandCoefficients(this.coefficients, bands, this.sampleRate);
+    this.trimDb = headroom && this.activeBands ? equalizerHeadroomDb(bands, this.sampleRate) : 0;
+    this.trim = this.trimDb === 0 ? 1 : Math.pow(10, this.trimDb / 20);
   }
 
   /** One sample through every active section of one channel. */
   public process(sample: number, channel: number): number {
-    let x = sample;
+    let x = sample * this.trim;
     for (let band = 0; band < this.activeBands; band += 1) {
       const c = band * COEFFS_PER_BAND;
       const k = band * this.channels + channel;
@@ -158,6 +250,7 @@ export class PcmDspStage extends Transform {
   private readonly rampFrames: number;
   private gain: number;
   private bands: ReadonlyArray<number> | null;
+  private readonly headroom: boolean;
   private bank: BiquadBank;
   /** Populated only while a coefficient change fades in; see PcmDspOptions.rampFrames. */
   private previousBank: BiquadBank | null = null;
@@ -181,13 +274,23 @@ export class PcmDspStage extends Transform {
     this.rampFrames = options.rampFrames ?? DEFAULT_RAMP_FRAMES;
     this.gain = dbToLinear(options.gainDb ?? 0);
     this.bands = options.bands ?? null;
+    this.headroom = options.headroom !== false;
     this.bank = new BiquadBank(this.channels, options.sampleRate);
-    this.bank.configure(this.bands);
+    this.bank.configure(this.bands, this.headroom);
   }
 
   /** True when this stage would leave the samples alone but for the requantisation. */
   public get isTransparent(): boolean {
     return this.gain === 1 && this.bank.isIdentity && this.previousBank === null;
+  }
+
+  /**
+   * Attenuation currently applied ahead of the equalizer so its boost cannot clip, in dB (0 or
+   * negative). Read by the session for the processing readout, so the level is accounted for rather
+   * than mysterious.
+   */
+  public get headroomDb(): number {
+    return this.bank.headroomDb;
   }
 
   /**
@@ -204,7 +307,7 @@ export class PcmDspStage extends Transform {
     // A flat outgoing bank is a valid fade source — it passes the input through unchanged — so even
     // switching the EQ on for the first time ramps rather than steps.
     const incoming = new BiquadBank(this.channels, this.options.sampleRate);
-    incoming.configure(bands);
+    incoming.configure(bands, this.headroom);
     this.previousBank = this.bank;
     this.bank = incoming;
     this.bands = bands;

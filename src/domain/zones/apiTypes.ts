@@ -283,6 +283,12 @@ export interface ApiProcessingChain {
    * narrowed, so a `resampled` chain with `dither: null` is a rate change that kept its precision.
    */
   dither: string | null;
+  /**
+   * Attenuation applied ahead of a boosting equalizer so its boost cannot clip, in dB (negative). This
+   * is where the level goes when an EQ preset sounds quieter than the same track without it: exactly the
+   * peak of the curve, and no more. Null when the curve needed none.
+   */
+  headroomDb: number | null;
   /** True while a crossfade is blending, which requantises by definition. */
   crossfading: boolean;
 }

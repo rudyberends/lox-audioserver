@@ -131,6 +131,12 @@ export class AudioSession {
    * the end (PCM profile in engine-DSP mode). Pausing it propagates up the pipe chain to the decoder.
    */
   public outputReadable?: NodeJS.ReadableStream;
+  /**
+   * @internal Where a live pipe source is currently piped, so cleanup can unpipe it. Leaving a source
+   * piped into a dead ffmpeg stdin looks like a working stream and delivers nothing: the readable stays
+   * flowing into a destroyed destination, and the next topology never sees a byte.
+   */
+  public pipeTarget?: NodeJS.WritableStream;
   // Two-stage PCM pipeline (decoder → pcmPipe → encoderInput → encoder).
   // Public fields on the pipeline object since crossfade orchestration needs to
   // unpipe/replace them mid-blend; see twoStagePipeline.ts for the contract.
@@ -371,16 +377,12 @@ export class AudioSession {
   /**
    * True when this session's DSP belongs on our own PCM stage rather than on ffmpeg's command line.
    *
-   * Only for sources ffmpeg has to decode anyway (file/URL) and only with crossfade off, which is the
-   * default. The crossfade path keeps its DSP in the encoder because its blender splices the
-   * intermediate bus, and a live pipe still needs ffmpeg to reach the output format first — both are
-   * follow-ups, not blockers.
+   * Every source kind qualifies — ffmpeg decodes to float first either way — except under crossfade,
+   * whose blender splices the integer bus and would have to learn the new shape. That path keeps its
+   * DSP in the encoder.
    */
   private usesEngineDsp(): boolean {
     if (this.crossfadeEnabled) {
-      return false;
-    }
-    if (this.source.kind !== 'file' && this.source.kind !== 'url') {
       return false;
     }
     return this.args.engineDspSpec(this.equalizerBands) !== null;
@@ -421,7 +423,13 @@ export class AudioSession {
         (!Number.isFinite(this.outputSettings.fixedGainDb) || this.outputSettings.fixedGainDb === 0) &&
         !this.sourcePreDelayMs;
 
-      if (canDirectPassthrough) {
+      // DSP first: `canDirectPassthrough` only compares *formats*, so a matching pipe with an
+      // equalizer set used to take the passthrough and drop the equalizer on the floor without a word.
+      // Same split as for file/URL — ffmpeg reaches the output rate, we own the DSP — so an EQ change on
+      // a Spotify or line-in zone no longer respawns anything either.
+      if (this.usesEngineDsp()) {
+        this.starter.startEngineDsp(pipeSource.stream);
+      } else if (canDirectPassthrough) {
         this.starter.startDirectPipe(pipeSource.stream, fmt, sr, ch);
       } else {
         this.starter.startPipeWithFfmpeg(pipeSource.stream, fmt, sr, ch);
@@ -726,8 +734,8 @@ export class AudioSession {
     if (typeof resumeAtSec === 'number' && Number.isFinite(resumeAtSec) && resumeAtSec > 0) {
       this.args = this.buildArgBuilder(resumeAtSec);
     }
-    if (!this.process && !this.engineDspMode) {
-      // No ffmpeg running yet; the next start() will pick up the new bands.
+    if (!this.process && !this.engineDspMode && !this.directPipeMode) {
+      // Nothing is running yet; the next start() will pick up the new bands.
       return;
     }
     if (this.ending || this.restartingForEq) {
@@ -738,9 +746,18 @@ export class AudioSession {
       this.process.terminate();
       return;
     }
-    // Engine-DSP with a PCM profile: the decoder is the only process, so its exit drives the same
-    // cleanup-and-start cycle an encoder's exit would (see handleProducerEnded).
-    this.pipeline.terminateDecoder();
+    if (this.pipeline.decoder) {
+      // Engine-DSP with a PCM profile: the decoder is the only process, so its exit drives the same
+      // cleanup-and-start cycle an encoder's exit would (see handleProducerEnded).
+      this.pipeline.terminateDecoder();
+      return;
+    }
+    // Direct pipe passthrough: no child process exists to wait for, so cycle the reader in place.
+    // Without this, switching the equalizer on for a zone playing a format-matched live source did
+    // nothing at all until the next track — the passthrough has no filter to change and nothing to kill.
+    this.restartingForEq = false;
+    this.cleanup({ suppressTermination: true });
+    setTimeout(() => this.start(), 0);
   }
 
   /**
@@ -877,9 +894,14 @@ export class AudioSession {
       bps: this.lastBpsTs ? this.lastBps : null,
       bitPerfect: this.bitPerfect,
       dspApplied: this.dspApplied,
-      // Described from the live equalizer bands rather than from the ones this session started with:
-      // a band moved mid-track restarts ffmpeg, and until it does the chain in the args is the old one.
-      processing: this.args.describeProcessing(this.equalizerBands),
+      // Described from the live equalizer bands rather than from the ones this session started with: on
+      // the ffmpeg paths a band moved mid-track respawns, and until it does the chain in the args is
+      // still the old one. The headroom comes from the stage that actually applies it, so a readout
+      // never claims a trim that no filter is performing.
+      processing: {
+        ...this.args.describeProcessing(this.equalizerBands),
+        headroomDb: this.dsp && this.dsp.headroomDb !== 0 ? this.dsp.headroomDb : null,
+      },
       crossfading: this.crossfadeActive,
       sourceFormat: this.sourceFormat,
       bufferedBytes: this.buffer.bytes,
@@ -904,7 +926,8 @@ export class AudioSession {
     this.bytesSinceLog = 0;
     this.lastLogTs = 0;
     this.pacer.reset();
-    this.pipeSource.detach(this.pipeline.pcmPipe);
+    this.pipeSource.detach(this.pipeTarget ?? this.pipeline.pcmPipe);
+    this.pipeTarget = undefined;
     this.directPipeMode = false;
     if (this.dsp) {
       this.dsp.removeAllListeners();

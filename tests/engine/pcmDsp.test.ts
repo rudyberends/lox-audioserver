@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from '../testHarness';
-import { PcmDspStage, bandsAreActive, type PcmDspBitDepth } from '../../src/engine/pcmDsp';
+import {
+  PcmDspStage,
+  bandsAreActive,
+  equalizerHeadroomDb,
+  type PcmDspBitDepth,
+} from '../../src/engine/pcmDsp';
 
 const SR = 44100;
 
@@ -44,7 +49,12 @@ async function collect(
 
 function makeStage(
   bands: number[] | null,
-  options: { bitDepth?: PcmDspBitDepth; gainDb?: number; rampFrames?: number } = {},
+  options: {
+    bitDepth?: PcmDspBitDepth;
+    gainDb?: number;
+    rampFrames?: number;
+    headroom?: boolean;
+  } = {},
 ): PcmDspStage {
   return new PcmDspStage({
     sampleRate: SR,
@@ -52,6 +62,7 @@ function makeStage(
     bitDepth: options.bitDepth ?? 16,
     ...(options.gainDb === undefined ? {} : { gainDb: options.gainDb }),
     ...(options.rampFrames === undefined ? {} : { rampFrames: options.rampFrames }),
+    ...(options.headroom === undefined ? {} : { headroom: options.headroom }),
     bands,
   });
 }
@@ -77,10 +88,11 @@ test('gain is applied in dB and does not depend on the equalizer', async () => {
 test('a boosted band has the gain it advertises at its centre frequency', async () => {
   // Measure the response the way a measurement rig would: feed an impulse, then evaluate the transfer
   // function at the band centre. This is what makes the coefficients verifiable rather than plausible.
+  // Headroom off, because that trim is deliberately the amount this test measures.
   const length = 16384;
   const impulse = Array.from({ length }, (_, i) => (i === 0 ? 0.25 : 0));
   const bands = [0, 0, 0, 0, 0, 6, 0, 0, 0, 0]; // +6 dB at 1 kHz
-  const out = await collect(makeStage(bands, { bitDepth: 32 }), stereo(impulse));
+  const out = await collect(makeStage(bands, { bitDepth: 32, headroom: false }), stereo(impulse));
 
   const gainAt = (frequency: number): number => {
     // Goertzel-style single-bin DFT over the impulse response.
@@ -152,6 +164,52 @@ test('24-bit output is packed into three bytes per sample', async () => {
   const out = await collect(makeStage(null, { bitDepth: 24 }), stereo(values));
   assert.equal(out.length, values.length * 2 * 3, 's24le is packed, not padded into four bytes');
   assert.ok(Math.abs(out.readIntLE(30 * 6, 3) - Math.round(0.25 * 8388608)) <= 1);
+});
+
+test('headroom is exactly the peak of the curve, and nothing when it cannot clip', () => {
+  assert.equal(equalizerHeadroomDb(null, SR), 0);
+  assert.equal(equalizerHeadroomDb([0, 0, 0, 0, 0, 0, 0, 0, 0, 0], SR), 0);
+  assert.equal(equalizerHeadroomDb([-6, -6, 0, 0, 0, 0, 0, 0, 0, 0], SR), 0, 'a cut cannot overflow');
+
+  const single = equalizerHeadroomDb([0, 0, 0, 0, 0, 6, 0, 0, 0, 0], SR);
+  assert.ok(Math.abs(single + 6) < 0.15, `expected about -6 dB, got ${single.toFixed(2)}`);
+
+  // Adjacent peaking filters overlap, so neighbours add up to more than the largest band — which is why
+  // the trim is measured off the response rather than taken from the slider.
+  const neighbours = equalizerHeadroomDb([0, 0, 0, 6, 6, 6, 0, 0, 0, 0], SR);
+  assert.ok(neighbours < single - 1, `expected more than ${single.toFixed(2)} dB, got ${neighbours.toFixed(2)}`);
+});
+
+test('a boost cannot clip once headroom is applied', async () => {
+  // 63 Hz at almost full scale, with the 63 Hz band lifted: the case that clips.
+  const length = 8192;
+  const values = Array.from({ length }, (_, i) => 0.99 * Math.sin((2 * Math.PI * 63 * i) / SR));
+  const bands = [0, 6, 0, 0, 0, 0, 0, 0, 0, 0];
+  const clipped = (buf: Buffer): number => {
+    let count = 0;
+    for (let i = 0; i < buf.length; i += 2) {
+      const value = buf.readInt16LE(i);
+      if (value >= 32767 || value <= -32768) count += 1;
+    }
+    return count;
+  };
+
+  const withHeadroom = await collect(makeStage(bands), stereo(values));
+  const without = await collect(makeStage(bands, { headroom: false }), stereo(values));
+  assert.equal(clipped(withHeadroom), 0, 'headroom must make clipping impossible');
+  assert.ok(clipped(without) > 100, `expected the untrimmed boost to clip; it clipped ${clipped(without)}`);
+});
+
+test('the stage reports the headroom it is applying', () => {
+  const boosted = makeStage([0, 0, 0, 0, 0, 6, 0, 0, 0, 0]);
+  assert.ok(Math.abs(boosted.headroomDb + 6) < 0.15);
+  const flat = makeStage(null);
+  assert.equal(flat.headroomDb, 0, 'nothing to account for');
+  // A curve change carries its own trim, so the readout follows the slider.
+  boosted.setBands([0, 0, 0, 0, 0, -6, 0, 0, 0, 0]);
+  assert.equal(boosted.headroomDb, 0);
+  boosted.destroy();
+  flat.destroy();
 });
 
 test('bandsAreActive ignores the noise around zero', () => {
