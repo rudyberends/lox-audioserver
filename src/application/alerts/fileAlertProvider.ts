@@ -94,6 +94,11 @@ export class FileAlertProvider {
    * a header parser (music-metadata) then returned e.g. 18 s for a 30 s clip, so the alert
    * stop timer fired early and clipped the recording on Sonos (#276). Decoding reports what
    * actually plays out, which is exactly what the stop timer needs.
+   *
+   * `-vn` because cover art is a video stream of one frame at t=0, and the position ffmpeg
+   * reports is the *earliest* of its outputs: with the picture mapped, `bell.mp3` measured
+   * 0.00 s instead of 3.48 s. A zero-length probe falls back to `MIN_ALERT_DURATION_MS`, so
+   * the doorbell held the zone for 20 seconds and the music came back long after the ring.
    */
   private probeDurationSeconds(absPath: string): Promise<number | undefined> {
     return new Promise((resolve) => {
@@ -107,7 +112,7 @@ export class FileAlertProvider {
         clearTimeout(timer);
         resolve(value);
       };
-      const proc = spawn(FFMPEG_BINARY, ['-hide_banner', '-i', absPath, '-f', 'null', '-'], {
+      const proc = spawn(FFMPEG_BINARY, ['-hide_banner', '-i', absPath, '-vn', '-f', 'null', '-'], {
         stdio: ['ignore', 'ignore', 'pipe'],
       });
       const timer = setTimeout(() => {
