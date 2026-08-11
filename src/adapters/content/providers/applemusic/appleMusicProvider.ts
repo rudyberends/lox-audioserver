@@ -21,6 +21,9 @@ import { collageKey, collageCachedUrl, ensureCollage } from '@/shared/playlistCo
 const APPLE_MUSIC_API_BASE = 'https://amp-api.music.apple.com/v1';
 const BEARER_TOKEN_TTL_MS = 30 * 60 * 1000;
 
+/** The largest page Apple's API accepts. Beyond it the request is rejected, not truncated. */
+const APPLE_MAX_PAGE = 100;
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 function appleLocalizedText(value: unknown): string {
@@ -114,7 +117,7 @@ export class AppleMusicProvider {
       case 'root':
         return this.buildRootFolder(offset);
       case 'albums': {
-        const albumResult = await this.fetchLibraryAlbums(limit || 50, offset);
+        const albumResult = await this.inPages((size, from) => this.fetchLibraryAlbums(size, from), limit || 50, offset);
         return {
           id: folderId,
           name: 'Albums',
@@ -125,7 +128,7 @@ export class AppleMusicProvider {
         };
       }
       case 'artists': {
-        const artistResult = await this.fetchLibraryArtists(limit || 50, offset);
+        const artistResult = await this.inPages((size, from) => this.fetchLibraryArtists(size, from), limit || 50, offset);
         return {
           id: folderId,
           name: 'Artists',
@@ -136,7 +139,7 @@ export class AppleMusicProvider {
         };
       }
       case 'playlists': {
-        const playlistResult = await this.fetchLibraryPlaylists(limit || 50, offset);
+        const playlistResult = await this.inPages((size, from) => this.fetchLibraryPlaylists(size, from), limit || 50, offset);
         return {
           id: folderId,
           name: 'Playlists',
@@ -180,7 +183,7 @@ export class AppleMusicProvider {
         };
       }
       case 'songs': {
-        const songsResult = await this.fetchLibrarySongs(limit || 50, offset);
+        const songsResult = await this.inPages((size, from) => this.fetchLibrarySongs(size, from), limit || 50, offset);
         return {
           id: folderId,
           name: 'Songs',
@@ -191,7 +194,7 @@ export class AppleMusicProvider {
         };
       }
       case 'recent': {
-        const recentResult = await this.fetchLibraryRecentAlbums(limit || 50, offset);
+        const recentResult = await this.inPages((size, from) => this.fetchLibraryRecentAlbums(size, from), limit || 50, offset);
         return {
           id: folderId,
           name: 'Recently Added',
@@ -203,8 +206,8 @@ export class AppleMusicProvider {
       }
       case 'albumItem': {
         const result = normalized.source === 'library'
-          ? await this.fetchLibraryAlbumTracks(normalized.id, limit || 50, offset)
-          : await this.fetchAlbumTracks(normalized.id, limit || 50, offset);
+          ? await this.inPages((size, from) => this.fetchLibraryAlbumTracks(normalized.id, size, from), limit || 50, offset)
+          : await this.inPages((size, from) => this.fetchAlbumTracks(normalized.id, size, from), limit || 50, offset);
         return {
           id: folderId,
           name: 'Album',
@@ -216,8 +219,8 @@ export class AppleMusicProvider {
       }
       case 'artistItem': {
         const result = normalized.source === 'library'
-          ? await this.fetchLibraryArtistAlbums(normalized.id, limit || 50, offset)
-          : await this.fetchArtistTopTracks(normalized.id, limit || 50, offset);
+          ? await this.inPages((size, from) => this.fetchLibraryArtistAlbums(normalized.id, size, from), limit || 50, offset)
+          : await this.inPages((size, from) => this.fetchArtistTopTracks(normalized.id, size, from), limit || 50, offset);
         return {
           id: folderId,
           name: 'Artist',
@@ -229,8 +232,8 @@ export class AppleMusicProvider {
       }
       case 'playlistItem': {
         const result = normalized.source === 'library'
-          ? await this.fetchLibraryPlaylistTracks(normalized.id, limit || 50, offset)
-          : await this.fetchPlaylistTracks(normalized.id, limit || 50, offset);
+          ? await this.inPages((size, from) => this.fetchLibraryPlaylistTracks(normalized.id, size, from), limit || 50, offset)
+          : await this.inPages((size, from) => this.fetchPlaylistTracks(normalized.id, size, from), limit || 50, offset);
         return {
           id: folderId,
           name: 'Playlist',
@@ -625,6 +628,44 @@ export class AppleMusicProvider {
       items: items.map((t: any) => mapTrack(this.audiopathPrefix, t)),
       total: typeof data?.meta?.total === 'number' ? data.meta.total : undefined,
     };
+  }
+
+  /**
+   * Apple pages at 100, and asking for more is not merely capped — the request is rejected, which
+   * arrives here as an empty page. A browse view then says "nothing here" over a library of 362
+   * artists, which is how this surfaced: the player asks for 120 at a time.
+   *
+   * So a larger ask is split into upstream pages and stitched back together. Anything within
+   * Apple's own page size is one request, exactly as before. `total` comes from the last page
+   * that reported one, and a short page ends the loop — that is Apple saying there is no more,
+   * whatever the count claimed.
+   */
+  private async inPages(
+    fetchPage: (limit: number, offset: number) => Promise<{ items: ContentFolderItem[]; total?: number }>,
+    limit: number,
+    offset: number,
+  ): Promise<{ items: ContentFolderItem[]; total?: number }> {
+    if (limit <= APPLE_MAX_PAGE) {
+      return fetchPage(limit, offset);
+    }
+    const items: ContentFolderItem[] = [];
+    let total: number | undefined;
+    let cursor = offset;
+    while (items.length < limit) {
+      const page = await fetchPage(Math.min(APPLE_MAX_PAGE, limit - items.length), cursor);
+      if (typeof page.total === 'number') {
+        total = page.total;
+      }
+      if (page.items.length === 0) {
+        break;
+      }
+      items.push(...page.items);
+      cursor += page.items.length;
+      if (typeof total === 'number' && cursor >= total) {
+        break;
+      }
+    }
+    return { items, total };
   }
 
   private async fetchLibraryAlbums(
