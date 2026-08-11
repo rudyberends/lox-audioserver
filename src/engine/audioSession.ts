@@ -36,6 +36,19 @@ export type { PlaybackSource };
 const MAX_RESTART_ATTEMPTS = 5;
 const RESTART_BACKOFF_STEP_MS = 100;
 const RESTART_BACKOFF_MAX_MS = 500;
+/**
+ * How long a finished session keeps its buffer for an output that has not fetched it yet.
+ *
+ * Outputs that pull over HTTP (Squeezelite, Music Assistant) run their file input unpaced — see
+ * `OutputFormatPolicy` — so ffmpeg reaches EOF in tens of milliseconds while the player is still
+ * being told which URL to fetch. Tearing the session down on that exit made every short alert and
+ * TTS clip answer the player's GET with a 404 (#331): the audio existed, complete, in the buffer,
+ * and was thrown away a few milliseconds before anyone asked for it.
+ *
+ * Only sessions nobody has subscribed to wait; once an output is attached it has been primed with
+ * the whole buffer, so a normal track end still tears down at once and the queue advances as before.
+ */
+const LATE_SUBSCRIBER_GRACE_MS = 5000;
 
 function pcmBitDepthFor(format: string): 16 | 24 | 32 {
   if (format === 's16le' || format === 's16be') return 16;
@@ -144,6 +157,8 @@ export class AudioSession {
   /** @internal */ public crossfadeActive = false;
   private discardSubscribersOnStop = false;
   private restartingForEq = false;
+  /** Set while the producer is done but the buffer is being held for an output that has yet to ask. */
+  private awaitingLateSubscriber: NodeJS.Timeout | null = null;
   /** @internal */ public stdoutPaused = false;
   private readonly pacer: OutputPacer;
   // When streaming raw PCM, ensure we only emit full audio frames.
@@ -392,6 +407,11 @@ export class AudioSession {
     if (this.process || this.engineDspMode) {
       return;
     }
+    if (this.awaitingLateSubscriber) {
+      // A new source supersedes whatever we were holding the old buffer for.
+      clearTimeout(this.awaitingLateSubscriber);
+      this.awaitingLateSubscriber = null;
+    }
     this.buffer.clear();
     this.pcmAligner?.reset();
     this.codecHeader = null;
@@ -511,6 +531,10 @@ export class AudioSession {
             !shouldRestartForEq && options.restartOnFailure === true && !this.ending && code !== 0;
           const restartBudgetExhausted = this.restartAttempts >= MAX_RESTART_ATTEMPTS;
           const shouldRestart = wantsRestart && !restartBudgetExhausted;
+          if (!shouldRestart && !shouldRestartForEq && this.shouldHoldForLateSubscriber(code, signal)) {
+            this.holdForLateSubscriber();
+            return;
+          }
           // When we give up (budget exhausted), suppressTermination=false so cleanup
           // fully tears the session down instead of leaving it in limbo.
           this.cleanup({ suppressTermination: shouldRestart || shouldRestartForEq });
@@ -774,8 +798,56 @@ export class AudioSession {
       return;
     }
     if (!this.ending) {
+      if (this.shouldHoldForLateSubscriber(0, null)) {
+        this.holdForLateSubscriber();
+        return;
+      }
       this.cleanup();
     }
+  }
+
+  /**
+   * Did the producer finish cleanly with audio nobody has collected?
+   *
+   * `fanout.size === 0` is the whole test for "nobody collected it": a subscriber that attached was
+   * primed with the entire buffer at attach time, so there is nothing left to wait for and the
+   * teardown must stay immediate — delaying it would delay the next track in a queue.
+   */
+  private shouldHoldForLateSubscriber(code: number | null, signal: string | null): boolean {
+    return (
+      !this.ending &&
+      !this.awaitingLateSubscriber &&
+      (code === 0 || code === null) &&
+      !signal &&
+      this.fanout.size === 0 &&
+      this.buffer.bytes > 0
+    );
+  }
+
+  /** Keep the finished session (and its buffer) reachable until an output asks for it, or time is up. */
+  private holdForLateSubscriber(): void {
+    if (this.process) {
+      // The process is gone; drop our handle so nothing tries to write to or signal it, while the
+      // buffer and the fanout stay alive for whoever still has to connect.
+      this.process.detach();
+      this.process = undefined;
+    }
+    this.log.info('producer finished before any output attached; holding buffer', {
+      zoneId: this.zoneId,
+      profile: this.profile,
+      bufferedBytes: this.buffer.bytes,
+      graceMs: LATE_SUBSCRIBER_GRACE_MS,
+    });
+    this.awaitingLateSubscriber = setTimeout(() => {
+      this.awaitingLateSubscriber = null;
+      this.log.debug('buffer hold expired', {
+        zoneId: this.zoneId,
+        profile: this.profile,
+        subscribers: this.fanout.size,
+      });
+      this.cleanup();
+    }, LATE_SUBSCRIBER_GRACE_MS);
+    this.awaitingLateSubscriber.unref?.();
   }
 
   public waitForFirstChunk(timeoutMs = 2000): Promise<boolean> {
@@ -787,7 +859,9 @@ export class AudioSession {
   }
 
   public createSubscriber(options: { primeWithBuffer?: boolean; label?: string } = {}): PassThrough | null {
-    if (!this.process && !this.directPipeMode && !this.engineDspMode) {
+    // A held session has no process left, but it is exactly the case this exists for: the buffer is
+    // complete and the output arriving now is the one it was kept for.
+    if (!this.process && !this.directPipeMode && !this.engineDspMode && !this.awaitingLateSubscriber) {
       return null;
     }
     const primeWithBuffer = options.primeWithBuffer !== false;
@@ -923,6 +997,10 @@ export class AudioSession {
 
   /** @internal */ public cleanup(options: { suppressTermination?: boolean } = {}): void {
     const suppressTermination = options.suppressTermination === true;
+    if (this.awaitingLateSubscriber) {
+      clearTimeout(this.awaitingLateSubscriber);
+      this.awaitingLateSubscriber = null;
+    }
     this.bytesSinceLog = 0;
     this.lastLogTs = 0;
     this.pacer.reset();
