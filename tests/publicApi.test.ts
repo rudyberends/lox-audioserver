@@ -12,7 +12,7 @@ import { COVER_ART_NOW_PLAYING_SIZE } from '../src/shared/coverArt';
 import { ServerLifecycle } from '../src/domain/server/lifecycle';
 import type { HealthReport } from '../src/domain/server/health';
 import type { ZoneState } from '../src/domain/zones/zoneState';
-import type { ApiOutputSync } from '../src/domain/zones/apiTypes';
+import type { ApiOutputSync, ApiStreamFormat } from '../src/domain/zones/apiTypes';
 import type { NotifierPort } from '../src/ports/NotifierPort';
 import type { AudioAnalysisEvent } from '../src/application/audio/audioAnalysisService';
 
@@ -1043,6 +1043,72 @@ test('a moving lead or jitter is a reading, not a zone change', () => {
   // So is losing the clock.
   hub.publishZoneChanged(at(13, { leadMs: 288, delayMs: 60, state: 'error' }));
   assert.equal(seen[3].type, 'zone.changed', 'losing the lock is state');
+});
+
+test('a moving bitrate is a reading, not a zone change', () => {
+  /*
+   * `format.*.bitrate` is a throughput counter, re-averaged about once a second for every codec
+   * that is not PCM (PCM's is derived from its sample format and does not move). Leaving it in the
+   * comparison made a FLAC or MP3 output differ from itself on every tick, so a playing zone sent
+   * its whole state every second and `zone.progress` never fired at all — on MQTT that was all ~27
+   * of a zone's topics, every second, and the "send the playing time" setting could not turn it off
+   * because none of it was a progress tick (sonn-audio/core#325).
+   */
+  const hub = new ApiEventHub();
+  const seen: any[] = [];
+  hub.subscribe((e) => seen.push(e));
+  const at = (time: number, output: Partial<ApiStreamFormat> = {}) =>
+    toApiZoneState(zoneState({ time }), {
+      streamFormat: () => ({
+        bitPerfect: false,
+        dspApplied: true,
+        source: null,
+        output: {
+          codec: 'flac',
+          sampleRate: 44100,
+          bitDepth: 16,
+          channels: 2,
+          bitrate: 1030904,
+          highRes: false,
+          ...output,
+        },
+        processing: null,
+      }),
+    });
+
+  hub.publishZoneChanged(at(10));
+  assert.equal(seen[0].type, 'zone.changed');
+
+  // A second of FLAC compresses differently from the one before it. Nothing changed.
+  hub.publishZoneChanged(at(11, { bitrate: 1055456 }));
+  assert.equal(seen[1].type, 'zone.progress', 'a re-averaged throughput counter is not state');
+
+  // The codec is: a client showing what is being heard has to hear about that one.
+  hub.publishZoneChanged(at(12, { bitrate: 945896, codec: 'mp3' }));
+  assert.equal(seen[2].type, 'zone.changed', 'the codec beside it is state');
+  assert.equal(seen[2].zone.format.output.codec, 'mp3');
+  assert.equal(seen[2].zone.format.output.bitrate, 945896, 'and the event still carries the reading');
+});
+
+test('a snapshot that says nothing new is not published at all', () => {
+  /*
+   * The internal notifier is re-entered for reasons that do not always change the projection — the
+   * 60 s heartbeat re-broadcast, a field that only exists in the Loxone payload. Each of those used
+   * to be a full `zone.changed`, because "the position did not move" was read as "something else
+   * did".
+   */
+  const hub = new ApiEventHub();
+  const seen: any[] = [];
+  hub.subscribe((e) => seen.push(e));
+
+  hub.publishZoneChanged(toApiZoneState(zoneState({ time: 10 })));
+  hub.publishZoneChanged(toApiZoneState(zoneState({ time: 10 })));
+  hub.publishZoneChanged(toApiZoneState(zoneState({ time: 10 })));
+  assert.deepEqual(seen.map((e) => e.type), ['zone.changed'], 'saying it twice says nothing');
+
+  hub.publishZoneChanged(toApiZoneState(zoneState({ time: 10, volume: 55 })));
+  assert.equal(seen[1]?.type, 'zone.changed', 'a real change still gets through');
+  assert.equal(seen[1].zone.volume, 55);
 });
 
 test('progress is tracked per zone, so one zone cannot mask another', () => {

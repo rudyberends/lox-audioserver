@@ -60,6 +60,15 @@ export class MqttPublisher {
   private lastError: string | null = null;
   private published = 0;
   private starting: Promise<void> | null = null;
+  /**
+   * What was last put on each topic, so a topic is only written when its own value moved.
+   *
+   * A zone travels as one event but lands as ~27 topics, and most changes touch one of them: a
+   * volume step used to rewrite the title, the album and the cover url with the values they
+   * already held. Cleared before every snapshot — a broker that restarted lost its retained
+   * messages, and this cache must not then be the reason we do not send them again.
+   */
+  private readonly lastPayload = new Map<string, string>();
 
   constructor(
     private readonly configPort: ConfigPort,
@@ -174,6 +183,7 @@ export class MqttPublisher {
 
   /** Everything a consumer needs to render current state without waiting for a change. */
   private async publishSnapshot(prefix: string, online: string): Promise<void> {
+    this.lastPayload.clear();
     await this.send([{ topic: online, payload: '1', retain: true }]);
     for (const zone of this.getZones()) {
       await this.send(zoneMessages(prefix, zone));
@@ -288,10 +298,23 @@ export class MqttPublisher {
       return;
     }
     for (const message of messages) {
+      // The cache tracks what the broker *holds*, which only a retained publish changes. An
+      // unretained one — a progress tick — is always sent and never recorded: `position` is
+      // written both ways, and letting a tick stand in for the retained value would leave a
+      // late joiner reading a clock that stopped whenever the ticks took over.
+      if (message.retain && this.lastPayload.get(message.topic) === message.payload) {
+        continue;
+      }
       try {
         await client.publishAsync(message.topic, message.payload, { retain: message.retain });
+        if (message.retain) {
+          this.lastPayload.set(message.topic, message.payload);
+        }
         this.published += 1;
       } catch (error) {
+        // Forget it rather than record it: a publish that failed must be retried by the next
+        // change, not skipped because we believe the broker already has this value.
+        this.lastPayload.delete(message.topic);
         this.lastError = error instanceof Error ? error.message : String(error);
       }
     }
@@ -306,6 +329,7 @@ export class MqttPublisher {
   public async stop(): Promise<void> {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.lastPayload.clear();
     const client = this.client;
     this.client = null;
     if (!client) {

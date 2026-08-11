@@ -364,6 +364,12 @@ second per playing zone. Anything else that changes — volume, a new track, a s
 switch — still arrives as a `zone.changed`, so **a client that ignores
 `zone.progress` stays correct**; its progress bar just moves a beat later.
 
+What counts as "nothing but the clock" excludes the server's own live *readings*:
+`format.*.bitrate` (a throughput average that moves every second for any codec but PCM) and
+`output.sync`'s `leadMs`/`leadMinMs`/`driftMs`. Every event carries their current values, but a
+new reading on its own does not produce one — read them from `GET /zones` when you want them on
+their own schedule. A snapshot identical to the one before it is not sent at all.
+
 The three collection events carry a **size, not the collection**. A queue is paged and can
 hold thousands of entries, so shipping it on every edit would be the wrong trade — re-read
 `GET /zones/{id}/queue` for the page you are showing. They also fire when *another* client
@@ -1185,9 +1191,16 @@ clears when playback stops instead of keeping the last track.
 Everything is **retained**, so a consumer that connects later sees current state
 immediately instead of waiting for the next change.
 
+A topic is only written when **its own** value moved: a volume step publishes `volume` and the
+JSON object, and leaves the title, album and cover url alone. So the message rate on a topic is
+the rate that field actually changes at, and `mosquitto_sub` on the tree shows you changes rather
+than a heartbeat. A full tree is republished on connect and reconnect, because a broker that
+restarted lost its retained messages.
+
 `sonn` is the default prefix and is configurable; two servers on one broker need different
 ones. The playing-time counter (`position`) is off by default — it costs a message per
-second per zone — and can be switched on in the same panel.
+second per zone — and can be switched on in the same panel. With it off, a playing zone is
+quiet until something other than the clock changes.
 
 ### Controlling it
 
