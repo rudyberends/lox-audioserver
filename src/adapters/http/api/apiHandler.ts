@@ -36,6 +36,7 @@ import type {
   ApiBrowseItem,
   ApiBrowseResult,
   ApiInput,
+  ApiItemAbout,
   ApiSearchResult,
   ApiService,
   ApiFavorite,
@@ -211,6 +212,14 @@ export type ApiHandlerDeps = {
   browse: (id: string, start: number, limit: number) => Promise<ApiBrowseResult | null>;
   /** Describes one item by id. Null when it cannot be found. */
   describeItem: (id: string) => Promise<ApiBrowseItem | null>;
+  /**
+   * The story around an item. Null whenever there is none — which is most of the time, and is
+   * the documented ordinary answer rather than a failure.
+   *
+   * Optional so a server assembled without enrichment simply has no such route, which the
+   * contract already accounts for: the client reads 404 as "this server cannot tell that story".
+   */
+  describeAbout?: (id: string) => Promise<ApiItemAbout | null>;
   /** Searches across services, grouped by kind. */
   search: (request: {
     query: string;
@@ -577,13 +586,22 @@ export class ApiHandler {
       return;
     }
 
+    // Before the item route, and matched on its own: `/items/{id}/about` is a sub-resource, and
+    // an id is opaque, so nothing can tell one from the other by looking. See the item route
+    // below for what a greedy match did here.
+    const aboutMatch = /^\/items\/([^/]+)\/about$/.exec(pathname);
+    if (aboutMatch && method === 'GET') {
+      await this.handleItemAbout(res, aboutMatch[1]!);
+      return;
+    }
+
     // One segment, not `.+`: an id is opaque, so a greedy match cannot tell an id from an id
-    // followed by a sub-resource. It swallowed `/items/{id}/about` — a route this server does
-    // not have — into the id and answered *200* with a mangled item, which is worse than not
-    // having the route at all: a caller that correctly treats 404 as "no such surface" got a
-    // body of the wrong shape instead. Anything under an item now falls through to the 404 at
-    // the end, which is the honest answer until such a route exists. Ids containing a slash are
-    // percent-encoded by the caller and never appear literally here.
+    // followed by a sub-resource. It swallowed `/items/{id}/about` into the id and answered
+    // *200* with a mangled item, which is worse than not having the route at all: a caller that
+    // correctly treats 404 as "no such surface" got a body of the wrong shape instead. Anything
+    // else under an item now falls through to the 404 at the end, which is the honest answer
+    // until such a route exists. Ids containing a slash are percent-encoded by the caller and
+    // never appear literally here.
     const itemMatch = /^\/items\/([^/]+)$/.exec(pathname);
     if (itemMatch && method === 'GET') {
       await this.handleItem(res, itemMatch[1]!);
@@ -1341,6 +1359,22 @@ export class ApiHandler {
    * cannot answer, `name` comes back empty rather than filled with the raw id: Music
    * Assistant returns the id as the name in this case, which looks like data and is not.
    */
+  /**
+   * The story around an item — a biography, the acts beside it, and who wrote the prose.
+   *
+   * 404 is the *ordinary* answer here, not an error: most items have no article, some kinds have
+   * none by nature, and a story that is still being assembled has nothing to show yet. Clients
+   * are documented to render nothing on 404, so this route never manufactures a placeholder.
+   */
+  private async handleItemAbout(res: ServerResponse, rawId: string): Promise<void> {
+    const about = await this.deps.describeAbout?.(rawId);
+    if (!about) {
+      this.sendJson(res, 404, { error: 'not-found' });
+      return;
+    }
+    this.sendJson(res, 200, about);
+  }
+
   private async handleItem(res: ServerResponse, rawId: string): Promise<void> {
     const item = await this.deps.describeItem(rawId);
     if (!item) {

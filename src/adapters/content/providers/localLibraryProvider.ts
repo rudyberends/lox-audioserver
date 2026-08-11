@@ -21,6 +21,7 @@ import type {
   ScanStatus,
 } from '@/ports/ContentTypes';
 import type { SearchLimits } from '@/adapters/content/utils/searchLimits';
+import { waitForMusicBrainzSlot } from '@/adapters/content/enrichment/musicBrainz';
 import { ensureNasMounts, listStorages } from '@/adapters/content/storage/storageManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { NotifierPort } from '@/ports/NotifierPort';
@@ -136,6 +137,7 @@ export class LocalLibraryProvider {
       file?: { size: number; mtimeMs: number };
     }) => this.store.upsertWaveform(entry),
   };
+
   private notifier: NotifierPort;
   private readonly configPort: ConfigPort;
   private scanStatus: ScanStatus = 0;
@@ -144,7 +146,6 @@ export class LocalLibraryProvider {
   private stats: LibraryStats | null = null;
   private readonly coverLookupCache = new Map<string, string | null>();
   private readonly artistCoverProbeCache = new Map<string, string | null>();
-  private musicBrainzNextAllowedAt = 0;
   /** Artists already looked up without result, so a rescan doesn't re-ask. */
   private readonly artistArtMisses = new Set<string>();
   private artistArtRunning = false;
@@ -1826,13 +1827,15 @@ export class LocalLibraryProvider {
     }
   }
 
+  /**
+   * Queues behind every other MusicBrainz caller in this process, not just this one.
+   *
+   * The limit MusicBrainz asks us to respect is one request per second per *application*, so a
+   * limiter private to this class was only ever half of it: the about lookups are a second
+   * caller, and two well-behaved streams still make two requests a second between them.
+   */
   private async waitForMusicBrainzRateLimit(): Promise<void> {
-    const now = Date.now();
-    const waitMs = Math.max(0, this.musicBrainzNextAllowedAt - now);
-    this.musicBrainzNextAllowedAt = now + waitMs + 1100;
-    if (waitMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
-    }
+    await waitForMusicBrainzSlot();
   }
 
   private async getStorageLabel(storageId: string): Promise<string> {

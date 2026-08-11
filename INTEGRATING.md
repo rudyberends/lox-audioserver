@@ -425,6 +425,7 @@ GET /api/v1/services                →  { "services": [ … ] }
 GET /api/v1/browse                  →  the root: one entry per service
 GET /api/v1/browse/{id}             →  { "container": …, "items": [ … ], "start": 0, "total": 42 }
 GET /api/v1/items/{id}              →  one item                404 not-found
+GET /api/v1/items/{id}/about        →  a biography, related items       404 when there is none
 GET /api/v1/search?q=…              →  { "items": { "track": [ … ] }, … }
 GET /api/v1/playlists               →  { "items": [ … ], "total": 1 }
 GET /api/v1/waveform?uri=…          →  { "uri": …, "buckets": [ … ] }   404 no-waveform
@@ -833,6 +834,41 @@ For when you have an id but no listing it came from — a deep link, a restored 
 stored last week. One caveat, stated plainly: a container's own name is not always knowable.
 Providers name a folder in the *listing that contains it*, not in the folder itself, so
 `name` can come back empty for a container you did not browse into. It is never fabricated.
+
+### The story around an item
+
+```bash
+curl -s http://server:7090/api/v1/items/<id>/about
+```
+
+```json
+{
+  "description": "Queen are a British rock band formed in London in 1970 by…",
+  "similar": [ { "id": "…", "name": "Chris Martin", "kind": "artist", … } ],
+  "source": { "name": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Queen_(band)" }
+}
+```
+
+**404 is the ordinary answer, not an error.** Most items have no article, some kinds have none
+by nature (a playlist is somebody's collection; nobody writes about it), and a story that has
+not been assembled yet has nothing to show. Render nothing and move on — a client that treats
+this 404 as a failure will report an outage on the common case.
+
+Three things worth knowing:
+
+- **`similar` are real items**, with ids that go straight back into `/browse/{id}` or
+  `POST /zones/{id}/play`. A related act this server has no copy of is *absent* rather than
+  listed as a name you cannot open. The list is often empty, and empty is a legitimate answer:
+  it means the neighbours exist in the world but not in this house.
+- **`source` is not decoration.** The prose comes from freely licensed sources that require
+  attribution, so if you show the description, show the credit.
+- **The first ask may 404 and the second may not.** Assembling a story means several
+  rate-limited upstream requests; rather than hold your request open, the server answers with
+  what it has and finishes in the background. Ask again later — the answer is cached for weeks,
+  including the answer "there is nothing".
+
+The server that assembles this uses MusicBrainz, Wikidata and Wikipedia — no API key, and
+nothing about your library leaves the server beyond the artist or album name being looked up.
 
 ### Search
 

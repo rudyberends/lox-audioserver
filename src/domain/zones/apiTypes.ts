@@ -749,6 +749,25 @@ export interface ApiSearchResult {
   services: Array<{ service: string; failed?: boolean }>;
 }
 
+/**
+ * The story around an item: who this is, and who stands next to them.
+ *
+ * Answered by `GET /items/{id}/about`, and **404 is the ordinary answer** — an item nobody has
+ * written about, a kind nobody writes about, or a story not assembled yet. Clients render nothing
+ * on 404 rather than treating it as an error.
+ */
+export interface ApiItemAbout {
+  /** Plain text, paragraphs separated by blank lines. Null when there is prose for neither. */
+  description: string | null;
+  /**
+   * Related items — real ones. Every entry is browsable or playable through this same API, which
+   * is why a related act this server has no copy of is absent rather than listed as a name.
+   */
+  similar: ApiBrowseItem[];
+  /** Where the prose came from. Free sources require the credit, so it travels with the text. */
+  source: { name: string; url: string | null } | null;
+}
+
 /** A content service, with what it can actually do. */
 export interface ApiService {
   /** Provider name, as used in `service` on every item. */

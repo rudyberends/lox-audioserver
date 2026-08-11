@@ -17,6 +17,8 @@ import { SonnClientApiHandler } from '@/adapters/http/sonnClientApi/sonnClientAp
 import { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandler';
 import { ApiHandler } from '@/adapters/http/api/apiHandler';
 import { buildPublicAudioServersList } from '@/adapters/discovery/audioServersList';
+import { AboutStore } from '@/adapters/content/enrichment/aboutStore';
+import { AboutService } from '@/adapters/http/api/aboutService';
 import { BrowseService } from '@/adapters/http/api/browseService';
 import { DestinationService } from '@/adapters/http/api/destinationService';
 import { encodeContainerRef, resolveUriFromRef } from '@/domain/media/browseRef';
@@ -120,6 +122,7 @@ export class HttpService {
   private readonly beoremoteApi: BeoremoteApiHandler;
   private readonly api: ApiHandler;
   private readonly browseService: BrowseService;
+  private readonly aboutService: AboutService;
   private readonly destinationService: DestinationService;
   private readonly sendspin: SendspinGateway;
   private readonly snapcast: SnapcastGateway;
@@ -205,6 +208,11 @@ export class HttpService {
     );
     this.sonnClientApi = new SonnClientApiHandler(options.configPort, config.port);
     this.browseService = new BrowseService(options.configPort, options.contentManager);
+    this.aboutService = new AboutService({
+      describeItem: (id) => this.browseService.describeItem(id),
+      search: (request) => this.browseService.search(request),
+      store: new AboutStore(),
+    });
     this.destinationService = new DestinationService(
       options.zoneManager,
       options.browserZoneRegistry,
@@ -282,6 +290,7 @@ export class HttpService {
       listServices: () => this.browseService.listServices(),
       browse: (id, start, limit) => this.browseService.browse(id, start, limit),
       describeItem: (id) => this.browseService.describeItem(id),
+      describeAbout: (id) => this.aboutService.describeAbout(id),
       search: (request) => this.browseService.search(request),
       listPlaylists: async (start, limit) => {
         const page = await options.contentManager.listLocalPlaylists(start, limit);
