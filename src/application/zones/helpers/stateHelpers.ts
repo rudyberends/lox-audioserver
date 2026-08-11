@@ -106,6 +106,7 @@ export function buildInitialState(zone: ZoneConfig): ZoneState {
     plshuffle: 0,
     plrepeat: 0,
     volume: defaultVol,
+    muted: false,
     mode: 'stop',
     audiotype: 0,
     sourceName: zone.sourceMac,

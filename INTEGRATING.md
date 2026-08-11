@@ -97,6 +97,7 @@ changed and leave you to re-read the page you are showing.
   "duration": 210,
   "volume": 40,
   "volumeLimits": { "max": 70, "default": 20, "step": 2 },
+  "muted": false,
   "repeat": "off",
   "shuffle": false,
   "track": {
@@ -140,6 +141,7 @@ changed and leave you to re-read the page you are showing.
 | `duration` | number | Whole seconds. `0` means open-ended (live radio). |
 | `volume` | number | `0`–`100`, but see `volumeLimits`. |
 | `volumeLimits` | object | `max`, `default` and `step` — what this zone's volume will actually accept. |
+| `muted` | boolean | Silenced on purpose. A muted zone reports `volume: 0`; this says it will come back to the level it had. Any write that puts the volume above zero clears it, so you never have to unmute before turning something up. |
 | `repeat` | `off` \| `one` \| `all` | |
 | `shuffle` | boolean | |
 
@@ -565,6 +567,7 @@ POST /api/v1/zones/{id}/next
 POST /api/v1/zones/{id}/previous
 
 PUT  /api/v1/zones/{id}/volume     {"volume": 40}   or  {"delta": -5}
+PUT  /api/v1/zones/{id}/mute       {"muted": true}  or  no body to toggle
 PUT  /api/v1/zones/{id}/position   {"position": 90}
 PUT  /api/v1/zones/{id}/power      {"power": "on"}
 PUT  /api/v1/zones/{id}/input      {"input": "linein-ms3h9f42"}
@@ -602,6 +605,13 @@ power command still uses `{"power":"off"}` and switches the
 configured power action immediately; it does not wait for the automatic `offDelayMs`. It also
 stops playback. The automatic switch-off caused by a normal playback state transition keeps
 using the configured delay.
+
+`mute` is silence with a way back: it sets the volume to `0` and remembers the level, so
+unmuting returns the zone to where it was rather than to a default. Sending `{"muted":true}`
+twice is harmless, which is why the field is a boolean — a client that retries a failed
+request does not flip it. Omit the body to toggle, the way a remote's mute key does. There
+is no need to unmute before turning something up: any volume write above zero clears it,
+whether it comes from here, from a device's own knob or from an announcement.
 
 `pause` keeps the zone's place and `stop` gives it up: after `pause`, `play` resumes
 where it was; after `stop` it starts over. Both let the zone's power management switch
@@ -1136,6 +1146,7 @@ sonn/server/online              1        (0 when the server dies — this is an 
 sonn/zones/3                    {"id":3,"name":"Kitchen","state":"playing",…}
 sonn/zones/3/state              playing
 sonn/zones/3/volume             40
+sonn/zones/3/muted              0
 sonn/zones/3/track/title        Song
 sonn/zones/3/source/name        Apple Music
 sonn/zones/3/output/protocol    sendspin
@@ -1162,6 +1173,8 @@ one at once:
 ```bash
 mosquitto_pub -t 'sonn/zones/3/set/volume' -m '40'      # absolute
 mosquitto_pub -t 'sonn/zones/3/set/volume' -m '+5'      # relative, like a remote
+mosquitto_pub -t 'sonn/zones/3/set/muted'  -m '1'
+mosquitto_pub -t 'sonn/zones/3/set/muted'  -m ''        # empty toggles, for a wall button
 mosquitto_pub -t 'sonn/zones/3/set/state'  -m 'paused'
 mosquitto_pub -t 'sonn/zones/3/set/next'   -m '1'       # value ignored
 
@@ -1169,11 +1182,12 @@ mosquitto_pub -t 'sonn/zones/3/cmd' -m '{"power":"on","volume":40}'
 mosquitto_pub -t 'sonn/zones/3/cmd' -m '{"play":"applemusic:track:…"}'
 ```
 
-Writable fields: `volume`, `state`, `power`, `position`, `repeat`, `shuffle`, `next`,
-`previous`, `play`. The values are the ones the state topics publish — write `paused`, not
+Writable fields: `volume`, `muted`, `state`, `power`, `position`, `repeat`, `shuffle`,
+`next`, `previous`, `play`. The values are the ones the state topics publish — write `paused`, not
 some separate command word — and booleans accept `1`/`true`/`on`/`yes` and their opposites.
 A message carrying several fields is applied in a sensible order regardless of key order:
-power before volume, so `{"power":"on","volume":40}` does what it looks like.
+power before volume, so `{"power":"on","volume":40}` does what it looks like, and mute
+after volume, so `{"volume":40,"muted":true}` sets the level it will come back to.
 
 An invalid value is refused whole rather than applied in part, and an unknown field is
 ignored, so echoing our own state topics back does no harm.

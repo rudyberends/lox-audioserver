@@ -30,6 +30,8 @@ export type CommandIntent =
   | { kind: 'StopOff' }
   | { kind: 'Position'; posSeconds: number }
   | { kind: 'Volume'; volume: VolumeCommandIntent }
+  /** `null` toggles, which is what a remote's mute key means. */
+  | { kind: 'Mute'; muted: boolean | null }
   | { kind: 'QueueStep'; delta: 1 | -1 }
   | { kind: 'QueuePlayCurrent' }
   | { kind: 'Shuffle'; enabled: boolean | null }

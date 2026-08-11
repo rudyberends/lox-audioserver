@@ -466,6 +466,10 @@ export class AlertsCoordinator {
         qid: ctx.state.qid,
         audiotype: ctx.state.audiotype,
         sourceName: ctx.state.sourceName,
+        // An announcement is meant to be heard, so it raises the volume of a muted
+        // zone like it raises a quiet one — and putting the flag back here is what
+        // stops a doorbell from leaving the zone permanently unmuted.
+        muted: ctx.state.muted,
       },
     };
   }

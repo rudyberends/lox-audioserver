@@ -345,6 +345,7 @@ export function toApiZoneState(state: ZoneState, lookups: ZoneProjectionLookups 
     duration: toWholeSeconds(state.duration),
     volume: toWholeSeconds(state.volume),
     volumeLimits: lookups.volumeLimits ?? { max: 100, default: 0, step: 1 },
+    muted: state.muted === true,
     repeat: toRepeatMode(state.plrepeat),
     shuffle: Boolean(state.plshuffle),
     track: toTrack(state),

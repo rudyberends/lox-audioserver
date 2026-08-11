@@ -100,6 +100,7 @@ import './queueBuilderArtistFlatten.test';
 import './nowPlayingMetadata.test';
 import './publicApi.test';
 import './dlnaRendererReflection.test';
+import './zoneMute.test';
 import './itemAbout.test';
 import './browseContainerIdentity.test';
 import './outputDelay.test';

@@ -107,6 +107,16 @@ function fieldCommand(
         ? 'invalid-volume'
         : [{ zoneId, command: 'volume', payload: String(volume) }];
     }
+    case 'muted': {
+      const on = parseBool(text);
+      // An empty payload toggles — a wall button wired to a topic has no value to send.
+      if (on === null) {
+        return text === '' || text.toLowerCase() === 'toggle'
+          ? [{ zoneId, command: 'mute', payload: 'toggle' }]
+          : 'invalid-muted';
+      }
+      return [{ zoneId, command: 'mute', payload: on ? '1' : '0' }];
+    }
     case 'state': {
       // The values this publishes on `state`, so what you read is what you can write.
       const map: Record<string, string> = {
@@ -158,6 +168,9 @@ function fieldCommand(
 const CMD_ORDER = [
   'power',
   'volume',
+  // After volume: `{"volume":40,"muted":true}` reads as "set the level, then silence it",
+  // and the other order would have the volume write clear the mute it just asked for.
+  'muted',
   'repeat',
   'shuffle',
   'position',

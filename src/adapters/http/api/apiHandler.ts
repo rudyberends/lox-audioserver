@@ -312,6 +312,7 @@ const DESTINATION_ACTIONS = new Set([
   'next',
   'previous',
   'volume',
+  'mute',
   'position',
   'power',
   'repeat',
@@ -830,6 +831,22 @@ export class ApiHandler {
           return;
         }
         this.deps.handleCommand(zoneId, 'volume', String(volume));
+        res.writeHead(204).end();
+        return;
+      }
+      case 'mute': {
+        // A boolean rather than a toggle, so a client that retries a failed request does
+        // not end up flipping it twice. Omit the field to toggle deliberately, which is
+        // what a remote's mute key does.
+        if (body.muted !== undefined && typeof body.muted !== 'boolean') {
+          this.sendJson(res, 400, { error: 'invalid-muted' });
+          return;
+        }
+        this.deps.handleCommand(
+          zoneId,
+          'mute',
+          body.muted === undefined ? 'toggle' : body.muted ? '1' : '0',
+        );
         res.writeHead(204).end();
         return;
       }

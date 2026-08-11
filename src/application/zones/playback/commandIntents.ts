@@ -44,6 +44,20 @@ export function mapZoneCommandToIntent(input: {
         },
       };
     }
+    case 'mute': {
+      // No payload is a toggle, which is what a remote's mute key sends.
+      const normalized = typeof payload === 'string' ? payload.trim().toLowerCase() : '';
+      if (!normalized || normalized === 'toggle') {
+        return { kind: 'Mute', muted: null };
+      }
+      if (['1', 'on', 'true', 'enable', 'yes'].includes(normalized)) {
+        return { kind: 'Mute', muted: true };
+      }
+      if (['0', 'off', 'false', 'disable', 'no'].includes(normalized)) {
+        return { kind: 'Mute', muted: false };
+      }
+      return null;
+    }
     case 'queueplus':
     case 'next':
       return { kind: 'QueueStep', delta: 1 };

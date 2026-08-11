@@ -1,5 +1,9 @@
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
-import { clamp } from '@/application/zones/helpers/stateHelpers';
+import {
+  clamp,
+  clampVolumeForZone,
+  getZoneDefaultVolume,
+} from '@/application/zones/helpers/stateHelpers';
 import { isQueueDrivenInput } from '@/application/zones/playback/guards';
 import { mapZoneCommandToIntent } from '@/application/zones/playback/commandIntents';
 import type { VolumeCommandIntent } from '@/application/zones/playback/types';
@@ -80,6 +84,9 @@ export function handleZoneCommand(args: {
       break;
     case 'Volume':
       handleVolume(coordinator, ctx, zoneId, mode, intent.volume);
+      break;
+    case 'Mute':
+      handleMute(coordinator, ctx, zoneId, mode, intent.muted);
       break;
     case 'QueueStep':
       handleQueueStep(coordinator, ctx, zoneId, mode, intent.delta);
@@ -339,6 +346,60 @@ function handleVolume(
     payload: volume.rawPayload,
     target,
   });
+  applyVolumeLevel(coordinator, ctx, zoneId, mode, target);
+}
+
+/**
+ * Silence the zone while remembering what to come back to, or hand that level back.
+ *
+ * Mute is not a separate signal to the outputs — an output that is handed zero is
+ * silent, which is the whole of it. What mute adds is the reason and the way back,
+ * so a client can draw a crossed-out speaker and pressing it again returns the zone
+ * to the level it had rather than to some default.
+ */
+function handleMute(
+  coordinator: CommandCoordinator,
+  ctx: ZoneContext,
+  zoneId: number,
+  mode: ZoneContext['inputMode'],
+  requested: boolean | null,
+): void {
+  const currentlyMuted = ctx.state.muted === true;
+  const muted = requested ?? !currentlyMuted;
+  if (muted === currentlyMuted) {
+    return;
+  }
+  if (muted) {
+    // A zone already at zero has nothing worth remembering, and remembering it would
+    // make unmute restore silence. Unmute falls back to the configured default there.
+    const level = ctx.state.volume ?? 0;
+    ctx.volumeBeforeMute = level > 0 ? level : undefined;
+    applyVolumeLevel(coordinator, ctx, zoneId, mode, 0, { muted: true });
+    coordinator.log.debug('zone muted', { zoneId, restoreTo: ctx.volumeBeforeMute ?? null });
+    return;
+  }
+  const restore = clampVolumeForZone(
+    ctx.config,
+    ctx.volumeBeforeMute ?? getZoneDefaultVolume(ctx.config),
+  );
+  ctx.volumeBeforeMute = undefined;
+  applyVolumeLevel(coordinator, ctx, zoneId, mode, restore, { muted: false });
+  coordinator.log.debug('zone unmuted', { zoneId, volume: restore });
+}
+
+/**
+ * Put a level on the zone: the input that owns its volume, the local player, the
+ * state and the outputs. Shared by the volume command and by mute, so silencing a
+ * zone travels exactly as far as turning it down to zero by hand does.
+ */
+function applyVolumeLevel(
+  coordinator: CommandCoordinator,
+  ctx: ZoneContext,
+  zoneId: number,
+  mode: ZoneContext['inputMode'],
+  target: number,
+  extraPatch?: Partial<ZoneState>,
+): void {
   if (mode === 'airplay') {
     coordinator.remoteVolume(zoneId, target);
   }
@@ -350,7 +411,7 @@ function handleVolume(
   // Apply locally and push to outputs immediately so repeated relative commands
   // use the updated level even if input callbacks lag.
   ctx.player.setVolume(target);
-  coordinator.applyPatch(zoneId, { volume: target });
+  coordinator.applyPatch(zoneId, { volume: target, ...extraPatch });
   coordinator.dispatchVolume(ctx, ctx.outputs, target);
 }
 

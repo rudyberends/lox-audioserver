@@ -80,6 +80,13 @@ export interface ZoneContext {
   lastPositionValue: number;
   lastPlaybackErrorAt: number;
   lastPlaybackErrorReason?: string;
+  /**
+   * The level to hand back when this zone is unmuted. Runtime bookkeeping rather
+   * than state: no consumer needs it, and after a restart a zone comes up unmuted
+   * anyway. Absent when the zone was already silent when it was muted, in which
+   * case unmute goes to the configured default instead of back to silence.
+   */
+  volumeBeforeMute?: number;
   activeOutputTypes: Set<string>;
   /**
    * Single-output slot for the zone; only this output should receive play/pause/stop/metadata/volume.

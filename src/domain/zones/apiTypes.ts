@@ -320,6 +320,12 @@ export interface ApiZoneState {
    */
   volume: number;
   volumeLimits: ApiVolumeLimits;
+  /**
+   * Silenced on purpose. A muted zone reports `volume: 0` like any other silent one;
+   * this says it will come back to the level it had, which is what a mute button
+   * needs to know. Any write that puts the volume above zero clears it.
+   */
+  muted: boolean;
   repeat: ApiRepeatMode;
   shuffle: boolean;
 

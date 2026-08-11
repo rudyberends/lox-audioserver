@@ -58,6 +58,17 @@ export interface ZoneState {
   station: string;
   time: number;
   title: string;
+  /**
+   * Silenced while keeping the level it will come back to. A muted zone reports
+   * `volume: 0` like any other silent zone — mute is the *reason*, which is what a
+   * client needs to know whether to draw a crossed-out speaker and what pressing it
+   * again should restore. The level to restore is runtime bookkeeping and lives on
+   * the zone context, not here.
+   *
+   * The pair `muted: true` with a volume above zero is nonsense, and
+   * `applyZonePatch` is what guarantees it cannot happen.
+   */
+  muted: boolean;
   qid?: string;
   /**
    * What the zone is playing, as a category the client renders differently:

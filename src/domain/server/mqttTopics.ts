@@ -60,6 +60,7 @@ function flatten(zone: ApiZoneState): Record<string, string> {
     position: String(zone.position),
     duration: String(zone.duration),
     volume: String(zone.volume),
+    muted: zone.muted ? '1' : '0',
     repeat: zone.repeat,
     shuffle: zone.shuffle ? '1' : '0',
     name: zone.name,
