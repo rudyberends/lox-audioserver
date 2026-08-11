@@ -73,6 +73,7 @@ import './durationRegression.test';
 import './runtimeShutdown.test';
 import './sourceResolver.test';
 import './beolinkStateController.test';
+import './sonosTransportResilience.test';
 import './externalStateRouter.test';
 import './equalizerRestartScheduler.test';
 import './zoneHeartbeatService.test';

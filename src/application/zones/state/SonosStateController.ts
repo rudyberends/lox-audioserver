@@ -247,6 +247,14 @@ export class SonosStateController implements ZoneStateController {
     if (!action) {
       return false;
     }
+    if (!this.client?.player?.group) {
+      // Decline instead of accepting-and-dropping: returning true told the caller the speaker
+      // had it, so a play with no live group (websocket down, speaker rebooted, zone regrouped)
+      // went nowhere at all. Declining hands the command back to local playback, which can
+      // restart the queue where it left off (issue #327).
+      this.log.warn('sonos command declined; no active group', { zoneId: this.zone.id, action });
+      return false;
+    }
     void this.dispatchCommand(action);
     return true;
   }
@@ -407,7 +415,9 @@ export class SonosStateController implements ZoneStateController {
   private async dispatchCommand(action: 'play' | 'pause' | 'stop' | 'next' | 'previous'): Promise<void> {
     const group = this.client?.player?.group;
     if (!group) {
-      this.log.warn('sonos command ignored; no active group', { zoneId: this.zone.id, action });
+      // handleCommand() already declines in this case; this only catches a group disappearing
+      // between the decision and this async continuation.
+      this.log.warn('sonos command ignored; group disappeared', { zoneId: this.zone.id, action });
       return;
     }
 

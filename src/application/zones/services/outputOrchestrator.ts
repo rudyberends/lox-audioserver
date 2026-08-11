@@ -205,6 +205,21 @@ export function dispatchOutputs(
   }
 
   const targets = [...controllers, ...targetOutputs];
+  // Only a failed `play` means the listener is left with silence, so only that one is escalated
+  // to a playback error (which tears the session down and shows "Playback unavailable"). A
+  // pause/resume/stop that did not reach the speaker leaves a valid session behind, and killing
+  // it made the zone unresumable: play then routed to a state controller with nothing to
+  // resume, so the command vanished (issue #327).
+  const isFatal = action === 'play';
+  const reportFailure = (error: unknown): void => {
+    const message = error instanceof Error ? error.message : String(error);
+    const zoneIdPayload =
+      payload && typeof payload === 'object' ? (payload as { zoneId?: number }).zoneId : undefined;
+    log.warn('output action failed', { zoneId: zoneIdPayload, action, message, fatal: isFatal });
+    if (isFatal && typeof zoneIdPayload === 'number') {
+      notifyOutputError(zoneIdPayload, message);
+    }
+  };
   targets.forEach((output) => {
     try {
       let result: void | Promise<void> | undefined;
@@ -227,32 +242,10 @@ export function dispatchOutputs(
           break;
       }
       if (result instanceof Promise) {
-        void result.catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          const zoneIdPayload =
-            payload && typeof payload === 'object' ? (payload as { zoneId?: number }).zoneId : undefined;
-          log.warn('output action failed', {
-            zoneId: zoneIdPayload,
-            action,
-            message,
-          });
-          if (typeof zoneIdPayload === 'number') {
-            notifyOutputError(zoneIdPayload, message);
-          }
-        });
+        void result.catch(reportFailure);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const zoneIdPayload =
-        payload && typeof payload === 'object' ? (payload as { zoneId?: number }).zoneId : undefined;
-      log.warn('output action failed', {
-        zoneId: zoneIdPayload,
-        action,
-        message,
-      });
-      if (typeof zoneIdPayload === 'number') {
-        notifyOutputError(zoneIdPayload, message);
-      }
+      reportFailure(error);
     }
   });
 }

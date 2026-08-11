@@ -9,7 +9,7 @@ import type {
   OutputConfigDefinition,
   ZoneOutput,
 } from '@/ports/OutputsTypes';
-import { SonosClient } from '@sonn-audio/node-sonos';
+import { SonosClient, type SonosGroup, type SonosPlayer } from '@sonn-audio/node-sonos';
 import { resolveDlnaEndpoints } from '@/adapters/outputs/dlna/dlnaDiscovery';
 import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
 import {
@@ -98,6 +98,26 @@ export const SONOS_OUTPUT_DEFINITION: OutputConfigDefinition = {
     },
   ],
 };
+
+/**
+ * S2 errors that mean the websocket itself is gone rather than the command being refused.
+ * Matched by error name because node-sonos derives `name` from the error class, which survives
+ * a duplicated module instance in a way `instanceof` does not.
+ *
+ * `InvalidState` is in here for the 'Already connected' a wedged reconnect loop reports
+ * (node-sonos ≤ 0.2.3): the socket is just as dead, and the client must be replaced.
+ */
+const S2_CONNECTION_LOST_ERRORS = new Set([
+  'NotConnected',
+  'ConnectionClosed',
+  'ConnectionFailed',
+  'CannotConnect',
+  'InvalidState',
+]);
+
+function isS2ConnectionLost(err: unknown): boolean {
+  return err instanceof Error && S2_CONNECTION_LOST_ERRORS.has(err.name);
+}
 
 export class SonosOutput implements ZoneOutput {
   public readonly type = 'sonos';
@@ -241,9 +261,7 @@ export class SonosOutput implements ZoneOutput {
     if (!session?.playbackSource) {
       return;
     }
-    const s2 = await this.ensureS2Client();
-    if (s2?.player?.group) {
-      await s2.player.group.pause();
+    if (await this.tryS2Group('pause', (group) => group.pause(), this.commandTimeoutMs)) {
       return;
     }
     if (!(await this.ensureEndpoints())) {
@@ -257,9 +275,7 @@ export class SonosOutput implements ZoneOutput {
       await this.play(session);
       return;
     }
-    const s2 = await this.ensureS2Client();
-    if (s2?.player?.group) {
-      await s2.player.group.play();
+    if (await this.tryS2Group('resume', (group) => group.play(), this.commandTimeoutMs)) {
       return;
     }
     if (!(await this.ensureEndpoints())) {
@@ -272,9 +288,7 @@ export class SonosOutput implements ZoneOutput {
     if (!session?.playbackSource) {
       return;
     }
-    const s2 = await this.ensureS2Client();
-    if (s2?.player?.group) {
-      await s2.player.group.stop();
+    if (await this.tryS2Group('stop', (group) => group.stop(), this.commandTimeoutMs)) {
       return;
     }
     if (!(await this.ensureEndpoints())) {
@@ -318,19 +332,9 @@ export class SonosOutput implements ZoneOutput {
   }
 
   private async tryApplyVolume(level: number): Promise<boolean> {
-    const s2 = await this.ensureS2Client();
-    if (s2?.player) {
-      try {
-        await s2.player.setVolume(level);
-        this.log.info('Sonos volume set', { zoneId: this.zoneId, volume: level, path: 's2' });
-        return true;
-      } catch (err) {
-        this.log.debug('sonos s2 volume failed', {
-          zoneId: this.zoneId,
-          volume: level,
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
+    if (await this.tryS2Player('volume', (player) => player.setVolume(level))) {
+      this.log.info('Sonos volume set', { zoneId: this.zoneId, volume: level, path: 's2' });
+      return true;
     }
     if (!(await this.ensureEndpoints())) {
       return false;
@@ -392,22 +396,16 @@ export class SonosOutput implements ZoneOutput {
   }
 
   public async joinToLeaderS2(groupId: string): Promise<boolean> {
-    const client = await this.ensureS2Client();
-    if (!client?.player) {
+    // Bail out before the retry loop when there is no websocket API at all (S1, or a device
+    // that never connected): the caller falls back to SOAP grouping and should not wait.
+    if (!(await this.ensureS2Client())?.player) {
       return false;
     }
     for (let attempt = 1; attempt <= 2; attempt += 1) {
-      try {
-        await client.player.joinGroup(groupId);
+      if (await this.tryS2Player('join', (player) => player.joinGroup(groupId))) {
         return true;
-      } catch (err) {
-        if (attempt === 2) {
-          this.log.debug('sonos s2 join failed', {
-            zoneId: this.zoneId,
-            message: err instanceof Error ? err.message : String(err),
-          });
-          return false;
-        }
+      }
+      if (attempt < 2) {
         await delay(300);
       }
     }
@@ -415,9 +413,7 @@ export class SonosOutput implements ZoneOutput {
   }
 
   public async leaveGroup(): Promise<void> {
-    const s2 = await this.ensureS2Client();
-    if (s2?.player) {
-      await s2.player.leaveGroup();
+    if (await this.tryS2Player('leave group', (player) => player.leaveGroup())) {
       return;
     }
     if (!(await this.ensureEndpoints())) {
@@ -468,6 +464,7 @@ export class SonosOutput implements ZoneOutput {
         zoneId: this.zoneId,
         message: err instanceof Error ? err.message : String(err),
       });
+      this.invalidateS2ClientIfLost(err, client);
       return false;
     }
   }
@@ -731,22 +728,79 @@ export class SonosOutput implements ZoneOutput {
   }
 
   private async playViaS2(uri: string, session: PlaybackSession): Promise<boolean> {
+    const container = this.buildS2Container(session);
+    return this.tryS2Group('play', (group) => group.playStreamUrl(uri, container));
+  }
+
+  /**
+   * Runs a transport command on the S2 group, returning false when the websocket API is
+   * unavailable or the command failed so the caller can fall back to SOAP.
+   *
+   * Every S2 path must have this shape. play() and volume always did; pause/resume/stop let the
+   * error through, so a stale websocket turned an ordinary pause into a fatal playback error
+   * that tore down a healthy stream and left the zone unable to resume (issue #327). Speaking
+   * SOAP to the same speaker keeps working in exactly that situation.
+   *
+   * `timeoutMs` is optional because a half-open socket accepts the frame but never answers;
+   * transport commands cap their wait and fall through to SOAP, while play/join/alert keep
+   * waiting rather than risk issuing the same command twice over both transports.
+   */
+  private tryS2Group(
+    label: string,
+    run: (group: SonosGroup) => Promise<unknown>,
+    timeoutMs?: number,
+  ): Promise<boolean> {
+    return this.tryS2(label, (client) => client.player?.group ?? null, run, timeoutMs);
+  }
+
+  /** Player-scoped counterpart of tryS2Group (volume, grouping); same fall-back contract. */
+  private tryS2Player(
+    label: string,
+    run: (player: SonosPlayer) => Promise<unknown>,
+    timeoutMs?: number,
+  ): Promise<boolean> {
+    return this.tryS2(label, (client) => client.player, run, timeoutMs);
+  }
+
+  private async tryS2<T>(
+    label: string,
+    select: (client: SonosClient) => T | null | undefined,
+    run: (target: T) => Promise<unknown>,
+    timeoutMs?: number,
+  ): Promise<boolean> {
     const client = await this.ensureS2Client();
-    if (!client?.player?.group) {
+    const target = client ? select(client) : null;
+    if (!client || !target) {
       return false;
     }
-    const group = client.player.group;
-    const container = this.buildS2Container(session);
     try {
-      await group.playStreamUrl(uri, container);
+      const call = run(target);
+      await (timeoutMs ? withTimeout(call, timeoutMs) : call);
       return true;
     } catch (err) {
-      this.log.debug('sonos s2 play failed', {
+      this.log.debug(`sonos s2 ${label} failed`, {
         zoneId: this.zoneId,
         message: err instanceof Error ? err.message : String(err),
       });
+      this.invalidateS2ClientIfLost(err, client);
       return false;
     }
+  }
+
+  /**
+   * Drops the cached S2 client when its websocket is gone, so the next command reconnects
+   * instead of hitting the same dead socket forever. Anything else (a refused command, a
+   * timeout) leaves the client in place — it is still the fastest path once it recovers.
+   */
+  private invalidateS2ClientIfLost(err: unknown, client: SonosClient): void {
+    if (!isS2ConnectionLost(err) || this.s2Client !== client) {
+      return;
+    }
+    this.s2Client = null;
+    this.log.info('Sonos S2 client dropped after connection loss; reconnecting on next command', {
+      zoneId: this.zoneId,
+    });
+    void client.disconnect().catch(() => undefined);
   }
 
   private buildS2Container(session: PlaybackSession): { _objectType: 'container'; name: string; type: string } {
