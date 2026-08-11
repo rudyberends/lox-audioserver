@@ -23,6 +23,8 @@ import './engine/subscriberFanout.test';
 import './engine/pcmCrossfade.test';
 import './engine/ffmpegArgs.test';
 import './engine/audioSessionRestart.test';
+import './engine/pcmDsp.test';
+import './engine/engineDspSession.test';
 import './bitPerfectPlayback.test';
 import './sendspinFormatReuse.test';
 import './flacFrameSplitter.test';

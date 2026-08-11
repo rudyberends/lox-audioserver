@@ -17,6 +17,7 @@ import type { SessionKey } from '@/ports/types/SessionKey';
 import { FfmpegArgBuilder, type SourceNativeFormat } from '@/engine/ffmpegArgs';
 import { getCachedSourceFormat } from '@/engine/sourceProbe';
 import { PipeSourceAdapter } from '@/engine/pipeSourceAdapter';
+import { PcmDspStage } from '@/engine/pcmDsp';
 import { TwoStagePipeline } from '@/engine/twoStagePipeline';
 import { FirstChunkBarrier } from '@/engine/firstChunkBarrier';
 import { SessionStarter } from '@/engine/sessionStarter';
@@ -118,6 +119,18 @@ export class AudioSession {
   private debugTapStream?: fs.WriteStream;
   /** @internal */ public readonly pipeSource = new PipeSourceAdapter();
   /** @internal */ public directPipeMode = false;
+  /**
+   * @internal Our own DSP stage, when this session runs the engine-DSP topology. Present means the
+   * gain and the equalizer are ours, and an EQ change is a coefficient swap rather than a respawn.
+   */
+  public dsp?: PcmDspStage;
+  /** @internal True while the engine-DSP topology owns the pipeline. */
+  public engineDspMode = false;
+  /**
+   * @internal The readable whose backpressure throttles the producer when no encoder process sits at
+   * the end (PCM profile in engine-DSP mode). Pausing it propagates up the pipe chain to the decoder.
+   */
+  public outputReadable?: NodeJS.ReadableStream;
   // Two-stage PCM pipeline (decoder → pcmPipe → encoderInput → encoder).
   // Public fields on the pipeline object since crossfade orchestration needs to
   // unpipe/replace them mid-blend; see twoStagePipeline.ts for the contract.
@@ -305,13 +318,76 @@ export class AudioSession {
     return this.pcmAligner ? this.pcmAligner.align(chunk) : chunk;
   }
 
+  /**
+   * The one way audio leaves this session, whoever produced it: an ffmpeg stdout, a direct pipe or our
+   * own DSP stage. Alignment, the first-chunk barrier, the codec header, the rolling buffer, the
+   * analysis tap, the subscribers and the pacer all hang off this single point — they used to be
+   * copied per topology, which is how the direct-pipe path ended up with its own subtly different one.
+   *
+   * @param firstChunkLabel Log line for the first chunk, or null to stay quiet (the caller logs it).
+   */
+  /** @internal */ public emitOutputChunk(
+    chunk: Buffer,
+    options: { firstChunkLabel?: string | null } = {},
+  ): void {
+    if (!chunk?.length) {
+      return;
+    }
+    const aligned = this.profile === 'pcm' ? this.alignPcmChunk(chunk) : chunk;
+    if (!aligned?.length) {
+      // Hold until we have a full PCM frame so new subscribers don't start mid-sample.
+      this.recordBytes(chunk.length);
+      this.maybeApplyOutputPacing();
+      return;
+    }
+    if (this.firstChunk.signal()) {
+      // A restarted producer reached output → it recovered; reset the backoff budget.
+      this.restartAttempts = 0;
+      const label = options.firstChunkLabel;
+      if (label) {
+        this.log.info(label, {
+          zoneId: this.zoneId,
+          profile: this.profile,
+          bytes: aligned.length,
+          spawnToFirstChunkMs: this.startTs ? Math.max(0, Date.now() - this.startTs) : null,
+        });
+      }
+      this.codecHeader = this.codec.captureHeader(aligned);
+    }
+    this.buffer.push(aligned);
+    this.recordBytes(chunk.length);
+    if (this.profile === 'pcm') {
+      this.onPcmFrame?.(this.zoneId, aligned, Date.now() * 1000);
+    }
+    this.writeToSubscribers(aligned);
+    this.maybeApplyOutputPacing();
+  }
+
   private bufferedChunkStartsWithCodecHeader(): boolean {
     const firstBufferedChunk = this.buffer.firstChunk();
     return Boolean(firstBufferedChunk && this.codec.startsWithHeader(firstBufferedChunk));
   }
 
+  /**
+   * True when this session's DSP belongs on our own PCM stage rather than on ffmpeg's command line.
+   *
+   * Only for sources ffmpeg has to decode anyway (file/URL) and only with crossfade off, which is the
+   * default. The crossfade path keeps its DSP in the encoder because its blender splices the
+   * intermediate bus, and a live pipe still needs ffmpeg to reach the output format first — both are
+   * follow-ups, not blockers.
+   */
+  private usesEngineDsp(): boolean {
+    if (this.crossfadeEnabled) {
+      return false;
+    }
+    if (this.source.kind !== 'file' && this.source.kind !== 'url') {
+      return false;
+    }
+    return this.args.engineDspSpec(this.equalizerBands) !== null;
+  }
+
   public start(): void {
-    if (this.process) {
+    if (this.process || this.engineDspMode) {
       return;
     }
     this.buffer.clear();
@@ -360,6 +436,10 @@ export class AudioSession {
     if (this.source.kind === 'file' || this.source.kind === 'url') {
       if (this.crossfadeEnabled) {
         this.starter.startTwoStage();
+      } else if (this.usesEngineDsp()) {
+        // ffmpeg decodes and resamples, we own the gain, the equalizer and the requantisation. A PCM
+        // profile needs no second process at all; a codec profile gets an encoder that only encodes.
+        this.starter.startEngineDsp();
       } else {
         this.starter.startSingleStage();
       }
@@ -383,37 +463,9 @@ export class AudioSession {
       args,
       {
         onStdout: (chunk: Buffer) => {
-          if (!chunk?.length) {
-            return;
-          }
-          const aligned = this.profile === 'pcm' ? this.alignPcmChunk(chunk) : chunk;
-          if (!aligned?.length) {
-            // Hold until we have a full PCM frame so new subscribers don't start mid-sample.
-            this.recordBytes(chunk.length);
-            this.maybeApplyOutputPacing();
-            return;
-          }
-          if (this.firstChunk.signal()) {
-            // Restarted ffmpeg produced output → it recovered; reset the backoff budget.
-            this.restartAttempts = 0;
-            if (options.logFirstChunk !== false) {
-              const now = Date.now();
-              this.log.info('ffmpeg first chunk', {
-                zoneId: this.zoneId,
-                profile: this.profile,
-                bytes: aligned.length,
-                spawnToFirstChunkMs: this.startTs ? Math.max(0, now - this.startTs) : null,
-              });
-            }
-            this.codecHeader = this.codec.captureHeader(aligned);
-          }
-          this.buffer.push(aligned);
-          this.recordBytes(chunk.length);
-          if (this.profile === 'pcm') {
-            this.onPcmFrame?.(this.zoneId, aligned, Date.now() * 1000);
-          }
-          this.writeToSubscribers(aligned);
-          this.maybeApplyOutputPacing();
+          this.emitOutputChunk(chunk, {
+            firstChunkLabel: options.logFirstChunk === false ? null : 'ffmpeg first chunk',
+          });
         },
         onStderr: (message: string) => {
           this.lastStderrLine = message;
@@ -550,6 +602,13 @@ export class AudioSession {
       this.stdoutPaused = true;
       return;
     }
+    // Engine-DSP with a PCM profile has no encoder process: throttling the DSP stage's readable side
+    // propagates back through the pipe chain to the decoder's stdout.
+    if (this.outputReadable) {
+      this.outputReadable.pause();
+      this.stdoutPaused = true;
+      return;
+    }
     if (!this.process?.stdout) {
       return;
     }
@@ -562,6 +621,11 @@ export class AudioSession {
       return;
     }
     if (this.directPipeMode && this.pipeSource.resume()) {
+      this.stdoutPaused = false;
+      return;
+    }
+    if (this.outputReadable) {
+      this.outputReadable.resume();
       this.stdoutPaused = false;
       return;
     }
@@ -600,7 +664,7 @@ export class AudioSession {
   }
 
   private maybeApplyOutputPacing(): void {
-    if (!this.process) return;
+    if (!this.process && !this.engineDspMode) return;
     this.pacer.tick(this.totalBytes, this.startTs);
   }
 
@@ -620,7 +684,13 @@ export class AudioSession {
   }
 
   /**
-   * Replace the EQ bands and respawn ffmpeg without tearing down subscribers.
+   * Apply new EQ bands — on the running stream when our own DSP stage owns them, otherwise by
+   * respawning ffmpeg.
+   *
+   * With the engine-DSP topology the coefficients are ours, so a slider move is a coefficient swap
+   * with a 12 ms fade: no gap, no re-seek, no process boundary crossed. A respawn is still needed when
+   * the *topology* has to change — switching the EQ on for the first time (a passthrough session has no
+   * DSP stage) or back off entirely (so passthrough can be regained).
    *
    * The standard restart path (PlaybackService.start) does
    * stop({ discardSubscribers: true }), which destroys the output adapters'
@@ -640,11 +710,23 @@ export class AudioSession {
    *   is ignored for sources that cannot be positioned.
    */
   public restartForEqualizer(bands: ReadonlyArray<number> | null, resumeAtSec?: number): void {
+    // Live path: our stage is running and the new curve still needs it. Nothing else to do — no
+    // respawn, so also no resume position to compute.
+    if (this.dsp && !this.ending && this.args.engineDspSpec(bands) !== null) {
+      this.equalizerBands = bands;
+      const changed = this.dsp.setBands(bands);
+      this.log.info('equalizer applied on the running stream', {
+        zoneId: this.zoneId,
+        profile: this.profile,
+        changed,
+      });
+      return;
+    }
     this.equalizerBands = bands;
     if (typeof resumeAtSec === 'number' && Number.isFinite(resumeAtSec) && resumeAtSec > 0) {
       this.args = this.buildArgBuilder(resumeAtSec);
     }
-    if (!this.process) {
+    if (!this.process && !this.engineDspMode) {
       // No ffmpeg running yet; the next start() will pick up the new bands.
       return;
     }
@@ -652,7 +734,31 @@ export class AudioSession {
       return;
     }
     this.restartingForEq = true;
-    this.process.terminate();
+    if (this.process) {
+      this.process.terminate();
+      return;
+    }
+    // Engine-DSP with a PCM profile: the decoder is the only process, so its exit drives the same
+    // cleanup-and-start cycle an encoder's exit would (see handleProducerEnded).
+    this.pipeline.terminateDecoder();
+  }
+
+  /**
+   * The producer of a process-less topology ended (engine-DSP with a PCM profile).
+   *
+   * Mirrors what {@link spawnFfmpeg}'s exit handler does for the topologies that own an ffmpeg on the
+   * output side: honour a pending EQ-driven restart, otherwise tear the session down.
+   */
+  /** @internal */ public handleProducerEnded(): void {
+    if (this.restartingForEq && !this.ending) {
+      this.restartingForEq = false;
+      this.cleanup({ suppressTermination: true });
+      setTimeout(() => this.start(), 0);
+      return;
+    }
+    if (!this.ending) {
+      this.cleanup();
+    }
   }
 
   public waitForFirstChunk(timeoutMs = 2000): Promise<boolean> {
@@ -664,7 +770,7 @@ export class AudioSession {
   }
 
   public createSubscriber(options: { primeWithBuffer?: boolean; label?: string } = {}): PassThrough | null {
-    if (!this.process && !this.directPipeMode) {
+    if (!this.process && !this.directPipeMode && !this.engineDspMode) {
       return null;
     }
     const primeWithBuffer = options.primeWithBuffer !== false;
@@ -800,6 +906,13 @@ export class AudioSession {
     this.pacer.reset();
     this.pipeSource.detach(this.pipeline.pcmPipe);
     this.directPipeMode = false;
+    if (this.dsp) {
+      this.dsp.removeAllListeners();
+      this.dsp.destroy();
+      this.dsp = undefined;
+    }
+    this.engineDspMode = false;
+    this.outputReadable = undefined;
     if (suppressTermination) {
       // ffmpeg is restarting; chain existing waiters to the next arm() cycle so the
       // position ticker does not start prematurely before the restarted process produces output.

@@ -539,6 +539,103 @@ export class FfmpegArgBuilder {
   }
 
   /**
+   * What the engine-side DSP stage has to apply, or null when there is nothing for it to do.
+   *
+   * Gain and the equalizer move to our own PCM stage so they can change without respawning ffmpeg; the
+   * pre-delay stays on the decoder's command line, since it is a fixed time shift that never changes
+   * mid-session and needs no precision from us.
+   */
+  public engineDspSpec(
+    equalizerBands: ReadonlyArray<number> | null,
+  ): { gainDb: number; bands: ReadonlyArray<number> | null } | null {
+    const { fixedGainDb } = this.outputSettings;
+    const sourceGainDb = this.source.kind === 'url' ? this.source.gainDb : undefined;
+    const gainSource =
+      typeof sourceGainDb === 'number' && Number.isFinite(sourceGainDb) ? sourceGainDb : 0;
+    const gainOutput = Number.isFinite(fixedGainDb) ? fixedGainDb : 0;
+    const gainDb = gainSource + gainOutput;
+    const bands = buildEqualizerFilterChain(equalizerBands) ? equalizerBands : null;
+    if (gainDb === 0 && !bands) {
+      return null;
+    }
+    return { gainDb, bands };
+  }
+
+  /**
+   * Whether our DSP stage should hand this profile float rather than integers.
+   *
+   * The lossy encoders convert to float internally, so quantising for them — dither and all — would be
+   * a requantisation that only adds noise. FLAC and PCM are integer formats and need the real thing.
+   */
+  public engineDspEmitsFloat(): boolean {
+    return this.profile === 'mp3' || this.profile === 'aac' || this.profile === 'opus';
+  }
+
+  /**
+   * Decoder for the engine-DSP topology: source → float PCM at the output rate and channel count.
+   *
+   * Float out, because every stage after this one is ours and works in float. The explicit soxr filter
+   * is not optional even though `-ar` is set: without a filter that pins `osr`, ffmpeg reaches the
+   * output rate through an auto-inserted resampler with default options.
+   */
+  public buildF32DecoderArgs(): string[] {
+    const { sampleRate, channels } = this.outputSettings;
+    const filters: string[] = [];
+    if (this.sourcePreDelayMs && this.sourcePreDelayMs > 0) {
+      filters.push(renderFilterStage({ kind: 'delay', ms: Math.round(this.sourcePreDelayMs) }));
+    }
+    filters.push(
+      renderFilterStage({
+        kind: 'resample',
+        osr: sampleRate,
+        osf: null,
+        dither: null,
+        async: this.source.kind !== 'pipe',
+      }),
+    );
+    return [
+      '-hide_banner', '-nostats', '-loglevel', this.getLogLevel(),
+      ...this.buildInputArgs(),
+      '-af', filters.join(','),
+      '-vn', '-acodec', 'pcm_f32le', '-ar', String(sampleRate), '-ac', String(channels),
+      '-f', 'f32le', 'pipe:1',
+    ];
+  }
+
+  /**
+   * Encoder for the engine-DSP topology: our finished integer PCM in, the output profile out.
+   *
+   * No filters and no `-ar`/`-ac` conversion: the samples arriving here are already exactly what the
+   * consumer negotiated, and re-stating a conversion is how a second resampler sneaks in. Only used for
+   * the codec profiles — a PCM profile skips the process entirely.
+   */
+  public buildEngineDspEncoderArgs(): string[] {
+    const { sampleRate, channels, pcmBitDepth, mp3Bitrate } = this.outputSettings;
+    const args = [
+      '-hide_banner', '-nostats', '-loglevel', this.getLogLevel(),
+      '-fflags', 'nobuffer', '-probesize', '32', '-analyzeduration', '0',
+      '-f', this.engineDspEmitsFloat() ? 'f32le' : pcmFormatFromBitDepth(pcmBitDepth),
+      '-ar', String(sampleRate), '-ac', String(channels), '-i', 'pipe:0',
+    ];
+    switch (this.profile) {
+      case 'flac':
+        return [...args, '-acodec', 'flac', '-compression_level', '0', '-frame_size', '512',
+          '-sample_fmt', sampleFormatForDepth(pcmBitDepth), '-f', 'flac', 'pipe:1'];
+      case 'aac':
+        return [...args, '-acodec', 'aac', '-b:a', mp3Bitrate || '160k', '-f', 'adts', 'pipe:1'];
+      case 'opus':
+        return [...args, '-acodec', 'libopus', '-application', 'audio',
+          '-b:a', mp3Bitrate || '160k', '-f', 'opus', 'pipe:1'];
+      case 'mp3':
+        return [...args, '-acodec', 'libmp3lame', '-b:a', mp3Bitrate || '320k', '-f', 'mp3', 'pipe:1'];
+      case 'pcm':
+      default:
+        return [...args, '-acodec', pcmCodecFromBitDepth(pcmBitDepth),
+          '-f', pcmFormatFromBitDepth(pcmBitDepth), 'pipe:1'];
+    }
+  }
+
+  /**
    * The conversion into the two-stage intermediate bus: soxr at our settings, dithered when the bus
    * is 16-bit. No DSP — that runs in the encoder, which is the stage crossfade leaves attached.
    */

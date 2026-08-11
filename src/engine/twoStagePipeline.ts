@@ -39,13 +39,33 @@ export class TwoStagePipeline {
     this.encoderInput = new PassThrough();
     this.pcmPipe = new PassThrough();
 
+    const proc = this.spawnDecoder(args, {
+      onEnded: () => {
+        if (!isCrossfadeActive()) {
+          this.encoderInput?.end();
+        }
+      },
+    });
+
+    proc.stdout.pipe(this.pcmPipe, { end: false });
+    this.pcmPipe.pipe(this.encoderInput, { end: false });
+  }
+
+  /**
+   * Spawn a decoder and own its lifecycle without wiring the crossfade bridge.
+   *
+   * The engine-DSP topology feeds our own PCM stage instead of `pcmPipe`, but it wants the same
+   * ownership: stderr on the session log, one `onEnded` for both exit and spawn failure, and
+   * {@link terminateDecoder} to reach it.
+   */
+  public spawnDecoder(
+    args: string[],
+    handlers: { onEnded: (reason: 'exit' | 'error') => void },
+  ): ChildProcessWithoutNullStreams {
     const proc = spawn(FFMPEG_BINARY, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
     }) as ChildProcessWithoutNullStreams;
     this.decoder = proc;
-
-    proc.stdout.pipe(this.pcmPipe, { end: false });
-    this.pcmPipe.pipe(this.encoderInput, { end: false });
 
     proc.stderr?.on('data', (c: Buffer) => {
       const msg = c.toString().trim();
@@ -53,14 +73,13 @@ export class TwoStagePipeline {
     });
     proc.on('exit', (code, signal) => {
       this.log.debug('decoder exited', { ...this.logContext, code, signal });
-      if (!isCrossfadeActive()) {
-        this.encoderInput?.end();
-      }
+      handlers.onEnded('exit');
     });
     proc.on('error', (err: NodeJS.ErrnoException) => {
       this.log.warn('decoder error', { ...this.logContext, message: err.message });
-      if (!isCrossfadeActive()) this.encoderInput?.end();
+      handlers.onEnded('error');
     });
+    return proc;
   }
 
   public terminateDecoder(): void {

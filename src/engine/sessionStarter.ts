@@ -1,5 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { FFMPEG_LOW_LATENCY_ARGS } from '@/engine/ffmpegArgs';
+import { PcmDspStage } from '@/engine/pcmDsp';
 import type { AudioSession } from '@/engine/audioSession';
 
 /**
@@ -67,22 +68,7 @@ export class SessionStarter {
         }
       }
 
-      const aligned = s.alignPcmChunk(chunk);
-      if (!aligned?.length) {
-        s.recordBytes(chunk.length);
-        return;
-      }
-      if (s.firstChunk.signal()) {
-        s.log.info('direct pipe first chunk', {
-          zoneId: s.zoneId,
-          profile: s.profile,
-          bytes: aligned.length,
-          spawnToFirstChunkMs: s.startTs ? Math.max(0, Date.now() - s.startTs) : null,
-        });
-      }
-      s.buffer.push(aligned);
-      s.recordBytes(chunk.length);
-      s.writeToSubscribers(aligned);
+      s.emitOutputChunk(chunk, { firstChunkLabel: 'direct pipe first chunk' });
     });
     s.pipeSource.onError((err: unknown) => {
       s.log.warn('pipe source error', {
@@ -261,6 +247,79 @@ export class SessionStarter {
       restartOnFailure: s.source.kind === 'pipe',
       logFirstChunk: true,
     });
+  }
+
+  /**
+   * File/URL source with DSP: ffmpeg decodes and resamples to float, our own stage owns the gain, the
+   * equalizer and the requantisation, and only a codec profile needs an encoder behind it.
+   *
+   *   decoder ffmpeg (→ f32le) → PcmDspStage (→ int) → subscribers
+   *                                                  ↳ encoder ffmpeg → subscribers   (flac/mp3/aac/opus)
+   *
+   * The point is not fewer processes (though a PCM zone does drop one): it is that the DSP no longer
+   * lives inside a process whose command line is fixed for its lifetime, so an EQ change is a
+   * coefficient swap instead of a respawn with a re-seek.
+   */
+  public startEngineDsp(): void {
+    const s = this.session;
+    const spec = s.args.engineDspSpec(s.equalizerBands) ?? { gainDb: 0, bands: null };
+    const dsp = new PcmDspStage({
+      sampleRate: s.outputSettings.sampleRate,
+      channels: s.outputSettings.channels,
+      bitDepth: s.outputSettings.pcmBitDepth,
+      floatOutput: s.args.engineDspEmitsFloat(),
+      gainDb: spec.gainDb,
+      bands: spec.bands,
+    });
+    s.dsp = dsp;
+    s.engineDspMode = true;
+    s.startTs = Date.now();
+
+    const decoderArgs = s.args.buildF32DecoderArgs();
+    s.log.debug('spawning ffmpeg (engine-dsp decoder)', {
+      zoneId: s.zoneId,
+      args: decoderArgs,
+      profile: s.profile,
+      gainDb: spec.gainDb,
+      equalizer: spec.bands ? [...spec.bands] : null,
+    });
+    const decoder = s.pipeline.spawnDecoder(decoderArgs, {
+      onEnded: () => {
+        // End the stage so a codec encoder flushes and finishes; the PCM profile's own 'end' handler
+        // below takes it from there.
+        if (!dsp.destroyed && !dsp.writableEnded) {
+          dsp.end();
+        }
+      },
+    });
+    decoder.stdout.pipe(dsp);
+    dsp.on('error', (err: Error) => {
+      s.log.warn('engine dsp stage error', { zoneId: s.zoneId, message: err.message });
+      if (!s.ending) {
+        s.cleanup();
+      }
+    });
+
+    if (s.profile === 'pcm') {
+      // No encoder: the stage's output *is* the session's output.
+      s.outputReadable = dsp;
+      dsp.on('data', (chunk: Buffer) => {
+        s.emitOutputChunk(chunk, { firstChunkLabel: 'engine dsp first chunk' });
+      });
+      dsp.on('end', () => {
+        s.log.debug('engine dsp stage ended', { zoneId: s.zoneId, profile: s.profile });
+        s.handleProducerEnded();
+      });
+      return;
+    }
+
+    const encoderArgs = s.args.buildEngineDspEncoderArgs();
+    s.log.debug('spawning ffmpeg (engine-dsp encoder)', {
+      zoneId: s.zoneId,
+      args: encoderArgs,
+      profile: s.profile,
+    });
+    s.process = s.spawnFfmpeg(encoderArgs, { logFirstChunk: true, stdinStream: dsp });
   }
 
   /**
