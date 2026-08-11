@@ -10,7 +10,11 @@ type SchedulerFakes = {
   sessions: Map<number, PlaybackSession>;
   hasSession: Set<number>;
   bands: Map<number, ReadonlyArray<number> | null>;
-  restartCalls: Array<{ zoneId: number; bands: ReadonlyArray<number> | null }>;
+  restartCalls: Array<{
+    zoneId: number;
+    bands: ReadonlyArray<number> | null;
+    resumeAtSec?: number;
+  }>;
 };
 
 function buildScheduler(debounceMs = 5): { scheduler: EqualizerRestartScheduler; fakes: SchedulerFakes } {
@@ -24,8 +28,12 @@ function buildScheduler(debounceMs = 5): { scheduler: EqualizerRestartScheduler;
     getSession: (zoneId) => fakes.sessions.get(zoneId),
     playbackService: {
       hasSession: (zoneId: number) => fakes.hasSession.has(zoneId),
-      restartZoneForEqualizer: (zoneId: number, bands: ReadonlyArray<number> | null) => {
-        fakes.restartCalls.push({ zoneId, bands });
+      restartZoneForEqualizer: (
+        zoneId: number,
+        bands: ReadonlyArray<number> | null,
+        resumeAtSec?: number,
+      ) => {
+        fakes.restartCalls.push({ zoneId, bands, resumeAtSec });
       },
     } as never,
     getEqualizerBands: (zoneId) => fakes.bands.get(zoneId) ?? null,
@@ -141,4 +149,51 @@ test('EqualizerRestartScheduler reads bands at apply-time, not schedule-time', a
 
   assert.equal(fakes.restartCalls.length, 1);
   assert.deepEqual(fakes.restartCalls[0]?.bands, [9, 9]);
+});
+
+/** A positioned track: the restart has to continue where the listener is. */
+function makeTrackSession(elapsed: number, duration: number): PlaybackSession {
+  return {
+    state: 'playing',
+    playbackSource: { kind: 'file', path: '/music/track.flac' } as never,
+    elapsed,
+    duration,
+  } as PlaybackSession;
+}
+
+test('a track restart resumes at the current position instead of rewinding', async () => {
+  // A respawn re-runs the original command line, so without a position ffmpeg replays the track from
+  // its start: moving one EQ band would rewind the song.
+  const { scheduler, fakes } = buildScheduler(5);
+  fakes.sessions.set(1, makeTrackSession(42.7, 300));
+  fakes.hasSession.add(1);
+
+  scheduler.schedule(1);
+  await wait(20);
+
+  assert.equal(fakes.restartCalls[0]?.resumeAtSec, 42);
+});
+
+test('live and unpositionable sources restart without a seek', async () => {
+  const { scheduler, fakes } = buildScheduler(5);
+  // Radio: no duration, and an elapsed that only counts listening time — seeking there is meaningless.
+  fakes.sessions.set(1, {
+    state: 'playing',
+    playbackSource: { kind: 'url', url: 'http://radio/stream' } as never,
+    elapsed: 900,
+    duration: 0,
+  } as PlaybackSession);
+  // A live pipe (librespot) simply continues; it has no offset at all.
+  fakes.sessions.set(2, { ...makeSession('playing'), elapsed: 30, duration: 200 } as PlaybackSession);
+  fakes.hasSession.add(1);
+  fakes.hasSession.add(2);
+
+  scheduler.schedule(1);
+  scheduler.schedule(2);
+  await wait(20);
+
+  assert.equal(fakes.restartCalls.length, 2);
+  for (const call of fakes.restartCalls) {
+    assert.equal(call.resumeAtSec, undefined);
+  }
 });

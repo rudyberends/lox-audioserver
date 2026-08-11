@@ -22,6 +22,7 @@ import './engine/outputPacer.test';
 import './engine/subscriberFanout.test';
 import './engine/pcmCrossfade.test';
 import './engine/ffmpegArgs.test';
+import './engine/audioSessionRestart.test';
 import './bitPerfectPlayback.test';
 import './sendspinFormatReuse.test';
 import './flacFrameSplitter.test';

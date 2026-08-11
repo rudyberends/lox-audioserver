@@ -56,7 +56,31 @@ export class EqualizerRestartScheduler {
     // calls stop({ discardSubscribers: true }) which destroys their
     // PassThrough streams and forces the user to press Play again.
     const bands = this.deps.getEqualizerBands(zoneId);
-    this.deps.log.info('restarting audio engine to apply equalizer change', { zoneId });
-    this.deps.playbackService.restartZoneForEqualizer(zoneSessionKey(zoneId), bands);
+    const resumeAtSec = resumePosition(session);
+    this.deps.log.info('restarting audio engine to apply equalizer change', { zoneId, resumeAtSec });
+    this.deps.playbackService.restartZoneForEqualizer(zoneSessionKey(zoneId), bands, resumeAtSec);
   }
+}
+
+/**
+ * Where the respawned ffmpeg should pick the track up.
+ *
+ * A respawn re-runs the original command line, so without a position a track restarts from its
+ * beginning — moving one EQ band would rewind the song. Only finite content qualifies: live radio has
+ * no duration and an elapsed counter that only says how long it has been listened to, and seeking a
+ * live URL to that offset is meaningless.
+ */
+function resumePosition(session: PlaybackSession): number | undefined {
+  const kind = session.playbackSource?.kind;
+  if (kind !== 'file' && kind !== 'url') {
+    return undefined;
+  }
+  if (!(session.duration > 0)) {
+    return undefined;
+  }
+  const elapsed = Math.floor(session.elapsed);
+  if (!Number.isFinite(elapsed) || elapsed <= 0 || elapsed >= session.duration) {
+    return undefined;
+  }
+  return elapsed;
 }

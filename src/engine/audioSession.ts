@@ -132,7 +132,13 @@ export class AudioSession {
   // which results in loud noise (misaligned sample boundaries).
   /** @internal */ public readonly pcmAligner: PcmFrameAligner | null;
   /** @internal */ public readonly codec: CodecPolicy;
-  /** @internal */ public readonly args: FfmpegArgBuilder;
+  /**
+   * @internal Rebuilt (not mutated) whenever a restart has to resume somewhere other than the
+   * source's original offset — see {@link restartForEqualizer}.
+   */
+  public args: FfmpegArgBuilder;
+  private readonly isAlertSource: boolean;
+  private readonly nativeFormat: SourceNativeFormat | undefined;
   // For codec streams (FLAC, etc.), store the initial header so new subscribers
   // joining mid-stream can initialize their decoders correctly.
   /** @internal */ public codecHeader: Buffer | null = null;
@@ -262,14 +268,9 @@ export class AudioSession {
       return undefined;
     })();
     this.sourceFormat = sourceFormatFor(this.source, nativeFormat);
-    this.args = new FfmpegArgBuilder(
-      this.source,
-      this.profile,
-      this.outputSettings,
-      isAlertSource,
-      this.sourcePreDelayMs,
-      nativeFormat,
-    );
+    this.isAlertSource = isAlertSource;
+    this.nativeFormat = nativeFormat;
+    this.args = this.buildArgBuilder();
     const losslessSource = nativeFormat?.lossless === true ||
       (this.sourceFormat?.codec.startsWith('pcm_') === true || this.sourceFormat?.codec === 'flac');
     this.bitPerfect = losslessSource && this.args.isBitPerfect(this.equalizerBands);
@@ -277,6 +278,27 @@ export class AudioSession {
     this.pipeline = new TwoStagePipeline(this.log, { zoneId: this.zoneId, profile: this.profile });
     this.starter = new SessionStarter(this);
     this.crossfader = new Crossfader(this);
+  }
+
+  /**
+   * Command-line builder for this session, optionally seeking somewhere other than the source's own
+   * `startAtSec`. Only file and URL sources can be positioned; a live pipe has no offset to seek to
+   * and simply continues where it is.
+   */
+  private buildArgBuilder(resumeAtSec?: number): FfmpegArgBuilder {
+    const seekable = this.source.kind === 'file' || this.source.kind === 'url';
+    const source =
+      seekable && typeof resumeAtSec === 'number' && Number.isFinite(resumeAtSec) && resumeAtSec > 0
+        ? ({ ...this.source, startAtSec: resumeAtSec } as PlaybackSource)
+        : this.source;
+    return new FfmpegArgBuilder(
+      source,
+      this.profile,
+      this.outputSettings,
+      this.isAlertSource,
+      this.sourcePreDelayMs,
+      this.nativeFormat,
+    );
   }
 
   /** @internal */ public alignPcmChunk(chunk: Buffer): Buffer | null {
@@ -611,9 +633,17 @@ export class AudioSession {
    * the process, then in the exit handler call cleanup with
    * suppressTermination=true (preserves subscribers) and call start() again,
    * which spawns a fresh ffmpeg using the now-updated equalizerBands.
+   *
+   * @param resumeAtSec Where the restarted ffmpeg should pick the source up, in seconds. Without it a
+   *   respawn re-runs the *original* command line — including its original `-ss` — so a file or URL
+   *   track jumped back to its start on every EQ change. The caller supplies the current position; it
+   *   is ignored for sources that cannot be positioned.
    */
-  public restartForEqualizer(bands: ReadonlyArray<number> | null): void {
+  public restartForEqualizer(bands: ReadonlyArray<number> | null, resumeAtSec?: number): void {
     this.equalizerBands = bands;
+    if (typeof resumeAtSec === 'number' && Number.isFinite(resumeAtSec) && resumeAtSec > 0) {
+      this.args = this.buildArgBuilder(resumeAtSec);
+    }
     if (!this.process) {
       // No ffmpeg running yet; the next start() will pick up the new bands.
       return;

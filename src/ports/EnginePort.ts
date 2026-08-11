@@ -101,7 +101,16 @@ export interface EnginePort {
     options?: EngineHandoffOptions,
   ): void;
   stop(key: SessionKey, reason?: string, options?: EngineStopOptions): void;
-  restartZoneForEqualizer(key: SessionKey, bands: ReadonlyArray<number> | null): boolean;
+  /**
+   * @param resumeAtSec Playback position the respawned session should continue from. Omit for sources
+   *   that carry no position (live input); a positioned source restarted without it replays from its
+   *   original offset.
+   */
+  restartZoneForEqualizer(
+    key: SessionKey,
+    bands: ReadonlyArray<number> | null,
+    resumeAtSec?: number,
+  ): boolean;
   createStream(key: SessionKey, profile?: OutputProfile, options?: EngineStreamOptions): PassThrough | null;
   createLocalSession(
     key: SessionKey,
