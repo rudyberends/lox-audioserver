@@ -1107,7 +1107,12 @@ export class AudioManager {
       return;
     }
     this.sessions.delete(zoneId);
-    const cleanExit = (exitCode === 0 || exitCode === null) && !exitSignal && !stderr;
+    // Whether ffmpeg succeeded is its exit status, never what it printed. At `-loglevel info`
+    // — which every source without a probed native format gets, see `FfmpegArgBuilder.getLogLevel`
+    // — a flawless run still writes the input banner and, for FLAC into a pipe, "unable to rewrite
+    // FLAC header". Reading that as failure turned every alert and TTS on a non-Sendspin output
+    // into "Playback unavailable" (#331). stderr stays the *text* of an error, not the verdict.
+    const cleanExit = (exitCode === 0 || exitCode === null) && !exitSignal;
     const isFiniteFile = session.playbackSource?.kind === 'file' && !session.metadata?.isRadio;
     if (!reason && cleanExit && (shouldEmitEnded || isFiniteFile)) {
       this.log.info('playback ended', {
@@ -1143,7 +1148,7 @@ export class AudioManager {
       return;
     }
     if (session.state === 'playing') {
-      if (exitCode !== 0 || exitSignal || stderr) {
+      if (!cleanExit) {
         const detail =
           stderr ||
           (typeof exitCode === 'number' ? `ffmpeg exited (${exitCode})` : exitSignal ? `ffmpeg exited (${exitSignal})` : 'ffmpeg exited');
