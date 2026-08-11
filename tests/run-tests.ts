@@ -47,6 +47,7 @@ import './audioServersAndBearer.test';
 import './outputFactory.airplay.test';
 import './outputFactory.sendspin.test';
 import './airplayPcmStream.test';
+import './airplayVolumeAssert.test';
 import './airplayStreamSession.test';
 import './audioStreamHandlerIcy.test';
 import './queueAuthority.test';

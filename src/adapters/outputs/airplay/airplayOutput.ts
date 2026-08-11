@@ -104,6 +104,9 @@ export class AirPlayOutput implements ZoneOutput {
   private readonly retryMaxAttempts = 20;
   private progressTimer: NodeJS.Timeout | null = null;
   private readonly progressIntervalMs = 2000;
+  private volumeAssertTimer: NodeJS.Timeout | null = null;
+  // Second volume assert, once audio is definitely flowing (see assertDeviceVolume).
+  private readonly volumeAssertDelayMs = 1500;
   private readonly pcmStartTimeoutMs = 8000;
   private readonly pcmPipeTimeoutMs = 20000;
 
@@ -198,6 +201,7 @@ export class AirPlayOutput implements ZoneOutput {
       const stream = this.streamSession.getStream();
       if (stream) {
         await this.sender.start(stream, this.currentVolume);
+        this.assertDeviceVolume('play (already active)');
       }
       this.clearRetry();
       return;
@@ -249,6 +253,7 @@ export class AirPlayOutput implements ZoneOutput {
       }
       this.running = true;
       this.clearRetry();
+      this.assertDeviceVolume('play');
     } finally {
       this.starting = false;
     }
@@ -265,6 +270,7 @@ export class AirPlayOutput implements ZoneOutput {
     this.log.info('AirPlay pause', { zoneId: this.zoneId, zoneName: this.zoneName });
     this.paused = true;
     this.stopProgressTimer();
+    this.clearVolumeAssert();
     this.sender.pause();
     this.running = false;
     this.starting = false;
@@ -291,6 +297,7 @@ export class AirPlayOutput implements ZoneOutput {
         this.running = true;
         this.clearRetry();
         this.startProgressTimer();
+        this.assertDeviceVolume('resume');
         void this.updateMetadata(session);
         return;
       }
@@ -304,6 +311,7 @@ export class AirPlayOutput implements ZoneOutput {
     this.log.info('AirPlay stop', { zoneId: this.zoneId, zoneName: this.zoneName });
     this.clearRetry();
     this.stopProgressTimer();
+    this.clearVolumeAssert();
 
     if (this.attachedLeaderId) {
       // We were a grouped member; just tear down our sender and detach.
@@ -351,6 +359,52 @@ export class AirPlayOutput implements ZoneOutput {
     }
     this.currentVolume = clamped;
     await this.sender.setVolume(this.currentVolume);
+  }
+
+  /**
+   * Push the zone volume to the device again now that the RTP session is live.
+   *
+   * libraop asserts the volume exactly once, inside connect: a SET_PARAMETER right
+   * after RECORD, before a single audio packet has gone out. Some devices — Sonos
+   * in particular — drop that one and keep playing at whatever internal AirPlay
+   * volume they retained, which is heard as "play works, the visualizer runs, but
+   * it stays silent until you touch volume +/-" (#330). The volume dispatch that
+   * follows every playback start can't fix it either: it normally carries the level
+   * we already hold, and {@link setVolume} short-circuits an unchanged level. So
+   * assert it explicitly here — once on start, and once more a moment later when
+   * audio is definitely flowing, for devices that only honour volume mid-stream.
+   */
+  private assertDeviceVolume(reason: string): void {
+    this.clearVolumeAssert();
+    this.pushVolume(reason);
+    const timer = setTimeout(() => {
+      this.volumeAssertTimer = null;
+      if (this.running && !this.paused) {
+        this.pushVolume(`${reason} (mid-stream)`);
+      }
+    }, this.volumeAssertDelayMs);
+    timer.unref?.();
+    this.volumeAssertTimer = timer;
+  }
+
+  private pushVolume(reason: string): void {
+    if (!this.sender.isRunning()) {
+      return;
+    }
+    this.log.debug('AirPlay volume assert', {
+      zoneId: this.zoneId,
+      volume: this.currentVolume,
+      reason,
+    });
+    void this.sender.setVolume(this.currentVolume);
+  }
+
+  private clearVolumeAssert(): void {
+    if (!this.volumeAssertTimer) {
+      return;
+    }
+    clearTimeout(this.volumeAssertTimer);
+    this.volumeAssertTimer = null;
   }
 
   public async updateMetadata(session: PlaybackSession | null): Promise<void> {
@@ -433,6 +487,7 @@ export class AirPlayOutput implements ZoneOutput {
     this.starting = false;
     if (started) {
       this.startProgressTimer();
+      this.assertDeviceVolume('grouped start');
     }
     return started;
   }
@@ -455,11 +510,13 @@ export class AirPlayOutput implements ZoneOutput {
     this.running = started;
     if (started) {
       this.startProgressTimer();
+      this.assertDeviceVolume('leader stream start');
     }
   }
 
   public async stopLocal(): Promise<void> {
     this.stopProgressTimer();
+    this.clearVolumeAssert();
     this.sender.stop();
     this.destroyGroupSource();
     this.running = false;
