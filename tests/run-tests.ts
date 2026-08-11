@@ -56,6 +56,7 @@ import './queueMutations.test';
 import './ytmusicNative.mock.test';
 import './spotifyAccountProvider.playlists.test';
 import './spotifyRecoveryPolicy.test';
+import './deezerRetryStream.test';
 import './subsonicIds.test';
 import './subsonicResponse.test';
 import './subsonicStreamRange.test';

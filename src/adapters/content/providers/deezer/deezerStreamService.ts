@@ -27,6 +27,10 @@ const DEEZER_BF_KEY = Buffer.from('g4el58wc0zvf9na1', 'utf8');
 const DEEZER_BF_IV = Buffer.from('0001020304050607', 'hex');
 const BLOCK_SIZE = 2048;
 const DEEZER_JITTER_BUFFER_BYTES = 1024 * 1024 * 2;
+/** How long upstream may go quiet — while we are waiting on it — before we re-request. */
+const DEEZER_STALL_TIMEOUT_MS = 4000;
+/** Backstop against a pathological loop of tiny-progress resumes; a sane track needs a handful. */
+const DEEZER_MAX_STREAM_ATTEMPTS = 64;
 
 type DeezerPlaybackResult = {
   playbackSource: PlaybackSource | null;
@@ -659,8 +663,13 @@ export class DeezerStreamService {
     const stream = createRetryStream(session, controller.signal, this.log);
     stream.pipe(decryptStream).pipe(jitterBuffer).pipe(res);
 
-    stream.on('error', () => {
+    stream.on('error', (err: Error) => {
+      // The headers went out long ago, so breaking the socket is the only way left to tell
+      // ffmpeg this was not the end of the track. Ending the response would read as a clean
+      // EOF and truncate the track silently.
+      this.log.warn('deezer proxy stream failed', { sessionId, message: err.message });
       cleanup();
+      res.destroy(err);
     });
     res.on('close', cleanup);
   }
@@ -837,105 +846,174 @@ function mapGwFormatToId(format?: string): number | undefined {
   }
 }
 
-function createRetryStream(
+/**
+ * Streams one proxy session's bytes into a PassThrough, resuming with a Range request
+ * whenever the upstream body breaks off before the file is whole.
+ *
+ * Two rules carry this function, and #328 is what happened without them:
+ *
+ * - An interrupted body is not a finished one. `out.end()` promises the consumer that
+ *   those were all the bytes there are; ffmpeg believes it, exits 0 on half a track and
+ *   the zone falls silent with nothing that reads as a failure anywhere. Only a body that
+ *   ends on its own terms may end the stream, and only after the resume machinery has had
+ *   its turn.
+ * - The stall timer measures upstream silence, never our own backpressure. A paced output
+ *   — sendspin behind a session buffer worth about a second — parks the writer on `drain`
+ *   for seconds at a time, and a healthy CDN connection used to be aborted for it. The
+ *   clock runs only while we are waiting for a chunk.
+ */
+/** @internal exported for tests */
+export function createRetryStream(
   session: DeezerProxySession,
   signal: AbortSignal,
   log: ReturnType<typeof createLogger>,
+  stallTimeoutMs: number = DEEZER_STALL_TIMEOUT_MS,
 ): PassThrough {
   const out = new PassThrough();
+  // Deezer's own filesize for the chosen format. Advisory: it is how we notice a short
+  // close, never grounds to fail a stream that delivered everything the CDN has.
+  const totalSize = Number(session.estimatedSize) > 0 ? Number(session.estimatedSize) : null;
   let offset = 0;
   let buffer = Buffer.alloc(0);
   let pumping = false;
+
+  const delivered = (): number => offset + buffer.length;
+
+  const flushAndEnd = (): void => {
+    if (buffer.length > 0) {
+      offset += buffer.length;
+      out.write(buffer);
+      buffer = Buffer.alloc(0);
+    }
+    out.end();
+  };
 
   const pump = async (): Promise<void> => {
     if (pumping) return;
     pumping = true;
     let attempts = 0;
-    const maxAttempts = Math.max(3, session.urls.length * 4);
-    const stallTimeoutMs = 4000;
+    let attemptsWithoutProgress = 0;
+    const maxAttemptsWithoutProgress = Math.max(3, session.urls.length * 2);
 
     while (!signal.aborted && !out.destroyed) {
-      let fetched = false;
-      for (const url of session.urls) {
-        if (signal.aborted || out.destroyed) {
-          pumping = false;
-          return;
+      if (attempts >= DEEZER_MAX_STREAM_ATTEMPTS) {
+        out.destroy(new Error(`deezer retry limit reached at ${delivered()} bytes`));
+        pumping = false;
+        return;
+      }
+      const url = session.urls[attempts % session.urls.length] ?? '';
+      attempts += 1;
+      const resumeOffset = delivered();
+      // 'ended' = upstream closed by itself, 'broke' = aborted or errored mid-body,
+      // 'unusable' = never got a body to read.
+      let outcome: 'ended' | 'broke' | 'unusable' = 'unusable';
+      const requestController = new AbortController();
+      const onAbort = (): void => requestController.abort();
+      signal.addEventListener('abort', onAbort, { once: true });
+      let idleTimer: NodeJS.Timeout | null = null;
+      const stopIdleTimer = (): void => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = null;
+      };
+      const armIdleTimer = (): void => {
+        stopIdleTimer();
+        idleTimer = setTimeout(() => requestController.abort(), stallTimeoutMs);
+      };
+      try {
+        const headers: Record<string, string> = { ...session.headers };
+        if (resumeOffset > 0) {
+          headers.Range = `bytes=${resumeOffset}-`;
         }
-        attempts += 1;
-        if (attempts > maxAttempts) {
-          out.destroy(new Error('deezer retry limit reached'));
-          pumping = false;
-          return;
-        }
-        try {
-          const headers: Record<string, string> = { ...session.headers };
-          const resumeOffset = offset + buffer.length;
-          if (resumeOffset > 0) {
-            headers.Range = `bytes=${resumeOffset}-`;
-          }
-          const requestController = new AbortController();
-          const onAbort = () => requestController.abort();
-          signal.addEventListener('abort', onAbort, { once: true });
-          const res = await fetch(url, { headers, signal: requestController.signal });
-          if (!res.ok || !res.body) {
-            signal.removeEventListener('abort', onAbort);
-            continue;
-          }
-          if (resumeOffset > 0 && res.status !== 206) {
-            signal.removeEventListener('abort', onAbort);
-            continue;
-          }
-          fetched = true;
+        const res = await fetch(url, { headers, signal: requestController.signal });
+        if (!res.ok || !res.body) {
+          log.debug('deezer proxy fetch rejected', { status: res.status, resumeOffset });
+        } else if (resumeOffset > 0 && res.status !== 206) {
+          // A 200 to a Range request would replay the file from the top and splice the
+          // start of the track into the middle of it.
+          log.debug('deezer proxy resume not honoured', { status: res.status, resumeOffset });
+        } else {
           const body = Readable.fromWeb(res.body as unknown as Parameters<typeof Readable.fromWeb>[0]);
-          let idleTimer: NodeJS.Timeout | null = null;
-          const resetIdleTimer = (): void => {
-            if (idleTimer) clearTimeout(idleTimer);
-            idleTimer = setTimeout(() => {
-              requestController.abort();
-            }, stallTimeoutMs);
-          };
-          resetIdleTimer();
+          outcome = 'broke';
+          armIdleTimer();
           for await (const chunk of body) {
-            if (signal.aborted || out.destroyed) {
-              if (idleTimer) clearTimeout(idleTimer);
-              signal.removeEventListener('abort', onAbort);
-              pumping = false;
-              return;
-            }
-            resetIdleTimer();
-            const incoming = Buffer.from(chunk as Buffer);
-            buffer = Buffer.concat([buffer, incoming]);
+            stopIdleTimer();
+            if (signal.aborted || out.destroyed) break;
+            buffer = Buffer.concat([buffer, Buffer.from(chunk as Buffer)]);
             while (buffer.length >= BLOCK_SIZE) {
               const block = buffer.subarray(0, BLOCK_SIZE);
               buffer = buffer.subarray(BLOCK_SIZE);
               offset += block.length;
               if (!out.write(block)) {
-                await once(out, 'drain');
+                // Our consumer's pace, not a stalled download — and the wait must not
+                // outlive the request, or a disconnected client leaks this pump.
+                await once(out, 'drain', { signal });
               }
             }
+            armIdleTimer();
           }
-          if (idleTimer) clearTimeout(idleTimer);
-          signal.removeEventListener('abort', onAbort);
-        } catch (err) {
-          log.debug('deezer proxy retry fetch failed', {
-            message: err instanceof Error ? err.message : String(err),
-          });
+          if (!signal.aborted && !out.destroyed) {
+            outcome = 'ended';
+          }
         }
+      } catch (err) {
+        log.debug('deezer proxy stream interrupted', {
+          message: err instanceof Error ? err.message : String(err),
+          resumeOffset,
+          delivered: delivered(),
+        });
+      } finally {
+        stopIdleTimer();
+        signal.removeEventListener('abort', onAbort);
+        // Frees the socket when we left the body early; a consumed body ignores it.
+        requestController.abort();
       }
 
-      if (!fetched) {
-        out.destroy(new Error('deezer proxy upstream failed'));
+      if (signal.aborted || out.destroyed) {
         pumping = false;
         return;
       }
-      if (buffer.length > 0) {
-        offset += buffer.length;
-        out.write(buffer);
-        buffer = Buffer.alloc(0);
+      const madeProgress = delivered() > resumeOffset;
+      if (outcome === 'ended') {
+        if (totalSize === null || delivered() >= totalSize) {
+          flushAndEnd();
+          pumping = false;
+          return;
+        }
+        if (!madeProgress) {
+          // Twice now upstream has closed at the same byte. The filesize is advisory, so
+          // trust the bytes over it rather than fail a track that is probably whole.
+          log.debug('deezer proxy ended short of the advertised size', {
+            delivered: delivered(),
+            totalSize,
+          });
+          flushAndEnd();
+          pumping = false;
+          return;
+        }
+        log.debug('deezer proxy closed early; resuming', {
+          resumeOffset: delivered(),
+          totalSize,
+        });
+        continue;
       }
-      out.end();
-      pumping = false;
-      return;
+      attemptsWithoutProgress = madeProgress ? 0 : attemptsWithoutProgress + 1;
+      if (attemptsWithoutProgress > maxAttemptsWithoutProgress) {
+        out.destroy(
+          new Error(
+            delivered() === 0
+              ? 'deezer proxy upstream failed'
+              : `deezer proxy stream broke off at ${delivered()} bytes`,
+          ),
+        );
+        pumping = false;
+        return;
+      }
+      log.debug('deezer proxy resuming stream', {
+        attempt: attempts,
+        outcome,
+        resumeOffset: delivered(),
+        totalSize,
+      });
     }
     pumping = false;
   };
