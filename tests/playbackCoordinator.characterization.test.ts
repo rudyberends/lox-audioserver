@@ -391,6 +391,9 @@ class FakePlayer extends EventEmitter {
 
   public setVolume(level: number): void {
     this.volume = level;
+    // Mirror the real ZonePlayer: setVolume *is* an emit, and that event is what
+    // patches state and dispatches to outputs.
+    this.emit('volume', level);
   }
 
   public updateTiming(elapsed: number, duration: number): void {
@@ -674,6 +677,13 @@ function createHarness(options?: {
   });
   // Speed up queue stepping for tests (otherwise waits 150ms).
   (coordinator as any).queueStepDispatcher.queueStepCoalesceMs = 0;
+  /*
+   * Wire the player listeners here, exactly once, because production does: a zone's
+   * player is created and its listeners attached on adjacent lines in registerZone,
+   * so a zone without them does not exist. Leaving them off made the harness assert
+   * behaviour that only the (now removed) duplicate volume dispatch provided.
+   */
+  coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
 
   return {
     coordinator,
@@ -740,7 +750,6 @@ test('input switching gates callbacks and stops prior sessions', async () => {
 
 test('duplicate end_of_track signals advance queue only once', async () => {
   const { coordinator, ctx } = createHarness();
-  coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
   ctx.queueController.setItems(
     [
       makeQueueItem({ title: 'One', audiopath: 'spotify:track:one', unique_id: 'id-1' }),
@@ -1259,7 +1268,6 @@ test('playContent ignores MA serviceplay when already playing target', async () 
 test('player started dispatches outputs, volume, and patch in order', () => {
   const trace: string[] = [];
   const { coordinator, ctx, patches, outputRouter } = createHarness({ trace });
-  coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
   ctx.state.volume = 42;
   ctx.queueController.setItems([makeQueueItem({ title: 'Track', audiopath: 'library://one', unique_id: 'id-1' })], 0);
   const session = {
@@ -1279,7 +1287,6 @@ test('player started dispatches outputs, volume, and patch in order', () => {
 
 test('player started keeps current volume when already active', () => {
   const { coordinator, ctx, patches, outputRouter } = createHarness();
-  coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
   ctx.state.mode = 'pause';
   ctx.state.volume = 42;
 
@@ -1292,7 +1299,6 @@ test('player started keeps current volume when already active', () => {
 
 test('player started preserves alert volume even when zone was stopped', () => {
   const { coordinator, ctx, patches, outputRouter } = createHarness();
-  coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
   // AlertsCoordinator sets state.volume to the per-event slider value before playUri starts.
   ctx.state.mode = 'stop';
   ctx.state.volume = 66;
@@ -1313,7 +1319,6 @@ test('player started preserves alert volume even when zone was stopped', () => {
 test('player resumed dispatches outputs before patch', () => {
   const trace: string[] = [];
   const { coordinator, ctx, patches } = createHarness({ trace });
-  coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
 
   const player = ctx.player as unknown as EventEmitter;
   player.emit('resumed', null);
@@ -1326,7 +1331,6 @@ test('player resumed dispatches outputs before patch', () => {
 test('player paused dispatches outputs before patch', () => {
   const trace: string[] = [];
   const { coordinator, ctx, patches } = createHarness({ trace });
-  coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
 
   const player = ctx.player as unknown as EventEmitter;
   player.emit('paused', null);
@@ -1339,7 +1343,6 @@ test('player paused dispatches outputs before patch', () => {
 test('player stopped dispatches outputs before patch', () => {
   const trace: string[] = [];
   const { coordinator, ctx, patches } = createHarness({ trace });
-  coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
 
   const player = ctx.player as unknown as EventEmitter;
   player.emit('stopped', null);
@@ -1351,7 +1354,6 @@ test('player stopped dispatches outputs before patch', () => {
 
 test('player position forces radio time/duration to zero', () => {
   const { coordinator, ctx, patches } = createHarness();
-  coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
   ctx.state.audiopath = 'tunein:station:abc';
   ctx.state.audiotype = 1 as any;
   ctx.state.time = 5;
@@ -1367,7 +1369,6 @@ test('player position forces radio time/duration to zero', () => {
 
 test('player position throttles identical updates', () => {
   const { coordinator, ctx, patches } = createHarness();
-  coordinator.setupPlayerListeners(ctx.player as any, ctx.outputs, ctx.id, ctx.name, ctx.sourceMac);
   ctx.state.audiopath = 'library://track/one';
   ctx.state.duration = 100;
   const now = Date.now();

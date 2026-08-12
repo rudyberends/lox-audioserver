@@ -408,11 +408,23 @@ function applyVolumeLevel(
       volume_level: target,
     });
   }
-  // Apply locally and push to outputs immediately so repeated relative commands
-  // use the updated level even if input callbacks lag.
+  /*
+   * `player.setVolume` is the whole dispatch: it is a synchronous `emit`, so
+   * `onPlayerVolume` runs before this line returns and already applies the volume
+   * patch and pushes to `ctx.outputs` — the very same array the listener closed
+   * over. Dispatching again here sent every volume change to every output twice,
+   * which on a sendspin client meant two encrypted round trips and two mixer
+   * writes per change.
+   *
+   * The follow-up patch is only needed when there is something the listener's
+   * volume-only patch cannot carry — the mute flag. For a plain volume change it
+   * was a second patch of a value already applied, and so a second state
+   * notification to every consumer.
+   */
   ctx.player.setVolume(target);
-  coordinator.applyPatch(zoneId, { volume: target, ...extraPatch });
-  coordinator.dispatchVolume(ctx, ctx.outputs, target);
+  if (extraPatch && Object.keys(extraPatch).length > 0) {
+    coordinator.applyPatch(zoneId, { volume: target, ...extraPatch });
+  }
 }
 
 function handleQueueStep(

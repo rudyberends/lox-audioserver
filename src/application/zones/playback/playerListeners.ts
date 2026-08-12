@@ -139,9 +139,16 @@ function onPlayerStarted(
     const volume = isFreshStart
       ? getZoneDefaultVolume(ctx.config)
       : clampVolumeForZone(ctx.config, ctx.state.volume);
-    if (isFreshStart) {
-      ctx.player.setVolume(volume);
-    }
+    /*
+     * No `player.setVolume` here.
+     *
+     * The real player's `setVolume` only emits, and `onPlayerVolume` answers that by
+     * patching the volume and dispatching to outputs — which is exactly what the two
+     * calls below already do, and they carry the started patch besides. On a fresh
+     * start it therefore only bought a second dispatch to every output and a second
+     * state patch. The pause-reset timer is already cleared unconditionally above,
+     * so the listener's other side effect is not missed either.
+     */
     // [#287] Trace the start-volume decision so we can see, on Spotify Connect
     // activation, whether the zone default is applied and dispatched to outputs.
     log.debug('player started: start-volume decision', {
@@ -188,8 +195,14 @@ function onPlayerResumed(
     const patch = buildResumedPatch({ ctx, audioHelpers: coordinator.audioHelpers });
     if (!ctx.alert && hadPendingReset) {
       const defaultVolume = getZoneDefaultVolume(ctx.config);
+      /*
+       * `setVolume` dispatches on its own (synchronous emit -> onPlayerVolume), so
+       * the follow-up dispatch that used to sit here was a duplicate. It also sent
+       * the raw configured default rather than the clamped value, so a zone whose
+       * default sits above its own `maxVolume` had the out-of-policy level land on
+       * its outputs as the last word.
+       */
       ctx.player.setVolume(defaultVolume);
-      coordinator.dispatchVolume(ctx, outputs, defaultVolume);
       coordinator.applyPatch(zoneId, { ...patch, volume: defaultVolume });
     } else {
       coordinator.applyPatch(zoneId, patch);

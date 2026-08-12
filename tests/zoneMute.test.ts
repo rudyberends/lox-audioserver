@@ -3,7 +3,7 @@ import { test } from './testHarness';
 import { handleZoneCommand } from '../src/application/zones/playback/commandHandlers';
 import { mapZoneCommandToIntent } from '../src/application/zones/playback/commandIntents';
 import { applyZonePatch } from '../src/domain/zones/reducer';
-import { buildInitialState } from '../src/application/zones/helpers/stateHelpers';
+import { buildInitialState, clampVolumeForZone } from '../src/application/zones/helpers/stateHelpers';
 import { parseMqttCommand } from '../src/domain/server/mqttCommands';
 import type { ZoneContext } from '../src/application/zones/internal/zoneTypes';
 import type { ZoneState } from '../src/domain/zones/zoneState';
@@ -43,7 +43,21 @@ function harness(overrides: Partial<ZoneState> = {}, config: ZoneConfig = zoneCo
     outputs: [],
     queue: { items: [], shuffle: false, repeat: 0, currentIndex: 0, authority: 'local' },
     queueController: { current: () => null, currentIndex: () => -1 },
-    player: { setVolume: (level: number) => playerVolumes.push(level) },
+    /*
+     * Stands in for the real ZonePlayer, whose `setVolume` is an `emit` that
+     * `onPlayerVolume` turns into a state patch plus an output dispatch. This
+     * harness exercises `handleZoneCommand` in isolation, without the coordinator's
+     * listener wiring, so the fake has to carry those consequences itself —
+     * otherwise the volume that a command produces reaches nothing here.
+     */
+    player: {
+      setVolume: (level: number) => {
+        playerVolumes.push(level);
+        const clamped = clampVolumeForZone(config, level);
+        coordinator.applyPatch(3, { volume: clamped });
+        coordinator.dispatchVolume(ctx, ctx.outputs, clamped);
+      },
+    },
   } as unknown as ZoneContext;
 
   const coordinator = {
