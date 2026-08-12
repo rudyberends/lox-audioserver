@@ -103,6 +103,7 @@ test('SendspinLineInService resolveFormat selects first valid pcm format from ad
   const originalSendCommand = sendspinCore.sendServerCommand;
   try {
     (sendspinCore as any).getSessionByClientId = () => ({
+      getSourceStreamFormat: () => null,
       getSourceSupport: () => ({
         supported_formats: [
           { codec: 'aac', sample_rate: 48000, channels: 2, bit_depth: 16 },
@@ -140,6 +141,7 @@ test('SendspinLineInService drops additional chunks while stream is backpressure
   const originalSendCommand = sendspinCore.sendServerCommand;
   try {
     (sendspinCore as any).getSessionByClientId = () => ({
+      getSourceStreamFormat: () => null,
       getSourceSupport: () => ({
         supported_formats: [{ codec: 'pcm', sample_rate: 48000, channels: 2, bit_depth: 16 }],
       }),
@@ -178,6 +180,7 @@ test('SendspinLineInService getControlSupport filters unknown control values', (
   const originalSendCommand = sendspinCore.sendServerCommand;
   try {
     (sendspinCore as any).getSessionByClientId = () => ({
+      getSourceStreamFormat: () => null,
       getSourceSupport: () => ({
         controls: [SourceControl.PLAY, 999],
       }),

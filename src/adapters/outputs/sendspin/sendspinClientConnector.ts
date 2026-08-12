@@ -2,7 +2,7 @@ import type { IncomingMessage } from 'node:http';
 import WebSocket from 'ws';
 import type { RawData } from 'ws';
 import { createLogger } from '@/shared/logging/logger';
-import { ConnectionReason, sendspinCore } from '@sonn-audio/node-sendspin';
+import { ConnectionReason, sendspinCore, TERMINAL_GOODBYE_REASONS } from '@sonn-audio/node-sendspin';
 import type { MdnsBrowser, MdnsPort, MdnsRegistration, MdnsServiceRecord } from '@/ports/MdnsPort';
 
 interface Endpoint {
@@ -600,11 +600,18 @@ export class SendspinClientConnector {
     return reason.slice(prefix.length).trim() || null;
   }
 
+  /**
+   * Whether a goodbye means reconnecting is pointless.
+   *
+   * The client is telling us it will not accept this server as it stands, so a retry
+   * just earns the same refusal. `restart` is deliberately not in the list — a
+   * restarting client is expected back.
+   */
   private shouldSuppressRetry(reason: string | null): boolean {
     if (!reason) {
       return false;
     }
-    return reason === 'another_server' || reason === 'shutdown' || reason === 'user_request';
+    return (TERMINAL_GOODBYE_REASONS as readonly string[]).includes(reason);
   }
 
   private maybeFallbackDirectPort(endpoint: Endpoint): Endpoint | null {

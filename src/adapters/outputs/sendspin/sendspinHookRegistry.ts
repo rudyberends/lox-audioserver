@@ -41,6 +41,8 @@ export class SendspinHookRegistry implements SendspinHookRegistryPort {
       onSourceState: (...args) => this.dispatch(clientId, 'onSourceState', ...args),
       onSourceCommand: (...args) => this.dispatch(clientId, 'onSourceCommand', ...args),
       onSourceAudio: (...args) => this.dispatch(clientId, 'onSourceAudio', ...args),
+      onSourceStreamStart: (...args) => this.dispatch(clientId, 'onSourceStreamStart', ...args),
+      onSourceStreamEnd: (...args) => this.dispatch(clientId, 'onSourceStreamEnd', ...args),
       onIdentified: (...args) => this.dispatch(clientId, 'onIdentified', ...args),
       onDisconnected: (...args) => this.dispatch(clientId, 'onDisconnected', ...args),
       onFormatChanged: (...args) => this.dispatch(clientId, 'onFormatChanged', ...args),

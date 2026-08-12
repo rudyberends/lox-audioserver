@@ -15,6 +15,7 @@ import {
   RepeatMode,
   sendspinCore,
   serverNowUs,
+  type ControllerStatePayload,
   type PlayerFormat,
   type PlayerFormatWithBitDepth,
   type SendspinGroupCommand,
@@ -118,6 +119,19 @@ function normalizeSendspinLatencyMs(value: unknown): number {
   const num = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
   if (!Number.isFinite(num)) return 0;
   return Math.max(0, Math.min(SENDSPIN_MAX_STATIC_DELAY_MS, Math.round(num)));
+}
+
+/**
+ * Translate the zone's `plrepeat` to the sendspin repeat mode.
+ *
+ * The engine's numbering is 1 = all, 3 = one, anything else off. Shared by the
+ * metadata and controller objects, which have to agree: they describe the same
+ * group, and the spec now requires the value in the controller state as well.
+ */
+function resolveRepeatMode(plrepeat: number | undefined): RepeatMode {
+  if (plrepeat === 3) return RepeatMode.ONE;
+  if (plrepeat === 1) return RepeatMode.ALL;
+  return RepeatMode.OFF;
 }
 
 export type SendspinMetadataPayload = Parameters<SendspinSession['sendMetadata']>[0];
@@ -952,7 +966,7 @@ export class SendspinOutput implements ZoneOutput {
     this.sendControllerState();
   }
 
-  private handleGroupCommand(command: { command: string; volume?: number; mute?: boolean }): void {
+  private handleGroupCommand(command: SendspinGroupCommand): void {
     const cmd = command.command;
     this.log.info('Sendspin controller command', { zoneId: this.zoneId, command: cmd, volume: command.volume, mute: command.mute });
     switch (cmd) {
@@ -1017,9 +1031,49 @@ export class SendspinOutput implements ZoneOutput {
       case 'switch':
         this.handleSwitchCommand();
         break;
+      case 'seek':
+        if (typeof command.positionMs === 'number') {
+          this.seekToMs(command.positionMs);
+        }
+        break;
+      case 'seek_relative':
+        if (typeof command.offsetMs === 'number') {
+          this.seekToMs(this.currentPositionMs() + command.offsetMs);
+        }
+        break;
       default:
         this.log.debug('Unsupported Sendspin controller command', { cmd });
     }
+  }
+
+  /** Where playback currently stands, in ms — the anchor a relative seek moves from. */
+  private currentPositionMs(): number {
+    const session = this.ports.audioManager.getSession(this.zoneId);
+    const zoneState = this.ports.zoneManager.getZoneState(this.zoneId);
+    const seconds = session?.elapsed ?? zoneState?.time ?? 0;
+    return Math.max(0, Math.round(seconds * 1000));
+  }
+
+  /**
+   * Seek to an absolute position, clamped into the track.
+   *
+   * The engine's own seek vocabulary is `position` in whole seconds, so this is
+   * where sendspin's milliseconds are converted. Clamping matters for
+   * `seek_relative`, where an offset can legitimately point past either end.
+   */
+  private seekToMs(positionMs: number): void {
+    const zoneState = this.ports.zoneManager.getZoneState(this.zoneId);
+    const maxMs = this.resolveSeekMaxMs(zoneState);
+    if (maxMs === null) {
+      this.log.debug('Sendspin seek ignored; nothing seekable playing', { zoneId: this.zoneId });
+      return;
+    }
+    const clampedMs = Math.max(0, Math.min(maxMs, Math.round(positionMs)));
+    this.ports.zoneManager.handleCommand(
+      this.zoneId,
+      'position',
+      String(Math.round(clampedMs / 1000)),
+    );
   }
 
   private handleSwitchCommand(): void {
@@ -1951,16 +2005,37 @@ export class SendspinOutput implements ZoneOutput {
     if (typeof zoneState?.plshuffle === 'number') {
       supportedCommands.push(MediaCommand.SHUFFLE, MediaCommand.UNSHUFFLE);
     }
-    sendspinCore.setClientControllerState(this.activeClientId(), {
+    /*
+     * Seek is only offered for a track with a known extent.
+     *
+     * A live stream has `duration` 0 or absent, and `seek_max_ms` is what tells the
+     * client where the bar ends — offering `seek` without it would put a scrubber on
+     * something that cannot be scrubbed.
+     */
+    const seekMaxMs = this.resolveSeekMaxMs(zoneState);
+    if (seekMaxMs !== null) {
+      supportedCommands.push(MediaCommand.SEEK, MediaCommand.SEEK_RELATIVE);
+    }
+    const controllerState: ControllerStatePayload = {
       supported_commands: supportedCommands,
       volume: vol,
       muted: false,
-    });
-    this.ports.sendspinGroup.broadcastControllerState(this.zoneId, {
-      supported_commands: supportedCommands,
-      volume: vol,
-      muted: false,
-    });
+      repeat: resolveRepeatMode(zoneState?.plrepeat),
+      shuffle: zoneState?.plshuffle === 1,
+      ...(seekMaxMs !== null ? { seek_max_ms: seekMaxMs } : {}),
+    };
+    sendspinCore.setClientControllerState(this.activeClientId(), controllerState);
+    this.ports.sendspinGroup.broadcastControllerState(this.zoneId, controllerState);
+  }
+
+  /** Track extent in ms for `seek_max_ms`, or null when nothing seekable is playing. */
+  private resolveSeekMaxMs(zoneState: { duration?: number | null } | null | undefined): number | null {
+    const session = this.ports.audioManager.getSession(this.zoneId);
+    const durationSeconds = session?.metadata?.duration ?? zoneState?.duration ?? null;
+    if (typeof durationSeconds !== 'number' || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+      return null;
+    }
+    return Math.round(durationSeconds * 1000);
   }
 
   private startProgressUpdates(): void {
@@ -2146,12 +2221,7 @@ export class SendspinOutput implements ZoneOutput {
         : Number.isFinite(Number(meta?.trackId))
           ? Number(meta?.trackId)
           : null;
-    const repeatMode: RepeatMode | null =
-      zoneState?.plrepeat === 3
-        ? RepeatMode.ONE
-        : zoneState?.plrepeat === 1
-          ? RepeatMode.ALL
-          : RepeatMode.OFF;
+    const repeatMode = resolveRepeatMode(zoneState?.plrepeat);
     const shuffleMode: boolean | null =
       typeof zoneState?.plshuffle === 'number' ? zoneState.plshuffle === 1 : null;
 

@@ -4,6 +4,7 @@ import type { LineInInputConfig } from '@/domain/config/types';
 import type { LineInIngestFormat, LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import { pcmFormatFromBitDepth } from '@/ports/types/audioFormat';
 import { sendspinCore, SourceCommand, SourceControl } from '@sonn-audio/node-sendspin';
+import type { SendspinSourceStreamFormat } from '@sonn-audio/node-sendspin';
 import type { SendspinHookRegistryPort } from '@/adapters/outputs/sendspin/sendspinHookRegistry';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { LineInControlCommand } from '@/ports/InputsPort';
@@ -190,6 +191,23 @@ export class SendspinLineInService {
           this.stopActiveSource(clientId, `sendspin-${state.state}`);
         }
       },
+      /*
+       * A conformant source states its format here, not in its hello, so this is the
+       * first and only place we learn it. Restart the ingest rather than patch it:
+       * a client may announce a new format mid-session, and downstream has already
+       * been handed a stream shaped for the old one.
+       */
+      onSourceStreamStart: (_session, format) => {
+        this.log.info('sendspin line-in stream announced', { clientId, format });
+        this.stopActiveSource(clientId, 'sendspin-format-announced');
+        const mapping = this.mappings.get(clientId);
+        if (mapping) {
+          this.ensureActiveSource(clientId, mapping.inputId);
+        }
+      },
+      onSourceStreamEnd: () => {
+        this.stopActiveSource(clientId, 'sendspin-stream-ended');
+      },
       onDisconnected: () => {
         this.stopActiveSource(clientId, 'sendspin-disconnected');
       },
@@ -247,9 +265,17 @@ export class SendspinLineInService {
     if (!session) {
       return null;
     }
-    const format = this.resolveFormat(session.getSourceSupport() as unknown as {
-      supported_formats?: Array<{ codec?: string; sample_rate: number; channels: number; bit_depth: number }>;
-    } | null);
+    /*
+     * The announced stream format wins over anything advertised in the hello.
+     * `client_stream/start` describes the stream that is actually running, while
+     * `supported_formats` is a vendor extension listing what the input *could*
+     * deliver — a fallback for clients that never send the spec message.
+     */
+    const format =
+      this.formatFromStream(session.getSourceStreamFormat())
+      ?? this.resolveFormat(session.getSourceSupport() as unknown as {
+        supported_formats?: Array<{ codec?: string; sample_rate: number; channels: number; bit_depth: number }>;
+      } | null);
     const stream = new PassThrough({ highWaterMark: 1024 * 64 });
     this.registry.start(inputId, stream, { format: format ?? undefined });
     const active: ActiveSource = { inputId, stream, format: format ?? undefined };
@@ -276,11 +302,27 @@ export class SendspinLineInService {
     sendspinCore.sendServerCommand(clientId, { source: { command } });
   }
 
+  /**
+   * Send a transport control to the source device.
+   *
+   * `server/command.source.control` is a vendor extension: the spec object carries
+   * only `command: start|stop`, so a control-only payload has no `command` at all and
+   * a conformant client rejects the whole message. It therefore goes out only to a
+   * client that explicitly advertised `controls` — silence is the safe default here,
+   * not a best-effort send.
+   */
   private sendSourceControl(clientId: string, command: LineInControlCommand): void {
     const session = sendspinCore.getSessionByClientId(clientId);
     const control = SOURCE_CONTROL_MAP[command];
     const supported = session?.getSourceSupport()?.controls ?? null;
-    if (supported && supported.length && !supported.includes(control)) {
+    if (!supported || !supported.length) {
+      this.log.debug('sendspin line-in control skipped; client advertised no controls', {
+        clientId,
+        command,
+      });
+      return;
+    }
+    if (!supported.includes(control)) {
       this.log.debug('sendspin line-in control skipped; unsupported by client', {
         clientId,
         command,
@@ -405,6 +447,22 @@ export class SendspinLineInService {
       }
     }
     return null;
+  }
+
+  /** Turn a `client_stream/start` format into an ingest format, or null if we can't take it. */
+  private formatFromStream(format: SendspinSourceStreamFormat | null): LineInIngestFormat | null {
+    if (!format || !this.isPcmCodec(format.codec)) {
+      return null;
+    }
+    const { sampleRate, channels, bitDepth } = format;
+    if (!Number.isFinite(sampleRate) || sampleRate <= 0) return null;
+    if (!Number.isFinite(channels) || channels <= 0) return null;
+    if (![16, 24, 32].includes(bitDepth)) {
+      this.log.warn('sendspin line-in announced an unsupported bit depth', { bitDepth });
+      return null;
+    }
+    const pcmFormat = pcmFormatFromBitDepth(bitDepth as 16 | 24 | 32) as LineInIngestFormat['pcmFormat'];
+    return { sampleRate, channels, bitDepth, pcmFormat };
   }
 
   private resolveFormat(

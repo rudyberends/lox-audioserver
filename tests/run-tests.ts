@@ -28,6 +28,7 @@ import './engine/pcmDsp.test';
 import './engine/engineDspSession.test';
 import './bitPerfectPlayback.test';
 import './sendspinFormatReuse.test';
+import './sendspinProtocol.test';
 import './flacFrameSplitter.test';
 import './engine/pipeSourceAdapter.test';
 import './playbackRefactorSeams.test';
