@@ -176,9 +176,9 @@ test('selecting a favorite starts it on the zone', async () => {
   assert.deepEqual(played, [{ zoneId: 12, audiopath: 'spotify:playlist:42', type: 'favorite' }]);
 });
 
-test('standby key 0x30 powers the zone off immediately', async () => {
+test('the standby key powers the zone off immediately', async () => {
   const { handler, commands, powerSignals } = createHarness();
-  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0x30' });
+  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 116 });
   assert.equal(res.statusCode, 200);
   assert.deepEqual(powerSignals, [{ zoneId: 12, signal: 0 }]);
   assert.deepEqual(commands, [{ zoneId: 12, command: 'off' }]);
@@ -359,7 +359,7 @@ test('a burst of step presses advances the queue once', async () => {
   // The remote sends one press several times over; each would skip another track,
   // so six packets must not land six tracks away.
   for (let i = 0; i < 6; i += 1) {
-    const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb5' });
+    const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 163 });
     assert.equal(res.statusCode, 200, 'a folded press is still a success, not a failure');
   }
   assert.deepEqual(commands, [{ zoneId: 12, command: 'next' }]);
@@ -367,26 +367,25 @@ test('a burst of step presses advances the queue once', async () => {
 
 test('a suppressed press says so, so the bridge does not retry it', async () => {
   const { handler } = createHarness();
-  const first = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb5' });
-  const second = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb5' });
+  const first = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 163 });
+  const second = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 163 });
   assert.equal(first.json().coalesced, undefined);
   assert.equal(second.json().coalesced, true);
 });
 
-test('the alias code bursts together with the code it mirrors', async () => {
+test('a repeated skip within the burst window counts once', async () => {
   const { handler, commands } = createHarness();
-  // 0x9c and 0xb5 are the same intent from different controls, so a remote sending
-  // both must not count as two deliberate presses.
-  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb5' });
-  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0x9c' });
+  // The remote repeats a held key; two presses that close together are one intent.
+  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 163 });
+  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 163 });
   assert.deepEqual(commands, [{ zoneId: 12, command: 'next' }]);
 });
 
 test('previous is not suppressed by a preceding next', async () => {
   const { handler, commands } = createHarness();
   // Pressing back straight after forward is a correction, not a burst.
-  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb5' });
-  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb6' });
+  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 163 });
+  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 165 });
   assert.deepEqual(commands, [
     { zoneId: 12, command: 'next' },
     { zoneId: 12, command: 'previous' },
@@ -400,8 +399,8 @@ test('two zones stepping at once do not suppress each other', async () => {
     name: 'Kitchen',
     inputs: { beoremote: { enabled: true } },
   });
-  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb5' });
-  await call(handler, 'POST', '/api/beoremote/zones/13/key', { code: '0xb5' });
+  await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 163 });
+  await call(handler, 'POST', '/api/beoremote/zones/13/key', { code: 163 });
   assert.deepEqual(commands, [
     { zoneId: 12, command: 'next' },
     { zoneId: 13, command: 'next' },
@@ -412,7 +411,7 @@ test('play and pause are never suppressed — a repeat there is harmless', async
   const { handler, commands } = createHarness();
   // Unlike a skip, a second play or pause is a no-op, so folding them would only
   // risk dropping the press that mattered.
-  for (const code of ['0xb0', '0xb0', '0xb1', '0xb1']) {
+  for (const code of [207, 207, 119, 119]) {
     await call(handler, 'POST', '/api/beoremote/zones/12/key', { code });
   }
   assert.deepEqual(commands.map((c) => c.command), ['play', 'play', 'pause', 'pause']);
@@ -420,7 +419,7 @@ test('play and pause are never suppressed — a repeat there is harmless', async
 
 test('a transport key goes through the existing routing, not around it', async () => {
   const { handler, commands } = createHarness();
-  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb5' });
+  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 163 });
   assert.equal(res.statusCode, 200);
   // handleCommand is what already decides line-in-bridge vs local queue; the key
   // API must not duplicate that decision.
@@ -429,14 +428,14 @@ test('a transport key goes through the existing routing, not around it', async (
 
 test('a digit key selects a disc on the line-in the zone is playing', async () => {
   const { handler, sentCommands } = createHarness({ audiopath: 'linein://in-1' });
-  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0x08' });
+  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 263 });
   assert.equal(res.statusCode, 200);
   assert.deepEqual(sentCommands, [{ inputId: 'in-1', command: 'disc', args: ['3'] }]);
 });
 
 test('a digit key on a network source is refused rather than sent nowhere', async () => {
   const { handler, sentCommands } = createHarness({ audiopath: 'spotify:track:x' });
-  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0x08' });
+  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 263 });
   assert.equal(res.statusCode, 409);
   assert.equal(res.json().error, 'not-a-line-in-source');
   assert.deepEqual(sentCommands, []);
@@ -444,14 +443,14 @@ test('a digit key on a network source is refused rather than sent nowhere', asyn
 
 test('a colour key starts the matching favorite', async () => {
   const { handler, played } = createHarness();
-  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0x01' });
+  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 257 });
   assert.equal(res.statusCode, 200);
   assert.deepEqual(played, [{ zoneId: 12, audiopath: 'spotify:playlist:42', type: 'favorite' }]);
 });
 
 test('a colour key for an empty favorite slot reports it instead of failing silently', async () => {
   const { handler, played } = createHarness();
-  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0x04' });
+  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 259 });
   assert.equal(res.statusCode, 409);
   assert.equal(res.json().error, 'favorite-empty');
   assert.deepEqual(played, []);
@@ -459,22 +458,22 @@ test('a colour key for an empty favorite slot reports it instead of failing sile
 
 test('an unassigned code answers 404 so the bridge can log it', async () => {
   const { handler } = createHarness();
-  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0x7f' });
+  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 127 });
   assert.equal(res.statusCode, 404);
   assert.equal(res.json().error, 'key-not-assigned');
-  assert.equal(res.json().code, '0x7f');
+  assert.equal(res.json().code, '127');
 });
 
 test('a known-but-unbound key names the button in its 404', async () => {
   const { handler } = createHarness();
-  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0x41' });
+  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 402 });
   assert.equal(res.statusCode, 404);
-  assert.equal(res.json().button, 'nav-41');
+  assert.equal(res.json().button, 'step-up');
 });
 
 test('a key needs no revision — nothing can shift under a button', async () => {
   const { handler, commands } = createHarness();
-  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: '0xb0' });
+  const res = await call(handler, 'POST', '/api/beoremote/zones/12/key', { code: 207 });
   assert.equal(res.statusCode, 200);
   assert.deepEqual(commands, [{ zoneId: 12, command: 'play' }]);
 });

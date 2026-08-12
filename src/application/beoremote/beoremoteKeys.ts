@@ -1,18 +1,19 @@
 /**
  * What each Beoremote One key code means.
  *
- * The bridge forwards raw HID codes and names nothing, because naming there would be
- * a filter: a key it had not seen would be dropped before reaching a server that may
- * well know it. Which code is which button is a property of the remote's hardware, so
- * the table lives here, once, rather than in every bridge.
+ * These are Linux input codes, as the kernel reports them: the remote is an ordinary
+ * HID peripheral, and the client forwards what it reads from `/dev/input/event*`
+ * without naming or filtering anything. A key it had not seen would otherwise be
+ * dropped before reaching a server that may well know it. Which code is which button
+ * is a property of the remote's hardware, so the table lives here, once.
  *
- * The codes were measured one by one and are NOT regular — do not derive them.
- * Yellow and blue are the reverse of the order you would expect, and the dot keys are
- * not contiguous (0x12, 0x14, 0x0f, 0x11).
+ * The codes were measured one by one on a real remote and are NOT regular — do not
+ * derive them. Yellow has the *lowest* of the four colour codes, and the dots run
+ * 273, 275, 270, 272.
  *
- * Volume is deliberately absent. It stays on the player: it arrives in bursts, so it
- * would be six HTTP calls where one D-Bus property set does, and it has to keep
- * working while the server is briefly away.
+ * Volume is deliberately absent. It stays on the player: it arrives in bursts of six
+ * presses, so it would be six HTTP calls where one local step does, and it has to
+ * keep working while the server is briefly away.
  */
 
 import type { BeoremoteKeyBinding } from '@/domain/config/types';
@@ -57,16 +58,17 @@ export type AssignableButton = (typeof ASSIGNABLE_BUTTONS)[number];
  * configurable — only what a button *does* is.
  */
 const BUTTON_CODES: Record<AssignableButton, number> = {
-  red: 0x01,
-  green: 0x02,
-  // Not a typo and not a mistake in the remote: yellow is 0x03, blue is 0x04,
-  // the reverse of the order the buttons are printed in.
-  yellow: 0x03,
-  blue: 0x04,
-  dot1: 0x12,
-  dot2: 0x14,
-  dot3: 0x0f,
-  dot4: 0x11,
+  // BTN_1, BTN_2, BTN_0, BTN_3 — measured in that order by pressing red, green,
+  // yellow, blue. Yellow really is the lowest; the remote does not number its
+  // colours the way it prints them.
+  red: 257,
+  green: 258,
+  yellow: 256,
+  blue: 259,
+  dot1: 273,
+  dot2: 275,
+  dot3: 270,
+  dot4: 272,
 };
 
 const BUTTON_BY_CODE = new Map<number, AssignableButton>(
@@ -89,15 +91,17 @@ export function defaultFavoriteSlot(button: AssignableButton): number {
 
 /**
  * Codes seen in the wild but not yet identified. Listed so they answer as a known
- * button rather than a 404, which keeps the bridge's log about genuinely new keys.
- * 0x41–0x45 is almost certainly the navigation ring.
+ * button rather than a 404, which keeps the client's log about genuinely new keys.
  */
 const OBSERVED_UNASSIGNED: Record<number, string> = {
-  0x41: 'nav-41',
-  0x42: 'nav-42',
-  0x43: 'nav-43',
-  0x44: 'nav-44',
-  0x45: 'nav-45',
+  402: 'step-up',
+  403: 'step-down',
+  // The navigation ring, by the names the kernel gives them.
+  103: 'nav-up',
+  108: 'nav-down',
+  105: 'nav-left',
+  106: 'nav-right',
+  353: 'nav-select',
 };
 
 /**
@@ -105,34 +109,28 @@ const OBSERVED_UNASSIGNED: Record<number, string> = {
  * they are per-zone configurable and resolved through {@link resolveKeyAction}.
  */
 const KEY_ACTIONS: Record<number, BeoremoteKeyAction> = {
-  // Standby / power off
-  0x30: { kind: 'standby' },
+  // KEY_POWER. The client grabs the input devices precisely so this one does not also
+  // reach logind, which would switch the machine off.
+  116: { kind: 'standby' },
 
-  // Transport
-  0xb0: { kind: 'transport', command: 'play' },
-  0xb1: { kind: 'transport', command: 'pause' },
-  0xb5: { kind: 'transport', command: 'next' },
-  0xb6: { kind: 'transport', command: 'previous' },
-  // The remote emits a second pair for step-forward/back — a different physical
-  // control reporting the same intent. Aliases rather than replacements: both pairs
-  // are live, because a remote may send either.
-  0x9c: { kind: 'transport', command: 'next' },
-  0x9d: { kind: 'transport', command: 'previous' },
+  // Transport: KEY_PLAY, KEY_PAUSE, KEY_NEXTSONG, KEY_PREVIOUSSONG.
+  207: { kind: 'transport', command: 'play' },
+  119: { kind: 'transport', command: 'pause' },
+  163: { kind: 'transport', command: 'next' },
+  165: { kind: 'transport', command: 'previous' },
 
-  // Digits 1-6 → disc select on a changer.
-  0x06: { kind: 'disc', disc: 1 },
-  0x07: { kind: 'disc', disc: 2 },
-  0x08: { kind: 'disc', disc: 3 },
-  0x09: { kind: 'disc', disc: 4 },
-  0x0a: { kind: 'disc', disc: 5 },
-  0x0b: { kind: 'disc', disc: 6 },
-
-  0x10: { kind: 'unassigned', label: 'menu' },
+  // Digits 1-6 → disc select on a changer. BTN_5 upwards, not KEY_1.
+  261: { kind: 'disc', disc: 1 },
+  262: { kind: 'disc', disc: 2 },
+  263: { kind: 'disc', disc: 3 },
+  264: { kind: 'disc', disc: 4 },
+  265: { kind: 'disc', disc: 5 },
+  266: { kind: 'disc', disc: 6 },
 };
 
 /**
- * Parse a code as sent by the bridge. Accepts `"0xb5"`, `"b5"` or a plain number, so
- * a bridge does not have to agree with us on formatting.
+ * Parse a code as sent by the client: a plain kernel key code. A hex string is still
+ * accepted so a code copied out of a log or a bug report can be pasted in as-is.
  */
 export function parseKeyCode(raw: unknown): number | null {
   if (typeof raw === 'number') {
@@ -151,7 +149,7 @@ export function parseKeyCode(raw: unknown): number | null {
 
 /** Format a code the way the table and the logs spell it. */
 export function formatKeyCode(code: number): string {
-  return `0x${code.toString(16).padStart(2, '0')}`;
+  return String(code);
 }
 
 /**
