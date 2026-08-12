@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
+import { WebSocketServer } from 'ws';
 import { test } from './testHarness';
 import {
   Identity,
   NoiseSession,
+  SendspinClient,
+  sendspinCore,
+  PskCategory,
+  AudioCodec,
+  Roles,
   SendspinSession,
   SENTINEL_RESOLVED,
   NoiseTransport,
@@ -258,6 +264,62 @@ test('noise: the server greets first on an encrypted connection', async () => {
   assert.equal(hello.type, 'server/hello');
   // Identity was settled by the handshake, so the hello shrinks to just the name.
   assert.deepEqual(hello.payload, { name: 'Greeting Server' });
+});
+
+test('noise: client and server bring each other up over a real socket', async () => {
+  /*
+   * Both halves of the module against each other over a WebSocket, encrypted.
+   *
+   * The pairwise crypto is covered above and the wire format is pinned by the
+   * interop harness against the reference Python library; what this adds is that
+   * the two drivers agree on *sequence* — the reversed hello order, and that the
+   * client takes the server id from the handshake rather than from a hello field
+   * that no longer carries it.
+   */
+  const serverIdentity = Identity.generate();
+  const clientIdentity = Identity.generate();
+  sendspinCore.configureServer({ name: 'Loopback Server' });
+  sendspinCore.enableEncryption(serverIdentity);
+
+  const wss = new WebSocketServer({ port: 0, path: '/sendspin' });
+  await new Promise<void>((resolve) => wss.once('listening', () => resolve()));
+  wss.on('connection', (ws, req) => sendspinCore.handleConnection(ws, req));
+  const { port } = wss.address() as { port: number };
+
+  const client = new SendspinClient('ignored-under-encryption', 'Loopback Client', [Roles.PLAYER], {
+    playerSupport: {
+      supported_formats: [
+        { codec: AudioCodec.PCM, channels: 2, sample_rate: 48000, bit_depth: 16 },
+      ],
+      buffer_capacity: 256 * 1024,
+      supported_commands: [],
+    },
+    encryption: { identity: clientIdentity },
+  });
+
+  try {
+    await client.connect(`ws://127.0.0.1:${port}/sendspin`, { timeoutMs: 8000 });
+    assert.equal(client.isEncrypted, true, 'the connection should be encrypted');
+    assert.equal(client.admittedWith, PskCategory.SENTINEL, 'unpaired admission uses the Sentinel PSK');
+    assert.equal(client.info?.name, 'Loopback Server');
+    // Identity comes from the handshake, not from the hello.
+    assert.equal(client.info?.serverId, serverIdentity.peerId);
+    assert.equal(client.encryptedServerId, serverIdentity.peerId);
+
+    // The server authenticated the client by its key, not by the string it passed.
+    const known = sendspinCore.listClients().map((entry) => entry.clientId);
+    assert.ok(
+      known.includes(clientIdentity.peerId),
+      `server should know the client by its key, got ${JSON.stringify(known)}`,
+    );
+    assert.ok(
+      !known.includes('ignored-under-encryption'),
+      'the self-declared id must not be accepted under encryption',
+    );
+  } finally {
+    await client.disconnect();
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+  }
 });
 
 test('noise: a stray non-fragment frame mid-reassembly is refused', () => {
