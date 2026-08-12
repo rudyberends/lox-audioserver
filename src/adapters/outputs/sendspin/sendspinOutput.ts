@@ -1,5 +1,3 @@
-import { request as httpRequest } from 'node:http';
-import { request as httpsRequest } from 'node:https';
 import { Jimp, JimpMime } from 'jimp';
 import { createLogger } from '@/shared/logging/logger';
 import type { PlaybackSession } from '@/application/playback/audioManager';
@@ -34,7 +32,7 @@ import type { PlaybackSource } from '@/ports/EngineTypes';
 import { probeFileFormat, type ProbedSourceFormat } from '@/engine/sourceProbe';
 import { FlacFrameSplitter } from '@/engine/flacFrameSplitter';
 import { SendspinClientSender } from '@/adapters/outputs/sendspin/sendspinClientSender';
-import { derivePalette } from '@/adapters/outputs/sendspin/artworkPalette';
+import { artworkService } from '@/application/artwork/artworkService';
 import {
   getStoredClientFormat,
   rememberClientFormat,
@@ -2300,7 +2298,9 @@ export class SendspinOutput implements ZoneOutput {
     // Clear every channel: stream/start re-arms the client's artwork stream, then a
     // header-only frame per channel collapses to "no image" on the receiver. The
     // color@v1 palette is derived from the same artwork, so clear it in lockstep
-    // (no-op for clients that did not negotiate the color role).
+    // (no-op for clients that did not negotiate the color role). The zone's own
+    // `artworkColors` is not touched here — it follows `coverurl` for every zone,
+    // Sendspin or not, and clearing it from one client's stream would fight that.
     const clearAll = (): void => {
       sendspinCore.sendArtworkStreamStart(clientId, preferredChannels);
       preferredChannels.forEach((_channel, idx) => {
@@ -2314,7 +2314,6 @@ export class SendspinOutput implements ZoneOutput {
         on_dark: null,
         on_light: null,
       });
-      this.ports.zoneManager.applyPatch(this.zoneId, { artworkColors: null });
     };
     try {
       const coverUrl =
@@ -2325,38 +2324,18 @@ export class SendspinOutput implements ZoneOutput {
         clearAll();
         return;
       }
-      // Skip invalid/non-http URLs to avoid noisy errors.
-      try {
-        const parsed = new URL(coverUrl);
-        if (!/^https?:$/.test(parsed.protocol)) {
-          clearAll();
-          return;
-        }
-      } catch {
-        clearAll();
-        return;
-      }
-      const buf = await this.fetchBuffer(coverUrl);
-      if (!buf || buf.length === 0) {
-        clearAll();
-        return;
-      }
       // The artwork@v1 spec has the server deliver each channel an image in the
       // requested format at the requested dimensions, not the raw origin bytes.
       // Decode once, then letterbox + re-encode per channel so clients (which only
-      // decode known formats) always receive something they can render.
-      let source: Awaited<ReturnType<typeof Jimp.read>>;
-      try {
-        source = await Jimp.read(buf);
-      } catch (decodeError) {
-        this.log.debug('Sendspin artwork decode failed', {
-          zoneId: this.zoneId,
-          bytes: buf.length,
-          message: (decodeError as Error).message,
-        });
+      // decode known formats) always receive something they can render. The fetch
+      // and decode are shared with the zone's palette, so the cover is downloaded
+      // once no matter which of the two asks first.
+      const artwork = await artworkService.getImage(coverUrl);
+      if (!artwork) {
         clearAll();
         return;
       }
+      const source = artwork.image;
       sendspinCore.sendArtworkStreamStart(clientId, preferredChannels);
       for (const [idx, channel] of preferredChannels.entries()) {
         if (channel.source === 'none') {
@@ -2366,11 +2345,9 @@ export class SendspinOutput implements ZoneOutput {
         const encoded = await this.encodeArtwork(source, channel);
         sendspinCore.sendArtwork(clientId, idx as 0 | 1 | 2 | 3, encoded);
       }
-      // color@v1: push a palette derived from the same artwork so display
+      // color@v1: push the palette derived from the same artwork so display
       // clients can theme their UI. No-op for clients without the color role.
-      const palette = derivePalette(source);
-      sendspinCore.sendColor(clientId, palette);
-      this.ports.zoneManager.applyPatch(this.zoneId, { artworkColors: palette });
+      sendspinCore.sendColor(clientId, artwork.palette);
     } catch (error) {
       this.log.debug('Sendspin artwork fetch failed', {
         zoneId: this.zoneId,
@@ -2403,45 +2380,6 @@ export class SendspinOutput implements ZoneOutput {
       return canvas.getBuffer(JimpMime.bmp);
     }
     return canvas.getBuffer(JimpMime.jpeg, { quality: 85 });
-  }
-
-  private async fetchBuffer(url: string, redirectsLeft = 5): Promise<Buffer | null> {
-    return new Promise<Buffer | null>((resolve) => {
-      const handler = (res: any) => {
-        const status = res.statusCode ?? 0;
-        // Follow redirects: cover CDNs routinely 30x, and the redirect body is not
-        // an image. Without this the receiver would get HTML/empty bytes.
-        if (status >= 300 && status < 400 && res.headers?.location) {
-          res.resume();
-          if (redirectsLeft <= 0) {
-            resolve(null);
-            return;
-          }
-          let next: string;
-          try {
-            next = new URL(res.headers.location, url).toString();
-          } catch {
-            resolve(null);
-            return;
-          }
-          this.fetchBuffer(next, redirectsLeft - 1).then(resolve, () => resolve(null));
-          return;
-        }
-        if (status < 200 || status >= 300) {
-          res.resume();
-          resolve(null);
-          return;
-        }
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk: Buffer) => chunks.push(chunk));
-        res.on('end', () => resolve(Buffer.concat(chunks)));
-        res.on('error', () => resolve(null));
-      };
-      const client = url.startsWith('https') ? httpsRequest : httpRequest;
-      const req = client(url, handler);
-      req.on('error', () => resolve(null));
-      req.end();
-    });
   }
 
   /** Identifier of the configured Sendspin client. */

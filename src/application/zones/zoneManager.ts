@@ -48,6 +48,8 @@ import {
 } from '@/application/zones/services/powerManager';
 import { SharedPowerGroupManager } from '@/application/zones/services/sharedPowerGroupManager';
 import { ZoneHeartbeatService } from '@/application/zones/services/ZoneHeartbeatService';
+import { ZoneArtworkColorService } from '@/application/artwork/zoneArtworkColorService';
+import { artworkService } from '@/application/artwork/artworkService';
 import { InputSourceConfigurator } from '@/application/zones/services/InputSourceConfigurator';
 import {
   buildInitialState,
@@ -148,6 +150,7 @@ export class ZoneManager {
   private readonly powerManager: PowerManager;
   private readonly sharedPowerGroupManager: SharedPowerGroupManager;
   private readonly heartbeat: ZoneHeartbeatService;
+  private readonly artworkColors: ZoneArtworkColorService;
   private readonly inputConfigurator: InputSourceConfigurator;
   private initialized = false;
   private notifier: NotifierPort;
@@ -235,6 +238,10 @@ export class ZoneManager {
       getState: (zoneId) => this.getState(zoneId),
       applyPatch: (zoneId, patch, force) => this.applyPatch(zoneId, patch, force),
     });
+    this.artworkColors = new ZoneArtworkColorService({
+      getPalette: (coverUrl) => artworkService.getPalette(coverUrl),
+      applyPatch: (zoneId, patch) => this.applyPatch(zoneId, patch),
+    });
     this.stateStore = new ZoneStateStore(this.zoneRepo, {
       isRadioAudiopath: audioHelpers.isRadioAudiopath,
       isLineInAudiopath: audioHelpers.isLineInAudiopath,
@@ -242,6 +249,7 @@ export class ZoneManager {
         this.groupingCoordinator.syncGroupMembersPatch(leaderId, patch, force),
       onStatePatch: (zoneId, patch, nextState) => {
         mixedGroup?.handleStatePatch(zoneId, patch, nextState);
+        this.artworkColors.onStatePatch(zoneId, patch);
         const ctx = this.zoneRepo.get(zoneId);
         if (ctx) {
           this.powerManager.onStatePatch(zoneId, ctx.config, patch, nextState);

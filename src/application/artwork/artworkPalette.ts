@@ -1,10 +1,18 @@
 import { intToRGBA, type Jimp } from 'jimp';
 
 /**
- * Derives a color@v1 palette from album artwork, matching the Sendspin spec's
- * WCAG >=4.5:1 contrast invariants for the background/on pairs. The reference
- * server only validates a palette; computing one from the image is the
- * application's job (same split as the visualizer DSP).
+ * Derives a UI palette from album artwork.
+ *
+ * The shape and the WCAG >=4.5:1 contrast invariant on the background/on pairs come from Sendspin's
+ * `color@v1`, but nothing here is Sendspin's: a palette is a fact about the *cover*, not about a
+ * transport. It changes once per track, it is six colours, and every consumer wants the same six —
+ * a Sendspin display theming its screen, the player, the API, a lighting integration picking a base
+ * hue. So it lives in the application layer and the Sendspin adapter is one caller among several.
+ *
+ * Not to be confused with the audio-reactive side of "colour". That is a *feature* stream at frame
+ * rate (see the analysis service), and it deliberately carries no colours at all — the consumer owns
+ * that mapping. These two meet only at the consumer, where this palette is the base that the
+ * features modulate.
  */
 
 export type Rgb = [number, number, number];

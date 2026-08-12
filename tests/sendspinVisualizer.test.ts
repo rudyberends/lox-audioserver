@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { Jimp } from 'jimp';
 import { test } from './testHarness';
 import { SendspinVisualizer, windowSizeFor } from '../src/adapters/outputs/sendspin/sendspinVisualizer';
-import { derivePalette, type Rgb } from '../src/adapters/outputs/sendspin/artworkPalette';
+import { derivePalette, type Rgb } from '../src/application/artwork/artworkPalette';
 
 const SAMPLE_RATE = 48_000;
 const WINDOW = 2048;

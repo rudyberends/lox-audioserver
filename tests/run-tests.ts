@@ -86,6 +86,7 @@ import './playlistTrackParentContext.test';
 import './audioManager.playbackPreDelay.test';
 import './sendspinLineInService.test';
 import './sendspinVisualizer.test';
+import './zoneArtworkColors.test';
 import './powerManager.test';
 import './sharedPowerGroupManager.test';
 import './configHandlers.volume.test';
