@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { PassThrough } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
+import { serverClockUs } from '@/shared/audio/serverClock';
 import { FFMPEG_BINARY, FfmpegProcess } from '@/engine/ffmpegProcess';
 import {
   mp3BitrateToBps,
@@ -378,7 +379,9 @@ export class AudioSession {
     this.buffer.push(aligned);
     this.recordBytes(chunk.length);
     if (this.profile === 'pcm') {
-      this.onPcmFrame?.(this.zoneId, aligned, Date.now() * 1000);
+      // The audio timeline, not wall time — see serverClockUs. Sendspin's frame timestamps are
+      // on this clock, and analysis consumers cannot mix the two.
+      this.onPcmFrame?.(this.zoneId, aligned, serverClockUs());
     }
     this.writeToSubscribers(aligned);
     this.maybeApplyOutputPacing();

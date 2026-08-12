@@ -39,6 +39,8 @@ import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import { EngineAdapter } from '@/adapters/engine/EngineAdapter';
 import { AudioStreamEngine } from '@/engine/audioStreamEngine';
 import { AudioAnalysisService } from '@/application/audio/audioAnalysisService';
+import { EngineAnalysisFeed } from '@/application/audio/analysisFeed';
+import { zoneSessionKey } from '@/ports/types/SessionKey';
 import { WaveformService } from '@/application/audio/waveformService';
 import { SendspinVisualizer } from '@/adapters/outputs/sendspin/sendspinVisualizer';
 import type { ApiOutputCapabilities } from '@/domain/zones/apiTypes';
@@ -243,6 +245,18 @@ export function createRuntime(): Runtime {
   const audioStreamEngine = new AudioStreamEngine(
     () => (configPort.getSystemConfig()?.audioserver?.crossfadeSec ?? 0) > 0,
     (zoneId, pcm, timestampUs) => audioAnalysis.push(Number(zoneId), pcm, timestampUs),
+  );
+  // Outputs whose session profile is PCM push frames into the analysis service themselves (see the
+  // engine callback above). For every other output the audio only exists encoded, so the feed
+  // subscribes to the session like any other client and decodes that copy — no change to the stream
+  // the device is being sent. Attached here so it is live for whoever asks first: the API, a lighting
+  // adapter, or the player's spectrum.
+  audioAnalysis.setFeedController(
+    new EngineAnalysisFeed({
+      engine: audioStreamEngine,
+      sessionKey: zoneSessionKey,
+      push: (zoneId, pcm, timestampUs) => audioAnalysis.push(zoneId, pcm, timestampUs),
+    }),
   );
   const customRadioStore = new CustomRadioStore();
   const spotifyManagerProvider = new SpotifyServiceManagerProvider(configPort);

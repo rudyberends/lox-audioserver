@@ -54,6 +54,18 @@ type Subscription = {
 };
 
 /**
+ * Asked to arrange PCM for a zone that has consumers but no producer.
+ *
+ * Outputs that run a PCM session push frames of their own accord; the rest need something to go and
+ * fetch the audio. That is a decision about *sessions*, which this service knows nothing about, so it
+ * only reports the transitions: first engine-feed consumer for a zone, and last one gone.
+ */
+export interface AudioAnalysisFeedController {
+  ensure(zoneId: number): void;
+  release(zoneId: number): void;
+}
+
+/**
  * Protocol-neutral owner of realtime audio analysis.
  *
  * Outputs feed PCM into this service and subscribe to normalized events. A future web/API
@@ -62,8 +74,17 @@ type Subscription = {
  */
 export class AudioAnalysisService {
   private readonly subscriptions = new Map<number, Map<symbol, Subscription>>();
+  private feedController: AudioAnalysisFeedController | null = null;
 
   constructor(private readonly createAnalyzer: AudioAnalysisAnalyzerFactory) {}
+
+  /**
+   * Wire the thing that produces PCM for outputs which do not push it themselves. Set once during
+   * bootstrap; without it the service behaves exactly as before and only sees what outputs push.
+   */
+  public setFeedController(controller: AudioAnalysisFeedController | null): void {
+    this.feedController = controller;
+  }
 
   public subscribe(
     zoneId: number,
@@ -77,14 +98,33 @@ export class AudioAnalysisService {
       zoneSubscriptions = new Map();
       this.subscriptions.set(zoneId, zoneSubscriptions);
     }
-    zoneSubscriptions.set(token, { analyzer, feed: options.feed ?? 'engine' });
+    const feed = options.feed ?? 'engine';
+    zoneSubscriptions.set(token, { analyzer, feed });
+    if (feed === 'engine' && this.engineConsumers(zoneId) === 1) {
+      this.feedController?.ensure(zoneId);
+    }
     return () => {
       const current = this.subscriptions.get(zoneId);
-      current?.delete(token);
-      if (current?.size === 0) {
+      if (!current?.delete(token)) {
+        return;
+      }
+      if (feed === 'engine' && this.engineConsumers(zoneId) === 0) {
+        this.feedController?.release(zoneId);
+      }
+      if (current.size === 0) {
         this.subscriptions.delete(zoneId);
       }
     };
+  }
+
+  private engineConsumers(zoneId: number): number {
+    let count = 0;
+    for (const subscription of this.subscriptions.get(zoneId)?.values() ?? []) {
+      if (subscription.feed === 'engine') {
+        count += 1;
+      }
+    }
+    return count;
   }
 
   public push(
