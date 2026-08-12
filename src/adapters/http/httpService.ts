@@ -206,7 +206,11 @@ export class HttpService {
       options.lineInMetadataService,
       options.lineInActivation,
     );
-    this.sonnClientApi = new SonnClientApiHandler(options.configPort, config.port);
+    this.sonnClientApi = new SonnClientApiHandler(
+      options.configPort,
+      config.port,
+      options.lineInActivation,
+    );
     this.browseService = new BrowseService(options.configPort, options.contentManager);
     this.aboutService = new AboutService({
       describeItem: (id) => this.browseService.describeItem(id),

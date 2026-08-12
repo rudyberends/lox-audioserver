@@ -40,11 +40,12 @@ function request(method: string, body?: unknown, host = 'audioserver.local:7090'
 }
 
 function createHarness(initial: any = {}) {
+  const { lineInActivation, ...rest } = initial;
   const config: any = {
     system: { audioserver: { ip: '192.168.1.209', name: 'Audioserver' } },
     zones: [],
     inputs: {},
-    ...initial,
+    ...rest,
   };
   const configPort: any = {
     getConfig: () => config,
@@ -53,7 +54,7 @@ function createHarness(initial: any = {}) {
       return config;
     },
   };
-  const handler = new SonnClientApiHandler(configPort, 7090);
+  const handler = new SonnClientApiHandler(configPort, 7090, lineInActivation);
   const log: any = { info: () => {}, warn: () => {}, debug: () => {}, spam: () => {} };
   const routes = buildSonnClientRoutes({
     log,
@@ -271,6 +272,111 @@ test('every device is told which client build it should be running', async () =>
   assert.ok(client, 'the client build is offered without the device asking for it');
   assert.equal(client.version, '1.2.3');
   assert.equal(client.sha256, 'a'.repeat(64));
+});
+
+test('an input takes its format from the line-in it feeds, not from the device entry', async () => {
+  const { call, admin, config } = createHarness();
+  await call('POST', '/api/sonnclients/register', REGISTRATION);
+
+  await admin('PUT', '/sonnclients/sonn-kitchen-9e2f', {
+    sources: [{ clientId: 'sonn-kitchen-9e2f-linein', input: 'alsa:hw:CARD=CODEC,DEV=0' }],
+  });
+
+  // Set where someone actually thinks about this input. Both places used to carry these numbers,
+  // and the device quietly ran on its own defaults while this screen showed something else.
+  config.inputs = {
+    lineIn: {
+      inputs: [
+        {
+          id: 'linein-1',
+          name: 'BeoSound 9000',
+          source: {
+            type: 'sendspin',
+            clientId: 'sonn-kitchen-9e2f-linein',
+            sample_rate: 44100,
+            bit_depth: 24,
+            channels: 2,
+            codec: 'pcm',
+            vad_threshold_db: -52,
+            vad_hold_ms: 3000,
+          },
+        },
+      ],
+    },
+  } as never;
+
+  const desired = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', {
+      state: 'connected',
+      players: [],
+    })
+  ).json();
+
+  const source = desired.sources[0];
+  assert.equal(source.sample_rate, 44100);
+  assert.equal(source.bit_depth, 24);
+  assert.equal(source.threshold_db, -52);
+  assert.equal(source.hold_ms, 3000);
+});
+
+test('a transport command for an input reaches the device that provides it', async () => {
+  const commands = new Map<string, Array<{ command: string; args: string[] }>>([
+    ['linein-1', [{ command: 'next', args: [] }]],
+  ]);
+  const active = new Set<string>(['linein-1']);
+  const { call, admin, config } = createHarness({
+    lineInActivation: {
+      takeCommands: (inputId: string) => {
+        const queued = commands.get(inputId) ?? [];
+        commands.delete(inputId);
+        return queued;
+      },
+      isActive: (inputId: string) => active.has(inputId),
+    },
+  });
+  await call('POST', '/api/sonnclients/register', REGISTRATION);
+  await admin('PUT', '/sonnclients/sonn-kitchen-9e2f', {
+    sources: [{ clientId: 'sonn-kitchen-9e2f-linein', input: 'alsa:hw:CARD=CODEC,DEV=0' }],
+  });
+  config.inputs = {
+    lineIn: {
+      inputs: [
+        { id: 'linein-1', source: { type: 'sendspin', clientId: 'sonn-kitchen-9e2f-linein' } },
+      ],
+    },
+  } as never;
+
+  const first = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', {
+      state: 'connected',
+      players: [],
+    })
+  ).json();
+
+  assert.deepEqual(first.source_commands, [
+    { client_id: 'sonn-kitchen-9e2f-linein', command: 'next', args: [] },
+  ]);
+  // A room is listening to this input, so the device is asked to come back quickly: five seconds
+  // between pressing next and the track changing is a remote nobody uses.
+  assert.equal(first.poll_interval_ms, 1000);
+
+  // Draining is what acknowledges delivery, so the same press does not arrive twice.
+  const second = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', {
+      state: 'connected',
+      players: [],
+    })
+  ).json();
+  assert.deepEqual(second.source_commands, []);
+
+  active.clear();
+  const third = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', {
+      state: 'connected',
+      players: [],
+    })
+  ).json();
+  assert.equal(third.poll_interval_ms, 5000, 'nothing to be quick about once the room moves on');
 });
 
 test('a disabled device keeps polling and is told to play nothing', async () => {

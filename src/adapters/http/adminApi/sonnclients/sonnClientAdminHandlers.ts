@@ -414,6 +414,7 @@ function sanitizeSources(value: unknown): SonnClientSourceConfig[] {
       name: optionalString(entry.name),
       input: optionalString(entry.input),
       enabled: entry.enabled === undefined ? undefined : entry.enabled !== false,
+      codec: optionalString(entry.codec),
       sampleRate: optionalNumber(entry.sampleRate, 8_000, 384_000),
       bitDepth: optionalNumber(entry.bitDepth, 8, 32),
       channels: optionalNumber(entry.channels, 1, 8),

@@ -95,6 +95,12 @@ const STATUS_STALE_MS = 20_000;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const MIN_POLL_INTERVAL_MS = 1_000;
 const MAX_POLL_INTERVAL_MS = 60_000;
+/**
+ * How often a device is asked while it is providing an input a room is listening to.
+ *
+ * The floor the client accepts, because this is the window a button press waits in.
+ */
+const ACTIVE_INPUT_POLL_INTERVAL_MS = 1_000;
 /** Sendspin lives on the gateway's own port, at this path. */
 const SENDSPIN_PATH = '/sendspin';
 
@@ -106,6 +112,20 @@ export type SonnClientAdminView = {
   status: StatusPayload | null;
   statusReceivedAt: string | null;
   queuedCommands: QueuedCommand[];
+};
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+/** What this handler needs of the line-in registry: what is waiting, and what is in use. */
+export type LineInCommandSource = {
+  takeCommands: (inputId: string) => Array<{ command: string; args: string[] }>;
+  isActive: (inputId: string) => boolean;
 };
 
 /** Catalogue name under which the client's own build is published. */
@@ -123,6 +143,14 @@ export class SonnClientApiHandler {
     private readonly configPort: ConfigPort,
     /** Gateway port, for the fallback when a request arrives without a Host header. */
     private readonly httpPort: number,
+    /**
+     * Where transport commands for a line-in are waiting.
+     *
+     * The source role carries no command at all — that surface was never in the protocol — so a
+     * BeoSound told to skip a track is told over this management channel instead, on the poll the
+     * device is making anyway.
+     */
+    private readonly lineInActivation?: LineInCommandSource,
   ) {}
 
   public matches(pathname: string): boolean {
@@ -278,12 +306,17 @@ export class SonnClientApiHandler {
       // Absent while the device is disabled: the client keeps polling and plays nothing, which is
       // exactly what "parked" should look like from the device's side.
       sendspin_url: enabled ? this.resolveSendspinUrl(req) : undefined,
-      poll_interval_ms: this.resolvePollInterval(section.pollIntervalMs),
+      poll_interval_ms: this.resolvePollInterval(section.pollIntervalMs, device),
       players: enabled ? (device?.players ?? []).map((player) => this.mapPlayer(player)) : [],
       sources: enabled ? (device?.sources ?? []).map((source) => this.mapSource(source)) : [],
       beoremote: this.mapBeoremote(device),
       components: this.mapComponents(device, deviceId),
       commands: options.takeCommands ? this.takeCommands(deviceId) : [],
+      // Transport for the gear on an input — start it, skip a track, pick a disc. Taken on the same
+      // poll rather than pushed, because the device has no inbound channel for this: the protocol
+      // has no source command at all, and that is what makes this a management concern.
+      source_commands:
+        enabled && options.takeCommands ? this.takeSourceCommands(device) : [],
     };
   }
 
@@ -309,22 +342,111 @@ export class SonnClientApiHandler {
     };
   }
 
+  /**
+   * One input, as the device should capture it.
+   *
+   * The format and the silence thresholds come from the line-in this source feeds, not from the
+   * device entry. Both used to carry them, which meant the screen where you set them — the line-in,
+   * where you are thinking about *this input* — wrote numbers nobody read, while the device quietly
+   * ran on its own defaults. The same fact in two places is a bug waiting for someone to notice the
+   * sample rate is not the one they typed.
+   */
   private mapSource(source: SonnClientSourceConfig): Record<string, unknown> {
+    const input = this.lineInFor(source.clientId);
+    const pick = <T>(fromInput: T | undefined, fromDevice: T | undefined): T | undefined =>
+      fromInput ?? fromDevice;
+
     return {
       client_id: source.clientId,
       name: source.name,
       input: source.input,
       enabled: source.enabled !== false,
-      sample_rate: source.sampleRate,
-      bit_depth: source.bitDepth,
-      channels: source.channels,
+      codec: pick(asString(input?.codec), source.codec),
+      sample_rate: pick(asNumber(input?.sample_rate), source.sampleRate),
+      bit_depth: pick(asNumber(input?.bit_depth), source.bitDepth),
+      channels: pick(asNumber(input?.channels), source.channels),
       frame_ms: source.frameMs,
-      threshold_db: source.thresholdDb,
-      hold_ms: source.holdMs,
+      threshold_db: pick(asNumber(input?.vad_threshold_db), source.thresholdDb),
+      hold_ms: pick(asNumber(input?.vad_hold_ms), source.holdMs),
       controls: source.controls,
       control_hook: source.controlHook,
       always_on: source.alwaysOn,
     };
+  }
+
+  /**
+   * Transport commands waiting for the inputs this device provides.
+   *
+   * Drained here, which is what acknowledges delivery: the queue exists because the alternative —
+   * dropping a button press because the device was mid-poll — is the failure people notice.
+   */
+  private takeSourceCommands(
+    device: SonnClientDeviceConfig | null,
+  ): Array<Record<string, unknown>> {
+    if (!this.lineInActivation || !device?.sources?.length) {
+      return [];
+    }
+    const taken: Array<Record<string, unknown>> = [];
+    for (const source of device.sources) {
+      const input = this.lineInIdFor(source.clientId);
+      if (!input) continue;
+      for (const queued of this.lineInActivation.takeCommands(input)) {
+        taken.push({
+          client_id: source.clientId,
+          command: queued.command,
+          args: queued.args,
+        });
+      }
+    }
+    return taken;
+  }
+
+  /**
+   * How long this device should wait before asking again.
+   *
+   * Faster while it provides an input a room is listening to, because that is when a button press
+   * is waiting on the next poll: five seconds between "next" and the track changing is the
+   * difference between a remote that works and one nobody uses. Back to the ordinary interval as
+   * soon as the room moves on — there is nothing to be quick about then.
+   */
+  private pollIntervalFor(device: SonnClientDeviceConfig | null): number | null {
+    if (!this.lineInActivation) return null;
+    for (const source of device?.sources ?? []) {
+      const input = this.lineInIdFor(source.clientId);
+      if (input && this.lineInActivation.isActive(input)) {
+        return ACTIVE_INPUT_POLL_INTERVAL_MS;
+      }
+    }
+    return null;
+  }
+
+  /** The line-in id this Sendspin source provides audio for, if any. */
+  private lineInIdFor(clientId: string): string | null {
+    const inputs = this.configPort.getConfig().inputs?.lineIn?.inputs ?? [];
+    for (const entry of inputs) {
+      const source = (entry as { id?: string; source?: Record<string, unknown> }).source;
+      const id = (entry as { id?: string }).id;
+      if (!source || source.type !== 'sendspin' || typeof id !== 'string') continue;
+      const client = (source.clientId ?? source.client_id) as string | undefined;
+      if (typeof client === 'string' && client.trim() === clientId) {
+        return id;
+      }
+    }
+    return null;
+  }
+
+  /** The line-in whose audio this Sendspin source provides, if any. */
+  private lineInFor(clientId: string): Record<string, unknown> | null {
+    const inputs = this.configPort.getConfig().inputs?.lineIn?.inputs ?? [];
+    for (const entry of inputs) {
+      const source = (entry as { source?: Record<string, unknown> }).source;
+      if (!source || source.type !== 'sendspin') continue;
+      const id = (source.clientId ?? source.client_id) as string | undefined;
+      if (typeof id === 'string' && id.trim() === clientId) {
+        return source;
+      }
+    }
+    return null;
   }
 
   private mapBeoremote(device: SonnClientDeviceConfig | null): Record<string, unknown> | undefined {
@@ -438,7 +560,14 @@ export class SonnClientApiHandler {
     return `ws://${host}:${this.httpPort}${SENDSPIN_PATH}`;
   }
 
-  private resolvePollInterval(configured?: number): number {
+  private resolvePollInterval(
+    configured?: number,
+    device?: SonnClientDeviceConfig | null,
+  ): number {
+    const active = this.pollIntervalFor(device ?? null);
+    if (active !== null) {
+      return active;
+    }
     if (typeof configured !== 'number' || !Number.isFinite(configured)) {
       return DEFAULT_POLL_INTERVAL_MS;
     }

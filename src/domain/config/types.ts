@@ -845,6 +845,11 @@ export interface SonnClientSourceConfig {
   /** Capture device id as the client reported it. */
   input?: string;
   enabled?: boolean;
+  /**
+   * Capture format. Normally set on the line-in this source feeds, which is where someone is
+   * thinking about the input; these are the fallback for a source that feeds nothing yet.
+   */
+  codec?: string;
   sampleRate?: number;
   bitDepth?: number;
   channels?: number;
