@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { createLogger } from '@/shared/logging/logger';
 import { bestEffort } from '@/shared/bestEffort';
 import { ensureDir, readJson, resolveDataDir, writeJson } from '@/shared/utils/file';
+import { explainMountFailure } from './mountDiagnostics';
 
 export interface StorageConfig {
   id: string;
@@ -177,7 +178,7 @@ async function mountStorage(cfg: StorageConfig, dir: string): Promise<void> {
         }
         const msg = inlineErr instanceof Error ? inlineErr.message : String(inlineErr);
         log.error('mount failed (inline fallback)', { unc, dir, message: msg });
-        throw new Error(`mount.cifs failed: ${msg}`);
+        throw new Error(await explainMountFailure(msg));
       }
     }
 
@@ -193,7 +194,7 @@ async function mountStorage(cfg: StorageConfig, dir: string): Promise<void> {
     }
     const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
     log.error('mount failed', { unc, dir, message: msg });
-    throw new Error(`mount.cifs failed: ${msg}`);
+    throw new Error(await explainMountFailure(msg));
   }
 }
 

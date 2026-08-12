@@ -521,7 +521,10 @@ async function handleLibraryStorageAdd(
     deps.sendJson(res, 201, { storage });
   } catch (err) {
     deps.log.warn('library storage add failed', { err });
-    deps.sendJson(res, 500, { error: 'library-storage-add-failed' });
+    // The reason has to travel: a refused mount is usually about the container's own privileges,
+    // and only the message says which change fixes it (see mountDiagnostics).
+    const message = err instanceof Error ? err.message : String(err);
+    deps.sendJson(res, 500, { error: 'library-storage-add-failed', message });
   }
 }
 
