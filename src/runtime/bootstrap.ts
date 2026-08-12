@@ -74,6 +74,8 @@ import { SonnCoreMdnsService } from '@/adapters/discovery/sonnCoreMdnsService';
 import { SonnCorePeerRegistry } from '@/adapters/discovery/sonnCorePeerRegistry';
 import { SnapcastMdnsService } from '@/adapters/outputs/snapcast/snapcastMdnsService';
 import { SendspinServerAdvertiser } from '@/adapters/outputs/sendspin/sendspinServerAdvertiser';
+import { loadSendspinIdentity } from '@/adapters/outputs/sendspin/sendspinIdentity';
+import { sendspinCore } from '@sonn-audio/node-sendspin';
 import type { MdnsLifecycleService } from '@/adapters/discovery/mdnsLifecycle';
 import { createAirplayGroupController } from '@/application/outputs/airplayGroupController';
 import { createSnapcastGroupController } from '@/application/outputs/snapcastGroupController';
@@ -833,6 +835,28 @@ export function createRuntime(): Runtime {
     // Deliberately not awaited into the startup path: an unreachable broker must not
     // hold up a server that plays music perfectly well without one. It retries itself.
     void mqttPublisher.start();
+
+    /*
+     * Name this server to sendspin clients, and offer the encrypted path.
+     *
+     * Both matter for a house with more than one audioserver: a client tells servers
+     * apart by `server_id`, and every one of ours used to answer "server". The
+     * identity's public key is that id under encryption, and the macId keeps it
+     * stable for clients still on the unencrypted path.
+     *
+     * Encryption stays opt-in per connection — a client that opens with
+     * `client/hello` instead of `client/init` keeps the transition-mode path — so
+     * turning it on here cannot break an existing client. Admission is by the
+     * published Sentinel PSK, i.e. unpaired playback: confidential against a passive
+     * listener, authenticating nothing. Pairing is not implemented.
+     */
+    const systemConfig = configPort.getSystemConfig()?.audioserver;
+    sendspinCore.configureServer({
+      name: systemConfig?.name?.trim() || 'Sonn Audio Server',
+      serverId: (systemConfig?.macId ?? '').trim().toUpperCase() || 'server',
+    });
+    sendspinCore.enableEncryption(loadSendspinIdentity());
+    log.info('sendspin server identity', { serverId: sendspinCore.getServerId() });
 
     sendspinServerAdvertiser = new SendspinServerAdvertiser(
       config.http,

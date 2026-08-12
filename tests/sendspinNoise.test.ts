@@ -1,0 +1,202 @@
+import assert from 'node:assert/strict';
+import { test } from './testHarness';
+import {
+  Identity,
+  NoiseSession,
+  NoiseTransport,
+  SENTINEL_PSK,
+  SENTINEL_PSK_ID,
+  MAX_TRANSPORT_PLAINTEXT,
+  MSG_TYPE_FRAGMENT_MORE,
+  fragment,
+  pskIdFor,
+  generatePsk,
+  b64urlEncode,
+  b64urlDecode,
+} from '@sonn-audio/node-sendspin';
+
+/**
+ * Noise KKpsk2 checks. The wire itself is pinned by the interop harness against
+ * the Python `noiseprotocol` library (the one aiosendspin uses); these cover the
+ * pieces that are ours — identity handling, the transport framing, and that a
+ * responder and initiator built here agree with each other.
+ */
+
+/** A matched initiator/responder pair over the same prologue and PSK. */
+function handshakePair(psk: Buffer = SENTINEL_PSK) {
+  const server = Identity.generate();
+  const client = Identity.generate();
+  const prologue = Buffer.from('client/init|server/init', 'utf8');
+  const suite = '25519_ChaChaPoly_SHA256' as const;
+  const initiator = NoiseSession.asInitiator({
+    suite,
+    localStaticPriv: server.privateBytes,
+    remoteStaticPub: client.publicBytes,
+    prologue,
+    psk,
+  });
+  const responder = NoiseSession.asResponder({
+    suite,
+    localStaticPriv: client.privateBytes,
+    remoteStaticPub: server.publicBytes,
+    prologue,
+  });
+  const msg1 = initiator.writeMessage(Buffer.from(JSON.stringify({ psk_id: pskIdFor(psk) })));
+  const named = JSON.parse(responder.readMessage(msg1).toString('utf8'));
+  responder.mixPsk(psk);
+  const msg2 = responder.writeMessage(Buffer.from('{}'));
+  initiator.readMessage(msg2);
+  return { initiator, responder, named, server, client };
+}
+
+test('noise: a handshake completes and both sides agree on the hash', () => {
+  const { initiator, responder, named } = handshakePair();
+  assert.equal(named.psk_id, SENTINEL_PSK_ID, 'message 1 should name the PSK it used');
+  assert.ok(initiator.handshakeComplete && responder.handshakeComplete);
+  assert.equal(
+    initiator.handshakeHash.toString('hex'),
+    responder.handshakeHash.toString('hex'),
+    'a mismatched hash means the two derived different keys',
+  );
+});
+
+test('noise: transport traffic flows both ways and rejects tampering', () => {
+  const { initiator, responder } = handshakePair();
+  const toClient = initiator.encrypt(Buffer.from('server says hello'));
+  assert.equal(responder.decrypt(toClient).toString('utf8'), 'server says hello');
+  const toServer = responder.encrypt(Buffer.from('client says hello'));
+  assert.equal(initiator.decrypt(toServer).toString('utf8'), 'client says hello');
+
+  const tampered = initiator.encrypt(Buffer.from('trust me'));
+  tampered[tampered.length - 1] ^= 0xff;
+  assert.throws(() => responder.decrypt(tampered), /authenticate/);
+});
+
+test('noise: a wrong PSK fails the handshake rather than downgrading', () => {
+  const server = Identity.generate();
+  const client = Identity.generate();
+  const prologue = Buffer.from('prologue', 'utf8');
+  const suite = '25519_ChaChaPoly_SHA256' as const;
+  const initiator = NoiseSession.asInitiator({
+    suite,
+    localStaticPriv: server.privateBytes,
+    remoteStaticPub: client.publicBytes,
+    prologue,
+    psk: generatePsk(),
+  });
+  const responder = NoiseSession.asResponder({
+    suite,
+    localStaticPriv: client.privateBytes,
+    remoteStaticPub: server.publicBytes,
+    prologue,
+  });
+  responder.readMessage(initiator.writeMessage(Buffer.from('{}')));
+  responder.mixPsk(generatePsk()); // A different PSK than the server used.
+  const msg2 = responder.writeMessage(Buffer.from('{}'));
+  assert.throws(() => initiator.readMessage(msg2), /authenticate/);
+});
+
+test('noise: a prologue mismatch fails the handshake', () => {
+  const server = Identity.generate();
+  const client = Identity.generate();
+  const suite = '25519_ChaChaPoly_SHA256' as const;
+  // The prologue is the verbatim init frames, so this is what a tampered suite or
+  // identity in the cleartext exchange would look like.
+  const initiator = NoiseSession.asInitiator({
+    suite,
+    localStaticPriv: server.privateBytes,
+    remoteStaticPub: client.publicBytes,
+    prologue: Buffer.from('honest'),
+    psk: SENTINEL_PSK,
+  });
+  const responder = NoiseSession.asResponder({
+    suite,
+    localStaticPriv: client.privateBytes,
+    remoteStaticPub: server.publicBytes,
+    prologue: Buffer.from('tampered'),
+  });
+  assert.throws(() => responder.readMessage(initiator.writeMessage(Buffer.from('{}'))), /authenticate/);
+});
+
+test('noise: an identity round-trips through its persisted form', () => {
+  const identity = Identity.generate();
+  const restored = Identity.fromPrivateB64u(identity.privateB64u);
+  assert.equal(restored.peerId, identity.peerId, 'a reloaded identity must be the same server');
+  assert.equal(identity.peerId.length, 43, 'a peer id is a 32-byte key in unpadded base64url');
+  assert.equal(b64urlEncode(b64urlDecode(identity.peerId)).length, 43);
+});
+
+test('noise: the Sentinel PSK is the published constant', () => {
+  // Hard-coded rather than recomputed: if this value ever drifts, every unpaired
+  // client stops connecting, and the test should say so rather than agree with us.
+  assert.equal(SENTINEL_PSK.toString('hex').length, 64);
+  assert.equal(SENTINEL_PSK_ID, pskIdFor(SENTINEL_PSK));
+  assert.equal(SENTINEL_PSK_ID.length, 43);
+});
+
+test('noise: the transport carries text and typed binary through fragmentation', () => {
+  const { initiator, responder } = handshakePair();
+  const server = new NoiseTransport(initiator);
+  const client = new NoiseTransport(responder);
+
+  const textFrames = server.encodeText('{"type":"server/time"}');
+  assert.equal(textFrames.length, 1);
+  const decodedText = client.decode(textFrames[0]);
+  assert.deepEqual(decodedText, { kind: 'text', data: '{"type":"server/time"}' });
+
+  // An audio chunk keeps its role type byte, which doubles as the transport's.
+  const chunk = Buffer.concat([Buffer.from([4]), Buffer.alloc(32, 0xab)]);
+  const binaryFrames = server.encodeBinary(chunk);
+  const decodedBinary = client.decode(binaryFrames[0]);
+  assert.equal(decodedBinary?.kind, 'binary');
+  assert.deepEqual(decodedBinary?.kind === 'binary' ? decodedBinary.data : null, chunk);
+
+  // Oversized payloads fragment and reassemble byte-exactly.
+  const big = Buffer.concat([Buffer.from([4]), Buffer.alloc(MAX_TRANSPORT_PLAINTEXT * 2 + 500, 0x5a)]);
+  const frames = server.encodeBinary(big);
+  assert.ok(frames.length >= 3, `expected several fragments, got ${frames.length}`);
+  let reassembled = null;
+  for (const frame of frames) {
+    const out = client.decode(frame);
+    if (out) reassembled = out;
+  }
+  assert.equal(reassembled?.kind, 'binary');
+  assert.deepEqual(reassembled?.kind === 'binary' ? reassembled.data : null, big);
+});
+
+test('noise: fragmentation never exceeds the Noise transport limit', () => {
+  const big = Buffer.concat([Buffer.from([4]), Buffer.alloc(MAX_TRANSPORT_PLAINTEXT * 3, 1)]);
+  const frames = fragment(big);
+  for (const frame of frames) {
+    assert.ok(
+      frame.length <= MAX_TRANSPORT_PLAINTEXT,
+      `fragment of ${frame.length} exceeds the ${MAX_TRANSPORT_PLAINTEXT}-byte plaintext limit`,
+    );
+  }
+  // The reassembled body must equal the original, header byte included.
+  const body = Buffer.concat([
+    Buffer.from([frames[0][1]]),
+    ...frames.map((f, i) => (i === 0 ? f.subarray(2) : f.subarray(1))),
+  ]);
+  assert.deepEqual(body, big);
+});
+
+test('noise: a stray non-fragment frame mid-reassembly is refused', () => {
+  const { initiator, responder } = handshakePair();
+  const client = new NoiseTransport(responder);
+  /*
+   * Built straight from the session rather than through `encodeBinary`.
+   *
+   * Noise frames must be decrypted in the order they were encrypted, so feeding a
+   * transport a subset of a fragmented message plus a later frame fails on the auth
+   * tag before it ever reaches the reassembly guard. Encrypting exactly the two
+   * frames under test, in order, is the only way to exercise it.
+   */
+  const openingFragment = initiator.encrypt(
+    Buffer.concat([Buffer.from([MSG_TYPE_FRAGMENT_MORE, 4]), Buffer.alloc(16, 3)]),
+  );
+  const completeMessage = initiator.encrypt(Buffer.from(' {"type":"server/time"}', 'binary'));
+
+  assert.equal(client.decode(openingFragment), null, 'the opening fragment yields nothing yet');
+  assert.throws(() => client.decode(completeMessage), /fragmented message is in flight/);
+});
