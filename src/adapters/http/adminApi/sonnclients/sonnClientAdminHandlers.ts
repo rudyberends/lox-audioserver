@@ -32,7 +32,19 @@ export type SonnClientAdminHandlerDeps = {
 };
 
 /** Commands a device will act on itself. Anything else is refused rather than queued forever. */
-const DEVICE_COMMANDS = new Set(['pair_remote']);
+/**
+ * What an operator may ask a device to do.
+ *
+ * Deliberately a list rather than a passthrough: these are executed on someone's hardware, and a
+ * device should refuse anything it was not built to be asked.
+ */
+const DEVICE_COMMANDS = new Set([
+  'pair_remote',
+  // Open the Bluetooth pairing window: visible and pairable for as long as the zone's setting says.
+  'bluetooth_discoverable',
+  // Forget one paired phone, by address.
+  'bluetooth_forget',
+]);
 
 
 /** Where the client's own releases are published, and what each build is called there. */

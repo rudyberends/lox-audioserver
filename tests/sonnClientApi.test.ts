@@ -496,6 +496,68 @@ test('a component with no artifact for this architecture is left out rather than
   assert.deepEqual(desired.components, []);
 });
 
+test('a zone claims a device radio for Bluetooth, and names what a phone sees', async () => {
+  const { config, call, admin } = createHarness();
+  await call('POST', '/api/sonnclients/register', REGISTRATION);
+  await admin('PUT', '/sonnclients/sonn-kitchen-9e2f', { name: 'Kitchen' });
+
+  // Same split as the remote: the radio is the device's, the room decides whether it is used.
+  config.zones = [
+    {
+      id: 12,
+      name: 'Kitchen',
+      inputs: {
+        bluetooth: {
+          enabled: true,
+          deviceId: 'sonn-kitchen-9e2f',
+          discoverableSeconds: 120,
+          pin: '0000',
+        },
+      },
+    },
+  ] as never;
+
+  const desired = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', { state: 'connected' })
+  ).json();
+  assert.equal(desired.bluetooth.zone_id, 12);
+  // What someone looks for on their phone is the room, not the hostname of a box in a cupboard.
+  assert.equal(desired.bluetooth.name, 'Kitchen');
+  assert.equal(desired.bluetooth.discoverable_seconds, 120);
+  assert.equal(desired.bluetooth.pin, '0000');
+  assert.equal(desired.bluetooth.control, true);
+
+  // A name given here wins over the room's own.
+  (config.zones[0] as never as { inputs: { bluetooth: { publishName?: string } } }).inputs.bluetooth.publishName =
+    'Keuken speaker';
+  const renamed = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', { state: 'connected' })
+  ).json();
+  assert.equal(renamed.bluetooth.name, 'Keuken speaker');
+
+  // Switched off is not "as before": the device should stop accepting phones.
+  (config.zones[0] as never as { inputs: { bluetooth: { enabled: boolean } } }).inputs.bluetooth.enabled = false;
+  const off = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', { state: 'connected' })
+  ).json();
+  assert.equal(off.bluetooth, undefined);
+});
+
+test('the Bluetooth commands an operator may send are the two that exist', async () => {
+  const { call, admin } = createHarness();
+  await call('POST', '/api/sonnclients/register', REGISTRATION);
+
+  for (const command of ['bluetooth_discoverable', 'bluetooth_forget']) {
+    const accepted = await admin('POST', '/sonnclients/sonn-kitchen-9e2f/commands', { command });
+    assert.equal(accepted.statusCode, 202, command);
+  }
+  // Anything else is refused rather than passed to someone's hardware.
+  const refused = await admin('POST', '/sonnclients/sonn-kitchen-9e2f/commands', {
+    command: 'bluetooth_anything_else',
+  });
+  assert.equal(refused.statusCode, 400);
+});
+
 test('a device a zone plays through cannot be forgotten', async () => {
   const { config, call, admin } = createHarness();
   await call('POST', '/api/sonnclients/register', REGISTRATION);

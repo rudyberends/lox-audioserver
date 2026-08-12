@@ -61,6 +61,8 @@ type StatusPayload = {
   components?: Array<{ name?: string; version?: string | null; state?: string }>;
   pairing?: unknown;
   beoremote?: unknown;
+  /** What the device's radio is doing: visible, paired phones, what is connected and playing. */
+  bluetooth?: unknown;
 };
 
 type Registration = {
@@ -310,6 +312,7 @@ export class SonnClientApiHandler {
       players: enabled ? (device?.players ?? []).map((player) => this.mapPlayer(player)) : [],
       sources: enabled ? (device?.sources ?? []).map((source) => this.mapSource(source)) : [],
       beoremote: this.mapBeoremote(device),
+      bluetooth: this.mapBluetooth(device),
       components: this.mapComponents(device, deviceId),
       commands: options.takeCommands ? this.takeCommands(deviceId) : [],
       // Transport for the gear on an input — start it, skip a track, pick a disc. Taken on the same
@@ -478,6 +481,35 @@ export class SonnClientApiHandler {
       menu_poll_ms: legacy?.menuPollMs,
       volume_player: legacy?.volumePlayer,
       volume_step: zone?.inputs?.beoremote?.volumeStep ?? legacy?.volumeStep,
+    };
+  }
+
+  /**
+   * Bluetooth audio for the room that claimed this device's radio.
+   *
+   * Same split as the remote: the radio belongs to the device, the room decides whether it is used.
+   * Nothing is received here — the client terminates A2DP and streams what it gets in as a source,
+   * so what goes down is a switch, a name to be seen under, and how long to stay visible.
+   */
+  private mapBluetooth(device: SonnClientDeviceConfig | null): Record<string, unknown> | undefined {
+    if (!device) return undefined;
+    const config = this.configPort.getConfig();
+    const zone = config.zones.find(
+      (candidate) => candidate.inputs?.bluetooth?.deviceId === device.deviceId,
+    );
+    const bluetooth = zone?.inputs?.bluetooth;
+    if (!zone || bluetooth?.enabled !== true) {
+      return undefined;
+    }
+    return {
+      enabled: true,
+      zone_id: zone.id,
+      // The room's name is what someone looks for on their phone; the device's hostname means
+      // nothing to them.
+      name: bluetooth.publishName?.trim() || zone.name,
+      discoverable_seconds: bluetooth.discoverableSeconds,
+      pin: bluetooth.pin?.trim() || undefined,
+      control: bluetooth.control !== false,
     };
   }
 

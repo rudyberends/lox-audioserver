@@ -547,6 +547,7 @@ export interface ZoneInputConfig {
   lineIn?: ZoneLineInConfig | null;
   dlna?: ZoneDlnaConfig | null;
   beoremote?: ZoneBeoremoteConfig | null;
+  bluetooth?: ZoneBluetoothConfig | null;
 }
 
 /**
@@ -599,6 +600,41 @@ export type BeoremoteKeyBinding =
   | { kind: 'lineIn'; inputId: string }
   /** Start a radio station by its audiopath, with the name to show in the UI. */
   | { kind: 'radio'; audiopath: string; name?: string };
+
+/**
+ * Bluetooth audio into this zone: a phone pairs with a Sonn Client and plays to the room.
+ *
+ * The radio is on the device, so which device carries this zone's Bluetooth is a fact about the
+ * hardware; that the room accepts it is a fact about the room. Same split as the remote — paired on
+ * the device's screen, put to work here.
+ *
+ * Unlike AirPlay or DLNA, nothing is received by the server: the client terminates A2DP and streams
+ * the audio in as an ordinary source, so this is a switch and a name, not a receiver.
+ */
+export interface ZoneBluetoothConfig {
+  /** Accept Bluetooth audio in this zone. */
+  enabled: boolean;
+  /** Sonn Client whose radio this zone uses. */
+  deviceId?: string;
+  /** What a phone sees when it looks for something to pair with. Defaults to the zone name. */
+  publishName?: string;
+  /**
+   * How long the device stays visible after someone asks it to be, in seconds.
+   *
+   * Visible forever is an invitation; visible never is unusable. The window is opened from the UI
+   * and closes by itself, the way every consumer device does it.
+   */
+  discoverableSeconds?: number;
+  /**
+   * A fixed passkey to show, for phones that ask for one.
+   *
+   * Most modern pairings are Just Works and show a confirmation on both screens instead. This is
+   * for the ones that do not, and for installations that want a code on the wall.
+   */
+  pin?: string;
+  /** Let a paired phone's transport keys and metadata reach the zone (AVRCP). */
+  control?: boolean;
+}
 
 export interface ZoneDlnaConfig {
   /** Expose this zone as a DLNA/UPnP MediaRenderer that apps can cast to. */
