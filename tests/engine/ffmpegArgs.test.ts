@@ -32,6 +32,35 @@ test('buildInputArgs(file) includes -re by default and -i path', () => {
 test('buildInputArgs(file) omits -re when realTime=false', () => {
   const args = makeBuilder({ kind: 'file', path: '/tmp/x.mp3', realTime: false }).buildInputArgs();
   assert.ok(!args.includes('-re'));
+  // A codec with a bitrate can be paced from the output side, so nothing is imposed here.
+  assert.ok(!args.includes('-readrate'));
+});
+
+/*
+ * An unpaced file on a FLAC profile is the one session with no pacing at all: the flag switches off
+ * the input clock, and the output-side backpressure that is meant to replace it is computed from a
+ * bitrate that a variable-bitrate codec does not have. ffmpeg then hands over the whole track in a
+ * couple of seconds, which breaks anything downstream that has to know what is playing *now*.
+ *
+ * The cap tracks the wall clock with a little headroom, after an opening burst — not plain `-re`,
+ * which would cost the fast start the flag was set for.
+ */
+test('buildInputArgs(file) caps an unpaced FLAC session to wall clock, after a starting burst', () => {
+  const args = makeBuilder(
+    { kind: 'file', path: '/tmp/x.mp3', realTime: false },
+    'flac',
+  ).buildInputArgs();
+  assert.ok(!args.includes('-re'), 'a hard realtime clock would remove the prebuffer head start');
+  assert.equal(args[args.indexOf('-readrate') + 1], '1.1');
+  assert.equal(args[args.indexOf('-readrate_initial_burst') + 1], '5');
+  // Ahead of the input, like every other input option.
+  assert.ok(args.indexOf('-readrate') < args.indexOf('-i'));
+});
+
+test('buildInputArgs(file) leaves a paced FLAC session on -re alone', () => {
+  const args = makeBuilder({ kind: 'file', path: '/tmp/x.mp3' }, 'flac').buildInputArgs();
+  assert.ok(args.includes('-re'));
+  assert.ok(!args.includes('-readrate'));
 });
 
 test('buildInputArgs(url) sets reconnect flags and -i url', () => {

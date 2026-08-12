@@ -257,6 +257,33 @@ export class FfmpegArgBuilder {
     return this.sourceNativeFormat ? 'error' : 'info';
   }
 
+  /**
+   * A speed limit for a file the caller asked *not* to pace, when nothing else will pace it.
+   *
+   * `realTime: false` on a file is deliberate — `AudioManager.startWithResolvedSource` forces it, so
+   * playback can start without waiting on ffmpeg's clock — and the engine is meant to keep the
+   * producer honest from the output side instead. That backpressure is computed from the output
+   * bitrate, which a variable-bitrate codec does not have. The URL branch above already carves out
+   * FLAC for exactly this reason; a *file* on a FLAC profile fell between the two and ran with no
+   * pacing at all, which is not a small effect: ffmpeg hands over the entire track within a second
+   * or two of the first byte.
+   *
+   * A finite source racing to EOF is the failure the URL branch warns about, and it makes "what is
+   * playing now" meaningless anywhere downstream — an analysis tap on such a session measures a
+   * burst and then silence, and a presentation timestamp has nothing to refer to.
+   *
+   * So: track the wall clock with 10% of headroom, after an opening burst that keeps the fast start
+   * the flag was set for. Five seconds is enough for a pull renderer that wants to prebuffer before
+   * it begins (measured for the same problem in Music Assistant, which uses these same two options).
+   * Deliberately *not* plain `-re`, which would take that head start away.
+   */
+  private unpacedFileRateArgs(): string[] {
+    if (this.profile !== 'flac') {
+      return [];
+    }
+    return ['-readrate', '1.1', '-readrate_initial_burst', '5'];
+  }
+
   /** Single-stage input args based on source kind. */
   public buildInputArgs(): string[] {
     if (this.source.kind === 'url') {
@@ -302,9 +329,9 @@ export class FfmpegArgBuilder {
     const inputLatencyArgs = this.isAlertSource ? FFMPEG_BUFFERED_ARGS : FFMPEG_LOW_LATENCY_ARGS;
     // Pace file sources in real-time so downstream outputs (e.g., Snapcast) don't get flooded.
     const paceInput = this.source.realTime !== false;
-    const realTimeArgs = paceInput ? ['-re'] : [];
     return [
-      ...inputLatencyArgs, ...loopArgs, ...realTimeArgs,
+      ...inputLatencyArgs, ...loopArgs,
+      ...(paceInput ? ['-re'] : this.unpacedFileRateArgs()),
       ...buildSeekArgs(this.source.startAtSec),
       '-i', this.source.path,
     ];
