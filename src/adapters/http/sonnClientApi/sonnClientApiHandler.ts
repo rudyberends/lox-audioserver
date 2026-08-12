@@ -449,17 +449,35 @@ export class SonnClientApiHandler {
     return null;
   }
 
+  /**
+   * The remote this device runs, and the room it drives.
+   *
+   * The room comes from the zone that claimed this device's remote, not from the device entry:
+   * which room a remote belongs to is a fact about the room. Pairing is a fact about the device and
+   * stays on the device screen, which is the split the speakers already follow — one screen makes
+   * the thing, the other puts it to work.
+   */
   private mapBeoremote(device: SonnClientDeviceConfig | null): Record<string, unknown> | undefined {
-    const beoremote = device?.beoremote;
-    if (!beoremote || beoremote.enabled !== true || typeof beoremote.zoneId !== 'number') {
+    if (!device) return undefined;
+    const zone = this.configPort
+      .getConfig()
+      .zones.find((candidate) => candidate.inputs?.beoremote?.deviceId === device.deviceId);
+    const legacy = device.beoremote;
+
+    // The device entry is still read for an installation configured before rooms could claim a
+    // remote; nothing writes it any more.
+    // A room that claimed this remote but switched it off is not driving anything.
+    const claimed = zone?.inputs?.beoremote?.enabled === false ? undefined : zone?.id;
+    const zoneId = claimed ?? (legacy?.enabled === true ? legacy.zoneId : undefined);
+    if (typeof zoneId !== 'number') {
       return undefined;
     }
     return {
       enabled: true,
-      zone_id: beoremote.zoneId,
-      menu_poll_ms: beoremote.menuPollMs,
-      volume_player: beoremote.volumePlayer,
-      volume_step: beoremote.volumeStep,
+      zone_id: zoneId,
+      menu_poll_ms: legacy?.menuPollMs,
+      volume_player: legacy?.volumePlayer,
+      volume_step: zone?.inputs?.beoremote?.volumeStep ?? legacy?.volumeStep,
     };
   }
 

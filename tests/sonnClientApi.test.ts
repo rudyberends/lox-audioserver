@@ -379,6 +379,37 @@ test('a transport command for an input reaches the device that provides it', asy
   assert.equal(third.poll_interval_ms, 5000, 'nothing to be quick about once the room moves on');
 });
 
+test('a room claims a remote, the device does not claim a room', async () => {
+  const { call, admin, config } = createHarness();
+  await call('POST', '/api/sonnclients/register', REGISTRATION);
+  await admin('PUT', '/sonnclients/sonn-kitchen-9e2f', { name: 'Kitchen' });
+
+  // Nothing on the device says which room it drives. Pairing is a fact about the box; which room a
+  // remote belongs to is a fact about the room, and it is set beside that room's output.
+  config.zones = [
+    { id: 12, name: 'Kitchen', inputs: { beoremote: { enabled: true, deviceId: 'sonn-kitchen-9e2f', volumeStep: 6 } } },
+  ] as never;
+
+  const desired = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', {
+      state: 'connected',
+      players: [],
+    })
+  ).json();
+  assert.equal(desired.beoremote.zone_id, 12);
+  assert.equal(desired.beoremote.volume_step, 6);
+
+  // A room that claimed it and then switched it off is not driving anything.
+  config.zones[0].inputs.beoremote.enabled = false;
+  const off = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', {
+      state: 'connected',
+      players: [],
+    })
+  ).json();
+  assert.equal(off.beoremote, undefined);
+});
+
 test('a disabled device keeps polling and is told to play nothing', async () => {
   const { call, admin } = createHarness();
   await call('POST', '/api/sonnclients/register', REGISTRATION);

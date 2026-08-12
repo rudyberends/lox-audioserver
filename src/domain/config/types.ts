@@ -552,12 +552,23 @@ export interface ZoneInputConfig {
 /**
  * Beoremote One control for this zone.
  *
- * There is no remote identity here: a bridge names the zone it drives in its own
- * config, so any number of remotes can point at the same room and they all read
- * these settings. This is only what they show and what their keys do.
+ * What the remote shows and what its keys do, and — since Sonn Clients — *which* remote. A device
+ * screen is where a remote is paired, because that is a fact about the box its radio talks to; a
+ * room is where it is put to work, because that is a fact about the room. Naming the zone from the
+ * device was the wrong way round: it made assigning a remote something you did on the hardware page
+ * rather than beside the output it belongs with.
  */
 export interface ZoneBeoremoteConfig {
   enabled: boolean;
+  /**
+   * Sonn Client device whose paired remote drives this zone.
+   *
+   * Absent means any bridge that names this zone itself, which is how the standalone Python bridge
+   * works and how this behaved before a device could be claimed here.
+   */
+  deviceId?: string;
+  /** Volume points per key press, on the 0-100 scale. Absent leaves the device's own default. */
+  volumeStep?: number;
   /**
    * What fills the single submenu the remote's firmware allows. See
    * {@link BeoremoteSubmenuSource}; omitted means no submenu.
