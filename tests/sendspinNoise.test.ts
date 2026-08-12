@@ -3,6 +3,8 @@ import { test } from './testHarness';
 import {
   Identity,
   NoiseSession,
+  SendspinSession,
+  SENTINEL_RESOLVED,
   NoiseTransport,
   SENTINEL_PSK,
   SENTINEL_PSK_ID,
@@ -179,6 +181,83 @@ test('noise: fragmentation never exceeds the Noise transport limit', () => {
     ...frames.map((f, i) => (i === 0 ? f.subarray(2) : f.subarray(1))),
   ]);
   assert.deepEqual(body, big);
+});
+
+test('noise: the server greets first on an encrypted connection', async () => {
+  /*
+   * Encryption reverses the hello order and the client waits on it.
+   *
+   * The reference client does `_receive_server_hello()` -> `_send_client_hello()`
+   * -> `_receive_server_activate()`, so a server that waits for `client/hello`
+   * before greeting deadlocks: both sides sit there. Nothing below sends a
+   * `client/hello` at all — `server/hello` has to be on the wire regardless.
+   */
+  const sent: Array<{ binary: boolean; data: any }> = [];
+  const socket = {
+    readyState: 1,
+    bufferedAmount: 0,
+    send: (data: string | Buffer) =>
+      sent.push({ binary: Buffer.isBuffer(data), data }),
+    close: () => {},
+    ping: () => {},
+    terminate: () => {},
+    on: () => {},
+  };
+  const identity = Identity.generate();
+  const session = new SendspinSession(
+    socket as any,
+    null,
+    undefined,
+    {},
+    {},
+    { identity, pskProvider: () => SENTINEL_RESOLVED },
+    { serverId: 'ignored-under-encryption', name: 'Greeting Server' },
+  );
+
+  const client = Identity.generate();
+  const suite = '25519_ChaChaPoly_SHA256' as const;
+  const clientInit = JSON.stringify({
+    type: 'client/init',
+    payload: { client_id: client.peerId, version: 1, suite },
+  });
+  session.handleText(clientInit);
+  // The handshake is async because a PskProvider may be, so let it settle.
+  await Promise.resolve();
+  await Promise.resolve();
+
+  // server/init and Noise message 1 go out back-to-back, both in the clear.
+  assert.equal(sent.length, 2, `expected server/init + message 1, got ${sent.length}`);
+  const serverInit = String(sent[0].data);
+  assert.equal(JSON.parse(serverInit).payload.server_id, identity.peerId);
+  const message1 = JSON.parse(String(sent[1].data));
+  assert.equal(message1.type, 'noise/handshake');
+
+  const responder = NoiseSession.asResponder({
+    suite,
+    localStaticPriv: client.privateBytes,
+    remoteStaticPub: identity.publicBytes,
+    prologue: Buffer.concat([Buffer.from(clientInit, 'utf8'), Buffer.from(serverInit, 'utf8')]),
+  });
+  const named = JSON.parse(
+    responder.readMessage(b64urlDecode(message1.payload.data)).toString('utf8'),
+  );
+  assert.equal(named.psk_id, SENTINEL_PSK_ID, 'unpaired admission should name the Sentinel PSK');
+  responder.mixPsk(SENTINEL_PSK);
+  const message2 = responder.writeMessage(Buffer.from('{}'));
+  session.handleText(
+    JSON.stringify({ type: 'noise/handshake', payload: { data: b64urlEncode(message2) } }),
+  );
+
+  const afterHandshake = sent.slice(2);
+  assert.equal(afterHandshake.length, 1, 'the server owes exactly one frame after the handshake');
+  assert.ok(afterHandshake[0].binary, 'post-handshake frames must be encrypted binary');
+  const transport = new NoiseTransport(responder);
+  const decoded = transport.decode(afterHandshake[0].data as Buffer);
+  assert.equal(decoded?.kind, 'text');
+  const hello = JSON.parse(decoded?.kind === 'text' ? decoded.data : '{}');
+  assert.equal(hello.type, 'server/hello');
+  // Identity was settled by the handshake, so the hello shrinks to just the name.
+  assert.deepEqual(hello.payload, { name: 'Greeting Server' });
 });
 
 test('noise: a stray non-fragment frame mid-reassembly is refused', () => {
