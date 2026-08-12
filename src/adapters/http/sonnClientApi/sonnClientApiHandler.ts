@@ -108,6 +108,9 @@ export type SonnClientAdminView = {
   queuedCommands: QueuedCommand[];
 };
 
+/** Catalogue name under which the client's own build is published. */
+export const CLIENT_COMPONENT = 'sonn-client';
+
 export class SonnClientApiHandler {
   private readonly log = createLogger('Http', 'SonnClients');
   /** Last registration per device. In memory: it is a description of hardware, not a setting. */
@@ -350,11 +353,16 @@ export class SonnClientApiHandler {
     device: SonnClientDeviceConfig | null,
     deviceId: string,
   ): Array<Record<string, unknown>> {
-    const wanted = device?.requiredComponents ?? [];
+    const catalogue = this.configPort.getConfig().sonnClients?.components ?? [];
+    // The client itself goes to every device that has one, without being asked for: a park where
+    // some speakers quietly stay behind on an old version is the thing a central version is for.
+    const wanted = [...(device?.requiredComponents ?? [])];
+    if (catalogue.some((entry) => entry.name === CLIENT_COMPONENT) && !wanted.includes(CLIENT_COMPONENT)) {
+      wanted.push(CLIENT_COMPONENT);
+    }
     if (!wanted.length) {
       return [];
     }
-    const catalogue = this.configPort.getConfig().sonnClients?.components ?? [];
     const arch = this.resolveArch(deviceId);
     const resolved: Array<Record<string, unknown>> = [];
 

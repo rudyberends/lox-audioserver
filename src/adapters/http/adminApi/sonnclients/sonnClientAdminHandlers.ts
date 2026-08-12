@@ -3,8 +3,10 @@ import type { ComponentLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { SonnClientApiHandler } from '@/adapters/http/sonnClientApi/sonnClientApiHandler';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
+import { CLIENT_COMPONENT } from '@/adapters/http/sonnClientApi/sonnClientApiHandler';
 import type {
   SonnClientBeoremoteConfig,
+  SonnClientComponentConfig,
   SonnClientDeviceConfig,
   SonnClientPlayerConfig,
   SonnClientSourceConfig,
@@ -31,6 +33,56 @@ export type SonnClientAdminHandlerDeps = {
 
 /** Commands a device will act on itself. Anything else is refused rather than queued forever. */
 const DEVICE_COMMANDS = new Set(['pair_remote']);
+
+
+/** Where the client's own releases are published, and what each build is called there. */
+const CLIENT_REPO = 'sonn-audio/sonn-client';
+/**
+ * Architecture as a device reports it, to the build published for it.
+ *
+ * Rust says `arm` for both 32-bit ARM builds, so a Raspberry Pi 1 or Zero cannot be told apart from
+ * a Pi 2 here. It gets the armv7 build, which is right for everything from a Pi 2 onwards and wrong
+ * for the two oldest boards — where the device's own rollback puts the previous binary back, which
+ * is exactly the case that guard exists for.
+ */
+const CLIENT_TARGETS: Record<string, string> = {
+  aarch64: 'aarch64-unknown-linux-gnu',
+  arm: 'armv7-unknown-linux-gnueabihf',
+  x86_64: 'x86_64-unknown-linux-gnu',
+};
+
+/**
+ * Build the catalogue entry for a version of the client, reading the hashes from the release.
+ *
+ * One version number instead of four URLs and four hashes typed by hand, because the alternative is
+ * a feature nobody uses: the release publishes a `.sha256` beside every tarball precisely so this
+ * can be assembled rather than transcribed.
+ */
+async function clientComponentFor(version: string): Promise<SonnClientComponentConfig> {
+  const clean = version.trim().replace(/^v/, '');
+  if (!/^\d+\.\d+\.\d+$/.test(clean)) {
+    throw new Error('invalid-version');
+  }
+
+  const urls: Record<string, string> = {};
+  const sha256: Record<string, string> = {};
+  for (const [arch, target] of Object.entries(CLIENT_TARGETS)) {
+    const url = `https://github.com/${CLIENT_REPO}/releases/download/v${clean}/sonn-client-${clean}-${target}.tar.gz`;
+    const response = await fetch(`${url}.sha256`);
+    if (!response.ok) {
+      throw new Error(`no-artifact-for-${arch}`);
+    }
+    // `sha256sum` writes "<hash>  <filename>"; the hash is all we keep.
+    const digest = (await response.text()).trim().split(/\s+/)[0] ?? '';
+    if (!/^[0-9a-f]{64}$/i.test(digest)) {
+      throw new Error(`bad-checksum-for-${arch}`);
+    }
+    urls[arch] = url;
+    sha256[arch] = digest;
+  }
+
+  return { name: CLIENT_COMPONENT, version: clean, urls, sha256 };
+}
 
 export function buildSonnClientRoutes(deps: SonnClientAdminHandlerDeps): Route[] {
   return [
@@ -148,6 +200,46 @@ export function buildSonnClientRoutes(deps: SonnClientAdminHandlerDeps): Route[]
         }
         res.writeHead(204);
         res.end();
+      },
+    },
+    {
+      method: 'POST',
+      pattern: /^\/sonnclients\/client-version$/,
+      handler: async (req, res) => {
+        const body = (await deps.readJsonBody(req, res)) as { version?: unknown } | null;
+        const version = typeof body?.version === 'string' ? body.version : '';
+        let entry: SonnClientComponentConfig;
+        try {
+          entry = await clientComponentFor(version);
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : 'invalid-version';
+          deps.log.warn('sonn client version not published', { version, reason });
+          deps.sendJson(res, 400, { error: reason });
+          return;
+        }
+
+        try {
+          await deps.configPort.updateConfig((config) => {
+            config.sonnClients = config.sonnClients ?? {};
+            const components = config.sonnClients.components ?? [];
+            const index = components.findIndex((candidate) => candidate.name === CLIENT_COMPONENT);
+            if (index >= 0) {
+              components[index] = entry;
+            } else {
+              components.push(entry);
+            }
+            config.sonnClients.components = components;
+          });
+        } catch (err) {
+          deps.log.warn('sonn client version update failed', { err, version });
+          deps.sendJson(res, 500, { error: 'client-version-failed' });
+          return;
+        }
+
+        // Nothing is pushed: every device asks on its next poll, installs when it is not playing,
+        // and reports what it ended up running.
+        deps.log.info('sonn client version set', { version: entry.version });
+        deps.sendJson(res, 200, entry);
       },
     },
     {

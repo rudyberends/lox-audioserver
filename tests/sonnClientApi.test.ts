@@ -242,6 +242,37 @@ test('how a speaker applies volume reaches the device, and nonsense does not', a
   assert.equal(desired.players[1].volume_control, undefined);
 });
 
+test('every device is told which client build it should be running', async () => {
+  const { call, admin, config } = createHarness();
+  await call('POST', '/api/sonnclients/register', REGISTRATION);
+
+  // Published centrally, not per device: a park where some speakers quietly stay behind on an old
+  // version is the thing a central version exists to prevent.
+  config.sonnClients = config.sonnClients ?? {};
+  config.sonnClients.components = [
+    {
+      name: 'sonn-client',
+      version: '1.2.3',
+      urls: { aarch64: 'https://example.test/sonn-client-1.2.3-aarch64.tar.gz' },
+      sha256: { aarch64: 'a'.repeat(64) },
+    },
+  ];
+
+  const desired = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', {
+      state: 'connected',
+      players: [],
+    })
+  ).json();
+
+  const client = desired.components.find(
+    (component: { name?: string }) => component.name === 'sonn-client',
+  );
+  assert.ok(client, 'the client build is offered without the device asking for it');
+  assert.equal(client.version, '1.2.3');
+  assert.equal(client.sha256, 'a'.repeat(64));
+});
+
 test('a disabled device keeps polling and is told to play nothing', async () => {
   const { call, admin } = createHarness();
   await call('POST', '/api/sonnclients/register', REGISTRATION);
