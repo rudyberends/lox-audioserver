@@ -408,6 +408,7 @@ export class SendspinOutput implements ZoneOutput {
         this.lastClientStateSignature = null;
         this.lastLoggedClientState = null;
         this.lastLoggedMuted = null;
+        this.lastAppliedMuted = null;
         this.activeSession = sendspinSession;
         this.clientConnected = true;
         this.clientState = null;
@@ -476,6 +477,7 @@ export class SendspinOutput implements ZoneOutput {
         this.lastClientStateSignature = null;
         this.lastLoggedClientState = null;
         this.lastLoggedMuted = null;
+        this.lastAppliedMuted = null;
         this.clientState = null;
         this.reactedClientState = null;
         this.externalSourceActive = false;
@@ -633,6 +635,12 @@ export class SendspinOutput implements ZoneOutput {
   }
   private set lastLoggedMuted(value: boolean | null) {
     this.primary.lastLoggedMuted = value;
+  }
+  private get lastAppliedMuted(): boolean | null {
+    return this.primary.lastAppliedMuted;
+  }
+  private set lastAppliedMuted(value: boolean | null) {
+    this.primary.lastAppliedMuted = value;
   }
 
   /** Whether there is a client connected and ready to receive PCM. */
@@ -897,9 +905,32 @@ export class SendspinOutput implements ZoneOutput {
     if (nextState) {
       this.clientState = nextState;
     }
-    // Skip the very first client state to avoid the client overriding the zone's default volume on connect.
-    if (!this.initialClientStateSkipped) {
+    /*
+     * Ignore the client's opening volume report, not merely its first message.
+     *
+     * A client comes up at its own default — 100 for the reference clients — and that
+     * must not become the zone's volume. The guard used to consume whichever message
+     * arrived first, which works only for a client that packs everything into one.
+     * sendspin-rs sends availability first and the player object second:
+     *
+     *   {"available":true,"state":"synchronized"}
+     *   {"player":{"volume":100,"muted":false,...}}
+     *
+     * so the guard was spent on a message carrying no volume at all, and the 100 in
+     * the next one was adopted — pulling the whole zone (and every other output in
+     * it) to full volume moments after a client connected.
+     *
+     * A message without a volume cannot override ours, so let it through and keep
+     * the guard armed for the one that can.
+     */
+    if (!this.initialClientStateSkipped && typeof update.volume === 'number') {
       this.initialClientStateSkipped = true;
+      this.log.debug('Sendspin ignored the client opening volume', {
+        zoneId: this.zoneId,
+        clientId: this.clientId,
+        clientVolume: update.volume,
+        zoneVolume: this.lastKnownVolume,
+      });
       return;
     }
     if (nextState && nextState !== this.reactedClientState) {
@@ -962,18 +993,31 @@ export class SendspinOutput implements ZoneOutput {
         });
       } else if (vol !== this.lastKnownVolume) {
         this.lastKnownVolume = vol;
+        this.log.debug('Sendspin adopting the client volume', {
+          zoneId: this.zoneId,
+          clientId: this.clientId,
+          volume: vol,
+        });
         this.ports.zoneManager.handleCommand(this.zoneId, 'volume_set', String(vol));
       }
     }
+    /*
+     * Only act when mute actually changed.
+     *
+     * Clients restate `muted` in every state message, so acting on its presence
+     * meant every single update also fired a `volume_set` — which is what produced
+     * a second, redundant zone command 1ms after the first. Mute now goes through
+     * the zone's own mute command, which remembers the level to come back to
+     * instead of routing an unmute through a volume the output happens to have
+     * cached.
+     */
     if (!this.options.ignoreVolumeUpdates && typeof update.muted === 'boolean') {
-      // No explicit mute command path in zoneManager; treat mute as volume 0/unmute restore.
-      if (update.muted) {
-        this.ports.zoneManager.handleCommand(this.zoneId, 'volume_set', '0');
-      } else {
+      if (update.muted !== this.lastAppliedMuted) {
+        this.lastAppliedMuted = update.muted;
         this.ports.zoneManager.handleCommand(
           this.zoneId,
-          'volume_set',
-          String(this.lastKnownVolume),
+          'mute',
+          update.muted ? '1' : '0',
         );
       }
     }

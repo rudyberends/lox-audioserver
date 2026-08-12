@@ -64,6 +64,12 @@ export class SendspinClientSender {
   public initialClientStateSkipped = false;
   public lastLoggedClientState: string | null = null;
   public lastLoggedMuted: boolean | null = null;
+  /**
+   * The mute state we last acted on, so a client restating `muted` in every update
+   * does not re-issue a zone command each time. Null until the client has reported
+   * one, and reset with the rest of the per-session state on disconnect.
+   */
+  public lastAppliedMuted: boolean | null = null;
 
   /** Send-ahead capacity model for the in-flight stream; recreated on each (re)start. */
   private capacityGate: ClientCapacityGate | null = null;
