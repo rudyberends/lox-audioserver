@@ -20,6 +20,7 @@ import {
   type AudioAnalysisEvent,
   type AudioAnalysisSubscription,
 } from '@/application/audio/audioAnalysisService';
+import { serverClockUs } from '@/shared/audio/serverClock';
 import { toApiZoneState } from '@/adapters/http/api/zoneProjection';
 import { resolveUriFromRef } from '@/domain/media/browseRef';
 import {
@@ -1836,6 +1837,14 @@ export class ApiHandler {
       };
       // Everything a consumer needs to turn these numbers back into dB and Hz. Without it a
       // client has to hardcode the same constants and drift when this end changes them.
+      //
+      // `timeline` and `serverNowUs` are what make `timestampUs` usable at all. The clock is
+      // monotonic with a process-relative origin (see serverClockUs), so a reference reading has to
+      // travel with it — and *what* the stamp means differs per output, which is the part a client
+      // cannot guess: on the scheduled-output timeline it is when the audio will be heard, ~250 ms
+      // in the future, so a display that renders on arrival leads the music by that much. On the
+      // engine timeline it is when the audio was captured, which for a buffering renderer is
+      // earlier than playback by an amount we do not measure yet.
       write({
         type: 'analysis.ready',
         zoneId,
@@ -1845,6 +1854,8 @@ export class ApiHandler {
         floorDb: ANALYSIS_DB_FLOOR,
         fullScale: ANALYSIS_FULL_SCALE,
         spectrum: spectrum ?? null,
+        timeline: options.feed === 'scheduled-output' ? 'presentation' : 'capture',
+        serverNowUs: serverClockUs(),
       });
       unsubscribeAnalysis = this.deps.subscribeAudioAnalysis(zoneId, options, (event) => {
         write(serializeAnalysisEvent(event));
@@ -1857,7 +1868,21 @@ export class ApiHandler {
         arm();
       }
     });
-    const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), SSE_KEEPALIVE_MS);
+    /*
+     * The keep-alive carries a clock reading instead of being a bare comment.
+     *
+     * One reference at `analysis.ready` is enough to *start* mapping the audio timeline onto the
+     * client's own, but not to stay mapped: the two clocks tick at slightly different rates, and a
+     * display left on a single sample slowly slides off the music. Repeating the reading costs a
+     * few bytes on a message that had to be sent anyway, and it doubles as the recovery path — a
+     * client that reconnects or wakes from sleep re-syncs on the next tick rather than on the next
+     * track.
+     */
+    const keepAlive = setInterval(() => {
+      if (!res.writableEnded) {
+        write({ type: 'analysis.clock', serverNowUs: serverClockUs() });
+      }
+    }, SSE_KEEPALIVE_MS);
     const close = (): void => {
       clearInterval(keepAlive);
       unsubscribeZone();

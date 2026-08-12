@@ -633,7 +633,14 @@ test('the analysis stream announces its subscription and serializes spectrum bin
        * amplitudes mean nothing without the dB window they span, and the bins mean nothing without
        * the frequency range they were binned over. A player that guessed drew 1 kHz at 26% of the
        * width where it belonged at 54%.
+       *
+       * `serverNowUs` is a live reading of a monotonic clock, so it is checked for shape rather
+       * than value — but it has to be *there*: without a reference reading the `timestampUs` on
+       * every following event is a number against an origin the client cannot know.
        */
+      assert.equal(typeof ready.serverNowUs, 'number');
+      assert.ok(Number.isFinite(ready.serverNowUs));
+      delete ready.serverNowUs;
       assert.deepEqual(ready, {
         type: 'analysis.ready',
         zoneId: 3,
@@ -645,6 +652,11 @@ test('the analysis stream announces its subscription and serializes spectrum bin
         floorDb: -60,
         fullScale: 65535,
         spectrum: { n_disp_bins: 16, scale: 'log', f_min: 40, f_max: 16000 },
+        // This harness zone is a Sendspin output, so the stream follows the scheduled-output
+        // timeline and the stamps say when the audio will be *heard* — about 250 ms out. A client
+        // that draws on arrival therefore leads the music; one that honours this delays to match.
+        // Zones on other outputs report 'capture' here, where the stamp is already in the past.
+        timeline: 'presentation',
       });
 
       analysisListener?.({ type: 'spectrum', bins: new Uint16Array([1, 2, 3]), timestampUs: 123 });
