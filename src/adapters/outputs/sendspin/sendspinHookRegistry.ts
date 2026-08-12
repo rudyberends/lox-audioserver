@@ -48,6 +48,7 @@ export class SendspinHookRegistry implements SendspinHookRegistryPort {
       onFormatChanged: (...args) => this.dispatch(clientId, 'onFormatChanged', ...args),
       onGoodbye: (...args) => this.dispatch(clientId, 'onGoodbye', ...args),
       onUnsupportedRoles: (...args) => this.dispatch(clientId, 'onUnsupportedRoles', ...args),
+      onNoncompliance: (...args) => this.dispatch(clientId, 'onNoncompliance', ...args),
     };
   }
 

@@ -120,7 +120,18 @@ test('sendspin: an artwork-only request-format does not re-announce the player s
 });
 
 test('sendspin: a player request-format still re-announces the player stream', () => {
-  const { socket, session } = connect(playerHello());
+  const { socket, session } = connect(
+    playerHello({
+      'player@v1_support': {
+        supported_formats: [
+          { codec: 'pcm', channels: 2, sample_rate: 48000, bit_depth: 16 },
+          { codec: 'pcm', channels: 2, sample_rate: 44100, bit_depth: 16 },
+        ],
+        buffer_capacity: 1_000_000,
+        supported_commands: [],
+      },
+    }),
+  );
   session.sendStreamStart({ codec: AudioCodec.PCM, sampleRate: 48000, channels: 2, bitDepth: 16 });
 
   session.handleText(
@@ -133,6 +144,72 @@ test('sendspin: a player request-format still re-announces the player stream', (
   const starts = socket.ofType('stream/start').filter((msg) => msg.payload?.player);
   assert.equal(starts.length, 2);
   assert.equal(starts[1].payload?.player.sample_rate, 44100);
+});
+
+test('sendspin: a format request outside the declared list is refused', () => {
+  const flagged: string[] = [];
+  const socket = new FakeSocket();
+  const session = new SendspinSession(socket as any, null, undefined, {}, {
+    onNoncompliance: (_s, reason) => flagged.push(reason),
+  });
+  session.handleText(
+    JSON.stringify({
+      type: 'client/hello',
+      payload: playerHello({
+        'player@v1_support': {
+          supported_formats: [
+            { codec: 'pcm', channels: 2, sample_rate: 48000, bit_depth: 16 },
+            { codec: 'pcm', channels: 2, sample_rate: 44100, bit_depth: 16 },
+          ],
+          buffer_capacity: 1_000_000,
+          supported_commands: [],
+        },
+      }),
+    }),
+  );
+  session.sendStreamStart({ codec: AudioCodec.PCM, sampleRate: 48000, channels: 2, bitDepth: 16 });
+
+  // 192 kHz was never declared. Honouring it would have the client fail to decode
+  // every packet, so the format in force is kept and re-announced.
+  session.handleText(
+    JSON.stringify({ type: 'stream/request-format', payload: { player: { sample_rate: 192000 } } }),
+  );
+
+  assert.equal(session.getStreamFormat().sampleRate, 48000, 'undeclared rate must not be adopted');
+  const starts = socket.ofType('stream/start').filter((msg) => msg.payload?.player);
+  assert.equal(starts.length, 2, 'the client should still be told what it is getting');
+  assert.equal(starts[1].payload?.player.sample_rate, 48000);
+  assert.equal(flagged.length, 1);
+  assert.match(flagged[0], /supported_formats/);
+
+  // A declared format still goes through.
+  session.handleText(
+    JSON.stringify({ type: 'stream/request-format', payload: { player: { sample_rate: 44100 } } }),
+  );
+  assert.equal(session.getStreamFormat().sampleRate, 44100);
+});
+
+test('sendspin: a controller command from a client without the role is refused', () => {
+  const commands: unknown[] = [];
+  const flagged: string[] = [];
+  const socket = new FakeSocket();
+  const session = new SendspinSession(socket as any, null, undefined, {}, {
+    onGroupCommand: (_s, cmd) => commands.push(cmd),
+    onNoncompliance: (_s, reason) => flagged.push(reason),
+  });
+  // Player only — no controller role negotiated.
+  session.handleText(JSON.stringify({ type: 'client/hello', payload: playerHello() }));
+
+  session.handleText(
+    JSON.stringify({ type: 'client/command', payload: { controller: { command: 'pause' } } }),
+  );
+  session.handleText(
+    JSON.stringify({ type: 'client/command', payload: { controller: { command: 'volume', volume: 5 } } }),
+  );
+
+  assert.deepEqual(commands, [], 'a player-only client must not drive the group');
+  assert.equal(flagged.length, 1, 'the deviation is reported once per reason');
+  assert.match(flagged[0], /without the controller role/);
 });
 
 test('sendspin: visualizer support is read from the key matching the negotiated role', () => {

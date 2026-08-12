@@ -448,6 +448,20 @@ export class SendspinOutput implements ZoneOutput {
       },
       onPlayerState: (_session: SendspinSession, update: SendspinPlayerStateUpdate) => this.handleClientState(update),
       onGroupCommand: (_session: SendspinSession, command: SendspinGroupCommand) => this.handleGroupCommand(command),
+      /*
+       * Say out loud what the session tolerated. These are things a conformant
+       * client never does — an undeclared format request, a role object without the
+       * role — and they are the kind of deviation that otherwise only surfaces as
+       * "the client sounds broken" with nothing in the log to point at it. Fired
+       * once per reason, so warning level is safe.
+       */
+      onNoncompliance: (_session: SendspinSession, reason: string) => {
+        this.log.warn('Sendspin client deviated from the spec', {
+          zoneId: this.zoneId,
+          clientId: this.activeClientId(),
+          reason,
+        });
+      },
       onDisconnected: (sendspinSession: SendspinSession) => {
         // A stale/superseded session can close long after a newer one took over
         // (e.g. an unclean drop the heartbeat only reaps ~30-60s later). React
