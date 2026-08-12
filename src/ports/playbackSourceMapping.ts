@@ -57,6 +57,7 @@ export function toEngineInputSpec(source: PlaybackSource): EngineInputSpec {
         preDelayMs: source.preDelayMs,
         startAtSec: source.startAtSec,
         realTime: source.realTime,
+        nativeFormat: source.nativeFormat,
       };
     default:
       throw new Error('Unknown PlaybackSource.');
@@ -107,6 +108,7 @@ export function toPlaybackSource(input: EngineInputSpec): PlaybackSource {
         preDelayMs: input.preDelayMs,
         startAtSec: input.startAtSec,
         realTime: input.realTime,
+        nativeFormat: input.nativeFormat,
       };
     case 'silence':
       throw new Error('EngineInputSpec kind "silence" is not supported by the audio engine.');

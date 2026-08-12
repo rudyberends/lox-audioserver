@@ -15,6 +15,20 @@ export type PlaybackSource =
       startAtSec?: number;
       /** Whether ffmpeg should pace input with -re (default: true). */
       realTime?: boolean;
+      /**
+       * Native format of the file, when the caller knows it up front.
+       *
+       * Read in place of the probe cache, so a scanned library track needs no probe to take the
+       * bit-perfect bypass. Omit when unknown; the engine then resamples as before.
+       */
+      nativeFormat?: {
+        sampleRate: number;
+        channels: number;
+        /** Omit for lossy codecs; there is no original depth to preserve. */
+        bitDepth?: 16 | 24 | 32;
+        lossless: boolean;
+        codecName?: string;
+      };
     }
   | {
       kind: 'url';

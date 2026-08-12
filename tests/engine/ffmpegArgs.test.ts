@@ -63,6 +63,40 @@ test('buildInputArgs(file) leaves a paced FLAC session on -re alone', () => {
   assert.ok(!args.includes('-readrate'));
 });
 
+/*
+ * The payoff of recording a library file's format at scan time.
+ *
+ * `isBitPerfect` returns false on its first guard when the source format is unknown, and an unknown
+ * source is what every local file used to be outside the sendspin path. The result was visible in the
+ * signal-path readout as "the resampler ran — the source format was not declared in time": soxr plus,
+ * on a 16-bit integer profile, dither, over a file that already matched the output exactly.
+ */
+test('a declared file format that matches the output takes the bypass', () => {
+  const builder = new FfmpegArgBuilder(
+    { kind: 'file', path: '/music/a.flac' },
+    'flac',
+    defaultOutput,
+    false,
+    undefined,
+    { sampleRate: 44100, channels: 2, bitDepth: 16, lossless: true, codecName: 'flac' },
+  );
+  assert.equal(builder.isBitPerfect(null), true);
+  assert.ok(!builder.buildOutputArgs(null).includes('-af'), 'no filter at all, not even a resampler');
+});
+
+test('a declared file format that does not match still converts', () => {
+  const builder = new FfmpegArgBuilder(
+    { kind: 'file', path: '/music/hires.flac' },
+    'flac',
+    defaultOutput,
+    false,
+    undefined,
+    { sampleRate: 96000, channels: 2, bitDepth: 24, lossless: true, codecName: 'flac' },
+  );
+  assert.equal(builder.isBitPerfect(null), false);
+  assert.ok(builder.buildOutputArgs(null).includes('-af'), '96/24 into a 44.1/16 sink has work to do');
+});
+
 test('buildInputArgs(url) sets reconnect flags and -i url', () => {
   const args = makeBuilder({ kind: 'url', url: 'http://x/y.mp3' }).buildInputArgs();
   assert.ok(args.includes('-reconnect'));

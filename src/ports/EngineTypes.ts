@@ -10,6 +10,25 @@ export type PlaybackSource =
       startAtSec?: number;
       /** Whether ffmpeg should pace input with -re (default: true). */
       realTime?: boolean;
+      /**
+       * Native audio format of this file, when the caller knows it up front.
+       *
+       * Same purpose as the URL variant's: without it the engine cannot tell whether a conversion is
+       * needed, so it resamples on the assumption that one is. For a local FLAC that already matches
+       * the output that is soxr plus dither over every sample, for nothing.
+       *
+       * The library records this during its scan, from the same parse it does for tags, so declaring
+       * it costs no extra read at playback time. Omit when unknown — the engine then behaves as
+       * before.
+       */
+      nativeFormat?: {
+        sampleRate: number;
+        channels: number;
+        /** Omit for lossy codecs; there is no original depth to preserve. */
+        bitDepth?: 16 | 24 | 32;
+        lossless: boolean;
+        codecName?: string;
+      };
     }
   | {
       kind: 'url';
@@ -71,6 +90,14 @@ export type EngineInputSpec =
       startAtSec?: number;
       /** Whether ffmpeg should pace input with -re (default: true). */
       realTime?: boolean;
+      /** Native format of the file when the caller knows it — see `PlaybackSource`. */
+      nativeFormat?: {
+        sampleRate: number;
+        channels: number;
+        bitDepth?: 16 | 24 | 32;
+        lossless: boolean;
+        codecName?: string;
+      };
     }
   | {
       kind: 'url';

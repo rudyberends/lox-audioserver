@@ -67,6 +67,7 @@ import './subsonicApi.test';
 import './subsonicAdminApi.test';
 import './localLibraryStore.search.test';
 import './localLibraryStore.delete.test';
+import './localLibraryStore.sourceFormat.test';
 import './localLibraryProvider.folders.test';
 import './localLibraryResolveItem.test';
 import './zonePlayerEndGuard.test';

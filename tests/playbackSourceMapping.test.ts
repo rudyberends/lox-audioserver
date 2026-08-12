@@ -44,6 +44,9 @@ test('a file source survives the round trip with every field set', () => {
     startAtSec: 3,
     // Dropped by the old reverse mapper, which silently re-enabled ffmpeg's `-re` pacing.
     realTime: false,
+    // Dropping this one would cost a scanned library track its bit-perfect bypass, silently: the
+    // engine would simply not know the format and resample as if it were unknown.
+    nativeFormat: { sampleRate: 44100, channels: 2, bitDepth: 16, lossless: true, codecName: 'flac' },
   };
   assert.deepEqual(toPlaybackSource(toEngineInputSpec(source)), source);
 });

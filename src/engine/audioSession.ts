@@ -298,6 +298,19 @@ export class AudioSession {
         };
       }
       if (this.source.kind === 'file') {
+        // A declaration beats the cache: the library records the format during its scan, so a track
+        // that has been scanned needs no probe at all. The cache remains the answer for a file
+        // nothing has declared — an alert, or a track a caller probed itself before starting.
+        const declared = this.source.nativeFormat;
+        if (declared) {
+          return {
+            sampleRate: declared.sampleRate,
+            channels: declared.channels,
+            bitDepth: declared.bitDepth ?? null,
+            lossless: declared.lossless,
+            codecName: declared.codecName,
+          };
+        }
         return getCachedSourceFormat(this.source.path) ?? undefined;
       }
       return undefined;

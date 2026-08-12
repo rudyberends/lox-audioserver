@@ -34,6 +34,7 @@ import {
   type PlaylistRow,
   type StoredTrack,
   type TrackFileRow,
+  type TrackSourceFormat,
 } from '@/adapters/content/providers/localLibraryStore';
 import type { PlaylistEntry } from '@/ports/ContentTypes';
 
@@ -104,6 +105,33 @@ interface SafeTags {
   compilation: boolean;
   picture?: mm.IPicture;
   duration?: number;
+  /** The file's own audio format, when the parse reported enough of it to be usable. */
+  format?: TrackSourceFormat | null;
+}
+
+/**
+ * `music-metadata`'s format block, narrowed to what the engine can act on.
+ *
+ * The scan already parses every file for its tags; this reads four more fields off the same result
+ * instead of discarding them. Nothing is inferred: without a rate and a channel count there is no
+ * usable answer, and a depth is only reported for a lossless codec — a lossy file has no original
+ * depth to preserve, and claiming one would invite a bit-perfect verdict that cannot be true.
+ */
+function toTrackSourceFormat(format: mm.IAudioMetadata['format']): TrackSourceFormat | null {
+  const sampleRate = format.sampleRate;
+  const channels = format.numberOfChannels;
+  if (!sampleRate || !channels) {
+    return null;
+  }
+  const lossless = format.lossless === true;
+  const depth = format.bitsPerSample;
+  return {
+    codec: (format.codec ?? '').toLowerCase() || 'unknown',
+    sampleRate,
+    channels,
+    bitDepth: lossless && (depth === 16 || depth === 24 || depth === 32) ? depth : null,
+    lossless,
+  };
 }
 
 type AlbumIdPayload = { storageId: string; artist: string; album: string };
@@ -128,6 +156,24 @@ export class LocalLibraryProvider {
    * keyed by a file path and has nothing to do with browsing — so rather than handing out the database,
    * this hands out the two statements that touch that one table.
    */
+  /**
+   * What the scan recorded about a file's own audio format.
+   *
+   * Validated against the file on disk inside the store — a stale row answers null rather than a
+   * wrong format, because a wrong one would earn a bit-perfect bypass it cannot honour.
+   */
+  public readonly sourceFormats = {
+    get: (absolutePath: string) => {
+      // The engine holds a filesystem path; the library is keyed by the path relative to its root.
+      // Anything outside that root is not a library track — an alert, a stray file — and has no row.
+      const relPath = path.relative(this.baseDir, absolutePath);
+      if (!relPath || relPath.startsWith('..') || path.isAbsolute(relPath)) {
+        return null;
+      }
+      return this.store.getSourceFormat(relPath, absolutePath);
+    },
+  };
+
   public readonly waveforms = {
     get: (path: string, file?: { size: number; mtimeMs: number }) => this.store.getWaveform(path, file),
     upsert: (entry: {
@@ -1346,9 +1392,15 @@ export class LocalLibraryProvider {
     // part (tag parse, cover extraction, artist-art probe). Size is compared as
     // well as mtime because a restore or in-place edit can preserve one but not
     // the other.
+    //
+    // A row from before the format columns existed is *not* accurate, though, however untouched the
+    // file is. Nothing can backfill it from the database — the answer is in the file — so a row with
+    // no codec is re-read once. Without this, an upgraded library would keep resampling every track
+    // it already had until each file happened to change.
     const known = this.store.findByStoragePath(storageId, relPath);
     if (
       known &&
+      known.codec &&
       known.size === fileStat.size &&
       known.mtime === Math.floor(fileStat.mtimeMs)
     ) {
@@ -1387,6 +1439,7 @@ export class LocalLibraryProvider {
       mtime: fileStat?.mtimeMs ? Math.floor(fileStat.mtimeMs) : undefined,
       size: fileStat?.size,
       duration: track.duration,
+      format: metadata.format,
     });
   }
 
@@ -1465,6 +1518,7 @@ export class LocalLibraryProvider {
         compilation: metadata.common.compilation === true,
         picture: metadata.common.picture?.[0],
         duration: metadata.format.duration ? Math.round(metadata.format.duration) : undefined,
+        format: toTrackSourceFormat(metadata.format),
       };
     } catch {
       return { title: '', album: '', artist: '', albumArtist: '', compilation: false };

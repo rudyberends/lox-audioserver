@@ -71,6 +71,16 @@ export class ContentManager {
   private readonly spotifyManagerProvider: SpotifyServiceManagerProvider;
   private readonly library: LocalLibraryProvider;
 
+  /**
+   * The recorded native format of a library track, for the engine's bit-perfect decision.
+   *
+   * Narrow on purpose, like `waveformStore`: the playback path needs one answer about one file, not
+   * the library provider.
+   */
+  public get sourceFormatLookup(): LocalLibraryProvider['sourceFormats']['get'] {
+    return (absolutePath) => this.library.sourceFormats.get(absolutePath);
+  }
+
   /** The library's waveform sidecar, for whoever prepares and serves them. */
   public get waveformStore(): {
     getWaveform: LocalLibraryProvider['waveforms']['get'];

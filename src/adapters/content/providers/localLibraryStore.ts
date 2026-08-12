@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
+import { statSync } from 'node:fs';
 import { ensureDir, resolveDataDir } from '@/shared/utils/file';
 
 export interface TrackInsert {
@@ -14,6 +15,26 @@ export interface TrackInsert {
   mtime?: number;
   size?: number;
   duration?: number;
+  /** The file's own audio format, when the scan could read it. See {@link TrackSourceFormat}. */
+  format?: TrackSourceFormat | null;
+}
+
+/**
+ * A file's native audio format, as the scanner found it.
+ *
+ * Recorded so the engine can skip a resample that would not change anything: without it a local file
+ * reaches the arg builder as an unknown quantity, `isBitPerfect` cannot clear its first guard, and a
+ * FLAC that already matches the output gets run through soxr and dithered for nothing.
+ *
+ * `bitDepth` is null for lossy codecs, which have no original depth to preserve — the same contract
+ * as `ProbedSourceFormat`, so the two are interchangeable to a caller.
+ */
+export interface TrackSourceFormat {
+  codec: string;
+  sampleRate: number;
+  channels: number;
+  bitDepth: 16 | 24 | 32 | null;
+  lossless: boolean;
 }
 
 export interface StoredTrack {
@@ -29,6 +50,12 @@ export interface StoredTrack {
   mtime?: number | null;
   size?: number | null;
   duration?: number | null;
+  /** Null on rows written before the format columns existed — see `getSourceFormat`. */
+  codec?: string | null;
+  sample_rate?: number | null;
+  bit_depth?: number | null;
+  channels?: number | null;
+  lossless?: number | null;
 }
 
 export interface PagedResult<T> {
@@ -120,6 +147,7 @@ export class LocalLibraryStore {
   private static readonly SCHEMA_V5 = 5; // adds user-editable playlists
   private static readonly SCHEMA_V6 = 6; // adds materialized album rollup
   private static readonly SCHEMA_V7 = 7; // adds track_waveforms sidecar table
+  private static readonly SCHEMA_V8 = 8; // adds the source audio format on tracks
 
   public constructor(options: { dbPath?: string } = {}) {
     this.dbPath = options.dbPath ?? resolveDataDir('music', 'library.db');
@@ -229,6 +257,11 @@ export class LocalLibraryStore {
     const params = {
       ...track,
       albumArtist: normalizeGroupArtist(track.albumArtist || track.artist),
+      codec: track.format?.codec ?? null,
+      sampleRate: track.format?.sampleRate ?? null,
+      bitDepth: track.format?.bitDepth ?? null,
+      channels: track.format?.channels ?? null,
+      lossless: track.format ? (track.format.lossless ? 1 : 0) : null,
     };
     // A retag can move a track to a different album artist; the group it left
     // has to be recomputed too or it keeps a row with a stale track count.
@@ -238,8 +271,10 @@ export class LocalLibraryStore {
       )
       .get(track.storageId, track.relPath) as { group_artist: string } | undefined;
     const stmt = db.prepare(`
-      INSERT INTO tracks (storage_id, rel_path, title, album, artist, album_artist, audiopath, cover, mtime, size, duration)
-      VALUES (@storageId, @relPath, @title, @album, @artist, @albumArtist, @audiopath, @cover, @mtime, @size, @duration)
+      INSERT INTO tracks (storage_id, rel_path, title, album, artist, album_artist, audiopath, cover, mtime, size, duration,
+        codec, sample_rate, bit_depth, channels, lossless)
+      VALUES (@storageId, @relPath, @title, @album, @artist, @albumArtist, @audiopath, @cover, @mtime, @size, @duration,
+        @codec, @sampleRate, @bitDepth, @channels, @lossless)
       ON CONFLICT(storage_id, rel_path) DO UPDATE SET
         title = excluded.title,
         album = excluded.album,
@@ -249,7 +284,12 @@ export class LocalLibraryStore {
         cover = excluded.cover,
         mtime = excluded.mtime,
         size = excluded.size,
-        duration = excluded.duration
+        duration = excluded.duration,
+        codec = excluded.codec,
+        sample_rate = excluded.sample_rate,
+        bit_depth = excluded.bit_depth,
+        channels = excluded.channels,
+        lossless = excluded.lossless
     `);
     stmt.run(params);
     // Keep the rollup in step with the row just written, so a caller that inserts
@@ -566,6 +606,77 @@ export class LocalLibraryStore {
       .prepare('SELECT * FROM tracks WHERE audiopath = ? LIMIT 1')
       .get(audiopath) as StoredTrack | undefined;
     return row ?? null;
+  }
+
+  /**
+   * The recorded native format of a track, or null when it cannot be vouched for.
+   *
+   * This is read on the playback path to let the engine take a bypass, so a *wrong* answer is worse
+   * than no answer: a declared format that does not match the file makes `isBitPerfect` clear its
+   * guard, leaves the filter chain empty, and lets ffmpeg insert its own resampler with default
+   * options — a silent conversion in place of the described one. Null keeps the old behaviour, which
+   * is merely a resample nobody needed.
+   *
+   * So the row is only believed while it still describes the file on disk. `mtime` and `size` were
+   * already recorded per track; comparing them costs one stat and catches the case the scan cannot:
+   * a file re-encoded in place between scans.
+   *
+   * Keyed on `rel_path` rather than the audiopath, because the caller is the playback path and what
+   * it holds is a file path. `rel_path` already carries its storage prefix (`local/…`, `nas/<id>/…`),
+   * so it identifies a file across storages on its own.
+   *
+   * @param absolutePath Where the file actually is, for the staleness check. Omit to skip it.
+   */
+  public getSourceFormat(relPath: string, absolutePath?: string): TrackSourceFormat | null {
+    const db = this.requireDb();
+    const row = db
+      .prepare(
+        'SELECT codec, sample_rate, bit_depth, channels, lossless, mtime, size FROM tracks WHERE rel_path = ? LIMIT 1',
+      )
+      .get(relPath) as
+      | {
+          codec: string | null;
+          sample_rate: number | null;
+          bit_depth: number | null;
+          channels: number | null;
+          lossless: number | null;
+          mtime: number | null;
+          size: number | null;
+        }
+      | undefined;
+    if (!row?.codec || !row.sample_rate || !row.channels) {
+      return null;
+    }
+    if (absolutePath && !this.fileStillMatches(absolutePath, row.mtime, row.size)) {
+      return null;
+    }
+    const depth = row.bit_depth;
+    return {
+      codec: row.codec,
+      sampleRate: row.sample_rate,
+      channels: row.channels,
+      bitDepth: depth === 16 || depth === 24 || depth === 32 ? depth : null,
+      lossless: row.lossless === 1,
+    };
+  }
+
+  private fileStillMatches(
+    absolutePath: string,
+    mtime: number | null,
+    size: number | null,
+  ): boolean {
+    if (mtime == null || size == null) {
+      return false;
+    }
+    try {
+      const stat = statSync(absolutePath);
+      // `Math.floor`, because that is how the scan wrote it. Rounding here instead would disagree
+      // with the stored value for most files and quietly reject every format this exists to serve.
+      return Math.floor(stat.mtimeMs) === mtime && stat.size === size;
+    } catch {
+      // Unreadable or moved: not something to declare a format for.
+      return false;
+    }
   }
 
   public findByStoragePath(storageId: string, relPath: string): StoredTrack | null {
@@ -887,6 +998,7 @@ export class LocalLibraryStore {
 
     const userVersion = Number(db.pragma('user_version', { simple: true }) ?? 0);
     this.ensureAlbumArtistColumn(db);
+    this.ensureTrackFormatColumns(db);
     db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(storage_id, album_artist, album);');
     db.exec('UPDATE tracks SET album_artist = artist WHERE NULLIF(TRIM(album_artist), \'\') IS NULL;');
 
@@ -997,6 +1109,11 @@ export class LocalLibraryStore {
 
     if (userVersion < LocalLibraryStore.SCHEMA_V7) {
       db.pragma(`user_version = ${LocalLibraryStore.SCHEMA_V7}`);
+    }
+    if (userVersion < LocalLibraryStore.SCHEMA_V8) {
+      // The columns themselves are added by ensureTrackFormatColumns, which runs unconditionally;
+      // this only records how far the schema has come.
+      db.pragma(`user_version = ${LocalLibraryStore.SCHEMA_V8}`);
     }
   }
 
@@ -1246,6 +1363,32 @@ export class LocalLibraryStore {
     const columns = db.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === 'album_artist')) {
       db.exec('ALTER TABLE tracks ADD COLUMN album_artist TEXT NOT NULL DEFAULT \'\';');
+    }
+  }
+
+  /**
+   * Add the source-format columns to an existing database.
+   *
+   * Idempotent and unconditional, like `ensureAlbumArtistColumn`: a `user_version` bump alone cannot
+   * be trusted to mean the columns exist, since a database may have been created by a newer schema
+   * and then opened by an older build. Existing rows keep NULLs and simply read as undeclared until
+   * the next scan fills them in — which is the same state they are in today, so nothing regresses
+   * while a library is still unscanned.
+   */
+  private ensureTrackFormatColumns(db: Database.Database): void {
+    const columns = db.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>;
+    const present = new Set(columns.map((column) => column.name));
+    const additions: Array<[string, string]> = [
+      ['codec', 'TEXT'],
+      ['sample_rate', 'INTEGER'],
+      ['bit_depth', 'INTEGER'],
+      ['channels', 'INTEGER'],
+      ['lossless', 'INTEGER'],
+    ];
+    for (const [name, type] of additions) {
+      if (!present.has(name)) {
+        db.exec(`ALTER TABLE tracks ADD COLUMN ${name} ${type};`);
+      }
     }
   }
 

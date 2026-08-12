@@ -386,6 +386,26 @@ export function createRuntime(): Runtime {
    */
   const waveformService = new WaveformService(contentManager.waveformStore);
 
+  // The library knows every scanned file's native format, from the parse it already does for tags.
+  // Handing that to the audio manager is what lets a local FLAC that already matches the output take
+  // the bit-perfect bypass instead of being resampled and dithered for nothing. Wired here because
+  // the library is built after the audio manager.
+  audioManager.setDeclaredFileFormatSource((filePath) => {
+    const format = contentManager.sourceFormatLookup(filePath);
+    if (!format) {
+      return null;
+    }
+    // The store says `null` for "no depth to preserve" (a lossy codec); the engine source says
+    // "absent". Same statement, two spellings — and a literal null here would read as a depth.
+    return {
+      sampleRate: format.sampleRate,
+      channels: format.channels,
+      ...(format.bitDepth ? { bitDepth: format.bitDepth } : {}),
+      lossless: format.lossless,
+      codecName: format.codec,
+    };
+  });
+
   const contentAdapter = createContentAdapter(contentManager, {
     appleMusic: appleMusicStreamResolver,
     deezer: deezerStreamResolver,

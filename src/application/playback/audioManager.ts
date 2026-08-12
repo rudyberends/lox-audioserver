@@ -17,6 +17,15 @@ import type { PlaybackService } from '@/application/playback/PlaybackService';
 import type { ZoneAudioPreferences } from '@/application/playback/ZoneAudioPreferences';
 import { EqualizerRestartScheduler } from '@/application/playback/EqualizerRestartScheduler';
 
+/** What a caller may declare about a local file. Mirrors the engine source's `nativeFormat`. */
+export type DeclaredFileFormat = {
+  sampleRate: number;
+  channels: number;
+  bitDepth?: 16 | 24 | 32;
+  lossless: boolean;
+  codecName?: string;
+};
+
 import { toEngineInputSpec } from '@/ports/playbackSourceMapping';
 import type {
   PlaybackMetadata,
@@ -64,6 +73,36 @@ export class AudioManager {
    * Keyed by `${zoneId}:${streamId}`.
    */
   private readonly subscriberHandles = new Map<string, Set<() => void>>();
+
+  /**
+   * Where a local file's native format comes from, when something knows it.
+   *
+   * Set during bootstrap rather than passed in, because the library that answers it is built after
+   * this manager. Unset, every file stays undeclared and the engine resamples as it always did.
+   */
+  private declaredFileFormat: ((filePath: string) => DeclaredFileFormat | null) | null = null;
+
+  public setDeclaredFileFormatSource(
+    lookup: ((filePath: string) => DeclaredFileFormat | null) | null,
+  ): void {
+    this.declaredFileFormat = lookup;
+  }
+
+  /**
+   * Attach the file's own format to a source that does not carry one.
+   *
+   * `isBitPerfect` needs the source format to clear its first guard, and it is consulted when the
+   * ffmpeg args are built — synchronously, at session construction. So the answer has to be present
+   * *before* the engine starts, which is why it is looked up here rather than probed there. For a
+   * scanned library track it is a single indexed read plus one stat.
+   */
+  private declareFileFormat(source: PlaybackSource | null): PlaybackSource | null {
+    if (!source || source.kind !== 'file' || source.nativeFormat || !this.declaredFileFormat) {
+      return source;
+    }
+    const declared = this.declaredFileFormat(source.path);
+    return declared ? { ...source, nativeFormat: declared } : source;
+  }
 
   constructor(
     playbackService: PlaybackService,
@@ -243,11 +282,8 @@ export class AudioManager {
       this.prefs.setPcmPreference(zoneId, requiresPcm);
     }
     const startAtSec = this.normalizeStartAtSec(options?.startAtSec);
-    const playbackSource = this.decorateRadioSource(
-      zoneId,
-      resolvePlaybackSource(source),
-      metadata,
-      source,
+    const playbackSource = this.declareFileFormat(
+      this.decorateRadioSource(zoneId, resolvePlaybackSource(source), metadata, source),
     );
     const effectiveSource = this.applyStartAt(playbackSource, startAtSec, metadata);
     return this.startWithResolvedSource(
