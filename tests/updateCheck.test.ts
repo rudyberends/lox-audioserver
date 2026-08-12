@@ -18,6 +18,7 @@ const RELEASES = {
   ],
   'https://api.github.com/repos/o/ui/releases/latest': { tag_name: 'v5.1.0' },
   'https://api.github.com/repos/o/player/releases/latest': { tag_name: 'v0.1.0' },
+  'https://api.github.com/repos/o/sonn-client/releases/latest': { tag_name: 'v1.4.0' },
   'https://registry.npmjs.org/@sonn-audio/node-sendspin': {
     'dist-tags': { latest: '0.3.8' },
     description: 'Sendspin',
@@ -47,6 +48,7 @@ function harness(overrides: { declared?: Record<string, string> } = {}): Harness
     coreRepo: 'o/core',
     uiRepo: 'o/ui',
     playerRepo: 'o/player',
+    sonnClientRepo: 'o/sonn-client',
   });
   return {
     checker,
@@ -70,6 +72,7 @@ test('the update check reports the newest tags it found', async () => {
       corePrerelease: '4.1.0-beta.1',
       ui: '5.1.0',
       player: '0.1.0',
+      sonnClient: '1.4.0',
       components: { '@sonn-audio/node-sendspin': '0.3.8' },
       componentDescriptions: undefined,
     },

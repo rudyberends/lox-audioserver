@@ -106,11 +106,36 @@ export type MiscHandlerDeps = {
   onLoxoneToggle?: (enabled: boolean) => Promise<void>;
   loxoneNotifier?: LoxoneWsNotifier;
   sonnCorePeers: SonnCorePeerRegistry;
+  /**
+   * Versions the speakers are running, oldest first.
+   *
+   * Here rather than on its own screen because "something is behind" has one home in this UI: the
+   * chip in the shell reads this payload, and a speaker left on an old build is exactly the kind of
+   * thing nobody goes looking for.
+   */
+  sonnClientVersions?: () => string[];
   /** Whether this request carries a valid admin session; see handleInfo. */
   isAuthenticated: (req: IncomingMessage) => boolean;
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
 };
+
+/** Order two dotted versions oldest-first, so a park's laggard sorts to the front. */
+function compareVersions(a: string, b: string): number {
+  const parts = (value: string): number[] =>
+    value
+      .replace(/^v/, '')
+      .split(/[.-]/)
+      .map((piece) => Number.parseInt(piece, 10))
+      .map((piece) => (Number.isFinite(piece) ? piece : 0));
+  const left = parts(a);
+  const right = parts(b);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const diff = (left[index] ?? 0) - (right[index] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
 
 export function buildMiscRoutes(deps: MiscHandlerDeps): Route[] {
   // In-flight gates — captured by handler closures so /adminui/update and
@@ -379,6 +404,9 @@ function handleInfo(
     const buildVersion = readBuildVersion(pkgVersion);
     const packages = readAddonPackageVersions();
     const player = { installed: readPlayerVersion(deps.runtimeConfig.http.publicDir) };
+    // The oldest, because that is what "the speakers run X" has to mean when they disagree.
+    const runningClients = (deps.sonnClientVersions?.() ?? []).filter(Boolean).sort(compareVersions);
+    const sonnClient = { installed: runningClients[0] ?? null };
 
     const payload = {
       ...bootstrap,
@@ -395,6 +423,7 @@ function handleInfo(
       loxoneEnabled: cfg.system.audioserver.loxoneEnabled === true,
       packages,
       player,
+      sonnClient,
       containerized,
       // Whether a server-core update will auto-restart, so the UI can either
       // promise a reboot or tell the user to restart the service manually.

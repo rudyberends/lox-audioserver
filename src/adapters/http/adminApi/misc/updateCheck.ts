@@ -11,6 +11,8 @@ export type UpdateCheckLatest = {
   corePrerelease: string | null;
   ui: string | null;
   player: string | null;
+  /** Newest published build of the client the speakers run. */
+  sonnClient: string | null;
   components: Record<string, string>;
   componentDescriptions: Record<string, string>;
 };
@@ -22,13 +24,20 @@ export type GithubPart = {
   corePrerelease: string | null;
   ui: string | null;
   player: string | null;
+  sonnClient: string | null;
 };
 export type NpmPart = {
   components: Record<string, string>;
   componentDescriptions: Record<string, string>;
 };
 
-const EMPTY_GITHUB: GithubPart = { core: null, corePrerelease: null, ui: null, player: null };
+const EMPTY_GITHUB: GithubPart = {
+  core: null,
+  corePrerelease: null,
+  ui: null,
+  player: null,
+  sonnClient: null,
+};
 const EMPTY_NPM: NpmPart = { components: {}, componentDescriptions: {} };
 
 /** How long to leave an upstream alone after it refused, when it did not say itself. */
@@ -46,6 +55,7 @@ export type UpdateCheckerDeps = {
   coreRepo?: string;
   uiRepo?: string;
   playerRepo?: string;
+  sonnClientRepo?: string;
 };
 
 export type UpdateChecker = { check(force: boolean): Promise<UpdateCheckResult> };
@@ -132,6 +142,7 @@ export function createUpdateChecker(deps: UpdateCheckerDeps): UpdateChecker {
   const coreRepo = deps.coreRepo ?? 'sonn-audio/core';
   const uiRepo = deps.uiRepo ?? 'sonn-audio/adminui';
   const playerRepo = deps.playerRepo ?? 'sonn-audio/player';
+  const sonnClientRepo = deps.sonnClientRepo ?? 'sonn-audio/sonn-client';
 
   /**
    * Newest release tag for a repo, tried three ways: a repo with no non-prerelease
@@ -180,17 +191,19 @@ export function createUpdateChecker(deps: UpdateCheckerDeps): UpdateChecker {
   /** Release tags for core/UI/player. Rejects when the API refused, so the caller
    *  keeps what it knew instead of storing four nulls as an answer. */
   async function fetchGithubPart(): Promise<GithubPart> {
-    const [coreTag, corePrereleaseTag, uiTag, playerTag] = await Promise.all([
+    const [coreTag, corePrereleaseTag, uiTag, playerTag, sonnClientTag] = await Promise.all([
       fetchRepoLatestTag(coreRepo),
       fetchRepoLatestPrerelease(coreRepo),
       fetchRepoLatestTag(uiRepo),
       fetchRepoLatestTag(playerRepo),
+      fetchRepoLatestTag(sonnClientRepo),
     ]);
     return {
       core: stripV(coreTag),
       corePrerelease: stripV(corePrereleaseTag),
       ui: stripV(uiTag),
       player: stripV(playerTag),
+      sonnClient: stripV(sonnClientTag),
     };
   }
 
@@ -252,6 +265,7 @@ export function createUpdateChecker(deps: UpdateCheckerDeps): UpdateChecker {
           corePrerelease: githubPart.corePrerelease,
           ui: githubPart.ui,
           player: githubPart.player,
+          sonnClient: githubPart.sonnClient,
           components: npmPart.components,
           componentDescriptions: npmPart.componentDescriptions,
         },

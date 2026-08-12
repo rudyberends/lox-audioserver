@@ -291,6 +291,11 @@ export class AdminApiHandler {
         onLoxoneToggle: this.onLoxoneToggle,
         loxoneNotifier: this.loxoneNotifier,
         sonnCorePeers: this.sonnCorePeers,
+        sonnClientVersions: () =>
+          this.sonnClientApi
+            .listForAdmin()
+            .map((device) => device.registration?.version)
+            .filter((version): version is string => Boolean(version)),
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),
