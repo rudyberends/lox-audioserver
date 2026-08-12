@@ -5,10 +5,17 @@ services:
     hostname: sonn-core
     restart: unless-stopped
     network_mode: host
-    # privileged caps (and security-opt) needed to mount smb folders within the container
+    # Mounting an SMB/NAS share from inside the container needs both of these, and neither works
+    # without the other: SYS_ADMIN is what the mount itself requires, and Docker's default AppArmor
+    # profile blocks mounting even when that capability is granted. Leaving security_opt out is the
+    # usual cause of "mount error(13): Permission denied" on an otherwise correct share (#323).
+    # Under rootless Docker or userns-remap, mounting from inside the container is not possible at
+    # all — mount the share on the host there and pass the folder in as a volume instead.
     cap_add:
       - SYS_ADMIN
       - DAC_READ_SEARCH
+    security_opt:
+      - apparmor:unconfined
     # Power Manager note:
     # - gpioset needs the relevant /dev/gpiochip* device inside the container.
     # - USB HID relay boards via crelay need the matching /dev/hidraw* device.
