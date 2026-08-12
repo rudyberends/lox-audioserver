@@ -895,8 +895,9 @@ export interface SonnClientBeoremoteConfig {
 
 export interface SonnClientComponentConfig {
   /**
-   * Known name: `beoremote-bluetoothd` for B&O's patched BlueZ, or `sonn-client` for the client's
-   * own build — a device updates itself through the same mechanism it installs anything else with.
+   * Known name: `sonn-beoremote` for our build of B&O's patched BlueZ, or `sonn-client` for the
+   * client's own build — a device updates itself through the same mechanism it installs anything
+   * else with.
    */
   name: string;
   version?: string;

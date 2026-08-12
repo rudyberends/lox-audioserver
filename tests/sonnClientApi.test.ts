@@ -451,11 +451,11 @@ test('a component is resolved to the artifact for the device architecture', asyn
     sonnClients: {
       components: [
         {
-          name: 'beoremote-bluetoothd',
+          name: 'sonn-beoremote',
           version: '5.45-bo1',
           urls: {
-            aarch64: 'https://example.test/bluetoothd-aarch64.tar.gz',
-            armv7l: 'https://example.test/bluetoothd-armv7l.tar.gz',
+            aarch64: 'https://example.test/sonn-beoremote-aarch64.tar.gz',
+            armv7l: 'https://example.test/sonn-beoremote-armv7l.tar.gz',
           },
           sha256: { aarch64: 'a'.repeat(64), armv7l: 'b'.repeat(64) },
         },
@@ -464,12 +464,12 @@ test('a component is resolved to the artifact for the device architecture', asyn
   });
   await call('POST', '/api/sonnclients/register', REGISTRATION);
   await admin('PUT', '/sonnclients/sonn-kitchen-9e2f', {
-    requiredComponents: ['beoremote-bluetoothd'],
+    requiredComponents: ['sonn-beoremote'],
   });
 
   const desired = (await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', {})).json();
   assert.equal(desired.components.length, 1);
-  assert.equal(desired.components[0].url, 'https://example.test/bluetoothd-aarch64.tar.gz');
+  assert.equal(desired.components[0].url, 'https://example.test/sonn-beoremote-aarch64.tar.gz');
   assert.equal(desired.components[0].sha256, 'a'.repeat(64));
 });
 
@@ -478,7 +478,7 @@ test('a component with no artifact for this architecture is left out rather than
     sonnClients: {
       components: [
         {
-          name: 'beoremote-bluetoothd',
+          name: 'sonn-beoremote',
           urls: { armv7l: 'https://example.test/armv7l.tar.gz' },
           sha256: { armv7l: 'b'.repeat(64) },
         },
@@ -487,7 +487,7 @@ test('a component with no artifact for this architecture is left out rather than
   });
   await call('POST', '/api/sonnclients/register', REGISTRATION);
   await admin('PUT', '/sonnclients/sonn-kitchen-9e2f', {
-    requiredComponents: ['beoremote-bluetoothd'],
+    requiredComponents: ['sonn-beoremote'],
   });
 
   // The client refuses an unverified install anyway; refusing it here is where the reason is
