@@ -925,12 +925,9 @@ export class SendspinOutput implements ZoneOutput {
      */
     if (!this.initialClientStateSkipped && typeof update.volume === 'number') {
       this.initialClientStateSkipped = true;
-      this.log.debug('Sendspin ignored the client opening volume', {
-        zoneId: this.zoneId,
-        clientId: this.clientId,
-        clientVolume: update.volume,
-        zoneVolume: this.lastKnownVolume,
-      });
+      // Declining their value obliges us to state ours, or the two sit silently
+      // disagreeing: the zone at 12 and the speaker actually playing at 100.
+      this.assertZoneVolumeToClient(update.volume);
       return;
     }
     if (nextState && nextState !== this.reactedClientState) {
@@ -2210,6 +2207,43 @@ export class SendspinOutput implements ZoneOutput {
 
   private isOwner(): boolean {
     return sendspinClientOwners.get(this.clientId) === this.zoneId;
+  }
+
+  /**
+   * Tell a client the zone's volume after refusing the one it reported.
+   *
+   * `onIdentified` normally does this, but it returns early when this output does not
+   * own the client — and ownership is only claimed once a stream starts. So a client
+   * connecting to an idle zone was told nothing and stayed at its own default, which
+   * is 100 on the reference clients: the zone read 12 while the speaker was ready to
+   * play at full volume.
+   *
+   * Unlike `setVolume` this is not gated on ownership, because it is a reply to the
+   * client that just spoke rather than an unsolicited claim on it. It is still
+   * withheld when a *different* zone owns the client, since that zone's volume is
+   * the one that should reach it.
+   */
+  private assertZoneVolumeToClient(reportedVolume: number): void {
+    const owner = sendspinClientOwners.get(this.clientId);
+    if (typeof owner === 'number' && owner !== this.zoneId) {
+      return;
+    }
+    const zoneState = this.ports.zoneManager.getZoneState(this.zoneId);
+    const zoneVolume =
+      typeof zoneState?.volume === 'number' ? zoneState.volume : this.lastKnownVolume;
+    this.log.debug('Sendspin ignored the client opening volume', {
+      zoneId: this.zoneId,
+      clientId: this.clientId,
+      clientVolume: reportedVolume,
+      zoneVolume,
+    });
+    if (!this.activeSession) {
+      return;
+    }
+    this.lastKnownVolume = zoneVolume;
+    this.lastOutboundVolume = zoneVolume;
+    this.lastOutboundVolumeAt = Date.now();
+    this.activeSession.sendServerCommand(PlayerCommand.VOLUME, { volume: zoneVolume });
   }
 
   private claimOwnership(): void {
