@@ -112,6 +112,7 @@ import './queueBuilderArtistFlatten.test';
 import './nowPlayingMetadata.test';
 import './publicApi.test';
 import './dlnaRendererReflection.test';
+import './dlnaRendererCast.test';
 import './zoneMute.test';
 import './sonnCoreDiscovery.test';
 import './itemAbout.test';

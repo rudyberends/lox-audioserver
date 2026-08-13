@@ -1,4 +1,5 @@
 import { createLogger } from '@/shared/logging/logger';
+import { buildProxyUrl } from '@/shared/urlProxy';
 import type { AirplayController } from '@/ports/InputsPort';
 import type { PlaybackMetadata } from '@/ports/types/playback';
 import type { PlaybackSource } from '@/ports/EngineTypes';
@@ -47,9 +48,17 @@ export class DlnaRendererHandler implements RendererHandler {
     // Fresh start (or a seek, which the module signals as onPlay with an offset): hand the
     // pushed URL to the engine as the zone's source. onSeek stays a no-op so the seek doesn't
     // double-start — the module calls onPlay(uri, seconds) right after onSeek.
+    //
+    // Through the local proxy, like every other http(s) source: `resolvePlaybackSource` does
+    // this for anything played by audiopath, and a cast URI was the one URL that reached ffmpeg
+    // raw. That is a difference nobody chose — and it bites, because ffmpeg's own name
+    // resolution is the fragile part of the chain (issue #336: a Plex URL, a hostname it could
+    // not resolve, and a SIGSEGV before any output). The server fetches, ffmpeg talks to
+    // 127.0.0.1, and Range/redirects are handled on the way. A URI the proxy cannot front
+    // (anything not http/https) is passed through untouched.
     const source: PlaybackSource = {
       kind: 'url',
-      url: uri,
+      url: buildProxyUrl(uri) ?? uri,
       ...(startAtSec != null ? { startAtSec } : {}),
       realTime: true,
       restartOnFailure: false,
