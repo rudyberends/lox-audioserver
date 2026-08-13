@@ -46,9 +46,6 @@ export class SonnCoreMdnsService implements MdnsLifecycleService {
         id: normalizeMacId(mac) ?? undefined,
         /** What is running, so a client can tell whether a surface it needs exists yet. */
         version: readBuildVersion(),
-        linein: '/api/linein',
-        linein_register: '/api/linein/bridges/register',
-        linein_status: '/api/linein/bridges/{bridge_id}/status',
         // Where a Sonn Client registers and polls. Advertised even though the client has these as
         // defaults, so the paths can move without needing a release on every speaker.
         client_register: '/api/sonnclients/register',

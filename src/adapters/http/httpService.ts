@@ -12,7 +12,6 @@ import { SnapcastGateway } from '@/adapters/http/snapcast/snapcastGateway';
 import { AudioStreamHandler } from '@/adapters/http/streams/audioStreamHandler';
 import { AudioProxyHandler } from '@/adapters/http/streams/audioProxyHandler';
 import { LineInIngestWebSocket } from '@/adapters/http/streams/lineInIngestWs';
-import { LineInApiHandler } from '@/adapters/http/lineInApi/lineInApiHandler';
 import { SonnClientApiHandler } from '@/adapters/http/sonnClientApi/sonnClientApiHandler';
 import { BeoremoteApiHandler } from '@/adapters/http/beoremote/beoremoteApiHandler';
 import { ApiHandler } from '@/adapters/http/api/apiHandler';
@@ -55,7 +54,6 @@ import type { EnginePort } from '@/ports/EnginePort';
 import type { AlertFilesPort } from '@/ports/AlertFilesPort';
 import type { AlertsPort } from '@/ports/AlertsPort';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
-import type { LineInMetadataService } from '@/adapters/inputs/linein/lineInMetadataService';
 import type { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInActivationRegistry';
 import type { BluetoothNowPlayingSink } from '@/adapters/http/sonnClientApi/sonnClientApiHandler';
 import type { LineInActivationService } from '@/application/inputs/lineInActivationService';
@@ -118,7 +116,6 @@ export class HttpService {
   private readonly dlnaInput?: DlnaInputService;
   private readonly streamProxyRoutes: StreamProxyRoute[];
   private readonly lineInIngestWs: LineInIngestWebSocket;
-  private readonly lineInApi: LineInApiHandler;
   private readonly sonnClientApi: SonnClientApiHandler;
   private readonly beoremoteApi: BeoremoteApiHandler;
   private readonly api: ApiHandler;
@@ -152,7 +149,6 @@ export class HttpService {
       engine: EnginePort;
       streamEvents: StreamEvents;
       lineInRegistry: LineInIngestRegistry;
-      lineInMetadataService: LineInMetadataService;
       lineInActivation: LineInActivationRegistry;
       /** The Bluetooth input, so a phone's now-playing reaches the room it is playing in. */
       bluetoothInput?: BluetoothNowPlayingSink;
@@ -204,11 +200,6 @@ export class HttpService {
       dlnaInput?: DlnaInputService;
     },
   ) {
-    this.lineInApi = new LineInApiHandler(
-      options.configPort,
-      options.lineInMetadataService,
-      options.lineInActivation,
-    );
     this.sonnClientApi = new SonnClientApiHandler(
       options.configPort,
       config.port,
@@ -554,7 +545,6 @@ export class HttpService {
       mdnsPort: options.mdnsPort,
       sonnCorePeers: options.sonnCorePeers,
       alertFiles: options.alertFiles,
-      lineInApi: this.lineInApi,
       sonnClientApi: this.sonnClientApi,
       beoremoteApi: this.beoremoteApi,
       httpPort: config.port,
@@ -574,11 +564,6 @@ export class HttpService {
     this.dlnaInput = options.dlnaInput;
     this.streamProxyRoutes = options.streamProxyRoutes;
     this.lineInIngestWs = new LineInIngestWebSocket(options.lineInRegistry);
-    // Commands prefer the live ingest socket and fall back to the polled queue, so control latency
-    // drops from the poll interval to a round trip wherever the bridge speaks WebSocket.
-    options.lineInActivation.setCommandPusher((inputId, command, args) =>
-      this.lineInIngestWs.sendCommand(inputId, command, args),
-    );
     this.sendspin = new SendspinGateway(options.browserZoneRegistry);
     this.snapcast = new SnapcastGateway(options.snapcastCore);
     this.lmsCli = options.squeezeliteCli;
@@ -836,11 +821,6 @@ export class HttpService {
 
     if (this.audioStream.matches(pathname)) {
       await this.audioStream.handle(req, res, pathname);
-      return;
-    }
-
-    if (this.lineInApi.matches(pathname)) {
-      await this.lineInApi.handle(req, res, pathname);
       return;
     }
 

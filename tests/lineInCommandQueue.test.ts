@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from './testHarness';
 import { LineInActivationRegistry } from '../src/adapters/inputs/linein/lineInActivationRegistry';
 
-// Transport commands for a line-in source have to survive the gap until the bridge's next status
+// Transport commands for a line-in source have to survive the gap until the device's next status
 // poll, which is seconds away. Delivery is at-most-once by construction: draining the queue is the
 // acknowledgement, because a replayed "next" would skip two tracks.
 
@@ -39,8 +39,8 @@ test('deactivating drops what was queued for that source', () => {
   assert.deepEqual(registry.takeCommands('linein-1'), []);
 });
 
-test('an offline bridge cannot build an unbounded backlog', () => {
-  // Every press queues, but a bridge that has been away for an hour must not come back to hundreds
+test('an offline device cannot build an unbounded backlog', () => {
+  // Every press queues, but a device that has been away for an hour must not come back to hundreds
   // of commands. Oldest are dropped: a stale play matters less than the latest press.
   const registry = new LineInActivationRegistry();
   for (let i = 0; i < 40; i += 1) {

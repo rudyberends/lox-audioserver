@@ -684,7 +684,6 @@ export interface GlobalSpotifyConfig {
 
 export interface GlobalLineInConfig {
   inputs?: LineInInputConfig[] | null;
-  bridges?: LineInBridgeConfig[] | null;
 }
 
 export interface ZoneAirplayConfig {
@@ -753,8 +752,8 @@ export interface LineInInputConfig {
    * Saying no means nothing is ever sent, so nothing waits on hardware that was
    * never going to answer.
    *
-   * The bridge's on_command hook maps each verb onto whatever the device speaks, so
-   * adding a verb is a change to that script rather than to this server.
+   * The device's own hook maps each verb onto whatever the hardware speaks, so adding
+   * a verb is a change to that script rather than to this server.
    */
   controllable?: boolean;
 }
@@ -773,21 +772,6 @@ export type BeoremoteSubmenuSource =
   | { kind: 'favorites' }
   /** A folder from a browsable service, flattened to its first page of entries. */
   | { kind: 'serviceFolder'; service: string; user?: string; folderId: string; title?: string };
-
-export interface LineInBridgeConfig {
-  bridge_id: string;
-  hostname?: string;
-  version?: string;
-  ip?: string;
-  mac?: string;
-  capture_devices?: Array<{
-    id: string;
-    name?: string;
-    channels?: number;
-    sample_rates?: number[];
-  }>;
-  last_seen?: string;
-}
 
 /**
  * Devices running Sonn Client — a Pi (or comparable) that speaks nothing but Sendspin and takes its

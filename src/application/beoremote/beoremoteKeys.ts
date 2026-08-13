@@ -20,7 +20,7 @@ import type { BeoremoteKeyBinding } from '@/domain/config/types';
 
 /** What the server should do with a key, before it knows what the zone is playing. */
 export type BeoremoteKeyAction =
-  /** Transport, routed by the existing layer: to a line-in's bridge, else the queue. */
+  /** Transport, routed by the existing layer: to a line-in's device, else the queue. */
   | { kind: 'transport'; command: 'play' | 'pause' | 'next' | 'previous' }
   /** Pick a disc. Only meaningful on a line-in that fronts a changer. */
   | { kind: 'disc'; disc: number }

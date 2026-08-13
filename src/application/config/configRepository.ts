@@ -173,7 +173,6 @@ function defaultConfig(): AudioServerConfig {
     inputs: {
       lineIn: {
         inputs: [],
-        bridges: [],
       },
     },
     groups: {

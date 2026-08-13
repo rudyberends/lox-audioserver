@@ -147,24 +147,6 @@ export class LineInMetadataService {
     this.activeCaptures.set(inputId, capture);
   }
 
-  public handleTrackChange(inputId: string): void {
-    if (!this.isMetadataEnabledForInput(inputId)) {
-      return;
-    }
-    if (this.activeCaptures.has(inputId)) {
-      return;
-    }
-    const stream = this.registry.getStream(inputId);
-    if (!stream) {
-      this.log.info('line-in metadata track change ignored; no stream', { inputId });
-      return;
-    }
-    this.clearPoll(inputId);
-    this.log.info('line-in metadata track change capture', { inputId });
-    const capture = this.captureSnippet(inputId, stream);
-    this.activeCaptures.set(inputId, capture);
-  }
-
   private captureSnippet(
     inputId: string,
     stream: NodeJS.ReadableStream,

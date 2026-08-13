@@ -778,7 +778,6 @@ export function createRuntime(): Runtime {
       engine,
       streamEvents,
       lineInRegistry,
-      lineInMetadataService,
       lineInActivation,
       lineInActivationService,
       bluetoothInput: bluetoothInputService,

@@ -12,9 +12,8 @@ export class LineInIngestWebSocket {
   private readonly wsServer = new WebSocketServer({ noServer: true });
   private readonly registry: LineInIngestRegistry;
   /**
-   * Live ingest sockets by input id, so a transport command can be pushed the moment a client
-   * presses a button instead of waiting for the bridge's next status poll. One per input: a second
-   * connection for the same input replaces the first, matching the registry's own behaviour.
+   * Live ingest sockets by input id, so a second connection for the same input replaces the first —
+   * matching the registry's own behaviour rather than leaving two writers on one session.
    */
   private readonly sockets = new Map<string, WebSocket>();
 
@@ -23,34 +22,6 @@ export class LineInIngestWebSocket {
     this.wsServer.on('connection', (socket, req) => {
       this.handleConnection(socket, req);
     });
-  }
-
-  /**
-   * Push a command to the bridge serving this input.
-   *
-   * Returns false when no socket is connected, which is the caller's signal to fall back to the
-   * polled queue -- a bridge on the TCP transport, or one that is momentarily reconnecting, still has
-   * to receive the command eventually.
-   */
-  public sendCommand(inputId: string, command: string, args: string[] = []): boolean {
-    const socket = this.sockets.get(inputId.trim());
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      return false;
-    }
-    try {
-      socket.send(JSON.stringify({ command, args }));
-      this.log.info('line-in command pushed', { inputId, command, args });
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log.warn('line-in command push failed', { inputId, command, message });
-      return false;
-    }
-  }
-
-  public hasSocket(inputId: string): boolean {
-    const socket = this.sockets.get(inputId.trim());
-    return !!socket && socket.readyState === WebSocket.OPEN;
   }
 
   public handleUpgrade(request: IncomingMessage, socket: any, head: Buffer): boolean {

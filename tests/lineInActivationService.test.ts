@@ -123,7 +123,7 @@ test('activating with no audio yet parks the zone on "No Signal detected"', () =
   // The single-colon form, deliberately: only a started input gets `//`.
   assert.equal(patch.audiopath, 'linein:in-1');
   assert.deepEqual(zones.played, [], 'nothing may be played without a stream');
-  // The want is parked first, so a polling bridge sees it on its next status post.
+  // The want is parked first, so a polling device sees it on its next status post.
   assert.deepEqual(
     source.calls.filter((c) => c.fn === 'markWanted' || c.fn === 'requestStart').map((c) => c.fn),
     ['markWanted', 'requestStart'],
@@ -353,7 +353,7 @@ test('the stop is queued after the want is withdrawn, not before', () => {
 
   // Withdrawing the want also drops queued commands for that input, so a stop
   // queued first would be thrown away by the very next call — which is exactly
-  // how start and stop both silently stopped reaching the bridge once.
+  // how start and stop both silently stopped reaching the device once.
   const order = source.calls.map((c) => c.fn);
   assert.ok(
     order.indexOf('clearWanted') < order.indexOf('sendCommand'),

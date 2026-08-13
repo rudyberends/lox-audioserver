@@ -342,8 +342,8 @@ export class BeoremoteApiHandler {
     }
 
     if (action.kind === 'disc') {
-      // Only a changer behind a line-in understands this; the bridge's on_command
-      // hook turns it into a Beo4 command on the MasterLink bus.
+      // Only a changer behind a line-in understands this; the device's own hook
+      // turns it into a Beo4 command on the MasterLink bus.
       const inputId = this.activeLineInId(zoneId);
       if (!inputId) {
         return { ok: false, reason: 'not-a-line-in-source' };

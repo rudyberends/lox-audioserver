@@ -1,19 +1,6 @@
-import type { LineInInputConfig } from '@/domain/config/types';
-
 // Moved to the domain so the application layer can read it too (it may not import
 // from @/adapters). Re-exported here so existing importers stay unchanged.
 export { LINEIN_SAMPLE_RATE, resolveLineInSampleRate } from '@/domain/config/lineIn';
-
-export type LineInIngestResampler = 'linear' | 'sinc-fast' | 'sinc/rubato';
-
-export function resolveLineInIngestResampler(entry?: LineInInputConfig | null): LineInIngestResampler | undefined {
-  const source = entry?.source && typeof entry.source === 'object' ? (entry.source as Record<string, unknown>) : null;
-  const raw = typeof source?.ingest_resampler === 'string' ? source.ingest_resampler.trim() : '';
-  if (raw === 'linear' || raw === 'sinc-fast' || raw === 'sinc/rubato') {
-    return raw;
-  }
-  return undefined;
-}
 
 /**
  * Bytes buffered on the receiving end of a line-in ingest before backpressure kicks in.

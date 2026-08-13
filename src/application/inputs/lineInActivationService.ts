@@ -81,9 +81,9 @@ export class LineInActivationService {
   }
 
   /**
-   * Hand a command to whatever serves this input. The bridge passes it to its
-   * on_command hook, which is where the knowledge of the attached hardware lives —
-   * so adding a verb is a change to that script, not to this server.
+   * Hand a command to whatever serves this input. The device passes it to its own
+   * hook, which is where the knowledge of the attached hardware lives — so adding a
+   * verb is a change to that script, not to this server.
    */
   public sendCommand(inputId: string, command: string, args: string[] = []): void {
     this.log.info('line-in command', { inputId, command, args });
@@ -121,9 +121,9 @@ export class LineInActivationService {
   ): void {
     this.log.info('line-in selected', { zoneId, inputId });
     // Selecting the input is what makes the source wanted. A sendspin source is told
-    // directly (via requestStart below); a polling bridge reads this on its next
-    // status post and runs its on_start hook, which is what switches on gear that
-    // does not power up by itself.
+    // directly (via requestStart below); a polling device reads this on its next
+    // status post and runs its own hook, which is what switches on gear that does
+    // not power up by itself.
     this.source.markWanted(inputId);
     this.startControllableSource(inputId);
     this.ensureLineInWatch(zoneId, inputId);
@@ -317,7 +317,7 @@ export class LineInActivationService {
   }
 
   /**
-   * Arm a start-watch for the zone, so a source that appears later (a bridge that
+   * Arm a start-watch for the zone, so a source that appears later (a device that
    * reconnects, hardware that took a moment) still starts playing.
    *
    * The watch is sticky: it survives playback starting, and is torn down only when

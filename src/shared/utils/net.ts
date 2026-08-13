@@ -50,9 +50,9 @@ function isUnusableIpv4(address: string): boolean {
 /**
  * Every IPv4 address a LAN client could plausibly use to reach us, best first.
  *
- * Ordering matters: whatever comes first becomes the address we advertise over mDNS and the ingest
- * host we hand to line-in bridges, so a container address landing here sends a remote device to an
- * unroutable IP -- or worse, to a 172.x host that happens to exist on its own side of the network.
+ * Ordering matters: whatever comes first becomes the address we advertise over mDNS, so a container
+ * address landing here sends a remote device to an unroutable IP -- or worse, to a 172.x host that
+ * happens to exist on its own side of the network.
  */
 export function localIpv4Candidates(): string[] {
   const { preferred, fallback } = groupLocalIpv4();
