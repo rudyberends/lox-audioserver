@@ -4,6 +4,7 @@ import { resolveSpotifyInputStart } from '@/application/zones/playback/providerH
 import { resolveMusicAssistantInputStart } from '@/application/zones/playback/providerHandlers/musicAssistant';
 import { resolveLineInInputStart } from '@/application/zones/playback/providerHandlers/linein';
 import { resolveDlnaInputStart } from '@/application/zones/playback/providerHandlers/dlna';
+import { resolveBluetoothInputStart } from '@/application/zones/playback/providerHandlers/bluetooth';
 import { resolveMixedGroupInputStart } from '@/application/zones/playback/providerHandlers/mixedgroup';
 
 export function resolveInputStartDecision(label: string): InputStartDecision | null {
@@ -19,6 +20,8 @@ export function resolveInputStartDecision(label: string): InputStartDecision | n
       return resolveLineInInputStart();
     case 'dlna':
       return resolveDlnaInputStart();
+    case 'bluetooth':
+      return resolveBluetoothInputStart();
     case 'mixedgroup':
       return resolveMixedGroupInputStart();
     default:

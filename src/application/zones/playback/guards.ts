@@ -1,6 +1,15 @@
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 
-const METADATA_INPUTS = new Set(['spotify', 'airplay', 'musicassistant', 'linein', 'mixedgroup']);
+// Bluetooth is here because a phone says what it is playing over AVRCP, and that is the only thing
+// the room can show about it.
+const METADATA_INPUTS = new Set([
+  'spotify',
+  'airplay',
+  'musicassistant',
+  'linein',
+  'bluetooth',
+  'mixedgroup',
+]);
 const COVER_INPUTS = new Set(['spotify', 'airplay', 'musicassistant', 'mixedgroup']);
 const VOLUME_INPUTS = new Set(['spotify', 'airplay', 'musicassistant']);
 

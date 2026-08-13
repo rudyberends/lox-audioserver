@@ -100,7 +100,7 @@ export interface ZoneContext {
   /**
    * Explicit input mode so commands/volume can be gated consistently.
    * queue: local queue/streams, spotify: Spotify Connect, airplay: AirPlay input,
-   * musicassistant: MA stream proxy, linein: PCM ingest input
+   * musicassistant: MA stream proxy, linein: PCM ingest input, bluetooth: a phone in the room
    */
   inputMode:
     | 'queue'
@@ -109,6 +109,7 @@ export interface ZoneContext {
     | 'musicassistant'
     | 'linein'
     | 'dlna'
+    | 'bluetooth'
     | 'mixedgroup'
     | 'alert'
     | null;
