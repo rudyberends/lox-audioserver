@@ -101,6 +101,17 @@ export interface ContentFolder {
   service?: string;
   /** Optional grouped content for a home/feed-style browse surface. */
   sections?: ContentFolderSection[];
+  /**
+   * The container's own artwork, when the provider knows it.
+   *
+   * A folder browsed into directly used to describe itself with a name and nothing else, so
+   * an album page had the album's tracks and no album cover — the rows each carried the
+   * artwork their own container could not. Optional and provider-filled: nothing infers it,
+   * because an inference here means a second lookup on every browse.
+   */
+  coverurl?: string;
+  /** The container's byline (an album's artist), same contract as {@link ContentFolder.coverurl}. */
+  artist?: string;
 }
 
 export interface ContentFolderSection {

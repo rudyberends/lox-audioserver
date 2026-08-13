@@ -125,7 +125,14 @@ export class BrowseService {
       // (the player does, for `/about`) is holding an artist page addressed as an album.
         { ...named, id, kind: ref.kind }
         : toApiContainer(
-          { id: ref.folderId, name: folder.name, audiopath: ref.folderId },
+          {
+            id: ref.folderId,
+            name: folder.name,
+            audiopath: ref.folderId,
+            // What the provider chose to say about its own folder — see `ContentFolder.coverurl`.
+            coverurl: folder.coverurl,
+            artist: folder.artist,
+          },
           ref.service,
           ref.kind,
         ),

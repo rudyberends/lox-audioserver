@@ -858,7 +858,14 @@ export class LocalLibraryProvider {
       limit,
     );
     const folderItems = items.map((track) => this.trackItem(this.normalizeTrack(track)));
-    return this.buildFolder(`library:album:${albumKey}`, payload.album, folderItems, offset, limit, total, true);
+    const folder = this.buildFolder(`library:album:${albumKey}`, payload.album, folderItems, offset, limit, total, true);
+    /*
+     * The album describes itself: its cover and its artist ride the folder, not only the rows.
+     * The first track's artwork *is* the album's — that is how the album grid finds it too —
+     * so this costs nothing beyond reading a field that was already mapped.
+     */
+    const cover = folderItems.find((item) => item.coverurl)?.coverurl;
+    return { ...folder, ...(cover ? { coverurl: cover } : {}), artist: payload.artist };
   }
 
   private async buildArtistTracks(
@@ -878,7 +885,15 @@ export class LocalLibraryProvider {
       limit,
     );
     const folderItems = items.map((track) => this.trackItem(this.normalizeTrack(track)));
-    return this.buildFolder(`library:artist:${artistKey}`, payload.artist, folderItems, offset, limit, total, true);
+    const folder = this.buildFolder(`library:artist:${artistKey}`, payload.artist, folderItems, offset, limit, total, true);
+    /*
+     * The artist's own portrait — the Wikidata/Commons fetch already put it beside the music
+     * (`artist.jpg`), and the artist *listing* has always shown it. The artist's own page was
+     * the one place it never reached, because the folder carried a name and nothing else.
+     */
+    const row = this.store.getArtist(payload.storageId, payload.artist);
+    const cover = row ? this.artistItem(row).coverurl : '';
+    return { ...folder, ...(cover ? { coverurl: cover } : {}) };
   }
 
   public search(

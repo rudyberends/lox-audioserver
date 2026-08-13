@@ -105,7 +105,7 @@ export function toApiBrowseItem(item: ContentFolderItem, service: string): ApiBr
  * already has the real name from that row. Better a plain name than a fabricated one.
  */
 export function toApiContainer(
-  folder: { id: string; name?: string; audiopath?: string },
+  folder: { id: string; name?: string; audiopath?: string; coverurl?: string; artist?: string },
   service: string,
   kind: ContentItemKind = 'folder',
 ): ApiBrowseItem {
@@ -118,6 +118,8 @@ export function toApiContainer(
   // resolves an album or playlist folder id — so those say true as well. A `category` or a
   // plain `folder` is navigation and says false.
   const playable = Boolean((folder.audiopath ?? '').trim()) || PLAYABLE_CONTAINERS.has(kind);
+  const cover = (folder.coverurl ?? '').trim();
+  const artist = (folder.artist ?? '').trim();
   return {
     id: encodeContainerRef({ kind, service, folderId: folder.id }),
     name: (folder.name ?? '').trim(),
@@ -125,5 +127,9 @@ export function toApiContainer(
     browsable: true,
     playable,
     service,
+    // The folder's own artwork and byline, for the providers that fill them (see
+    // `ContentFolder.coverurl`) — this is what lets an album page open with its cover.
+    ...(cover ? { coverUrl: cover } : {}),
+    ...(artist ? { artist } : {}),
   };
 }
