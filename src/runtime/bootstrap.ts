@@ -236,8 +236,10 @@ export function createRuntime(): Runtime {
     emitFpeak: options.fPeak === true,
     emitPeak: options.peak === true,
     emitPitch: options.pitch === true,
+    emitStereo: options.stereo === true,
     spectrum: options.spectrum,
     onLoudness: (value, timestampUs) => listener({ type: 'loudness', value, timestampUs }),
+    onStereo: (left, right, timestampUs) => listener({ type: 'stereo', left, right, timestampUs }),
     onSpectrum: (bins, timestampUs) => listener({ type: 'spectrum', bins, timestampUs }),
     onFpeak: (frequencyHz, amplitude, timestampUs) =>
       listener({ type: 'f_peak', frequencyHz, amplitude, timestampUs }),

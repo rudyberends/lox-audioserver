@@ -19,7 +19,9 @@ export type AudioAnalysisEvent =
   | { type: 'spectrum'; bins: Uint16Array; timestampUs: number }
   | { type: 'f_peak'; frequencyHz: number; amplitude: number; timestampUs: number }
   | { type: 'peak'; strength: number; timestampUs: number }
-  | { type: 'pitch'; midiQ88: number; confidence: number; timestampUs: number };
+  | { type: 'pitch'; midiQ88: number; confidence: number; timestampUs: number }
+  /** Front left/right levels in the same u16 dB encoding as `loudness`. Mono reports both equal. */
+  | { type: 'stereo'; left: number; right: number; timestampUs: number };
 
 export type AudioAnalysisSubscription = {
   sampleRate: number;
@@ -32,6 +34,7 @@ export type AudioAnalysisSubscription = {
   fPeak?: boolean;
   peak?: boolean;
   pitch?: boolean;
+  stereo?: boolean;
   spectrum?: {
     n_disp_bins: number;
     scale: 'lin' | 'log' | 'mel';

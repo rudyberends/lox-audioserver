@@ -1778,10 +1778,12 @@ export class ApiHandler {
       return;
     }
     const requestedTypes = new Set(
-      (url.searchParams.get('types') ?? 'loudness,spectrum,f_peak,peak,pitch')
+      (url.searchParams.get('types') ?? 'loudness,spectrum,f_peak,peak,pitch,stereo')
         .split(',')
         .map((value) => value.trim())
-        .filter((value) => ['loudness', 'spectrum', 'f_peak', 'peak', 'pitch'].includes(value)),
+        .filter((value) =>
+          ['loudness', 'spectrum', 'f_peak', 'peak', 'pitch', 'stereo'].includes(value),
+        ),
     );
     const rateMax = Math.max(1, Math.min(60, Number(url.searchParams.get('rate') ?? 20) || 20));
     const bins = Math.max(4, Math.min(256, Number(url.searchParams.get('bins') ?? 32) || 32));
@@ -1833,6 +1835,7 @@ export class ApiHandler {
         fPeak: requestedTypes.has('f_peak'),
         peak: requestedTypes.has('peak'),
         pitch: requestedTypes.has('pitch'),
+        stereo: requestedTypes.has('stereo'),
         spectrum,
       };
       // Everything a consumer needs to turn these numbers back into dB and Hz. Without it a

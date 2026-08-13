@@ -31,12 +31,15 @@ export interface VisualizerDspOptions {
   emitFpeak: boolean;
   emitPeak: boolean;
   emitPitch: boolean;
+  /** Per-channel levels (front left/right), for a stereo meter. Mono reports both sides equal. */
+  emitStereo?: boolean;
   spectrum?: SpectrumConfig;
   onLoudness?: (value: number, timestampUs: number) => void;
   onSpectrum?: (bins: Uint16Array, timestampUs: number) => void;
   onFpeak?: (freqHz: number, amplitude: number, timestampUs: number) => void;
   onPeak?: (strength: number, timestampUs: number) => void;
   onPitch?: (midiQ88: number, confidence: number, timestampUs: number) => void;
+  onStereo?: (left: number, right: number, timestampUs: number) => void;
 }
 
 /**
@@ -170,6 +173,13 @@ export class SendspinVisualizer {
   private readonly ring: Float64Array;
   /** Per-frame mean of squares across channels, for everything that needs a level. */
   private readonly ringPow: Float64Array;
+  /**
+   * Per-frame squares of the first two channels, kept only when a stereo meter asked for them.
+   * The mid mix cancels width and the mean power hides it; a stereo meter is the one consumer
+   * that wants each side raw.
+   */
+  private readonly ringPowL: Float64Array | null;
+  private readonly ringPowR: Float64Array | null;
   private ringFilled = 0;
   private ringPos = 0;
   private readonly emitIntervalUs: number;
@@ -201,6 +211,9 @@ export class SendspinVisualizer {
     this.windowSize = window;
     this.ring = new Float64Array(window);
     this.ringPow = new Float64Array(window);
+    const wantStereo = options.emitStereo === true && !!options.onStereo;
+    this.ringPowL = wantStereo ? new Float64Array(window) : null;
+    this.ringPowR = wantStereo ? new Float64Array(window) : null;
     this.hann = new Float64Array(window);
     for (let i = 0; i < window; i += 1) {
       this.hann[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (window - 1));
@@ -291,13 +304,22 @@ export class SendspinVisualizer {
     for (let off = 0; off < usable; off += this.frameBytes) {
       let sum = 0;
       let sumSq = 0;
+      let sq0 = 0;
+      let sq1 = 0;
       for (let c = 0; c < ch; c += 1) {
         const v = this.readChannel(pcm, off + c * this.bytesPerSample);
         sum += v;
         sumSq += v * v;
+        if (c === 0) sq0 = v * v;
+        else if (c === 1) sq1 = v * v;
       }
       this.ring[this.ringPos] = sum / ch;
       this.ringPow[this.ringPos] = sumSq / ch;
+      if (this.ringPowL && this.ringPowR) {
+        this.ringPowL[this.ringPos] = sq0;
+        // Mono has one honest answer for both sides — not a silent right channel.
+        this.ringPowR[this.ringPos] = ch > 1 ? sq1 : sq0;
+      }
       this.ringPos = (this.ringPos + 1) % this.windowSize;
       if (this.ringFilled < this.windowSize) this.ringFilled += 1;
     }
@@ -314,15 +336,29 @@ export class SendspinVisualizer {
     const window = this.windowSize;
     const win = new Float64Array(window);
     let powSum = 0;
+    let powSumL = 0;
+    let powSumR = 0;
     for (let i = 0; i < window; i += 1) {
       const at = (this.ringPos + i) % window;
       win[i] = this.ring[at]!;
       powSum += this.ringPow[at]!;
+      if (this.ringPowL && this.ringPowR) {
+        powSumL += this.ringPowL[at]!;
+        powSumR += this.ringPowR[at]!;
+      }
     }
     const rms = Math.sqrt(powSum / window);
 
     if (o.emitLoudness && o.onLoudness) {
       o.onLoudness(ampToU16(rms), timestampUs);
+    }
+
+    if (this.ringPowL && o.onStereo) {
+      o.onStereo(
+        ampToU16(Math.sqrt(powSumL / window)),
+        ampToU16(Math.sqrt(powSumR / window)),
+        timestampUs,
+      );
     }
 
     if (o.emitPeak && o.onPeak) {
