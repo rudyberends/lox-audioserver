@@ -788,9 +788,8 @@ export interface SonnClientsConfig {
   /** Per-device configuration, keyed by the device's own stable id. */
   devices?: SonnClientDeviceConfig[];
   /**
-   * Software the client installs on request — currently only B&O's patched BlueZ, which is what
-   * makes a Beoremote One serve menus. Declared once and offered to whichever devices ask for the
-   * features that need it.
+   * Software a device can install on request — currently only the client's own build, which is how
+   * a device updates itself. Declared once here and offered to whichever devices ask for it.
    */
   components?: SonnClientComponentConfig[];
 }
@@ -915,15 +914,15 @@ export interface SonnClientBeoremoteConfig {
 
 export interface SonnClientComponentConfig {
   /**
-   * Known name: `sonn-beoremote` for our build of B&O's patched BlueZ, or `sonn-client` for the
-   * client's own build — a device updates itself through the same mechanism it installs anything
-   * else with.
+   * Known name: `sonn-client`, the client's own build — a device updates itself through the same
+   * mechanism it would install anything else with. A name the client does not recognise is refused
+   * rather than fetched.
    */
   name: string;
   version?: string;
   /** Where the device fetches it. One per architecture, keyed by the client's target triple. */
   urls?: Record<string, string>;
-  /** Hex sha256 per architecture. Required: this installs a daemon that owns the Bluetooth adapter. */
+  /** Hex sha256 per architecture. Required: this replaces software the device runs. */
   sha256?: Record<string, string>;
 }
 
