@@ -121,6 +121,27 @@ export function buildSonnClientRoutes(deps: SonnClientAdminHandlerDeps): Route[]
       },
     },
     {
+      // Take on a device that several servers can see. Nothing else here writes a device into the
+      // config, so this is the one place where "this speaker is ours" is decided.
+      method: 'POST',
+      pattern: /^\/sonnclients\/([^/]+)\/claim$/,
+      handler: async (_req, res, match) => {
+        const deviceId = decodeURIComponent(match[1] ?? '').trim();
+        if (!deviceId) {
+          deps.sendJson(res, 400, { error: 'missing-device-id' });
+          return;
+        }
+        const claimed = await deps.sonnClientApi.claim(deviceId);
+        if (!claimed) {
+          // Either it is already ours or it has never announced itself here; both are answered as
+          // "nothing to do" rather than as a failure, because both are true from the screen's side.
+          deps.sendJson(res, 409, { error: 'not-claimable' });
+          return;
+        }
+        deps.sendJson(res, 200, deps.sonnClientApi.viewForAdmin(deviceId));
+      },
+    },
+    {
       // The last log a device handed over. Empty until someone asks for one with `send_logs`: the
       // device only sends when told, so this answers "nothing yet" rather than waiting.
       method: 'GET',

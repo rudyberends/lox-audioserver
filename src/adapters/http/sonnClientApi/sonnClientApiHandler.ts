@@ -53,6 +53,23 @@ type RegisterPayload = {
     features?: string[];
   };
   components?: Array<{ name?: string; version?: string | null; state?: string }>;
+  /**
+   * Every audioserver this device found, this one included.
+   *
+   * It announces itself to all of them, so this is how each one knows whether it is the only
+   * candidate. Alone, it takes the device on; one of several, it waits to be picked — see
+   * {@link SonnClientApiHandler.handleRegister}. Absent from older clients, which only ever
+   * announced to one server and are treated as that case.
+   */
+  servers?: Array<{ name?: string; url?: string }>;
+  /**
+   * The server this device has been claimed by, when that is not us.
+   *
+   * A device says goodbye rather than leaving a stale entry behind: whoever is not chosen drops it
+   * on the spot. Cores do not talk to each other, and the device is the one thing that speaks to
+   * all of them.
+   */
+  claimed_by?: string;
 };
 
 type StatusPayload = {
@@ -89,6 +106,8 @@ type Registration = {
   inputs: DeviceInventoryEntry[];
   capabilities: NonNullable<RegisterPayload['capabilities']>;
   components: NonNullable<RegisterPayload['components']>;
+  /** The audioservers this device can see, itself included. See {@link RegisterPayload.servers}. */
+  servers: NonNullable<RegisterPayload['servers']>;
   registeredAt: number;
 };
 
@@ -132,6 +151,14 @@ const SENDSPIN_PATH = '/sendspin';
 export type SonnClientAdminView = {
   deviceId: string;
   online: boolean;
+  /**
+   * Whether this server is the one running the device.
+   *
+   * False for a device that found several servers and has not been given to one yet: it is showing
+   * on every one of their screens, waiting for somebody to say which. It has no settings here until
+   * it is claimed — see {@link SonnClientApiHandler.claim}.
+   */
+  claimed: boolean;
   config: SonnClientDeviceConfig | null;
   registration: Registration | null;
   status: StatusPayload | null;
@@ -274,6 +301,9 @@ export class SonnClientApiHandler {
       inputs: Array.isArray(body?.inputs) ? body!.inputs! : [],
       capabilities: body?.capabilities ?? {},
       components: Array.isArray(body?.components) ? body!.components! : [],
+      // Kept so the screen can say what else this speaker can see, which is the whole reason it
+      // may be sitting here unclaimed.
+      servers: Array.isArray(body?.servers) ? body!.servers! : [],
       registeredAt: Date.now(),
     };
     this.registrations.set(deviceId, registration);
@@ -287,10 +317,72 @@ export class SonnClientApiHandler {
       inputs: registration.inputs.length,
       configured: known,
     });
-    // A device is written into the config on first sight so it shows up in the admin UI as
-    // something waiting to be given a room. Nothing about what it plays is decided here.
-    await this.rememberDevice(registration);
-    this.sendJson(res, 200, this.buildDesiredState(deviceId, req));
+
+    // Somebody else has it. Let go rather than keep an entry nobody will ever look at again: the
+    // device announces itself to every server it finds, so this is the only moment we hear that it
+    // has been given to one of them.
+    const claimedBy = (body?.claimed_by ?? '').trim();
+    if (claimedBy && !this.isSelf(claimedBy, req)) {
+      if (known) {
+        this.log.info('sonn client claimed elsewhere', { deviceId, server: claimedBy });
+        await this.forget(deviceId);
+      }
+      this.sendJson(res, 200, { claimed: false, released: true });
+      return;
+    }
+
+    // Alone with this device, or already its server: take it on, which is what writing it into the
+    // config means. With several servers in earshot the choice is a person's to make, so it is kept
+    // in memory and offered on every one of their screens until one of them claims it.
+    const alone = (body?.servers?.length ?? 1) <= 1;
+    if (known || alone) {
+      await this.rememberDevice(registration);
+      this.sendJson(res, 200, {
+        ...this.buildDesiredState(deviceId, req),
+        claimed: true,
+        claimed_at: this.claimedAt(deviceId),
+      });
+      return;
+    }
+
+    this.log.info('sonn client waiting to be claimed', {
+      deviceId,
+      servers: body?.servers?.length,
+    });
+    this.sendJson(res, 200, { claimed: false });
+  }
+
+  /**
+   * Whether a url names this server.
+   *
+   * Compared on host and port rather than as text: a device reaches a server by whatever address it
+   * discovered, and this handler sees the one the request came in on. Anything unparseable is not
+   * us, which errs towards keeping a device rather than dropping it.
+   */
+  private isSelf(url: string, req: IncomingMessage): boolean {
+    try {
+      const theirs = new URL(url);
+      const host = (req.headers.host ?? '').trim();
+      if (!host) {
+        return false;
+      }
+      const ours = new URL(`http://${host}`);
+      const port = (value: URL): string => value.port || (value.protocol === 'https:' ? '443' : '80');
+      return theirs.hostname === ours.hostname && port(theirs) === port(ours);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * When this server last heard from the device it has claimed.
+   *
+   * Sent so a device that two servers both believe is theirs — which only happens to installations
+   * from before any of this — can pick the one that has actually been talking to it. A server it
+   * left months ago answers with a date months old.
+   */
+  private claimedAt(deviceId: string): string | undefined {
+    return this.findDeviceConfig(deviceId)?.lastSeen;
   }
 
   /**
@@ -830,15 +922,41 @@ export class SonnClientApiHandler {
   public viewForAdmin(deviceId: string): SonnClientAdminView {
     const snapshot = this.statusByDevice.get(deviceId) ?? null;
     const receivedAt = snapshot?.receivedAt ?? 0;
+    const config = this.findDeviceConfig(deviceId);
+    const registration = this.registrations.get(deviceId) ?? null;
+    // A device waiting to be claimed never posts a status — it has nothing to report and no
+    // settings to poll for — so its repeated announcements are what says it is still there.
+    const heardAt =
+      config === null && registration ? Math.max(receivedAt, registration.registeredAt) : receivedAt;
     return {
       deviceId,
-      online: receivedAt > 0 && Date.now() - receivedAt <= STATUS_STALE_MS,
-      config: this.findDeviceConfig(deviceId),
-      registration: this.registrations.get(deviceId) ?? null,
+      online: heardAt > 0 && Date.now() - heardAt <= STATUS_STALE_MS,
+      // Being in the config is what having been claimed means: nothing else about a device is
+      // written down here, so there is no second place for the two answers to disagree.
+      claimed: config !== null,
+      config,
+      registration,
       status: snapshot?.payload ?? null,
       statusReceivedAt: receivedAt ? new Date(receivedAt).toISOString() : null,
       queuedCommands: [...(this.commandQueues.get(deviceId) ?? [])],
     };
+  }
+
+  /**
+   * Take on a device that was waiting to be picked.
+   *
+   * Everything else follows from it: the device is written into the config, its next announcement
+   * is answered with a desired state instead of a shrug, and it says goodbye to the servers it was
+   * also talking to.
+   */
+  public async claim(deviceId: string): Promise<boolean> {
+    const registration = this.registrations.get(deviceId);
+    if (!registration || this.findDeviceConfig(deviceId)) {
+      return false;
+    }
+    await this.rememberDevice(registration);
+    this.log.info('sonn client claimed', { deviceId });
+    return true;
   }
 
   public isKnown(deviceId: string): boolean {
