@@ -20,8 +20,16 @@ import type { BeoremoteKeyBinding } from '@/domain/config/types';
 
 /** What the server should do with a key, before it knows what the zone is playing. */
 export type BeoremoteKeyAction =
-  /** Transport, routed by the existing layer: to a line-in's device, else the queue. */
-  | { kind: 'transport'; command: 'play' | 'pause' | 'next' | 'previous' }
+  /**
+   * Transport, routed by the existing layer: to a line-in's device, else the queue.
+   *
+   * `playPause` is the odd one: it is not a zone command but a question, answered
+   * against what the zone is doing at that moment. Remotes with a single play key
+   * send it, and only the server knows which way it should go.
+   */
+  | { kind: 'transport'; command: 'play' | 'pause' | 'next' | 'previous' | 'playPause' }
+  /** Mute, as a toggle — the only form a remote's mute key comes in. */
+  | { kind: 'mute' }
   /** Pick a disc. Only meaningful on a line-in that fronts a changer. */
   | { kind: 'disc'; disc: number }
   /** Start one of the zone's favorites, 1-based. Works on any source. */
@@ -118,6 +126,12 @@ const KEY_ACTIONS: Record<number, BeoremoteKeyAction> = {
   119: { kind: 'transport', command: 'pause' },
   163: { kind: 'transport', command: 'next' },
   165: { kind: 'transport', command: 'previous' },
+
+  // KEY_PLAYPAUSE and KEY_MUTE, from the Beoremote Essence: a small remote with one
+  // key for both halves of play and no display. The One has a key each and never
+  // sends these, so the table carries both spellings rather than choosing.
+  164: { kind: 'transport', command: 'playPause' },
+  113: { kind: 'mute' },
 
   // Digits 1-6 → disc select on a changer. BTN_5 upwards, not KEY_1.
   261: { kind: 'disc', disc: 1 },

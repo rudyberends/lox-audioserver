@@ -21,6 +21,13 @@ test('transport keys map to the four transport verbs', () => {
   assert.deepEqual(resolveKeyAction(165), { kind: 'transport', command: 'previous' });
 });
 
+test("the Essence's one play key and its mute are known", () => {
+  // A remote with a single play key and no display: what 164 means depends on the
+  // zone, so it is resolved where that is known rather than here.
+  assert.deepEqual(resolveKeyAction(164), { kind: 'transport', command: 'playPause' });
+  assert.deepEqual(resolveKeyAction(113), { kind: 'mute' });
+});
+
 test('116 (KEY_POWER) is the fixed standby key', () => {
   assert.deepEqual(resolveKeyAction(116), { kind: 'standby' });
 });

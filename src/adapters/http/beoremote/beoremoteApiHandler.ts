@@ -337,7 +337,24 @@ export class BeoremoteApiHandler {
     if (action.kind === 'transport') {
       // Straight into the existing layer, which already decides between a line-in's
       // bridge and the local queue. That decision must not be duplicated here.
-      this.deps.zoneManager.handleCommand(zoneId, action.command);
+      // A one-key play/pause is the exception: which half it means depends on what
+      // the zone is doing, and a zone that is not playing gets play — including one
+      // that does not exist yet, since the layer below answers that better than a
+      // guess here would.
+      const command =
+        action.command === 'playPause'
+          ? this.deps.zoneManager.getZoneState(zoneId)?.mode === 'play'
+            ? 'pause'
+            : 'play'
+          : action.command;
+      this.deps.zoneManager.handleCommand(zoneId, command);
+      return { ok: true };
+    }
+
+    if (action.kind === 'mute') {
+      // No payload: the zone reads that as a toggle, which is the only thing a mute
+      // key can mean.
+      this.deps.zoneManager.handleCommand(zoneId, 'mute');
       return { ok: true };
     }
 
