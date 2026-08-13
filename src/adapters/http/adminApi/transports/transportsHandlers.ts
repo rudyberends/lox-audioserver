@@ -12,6 +12,7 @@ import {
 } from '@/shared/musicassistant/maBridgeResolver';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import { sendspinCore } from '@sonn-audio/node-sendspin';
+import { bluetoothClientId } from '@/adapters/inputs/bluetooth/bluetoothInputService';
 import { OUTPUT_DEFINITIONS } from '@/adapters/outputs';
 import { discoverAirplayDevices } from '@/adapters/outputs/airplay/airplayDiscovery';
 import { discoverGoogleCastDevices } from '@/adapters/outputs/googleCast/googleCastDiscovery';
@@ -481,10 +482,20 @@ async function handleSendspinSourceDiscovery(
   deps: TransportsHandlerDeps,
 ): Promise<void> {
   try {
+    // A room's Bluetooth is a source too, and it must not be offered here: it is not something to
+    // wire up and point a line-in at, it appears when someone presses play on a phone and vanishes
+    // when they stop. The zone that owns it is where it is switched on.
+    const bluetoothClients = new Set(
+      (deps.configPort.getConfig().zones ?? [])
+        .map((zone) => zone.inputs?.bluetooth?.deviceId?.trim())
+        .filter((deviceId): deviceId is string => Boolean(deviceId))
+        .map((deviceId) => bluetoothClientId(deviceId)),
+    );
     const clients = sendspinCore
       .listClients()
       .filter((client) => client.roles.includes('source@v1'))
       .filter((client) => !isBrowserClient(client.clientId))
+      .filter((client) => !(client.clientId && bluetoothClients.has(client.clientId)))
       .map((client) => {
         const clientId = client.clientId;
         const controls = clientId
