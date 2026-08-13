@@ -47,6 +47,9 @@ const DEVICE_COMMANDS = new Set([
   'bluetooth_discoverable',
   // Forget one paired phone, by address.
   'bluetooth_forget',
+  // Hand over the last lines of the device's own log, optionally how many. The device posts them
+  // back; see the logs route below.
+  'send_logs',
 ]);
 
 
@@ -115,6 +118,24 @@ export function buildSonnClientRoutes(deps: SonnClientAdminHandlerDeps): Route[]
           deps.log.warn('sonn client list failed', { err });
           deps.sendJson(res, 500, { error: 'sonnclients-failed' });
         }
+      },
+    },
+    {
+      // The last log a device handed over. Empty until someone asks for one with `send_logs`: the
+      // device only sends when told, so this answers "nothing yet" rather than waiting.
+      method: 'GET',
+      pattern: /^\/sonnclients\/([^/]+)\/logs$/,
+      handler: (_req, res, match) => {
+        const deviceId = decodeURIComponent(match[1] ?? '').trim();
+        if (!deviceId) {
+          deps.sendJson(res, 400, { error: 'missing-device-id' });
+          return;
+        }
+        if (!deps.sonnClientApi.isKnown(deviceId)) {
+          deps.sendJson(res, 404, { error: 'device-not-found' });
+          return;
+        }
+        deps.sendJson(res, 200, deps.sonnClientApi.logsForAdmin(deviceId) ?? { lines: [], receivedAt: null });
       },
     },
     {

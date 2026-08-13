@@ -102,6 +102,19 @@ type QueuedCommand = {
   args: string[];
 };
 
+/** The last log a device handed over, and when. See {@link SonnClientApiHandler.handleLogs}. */
+type DeviceLogs = {
+  lines: string[];
+  receivedAt: number;
+};
+
+/**
+ * What a device may hand over in one go. It keeps a few hundred lines and is asked for two hundred,
+ * so these are a ceiling on a mistake rather than a limit anyone should meet.
+ */
+const MAX_LOG_LINES = 1000;
+const MAX_LOG_LINE_CHARS = 2000;
+
 /** A device is offline once it has missed a few polls; the client polls every 5s by default. */
 const STATUS_STALE_MS = 20_000;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
@@ -150,6 +163,14 @@ export class SonnClientApiHandler {
   private readonly statusByDevice = new Map<string, StatusSnapshot>();
   /** Commands waiting for their device's next poll, oldest first. */
   private readonly commandQueues = new Map<string, QueuedCommand[]>();
+  /**
+   * The last log each device sent, kept only in memory.
+   *
+   * On purpose: it is a snapshot someone asked for while looking at a screen, not a record. Writing
+   * it to disk would turn a diagnostic into a thing to manage — rotation, size, what happens to it
+   * when the device is removed — for something that is stale minutes after it is read.
+   */
+  private readonly logsByDevice = new Map<string, DeviceLogs>();
 
   constructor(
     private readonly configPort: ConfigPort,
@@ -203,6 +224,16 @@ export class SonnClientApiHandler {
         return;
       }
       await this.handleRegister(req, res);
+      return;
+    }
+
+    const logsMatch = normalized.match(/^\/api\/sonnclients\/([^/]+)\/logs$/);
+    if (logsMatch) {
+      if (req.method !== 'POST') {
+        this.sendJson(res, 405, { error: 'method-not-allowed' });
+        return;
+      }
+      await this.handleLogs(req, res, decodeURIComponent(logsMatch[1] ?? '').trim());
       return;
     }
 
@@ -260,6 +291,37 @@ export class SonnClientApiHandler {
     // something waiting to be given a room. Nothing about what it plays is decided here.
     await this.rememberDevice(registration);
     this.sendJson(res, 200, this.buildDesiredState(deviceId, req));
+  }
+
+  /**
+   * A device handing over its log, because someone pressed the button that asked for it.
+   *
+   * Kept for exactly one reader: the screen that asked. Each batch replaces the last, so what is
+   * held is one snapshot per device rather than a growing record — see {@link logsByDevice}.
+   */
+  private async handleLogs(
+    req: IncomingMessage,
+    res: ServerResponse,
+    deviceId: string,
+  ): Promise<void> {
+    if (!deviceId || !this.isKnown(deviceId)) {
+      this.sendJson(res, 404, { error: 'device-not-found' });
+      return;
+    }
+    const body = (await this.readJsonBody(req)) as { lines?: unknown } | null;
+    const raw = Array.isArray(body?.lines) ? body.lines : null;
+    if (!raw) {
+      this.sendJson(res, 400, { error: 'missing-lines' });
+      return;
+    }
+    // Trimmed rather than refused: a batch that is longer or wider than expected is still worth
+    // reading, and rejecting it would leave whoever pressed the button with nothing at all.
+    const lines = raw
+      .slice(-MAX_LOG_LINES)
+      .map((line) => (typeof line === 'string' ? line : String(line)).slice(0, MAX_LOG_LINE_CHARS));
+    this.logsByDevice.set(deviceId, { lines, receivedAt: Date.now() });
+    this.log.debug('sonn client log received', { deviceId, lines: lines.length });
+    this.sendJson(res, 200, { ok: true });
   }
 
   private async handleStatus(
@@ -781,6 +843,20 @@ export class SonnClientApiHandler {
 
   public isKnown(deviceId: string): boolean {
     return this.registrations.has(deviceId) || this.findDeviceConfig(deviceId) !== null;
+  }
+
+  /**
+   * The last log this device handed over, if it has.
+   *
+   * `null` when nothing has arrived yet, which is what the screen shows before the first ask and
+   * after a restart — the difference between "nothing to show" and "asked and got nothing" is the
+   * device's own timestamp, so it is reported rather than smoothed over.
+   */
+  public logsForAdmin(deviceId: string): { lines: string[]; receivedAt: string } | null {
+    const stored = this.logsByDevice.get(deviceId);
+    return stored
+      ? { lines: stored.lines, receivedAt: new Date(stored.receivedAt).toISOString() }
+      : null;
   }
 
   /** Queue a one-shot command for a device's next poll. */
