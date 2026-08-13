@@ -12,6 +12,7 @@ import type { ZoneState } from '../src/domain/zones/zoneState';
 type ConfiguratorFakes = {
   airplay: AirplayController | null;
   dlna: AirplayController | null;
+  bluetooth: AirplayController | null;
   spotify: SpotifyConnectController | null;
   airplayResolverSet: number;
   ctx: ZoneContext;
@@ -29,6 +30,7 @@ function buildConfigurator(opts: { activeInput?: ZoneContext['activeInput'] } = 
   const fakes: ConfiguratorFakes = {
     airplay: null,
     dlna: null,
+    bluetooth: null,
     spotify: null,
     airplayResolverSet: 0,
     ctx: {
@@ -56,13 +58,20 @@ function buildConfigurator(opts: { activeInput?: ZoneContext['activeInput'] } = 
 
   const inputsPort: Pick<
     InputsPort,
-    'configureAirplay' | 'configureDlna' | 'configureSpotify' | 'setAirplayPlayerResolver'
+    | 'configureAirplay'
+    | 'configureDlna'
+    | 'configureBluetooth'
+    | 'configureSpotify'
+    | 'setAirplayPlayerResolver'
   > = {
     configureAirplay: (controller) => {
       fakes.airplay = controller;
     },
     configureDlna: (controller) => {
       fakes.dlna = controller;
+    },
+    configureBluetooth: (controller) => {
+      fakes.bluetooth = controller;
     },
     configureSpotify: (controller) => {
       fakes.spotify = controller;
@@ -108,6 +117,10 @@ test('InputSourceConfigurator configure() wires AirPlay + Spotify + resolver onc
   configurator.configure();
   assert.ok(fakes.airplay, 'airplay controller should be registered');
   assert.ok(fakes.spotify, 'spotify controller should be registered');
+  // Every input that pushes into a zone gets the same controller: AirPlay, DLNA and the Bluetooth
+  // radio in a Sonn Client all hand over audio the same way.
+  assert.ok(fakes.dlna, 'dlna controller should be registered');
+  assert.ok(fakes.bluetooth, 'bluetooth controller should be registered');
   assert.equal(fakes.airplayResolverSet, 1);
 });
 

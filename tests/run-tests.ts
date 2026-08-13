@@ -81,6 +81,7 @@ import './externalStateRouter.test';
 import './equalizerRestartScheduler.test';
 import './zoneHeartbeatService.test';
 import './inputSourceConfigurator.test';
+import './bluetoothInput.test';
 import './stateControllerPolicies.test';
 import './zoneStateStore.test';
 import './isRadioAudiopath.test';
@@ -321,6 +322,13 @@ async function createZoneHarness(): Promise<ZoneHarness> {
       // omission type-checked and only surfaced as `undefined.configure` at run
       // time. These zone tests never exercise DLNA, so a no-op is the right stub.
       dlna: {
+        configure: () => {},
+        syncZones: () => {},
+        shutdown: () => {},
+      },
+      // Same story as DLNA: a zone can have a Bluetooth radio in the room, but none of these tests
+      // put a phone in it.
+      bluetooth: {
         configure: () => {},
         syncZones: () => {},
         shutdown: () => {},

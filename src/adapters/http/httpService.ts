@@ -57,6 +57,7 @@ import type { AlertsPort } from '@/ports/AlertsPort';
 import type { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import type { LineInMetadataService } from '@/adapters/inputs/linein/lineInMetadataService';
 import type { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInActivationRegistry';
+import type { BluetoothNowPlayingSink } from '@/adapters/http/sonnClientApi/sonnClientApiHandler';
 import type { LineInActivationService } from '@/application/inputs/lineInActivationService';
 import type { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInService';
 import type { MusicAssistantStreamService } from '@/adapters/inputs/musicassistant/musicAssistantStreamService';
@@ -153,6 +154,8 @@ export class HttpService {
       lineInRegistry: LineInIngestRegistry;
       lineInMetadataService: LineInMetadataService;
       lineInActivation: LineInActivationRegistry;
+      /** The Bluetooth input, so a phone's now-playing reaches the room it is playing in. */
+      bluetoothInput?: BluetoothNowPlayingSink;
       lineInActivationService: LineInActivationService;
       sendspinLineInService: SendspinLineInService;
       musicAssistantStreamService: MusicAssistantStreamService;
@@ -210,6 +213,7 @@ export class HttpService {
       options.configPort,
       config.port,
       options.lineInActivation,
+      options.bluetoothInput,
     );
     this.browseService = new BrowseService(options.configPort, options.contentManager);
     this.aboutService = new AboutService({

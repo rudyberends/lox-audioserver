@@ -88,6 +88,9 @@ export interface InputsPort {
   configureDlna(controller: AirplayController): void;
   syncDlnaZones(zones: ZoneConfig[]): void;
   shutdownDlna(): void;
+  configureBluetooth(controller: AirplayController): void;
+  syncBluetoothZones(zones: ZoneConfig[]): void;
+  shutdownBluetooth(): void;
   configureSpotify(controller: SpotifyConnectController): void;
   syncSpotifyZones(zones: ZoneConfig[], spotifyConfig?: GlobalSpotifyConfig | null): void;
   renameSpotifyZone(zoneId: number, name: string): Promise<void>;

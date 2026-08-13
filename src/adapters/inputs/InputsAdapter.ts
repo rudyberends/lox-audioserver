@@ -5,6 +5,7 @@ import type { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInAc
 import type { LineInActivationService } from '@/application/inputs/lineInActivationService';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
 import type { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
+import type { BluetoothInputService } from '@/adapters/inputs/bluetooth/bluetoothInputService';
 import type { InputsPort } from '@/ports/InputsPort';
 
 type AirplayController = Parameters<InputsPort['configureAirplay']>[0];
@@ -24,6 +25,7 @@ export type InputsAdapterDeps = {
    */
   lineInActivationService?: () => LineInActivationService | null;
   dlna: DlnaInputService;
+  bluetooth: BluetoothInputService;
 };
 
 export class InputsAdapter implements InputsPort {
@@ -59,6 +61,18 @@ export class InputsAdapter implements InputsPort {
 
   public shutdownDlna(): void {
     this.deps.dlna.shutdown();
+  }
+
+  public configureBluetooth(controller: AirplayController): void {
+    this.deps.bluetooth.configure(controller);
+  }
+
+  public syncBluetoothZones(...args: Parameters<InputsPort['syncBluetoothZones']>): void {
+    this.deps.bluetooth.syncZones(...args);
+  }
+
+  public shutdownBluetooth(): void {
+    this.deps.bluetooth.shutdown();
   }
 
   public configureSpotify(controller: SpotifyConnectController): void {

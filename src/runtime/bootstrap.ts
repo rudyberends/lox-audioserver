@@ -14,6 +14,7 @@ import { SubsonicApi } from '@/adapters/subsonic/subsonicApi';
 import { WebdavServer } from '@/adapters/webdav/webdavServer';
 import { SsdpAdvertiser } from '@sonn-audio/node-upnp';
 import { DlnaInputService } from '@/adapters/inputs/dlna/dlnaInputService';
+import { BluetoothInputService } from '@/adapters/inputs/bluetooth/bluetoothInputService';
 import { CustomRadioStore } from '@/adapters/content/providers/customRadioStore';
 import { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import { AppleMusicStreamService } from '@/adapters/content/providers/applemusic/appleMusicStreamService';
@@ -357,6 +358,7 @@ export function createRuntime(): Runtime {
   if (!airplayInputService) {
     throw new Error('airplay input service not initialized');
   }
+  const bluetoothInputService = new BluetoothInputService(sendspinHookRegistry);
   const inputsAdapter = createInputsAdapter({
     airplay: airplayInputService,
     spotify: spotifyInputService,
@@ -365,6 +367,7 @@ export function createRuntime(): Runtime {
     lineInActivation,
     lineInActivationService: () => lineInActivationService,
     dlna: dlnaInputService,
+    bluetooth: bluetoothInputService,
   });
   const zoneAudioPrefs = new ZoneAudioPreferences();
   const audioManager = new AudioManager(new PlaybackService(engine), outputNotifier, zoneAudioPrefs);
@@ -778,6 +781,7 @@ export function createRuntime(): Runtime {
       lineInMetadataService,
       lineInActivation,
       lineInActivationService,
+      bluetoothInput: bluetoothInputService,
       sendspinLineInService,
       musicAssistantStreamService,
       spotifyInputService,

@@ -8,6 +8,10 @@ import type {
   SonnClientPlayerConfig,
   SonnClientSourceConfig,
 } from '@/domain/config/types';
+import {
+  bluetoothClientId,
+  type BluetoothNowPlaying,
+} from '@/adapters/inputs/bluetooth/bluetoothInputService';
 
 /**
  * The management API for devices running Sonn Client.
@@ -63,6 +67,11 @@ type StatusPayload = {
   beoremote?: unknown;
   /** What the device's radio is doing: visible, paired phones, what is connected and playing. */
   bluetooth?: unknown;
+};
+
+/** Where a phone's now-playing is handed on, so the zone can show what is playing. */
+export type BluetoothNowPlayingSink = {
+  updateNowPlaying(deviceId: string, playing: BluetoothNowPlaying | null | undefined): void;
 };
 
 type Registration = {
@@ -153,6 +162,14 @@ export class SonnClientApiHandler {
      * device is making anyway.
      */
     private readonly lineInActivation?: LineInCommandSource,
+    /**
+     * Where a phone's now-playing goes.
+     *
+     * It rides the status poll rather than the audio stream because it is the phone's, not the
+     * stream's: AVRCP keeps answering while the music is paused, which is exactly when someone looks
+     * at the screen to see what stopped.
+     */
+    private readonly bluetoothInput?: BluetoothNowPlayingSink,
   ) {}
 
   public matches(pathname: string): boolean {
@@ -260,6 +277,7 @@ export class SonnClientApiHandler {
     }
     const payload = body as StatusPayload;
     this.statusByDevice.set(deviceId, { payload, receivedAt: Date.now() });
+    this.publishBluetoothNowPlaying(deviceId, payload);
 
     // The card lists only arrive when they changed, so an absent list means "as before" — keep the
     // one we have rather than replacing it with nothing.
@@ -496,6 +514,15 @@ export class SonnClientApiHandler {
    * Nothing is received here — the client terminates A2DP and streams what it gets in as a source,
    * so what goes down is a switch, a name to be seen under, and how long to stay visible.
    */
+  private publishBluetoothNowPlaying(deviceId: string, payload: StatusPayload): void {
+    if (!this.bluetoothInput) return;
+    const bluetooth = payload.bluetooth;
+    if (!bluetooth || typeof bluetooth !== 'object') return;
+    const playing = (bluetooth as { now_playing?: unknown }).now_playing;
+    if (playing !== null && typeof playing !== 'object') return;
+    this.bluetoothInput.updateNowPlaying(deviceId, playing as BluetoothNowPlaying | null);
+  }
+
   private mapBluetooth(device: SonnClientDeviceConfig | null): Record<string, unknown> | undefined {
     if (!device) return undefined;
     const config = this.configPort.getConfig();
@@ -512,6 +539,9 @@ export class SonnClientApiHandler {
       // The room's name is what someone looks for on their phone; the device's hostname means
       // nothing to them.
       name: bluetooth.publishName?.trim() || zone.name,
+      // Named here so both ends spell it the same way: the device sends the decoded audio under
+      // this id, and this end recognises it as the room's Bluetooth.
+      client_id: bluetoothClientId(device.deviceId),
       discoverable_seconds: bluetooth.discoverableSeconds,
       pin: bluetooth.pin?.trim() || undefined,
       control: bluetooth.control !== false,

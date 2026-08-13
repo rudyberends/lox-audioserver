@@ -11,7 +11,14 @@ import {
 } from '@/application/zones/helpers/stateHelpers';
 
 export type InputSourceConfiguratorDeps = {
-  inputsPort: Pick<InputsPort, 'configureAirplay' | 'configureDlna' | 'configureSpotify' | 'setAirplayPlayerResolver'>;
+  inputsPort: Pick<
+    InputsPort,
+    | 'configureAirplay'
+    | 'configureDlna'
+    | 'configureBluetooth'
+    | 'configureSpotify'
+    | 'setAirplayPlayerResolver'
+  >;
   zoneRepo: Pick<ZoneRepository, 'get'>;
   playback: Pick<
     PlaybackCoordinator,
@@ -53,6 +60,7 @@ export class InputSourceConfigurator {
     }
     this.configureAirplay();
     this.configureDlna();
+    this.configureBluetooth();
     this.configureSpotify();
     this.deps.inputsPort.setAirplayPlayerResolver(
       (zoneId) => this.deps.zoneRepo.get(zoneId)?.player ?? null,
@@ -62,7 +70,7 @@ export class InputSourceConfigurator {
 
   /**
    * The generic input controller: turns an input's callbacks into zone playback.
-   * Shared by AirPlay and the DLNA renderer input — neither is protocol-specific.
+   * Shared by AirPlay, the DLNA renderer input and Bluetooth — none is protocol-specific.
    */
   private buildInputController(): AirplayController {
     const { playback } = this.deps;
@@ -92,6 +100,10 @@ export class InputSourceConfigurator {
 
   private configureDlna(): void {
     this.deps.inputsPort.configureDlna(this.buildInputController());
+  }
+
+  private configureBluetooth(): void {
+    this.deps.inputsPort.configureBluetooth(this.buildInputController());
   }
 
   private configureSpotify(): void {
