@@ -562,6 +562,14 @@ export interface ZoneInputConfig {
 export interface ZoneBeoremoteConfig {
   enabled: boolean;
   /**
+   * Which models this room listens to, when it does not listen to all of them.
+   *
+   * One bridge serves the room and hears every B&O remote paired to its speaker, so this is a
+   * filter rather than a second switch: a model set to false has its keys dropped. Absent means
+   * every model, which is what a room configured before this existed has been doing.
+   */
+  models?: { one?: boolean; essence?: boolean };
+  /**
    * Sonn Client device whose paired remote drives this zone.
    *
    * Absent means any bridge that names this zone itself, which is how the standalone Python bridge

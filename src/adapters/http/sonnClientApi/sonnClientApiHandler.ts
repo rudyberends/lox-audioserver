@@ -703,6 +703,9 @@ export class SonnClientApiHandler {
       menu_poll_ms: legacy?.menuPollMs,
       volume_player: legacy?.volumePlayer,
       volume_step: zone?.inputs?.beoremote?.volumeStep ?? legacy?.volumeStep,
+      // Which models the room listens to. Sent only when it is not all of them, so a device reading
+      // an older room's settings hears nothing about it and keeps taking every remote.
+      models: zone?.inputs?.beoremote?.models,
     };
   }
 
