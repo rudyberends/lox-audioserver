@@ -7,6 +7,7 @@ import type {
   SonnClientDeviceConfig,
   SonnClientPlayerConfig,
   SonnClientSourceConfig,
+  ZoneConfig,
 } from '@/domain/config/types';
 import {
   bluetoothClientId,
@@ -516,7 +517,9 @@ export class SonnClientApiHandler {
     if (!device) return undefined;
     const config = this.configPort.getConfig();
     const zone = config.zones.find(
-      (candidate) => candidate.inputs?.beoremote?.deviceId === device.deviceId,
+      (candidate) =>
+        candidate.inputs?.beoremote?.enabled !== false &&
+        this.deviceClaimedBy(candidate, candidate.inputs?.beoremote?.deviceId, device.deviceId),
     );
     const legacy = device.beoremote;
 
@@ -557,11 +560,47 @@ export class SonnClientApiHandler {
     this.bluetoothInput.updateNowPlaying(deviceId, playing as BluetoothNowPlaying | null);
   }
 
+  /**
+   * The device a room falls back to for its radio and its remote.
+   *
+   * Nearly every room is one box: it plays through a Sonn Client, and the phone that pairs with it
+   * and the remote that drives it are that same box's radio. Making someone name the device three
+   * times — once as the speaker, once for Bluetooth, once for the remote — is asking them to repeat
+   * an answer the room already gave. So a zone with no device named for those follows the one that
+   * plays it, and naming one stays possible for the rooms that really are split across two boxes.
+   */
+  private deviceForZone(zone: ZoneConfig): string | undefined {
+    const clientId =
+      zone.output && typeof zone.output === 'object'
+        ? ((zone.output as { id?: string; clientId?: string }).id === 'sendspin'
+            ? (zone.output as { clientId?: string }).clientId
+            : undefined)
+        : undefined;
+    if (!clientId) return undefined;
+    const devices = this.configPort.getConfig().sonnClients?.devices ?? [];
+    const owner = devices.find((device) =>
+      (device.players ?? []).some((player) => player.clientId === clientId),
+    );
+    return owner?.deviceId;
+  }
+
+  /** Whether this device is the one the room means, named or by following its speaker. */
+  private deviceClaimedBy(
+    zone: ZoneConfig,
+    named: string | undefined,
+    deviceId: string,
+  ): boolean {
+    const trimmed = named?.trim();
+    return trimmed ? trimmed === deviceId : this.deviceForZone(zone) === deviceId;
+  }
+
   private mapBluetooth(device: SonnClientDeviceConfig | null): Record<string, unknown> | undefined {
     if (!device) return undefined;
     const config = this.configPort.getConfig();
     const zone = config.zones.find(
-      (candidate) => candidate.inputs?.bluetooth?.deviceId === device.deviceId,
+      (candidate) =>
+        candidate.inputs?.bluetooth?.enabled === true &&
+        this.deviceClaimedBy(candidate, candidate.inputs?.bluetooth?.deviceId, device.deviceId),
     );
     const bluetooth = zone?.inputs?.bluetooth;
     if (!zone || bluetooth?.enabled !== true) {

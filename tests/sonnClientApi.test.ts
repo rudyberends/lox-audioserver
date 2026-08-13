@@ -410,6 +410,44 @@ test('a room claims a remote, the device does not claim a room', async () => {
   assert.equal(off.beoremote, undefined);
 });
 
+test('a room does not have to name the device it already plays through', async () => {
+  const { call, admin, config } = createHarness();
+  await call('POST', '/api/sonnclients/register', REGISTRATION);
+  await admin('PUT', '/sonnclients/sonn-kitchen-9e2f', {
+    name: 'Kitchen',
+    players: [{ clientId: 'sonn-kitchen-9e2f', output: 'default' }],
+  });
+
+  // Nearly every room is one box. It has already said which one — the thing that plays it — so the
+  // radio work follows the speaker rather than making someone answer the same question three times.
+  config.zones = [
+    {
+      id: 12,
+      name: 'Kitchen',
+      output: { id: 'sendspin', clientId: 'sonn-kitchen-9e2f' },
+      inputs: {
+        bluetooth: { enabled: true },
+        beoremote: { enabled: true, volumeStep: 6 },
+      },
+    },
+  ] as never;
+
+  const desired = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', { state: 'connected' })
+  ).json();
+  assert.equal(desired.bluetooth.zone_id, 12);
+  assert.equal(desired.bluetooth.name, 'Kitchen');
+  assert.equal(desired.beoremote.zone_id, 12);
+
+  // A room split across two boxes still gets to say so, and then the speaker is not the answer.
+  config.zones[0].inputs.bluetooth.deviceId = 'sonn-hallway-1a2b';
+  const named = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', { state: 'connected' })
+  ).json();
+  assert.equal(named.bluetooth, undefined);
+  assert.equal(named.beoremote.zone_id, 12);
+});
+
 test('a disabled device keeps polling and is told to play nothing', async () => {
   const { call, admin } = createHarness();
   await call('POST', '/api/sonnclients/register', REGISTRATION);
