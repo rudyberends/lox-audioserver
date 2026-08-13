@@ -121,6 +121,13 @@ function handleGetConfig(res: ServerResponse, deps: ConfigHandlerDeps): void {
 async function handleClear(res: ServerResponse, deps: ConfigHandlerDeps): Promise<void> {
   const currentMacId = deps.configPort.getConfig()?.system?.audioserver?.macId;
   await deps.configPort.updateConfig((cfg) => {
+    // Emptied first, then filled with the defaults. Assigning the defaults on top only replaces the
+    // sections they name, so every section added since — Sonn client devices, and whatever comes
+    // next — quietly survived a reset: a speaker that had been wiped and reinstalled kept coming
+    // back as an offline ghost, and nothing about "clear the configuration" suggests that.
+    for (const key of Object.keys(cfg)) {
+      delete (cfg as unknown as Record<string, unknown>)[key];
+    }
     Object.assign(cfg, defaultConfig());
     if (currentMacId) {
       cfg.system.audioserver.macId = currentMacId;
