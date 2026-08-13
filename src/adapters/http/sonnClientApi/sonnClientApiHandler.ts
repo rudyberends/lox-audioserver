@@ -462,9 +462,10 @@ export class SonnClientApiHandler {
    */
   private mapBeoremote(device: SonnClientDeviceConfig | null): Record<string, unknown> | undefined {
     if (!device) return undefined;
-    const zone = this.configPort
-      .getConfig()
-      .zones.find((candidate) => candidate.inputs?.beoremote?.deviceId === device.deviceId);
+    const config = this.configPort.getConfig();
+    const zone = config.zones.find(
+      (candidate) => candidate.inputs?.beoremote?.deviceId === device.deviceId,
+    );
     const legacy = device.beoremote;
 
     // The device entry is still read for an installation configured before rooms could claim a
@@ -475,9 +476,13 @@ export class SonnClientApiHandler {
     if (typeof zoneId !== 'number') {
       return undefined;
     }
+    // The room's name travels with it: the adapter carries one name, and everything a user sees --
+    // the remote's product entry, the Bluetooth speaker, AirPlay, DLNA -- should be the room.
+    const zoneName = zone?.name ?? config.zones.find((candidate) => candidate.id === zoneId)?.name;
     return {
       enabled: true,
       zone_id: zoneId,
+      zone_name: zoneName,
       menu_poll_ms: legacy?.menuPollMs,
       volume_player: legacy?.volumePlayer,
       volume_step: zone?.inputs?.beoremote?.volumeStep ?? legacy?.volumeStep,
