@@ -448,6 +448,50 @@ test('a room does not have to name the device it already plays through', async (
   assert.equal(named.beoremote.zone_id, 12);
 });
 
+test('a device that says which room it is gets that room\'s radio work', async () => {
+  const { call, admin, config } = createHarness();
+  await call('POST', '/api/sonnclients/register', REGISTRATION);
+  config.zones = [
+    { id: 12, name: 'Kitchen', inputs: { bluetooth: { enabled: true }, beoremote: { enabled: true } } },
+    { id: 13, name: 'Study', inputs: {} },
+  ] as never;
+
+  // One answer, given on the device: this box is the Kitchen. The room's speaker follows from it,
+  // because a claim that changes nothing is a label rather than a setting.
+  await admin('PUT', '/sonnclients/sonn-kitchen-9e2f', {
+    zoneId: 12,
+    players: [{ clientId: 'sonn-kitchen-9e2f', output: 'default' }],
+  });
+  assert.deepEqual(config.zones[0].output, { id: 'sendspin', clientId: 'sonn-kitchen-9e2f' });
+
+  const desired = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', { state: 'connected' })
+  ).json();
+  assert.equal(desired.bluetooth.zone_id, 12);
+  assert.equal(desired.beoremote.zone_id, 12);
+});
+
+test('a room that already plays through something else keeps it', async () => {
+  const { call, admin, config } = createHarness();
+  await call('POST', '/api/sonnclients/register', REGISTRATION);
+  config.zones = [
+    { id: 12, name: 'Kitchen', output: { id: 'sonos', uuid: 'RINCON_1' }, inputs: { bluetooth: { enabled: true } } },
+  ] as never;
+
+  await admin('PUT', '/sonnclients/sonn-kitchen-9e2f', {
+    zoneId: 12,
+    players: [{ clientId: 'sonn-kitchen-9e2f', output: 'default' }],
+  });
+
+  // Somebody chose that Sonos. Replacing it because a Pi was pointed at the same room is a
+  // surprise, so the claim takes the radio work and leaves the speaker alone.
+  assert.deepEqual(config.zones[0].output, { id: 'sonos', uuid: 'RINCON_1' });
+  const desired = (
+    await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', { state: 'connected' })
+  ).json();
+  assert.equal(desired.bluetooth.zone_id, 12);
+});
+
 test('a disabled device keeps polling and is told to play nothing', async () => {
   const { call, admin } = createHarness();
   await call('POST', '/api/sonnclients/register', REGISTRATION);

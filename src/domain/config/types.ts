@@ -807,6 +807,21 @@ export interface SonnClientDeviceConfig {
   sources?: SonnClientSourceConfig[];
   /** Beoremote One support for this device. */
   beoremote?: SonnClientBeoremoteConfig | null;
+  /**
+   * The room this box serves, if it serves exactly one.
+   *
+   * Nearly every device is one room's hardware: it plays that room, a phone pairs with that room,
+   * and the remote lying on that room's table drives it. Saying so once here is what saves naming
+   * the same box again for each of those.
+   *
+   * Absent means the box stands on its own — a Pi with two sound cards serving two rooms, or one at
+   * a turntable whose input any room can play. Those are wired up per role instead, which is why
+   * this is a convenience and never the only way.
+   *
+   * Line-ins are deliberately not covered by it: a turntable is a source any room can select, not a
+   * property of the room its wire happens to reach.
+   */
+  zoneId?: number | null;
   /** Components this device should have installed. Names must exist in `components`. */
   requiredComponents?: string[];
   /** Last registration, recorded so the admin UI can show a device that is currently offline. */

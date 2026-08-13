@@ -168,6 +168,7 @@ export function buildSonnClientRoutes(deps: SonnClientAdminHandlerDeps): Route[]
             } else {
               devices.push(merged);
             }
+            claimRoom(config, merged);
           });
         } catch (err) {
           deps.log.warn('sonn client update failed', { err, deviceId });
@@ -330,6 +331,29 @@ function assignedClientIds(deps: SonnClientAdminHandlerDeps): Set<string> {
   return assigned;
 }
 
+/**
+ * Make a room actually play through the box that says it serves it.
+ *
+ * Saying "this is the Kitchen" has to mean something on its own, or it is a label. So the room's
+ * speaker becomes this device's player — but only when the room has none yet. A room already
+ * playing through something else keeps it: someone chose that, and silently replacing a Sonos
+ * because a Pi was assigned to the same room is the kind of surprise that costs trust. The screen
+ * says which it is and offers the swap as a button.
+ *
+ * Bluetooth and the remote need nothing here: the client API resolves those from this same claim.
+ */
+function claimRoom(config: any, device: SonnClientDeviceConfig): void {
+  if (typeof device.zoneId !== 'number') return;
+  const zone = (config.zones ?? []).find((entry: any) => entry.id === device.zoneId);
+  if (!zone) return;
+  const player = (device.players ?? []).find((entry) => entry.enabled !== false);
+  if (!player?.clientId) return;
+  const output = zone.output && typeof zone.output === 'object' ? zone.output : null;
+  const hasOutput = Boolean(output?.id) || (Array.isArray(zone.transports) && zone.transports.length > 0);
+  if (hasOutput) return;
+  zone.output = { id: 'sendspin', clientId: player.clientId };
+}
+
 function sanitizeDevice(body: Record<string, unknown>): Partial<SonnClientDeviceConfig> {
   const update: Partial<SonnClientDeviceConfig> = {};
   if ('name' in body) {
@@ -346,6 +370,10 @@ function sanitizeDevice(body: Record<string, unknown>): Partial<SonnClientDevice
   }
   if ('beoremote' in body) {
     update.beoremote = sanitizeBeoremote(body.beoremote);
+  }
+  if ('zoneId' in body) {
+    const zoneId = optionalNumber(body.zoneId, 0, 100_000);
+    update.zoneId = typeof zoneId === 'number' ? zoneId : null;
   }
   if ('requiredComponents' in body) {
     update.requiredComponents = asArray(body.requiredComponents)

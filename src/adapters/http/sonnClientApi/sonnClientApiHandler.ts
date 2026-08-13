@@ -584,14 +584,25 @@ export class SonnClientApiHandler {
     return owner?.deviceId;
   }
 
-  /** Whether this device is the one the room means, named or by following its speaker. */
+  /**
+   * Whether this device is the one the room means.
+   *
+   * Three answers, in the order someone would give them. The room naming a device wins, because
+   * that is somebody being explicit about a room split across two boxes. Otherwise a device that
+   * says it *is* this room serves it. Otherwise the box that plays the room does, which covers a
+   * device set up before any of this and needs no configuration at all.
+   */
   private deviceClaimedBy(
     zone: ZoneConfig,
     named: string | undefined,
     deviceId: string,
   ): boolean {
     const trimmed = named?.trim();
-    return trimmed ? trimmed === deviceId : this.deviceForZone(zone) === deviceId;
+    if (trimmed) return trimmed === deviceId;
+    const devices = this.configPort.getConfig().sonnClients?.devices ?? [];
+    const claimedBy = devices.find((device) => device.zoneId === zone.id)?.deviceId;
+    if (claimedBy) return claimedBy === deviceId;
+    return this.deviceForZone(zone) === deviceId;
   }
 
   private mapBluetooth(device: SonnClientDeviceConfig | null): Record<string, unknown> | undefined {
