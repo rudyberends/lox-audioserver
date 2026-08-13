@@ -61,6 +61,14 @@ const AVAILABLE_SERVICES = [
   },
 ];
 
+/**
+ * A folder id that is also a service-native path — `applemusic:library-album:b64_x`,
+ * `library:album:…`, `spotify:playlist:…`. Two segments at least, so a bare provider id such
+ * as `album:111` is left alone: those repeat across services and would collide in a cache
+ * keyed by path only.
+ */
+const NATIVE_PATH = /^[a-z][a-z0-9]*:[^:]+:/i;
+
 function emptyFolder(id: string, name: string, start: number, service: string): ContentFolder {
   return { id, name, items: [], totalitems: 0, start, service };
 }
@@ -479,12 +487,23 @@ export class ContentManager {
 
   private storeHarvestedItem(item: ContentFolderItem): void {
     const audiopath = (item.audiopath ?? '').trim();
-    if (!audiopath) {
+    // A container row (album, artist, playlist) usually carries no audiopath of its own — it
+    // is addressed by its folder id. That id is a service-native path for every provider
+    // that has one, so index it too: without this, favouriting a browsed album could not
+    // find its own cover and artist, while the tracks inside it could.
+    const folderId = (item.id ?? '').trim();
+    const keyPaths = [audiopath].filter(Boolean);
+    if (folderId && folderId !== audiopath && NATIVE_PATH.test(folderId)) {
+      keyPaths.push(folderId);
+    }
+    if (keyPaths.length === 0) {
       return;
     }
     // Leave radio/stream items to the live tunein path: it sets the `station`
     // field that a harvested metadata entry can't carry.
-    if (detectServiceFromAudiopath(audiopath) === 'radio' || /^https?:\/\//i.test(audiopath)) {
+    if (
+      keyPaths.some((p) => detectServiceFromAudiopath(p) === 'radio' || /^https?:\/\//i.test(p))
+    ) {
       return;
     }
     const title = (item.title || item.name || '').trim();
@@ -501,8 +520,10 @@ export class ContentManager {
       duration: typeof item.duration === 'number' && item.duration > 0 ? Math.round(item.duration) : undefined,
     };
     const expiresAt = Date.now() + this.metadataTtlMs;
-    for (const key of metadataKeyVariants(audiopath)) {
-      this.setHarvestedEntry(key, value, expiresAt);
+    for (const keyPath of keyPaths) {
+      for (const key of metadataKeyVariants(keyPath)) {
+        this.setHarvestedEntry(key, value, expiresAt);
+      }
     }
   }
 

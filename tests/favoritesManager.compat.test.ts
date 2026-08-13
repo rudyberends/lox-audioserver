@@ -316,3 +316,55 @@ test('favorites manager stores stream favorites as custom_stream', async () => {
     assert.equal(result.items[0]?.type, 'custom_stream');
   });
 });
+
+test('a favorite of something else does not borrow what is playing', async () => {
+  await withTempCwd(async () => {
+    const playing = {
+      audiopath: 'applemusic:track:b64_playing',
+      title: 'Teardrop',
+      artist: 'Massive Attack',
+      album: 'Mezzanine',
+      coverurl: 'http://cover/teardrop',
+    };
+    const favoritesManager = createFavoritesManager({
+      notifier: { notifyRoomFavoritesChanged: () => {} } as any,
+      contentPort: { resolveMetadata: async () => null } as any,
+    });
+    favoritesManager.initOnce({ zoneManager: { getState: () => playing } as any });
+
+    // Saving a browse row while a track plays: the row's own name is all we know.
+    const other = await favoritesManager.add(28, 'Blue Lines', 'applemusic:album:b64_bluelines');
+    assert.equal(other.title, 'Blue Lines');
+    assert.equal(other.name, 'Blue Lines');
+    assert.equal(other.artist, '');
+    assert.equal(other.album, '');
+    assert.equal(other.coverurl, '');
+
+    // Saving what *is* playing still fills itself in from the zone.
+    const current = await favoritesManager.add(28, '', playing.audiopath);
+    assert.equal(current.title, 'Teardrop');
+    assert.equal(current.artist, 'Massive Attack');
+    assert.equal(current.coverurl, 'http://cover/teardrop');
+  });
+});
+
+test('a non-spotify favorite does not inherit the playing spotify account', async () => {
+  await withTempCwd(async () => {
+    const favoritesManager = createFavoritesManager({
+      notifier: { notifyRoomFavoritesChanged: () => {} } as any,
+      contentPort: { resolveMetadata: async () => null } as any,
+    });
+    favoritesManager.initOnce({
+      zoneManager: { getState: () => ({ audiopath: 'spotify@acct-1:track:xyz' }) } as any,
+    });
+
+    const apple = await favoritesManager.add(28, 'Muse', 'applemusic:album:b64_muse');
+    assert.equal(apple.owner, '');
+    assert.equal(await favoritesManager.getAudiopathForFavorite(28, apple.id), 'applemusic:album:b64_muse');
+
+    // A Spotify path saved while that account plays still keeps its owner.
+    const spotify = await favoritesManager.add(28, 'Some Album', 'spotify:album:111');
+    assert.equal(spotify.owner, 'acct-1');
+    assert.equal(await favoritesManager.getAudiopathForFavorite(28, spotify.id), 'spotify@acct-1:album:111');
+  });
+});

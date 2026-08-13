@@ -235,6 +235,38 @@ test('favorites add picks up harvested cover/artist/album without a second brows
   });
 });
 
+test('a browsed container is harvested under its folder id', async () => {
+  const { cm, calls, setFolder } = makeManager();
+  // An album row carries no audiopath of its own: it is addressed by its folder id, which for
+  // a service-native provider is itself a path.
+  setFolder(
+    makeFolder([
+      {
+        id: 'applemusic:library-album:b64_bluelines',
+        name: 'Blue Lines',
+        type: 2,
+        artist: 'Massive Attack',
+        coverurl: 'http://cover/bluelines',
+      },
+    ]),
+  );
+  await cm.getServiceFolder('applemusic', 'user', 'recent', 0, 50);
+
+  const meta = await cm.resolveMetadata('applemusic:library-album:b64_bluelines');
+  assert.equal(meta?.title, 'Blue Lines');
+  assert.equal(meta?.artist, 'Massive Attack');
+  assert.equal(meta?.coverurl, 'http://cover/bluelines');
+  assert.equal(calls.getTrack, 0);
+});
+
+test('a bare provider id is not harvested as a path (it would collide across services)', async () => {
+  const { cm, setFolder } = makeManager();
+  setFolder(makeFolder([{ id: 'album:111', name: 'Ambiguous', type: 2, coverurl: 'http://cover/x' }]));
+  await cm.getServiceFolder('applemusic', 'user', 'recent', 0, 50);
+
+  assert.equal(await cm.resolveMetadata('album:111'), null);
+});
+
 test('recents record fills metadata from the harvest cache (no live lookup)', async () => {
   await withTempCwd(async () => {
     const { cm, calls, setFolder } = makeManager();

@@ -116,22 +116,33 @@ export class FavoritesManager {
       ? Math.max(...stored.items.map((item) => item.id)) + 1
       : 1;
     const state = this.zones.getState(zoneId);
+    const normalizedAudiopath = normalizeFavoriteAudiopath(audiopath);
+    // The owner is a Spotify account id, and `getForPlayback` puts it back as a
+    // `spotify@<owner>:` prefix — so borrowing the playing account's id for a path that is
+    // not Spotify's would rewrite an Apple Music favourite into a Spotify one.
     const providerId =
       extractProviderId(audiopath) ||
-      (state?.audiopath ? extractProviderId(state.audiopath) : null);
-    const normalizedAudiopath = normalizeFavoriteAudiopath(audiopath);
+      (/^spotify:/i.test(normalizedAudiopath) && state?.audiopath
+        ? extractProviderId(state.audiopath)
+        : null);
     // Best-effort metadata lookup; missing metadata should not block favorites.
     const meta = await bestEffort(() => this.contentPort.resolveMetadata(audiopath), {
       fallback: null,
     });
-    const stateMeta = state?.audiopath
+    // What the zone is playing describes *this* favourite only when it is the same item.
+    // Saving a browse row while something else plays used to borrow the playing track's
+    // title, artist and cover, so five different albums all came out looking like the
+    // track that happened to be on.
+    const playingPath = state?.audiopath ? normalizeFavoriteAudiopath(state.audiopath) : '';
+    const isNowPlaying = Boolean(playingPath) && playingPath === normalizedAudiopath;
+    const stateMeta = isNowPlaying
       ? {
-          title: state.title ?? '',
-          name: state.title ?? '',
-          artist: state.artist ?? '',
-          album: state.album ?? '',
-          coverurl: state.coverurl ?? '',
-        }
+        title: state?.title ?? '',
+        name: state?.title ?? '',
+        artist: state?.artist ?? '',
+        album: state?.album ?? '',
+        coverurl: state?.coverurl ?? '',
+      }
       : null;
     const item = {
       ...createItem(nextId, stored.items.length + 1, title, normalizedAudiopath),

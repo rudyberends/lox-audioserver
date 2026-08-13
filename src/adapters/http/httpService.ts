@@ -407,7 +407,10 @@ export class HttpService {
         );
       },
       addFavorite: async (zoneId, name, uri) => {
-        const created = await options.favoritesManager.add(zoneId, name, uri);
+        // A browse row hands out an opaque ref, and the guide promises it works anywhere a
+        // `uri` is taken. Store the audiopath it means, exactly as `play` does: an unresolved
+        // ref has no metadata to look up and cannot be played back later either.
+        const created = await options.favoritesManager.add(zoneId, name, resolveUriFromRef(uri));
         return {
           id: created.id,
           name: created.name || created.title || '',
@@ -429,7 +432,9 @@ export class HttpService {
         if (!uri) {
           return false;
         }
-        await options.zoneManager.playContent(zoneId, uri, 'api');
+        // Resolve on the way out too, so favourites stored as a browse ref before that was
+        // fixed still play instead of being handed to the queue as gibberish.
+        await options.zoneManager.playContent(zoneId, resolveUriFromRef(uri), 'api');
         return true;
       },
       getRecents: async (zoneId, start, limit) => {
