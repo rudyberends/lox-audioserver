@@ -283,7 +283,15 @@ export class SonnClientApiHandler {
     // The card lists only arrive when they changed, so an absent list means "as before" — keep the
     // one we have rather than replacing it with nothing.
     const registration = this.registrations.get(deviceId);
-    if (registration) {
+    if (!registration) {
+      // This server knows what hardware a device has because the device told it, and it keeps that
+      // in memory: it describes a box, not a setting, and it is rebuilt whenever the box registers.
+      // A restart therefore leaves a device that is happily polling but whose sound cards this end
+      // has never heard of — so it is asked to introduce itself again, and does on its next poll.
+      this.sendJson(res, 409, { error: 'unknown-device', register: true });
+      return;
+    }
+    {
       if (Array.isArray(payload.outputs)) {
         registration.outputs = payload.outputs;
       }

@@ -492,6 +492,24 @@ test('a room that already plays through something else keeps it', async () => {
   assert.equal(desired.bluetooth.zone_id, 12);
 });
 
+test('a device this server has never heard of is asked to introduce itself', async () => {
+  const { call } = createHarness();
+
+  // What hardware a device has is kept in memory here on purpose — it describes a box, not a
+  // setting — and it is rebuilt when the box registers. A restart therefore leaves a device happily
+  // polling whose sound cards nobody at this end has ever seen, and answering it with a desired
+  // state built on that blank is how a room ends up unable to pick an output.
+  const res = await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', { state: 'connected' });
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.json().register, true);
+
+  // Once it has introduced itself, the same poll is answered normally.
+  await call('POST', '/api/sonnclients/register', REGISTRATION);
+  const after = await call('POST', '/api/sonnclients/sonn-kitchen-9e2f/status', { state: 'connected' });
+  assert.equal(after.statusCode, 200);
+  assert.ok(after.json().sendspin_url);
+});
+
 test('a disabled device keeps polling and is told to play nothing', async () => {
   const { call, admin } = createHarness();
   await call('POST', '/api/sonnclients/register', REGISTRATION);
