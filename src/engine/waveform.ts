@@ -17,7 +17,7 @@
  * whole-file pass affordable on the hardware this runs on.
  */
 import { spawn } from 'node:child_process';
-import { FFMPEG_BINARY } from '@/engine/ffmpegProcess';
+import { ffmpegBinary } from '@/engine/ffmpegProcess';
 import { ANALYSIS_DB_FLOOR } from '@/application/audio/audioAnalysisService';
 import { createLogger } from '@/shared/logging/logger';
 
@@ -103,7 +103,7 @@ export async function computeWaveform(path: string): Promise<Waveform | null> {
 
   const pcm = await new Promise<Buffer | null>((resolve) => {
     const proc = spawn(
-      FFMPEG_BINARY,
+      ffmpegBinary(),
       // `-vn` because an embedded cover is a video stream, and `-map 0:a:0` so a file with several
       // audio tracks is reduced by its first rather than refused.
       ['-v', 'error', '-i', path, '-vn', '-map', '0:a:0', '-ac', '1', '-ar', String(PROBE_RATE), '-f', 's16le', '-'],

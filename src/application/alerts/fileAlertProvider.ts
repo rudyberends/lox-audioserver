@@ -3,7 +3,7 @@ import path from 'node:path';
 import { ALERT_FILE_MAP } from '@/application/alerts/alertFileManager';
 import type { AlertMediaResource } from '@/application/alerts/types';
 import { createLogger } from '@/shared/logging/logger';
-import { FFMPEG_BINARY } from '@/engine/ffmpegProcess';
+import { ffmpegBinary } from '@/engine/ffmpegProcess';
 
 const DURATION_PROBE_TIMEOUT_MS = 30000;
 
@@ -112,7 +112,7 @@ export class FileAlertProvider {
         clearTimeout(timer);
         resolve(value);
       };
-      const proc = spawn(FFMPEG_BINARY, ['-hide_banner', '-i', absPath, '-vn', '-f', 'null', '-'], {
+      const proc = spawn(ffmpegBinary(), ['-hide_banner', '-i', absPath, '-vn', '-f', 'null', '-'], {
         stdio: ['ignore', 'ignore', 'pipe'],
       });
       const timer = setTimeout(() => {

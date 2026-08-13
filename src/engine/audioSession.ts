@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { PassThrough } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import { serverClockUs } from '@/shared/audio/serverClock';
-import { FFMPEG_BINARY, FfmpegProcess } from '@/engine/ffmpegProcess';
+import { ffmpegBinary, FfmpegProcess } from '@/engine/ffmpegProcess';
 import {
   mp3BitrateToBps,
   type AudioOutputSettings,
@@ -94,7 +94,7 @@ export class AudioSession {
   /** @internal */ public readonly fanout: SubscriberFanout;
   /** @internal */ public process?: FfmpegProcess;
   /** @internal */ public ending = false;
-  /** @internal */ public readonly ffmpegPath = FFMPEG_BINARY;
+  /** @internal */ public readonly ffmpegPath = ffmpegBinary();
 
   /** @internal */ public readonly buffer: RollingBuffer;
   /** @internal */ public readonly firstChunk = new FirstChunkBarrier();
@@ -582,7 +582,7 @@ export class AudioSession {
             this.log.error('ffmpeg binary not found', {
               zoneId: this.zoneId,
               path: this.ffmpegPath,
-              hint: 'Install ffmpeg or set AUDIO_FFMPEG_PATH/FFMPEG_PATH env variables',
+              hint: 'Install ffmpeg with libmp3lame, libopus and libsoxr',
             });
           } else {
             this.log.error('ffmpeg error', { zoneId: this.zoneId, message: error.message });

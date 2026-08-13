@@ -22,6 +22,7 @@ import './engine/outputPacer.test';
 import './engine/subscriberFanout.test';
 import './engine/pcmCrossfade.test';
 import './engine/ffmpegArgs.test';
+import './engine/ffmpegBinary.test';
 import './engine/audioSessionRestart.test';
 import './engine/audioSessionLateSubscriber.test';
 import './engine/pcmDsp.test';

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { PassThrough } from 'node:stream';
-import { FFMPEG_BINARY } from '@/engine/ffmpegProcess';
+import { ffmpegBinary } from '@/engine/ffmpegProcess';
 
 export interface TwoStagePipelineLogger {
   debug(message: string, context?: Record<string, unknown>): void;
@@ -62,7 +62,7 @@ export class TwoStagePipeline {
     args: string[],
     handlers: { onEnded: (reason: 'exit' | 'error') => void },
   ): ChildProcessWithoutNullStreams {
-    const proc = spawn(FFMPEG_BINARY, args, {
+    const proc = spawn(ffmpegBinary(), args, {
       stdio: ['pipe', 'pipe', 'pipe'],
     }) as ChildProcessWithoutNullStreams;
     this.decoder = proc;
