@@ -26,10 +26,11 @@ function buildService() {
       const pipe = source.kind === 'pipe' ? source : null;
       calls.push(`start:${zoneId}:${label}:${pipe?.sampleRate}:${pipe?.channels}`);
     },
-    updateMetadata: (zoneId, metadata) => calls.push(`meta:${zoneId}:${metadata.title}`),
+    updateMetadata: (zoneId, metadata) =>
+      calls.push(`meta:${zoneId}:${metadata.title}${metadata.coverurl ? ':cover' : ''}`),
     updateCover: () => {},
     updateVolume: () => {},
-    updateTiming: () => {},
+    updateTiming: (zoneId, elapsed, duration) => calls.push(`time:${zoneId}:${elapsed}/${duration}`),
     pausePlayback: () => {},
     resumePlayback: () => {},
     stopPlayback: (zoneId) => calls.push(`stop:${zoneId}`),
@@ -67,6 +68,31 @@ test('a phone that starts playing takes the zone, and stopping gives it back', (
   hooks.onSourceStreamEnd?.(null as never);
 
   assert.deepEqual(calls, ['start:7:bluetooth:48000:2', 'stop:7']);
+});
+
+test('the phone\'s own clock decides the position and the length', () => {
+  const { service, registered, calls } = buildService();
+  service.syncZones([zone(7, { enabled: true, deviceId: 'sonn-hal' })]);
+  registered[0].hooks.onSourceStreamStart?.(null as never, START);
+  calls.length = 0;
+
+  // A phone reports where it is on every poll. Counting elapsed time here instead would keep
+  // running through a pause and describe a different moment than the one being heard.
+  service.updateNowPlaying('sonn-hal', {
+    title: 'Hyperballad',
+    duration_ms: 284318,
+    position_ms: 194734,
+  });
+  service.updateNowPlaying('sonn-hal', {
+    title: 'Hyperballad',
+    duration_ms: 284318,
+    position_ms: 199734,
+  });
+
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('time:')),
+    ['time:7:195/284', 'time:7:200/284'],
+  );
 });
 
 test('what the phone says it is playing reaches the zone once per change', () => {

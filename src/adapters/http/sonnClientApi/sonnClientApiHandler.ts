@@ -320,15 +320,24 @@ export class SonnClientApiHandler {
     const device = this.findDeviceConfig(deviceId);
     const section = this.configPort.getConfig().sonnClients ?? {};
     const enabled = device?.enabled !== false;
+    // What this box is called, falling back to the hostname it registered under. The client hands
+    // this to every speaker that has no name of its own, and a speaker's name is what the output
+    // picker on the Zones screen offers — so leaving it empty is how `sonn-beosound9000-a01ec20a`
+    // ended up in a dropdown meant to say "the Pi in the study".
+    const deviceName = device?.name?.trim() || device?.hostname?.trim() || undefined;
 
     return {
-      device_name: device?.name,
+      device_name: deviceName,
       // Absent while the device is disabled: the client keeps polling and plays nothing, which is
       // exactly what "parked" should look like from the device's side.
       sendspin_url: enabled ? this.resolveSendspinUrl(req) : undefined,
       poll_interval_ms: this.resolvePollInterval(section.pollIntervalMs, device),
-      players: enabled ? (device?.players ?? []).map((player) => this.mapPlayer(player)) : [],
-      sources: enabled ? (device?.sources ?? []).map((source) => this.mapSource(source)) : [],
+      players: enabled
+        ? (device?.players ?? []).map((player) => this.mapPlayer(player, deviceName))
+        : [],
+      sources: enabled
+        ? (device?.sources ?? []).map((source) => this.mapSource(source, deviceName))
+        : [],
       beoremote: this.mapBeoremote(device),
       bluetooth: this.mapBluetooth(device),
       components: this.mapComponents(device, deviceId),
@@ -341,10 +350,21 @@ export class SonnClientApiHandler {
     };
   }
 
-  private mapPlayer(player: SonnClientPlayerConfig): Record<string, unknown> {
+  private mapPlayer(
+    player: SonnClientPlayerConfig,
+    deviceName: string | undefined,
+  ): Record<string, unknown> {
     return {
       client_id: player.clientId,
-      name: player.name,
+      /**
+       * The name this speaker announces itself under — the label the Zones output picker offers.
+       *
+       * Resolved here rather than left to the client's own fallback: the client only rebuilds a
+       * speaker when something in its restart key changes, and the device name is not part of that
+       * key. So a box that was renamed went on announcing whatever it announced when it started,
+       * which for an unnamed one was the raw client id.
+       */
+      name: player.name ?? deviceName,
       output: player.output,
       enabled: player.enabled !== false,
       codecs: player.codecs,
@@ -372,14 +392,27 @@ export class SonnClientApiHandler {
    * ran on its own defaults. The same fact in two places is a bug waiting for someone to notice the
    * sample rate is not the one they typed.
    */
-  private mapSource(source: SonnClientSourceConfig): Record<string, unknown> {
-    const input = this.lineInFor(source.clientId);
+  private mapSource(
+    source: SonnClientSourceConfig,
+    deviceName: string | undefined,
+  ): Record<string, unknown> {
+    const lineIn = this.lineInFor(source.clientId);
+    const input = lineIn?.source ?? null;
     const pick = <T>(fromInput: T | undefined, fromDevice: T | undefined): T | undefined =>
       fromInput ?? fromDevice;
 
     return {
       client_id: source.clientId,
-      name: source.name,
+      /**
+       * The name this input announces itself under, which is what the line-in picker offers and
+       * what a log line names.
+       *
+       * Nothing is typed per input any more: the line-in it feeds is already named by the person
+       * who made it, and the box it sits in is named too, so asking for a third name was asking
+       * the same question a third time. The client falls back to the bare client id, which is
+       * nobody's idea of a turntable — hence the chain here.
+       */
+      name: source.name ?? lineIn?.name?.trim() ?? deviceName,
       input: source.input,
       enabled: source.enabled !== false,
       codec: pick(asString(input?.codec), source.codec),
@@ -457,14 +490,15 @@ export class SonnClientApiHandler {
   }
 
   /** The line-in whose audio this Sendspin source provides, if any. */
-  private lineInFor(clientId: string): Record<string, unknown> | null {
+  private lineInFor(clientId: string): { name?: string; source: Record<string, unknown> } | null {
     const inputs = this.configPort.getConfig().inputs?.lineIn?.inputs ?? [];
     for (const entry of inputs) {
-      const source = (entry as { source?: Record<string, unknown> }).source;
+      const record = entry as { name?: string; source?: Record<string, unknown> };
+      const source = record.source;
       if (!source || source.type !== 'sendspin') continue;
       const id = (source.clientId ?? source.client_id) as string | undefined;
       if (typeof id === 'string' && id.trim() === clientId) {
-        return source;
+        return { name: record.name, source };
       }
     }
     return null;
