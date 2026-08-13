@@ -40,6 +40,9 @@ export type SonnClientAdminHandlerDeps = {
  */
 const DEVICE_COMMANDS = new Set([
   'pair_remote',
+  // Forget one paired remote, by address. Pairing another is a button away; a device that has
+  // collected three from earlier attempts has no way to say so for itself.
+  'forget_remote',
   // Open the Bluetooth pairing window: visible and pairable for as long as the zone's setting says.
   'bluetooth_discoverable',
   // Forget one paired phone, by address.

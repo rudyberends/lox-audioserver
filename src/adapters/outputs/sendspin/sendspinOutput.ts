@@ -499,6 +499,31 @@ export class SendspinOutput implements ZoneOutput {
       },
     };
     this.hooksStop = this.ports.sendspinHooks.register(this.clientId, hooks);
+    // Adopt a client that is already here.
+    //
+    // `onIdentified` fires on a handshake, and assigning a room its speaker does not cause one: the
+    // client announced itself minutes ago and has been sitting in the list ever since. Without this
+    // the output holds no session, so selecting it plays nothing at all until something makes the
+    // client reconnect — which is why restarting it "fixed" the room, and why it looked like the
+    // client's fault. It is not; this end simply never picked up the phone.
+    //
+    // On the next tick rather than now: the hook starts a stream when the room is already playing,
+    // and construction has satellites and group registration still to do.
+    const existing = sendspinCore.getSessionByClientId(this.clientId);
+    if (existing) {
+      queueMicrotask(() => {
+        // Disposed before the tick came round: hooks are unregistered and this output is nobody's
+        // speaker any more.
+        if (!this.hooksStop) {
+          return;
+        }
+        this.log.info('Sendspin adopting a client that was already connected', {
+          zoneId: this.zoneId,
+          clientId: this.clientId,
+        });
+        hooks.onIdentified(existing);
+      });
+    }
     // Push the static-delay to any already-connected session right away. onIdentified
     // only fires on a fresh handshake, so without this the value would only land after
     // the client reconnects.
