@@ -19,12 +19,17 @@ import { PassThrough } from 'node:stream';
 import type { PlayerRegistryPort } from '@/ports/PlayerRegistryPort';
 import {
   createNativeLibrespotSession,
+  generateLibrespotCredentialsFromOAuth,
   getNativeLibrespotStream,
   resolveSpotifyAudioFile,
   startNativeConnectHost,
 } from '@/adapters/inputs/spotify/spotifyStreamingService';
 import type { SpotifyStreamProxyService } from '@/adapters/inputs/spotify/spotifyStreamProxyService';
-import { SpotifyUnavailableLoopGuard } from '@/adapters/inputs/spotify/spotifyRecoveryPolicy';
+import {
+  isCredentialRejection,
+  LibrespotCredentialsRejected,
+  SpotifyUnavailableLoopGuard,
+} from '@/adapters/inputs/spotify/spotifyRecoveryPolicy';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { LibrespotSession } from '@sonn-audio/node-librespot';
@@ -102,6 +107,22 @@ class SpotifyConnectInstance {
   private readonly restartStreakWindowMs = 30 * 1000; // 30 seconds
   private readonly unavailableLoopGuard = new SpotifyUnavailableLoopGuard();
   static accountCredentials = new Map<string, string>();
+  /**
+   * Credentials blobs that are known to work for one specific librespot device id.
+   *
+   * A blob is minted inside a librespot session, and that session has a device id — the one
+   * `login_with_access_token` was handed. Spotify binds the blob to it, so replaying a blob under a
+   * different device id is refused with INVALID_CREDENTIALS no matter how fresh it is (#333). The
+   * account-level blob in `accountCredentials` is minted under the *account id*, while every
+   * consumer here logs in under a *zone* device id, so it can only ever be a starting guess. What
+   * survives a rejection is per device, which is what this holds. Keyed `<accountId>::<deviceId>`.
+   */
+  static deviceCredentials = new Map<string, string>();
+  /** Devices whose account-level blob Spotify has already refused; never replayed again. */
+  static rejectedCredentials = new Set<string>();
+  /** Last mint attempt per device, so a refusal that survives minting cannot spin. */
+  static lastRemintAt = new Map<string, number>();
+  static readonly remintCooldownMs = 10 * 60 * 1000;
   private readonly pipeId: string;
   /**
    * On Spotify Connect activation (transfer-to-device) librespot fires a `volume`
@@ -184,20 +205,46 @@ class SpotifyConnectInstance {
       return;
     }
 
-    const native = await startNativeConnectHost({
-      credentialsPath: this.credentialsPayload ?? credPath,
-      deviceName: deviceId,
-      publishName,
-      onEvent: (ev) => this.handleNativeEvent(ev),
-      accessToken: accessToken ?? undefined,
-      // Do not pass our Web API app client id into librespot.
-      // librespot's internal client id defaults are more likely to be accepted for playback/connect.
-      clientId: undefined,
-    }).catch((error) => {
+    const startHost = (creds: string | null) =>
+      startNativeConnectHost({
+        /*
+         * Empty, not `credPath`, when there is nothing to log in with.
+         *
+         * `credentialsPath` doubles as "do we have a blob": any non-empty value takes the
+         * credentials branch. The old fallback handed it the literal `'inline'` marker, which is
+         * neither a file nor JSON, so a zone with no usable blob failed on unparseable credentials
+         * instead of logging in with the access token it was holding all along. That fallback is
+         * the whole recovery path once a blob has been refused, so it has to be reachable.
+         */
+        credentialsPath: creds ?? '',
+        deviceName: deviceId,
+        publishName,
+        onEvent: (ev) => this.handleNativeEvent(ev),
+        accessToken: accessToken ?? undefined,
+        // Do not pass our Web API app client id into librespot.
+        // librespot's internal client id defaults are more likely to be accepted for playback/connect.
+        clientId: undefined,
+        onCredentialsRejected: (message) => this.onConnectCredentialsRejected(deviceId, message),
+      });
+
+    let native = await startHost(this.credentialsForDevice(deviceId)).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       this.log.warn('spotify connect host start failed', { zoneId: this.zoneId, message });
       return null;
     });
+    if (!native && SpotifyConnectInstance.rejectedCredentials.has(this.deviceCredentialKey(deviceId))) {
+      // Login was refused rather than unreachable: mint a blob for this device and try once more,
+      // instead of handing the same refused one back on every scheduled restart.
+      const minted = await this.mintCredentialsForDevice(deviceId, 'connect_login_refused');
+      native = await startHost(minted).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.warn('spotify connect host start failed after re-mint', {
+          zoneId: this.zoneId,
+          message,
+        });
+        return null;
+      });
+    }
 
     if (!native) {
       this.isReady = false;
@@ -229,10 +276,15 @@ class SpotifyConnectInstance {
 
   public setAccount(accountId?: string): void {
     if (accountId) {
+      const accountChanged = this.accountId !== accountId;
       this.accountId = accountId;
       const payload = SpotifyConnectInstance.accountCredentials.get(accountId);
       if (payload) {
         this.credentialsPayload = payload;
+      } else if (accountChanged) {
+        // A different account with nothing stored yet: keeping the previous account's blob would
+        // log this zone in as the wrong user, and it is not ours to reuse.
+        this.credentialsPayload = null;
       }
     }
   }
@@ -312,6 +364,163 @@ class SpotifyConnectInstance {
       publishName,
     });
     return false;
+  }
+
+  /**
+   * Spotify refused this device's credentials — at login, or on every track it tries to load.
+   *
+   * The second form is the one that hurt: librespot keeps the Connect device up and just skips,
+   * so it looks alive while playing nothing (#333 saw one track retried ~540 times in six seconds).
+   * Marking the blob refused is what stops it being handed back on the next attempt; the restart
+   * then goes through `start()`, which mints one bound to this device.
+   */
+  private onConnectCredentialsRejected(deviceId: string, message: string): void {
+    this.markCredentialsRejected(deviceId);
+    if (!this.isReady) {
+      // Refused during startup: start() re-mints inline, so nothing to tear down here.
+      return;
+    }
+    this.log.warn('spotify refused this device\'s credentials while running; restarting it', {
+      zoneId: this.zoneId,
+      deviceId,
+      message,
+    });
+    this.notifyOutputError(this.zoneId, 'spotify credentials rejected');
+    this.stopConnectHost();
+    this.scheduleRestart({ minDelayMs: 1000 });
+  }
+
+  private deviceCredentialKey(deviceId: string): string {
+    return `${this.accountId ?? 'default'}::${deviceId}`;
+  }
+
+  /**
+   * Retire this device's blob, whichever one it was.
+   *
+   * Dropping the proven entry as well as flagging the seed matters: a blob we minted ourselves can
+   * still be refused later (a password change, a revoked session), and `credentialsForDevice`
+   * prefers a proven entry over the flag — so leaving it in place would hand the refused blob back
+   * on every retry and put the loop straight back.
+   */
+  private markCredentialsRejected(deviceId: string): void {
+    const key = this.deviceCredentialKey(deviceId);
+    SpotifyConnectInstance.deviceCredentials.delete(key);
+    SpotifyConnectInstance.rejectedCredentials.add(key);
+  }
+
+  /**
+   * The blob to log in with on `deviceId`: one already proven for it, else the account-level seed.
+   * Null once that seed has been refused for this device — replaying it is what looped.
+   */
+  private credentialsForDevice(deviceId: string): string | null {
+    const key = this.deviceCredentialKey(deviceId);
+    const proven = SpotifyConnectInstance.deviceCredentials.get(key);
+    if (proven) {
+      return proven;
+    }
+    if (SpotifyConnectInstance.rejectedCredentials.has(key)) {
+      return null;
+    }
+    return this.credentialsPayload;
+  }
+
+  /**
+   * Mint a credentials blob bound to `deviceId` from the account's OAuth token.
+   *
+   * The token is the credential that is still good — it is what browsing runs on — so it can always
+   * produce a blob. The point is *which device*: minting inside a session whose device id is the one
+   * that will later log in is what makes the blob reusable at all. Rate-limited per device, because
+   * a mint is a full Spotify login and a refusal that survives it must not become a spin.
+   */
+  private async mintCredentialsForDevice(deviceId: string, reason: string): Promise<string | null> {
+    const key = this.deviceCredentialKey(deviceId);
+    const lastAttempt = SpotifyConnectInstance.lastRemintAt.get(key) ?? 0;
+    if (Date.now() - lastAttempt < SpotifyConnectInstance.remintCooldownMs) {
+      return SpotifyConnectInstance.deviceCredentials.get(key) ?? null;
+    }
+    SpotifyConnectInstance.lastRemintAt.set(key, Date.now());
+    // Mark refused up front: if the mint fails, the seed must not be replayed on the next attempt.
+    SpotifyConnectInstance.rejectedCredentials.add(key);
+    SpotifyConnectInstance.deviceCredentials.delete(key);
+
+    let accessToken: string | null | undefined;
+    try {
+      accessToken = await this.spotifyManagers
+        .get()
+        ?.getAccessTokenForAccount(this.accountId ?? undefined);
+    } catch {
+      accessToken = null;
+    }
+    if (!accessToken) {
+      this.log.warn('spotify refused the stored credentials and there is no token to mint new ones', {
+        zoneId: this.zoneId,
+        deviceId,
+        reason,
+      });
+      return null;
+    }
+
+    const minted = await generateLibrespotCredentialsFromOAuth({
+      accessToken,
+      deviceName: deviceId,
+    });
+    if (!minted?.credentials) {
+      this.log.warn('spotify credential re-mint failed; falling back to the access token', {
+        zoneId: this.zoneId,
+        deviceId,
+        reason,
+      });
+      return null;
+    }
+    SpotifyConnectInstance.deviceCredentials.set(key, minted.credentials);
+    SpotifyConnectInstance.rejectedCredentials.delete(key);
+    this.credentialsPayload = minted.credentials;
+    void this.persistCredentials(minted.credentials);
+    this.log.info('spotify credentials re-minted for this device', {
+      zoneId: this.zoneId,
+      deviceId,
+      reason,
+      username: minted.username,
+    });
+    return minted.credentials;
+  }
+
+  /** Keep the account's stored blob in step with the one that actually works. Best-effort. */
+  private async persistCredentials(credentials: string): Promise<void> {
+    const accountId = this.accountId;
+    if (!accountId) {
+      return;
+    }
+    SpotifyConnectInstance.accountCredentials.set(accountId, credentials);
+    await bestEffort(
+      () =>
+        this.configPort.updateConfig((cfg) => {
+          const target = (cfg.content?.spotify?.accounts ?? []).find(
+            (acc) =>
+              acc.id === accountId ||
+              acc.user === accountId ||
+              acc.email === accountId ||
+              acc.spotifyId === accountId,
+          );
+          if (!target) {
+            return;
+          }
+          (target as { librespotCredentials?: unknown }).librespotCredentials = (() => {
+            try {
+              return JSON.parse(credentials);
+            } catch {
+              return credentials;
+            }
+          })();
+        }),
+      {
+        fallback: undefined,
+        onError: 'debug',
+        log: this.log,
+        label: 'spotify credential persist failed',
+        context: { zoneId: this.zoneId, accountId },
+      },
+    );
   }
 
   private scheduleRestart(options?: { minDelayMs?: number; rateLimited?: boolean }): void {
@@ -447,6 +656,11 @@ class SpotifyConnectInstance {
         if (this.restartStreak.count < 8) {
           this.restartStreak = { count: 8, firstAt: Date.now() };
         }
+      } else if (isCredentialRejection(lowerMessage)) {
+        // Not a transient failure: the stored blob is refused, and every restart will be refused
+        // the same way until a new one is minted. Retire it so the restart re-mints rather than
+        // replaying it.
+        this.markCredentialsRejected(this.deviceId || `lox-zone-${this.zoneId}`);
       } else if (lowerMessage.includes('bad_request') || lowerMessage.includes('bad request')) {
         // Likely invalid/insufficient access token scopes; avoid tight loops.
         this.restartStreak = { count: 10, firstAt: Date.now() };
@@ -758,7 +972,7 @@ class SpotifyConnectInstance {
     const deviceId = this.deviceId || `lox-zone-${this.zoneId}`;
     const deviceName = deviceId;
     const clientId: string | null = null;
-    const credentialsJson = this.credentialsPayload;
+    const credentialsJson = this.credentialsForDevice(deviceName);
 
     const session = await this.ensureNativeSession({
       accessToken,
@@ -1395,20 +1609,53 @@ class SpotifyConnectInstance {
 
     await this.closeNativeSession('replace');
     const { cacheDir, cacheSizeLimitMb } = this.resolveAudioCacheOpts();
-    const session = await createNativeLibrespotSession({
-      accessToken: accessToken ?? null,
-      credentialsJson: credentialsJson ?? null,
-      clientId,
-      deviceName,
-      cacheDir,
-      cacheSizeLimitMb,
-    });
+    const open = (creds: string | null): Promise<LibrespotSession | null> =>
+      createNativeLibrespotSession({
+        accessToken: accessToken ?? null,
+        credentialsJson: creds,
+        clientId,
+        deviceName,
+        cacheDir,
+        cacheSizeLimitMb,
+      });
+
+    let usedCredentials = credentialsJson ?? null;
+    let session: LibrespotSession | null = null;
+    try {
+      session = await open(usedCredentials);
+    } catch (error) {
+      if (!(error instanceof LibrespotCredentialsRejected)) {
+        throw error;
+      }
+      // The blob is refused, not the account. Mint one bound to this device and try once more;
+      // if that cannot be done either, `open(null)` falls back to the access token, which is the
+      // credential we know is good because browsing is running on it.
+      usedCredentials = await this.mintCredentialsForDevice(deviceName, 'session_login_refused');
+      try {
+        session = await open(usedCredentials);
+      } catch (retryError) {
+        if (!(retryError instanceof LibrespotCredentialsRejected)) {
+          throw retryError;
+        }
+        this.log.warn('spotify refused the re-minted credentials too', {
+          zoneId: this.zoneId,
+          deviceName,
+          message: retryError.message,
+        });
+        session = null;
+      }
+    }
     if (!session) {
       return null;
     }
     this.nativeSession = session;
     this.nativeSessionAccessToken = accessToken ?? null;
-    this.nativeSessionCredentialsHash = credHash;
+    // Key the session on the credentials it actually opened with, not the ones we started from,
+    // or a re-mint would look like a change on the next track and churn the session every time.
+    this.nativeSessionCredentialsHash =
+      usedCredentials && usedCredentials.trim()
+        ? crypto.createHash('sha1').update(usedCredentials).digest('hex')
+        : null;
     this.nativeSessionClientId = clientId ?? null;
     this.nativeSessionDeviceName = deviceName;
     return session;

@@ -11,6 +11,10 @@ import type {
   LibrespotErrorCode,
 } from '@sonn-audio/node-librespot';
 
+import {
+  isCredentialRejection,
+  LibrespotCredentialsRejected,
+} from '@/adapters/inputs/spotify/spotifyRecoveryPolicy';
 import type { SpotifyResolvedAudio } from './spotifyStreamProxyService';
 
 const log = createLogger('Audio', '@sonn-audio/node-librespot');
@@ -101,6 +105,11 @@ async function getSession(
     return await addon.createSession(safeOpts);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (isCredentialRejection(message)) {
+      // Distinct from "could not connect": the blob itself is refused, so the caller must mint a
+      // new one instead of retrying. Returning null here is what let a dead blob be replayed forever.
+      throw new LibrespotCredentialsRejected(message);
+    }
     log.warn('failed to create native librespot session', { message });
     return null;
   }
@@ -377,6 +386,12 @@ export async function startNativeConnectHost(params: {
   onEvent?: (event: ConnectEvent) => void;
   accessToken?: string | null;
   clientId?: string | null;
+  /**
+   * Called when Spotify refuses the credentials, either at login or on every track the device
+   * tries to load. The second form is why this exists: librespot keeps the device up and skips
+   * track after track, so nothing throws and the host looks healthy while playing nothing.
+   */
+  onCredentialsRejected?: (message: string) => void;
 }): Promise<{
   stream: NodeJS.ReadableStream;
   sampleRate: number;
@@ -387,7 +402,30 @@ export async function startNativeConnectHost(params: {
   next: () => void;
   prev: () => void;
 } | null> {
-  const { credentialsPath, deviceName, publishName, onEvent, accessToken, clientId } = params;
+  const {
+    credentialsPath,
+    deviceName,
+    publishName,
+    onEvent,
+    accessToken,
+    clientId,
+    onCredentialsRejected,
+  } = params;
+  let credentialsRejectionReported = false;
+  const reportCredentialRejection = (message: string): void => {
+    if (credentialsRejectionReported || !isCredentialRejection(message)) {
+      return;
+    }
+    credentialsRejectionReported = true;
+    onCredentialsRejected?.(message);
+  };
+  const connectLog = handleNativeLog('connect_host');
+  const handleConnectLog = (event: NativeLogEvent): void => {
+    connectLog(event);
+    if (event?.level === 'error') {
+      reportCredentialRejection(event?.message ?? '');
+    }
+  };
   const hasCredentialsPayload = Boolean(credentialsPath && credentialsPath.trim());
   const canUseToken = Boolean(accessToken && accessToken.trim());
   if (!hasCredentialsPayload && !canUseToken) {
@@ -428,7 +466,7 @@ export async function startNativeConnectHost(params: {
             deviceName,
             (chunk: Buffer) => safeWrite(chunk),
             onEvt,
-            handleNativeLog('connect_host'),
+            handleConnectLog,
           )
         : await addon.startConnectDeviceWithToken!(
             accessToken,
@@ -437,7 +475,7 @@ export async function startNativeConnectHost(params: {
             deviceName,
             (chunk: Buffer) => safeWrite(chunk),
             onEvt,
-            handleNativeLog('connect_host'),
+            handleConnectLog,
           );
 
     const stop = () => {
@@ -469,6 +507,7 @@ export async function startNativeConnectHost(params: {
       return null;
     }
     const message = error instanceof Error ? error.message : String(error);
+    reportCredentialRejection(message);
     log.warn('native connect host failed', {
       deviceName,
       publishName,
