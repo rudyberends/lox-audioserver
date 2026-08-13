@@ -93,6 +93,7 @@ import './zoneArtworkColors.test';
 import './analysisFeed.test';
 import './powerManager.test';
 import './sharedPowerGroupManager.test';
+import './mdnsService.test';
 import './configHandlers.volume.test';
 import './equalizer.test';
 import './zoneHandlers.serviceplay.test';

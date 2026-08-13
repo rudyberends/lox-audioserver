@@ -14,7 +14,21 @@ type AdvertisedRecord = { type: string; data?: unknown };
 
 export class MdnsService implements MdnsPort {
   private readonly log = createLogger('Discovery', 'Mdns');
-  private readonly bonjour = new Bonjour();
+  /**
+   * Made when first needed and thrown away by {@link shutdown}, rather than made once and kept.
+   *
+   * This service outlives the services that use it: a soft restart stops everything and starts it
+   * again on the same object. Destroying the responder on the way down and reusing the corpse on
+   * the way up meant publishing silently did nothing afterwards — the server kept running, kept
+   * answering HTTP, and simply stopped existing on the network. A speaker looking for it found
+   * nothing, with no error anywhere to explain why.
+   */
+  private instance: Bonjour | null = null;
+
+  private get bonjour(): Bonjour {
+    this.instance ??= new Bonjour();
+    return this.instance;
+  }
 
   public publish(options: MdnsPublishOptions): MdnsRegistration {
     const service = this.bonjour.publish({
@@ -95,8 +109,15 @@ export class MdnsService implements MdnsPort {
   }
 
   public shutdown(): void {
+    // Nothing to tear down until something has been published or browsed; asking for the responder
+    // here would create one only to destroy it.
+    const instance = this.instance;
+    this.instance = null;
+    if (!instance) {
+      return;
+    }
     try {
-      this.bonjour.destroy?.();
+      instance.destroy?.();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.log.debug('mdns shutdown failed', { message });
