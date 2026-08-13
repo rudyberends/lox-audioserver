@@ -5,7 +5,6 @@ import type { AirplayInstanceController } from '@/adapters/inputs/airplay/airpla
 import type { SendspinHookRegistryPort } from '@/adapters/outputs/sendspin/sendspinHookRegistry';
 import type { PlaybackMetadata } from '@/application/playback/audioManager';
 import { sendspinCore, SourceCommand } from '@sonn-audio/node-sendspin';
-import { lookupCoverUrl } from '@/adapters/content/enrichment/coverLookup';
 import type { SendspinSourceStreamFormat } from '@sonn-audio/node-sendspin';
 
 /** What a Sonn Client reports about the phone it is playing, as its status block carries it. */
@@ -177,27 +176,6 @@ export class BluetoothInputService {
     }
     this.published.set(zoneId, fingerprint);
     this.controller?.updateMetadata(zoneId, metadata);
-    void this.findCover(zoneId, fingerprint, metadata);
-  }
-
-  /**
-   * Look for a cover, and hand it over if the same track is still playing when it arrives.
-   *
-   * A phone sends no artwork — AVRCP has been able to carry it since 1.6, over a separate channel,
-   * and iOS does not offer it — so it is found from the artist and album instead. That takes a
-   * moment and a network, hence separately: the title should not wait on a picture.
-   */
-  private async findCover(
-    zoneId: number,
-    fingerprint: string,
-    metadata: Partial<PlaybackMetadata>,
-  ): Promise<void> {
-    const cover = await lookupCoverUrl(metadata.artist, metadata.album);
-    if (!cover || this.published.get(zoneId) !== fingerprint) {
-      // The track moved on while we were asking; the next one has its own cover.
-      return;
-    }
-    this.controller?.updateMetadata(zoneId, { ...metadata, coverurl: cover });
   }
 
   public shutdown(): void {

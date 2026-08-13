@@ -26,8 +26,7 @@ function buildService() {
       const pipe = source.kind === 'pipe' ? source : null;
       calls.push(`start:${zoneId}:${label}:${pipe?.sampleRate}:${pipe?.channels}`);
     },
-    updateMetadata: (zoneId, metadata) =>
-      calls.push(`meta:${zoneId}:${metadata.title}${metadata.coverurl ? ':cover' : ''}`),
+    updateMetadata: (zoneId, metadata) => calls.push(`meta:${zoneId}:${metadata.title}`),
     updateCover: () => {},
     updateVolume: () => {},
     updateTiming: (zoneId, elapsed, duration) => calls.push(`time:${zoneId}:${elapsed}/${duration}`),
