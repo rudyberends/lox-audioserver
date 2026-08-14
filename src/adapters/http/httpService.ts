@@ -595,6 +595,20 @@ export class HttpService {
       });
     });
 
+    /*
+     * Outlive the clients that poll us.
+     *
+     * Node closes an idle keep-alive connection after five seconds, and a Sonn Client posts its
+     * status every five — so the two race, and every few minutes a speaker logs a connection reset
+     * for a request that then succeeds on its retry. Nothing is broken by it, which is exactly why
+     * it is worth removing: a warning that means nothing teaches people to ignore warnings.
+     *
+     * Sixty-five seconds is the usual figure for a server behind a proxy, and headers must be given
+     * longer still or Node cuts the connection while a slow client is mid-request.
+     */
+    this.server.keepAliveTimeout = 65_000;
+    this.server.headersTimeout = 70_000;
+
     this.server.on('upgrade', (req, socket, head) => {
       this.handleUpgrade(req, socket, head);
     });
