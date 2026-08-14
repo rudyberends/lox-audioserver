@@ -3,6 +3,7 @@ import { createLogger } from '@/shared/logging/logger';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import {
   audioOutputSettings,
+  pcmBitDepthFromFormat,
   type AudioOutputSettings,
   type PcmBitDepth,
 } from '@/ports/types/audioFormat';
@@ -438,7 +439,20 @@ export class SendspinOutput implements ZoneOutput {
         this.sendControllerState();
         this.sendCurrentSnapshot();
         if (this.playbackState === 'playing') {
-          void this.startStream({ preserveAnchor: false, formatOverride: this.negotiatedFormat });
+          /*
+           * No `formatOverride` here, even though `negotiatedFormat` was just settled above. An
+           * override means "the client asked for exactly this, do not second-guess it" and so
+           * skips native-format matching entirely — but nobody asked for anything on a handshake.
+           * That value is a remembered or defaulted one, and passing it as an override made a
+           * reconnect (Connect churn on a track change is one) resample a source the client could
+           * have taken as it is.
+           *
+           * `startStream` falls back to `negotiatedFormat` anyway, so this starts from the same
+           * format and merely lets it be pulled to the source's rate. The 48k-only sink the
+           * comment above worries about is still safe: matching only ever moves to a format the
+           * client listed itself, and such a sink never lists 44.1k.
+           */
+          void this.startStream({ preserveAnchor: false });
         }
         // Push current playback state to the client right away.
         this.pushPlaybackState(this.playbackState);
@@ -2666,12 +2680,15 @@ export class SendspinOutput implements ZoneOutput {
    * Aligns the session format with the source's native rate (and depth, when the
    * source declares one) so the audio reaches the player untouched by us.
    *
-   * Both source kinds win, verified by measurement:
+   * Every source kind wins, verified by measurement:
    *  - lossless (local FLAC/ALAC): matching rate *and* depth passes the original
    *    samples through unchanged — bit-identical to the file.
    *  - lossy (Apple Music AAC): resampling 44.1→48k and padding 16→24 bits alters
    *    every sample and inflates the stream ~2.7x for nothing. At the native rate
    *    we hand the provider's decode to the player exactly as delivered.
+   *  - pipe (Spotify via Soloist, line-in, Bluetooth, AirPlay): raw PCM at a rate
+   *    the producer already fixed. Whatever a pipe hands us is final, so a resample
+   *    here is pure loss with nothing gained on either end.
    *
    * Deliberately conservative — it only ever moves to a format every client that will hear
    * this stream listed in its own `supported_formats`, and returns `format` untouched when:
@@ -2828,7 +2845,33 @@ export class SendspinOutput implements ZoneOutput {
       }
       return probeFileFormat(source.path);
     }
-    // Pipe sources already declare their format; there is nothing to probe.
+    if (source.kind === 'pipe') {
+      /*
+       * A pipe declares its own format, and that declaration is worth exactly as much as any
+       * probe: the engine hands the very same numbers to ffmpeg as `-f s24le -ar 44100 -ac 2`,
+       * so a wrong one would already be audible as a pitch shift long before it reached here.
+       *
+       * This branch used to be "pipes declare their format; there is nothing to probe", which
+       * read as done and behaved as unknown — the declaration was never read, so every pipe fell
+       * through to "format unknown" and kept whatever the client had negotiated. Spotify through
+       * Soloist is a 44.1 kHz/24-bit pipe and a client that asks for 48 kHz got the resampler on
+       * an input that needed nothing, which is precisely what this function exists to prevent.
+       *
+       * `lossless` here is a claim about these samples, not about wherever they came from: raw
+       * PCM in, so the declared depth is the real one and padding it wider adds no information.
+       * For a 16-bit pipe that means the output drops to 16-bit — same samples, less wire.
+       */
+      if (!source.sampleRate || !source.channels || !source.format) {
+        return null;
+      }
+      return {
+        sampleRate: source.sampleRate,
+        channels: source.channels,
+        bitDepth: pcmBitDepthFromFormat(source.format),
+        lossless: true,
+        codecName: 'pcm',
+      };
+    }
     return null;
   }
 

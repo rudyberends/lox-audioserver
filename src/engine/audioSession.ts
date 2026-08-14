@@ -7,6 +7,7 @@ import {
   mp3BitrateToBps,
   type AudioOutputSettings,
 } from '@/engine/audioFormat';
+import { pcmBitDepthFromFormat } from '@/ports/types/audioFormat';
 import { RollingBuffer } from '@/engine/rollingBuffer';
 import { SubscriberFanout } from '@/engine/subscriberFanout';
 import { OutputPacer } from '@/engine/outputPacer';
@@ -51,16 +52,23 @@ const RESTART_BACKOFF_MAX_MS = 500;
  */
 const LATE_SUBSCRIBER_GRACE_MS = 5000;
 
-function pcmBitDepthFor(format: string): 16 | 24 | 32 {
-  if (format === 's16le' || format === 's16be') return 16;
-  if (format === 's24le') return 24;
-  return 32;
-}
-
 function sourceFormatFor(
   source: PlaybackSource,
   nativeFormat: SourceNativeFormat | undefined,
 ): EngineSessionStats['sourceFormat'] {
+  // A declaring pipe is described from its own spec rather than from the native format derived
+  // out of it: both carry the same numbers, but raw PCM's bitrate follows from them exactly and
+  // is worth stating. Everything else is described by whatever declared or probed it.
+  if (source.kind === 'pipe' && source.sampleRate && source.channels && source.format) {
+    const bitDepth = pcmBitDepthFromFormat(source.format);
+    return {
+      codec: 'pcm',
+      sampleRate: source.sampleRate,
+      channels: source.channels,
+      bitDepth,
+      bitrate: source.sampleRate * source.channels * bitDepth,
+    };
+  }
   if (nativeFormat) {
     return {
       codec: nativeFormat.codecName ?? 'unknown',
@@ -70,17 +78,7 @@ function sourceFormatFor(
       bitrate: null,
     };
   }
-  if (source.kind !== 'pipe' || !source.sampleRate || !source.channels || !source.format) {
-    return null;
-  }
-  const bitDepth = pcmBitDepthFor(source.format);
-  return {
-    codec: 'pcm',
-    sampleRate: source.sampleRate,
-    channels: source.channels,
-    bitDepth,
-    bitrate: source.sampleRate * source.channels * bitDepth,
-  };
+  return null;
 }
 
 export class AudioSession {
@@ -312,6 +310,33 @@ export class AudioSession {
           };
         }
         return getCachedSourceFormat(this.source.path) ?? undefined;
+      }
+      if (this.source.kind === 'pipe') {
+        /*
+         * A pipe's spec *is* its probe: these are the very numbers this builder hands ffmpeg as
+         * `-f s24le -ar 44100 -ac 2`, so nothing here is being taken on trust that the decode does
+         * not already depend on.
+         *
+         * Without this a pipe had no native format, and `isBitPerfect` says no to a source it
+         * cannot see — so a 44.1 kHz/24-bit feed matched by a 44.1 kHz/24-bit output still got the
+         * terminal soxr stage, converting samples into the format they were already in. Spotify via
+         * Soloist is that feed. `pipeMatchesOutput` stays below as the fallback for a pipe that
+         * declares nothing; it only ever recognised the 16-bit librespot shape.
+         *
+         * `lossless` is a claim about these samples and not their origin: raw PCM arrives as-is, so
+         * the declared depth is the real one and there is no encoder between us and it.
+         */
+        const { sampleRate, channels, format } = this.source;
+        if (!sampleRate || !channels || !format) {
+          return undefined;
+        }
+        return {
+          sampleRate,
+          channels,
+          bitDepth: pcmBitDepthFromFormat(format),
+          lossless: true,
+          codecName: 'pcm',
+        };
       }
       return undefined;
     })();

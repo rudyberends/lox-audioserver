@@ -88,6 +88,23 @@ export function pcmFormatFromBitDepth(bitDepth: PcmBitDepth): string {
   }
 }
 
+/**
+ * The sample depth behind a raw-PCM format name — the inverse of `pcmFormatFromBitDepth`.
+ *
+ * A pipe source declares its samples by name (`s24le`), while both the engine's source stats
+ * and the sendspin output's native-format matching need the number. Shared so the two cannot
+ * disagree about what a pipe is carrying.
+ */
+export function pcmBitDepthFromFormat(format: string): PcmBitDepth {
+  if (format === 's16le' || format === 's16be') {
+    return 16;
+  }
+  if (format === 's24le') {
+    return 24;
+  }
+  return 32;
+}
+
 export function mp3BitrateToBps(bitrate: string): number {
   const match = /^(\d+)(k?)$/i.exec(bitrate.trim());
   if (!match) {
