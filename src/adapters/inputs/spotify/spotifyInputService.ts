@@ -1929,6 +1929,22 @@ export class SpotifyInputService {
     }
   }
 
+  /**
+   * A transport command for a zone whose queue belongs to the Spotify app.
+   *
+   * Returns false when this backend is not the one to ask, so the caller can try elsewhere.
+   */
+  public playerCommand(zoneId: number, command: string): boolean {
+    if (!this.soloist.isEnabled()) {
+      return false;
+    }
+    const normalized = command.trim().toLowerCase();
+    if (normalized !== 'next' && normalized !== 'previous') {
+      return false;
+    }
+    return this.soloist.skip(zoneId, normalized);
+  }
+
   public configure(controller: SpotifyConnectController): void {
     this.controller = controller;
     // The soloist backend needs the same way back into a zone: with its process always running,

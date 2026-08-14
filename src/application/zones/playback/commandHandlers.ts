@@ -459,12 +459,19 @@ function handleQueueStep(
   });
   if (coordinator.isLocalQueueAuthority(ctx.queue.authority)) {
     coordinator.stepQueue(zoneId, delta);
-  } else {
-    coordinator.log.debug('queue step skipped; non-local authority', {
-      zoneId,
-      authority: ctx.queue.authority,
-    });
+    return;
   }
+  if (mode === 'spotify') {
+    // The queue on screen is a mirror of the app's, and only the app can walk it. Passing the step
+    // on is what keeps the button honest — the alternative is a room full of tracks and a next
+    // that does nothing.
+    void coordinator.playerCommand(zoneId, delta === 1 ? 'next' : 'previous');
+    return;
+  }
+  coordinator.log.debug('queue step skipped; non-local authority', {
+    zoneId,
+    authority: ctx.queue.authority,
+  });
 }
 
 function handleQueuePlayCurrent(

@@ -264,6 +264,15 @@ export class SoloistWsClient extends EventEmitter {
     return this.send('get_queue');
   }
 
+  /** Move through the queue Soloist owns. Only meaningful while it is the one holding the list. */
+  public skipNext(): boolean {
+    return this.send('skip_next');
+  }
+
+  public skipPrevious(): boolean {
+    return this.send('skip_prev');
+  }
+
   public seek(positionMs: number): boolean {
     return this.send('seek', { position_ms: Math.max(0, Math.round(positionMs)) });
   }

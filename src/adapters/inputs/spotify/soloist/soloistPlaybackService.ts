@@ -717,6 +717,22 @@ export class SoloistPlaybackService {
     this.finishTrack(zoneId);
   }
 
+  /**
+   * Step the Spotify app's own queue, for a zone the app is driving.
+   *
+   * When the app owns the queue this server cannot walk it: the list belongs to Spotify, and the
+   * room is showing a mirror of it. So the zone's own next and previous are passed on to the thing
+   * that does own it, which is the only way those buttons can mean anything at all.
+   */
+  public skip(zoneId: number, direction: 'next' | 'previous'): boolean {
+    const runner = this.runners.get(zoneId);
+    if (!runner || runner.owner !== 'connect') {
+      return false;
+    }
+    this.log.info('passing a queue step to the spotify app', { zoneId, direction });
+    return direction === 'next' ? runner.ws.skipNext() : runner.ws.skipPrevious();
+  }
+
   public isPlaying(zoneId: number): boolean {
     return Boolean(this.runners.get(zoneId)?.stream);
   }

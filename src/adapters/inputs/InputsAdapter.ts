@@ -150,7 +150,14 @@ export class InputsAdapter implements InputsPort {
     this.deps.airplay.remoteVolume(...args);
   }
 
-  public playerCommand(...args: Parameters<InputsPort['playerCommand']>): ReturnType<InputsPort['playerCommand']> {
+  public async playerCommand(
+    ...args: Parameters<InputsPort['playerCommand']>
+  ): ReturnType<InputsPort['playerCommand']> {
+    // Spotify first: when the app owns a zone's queue, only Spotify can step it, and asking Music
+    // Assistant about a zone it does not have would answer for the wrong player.
+    if (this.deps.spotify.playerCommand(args[0], args[1])) {
+      return true;
+    }
     return this.deps.musicAssistant.playerCommand(...args);
   }
 
