@@ -2,6 +2,7 @@ import type { SpotifyAccountConfig } from '@/domain/config/types';
 import type {
   ContentFolder,
   ContentFolderItem,
+  ContentFolderSection,
   ContentServiceAccount,
   PlaylistEntry,
 } from '@/ports/ContentTypes';
@@ -18,9 +19,11 @@ import {
   fetchArtistTopTracks as pfArtistTopTracks,
   search as pfSearch,
   setPathfinderLocale,
+  type PathfinderSession,
   type BrowseCategory,
   type MediaEntry,
 } from '@/adapters/content/providers/spotify/spotifyPathfinder';
+import { webPathfinderSession } from '@/adapters/content/providers/spotify/spotifyWebTokens';
 import type { LibrespotSession } from '@sonn-audio/node-librespot';
 
 /** Short, non-reversible fingerprint of a refresh token, for tracking its
@@ -57,21 +60,14 @@ function decodeBrowseUri(categoryId: string): string | null {
 const PATHFINDER_SEARCH_TYPES = new Set(['track', 'album', 'artist', 'playlist']);
 
 /**
- * Spotify service root folders, indexed by the Loxone app's fixed `SpotifyFolder`
- * enum (Features=0, NewReleases=1, Categories=2, MyPlaylists=3, LikedSongs=4,
- * Albums=5, Artists=6, Podcasts=7). The app requests each section by this numeric
- * index, so this single list — in ENUM ORDER — drives the numeric folder routing
- * (normalizeFolderId) and the fallback root listing (buildRootFolder). The order
- * MUST match the enum or labels and content scramble (e.g. "Genres & Moods"
- * returning artists). Section titles in the app come from each folder response's
- * name (see the getFolder switch), not from these names.
- */
-/**
- * The sections this account publishes, each addressed by its own name.
+ * The sections this account can publish, each addressed by its own name.
  *
  * The Loxone app asks for these by an index into its own enum instead; that
  * mapping lives in the Loxone adapter (`loxoneServiceFolders`), so the order here
  * is presentation only and a section may be added without a slot to give it.
+ *
+ * "Can" rather than "does": this is the full menu, and `buildRootFolder` publishes
+ * the subset the account can actually fill right now.
  */
 const SPOTIFY_ROOT_FOLDERS: ReadonlyArray<{
   type: 'popular' | 'new' | 'genres' | 'playlists' | 'liked' | 'albums' | 'artists' | 'podcasts';
@@ -111,18 +107,6 @@ function localeForCountry(country: string | undefined): string {
   const cc = (country || '').trim().toUpperCase();
   return COUNTRY_LOCALE[cc] ?? 'en';
 }
-const SPOTIFY_FALLBACK_CATEGORIES: Array<{ id: string; name: string }> = [
-  { id: 'pop', name: 'Pop' },
-  { id: 'rock', name: 'Rock' },
-  { id: 'hip-hop', name: 'Hip-Hop' },
-  { id: 'electronic', name: 'Electronic' },
-  { id: 'dance', name: 'Dance' },
-  { id: 'jazz', name: 'Jazz' },
-  { id: 'classical', name: 'Classical' },
-  { id: 'focus', name: 'Focus' },
-  { id: 'chill', name: 'Chill' },
-  { id: 'workout', name: 'Workout' },
-];
 
 export interface SpotifyAccountState extends SpotifyAccountConfig {
   id: string;
@@ -193,6 +177,8 @@ export class SpotifyAccountProvider {
   // the Feb-2026 Web API restricts). One per account, reused; closed on dispose.
   private librespotSession: LibrespotSession | null = null;
   private librespotSessionPromise: Promise<LibrespotSession | null> | null = null;
+  // Stable identity for the pathfinder token cache; see getPathfinderSession.
+  private pathfinderSession: PathfinderSession | null = null;
 
   constructor(options: SpotifyAccountProviderOptions) {
     this.providerId = options.providerId;
@@ -345,45 +331,50 @@ export class SpotifyAccountProvider {
       case 'popular': {
         // Popular Playlists = the editorial playlists from Spotify's Music browse
         // hub (New Music Friday NL, Hot Hits NL, …) — matches the real audioserver.
-        const session = await this.getLibrespotSession();
-        if (session && supportsPathfinder(session)) {
-          const playlists = (await pfCategoryEntries(session, SPOTIFY_POPULAR_BROWSE_URI)).filter(
-            (e) => e.kind === 'playlist',
+        const session = await this.getPathfinderSession();
+        const playlists = (await pfCategoryEntries(session, SPOTIFY_POPULAR_BROWSE_URI)).filter(
+          (e) => e.kind === 'playlist',
+        );
+        if (playlists.length) {
+          const safeOffset = Math.max(0, offset || 0);
+          const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
+          const sliced = playlists.slice(safeOffset, safeOffset + safeLimit);
+          return this.buildFolder(
+            folderId,
+            'Popular Playlists',
+            { items: sliced.map((e) => this.mapMediaEntry(e)), total: playlists.length },
+            offset,
           );
-          if (playlists.length) {
-            const safeOffset = Math.max(0, offset || 0);
-            const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
-            const sliced = playlists.slice(safeOffset, safeOffset + safeLimit);
-            return this.buildFolder(
-              folderId,
-              'Popular Playlists',
-              { items: sliced.map((e) => this.mapMediaEntry(e)), total: playlists.length },
-              offset,
-            );
-          }
         }
         return this.buildFolder(folderId, 'Popular Playlists', { items: [], total: 0 }, offset);
       }
       case 'new': {
         // Editorial new-release albums via the New Releases browse page.
-        const session = await this.getLibrespotSession();
-        if (session && supportsPathfinder(session)) {
-          const albums = (await pfCategoryEntries(session, SPOTIFY_NEW_RELEASES_BROWSE_URI)).filter(
-            (e) => e.kind === 'album',
+        const session = await this.getPathfinderSession();
+        const albums = (await pfCategoryEntries(session, SPOTIFY_NEW_RELEASES_BROWSE_URI)).filter(
+          (e) => e.kind === 'album',
+        );
+        if (albums.length) {
+          const safeOffset = Math.max(0, offset || 0);
+          const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
+          const sliced = albums.slice(safeOffset, safeOffset + safeLimit);
+          return this.buildFolder(
+            folderId,
+            'New Releases',
+            { items: sliced.map((e) => this.mapMediaEntry(e)), total: albums.length },
+            offset,
           );
-          if (albums.length) {
-            const safeOffset = Math.max(0, offset || 0);
-            const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
-            const sliced = albums.slice(safeOffset, safeOffset + safeLimit);
-            return this.buildFolder(
-              folderId,
-              'New Releases',
-              { items: sliced.map((e) => this.mapMediaEntry(e)), total: albums.length },
-              offset,
-            );
-          }
         }
-        return this.buildFolder(folderId, 'New Releases', { items: [], total: 0 }, offset);
+        // Web API fallback. Unlike the rest of `/browse` — featured-playlists and the
+        // per-category playlist listings both answer 404 — new-releases is alive and
+        // localises to the account's country, so this section does not have to depend on a
+        // librespot session the account may not be able to open.
+        return this.buildFolder(
+          folderId,
+          'New Releases',
+          await this.fetchNewReleases(offset, limit || 20),
+          offset,
+        );
       }
       case 'genres':
         return this.buildFolder(
@@ -417,7 +408,7 @@ export class SpotifyAccountProvider {
         return this.buildFolder(
           folderId,
           'Artist',
-          await this.fetchArtistTopTracks(normalized.id),
+          await this.fetchArtistContent(normalized.id, limit || 20),
           offset,
         );
       case 'showItem':
@@ -438,7 +429,19 @@ export class SpotifyAccountProvider {
     }
   }
 
-  private buildRootFolder(offset: number): ContentFolder {
+  /**
+   * The root listing, with the sections this account cannot currently fill left out.
+   *
+   * It used to publish all eight unconditionally, which is how a working account ended up
+   * with five tiles that opened onto nothing: everything editorial (Popular Playlists,
+   * Genres & Moods and the drill-in under it) is reachable only over pathfinder, and
+   * pathfinder needs a librespot session token that stale credentials cannot mint. Podcasts
+   * is the same shape of problem for a different reason — most accounts simply have none.
+   *
+   * A tile that opens empty costs the user a tap and tells them nothing, so the root asks
+   * first. The sections come back on their own once the account can open a session again.
+   */
+  private async buildRootFolder(offset: number): Promise<ContentFolder> {
     const hasToken = Boolean(this.account.refreshToken?.trim());
     if (!hasToken) {
       return {
@@ -452,14 +455,78 @@ export class SpotifyAccountProvider {
         ],
       };
     }
+    const [editorial, podcasts] = await Promise.all([
+      this.canOfferEditorial(),
+      this.hasPodcastContent(),
+    ]);
+    const available = SPOTIFY_ROOT_FOLDERS.filter((folder) => {
+      if (folder.type === 'popular' || folder.type === 'genres') {
+        return editorial;
+      }
+      if (folder.type === 'podcasts') {
+        return podcasts;
+      }
+      return true;
+    });
     return {
       id: 'root',
       name: this.displayLabel,
       service: 'spotify',
       start: offset,
-      totalitems: SPOTIFY_ROOT_FOLDERS.length,
-      items: SPOTIFY_ROOT_FOLDERS.map((folder) => this.folderLink(folder.type, folder.name)),
+      totalitems: available.length,
+      items: available.map((folder) => this.folderLink(folder.type, folder.name)),
     };
+  }
+
+  /**
+   * Whether the editorial sections can be served at all — i.e. whether pathfinder tokens can be
+   * had from either source.
+   *
+   * This used to ask whether librespot had a session, which is why a stale login emptied
+   * Popular Playlists and Genres & Moods. Now that the scraped web tokens stand behind it the
+   * answer is normally yes, so those sections stop disappearing; it stays a real check rather
+   * than a constant because it is what notices Spotify changing the embed page out from under
+   * the scrape. Cheap after the first call: both token layers cache.
+   */
+  private async canOfferEditorial(): Promise<boolean> {
+    try {
+      const session = await this.getPathfinderSession();
+      await session.getTokens();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Whether this account has any podcast content — saved episodes or followed shows.
+   *
+   * Two `limit=1` requests, and only their totals are read. The root listing is cached by the
+   * content layer, so this is not paid per browse.
+   */
+  private async hasPodcastContent(): Promise<boolean> {
+    // `null` means the question could not be asked (no token, upstream error) as opposed to
+    // answered with nothing — and only a real zero should hide the section. Otherwise a
+    // failed refresh would delete Podcasts from an account that has plenty.
+    const probe = async (path: string): Promise<number | null> => {
+      const data = await this.request<{ total?: number; items?: unknown[] }>(
+        `${SPOTIFY_API_BASE}/${path}`,
+        { params: { limit: '1', offset: '0' }, suppressWarn: true },
+      );
+      if (!data) {
+        return null;
+      }
+      return data.total ?? data.items?.length ?? 0;
+    };
+    try {
+      const counts = await Promise.all([probe('me/episodes'), probe('me/shows')]);
+      if (counts.some((count) => count === null)) {
+        return true;
+      }
+      return counts.some((count) => (count ?? 0) > 0);
+    } catch {
+      return true;
+    }
   }
 
   private folderLink(id: string, name: string): ContentFolderItem {
@@ -474,7 +541,7 @@ export class SpotifyAccountProvider {
   private buildFolder(
     id: string,
     name: string,
-    result: { items: ContentFolderItem[]; total?: number },
+    result: { items: ContentFolderItem[]; total?: number; sections?: ContentFolderSection[] },
     offset: number,
   ): ContentFolder {
     return {
@@ -484,6 +551,7 @@ export class SpotifyAccountProvider {
       start: offset,
       totalitems: typeof result.total === 'number' ? result.total : result.items.length,
       items: result.items,
+      ...(result.sections?.length ? { sections: result.sections } : {}),
     };
   }
 
@@ -640,17 +708,15 @@ export class SpotifyAccountProvider {
     // Primary path: pathfinder (one call, fully hydrated). Unlike the Web API
     // (Feb 2026: only the owner's playlists return items), this works for any
     // playlist the account can see — including other users' public playlists.
-    const session = await this.getLibrespotSession();
-    if (session && supportsPathfinder(session)) {
-      const result = await pfPlaylistTracks(
-        session,
-        `spotify:playlist:${playlistId}`,
-        safeOffset,
-        safeLimit,
-      );
-      if (result) {
-        return { items: result.items.map((e) => this.mapMediaEntry(e)), total: result.total };
-      }
+    const session = await this.getPathfinderSession();
+    const result = await pfPlaylistTracks(
+      session,
+      `spotify:playlist:${playlistId}`,
+      safeOffset,
+      safeLimit,
+    );
+    if (result) {
+      return { items: result.items.map((e) => this.mapMediaEntry(e)), total: result.total };
     }
 
     // Fallback: Web API /items (owner-only since Feb 2026).
@@ -702,12 +768,10 @@ export class SpotifyAccountProvider {
     }
 
     // Primary path: pathfinder (tracks hydrated with album/cover/artist).
-    const session = await this.getLibrespotSession();
-    if (session && supportsPathfinder(session)) {
-      const result = await pfAlbumTracks(session, `spotify:album:${albumId}`, offset, limit || 50);
-      if (result) {
-        return { items: result.items.map((e) => this.mapMediaEntry(e)), total: result.total };
-      }
+    const session = await this.getPathfinderSession();
+    const result = await pfAlbumTracks(session, `spotify:album:${albumId}`, offset, limit || 50);
+    if (result) {
+      return { items: result.items.map((e) => this.mapMediaEntry(e)), total: result.total };
     }
 
     // Fallback: Web API. Fetch album metadata once to enrich track rows.
@@ -857,6 +921,28 @@ export class SpotifyAccountProvider {
     return result;
   }
 
+  /** Editorial new releases for the account's country, straight off the Web API. */
+  private async fetchNewReleases(
+    offset: number,
+    limit: number,
+  ): Promise<{ items: ContentFolderItem[]; total?: number }> {
+    const market = (this.account.country || '').trim().toUpperCase();
+    const data = await this.request<{ albums?: { items?: any[]; total?: number } }>(
+      `${SPOTIFY_API_BASE}/browse/new-releases`,
+      {
+        params: {
+          offset: String(Math.max(0, offset || 0)),
+          limit: String(Math.min(Math.max(limit || 20, 1), 50)),
+          ...(market ? { country: market } : {}),
+        },
+        suppressWarn: true,
+      },
+    );
+    const items = Array.isArray(data?.albums?.items) ? data.albums.items : [];
+    const mapped = items.filter(Boolean).map((album) => this.mapAlbum(album));
+    return { items: mapped, total: data?.albums?.total ?? mapped.length };
+  }
+
   private async fetchBrowseCategories(
     offset: number,
     limit: number,
@@ -867,26 +953,23 @@ export class SpotifyAccountProvider {
     // Primary path: real editorial Genres & Moods via pathfinder (browsePage).
     // The Web API browse routes are dead since Feb 2026; pathfinder needs the
     // librespot session token, available only when the native module exposes it.
-    const session = await this.getLibrespotSession();
-    if (session && supportsPathfinder(session)) {
-      const categories = await pfBrowseCategories(session);
-      if (categories.length) {
-        const sliced = categories.slice(safeOffset, safeOffset + safeLimit);
-        return {
-          items: sliced.map((cat) => this.mapBrowseCategory(cat)),
-          total: categories.length,
-        };
-      }
+    const session = await this.getPathfinderSession();
+    const categories = await pfBrowseCategories(session);
+    if (categories.length) {
+      const sliced = categories.slice(safeOffset, safeOffset + safeLimit);
+      return {
+        items: sliced.map((cat) => this.mapBrowseCategory(cat)),
+        total: categories.length,
+      };
     }
 
-    // Fallback when pathfinder is unavailable: a small static category list so the
-    // section isn't empty. (These open empty — drill-in needs pathfinder.)
-    const total = SPOTIFY_FALLBACK_CATEGORIES.length;
-    const sliced = SPOTIFY_FALLBACK_CATEGORIES.slice(safeOffset, safeOffset + safeLimit);
-    return {
-      items: sliced.map((entry) => this.mapCategory(entry)),
-      total,
-    };
+    // No fallback on purpose. `/browse/categories` does still answer, and used to be
+    // stood in for by a hardcoded list of ten genre names — but the drill-in
+    // (`/browse/categories/<id>/playlists`) is 404 either way, so both roads end in a
+    // category tile that opens onto nothing. A section of tiles that cannot be opened is
+    // worse than no section, and `canOfferEditorial` keeps it out of the root entirely
+    // while pathfinder is unavailable.
+    return { items: [], total: 0 };
   }
 
   private async fetchCategoryPlaylists(
@@ -902,18 +985,16 @@ export class SpotifyAccountProvider {
     // (see mapBrowseCategory). When present, drill in over the protocol.
     const browseUri = decodeBrowseUri(categoryId);
     if (browseUri) {
-      const session = await this.getLibrespotSession();
-      if (session && supportsPathfinder(session)) {
-        const entries = await pfCategoryEntries(session, browseUri);
-        if (entries.length) {
-          const safeOffset = Math.max(0, offset || 0);
-          const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
-          const sliced = entries.slice(safeOffset, safeOffset + safeLimit);
-          return {
-            items: sliced.map((entry) => this.mapMediaEntry(entry)),
-            total: entries.length,
-          };
-        }
+      const session = await this.getPathfinderSession();
+      const entries = await pfCategoryEntries(session, browseUri);
+      if (entries.length) {
+        const safeOffset = Math.max(0, offset || 0);
+        const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
+        const sliced = entries.slice(safeOffset, safeOffset + safeLimit);
+        return {
+          items: sliced.map((entry) => this.mapMediaEntry(entry)),
+          total: entries.length,
+        };
       }
       return { items: [], total: 0 };
     }
@@ -923,22 +1004,78 @@ export class SpotifyAccountProvider {
     return { items: [], total: 0 };
   }
 
-  private async fetchArtistTopTracks(
+  /**
+   * An artist's page: their popular tracks, then their records.
+   *
+   * Pathfinder answers this in one call and is preferred, but it needs a librespot session
+   * token — and when the stored credentials stop being accepted, that call is the only thing
+   * standing between a followed artist and an empty folder. Since `Artists` lists exactly the
+   * artists the user follows, that empty folder is a dead end on a tile they chose themselves,
+   * so the ordinary Web API endpoints back it up: `top-tracks` and `albums` both still answer
+   * with the account's refresh token, unlike the browse routes.
+   *
+   * Sections rather than one flat list, because "popular tracks" and "albums" are different
+   * questions and a consumer that can group them should. `items` stays filled with the same
+   * content in order for the consumers (the Loxone app among them) that only read that.
+   */
+  private async fetchArtistContent(
     artistId: string,
-  ): Promise<{ items: ContentFolderItem[]; total?: number }> {
+    limit: number,
+  ): Promise<{ items: ContentFolderItem[]; total?: number; sections?: ContentFolderSection[] }> {
     if (!artistId) {
       return { items: [], total: 0 };
     }
 
-    // Artist top tracks via pathfinder artist overview.
-    const session = await this.getLibrespotSession();
-    if (session && supportsPathfinder(session)) {
-      const tracks = await pfArtistTopTracks(session, `spotify:artist:${artistId}`);
-      if (tracks && tracks.length) {
-        return { items: tracks.map((e) => this.mapMediaEntry(e)), total: tracks.length };
-      }
+    // Artist top tracks via pathfinder artist overview — one call for the whole page.
+    const session = await this.getPathfinderSession();
+    const tracks = await pfArtistTopTracks(session, `spotify:artist:${artistId}`);
+    if (tracks && tracks.length) {
+      return { items: tracks.map((e) => this.mapMediaEntry(e)), total: tracks.length };
     }
-    return { items: [], total: 0 };
+
+    const market = (this.account.country || '').trim().toUpperCase();
+    const cappedLimit = Math.min(Math.max(limit || 20, 1), 50);
+    const [topTracks, albums] = await Promise.all([
+      this.request<{ tracks?: any[] }>(
+        `${SPOTIFY_API_BASE}/artists/${encodeURIComponent(artistId)}/top-tracks`,
+        { params: market ? { market } : {}, suppressWarn: true },
+      ),
+      this.request<{ items?: any[]; total?: number }>(
+        `${SPOTIFY_API_BASE}/artists/${encodeURIComponent(artistId)}/albums`,
+        {
+          params: {
+            limit: String(cappedLimit),
+            include_groups: 'album,single',
+            ...(market ? { market } : {}),
+          },
+          suppressWarn: true,
+        },
+      ),
+    ]);
+
+    const trackItems = (Array.isArray(topTracks?.tracks) ? topTracks.tracks : [])
+      .filter(Boolean)
+      .map((track) => this.mapTrack(track));
+    // `include_groups` mixes albums and singles; Spotify returns them newest-first, which is
+    // the order an artist page wants anyway.
+    const albumItems = (Array.isArray(albums?.items) ? albums.items : [])
+      .filter(Boolean)
+      .map((album) => this.mapAlbum(album));
+
+    const sections: ContentFolderSection[] = [];
+    if (trackItems.length) {
+      sections.push({ id: 'artist-top-tracks', name: 'Popular', items: trackItems });
+    }
+    if (albumItems.length) {
+      sections.push({ id: 'artist-albums', name: 'Albums & singles', items: albumItems });
+    }
+
+    const items = [...trackItems, ...albumItems];
+    return {
+      items,
+      total: items.length,
+      ...(sections.length > 1 ? { sections } : {}),
+    };
   }
 
   private async fetchShowEpisodes(
@@ -981,10 +1118,7 @@ export class SpotifyAccountProvider {
     if (!musicOnly) {
       return null;
     }
-    const session = await this.getLibrespotSession();
-    if (!session || !supportsPathfinder(session)) {
-      return null;
-    }
+    const session = await this.getPathfinderSession();
     const limit = Math.min(Math.max(maxLimit || 20, 1), 20);
     const sr = await pfSearch(session, query, limit);
     if (!sr) {
@@ -1145,21 +1279,6 @@ export class SpotifyAccountProvider {
       duration: durationSec,
       tag: 'episode',
     } as ContentFolderItem;
-  }
-
-  private mapCategory(category: any): ContentFolderItem {
-    const id = String(category?.id ?? '');
-    const icons = category?.icons;
-    const cover = this.extractImage(icons);
-    return {
-      id: this.makeUri('category', id),
-      name: String(category?.name ?? 'Category'),
-      title: String(category?.name ?? 'Category'),
-      type: FileType.Folder,
-      coverurl: cover,
-      thumbnail: this.extractImage(icons, 1) ?? cover,
-      tag: 'category',
-    };
   }
 
   /** Map a pathfinder Genres & Moods category card to a (drillable) folder.
@@ -1540,6 +1659,45 @@ export class SpotifyAccountProvider {
    * Returns null when credentials/native module are unavailable (caller falls
    * back to the Web API).
    */
+  /**
+   * The session pathfinder queries run on — librespot's when it has one, the scraped web tokens
+   * otherwise.
+   *
+   * Two sources rather than one because they are not equivalent: librespot's token is *this
+   * account*, so the Music hub comes back with its own algorithmic shelves (Discover Weekly,
+   * Release Radar, Daily Mix), while the scraped token is anonymous and returns the generic
+   * editorial hub. Preferring librespot keeps the personalised view; falling back to the scrape
+   * means a session that cannot be opened — or credentials that have gone stale — costs those
+   * few shelves instead of every editorial folder in the tree.
+   *
+   * One object per provider, held for its lifetime: the pathfinder layer caches minted tokens in
+   * a `WeakMap` keyed on identity, so a new object per call would re-mint on every query. The
+   * closure reads `getLibrespotSession()` afresh each time, so a session that appears (or is
+   * rebuilt after a re-pairing) is picked up without replacing this object.
+   */
+  private async getPathfinderSession(): Promise<PathfinderSession> {
+    if (!this.pathfinderSession) {
+      this.pathfinderSession = {
+        getTokens: async () => {
+          const librespot = await this.getLibrespotSession().catch(() => null);
+          if (librespot && supportsPathfinder(librespot)) {
+            try {
+              return await librespot.getTokens();
+            } catch (error) {
+              // Not a warning: the web tokens below cover this, and the reason is already
+              // logged by librespot itself.
+              this.log.debug('librespot tokens unavailable; using scraped web tokens', {
+                message: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
+          return webPathfinderSession.getTokens();
+        },
+      };
+    }
+    return this.pathfinderSession;
+  }
+
   private async getLibrespotSession(): Promise<LibrespotSession | null> {
     if (this.librespotSession) {
       return this.librespotSession;

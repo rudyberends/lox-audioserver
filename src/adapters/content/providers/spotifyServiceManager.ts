@@ -946,7 +946,52 @@ export class SpotifyServiceManager {
     if (bridgeProviderId) {
       return bridgeProviderId;
     }
+    const accountProviderId = this.accountProviderIdForServiceNative(trimmed);
+    if (accountProviderId) {
+      return accountProviderId;
+    }
     return this.providerIdFor(trimmed);
+  }
+
+  /**
+   * Map Spotify's own service-native identity — `spotify`, or `spotify:<accountId>` when there
+   * are several accounts — to the internal provider-map key `spotify@<accountId>`.
+   *
+   * The bridge services above are named after their provider, so a bare `applemusic` resolves;
+   * Spotify's accounts are keyed by account id, so a bare `spotify` matched nothing and every
+   * caller that has only the service name got "no provider matched; refusing to guess". That
+   * hit the public browse API's container lookup on every Spotify folder, which passes the
+   * service without an account because a browse ref carries no account.
+   */
+  private accountProviderIdForServiceNative(serviceNative: string): ProviderId | null {
+    const raw = serviceNative.trim().toLowerCase();
+    if (raw !== 'spotify' && !raw.startsWith('spotify:')) {
+      return null;
+    }
+    const accountIds = this.accounts
+      .map((acc) => (acc.id || acc.user || '').trim())
+      .filter(Boolean);
+    if (accountIds.length === 0) {
+      return null;
+    }
+    // `spotify:<slug>` — but the same grammar also carries search filters
+    // (`spotify:track#20`), so this only ever matches a real account id and otherwise
+    // falls through to the unnamed case below.
+    const slug = raw.slice('spotify:'.length);
+    if (slug) {
+      const match = accountIds.find((id) => id.toLowerCase() === slug);
+      return match ? this.providerIdFor(match) : null;
+    }
+    // Unnamed. With one account there is nothing to disambiguate; with several, the bare
+    // name is genuinely ambiguous and this answers with the same default account the rest
+    // of the server already uses for an unaddressed request. The service key for a
+    // multi-account setup spells the account out, so that case is not reached by our own
+    // consumers — only by something that dropped the account on the way.
+    if (accountIds.length === 1) {
+      return this.providerIdFor(accountIds[0]!);
+    }
+    const preferred = this.getDefaultAccountId();
+    return preferred ? this.providerIdFor(preferred) : null;
   }
 
   /**

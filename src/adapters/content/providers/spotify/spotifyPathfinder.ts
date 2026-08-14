@@ -21,8 +21,13 @@ const HTTP_TIMEOUT_MS = 10_000; // never let a slow CDN/API hang content browsin
 /** Top-level Genres & Moods landing URI (lists the category cards). */
 export const BROWSE_ROOT_URI = 'spotify:genre:browse';
 
-/** First-party tokens minted by librespot. */
-interface SessionTokens {
+/**
+ * The credentials a pathfinder request needs.
+ *
+ * Exported because librespot is no longer the only thing that can produce them — see
+ * `spotifyWebTokens`, which scrapes the same pair off the public web player.
+ */
+export interface SessionTokens {
   accessToken: string;
   tokenType: string;
   clientToken: string;

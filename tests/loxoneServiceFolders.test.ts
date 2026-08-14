@@ -7,6 +7,7 @@ import {
   toProviderNode,
 } from '../src/adapters/loxone/commands/utils/loxoneServiceFolders';
 import { SpotifyAccountProvider } from '../src/adapters/content/providers/spotify/spotifyAccountProvider';
+import { resetWebTokenCache } from '../src/adapters/content/providers/spotify/spotifyWebTokens';
 
 const APPLE = 'bridge-applemusic-dgmv27';
 
@@ -190,33 +191,73 @@ test('Music Assistant keeps the slots it fills with recommendations', () => {
   assert.equal(slot('bridge-musicassistant-ma1', '6'), 'artists');
 });
 
-// The table alone proves nothing: what the app receives is the provider's own root
-// run through the projection. This is that pair, end to end — the eight sections in
-// the order and under the ids the app has always got, straight from the provider.
-test("Spotify's real root listing still reaches Loxone as slots 0-7", async () => {
-  const provider = new SpotifyAccountProvider({
-    providerId: 'spotify@rudy',
-    // A refresh token is all the static root listing needs; nothing is fetched.
-    account: { id: 'rudy', refreshToken: 'stub' } as never,
-    persistAccount: async () => {},
-  });
-  const root = await provider.getFolder('root', 0, 50);
+// The eight sections the app has slots for, pinned in both directions: a section only
+// reaches the app if the provider still publishes it under the name this table expects, so
+// renaming one on either side has to be a deliberate edit here.
+test('every Spotify section the app has a slot for keeps its name', () => {
+  const expected: Array<[string, string]> = [
+    ['0', 'popular'],
+    ['1', 'new'],
+    ['2', 'genres'],
+    ['3', 'playlists'],
+    ['4', 'liked'],
+    ['5', 'albums'],
+    ['6', 'artists'],
+    ['7', 'podcasts'],
+  ];
+  for (const [index, node] of expected) {
+    assert.equal(slot('rudy', index), node, `slot ${index}`);
+  }
   assert.deepEqual(
-    rootItemsForLoxone('spotify', 'rudy', root?.items ?? []).map((i) => [i.id, i.name]),
-    [
-      ['0', 'Popular Playlists'],
-      ['1', 'New Releases'],
-      ['2', 'Genres & Moods'],
-      ['3', 'My Playlists'],
-      ['4', 'Liked Songs'],
-      ['5', 'Albums'],
-      ['6', 'Artists'],
-      ['7', 'Podcasts'],
-    ],
+    rootItemsForLoxone('spotify', 'rudy', expected.map(([, node]) => ({ id: node }))).map(
+      (item) => item.id,
+    ),
+    ['0', '1', '2', '3', '4', '5', '6', '7'],
   );
-  // And each of those slots comes back to the section the provider published.
-  for (const [index, item] of (root?.items ?? []).entries()) {
-    assert.equal(toProviderNode('spotify', 'rudy', String(index)), item.id);
+});
+
+// The table alone proves nothing: what the app receives is the provider's own root run
+// through the projection. This is that pair, end to end — and it also pins which sections
+// survive when the account can reach nothing, because that is the case a user meets when
+// their stored credentials go stale.
+test("Spotify's root reaches Loxone under the app's slot ids", async () => {
+  // Everything upstream refused, so the listing is decided by the provider alone and this stays
+  // a test of the projection rather than of the network. It is also the honest worst case: no
+  // access token, no librespot session, and no scraped web tokens either.
+  const originalFetch = global.fetch;
+  global.fetch = (async () => new Response('offline', { status: 503 })) as typeof fetch;
+  resetWebTokenCache();
+  try {
+    const provider = new SpotifyAccountProvider({
+      providerId: 'spotify@rudy',
+      // A refresh token gets past the "re-add this account" listing. With no pathfinder tokens
+      // from either source the editorial sections are left out rather than published as tiles
+      // that open onto nothing; Podcasts stays, because an unanswerable probe means "unknown".
+      account: { id: 'rudy', refreshToken: 'stub' } as never,
+      persistAccount: async () => {},
+    });
+    const root = await provider.getFolder('root', 0, 50);
+    assert.deepEqual(
+      rootItemsForLoxone('spotify', 'rudy', root?.items ?? []).map((i) => [i.id, i.name]),
+      [
+        ['1', 'New Releases'],
+        ['3', 'My Playlists'],
+        ['4', 'Liked Songs'],
+        ['5', 'Albums'],
+        ['6', 'Artists'],
+        ['7', 'Podcasts'],
+      ],
+    );
+    // The count has to match what is actually in the listing, not the full section list.
+    assert.equal(root?.totalitems, root?.items?.length);
+    // And every published section round-trips: the slot the app sends comes back as the node.
+    for (const item of root?.items ?? []) {
+      const projected = rootItemsForLoxone('spotify', 'rudy', [item])[0]!;
+      assert.equal(toProviderNode('spotify', 'rudy', projected.id), item.id);
+    }
+  } finally {
+    global.fetch = originalFetch;
+    resetWebTokenCache();
   }
 });
 
