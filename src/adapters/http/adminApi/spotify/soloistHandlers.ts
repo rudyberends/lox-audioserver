@@ -115,6 +115,11 @@ export async function handleSoloistSettings(
     }
     spotify.soloist = next;
   });
+  // Config alone changes nothing: the zones are given their players by syncZones, which otherwise
+  // only runs on a restart. Without this, switching player in the screen did nothing until
+  // something else happened to reload the zones — and every room quietly left the Spotify app.
+  const cfg = deps.configPort.getConfig();
+  deps.spotifyInputService.syncZones(cfg.zones ?? [], cfg.inputs?.spotify ?? null);
   await handleSoloistStatus(res, deps);
 }
 
