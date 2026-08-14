@@ -682,6 +682,7 @@ export class PlaybackCoordinator {
         playerCommand: (id, cmd, args) => this.inputsPort.playerCommand(id, cmd, args),
         requestLineInControl: (inputId, cmd) => this.inputsPort.requestLineInControl(inputId, cmd),
         requestLineInStop: (inputId) => this.inputsPort.requestLineInStop(inputId),
+        stopSpotifySession: (id, reason) => this.inputsPort.stopSpotifySession(id, reason),
       },
       ctx,
       zoneId,

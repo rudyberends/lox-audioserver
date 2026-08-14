@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# ESLint over all of src plus the dependency-cruiser boundary check (~10s).
+# Deliberately not lint-staged: the rules are type-aware, so a change in one
+# file can surface an error in another that isn't staged.
+npm run lint

@@ -42,6 +42,8 @@ type CommandCoordinator = {
   playerCommand: (zoneId: number, command: string, args?: Record<string, unknown>) => Promise<boolean>;
   requestLineInControl: (inputId: string, command: LineInControlCommand) => void;
   requestLineInStop: (inputId: string) => void;
+  /** Announce that a zone has stopped playing Spotify, whether it was an input or just a source. */
+  stopSpotifySession: (zoneId: number, reason: string) => void;
 };
 
 export function handleZoneCommand(args: {
@@ -239,6 +241,7 @@ function handleStopOff(
   // that case which must be released here -- otherwise the source stays powered after the zone is
   // off, with nothing left to turn it back down.
   releaseLineInOnStop(coordinator, ctx);
+  releaseSpotifyOnStop(coordinator, ctx);
   if (mode === 'airplay') {
     coordinator.remoteControl(zoneId, 'Stop');
     coordinator.setInputMode(ctx, null);
@@ -503,6 +506,23 @@ function handleQueuePlayCurrent(
       message: error instanceof Error ? error.message : String(error),
     });
   });
+}
+
+/**
+ * Tell Spotify the zone is done, when the zone was on it.
+ *
+ * Keyed off the audiopath for the same reason as the line-in above: a zone playing Spotify from its
+ * own queue has no `inputMode` — Spotify is its source, not an input — so nothing else here would
+ * announce the stop, and the backend went on believing it still owed the room a track. Which meant
+ * that anything the Spotify app played afterwards was read as a skip of a track this zone had long
+ * finished with, and the room started its old queue up again.
+ */
+function releaseSpotifyOnStop(coordinator: CommandCoordinator, ctx: ZoneContext): void {
+  const audiopath = ctx.state.audiopath ?? '';
+  if (!/^spotify[:@]/i.test(audiopath)) {
+    return;
+  }
+  coordinator.stopSpotifySession(ctx.id, 'zone_stopped');
 }
 
 function releaseLineInOnStop(coordinator: CommandCoordinator, ctx: ZoneContext): void {
