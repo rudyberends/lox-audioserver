@@ -145,7 +145,20 @@ export class SoloistSinkManager {
           'pulseaudio',
           ['--daemonize=no', '-n', '-F', scriptPath, '--exit-idle-time=-1'],
           {
-            env: { ...process.env, PULSE_RUNTIME_PATH: dir, PULSE_CONFIG_PATH: dir },
+            env: {
+              ...process.env,
+              PULSE_RUNTIME_PATH: dir,
+              PULSE_CONFIG_PATH: dir,
+              // Point the session bus at nothing that exists.
+              //
+              // PulseAudio claims `org.PulseAudio1` on whatever bus it can reach and treats the
+              // name being taken as another daemon of its own — it refuses to start. On a machine
+              // with a desktop session that name is already held by the session's own PulseAudio,
+              // which has nothing to do with ours: different socket, different config, none of our
+              // sinks. So after a reboot every room silently disappeared from the Spotify app.
+              // Unreachable it merely warns, and a private daemon has no use for a bus anyway.
+              DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(dir, 'no-dbus')}`,
+            },
             stdio: ['ignore', 'ignore', 'pipe'],
           },
         );
