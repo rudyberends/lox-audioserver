@@ -118,6 +118,8 @@ test('the API reports the engine chain, with crossfade merged in from the sessio
         channelsRemapped: false,
         reencoded: false,
         equalizer: { bands: [0, 2, 0, 0, 0, 0, 0, -1, 0, 0] },
+        dither: 'triangular',
+        headroomDb: null,
         gainDb: { source: -3.2, output: 0 },
         delayMs: 120,
       },
@@ -137,6 +139,8 @@ test('the API reports the engine chain, with crossfade merged in from the sessio
     channelsRemapped: false,
     reencoded: false,
     equalizer: { bands: [0, 2, 0, 0, 0, 0, 0, -1, 0, 0] },
+    dither: 'triangular',
+    headroomDb: null,
     gainDb: { source: -3.2, output: 0 },
     delayMs: 120,
     // Not part of the arg builder's description — it is a state of the session, not a configuration —
@@ -165,7 +169,7 @@ test('a replacement session wins over the one it replaced', () => {
       sourceFormat: { codec: 'flac', sampleRate: 192000, channels: 2, bitDepth: 24, bitrate: null },
     }),
   ]);
-  assert.equal(format?.output.sampleRate, 192000);
+  assert.equal(format?.output?.sampleRate, 192000);
 });
 
 test('a lower-rate replacement still wins — newest is the survivor, not the best', () => {
@@ -175,7 +179,7 @@ test('a lower-rate replacement still wins — newest is the survivor, not the be
     stat({ startedAt: 5_000, profile: 'pcm', sampleRate: 192000, pcmBitDepth: 24 }),
     stat({ startedAt: 5_900, profile: 'pcm', sampleRate: 44100, pcmBitDepth: 24 }),
   ]);
-  assert.equal(format?.output.sampleRate, 44100);
+  assert.equal(format?.output?.sampleRate, 44100);
 });
 
 test('profiles started together are compared on their audio, not their clock', () => {
@@ -184,8 +188,8 @@ test('profiles started together are compared on their audio, not their clock', (
     stat({ startedAt: 9_000, profile: 'mp3', sampleRate: 44100, pcmBitDepth: 16, bps: 32000 }),
     stat({ startedAt: 9_020, profile: 'pcm', sampleRate: 96000, pcmBitDepth: 24 }),
   ]);
-  assert.equal(format?.output.codec, 'pcm');
-  assert.equal(format?.output.sampleRate, 96000);
+  assert.equal(format?.output?.codec, 'pcm');
+  assert.equal(format?.output?.sampleRate, 96000);
 });
 
 test('a 24-bit container around a lossy source is not high-res', () => {
@@ -199,7 +203,7 @@ test('a 24-bit container around a lossy source is not high-res', () => {
       sourceFormat: { codec: 'aac', sampleRate: 44100, channels: 2, bitDepth: null, bitrate: 256000 },
     }),
   ]);
-  assert.equal(format?.output.highRes, false, 'padding is not resolution');
+  assert.equal(format?.output?.highRes, false, 'padding is not resolution');
   assert.equal(format?.source?.highRes, false, 'a lossy source is never high-res');
 });
 
@@ -212,7 +216,7 @@ test('depth surviving a rate reduction is still high-res', () => {
       sourceFormat: { codec: 'flac', sampleRate: 96000, channels: 2, bitDepth: 24, bitrate: null },
     }),
   ]);
-  assert.equal(format?.output.highRes, true, '24 bits survived, so the output is still better than CD');
+  assert.equal(format?.output?.highRes, true, '24 bits survived, so the output is still better than CD');
   assert.equal(format?.source?.highRes, true);
 });
 
@@ -225,14 +229,14 @@ test('upsampling a CD-rate lossless source does not make it high-res', () => {
       sourceFormat: { codec: 'flac', sampleRate: 44100, channels: 2, bitDepth: 16, bitrate: null },
     }),
   ]);
-  assert.equal(format?.output.highRes, false, 'the extra samples were invented');
+  assert.equal(format?.output?.highRes, false, 'the extra samples were invented');
 });
 
 test('without a reported source the output makes no high-res claim', () => {
   const format = toApiAudioFormat([
     stat({ profile: 'pcm', sampleRate: 96000, pcmBitDepth: 24, sourceFormat: null }),
   ]);
-  assert.equal(format?.output.highRes, false, 'a claim that cannot be backed is not made');
+  assert.equal(format?.output?.highRes, false, 'a claim that cannot be backed is not made');
 });
 
 test('the API exposes the engine bit-perfect decision', () => {

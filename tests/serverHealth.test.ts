@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import type { HealthReport } from '../src/domain/server/health';
 import { test } from './testHarness';
 import { ServerLifecycle } from '../src/domain/server/lifecycle';
 import { healthHttpStatus, worstStatus } from '../src/domain/server/health';
@@ -23,8 +24,7 @@ function inputs(overrides: Partial<HealthInputs> = {}): HealthInputs {
 }
 
 const named = (report: { checks: Array<{ name: string }> }) => report.checks.map((c) => c.name);
-const byName = (report: { checks: Array<{ name: string }> }, name: string) =>
-  report.checks.find((c) => c.name === name);
+const byName = (report: HealthReport, name: string) => report.checks.find((c) => c.name === name);
 
 test('a healthy server says so, and explains nothing', () => {
   const report = buildHealthReport(inputs());

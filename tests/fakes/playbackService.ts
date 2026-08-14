@@ -28,6 +28,7 @@ const noopEnginePort: EnginePort = {
     /* noop */
   },
   restartZoneForEqualizer: () => false,
+  inlineCrossfade: async () => false,
 };
 
 export function makePlaybackServiceFake(): PlaybackService {

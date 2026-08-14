@@ -1,3 +1,4 @@
+import { zoneSessionKey } from '../../src/ports/types/SessionKey';
 import assert from 'node:assert/strict';
 import { test } from '../testHarness';
 import { AudioSession } from '../../src/engine/audioSession';
@@ -21,7 +22,7 @@ function fileSession(): AudioSession {
   // No start(): the restart path rebuilds the command line before it touches a process, which is
   // exactly what this asserts.
   return new AudioSession(
-    1,
+    zoneSessionKey(1),
     { kind: 'file', path: '/music/track.flac' },
     'pcm',
     () => {},
@@ -51,7 +52,7 @@ test('an equalizer restart without a position leaves the command line alone', ()
 
 test('a live pipe cannot be positioned, so its restart carries no seek', () => {
   const session = new AudioSession(
-    1,
+    zoneSessionKey(1),
     { kind: 'pipe', path: 'spotify-pipe', format: 's16le', sampleRate: 44100, channels: 2 },
     'pcm',
     () => {},

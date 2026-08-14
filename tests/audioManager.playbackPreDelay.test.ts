@@ -53,6 +53,10 @@ class EngineSpy implements EnginePort {
   public restartZoneForEqualizer(): boolean {
     return false;
   }
+
+  public async inlineCrossfade(): Promise<boolean> {
+    return false;
+  }
 }
 
 const outputNotifier = {

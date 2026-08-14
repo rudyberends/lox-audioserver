@@ -53,7 +53,6 @@ test('a scanned format round-trips, so a matching file can take the bypass', asy
     bitDepth: 16,
     lossless: true,
   });
-  store.close?.();
   await fs.rm(tempDir, { recursive: true, force: true });
 });
 
@@ -69,7 +68,6 @@ test('a lossy track reports no depth rather than inventing one', async () => {
   const format = store.getSourceFormat('local/track.flac', file);
   assert.equal(format?.bitDepth, null, 'there is no original depth to preserve');
   assert.equal(format?.lossless, false);
-  store.close?.();
   await fs.rm(tempDir, { recursive: true, force: true });
 });
 
@@ -95,7 +93,6 @@ test('a file re-encoded in place since the scan reads as undeclared', async () =
 
   // Without a path to check against there is nothing to compare, and the row is taken at its word.
   assert.ok(store.getSourceFormat('local/track.flac'));
-  store.close?.();
   await fs.rm(tempDir, { recursive: true, force: true });
 });
 
@@ -104,6 +101,5 @@ test('a track scanned before the format columns existed simply has none', async 
   await insert(store, file, null);
   assert.equal(store.getSourceFormat('local/track.flac', file), null);
   assert.equal(store.getSourceFormat('local/nope.flac', file), null);
-  store.close?.();
   await fs.rm(tempDir, { recursive: true, force: true });
 });

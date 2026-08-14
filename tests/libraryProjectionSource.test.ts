@@ -41,6 +41,7 @@ test('the doubled form recents were stored in is unwrapped', () => {
     0,
     10,
     REGISTRY,
+    'Living',
   );
   assert.equal(recents.items[0]!.source, 'applemusic:track:b64_MTQ0Mw==');
 });

@@ -47,7 +47,8 @@ test('subsonic ids: ids survive characters that need escaping in URLs and XML', 
   const folderId = 'search?q=a&b=c /deep path/#frag';
   const id = encodeContainerId('dir', 'radio', folderId);
   assert.match(id, /^[A-Za-z0-9\-_.]+$/);
-  assert.equal(decodeEntityId(id)?.kind === 'song' ? null : decodeEntityId(id)?.folderId, folderId);
+  const roundTripped = decodeEntityId(id);
+  assert.equal(roundTripped?.kind === 'song' ? null : roundTripped?.folderId, folderId);
 });
 
 test('subsonic ids: malformed ids decode to null rather than throwing', () => {
@@ -68,7 +69,7 @@ test('subsonic ids: retag keeps the target while changing the entity kind', () =
   assert.ok(asAlbum);
   const decoded = decodeEntityId(asAlbum);
   assert.equal(decoded?.kind, 'album');
-  assert.equal(decoded?.kind === 'song' ? null : decoded?.folderId, 'library-local-albums');
+  assert.equal(decoded?.folderId, 'library-local-albums');
 });
 
 test('subsonic ids: retag refuses a song id', () => {

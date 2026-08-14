@@ -118,7 +118,7 @@ test('container playback intake: measured device payload resolves to real servic
     // Payload resolver must NOT slash-glue; it must rebuild the spotify@ envelope.
     const resolved = resolveServiceplayPayload(devicePayload);
     assert.equal(resolved, `spotify@bridge-applemusic-p0gngd:${kind}:b64_X`, `${kind} resolver`);
-    assert.ok(!resolved.split(':')[0].includes('/'), `${kind} no slash in first token`);
+    assert.ok(!resolved.split(':')[0]!.includes('/'), `${kind} no slash in first token`);
     // Then the playContent intake normalizes to service-native.
     const native = toServiceNative(resolved, reg);
     assert.equal(native, `applemusic:${kind}:b64_X`, `${kind} native`);

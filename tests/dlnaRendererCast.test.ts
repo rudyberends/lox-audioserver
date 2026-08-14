@@ -54,7 +54,9 @@ test('a cast uri the proxy cannot front is passed through untouched', () => {
 
   handler.onPlay('rtsp://192.168.1.5/stream');
 
-  assert.equal(started()?.url, 'rtsp://192.168.1.5/stream');
+  const rtspSource = started();
+  assert.ok(rtspSource && rtspSource.kind === 'url');
+  assert.equal(rtspSource.url, 'rtsp://192.168.1.5/stream');
 });
 
 test('a seek keeps the offset alongside the proxied url', () => {
@@ -65,5 +67,6 @@ test('a seek keeps the offset alongside the proxied url', () => {
 
   const source = started();
   assert.equal((source as { startAtSec?: number }).startAtSec, 61);
-  assert.equal(new URL(source!.url).pathname, '/streams/proxy');
+  assert.ok(source && source.kind === 'url');
+  assert.equal(new URL(source.url).pathname, '/streams/proxy');
 });

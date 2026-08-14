@@ -31,6 +31,9 @@ function statsFor(
   channels = 2,
 ): EngineSessionStats {
   return {
+    startedAt: 0,
+    bitPerfect: false,
+    dspApplied: false,
     profile,
     sampleRate,
     channels,

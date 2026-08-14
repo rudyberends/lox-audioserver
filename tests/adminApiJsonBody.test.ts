@@ -32,6 +32,13 @@ import { CustomRadioStore } from '../src/adapters/content/providers/customRadioS
 import { SpotifyServiceManagerProvider } from '../src/adapters/content/providers/spotifyServiceManager';
 import { SpotifyDeviceRegistry } from '../src/adapters/outputs/spotify/deviceRegistry';
 import type { MdnsPort } from '../src/ports/MdnsPort';
+import { SpotifyStreamProxyService } from '../src/adapters/inputs/spotify/spotifyStreamProxyService';
+import { SonnCorePeerRegistry } from '../src/adapters/discovery/sonnCorePeerRegistry';
+import { SonnClientApiHandler } from '../src/adapters/http/sonnClientApi/sonnClientApiHandler';
+import type { BeoremoteApiHandler } from '../src/adapters/http/beoremote/beoremoteApiHandler';
+import { noopGroupTracker } from './fakes/outputPorts';
+
+const HTTP_PORT = 7090;
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const noopConfigPort: ConfigPort = {
@@ -61,6 +68,7 @@ const noopContentPort: ContentPort = {
     byBridgeId: new Map(),
     accountCountByService: new Map(),
   }),
+  resolveFolder: async () => null,
   resolveMetadata: async () => null,
   resolvePlaybackSource: async () => ({ playbackSource: null, provider: 'library' }),
   configureAppleMusic: () => {},
@@ -143,12 +151,14 @@ function createHandler(): AdminApiHandler {
     () => {
       throw new Error('airplay session stopper not configured');
     },
+    { getPlayer: () => null },
+    new SpotifyStreamProxyService(),
   );
   const snapcastCore = new SnapcastCore(audioManager);
   const zoneManager = {} as ZoneManagerFacade;
   snapcastCore.initOnce({ zoneManager });
   const squeezeliteCore = new SqueezeliteCore(noopConfigPort);
-  const loxoneNotifier = new LoxoneWsNotifier(new ConnectionRegistry());
+  const loxoneNotifier = new LoxoneWsNotifier(new ConnectionRegistry(), noopGroupTracker);
   const customRadioStore = new CustomRadioStore();
   const favoritesManager = createFavoritesManager({
     notifier: makeNotifierFake(),
@@ -179,11 +189,26 @@ function createHandler(): AdminApiHandler {
     audioManager,
     zoneAudioPrefs,
     mdnsPort: noopMdnsPort,
+    sonnCorePeers: new SonnCorePeerRegistry(noopMdnsPort),
+    alertFiles: {
+      list: async () => [],
+      update: async () => {
+        /* noop */
+      },
+      revert: async () => {
+        /* noop */
+      },
+    },
+    sonnClientApi: new SonnClientApiHandler(noopConfigPort, HTTP_PORT),
+    // The JSON-body tests never route to the Beoremote surface; standing up its
+    // menu-source graph here would add setup, not assurance.
+    beoremoteApi: {} as BeoremoteApiHandler,
+    httpPort: HTTP_PORT,
   });
 }
 
 test('readJsonBody parses valid json under limit', async () => {
-  const handler = createHandler();
+  createHandler();
   const stream = new PassThrough();
   const req = stream as unknown as IncomingMessage;
   const res = new FakeResponse();
@@ -236,7 +261,7 @@ test('buildSqueezeliteAdminPlayerSnapshot exposes disconnected configured target
 });
 
 test('readJsonBody rejects invalid json with 400', async () => {
-  const handler = createHandler();
+  createHandler();
   const stream = new PassThrough();
   const req = stream as unknown as IncomingMessage;
   const res = new FakeResponse();
@@ -251,7 +276,7 @@ test('readJsonBody rejects invalid json with 400', async () => {
 });
 
 test('readJsonBody rejects oversized payloads with 413', async () => {
-  const handler = createHandler();
+  createHandler();
   const stream = new PassThrough();
   const req = stream as unknown as IncomingMessage;
   const res = new FakeResponse();
@@ -267,7 +292,7 @@ test('readJsonBody rejects oversized payloads with 413', async () => {
 });
 
 test('readJsonBody supports route-specific max size override', async () => {
-  const handler = createHandler();
+  createHandler();
   const stream = new PassThrough();
   const req = stream as unknown as IncomingMessage;
   const res = new FakeResponse();

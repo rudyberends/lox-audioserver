@@ -1,3 +1,5 @@
+import { zoneSessionKey } from '../src/ports/types/SessionKey';
+import { audioOutputSettings } from '../src/ports/types/audioFormat';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { test } from './testHarness';
@@ -6,7 +8,7 @@ import { AudioSession } from '../src/engine/audioSession';
 test('pipe-backed ffmpeg session resolves first chunk readiness', async () => {
   const sourceStream = new PassThrough();
   const session = new AudioSession(
-    1,
+    zoneSessionKey(1),
     {
       kind: 'pipe',
       path: 'spotify-pipe',
@@ -18,6 +20,7 @@ test('pipe-backed ffmpeg session resolves first chunk readiness', async () => {
     'flac',
     () => {},
     {
+      ...audioOutputSettings,
       sampleRate: 44100,
       channels: 2,
       pcmBitDepth: 16,

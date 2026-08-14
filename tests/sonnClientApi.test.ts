@@ -87,7 +87,7 @@ function createHarness(initial: any = {}) {
     assert.ok(route, `no admin route for ${method} ${path}`);
     const res = new FakeResponse();
     const match = path.match(route!.pattern)!;
-    await route!.handler(request(method, body), res as unknown as ServerResponse, match);
+    await route!.handler(request(method, body), res as unknown as ServerResponse, match, path);
     return res;
   };
 
@@ -244,7 +244,7 @@ test('how a speaker applies volume reaches the device, and nonsense does not', a
 });
 
 test('every device is told which client build it should be running', async () => {
-  const { call, admin, config } = createHarness();
+  const { call, config } = createHarness();
   await call('POST', '/api/sonnclients/register', REGISTRATION);
 
   // Published centrally, not per device: a park where some speakers quietly stay behind on an old

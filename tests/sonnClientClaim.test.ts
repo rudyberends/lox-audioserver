@@ -79,7 +79,7 @@ test('a server that has never seen a device does not adopt one that belongs else
 
 test('a stale entry does not outrank the device: the drift is not repeated', async () => {
   // This server adopted the device once, during another server's restart, and still has the entry.
-  const { handler, written } = handlerFor([{ deviceId: 'sonn-woonkamer-4791fbc6' }]);
+  const { handler } = handlerFor([{ deviceId: 'sonn-woonkamer-4791fbc6' }]);
   const answer = await register(handler, {
     device_id: 'sonn-woonkamer-4791fbc6',
     outputs: [],

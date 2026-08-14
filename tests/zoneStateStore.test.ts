@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import type { AudioManager } from '../src/application/playback/audioManager';
 import { test } from './testHarness';
 import { ZoneStateStore } from '../src/application/zones/ZoneStateStore';
 import { ZoneRepository } from '../src/application/zones/ZoneRepository';
@@ -88,6 +89,8 @@ function buildStore(opts: {
       notifyReloadMusicApp: () => {},
       notifyAudioSyncEvent: () => {},
     },
+    // Only these three are ever reached; typing the literal through Pick keeps the
+    // parameters inferred, and the cast stays narrow and visible.
     audioManager: {
       getSession: () => fakes.audioSession as never,
       updateSessionTiming: (zoneId, elapsed, duration) => {
@@ -98,8 +101,12 @@ function buildStore(opts: {
         if (fakes.audioSession) {
           fakes.audioSession.metadata = metadata as never;
         }
+        return (fakes.audioSession ?? null) as never;
       },
-    } as never,
+    } satisfies Pick<
+      AudioManager,
+      'getSession' | 'updateSessionTiming' | 'updateSessionMetadata'
+    > as unknown as AudioManager,
   });
 
   return { store, fakes };

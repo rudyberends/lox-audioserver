@@ -115,6 +115,7 @@ function makeRoutes(users?: UserAccount[], paired = false) {
       {} as IncomingMessage,
       {} as ServerResponse,
       route.pattern.exec(path) as RegExpExecArray,
+      path,
     );
     return { ...captured };
   };
@@ -240,7 +241,7 @@ test('secret store: a plaintext value passes through unchanged', () => {
 test('secret store: tampering is detected rather than silently accepted', () => {
   // GCM authenticates the ciphertext, so a flipped byte fails to open.
   const cipher = encryptSecret('geheim');
-  const [prefix, iv, tag, data] = cipher.split(':');
+  const [prefix, iv, tag] = cipher.split(':');
   const flipped = `${prefix}:${iv}:${tag}:${Buffer.from('anders').toString('base64')}`;
   assert.equal(decryptSecret(flipped), null);
   assert.equal(decryptSecret('enc:v1:kapot'), null);

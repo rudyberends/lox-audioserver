@@ -98,15 +98,21 @@ function buildConfigurator(opts: { activeInput?: ZoneContext['activeInput'] } = 
       updateInputTiming: (zoneId) => fakes.playbackCalls.push(`updateTiming:${zoneId}`),
       setInputMode: (_ctx, mode) => fakes.playbackCalls.push(`setInputMode:${mode}`),
       alignOutputFormat: (zoneId) => fakes.playbackCalls.push(`alignFormat:${zoneId}`),
-    } as never,
+      handleCommand: () => {
+        /* noop */
+      },
+    },
     outputRouter: {
       dispatchVolume: (ctx, outputs, level) =>
         fakes.outputVolumeCalls.push({ zoneId: ctx.id, volume: level, outputTypes: outputs.map((o) => o.type) }),
-    } as never,
+    },
     stateStore: {
       applyPatch: (zoneId, patch) => fakes.stateStorePatches.push({ zoneId, patch }),
     },
     applyPatch: (zoneId, patch, force) => fakes.applyPatchCalls.push({ zoneId, patch, force }),
+    updateQueue: () => {
+      /* noop */
+    },
   });
 
   return { configurator, fakes };

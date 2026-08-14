@@ -72,7 +72,7 @@ function makeRoutes(
     const route = routes.find((r) => r.method === method && r.pattern.test(path));
     assert.ok(route, `no route for ${method} ${path}`);
     const match = route.pattern.exec(path) as RegExpExecArray;
-    await route.handler({} as IncomingMessage, {} as ServerResponse, match);
+    await route.handler({} as IncomingMessage, {} as ServerResponse, match, '/subsonic');
     return { ...captured };
   };
   return { call, cfg };

@@ -1,3 +1,4 @@
+import { zoneSessionKey } from '../../src/ports/types/SessionKey';
 import assert from 'node:assert/strict';
 import { test } from '../testHarness';
 import { AudioSession } from '../../src/engine/audioSession';
@@ -23,7 +24,7 @@ const OUTPUT: AudioOutputSettings = {
  */
 function alertSession(onTerminated: () => void): AudioSession {
   return new AudioSession(
-    1,
+    zoneSessionKey(1),
     { kind: 'file', path: '/app/public/alerts/bell.mp3', realTime: false },
     'flac',
     onTerminated,

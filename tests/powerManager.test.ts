@@ -238,7 +238,17 @@ test('system power manager sends Basic Auth for URL credentials', async () => {
     async (baseUrl) => {
       const target = baseUrl.replace('://', '://user:p%40ss@');
       await executor.execute(
-        { type: 'url', config: { onUrl: `${target}/dev/sps/io/Amp/Ein`, offUrl: '' } },
+        {
+          type: 'url' as const,
+          config: {
+            onUrl: `${target}/dev/sps/io/Amp/Ein`,
+            onMethod: 'GET',
+            onBody: null,
+            offUrl: '',
+            offMethod: 'GET',
+            offBody: null,
+          },
+        },
         1,
       );
     },
@@ -258,7 +268,17 @@ test('system power manager reports URL client errors as failures', async () => {
       await assert.rejects(
         () =>
           executor.execute(
-            { type: 'url', config: { onUrl: `${baseUrl}/dev/sps/io/Amp/Ein`, offUrl: '' } },
+            {
+          type: 'url' as const,
+          config: {
+            onUrl: `${baseUrl}/dev/sps/io/Amp/Ein`,
+            onMethod: 'GET',
+            onBody: null,
+            offUrl: '',
+            offMethod: 'GET',
+            offBody: null,
+          },
+        },
             1,
           ),
         /http 401/,
@@ -306,8 +326,8 @@ test('system power manager supports method and JSON body for an off-only URL', a
           },
         },
       ]);
-      await executor.execute(config.actions[0], 0);
-      await executor.execute(config.actions[0], 1);
+      await executor.execute(config.actions[0]!, 0);
+      await executor.execute(config.actions[0]!, 1);
     },
   );
 

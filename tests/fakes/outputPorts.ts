@@ -1,5 +1,7 @@
 import { audioOutputSettings } from '../../src/ports/types/audioFormat';
+import { AudioAnalysisService } from '../../src/application/audio/audioAnalysisService';
 import type { AirplayGroupCoordinator } from '../../src/application/outputs/airplayGroupController';
+import type { GroupTrackerPort } from '../../src/ports/GroupTrackerPort';
 import type { ConfigPort } from '../../src/ports/ConfigPort';
 import type { EnginePort } from '../../src/ports/EnginePort';
 import type { OutputPorts } from '../../src/adapters/outputs/outputPorts';
@@ -55,6 +57,7 @@ const noopEnginePort: EnginePort = {
     /* noop */
   },
   restartZoneForEqualizer: () => false,
+  inlineCrossfade: async () => false,
 };
 
 export const noopAirplayGroupController: AirplayGroupCoordinator = {
@@ -64,8 +67,7 @@ export const noopAirplayGroupController: AirplayGroupCoordinator = {
   unregister: () => {
     /* noop */
   },
-  getBaseStartOffsetMs: () => 0,
-  ensureStartNtp: () => BigInt(0),
+  startSyncedGroup: async () => false,
   tryJoinLeader: async () => false,
   syncGroupMembers: async () => {
     /* noop */
@@ -124,6 +126,7 @@ export const noopSendspinGroupController: SendspinGroupCoordinator = {
   unregister: () => {
     /* noop */
   },
+  getMemberDeclaredFormats: () => [],
   notifyStreamStart: () => {
     /* noop */
   },
@@ -165,6 +168,9 @@ const noopZoneManager: OutputPorts['zoneManager'] = {
   handleCommand: () => {
     /* noop */
   },
+  applyPatch: () => {
+    /* noop */
+  },
   queue: {
     setShuffle: () => {},
     setPendingShuffle: () => {},
@@ -204,6 +210,8 @@ export const noopSqueezeliteGroupController: SqueezeliteGroupCoordinator = {
     leaderZoneId: zoneId,
     expectedCount: 1,
   }),
+  orchestrateGroupEnqueue: async () => false,
+  isZoneResyncing: () => false,
   orchestrateGroupPlayback: async () => false,
   orchestrateGroupPause: async () => false,
   orchestrateGroupResume: async () => false,
@@ -215,6 +223,32 @@ export const noopSqueezeliteGroupController: SqueezeliteGroupCoordinator = {
     /* noop */
   },
 };
+
+export const noopGroupTracker: GroupTrackerPort = {
+  upsertGroup: (input) => ({ record: { ...input, updatedAt: 0 }, changed: false }),
+  removeGroupByLeader: () => false,
+  getGroupByZone: () => undefined,
+  getGroupByLeader: () => undefined,
+  getGroupByExternalId: () => undefined,
+  onGroupChanged: () => () => {
+    /* noop */
+  },
+  setJoinedLeader: () => {
+    /* noop */
+  },
+  getJoinedLeader: () => null,
+  clearJoinedLeader: () => {
+    /* noop */
+  },
+};
+
+// Real service, fed by an analyzer that swallows everything: the fake needs the
+// class's own behaviour (subscribe bookkeeping), not a stubbed shape.
+export const noopAudioAnalysis = new AudioAnalysisService(() => ({
+  push: () => {
+    /* noop */
+  },
+}));
 
 export const noopOutputHandlers = {
   onQueueUpdate: () => {
@@ -240,6 +274,8 @@ export function makeOutputPortsFake(
   const squeezeliteCore = new SqueezeliteCore(configPort);
   return {
     engine: noopEnginePort,
+    audioAnalysis: noopAudioAnalysis,
+    groupTracker: noopGroupTracker,
     audioManager: noopAudioManager,
     zoneAudioPrefs: noopZoneAudioPrefs,
     outputStreamEvents: noopOutputStreamEventsPort,

@@ -43,7 +43,7 @@ test('the neutral `kind` field never reaches a Loxone listing', () => {
     kind: 'album',
     audiopath: 'applemusic:p0gngd:album:1',
   } as ContentFolderItem;
-  const [projected] = stripNeutralItemFields([{ ...item }]) as Array<Record<string, unknown>>;
+  const [projected] = stripNeutralItemFields([{ ...item }]) as unknown as Array<Record<string, unknown>>;
   assert.ok(projected, 'the item survives the projection');
   assert.ok(!('kind' in projected!), 'kind is ours, not theirs');
   assert.equal(projected!.type, 7, 'the Loxone type stays');

@@ -46,7 +46,7 @@ function makeSession(state: PlaybackSession['state'], hasSource = true): Playbac
   return {
     state,
     playbackSource: hasSource ? ({ kind: 'pipe', path: 'x' } as never) : undefined,
-  } as PlaybackSession;
+  } as unknown as PlaybackSession;
 }
 
 test('EqualizerRestartScheduler triggers restart after debounce when session is playing', async () => {
@@ -158,7 +158,7 @@ function makeTrackSession(elapsed: number, duration: number): PlaybackSession {
     playbackSource: { kind: 'file', path: '/music/track.flac' } as never,
     elapsed,
     duration,
-  } as PlaybackSession;
+  } as unknown as PlaybackSession;
 }
 
 test('a track restart resumes at the current position instead of rewinding', async () => {
@@ -182,9 +182,9 @@ test('live and unpositionable sources restart without a seek', async () => {
     playbackSource: { kind: 'url', url: 'http://radio/stream' } as never,
     elapsed: 900,
     duration: 0,
-  } as PlaybackSession);
+  } as unknown as PlaybackSession);
   // A live pipe (librespot) simply continues; it has no offset at all.
-  fakes.sessions.set(2, { ...makeSession('playing'), elapsed: 30, duration: 200 } as PlaybackSession);
+  fakes.sessions.set(2, { ...makeSession('playing'), elapsed: 30, duration: 200 } as unknown as PlaybackSession);
   fakes.hasSession.add(1);
   fakes.hasSession.add(2);
 

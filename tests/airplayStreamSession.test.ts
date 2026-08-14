@@ -42,6 +42,7 @@ test('airplay stream session uses zone engine stream before local fallback', () 
       /* noop */
     },
     restartZoneForEqualizer: () => false,
+    inlineCrossfade: async () => false,
   };
 
   const session = new AirplayStreamSession(6, engine);

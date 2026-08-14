@@ -76,7 +76,7 @@ test('noise: transport traffic flows both ways and rejects tampering', () => {
   assert.equal(initiator.decrypt(toServer).toString('utf8'), 'client says hello');
 
   const tampered = initiator.encrypt(Buffer.from('trust me'));
-  tampered[tampered.length - 1] ^= 0xff;
+  tampered[tampered.length - 1] = tampered[tampered.length - 1]! ^ 0xff;
   assert.throws(() => responder.decrypt(tampered), /authenticate/);
 });
 
@@ -149,13 +149,13 @@ test('noise: the transport carries text and typed binary through fragmentation',
 
   const textFrames = server.encodeText('{"type":"server/time"}');
   assert.equal(textFrames.length, 1);
-  const decodedText = client.decode(textFrames[0]);
+  const decodedText = client.decode(textFrames[0]!);
   assert.deepEqual(decodedText, { kind: 'text', data: '{"type":"server/time"}' });
 
   // An audio chunk keeps its role type byte, which doubles as the transport's.
   const chunk = Buffer.concat([Buffer.from([4]), Buffer.alloc(32, 0xab)]);
   const binaryFrames = server.encodeBinary(chunk);
-  const decodedBinary = client.decode(binaryFrames[0]);
+  const decodedBinary = client.decode(binaryFrames[0]!);
   assert.equal(decodedBinary?.kind, 'binary');
   assert.deepEqual(decodedBinary?.kind === 'binary' ? decodedBinary.data : null, chunk);
 
@@ -183,7 +183,7 @@ test('noise: fragmentation never exceeds the Noise transport limit', () => {
   }
   // The reassembled body must equal the original, header byte included.
   const body = Buffer.concat([
-    Buffer.from([frames[0][1]]),
+    Buffer.from([frames[0]![1]!]),
     ...frames.map((f, i) => (i === 0 ? f.subarray(2) : f.subarray(1))),
   ]);
   assert.deepEqual(body, big);
@@ -233,9 +233,9 @@ test('noise: the server greets first on an encrypted connection', async () => {
 
   // server/init and Noise message 1 go out back-to-back, both in the clear.
   assert.equal(sent.length, 2, `expected server/init + message 1, got ${sent.length}`);
-  const serverInit = String(sent[0].data);
+  const serverInit = String(sent[0]!.data);
   assert.equal(JSON.parse(serverInit).payload.server_id, identity.peerId);
-  const message1 = JSON.parse(String(sent[1].data));
+  const message1 = JSON.parse(String(sent[1]!.data));
   assert.equal(message1.type, 'noise/handshake');
 
   const responder = NoiseSession.asResponder({
@@ -256,9 +256,9 @@ test('noise: the server greets first on an encrypted connection', async () => {
 
   const afterHandshake = sent.slice(2);
   assert.equal(afterHandshake.length, 1, 'the server owes exactly one frame after the handshake');
-  assert.ok(afterHandshake[0].binary, 'post-handshake frames must be encrypted binary');
+  assert.ok(afterHandshake[0]!.binary, 'post-handshake frames must be encrypted binary');
   const transport = new NoiseTransport(responder);
-  const decoded = transport.decode(afterHandshake[0].data as Buffer);
+  const decoded = transport.decode(afterHandshake[0]!.data as Buffer);
   assert.equal(decoded?.kind, 'text');
   const hello = JSON.parse(decoded?.kind === 'text' ? decoded.data : '{}');
   assert.equal(hello.type, 'server/hello');

@@ -39,35 +39,35 @@ test('audio/<zoneId>/wecker forwards to alertsManager with single zone', async (
   const { handlers, calls } = buildHarness();
   await handlers.audioZoneAlert('audio/12/wecker');
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].leaderId, 12);
-  assert.equal(calls[0].type, 'wecker');
-  assert.deepEqual(calls[0].zones, [12]);
-  assert.equal(calls[0].volumeOverride, undefined);
+  assert.equal(calls[0]!.leaderId, 12);
+  assert.equal(calls[0]!.type, 'wecker');
+  assert.deepEqual(calls[0]!.zones, [12]);
+  assert.equal(calls[0]!.volumeOverride, undefined);
 });
 
 test('audio/<zoneId>/firealarm/<volume> passes the URL volume override', async () => {
   const { handlers, calls } = buildHarness();
   await handlers.audioZoneAlert('audio/3/firealarm/65');
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].type, 'firealarm');
-  assert.equal(calls[0].volumeOverride, 65);
+  assert.equal(calls[0]!.type, 'firealarm');
+  assert.equal(calls[0]!.volumeOverride, 65);
 });
 
 test('audio/<zoneId>/tts/<lang|text>/<volume> parses lang, text and volume', async () => {
   const { handlers, calls } = buildHarness();
   await handlers.audioZoneTts('audio/5/tts/de%7Challo+welt/40');
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].leaderId, 5);
-  assert.equal(calls[0].type, 'tts');
-  assert.equal(calls[0].ttsLang, 'de');
-  assert.equal(calls[0].ttsText, 'hallo welt');
-  assert.equal(calls[0].volumeOverride, 40);
+  assert.equal(calls[0]!.leaderId, 5);
+  assert.equal(calls[0]!.type, 'tts');
+  assert.equal(calls[0]!.ttsLang, 'de');
+  assert.equal(calls[0]!.ttsText, 'hallo welt');
+  assert.equal(calls[0]!.volumeOverride, 40);
 });
 
 test('audio/<zoneId>/tts without language defaults lang to undefined', async () => {
   const { handlers, calls } = buildHarness();
   await handlers.audioZoneTts('audio/5/tts/hello/30');
-  assert.equal(calls[0].ttsLang, undefined);
-  assert.equal(calls[0].ttsText, 'hello');
-  assert.equal(calls[0].volumeOverride, 30);
+  assert.equal(calls[0]!.ttsLang, undefined);
+  assert.equal(calls[0]!.ttsText, 'hello');
+  assert.equal(calls[0]!.volumeOverride, 30);
 });

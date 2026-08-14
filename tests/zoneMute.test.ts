@@ -212,7 +212,8 @@ test('MQTT writes mute with the same verb the HTTP route uses', () => {
     commands: [{ zoneId: 3, command: 'mute', payload: '1' }],
   });
   // An empty payload toggles: a wall button wired to a topic has no value to send.
-  assert.deepEqual(set('').kind === 'commands' && set('').commands, [
+  const toggled = set('');
+  assert.deepEqual(toggled.kind === 'commands' && toggled.commands, [
     { zoneId: 3, command: 'mute', payload: 'toggle' },
   ]);
   assert.equal(set('perhaps').kind, 'error');

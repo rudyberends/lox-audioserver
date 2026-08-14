@@ -19,10 +19,12 @@ test('a scalar write becomes the same command the HTTP verb produces', () => {
     zoneId: 3,
     commands: [{ zoneId: 3, command: 'volume', payload: '40' }],
   });
-  assert.deepEqual(set('state', 'pause').kind === 'commands' && set('state', 'pause').commands, [
+  const pause = set('state', 'pause');
+  assert.deepEqual(pause.kind === 'commands' && pause.commands, [
     { zoneId: 3, command: 'pause' },
   ]);
-  assert.deepEqual(set('repeat', 'all').kind === 'commands' && set('repeat', 'all').commands, [
+  const repeatAll = set('repeat', 'all');
+  assert.deepEqual(repeatAll.kind === 'commands' && repeatAll.commands, [
     { zoneId: 3, command: 'repeat', payload: 'all' },
   ]);
 });

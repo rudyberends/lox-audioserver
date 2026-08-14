@@ -42,7 +42,7 @@ function collectImports(content: string): string[] {
     pattern.lastIndex = 0;
     let match: RegExpExecArray | null = pattern.exec(content);
     while (match) {
-      specs.push(match[1]);
+      specs.push(match[1]!);
       match = pattern.exec(content);
     }
   }

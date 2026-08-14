@@ -192,20 +192,20 @@ function harness(): Harness {
       zoneId === 3
         ? { zoneId, items: favItems.slice(start, start + limit), start, total: favItems.length }
         : null,
-    addFavorite: async (zoneId, name, uri) => {
+    addFavorite: async (_zoneId, name, uri) => {
       libOps.push(`addFav:${name || '(auto)'}:${uri}`);
       return { id: 9, name: name || 'Auto', source: uri, coverUrl: '' };
     },
-    renameFavorite: async (zoneId, id, name) => {
+    renameFavorite: async (_zoneId, id, name) => {
       libOps.push(`renameFav:${id}:${name}`);
     },
-    removeFavorite: async (zoneId, id) => {
+    removeFavorite: async (_zoneId, id) => {
       libOps.push(`removeFav:${id}`);
     },
-    reorderFavorites: async (zoneId, ids) => {
+    reorderFavorites: async (_zoneId, ids) => {
       libOps.push(`reorderFav:${ids.join(',')}`);
     },
-    playFavorite: async (zoneId, id) => {
+    playFavorite: async (_zoneId, id) => {
       libOps.push(`playFav:${id}`);
       return favItems.some((f) => f.id === id);
     },
@@ -239,21 +239,21 @@ function harness(): Harness {
             currentIndex: 0,
           }
         : null,
-    queueAppend: async (zoneId, uri) => {
+    queueAppend: async (_zoneId, uri) => {
       queueOps.push(`append:${uri}`);
     },
-    queueInsertNext: async (zoneId, uri) => {
+    queueInsertNext: async (_zoneId, uri) => {
       queueOps.push(`next:${uri}`);
     },
-    queuePlay: (zoneId, id) => {
+    queuePlay: (_zoneId, id) => {
       queueOps.push(`play:${id}`);
       return queueItems.some((i) => i.id === id);
     },
-    queueMove: (zoneId, id, before) => {
+    queueMove: (_zoneId, id, before) => {
       queueOps.push(`move:${id}>${before ?? 'end'}`);
       return queueItems.some((i) => i.id === id);
     },
-    queueRemove: (zoneId, id) => {
+    queueRemove: (_zoneId, id) => {
       queueOps.push(`remove:${id}`);
     },
     queueClear: () => {
@@ -332,6 +332,18 @@ function harness(): Harness {
     getLifecycle: () => lifecycle.snapshot(),
     serverVersion: '4.0.0-test',
     startedAt: Date.now() - 5000,
+    // Surfaces these tests never call, but the port requires: present so a future
+    // signature change here shows up as a compile error rather than a silent gap.
+    getWaveform: () => null,
+    describeItem: async () => null,
+    search: async (request: { query: string }) => ({ query: request.query, items: {}, services: [] }),
+    listPlaylists: async () => ({ items: [], total: 0 }),
+    createPlaylist: async (name: string) => ({ id: 'pl-1', name, tracks: 0 }),
+    renamePlaylist: async () => null,
+    deletePlaylist: async () => false,
+    addPlaylistItem: async () => false,
+    removePlaylistItem: async () => false,
+    movePlaylistItem: async () => false,
   });
   browseAsks = [];
   return { handler, hub, commands, powers, plays, handoffs, states, browseAsks };
@@ -627,7 +639,7 @@ test('the analysis stream announces its subscription and serializes spectrum bin
     (res) => {
       assert.equal(res.statusCode, 200);
       assert.match(String(res.headers['content-type']), /text\/event-stream/);
-      const ready = JSON.parse(res.body.split('data: ')[1].split('\n')[0]);
+      const ready = JSON.parse(res.body.split('data: ')[1]!.split('\n')[0]!);
       /*
        * The geometry is part of the announcement, not something a client mirrors by hand: the u16
        * amplitudes mean nothing without the dB window they span, and the bins mean nothing without
@@ -663,7 +675,7 @@ test('the analysis stream announces its subscription and serializes spectrum bin
       const messages = res.body
         .split('data: ')
         .slice(1)
-        .map((message) => JSON.parse(message.split('\n')[0]));
+        .map((message) => JSON.parse(message.split('\n')[0]!));
       assert.deepEqual(messages[1], { type: 'spectrum', bins: [1, 2, 3], timestampUs: 123 });
     },
   );

@@ -116,6 +116,46 @@ class FakeInputsPort implements InputsPort {
     /* noop */
   }
 
+  public configureDlna(): void {
+    /* noop */
+  }
+
+  public syncDlnaZones(): void {
+    /* noop */
+  }
+
+  public shutdownDlna(): void {
+    /* noop */
+  }
+
+  public configureBluetooth(): void {
+    /* noop */
+  }
+
+  public syncBluetoothZones(): void {
+    /* noop */
+  }
+
+  public shutdownBluetooth(): void {
+    /* noop */
+  }
+
+  public async prefetchPlaybackSourceForUri(): Promise<void> {
+    /* noop */
+  }
+
+  public async startCrossfadeStream(): Promise<null> {
+    return null;
+  }
+
+  public stopCrossfadeStream(): void {
+    /* noop */
+  }
+
+  public releaseCrossfadeStream(): void {
+    /* noop */
+  }
+
   public configureSpotify(controller: SpotifyConnectController): void {
     this.spotifyController = controller;
   }
@@ -454,6 +494,7 @@ const noopContentPort: ContentPort = {
     byBridgeId: new Map(),
     accountCountByService: new Map(),
   }),
+  resolveFolder: async () => null,
   resolveMetadata: async () => null,
   resolvePlaybackSource: async () => ({ playbackSource: null, provider: 'library' }),
   configureAppleMusic: () => {},
@@ -903,17 +944,17 @@ test('output URI mismatch is ignored before first audio chunk for local queue', 
   ctx.queue.authority = 'local';
   ctx.inputMode = 'queue';
   const player = ctx.player as unknown as FakePlayer;
-  player.playUri(items[0].audiopath, {
-    title: items[0].title,
-    artist: items[0].artist,
-    album: items[0].album,
-    audiopath: items[0].audiopath,
-    duration: items[0].duration,
+  player.playUri(items[0]!.audiopath, {
+    title: items[0]!.title,
+    artist: items[0]!.artist,
+    album: items[0]!.album,
+    audiopath: items[0]!.audiopath,
+    duration: items[0]!.duration,
   });
 
   coordinator.updateOutputState(ctx.id, {
     status: 'playing',
-    uri: items[1].audiopath,
+    uri: items[1]!.audiopath,
   });
 
   assert.equal(ctx.queueController.currentIndex(), 0);
@@ -926,7 +967,7 @@ test('output URI mismatch is ignored before first audio chunk for local queue', 
 
   coordinator.updateOutputState(ctx.id, {
     status: 'playing',
-    uri: items[1].audiopath,
+    uri: items[1]!.audiopath,
   });
 
   assert.equal(ctx.queueController.currentIndex(), 1);
@@ -1257,7 +1298,7 @@ test('playContent ignores MA serviceplay when already playing target', async () 
 
 test('player started dispatches outputs, volume, and patch in order', () => {
   const trace: string[] = [];
-  const { coordinator, ctx, patches, outputRouter } = createHarness({ trace });
+  const { ctx, patches, outputRouter } = createHarness({ trace });
   ctx.state.volume = 42;
   ctx.queueController.setItems([makeQueueItem({ title: 'Track', audiopath: 'library://one', unique_id: 'id-1' })], 0);
   const session = {
@@ -1276,7 +1317,7 @@ test('player started dispatches outputs, volume, and patch in order', () => {
 });
 
 test('player started keeps current volume when already active', () => {
-  const { coordinator, ctx, patches, outputRouter } = createHarness();
+  const { ctx, patches, outputRouter } = createHarness();
   ctx.state.mode = 'pause';
   ctx.state.volume = 42;
 
@@ -1288,7 +1329,7 @@ test('player started keeps current volume when already active', () => {
 });
 
 test('player started preserves alert volume even when zone was stopped', () => {
-  const { coordinator, ctx, patches, outputRouter } = createHarness();
+  const { ctx, patches, outputRouter } = createHarness();
   // AlertsCoordinator sets state.volume to the per-event slider value before playUri starts.
   ctx.state.mode = 'stop';
   ctx.state.volume = 66;
@@ -1308,7 +1349,7 @@ test('player started preserves alert volume even when zone was stopped', () => {
 
 test('player resumed dispatches outputs before patch', () => {
   const trace: string[] = [];
-  const { coordinator, ctx, patches } = createHarness({ trace });
+  const { ctx, patches } = createHarness({ trace });
 
   const player = ctx.player as unknown as EventEmitter;
   player.emit('resumed', null);
@@ -1320,7 +1361,7 @@ test('player resumed dispatches outputs before patch', () => {
 
 test('player paused dispatches outputs before patch', () => {
   const trace: string[] = [];
-  const { coordinator, ctx, patches } = createHarness({ trace });
+  const { ctx, patches } = createHarness({ trace });
 
   const player = ctx.player as unknown as EventEmitter;
   player.emit('paused', null);
@@ -1332,7 +1373,7 @@ test('player paused dispatches outputs before patch', () => {
 
 test('player stopped dispatches outputs before patch', () => {
   const trace: string[] = [];
-  const { coordinator, ctx, patches } = createHarness({ trace });
+  const { ctx, patches } = createHarness({ trace });
 
   const player = ctx.player as unknown as EventEmitter;
   player.emit('stopped', null);
@@ -1343,7 +1384,7 @@ test('player stopped dispatches outputs before patch', () => {
 });
 
 test('player position forces radio time/duration to zero', () => {
-  const { coordinator, ctx, patches } = createHarness();
+  const { ctx, patches } = createHarness();
   ctx.state.audiopath = 'tunein:station:abc';
   ctx.state.audiotype = 1 as any;
   ctx.state.time = 5;
@@ -1358,7 +1399,7 @@ test('player position forces radio time/duration to zero', () => {
 });
 
 test('player position throttles identical updates', () => {
-  const { coordinator, ctx, patches } = createHarness();
+  const { ctx, patches } = createHarness();
   ctx.state.audiopath = 'library://track/one';
   ctx.state.duration = 100;
   const now = Date.now();

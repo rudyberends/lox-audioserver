@@ -5,6 +5,12 @@ import { ZoneRepository } from '../src/application/zones/ZoneRepository';
 import { buildInitialState } from '../src/application/zones/helpers/stateHelpers';
 import type { ZoneContext } from '../src/application/zones/internal/zoneTypes';
 import type { ZoneConfig } from '../src/domain/config/types';
+import type { ConfigPort } from '../src/ports/ConfigPort';
+
+// The coordinator reads exactly one thing off config: the host it builds alert URLs from.
+const alertConfigPort = {
+  getSystemConfig: () => ({ audioserver: { ip: '127.0.0.1' } }),
+} as unknown as ConfigPort;
 
 test('startAlert applies alert volume after switching to the alert source', async () => {
   const zone: ZoneConfig = {
@@ -29,7 +35,9 @@ test('startAlert applies alert volume after switching to the alert source', asyn
   const playerVolumes: number[] = [];
   const inputModes: Array<ZoneContext['inputMode']> = [];
   const callOrder: string[] = [];
-  let playedMetadata: Record<string, unknown> | null = null;
+  // Held on an object: TS narrows a `let` to its initialiser here, because the
+  // assignment below happens inside a callback it cannot see run.
+  const played: { metadata: Record<string, unknown> | null } = { metadata: null };
   const ctx = {
     id: zone.id,
     name: zone.name,
@@ -58,7 +66,7 @@ test('startAlert applies alert volume after switching to the alert source', asyn
         callOrder.push('setVolume');
       },
       playUri: (_uri: string, metadata: Record<string, unknown>) => {
-        playedMetadata = metadata;
+        played.metadata = metadata;
         callOrder.push('playUri');
         return {} as any;
       },
@@ -79,6 +87,7 @@ test('startAlert applies alert volume after switching to the alert source', asyn
 
   const coordinator = new AlertsCoordinator({
     zones: zoneRepo,
+    configPort: alertConfigPort,
     playbackCoordinator: {
       setInputMode: (_ctx: ZoneContext, mode: ZoneContext['inputMode']) => {
         inputModes.push(mode);
@@ -126,7 +135,7 @@ test('startAlert applies alert volume after switching to the alert source', asyn
   assert.deepEqual(callOrder, ['playUri', 'setVolume']);
   // Alert metadata must be flagged so the Sonos output omits the DIDL duration and streams
   // the clip open-ended instead of self-truncating the tail (issues #262/#276/#279).
-  assert.equal(playedMetadata?.isAlert, true);
+  assert.equal(played.metadata?.isAlert, true);
 });
 
 test('startAlert stop timer waits for the playback pre-delay so the tail is not clipped (#293)', async () => {
@@ -177,6 +186,7 @@ test('startAlert stop timer waits for the playback pre-delay so the tail is not 
 
   const coordinator = new AlertsCoordinator({
     zones: zoneRepo,
+    configPort: alertConfigPort,
     playbackCoordinator: {
       setInputMode: (_ctx: ZoneContext, mode: ZoneContext['inputMode']) => {
         _ctx.inputMode = mode;
@@ -201,7 +211,7 @@ test('startAlert stop timer waits for the playback pre-delay so the tail is not 
   // Capture the scheduled stop-timer delay without actually firing it.
   const delays: number[] = [];
   const realSetTimeout = global.setTimeout;
-  (global as any).setTimeout = (fn: (...a: unknown[]) => void, ms?: number, ...rest: unknown[]) => {
+  (global as any).setTimeout = (_fn: (...a: unknown[]) => void, ms?: number, ...rest: unknown[]) => {
     delays.push(ms ?? 0);
     const handle = realSetTimeout(() => {}, 1_000_000, ...(rest as []));
     handle.unref?.();
@@ -292,6 +302,7 @@ test('alert restore settles to stop when playback cannot resume (releases power-
 
   const coordinator = new AlertsCoordinator({
     zones: zoneRepo,
+    configPort: alertConfigPort,
     playbackCoordinator: {
       setInputMode: (_ctx: ZoneContext, mode: ZoneContext['inputMode']) => {
         _ctx.inputMode = mode;

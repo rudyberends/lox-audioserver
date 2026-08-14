@@ -234,7 +234,7 @@ test("Spotify's root reaches Loxone under the app's slot ids", async () => {
       // from either source the editorial sections are left out rather than published as tiles
       // that open onto nothing; Podcasts stays, because an unanswerable probe means "unknown".
       account: { id: 'rudy', refreshToken: 'stub' } as never,
-      persistAccount: async () => {},
+      persistAccount: async () => null,
     });
     const root = await provider.getFolder('root', 0, 50);
     assert.deepEqual(

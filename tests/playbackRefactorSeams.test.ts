@@ -36,6 +36,7 @@ const noopContentPort: ContentPort = {
     byBridgeId: new Map(),
     accountCountByService: new Map(),
   }),
+  resolveFolder: async () => null,
   resolveMetadata: async () => null,
   resolvePlaybackSource: async () => ({ playbackSource: null, provider: 'library' }),
   configureAppleMusic: () => {},

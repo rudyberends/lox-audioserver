@@ -117,7 +117,7 @@ test('visualizer: spectrum concentrates energy in the tone band', () => {
   }));
   dsp.push(sineMono16(1000, 0.6, WINDOW), 0);
   assert.ok(bins, 'spectrum frame emitted');
-  const out = bins!;
+  const out: Uint16Array = bins;
 
   let argmax = 0;
   for (let i = 1; i < out.length; i += 1) if (out[i]! > out[argmax]!) argmax = i;
@@ -353,8 +353,12 @@ function contrast(a: Rgb, b: Rgb): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-async function solid(colorRgbaHex: number): Promise<Awaited<ReturnType<typeof Jimp.read>>> {
-  return new Jimp({ width: 16, height: 16, color: colorRgbaHex });
+// A constructed Jimp and the one Jimp.read() resolves to differ in their format
+// generics; every caller here wants the read() shape, so convert once.
+type JimpImage = Awaited<ReturnType<typeof Jimp.read>>;
+
+async function solid(colorRgbaHex: number): Promise<JimpImage> {
+  return new Jimp({ width: 16, height: 16, color: colorRgbaHex }) as unknown as JimpImage;
 }
 
 test('palette: on/background pairs satisfy the WCAG 4.5:1 contrast invariant', async () => {

@@ -35,7 +35,7 @@ test('clearing the configuration drops sections the defaults do not name', async
   );
   assert.ok(clear, 'the clear route is registered');
 
-  await clear!.handler({} as never, {} as never, [] as never);
+  await clear!.handler({} as never, {} as never, [] as never, '/config/clear');
 
   assert.equal(stored.sonnClients, undefined, 'a wiped speaker does not come back');
   assert.equal(stored.somethingAddedLater, undefined, 'nor does any other section');

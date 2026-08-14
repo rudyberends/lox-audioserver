@@ -52,7 +52,7 @@ function fetchInfo(authenticated: boolean): { status?: number; body?: any } {
 
   const route = buildMiscRoutes(deps).find((r) => r.pattern.source === /^\/info$/.source);
   assert.ok(route, '/info route exists');
-  route!.handler({} as IncomingMessage, {} as ServerResponse, [] as any);
+  route!.handler({} as IncomingMessage, {} as ServerResponse, [] as any, '/info');
   return sent;
 }
 

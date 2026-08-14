@@ -60,7 +60,7 @@ test('bluetooth input listens only for zones that name a device', () => {
 test('a phone that starts playing takes the zone, and stopping gives it back', () => {
   const { service, registered, calls } = buildService();
   service.syncZones([zone(7, { enabled: true, deviceId: 'sonn-hal' })]);
-  const hooks = registered[0].hooks;
+  const hooks = registered[0]!.hooks;
 
   hooks.onSourceStreamStart?.(null as never, START);
   hooks.onSourceAudio?.(null as never, { data: Buffer.alloc(64) } as never);
@@ -72,7 +72,7 @@ test('a phone that starts playing takes the zone, and stopping gives it back', (
 test('the phone\'s own clock decides the position and the length', () => {
   const { service, registered, calls } = buildService();
   service.syncZones([zone(7, { enabled: true, deviceId: 'sonn-hal' })]);
-  registered[0].hooks.onSourceStreamStart?.(null as never, START);
+  registered[0]!.hooks.onSourceStreamStart?.(null as never, START);
   calls.length = 0;
 
   // A phone reports where it is on every poll. Counting elapsed time here instead would keep
@@ -97,7 +97,7 @@ test('the phone\'s own clock decides the position and the length', () => {
 test('what the phone says it is playing reaches the zone once per change', () => {
   const { service, registered, calls } = buildService();
   service.syncZones([zone(7, { enabled: true, deviceId: 'sonn-hal' })]);
-  registered[0].hooks.onSourceStreamStart?.(null as never, START);
+  registered[0]!.hooks.onSourceStreamStart?.(null as never, START);
   calls.length = 0;
 
   service.updateNowPlaying('sonn-hal', { title: 'Hyperballad', artist: 'Björk' });
@@ -121,11 +121,11 @@ test('metadata for a phone that is not playing here is ignored', () => {
 test('taking bluetooth away from a zone stops the music and releases the hooks', () => {
   const { service, registered, calls } = buildService();
   service.syncZones([zone(7, { enabled: true, deviceId: 'sonn-hal' })]);
-  registered[0].hooks.onSourceStreamStart?.(null as never, START);
+  registered[0]!.hooks.onSourceStreamStart?.(null as never, START);
   calls.length = 0;
 
   service.syncZones([zone(7, { enabled: false, deviceId: 'sonn-hal' })]);
 
   assert.deepEqual(calls, ['stop:7']);
-  assert.equal(registered[0].stopped, true);
+  assert.equal(registered[0]!.stopped, true);
 });

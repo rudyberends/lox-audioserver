@@ -1,3 +1,4 @@
+import { zoneSessionKey } from '../src/ports/types/SessionKey';
 import 'tsconfig-paths/register';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -167,6 +168,7 @@ import type { EnginePort, EngineSessionStats } from '../src/ports/EnginePort';
 import type { ZoneManagerFacade } from '../src/application/zones/createZoneManager';
 import { createRecentsManager } from '../src/application/zones/recents/recentsManager';
 import type { GroupManager } from '../src/application/groups/groupManager';
+import { buildBridgeRegistry } from '../src/domain/zones/bridgeIdentity';
 
 type ZoneHarness = {
   tempDir: string;
@@ -183,6 +185,8 @@ type ZoneHarness = {
 
 const noopContentPort: ContentPort = {
   getDefaultSpotifyAccountId: () => null,
+  getBridgeRegistry: () => buildBridgeRegistry([]),
+  resolveFolder: async () => null,
   resolveMetadata: async () => null,
   resolvePlaybackSource: async () => ({ playbackSource: null, provider: 'library' }),
   configureAppleMusic: () => {},
@@ -293,16 +297,20 @@ async function createZoneHarness(): Promise<ZoneHarness> {
       }
       airplayInputService.stopActiveSession(zoneId, reason);
     };
+    const noopPlayerRegistry = { getPlayer: () => null };
+    const spotifyStreamProxyModule = require('../src/adapters/inputs/spotify/spotifyStreamProxyService') as typeof import('../src/adapters/inputs/spotify/spotifyStreamProxyService');
     const spotifyInputService = new spotifyInputServiceModule.SpotifyInputService(
       outputHandlersProxy.onOutputError,
       configPort,
       spotifyManagerProvider,
       spotifyDeviceRegistry,
       stopAirplaySession,
+      noopPlayerRegistry,
+      new spotifyStreamProxyModule.SpotifyStreamProxyService(),
     );
     airplayInputService = new airplayInputServiceModule.AirplayInputService((zoneId, reason) => {
       spotifyInputService.stopActiveSession(zoneId, reason);
-    });
+    }, noopPlayerRegistry);
     if (!airplayInputService) {
       throw new Error('airplay input service not initialized');
     }
@@ -369,6 +377,7 @@ async function createZoneHarness(): Promise<ZoneHarness> {
     lineInMetadataService.initOnce({ zoneManager, configPort });
     const groupManager = groupManagerModule.createGroupManager({
       notifier: noopNotifier,
+      configPort,
       airplayGroup: airplayGroupController,
     });
     const groupTracker = require('../src/application/groups/groupTracker') as typeof import('../src/application/groups/groupTracker');
@@ -493,7 +502,7 @@ class FakeProcess extends EventEmitter {
     return true;
   }
 
-  public removeAllListeners(): this {
+  public override removeAllListeners(): this {
     super.removeAllListeners();
     return this;
   }
@@ -518,7 +527,7 @@ const { audioOutputSettings } = require('../src/engine/audioFormat') as typeof i
 
 test('audio session stats report zero subscribers', () => {
   const session = new AudioSession(
-    1,
+    zoneSessionKey(1),
     { kind: 'file', path: '/tmp/fake.wav' },
     'mp3',
     () => undefined,
@@ -534,7 +543,7 @@ test('pipe source listeners are detached after stop', () => {
   const baseErrorListeners = source.listenerCount('error');
   spawnImpl = () => new FakeProcess(true);
   const session = new AudioSession(
-    1,
+    zoneSessionKey(1),
     { kind: 'pipe', path: '/tmp/fake.pcm', stream: source, format: 's24le' },
     'pcm',
     () => undefined,
@@ -556,7 +565,7 @@ test('ffmpeg stop issues SIGKILL after timeout', async () => {
     return proc;
   };
   const session = new AudioSession(
-    1,
+    zoneSessionKey(1),
     { kind: 'pipe', path: '/tmp/fake.pcm', stream: source, format: 's24le' },
     'pcm',
     () => undefined,
@@ -576,7 +585,13 @@ test('audio manager active local session detection ignores stale no-subscriber s
   let hasEngineSession = true;
   const stats: EngineSessionStats[] = [
     {
+      startedAt: 0,
       profile: 'mp3',
+      sampleRate: 44100,
+      channels: 2,
+      pcmBitDepth: 16,
+      bitPerfect: false,
+      dspApplied: false,
       bps: null,
       bufferedBytes: 0,
       totalBytes: 0,
@@ -609,6 +624,7 @@ test('audio manager active local session detection ignores stale no-subscriber s
     getSessionStats: () => stats,
     setSessionTerminationHandler: () => {},
     restartZoneForEqualizer: () => false,
+    inlineCrossfade: async () => false,
   };
   const { AudioManager } = require('../src/application/playback/audioManager') as typeof import('../src/application/playback/audioManager');
   const { ZoneAudioPreferences } = require('../src/application/playback/ZoneAudioPreferences') as typeof import('../src/application/playback/ZoneAudioPreferences');
@@ -632,10 +648,10 @@ test('audio manager active local session detection ignores stale no-subscriber s
   session.startedAt = Date.now() - 10_000;
   assert.equal(manager.hasActiveLocalSession(1), false);
 
-  stats[0].subscribers = 1;
+  stats[0]!.subscribers = 1;
   assert.equal(manager.hasActiveLocalSession(1), true);
 
-  stats[0].subscribers = 0;
+  stats[0]!.subscribers = 0;
   session.playbackStartedAt = Date.now() - 1000;
   session.startedAt = Date.now() - 1000;
   assert.equal(manager.hasActiveLocalSession(1), true);
@@ -670,6 +686,7 @@ test('spotify pipe track change after pause restarts engine instead of continuin
     getSessionStats: () => [],
     setSessionTerminationHandler: () => {},
     restartZoneForEqualizer: () => false,
+    inlineCrossfade: async () => false,
   };
   const { AudioManager } = require('../src/application/playback/audioManager') as typeof import('../src/application/playback/audioManager');
   const { ZoneAudioPreferences } = require('../src/application/playback/ZoneAudioPreferences') as typeof import('../src/application/playback/ZoneAudioPreferences');
@@ -731,6 +748,7 @@ test('spotify explicit serviceplay restarts same pipe when request uri changed b
     getSessionStats: () => [],
     setSessionTerminationHandler: () => {},
     restartZoneForEqualizer: () => false,
+    inlineCrossfade: async () => false,
   };
   const { AudioManager } = require('../src/application/playback/audioManager') as typeof import('../src/application/playback/audioManager');
   const { ZoneAudioPreferences } = require('../src/application/playback/ZoneAudioPreferences') as typeof import('../src/application/playback/ZoneAudioPreferences');
@@ -784,6 +802,7 @@ test('applyZonePatch merges fields', () => {
     audiopath: 'spotify:track:old',
     audiotype: 0,
     clientState: 'on',
+    muted: false,
     coverurl: '',
     duration: 120,
     eq: [0,0,0,0,0,0,0,0,0,0],
@@ -815,6 +834,7 @@ test('applyZonePatch does not mutate inputs', () => {
     audiopath: '',
     audiotype: 0,
     clientState: 'on',
+    muted: false,
     coverurl: '',
     duration: 0,
     eq: [0,0,0,0,0,0,0,0,0,0],
@@ -863,8 +883,7 @@ test('zone queue transitions update state and notify', async () => {
   setNotifier(notifier);
 
   await zoneManager.replaceAll([createZoneConfig(1, 'Living')], {
-    airplay: { enabled: false },
-    spotify: { enabled: false },
+    spotify: {},
   });
 
   const initial = [
@@ -911,8 +930,7 @@ test('queue update with foreign audiopath is rejected while another source plays
   const { zoneManager, updateQueueFromOutput, setNotifier, noopNotifier } = harness;
 
   await zoneManager.replaceAll([createZoneConfig(2, 'Living')], {
-    airplay: { enabled: false },
-    spotify: { enabled: false },
+    spotify: {},
   });
 
   // Establish a radio stream as the active state.
@@ -953,8 +971,7 @@ test('queue refresh of current item does not wipe live metadata', async () => {
   const { zoneManager, updateQueueFromOutput, setNotifier, noopNotifier } = harness;
 
   await zoneManager.replaceAll([createZoneConfig(3, 'Living')], {
-    airplay: { enabled: false },
-    spotify: { enabled: false },
+    spotify: {},
   });
 
   // Initial queue with full metadata.
@@ -1024,8 +1041,7 @@ test('group join/leave emits audio sync payloads', async () => {
   });
 
   await zoneManager.replaceAll([createZoneConfig(1, 'Living'), createZoneConfig(2, 'Kitchen')], {
-    airplay: { enabled: false },
-    spotify: { enabled: false },
+    spotify: {},
   });
 
   const { upsertGroup, removeGroupByLeader, getGroupByLeader } = groupTracker;
@@ -1056,8 +1072,8 @@ test('group join/leave emits audio sync payloads', async () => {
 test('output routing switches active output and stops previous', () => {
   const { dispatchOutputs } = require('../src/application/zones/services/outputOrchestrator') as typeof import('../src/application/zones/services/outputOrchestrator');
 
-  const calls: Record<string, string[]> = { sendspin: [], dlna: [] };
-  const makeOutput = (type: string, ready: boolean) => ({
+  const calls: { sendspin: string[]; dlna: string[] } = { sendspin: [], dlna: [] };
+  const makeOutput = (type: 'sendspin' | 'dlna', ready: boolean) => ({
     type,
     isReady: () => ready,
     play: () => {
@@ -1093,7 +1109,8 @@ test('output routing switches active output and stops previous', () => {
     playbackSource: { kind: 'file', path: '/tmp/fake.wav' },
   } as unknown as PlaybackSession;
 
-  const log = { debug: () => undefined, warn: () => undefined, spam: () => undefined };
+  const { createLogger } = require('../src/shared/logging/logger') as typeof import('../src/shared/logging/logger');
+  const log = createLogger('Test', 'OutputRouting');
   const noopOutputError = () => undefined;
   dispatchOutputs(ctx, [sendspin, dlna], 'play', session, log, noopOutputError);
 

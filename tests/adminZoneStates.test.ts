@@ -87,7 +87,7 @@ async function fetchStates(mode: 'play' | 'pause' | 'stop' | null) {
     (r) => r.method === 'GET' && r.pattern.source === /^\/zones\/states$/.source,
   );
   assert.ok(route, 'zones/states route exists');
-  await route!.handler({} as any, new FakeResponse() as unknown as ServerResponse, [] as any);
+  await route!.handler({} as any, new FakeResponse() as unknown as ServerResponse, [] as any, '/zones/states');
   return sent;
 }
 
@@ -137,7 +137,7 @@ test('state-controllers serves the picker its options, with a stable shape', asy
     (r) => r.pattern.source === /^\/zones\/state-controllers$/.source,
   );
   assert.ok(route, 'route exists');
-  await route!.handler({} as any, new FakeResponse() as unknown as ServerResponse, [] as any);
+  await route!.handler({} as any, new FakeResponse() as unknown as ServerResponse, [] as any, '/zones/states');
 
   assert.equal(sent.status, 200);
   const list = sent.body.stateControllers;

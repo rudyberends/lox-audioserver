@@ -36,6 +36,7 @@ function makeController(count: number, startIndex = 0) {
     isTidalAudiopath: () => false,
     isYtMusicAudiopath: () => false,
     isYoutubeAudiopath: () => false,
+    isSoundcloudAudiopath: () => false,
     resolveBridgeProvider: () => null,
     getMusicAssistantUserId: () => 'musicassistant',
     getStateAudiotype: () => null,

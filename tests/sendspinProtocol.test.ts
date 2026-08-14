@@ -79,7 +79,7 @@ test('sendspin: stream triggers carry server_transmitted', () => {
   for (const type of ['stream/start', 'stream/clear', 'stream/end']) {
     const messages = socket.ofType(type);
     assert.equal(messages.length, 1, `expected exactly one ${type}`);
-    const stamp = messages[0].payload?.server_transmitted;
+    const stamp = messages[0]!.payload?.server_transmitted;
     assert.equal(typeof stamp, 'number', `${type} must stamp server_transmitted`);
     // It is the start of the window required_lead_time_ms is measured over, so it
     // has to be the actual send time, not a placeholder.
@@ -116,7 +116,7 @@ test('sendspin: an artwork-only request-format does not re-announce the player s
   assert.equal(playerStreamStarts(), 1, 'artwork request must not restart the player stream');
   const artworkStarts = socket.ofType('stream/start').filter((msg) => msg.payload?.artwork);
   assert.equal(artworkStarts.length, 1, 'artwork request should be answered for artwork');
-  assert.equal(artworkStarts[0].payload?.artwork.channels[0].width, 200);
+  assert.equal(artworkStarts[0]!.payload?.artwork.channels[0].width, 200);
 });
 
 test('sendspin: a player request-format still re-announces the player stream', () => {
@@ -143,7 +143,7 @@ test('sendspin: a player request-format still re-announces the player stream', (
 
   const starts = socket.ofType('stream/start').filter((msg) => msg.payload?.player);
   assert.equal(starts.length, 2);
-  assert.equal(starts[1].payload?.player.sample_rate, 44100);
+  assert.equal(starts[1]!.payload?.player.sample_rate, 44100);
 });
 
 test('sendspin: a format request outside the declared list is refused', () => {
@@ -178,9 +178,9 @@ test('sendspin: a format request outside the declared list is refused', () => {
   assert.equal(session.getStreamFormat().sampleRate, 48000, 'undeclared rate must not be adopted');
   const starts = socket.ofType('stream/start').filter((msg) => msg.payload?.player);
   assert.equal(starts.length, 2, 'the client should still be told what it is getting');
-  assert.equal(starts[1].payload?.player.sample_rate, 48000);
+  assert.equal(starts[1]!.payload?.player.sample_rate, 48000);
   assert.equal(flagged.length, 1);
-  assert.match(flagged[0], /supported_formats/);
+  assert.match(flagged[0]!, /supported_formats/);
 
   // A declared format still goes through.
   session.handleText(
@@ -209,7 +209,7 @@ test('sendspin: a controller command from a client without the role is refused',
 
   assert.deepEqual(commands, [], 'a player-only client must not drive the group');
   assert.equal(flagged.length, 1, 'the deviation is reported once per reason');
-  assert.match(flagged[0], /without the controller role/);
+  assert.match(flagged[0]!, /without the controller role/);
 });
 
 test('sendspin: visualizer support is read from the key matching the negotiated role', () => {
@@ -321,8 +321,8 @@ test('sendspin: stream/clear and stream/end drop roles they do not apply to', ()
   session.sendStreamEnd([Roles.PLAYER, Roles.ARTWORK, Roles.METADATA]);
 
   // clear reaches roles that hold a buffer; end reaches roles that receive a stream.
-  assert.deepEqual(socket.ofType('stream/clear')[0].payload?.roles, [Roles.PLAYER]);
-  assert.deepEqual(socket.ofType('stream/end')[0].payload?.roles, [Roles.PLAYER, Roles.ARTWORK]);
+  assert.deepEqual(socket.ofType('stream/clear')[0]!.payload?.roles, [Roles.PLAYER]);
+  assert.deepEqual(socket.ofType('stream/end')[0]!.payload?.roles, [Roles.PLAYER, Roles.ARTWORK]);
 });
 
 test('sendspin: controller seek commands carry their position through', () => {
@@ -352,8 +352,8 @@ test('sendspin: controller seek commands carry their position through', () => {
   );
 
   assert.equal(commands.length, 2);
-  assert.equal(commands[0].command, 'seek');
-  assert.equal(commands[0].positionMs, 90_000);
-  assert.equal(commands[1].command, 'seek_relative');
-  assert.equal(commands[1].offsetMs, -15_000);
+  assert.equal(commands[0]!.command, 'seek');
+  assert.equal(commands[0]!.positionMs, 90_000);
+  assert.equal(commands[1]!.command, 'seek_relative');
+  assert.equal(commands[1]!.offsetMs, -15_000);
 });

@@ -3,7 +3,7 @@ import { test } from './testHarness';
 import { AudioStreamHandler } from '../src/adapters/http/streams/audioStreamHandler';
 
 function createHandler(): AudioStreamHandler {
-  return new AudioStreamHandler({} as any, {} as any, {} as any);
+  return new AudioStreamHandler({} as any, {} as any, {} as any, {} as any);
 }
 
 test('audio stream handler enables ICY when Icy-MetaData header is set', () => {

@@ -1,3 +1,4 @@
+import { zoneSessionKey } from '../../src/ports/types/SessionKey';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { test } from '../testHarness';
@@ -39,7 +40,7 @@ function feedDecoder(session: AudioSession, frames: number): void {
 
 function makeSession(profile: OutputProfile, bands: number[] | null): AudioSession {
   return new AudioSession(
-    1,
+    zoneSessionKey(1),
     { kind: 'file', path: '/music/track.flac', realTime: false },
     profile,
     () => {},
@@ -152,7 +153,7 @@ test('a lossy encoder is fed float, not requantised integers', async () => {
 function pipeSession(bands: number[] | null): { session: AudioSession; stream: PassThrough } {
   const stream = new PassThrough();
   const session = new AudioSession(
-    1,
+    zoneSessionKey(1),
     {
       kind: 'pipe',
       path: 'librespot',
@@ -235,7 +236,7 @@ test('a fixed output gain alone is enough to own the chain', () => {
   // Spotify's loudness normalisation and a per-output trim are the same kind of stage as the EQ, and
   // they must not be left on a command line that cannot change.
   const session = new AudioSession(
-    1,
+    zoneSessionKey(1),
     { kind: 'url', url: 'https://x/y.m4a', gainDb: -3.5 },
     'pcm',
     () => {},

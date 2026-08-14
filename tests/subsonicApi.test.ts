@@ -373,7 +373,7 @@ test('subsonic api: a directory larger than one page is walked to completion', a
   assert.equal(body.directory.child.length, 450);
   const pages = browseCalls.filter((c) => c.folderId === 'big');
   assert.ok(pages.length >= 3, `expected several pages, got ${pages.length}`);
-  assert.equal(pages[0].offset, 0);
+  assert.equal(pages[0]!.offset, 0);
   // Pages must stay within what every provider accepts. Spotify rejects a limit
   // above 50 and Apple Music above 100, and a rejected page comes back empty —
   // which looks exactly like "this bridge has no content".
@@ -381,7 +381,7 @@ test('subsonic api: a directory larger than one page is walked to completion', a
     pages.every((p) => p.limit <= 50),
     `page limit too large: ${pages.map((p) => p.limit).join(',')}`,
   );
-  assert.equal(pages[1].offset, pages[0].limit);
+  assert.equal(pages[1]!.offset, pages[0]!.limit);
 });
 
 test('subsonic api: the directory cap truncates instead of walking forever', async () => {
