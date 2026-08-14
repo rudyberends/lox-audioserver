@@ -277,12 +277,29 @@ export class SoloistPlaybackService {
     }
 
     if (event.status === 'playing') {
+      // Only when this device is the one sounding. Connect pushes the account's playback to every
+      // device it has, so an idle room reports the same track, status and position as the room
+      // actually playing — adopting on that would light up every room at once with the same song.
+      if (!runner.ws.isActive) {
+        return;
+      }
       // Playing something nobody here asked for means the zone was taken over from the Spotify
       // app. Adopting it is the whole of Connect: open the pipe and let the zone follow along.
       const ours = runner.owner === 'queue' && runner.wantedUri && uri === runner.wantedUri;
       if (!ours && uri && uri !== runner.currentUri) {
         void this.adoptConnectPlayback(zoneId, event);
       }
+      return;
+    }
+
+    // Handed off to another device: this room is no longer the one playing, whatever else the
+    // account's state says about the track.
+    if (runner.owner === 'connect' && !runner.ws.isActive) {
+      this.log.info('spotify moved playback to another device', { zoneId });
+      runner.owner = 'queue';
+      runner.currentUri = null;
+      this.finishTrack(zoneId);
+      this.controller?.stopPlayback(zoneId);
       return;
     }
 

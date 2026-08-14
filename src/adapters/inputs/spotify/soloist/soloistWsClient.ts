@@ -25,6 +25,14 @@ export type SoloistStateEvent = {
   item?: SoloistItem;
   position?: { position_ms?: number };
   volume?: number;
+  /**
+   * Whether this device is the one Spotify is actually playing on.
+   *
+   * Connect pushes the account's playback to every device it has, so an idle room reports the
+   * same track, the same status and the same position as the room that is sounding. This is the
+   * only thing that tells them apart.
+   */
+  is_active?: boolean;
 };
 
 /** Title, artist, album, duration and art, as this server's metadata shape wants them. */
@@ -70,6 +78,8 @@ export class SoloistWsClient extends EventEmitter {
   private closed = false;
   /** Soloist accepts a socket before it has logged in; commands sent in between are refused. */
   private loggedIn = false;
+  /** Whether Spotify is playing on this device, as opposed to merely telling it what is on. */
+  private active = false;
 
   constructor(
     private readonly zoneId: number,
@@ -160,6 +170,9 @@ export class SoloistWsClient extends EventEmitter {
     if (event.type === 'auth_state') {
       this.loggedIn = event.logged_in === true;
     }
+    if (typeof event.is_active === 'boolean') {
+      this.active = event.is_active;
+    }
     if (event.type === 'error') {
       // Never re-emit this under its own name. An EventEmitter throws on an unhandled `error`
       // event, so one line of JSON from a child process would take the whole server down — which
@@ -197,6 +210,11 @@ export class SoloistWsClient extends EventEmitter {
       const timer = setTimeout(() => done(false), timeoutMs);
       this.on('event', onEvent);
     });
+  }
+
+  /** True while Spotify is playing on this device rather than merely mirroring the account. */
+  public get isActive(): boolean {
+    return this.active;
   }
 
   private send(command: string, extra: Record<string, unknown> = {}): boolean {
