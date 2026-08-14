@@ -35,6 +35,8 @@ const PLAY_START_TIMEOUT_MS = 20_000;
  * that it does not show up as a delay before a track starts.
  */
 const DEPTH_PROBE_FRAMES = 2048;
+/** How long to keep waiting for audible samples before giving up on measuring at all. */
+const DEPTH_PROBE_TIMEOUT_MS = 3_000;
 
 export type SoloistReadiness =
   | { ready: true }
@@ -457,7 +459,9 @@ export class SoloistPlaybackService {
       return null;
     }
     runner.stream = stream;
-    return this.pipeSourceFor(zoneId, stream, await this.probeDepth(stream));
+    const bitDepth = await this.probeDepth(stream);
+    this.log.info('soloist track depth measured', { zoneId, uri, bitDepth: bitDepth ?? 'unknown' });
+    return this.pipeSourceFor(zoneId, stream, bitDepth);
   }
 
   /**
@@ -529,11 +533,18 @@ export class SoloistPlaybackService {
     return lowByte === 0 ? 16 : 24;
   }
 
-  /** Read a little audio to measure it, then put it back so nothing is lost from the track. */
+  /**
+   * Read a little audio to measure it, then put it back so nothing is lost from the track.
+   *
+   * Keeps reading until something is actually audible. The pipe carries silence for a moment
+   * after a track is announced, and silence is not evidence — measuring the first frames that
+   * happen to arrive would call a 24-bit master 16-bit as often as it got it right.
+   */
   private async probeDepth(stream: Readable): Promise<16 | 24 | undefined> {
     const need = DEPTH_PROBE_FRAMES * SOLOIST_SINK_CHANNELS * 3;
     const chunks: Buffer[] = [];
     let total = 0;
+    let depth: 16 | 24 | undefined;
     await new Promise<void>((resolve) => {
       const done = (): void => {
         clearTimeout(timer);
@@ -544,19 +555,23 @@ export class SoloistPlaybackService {
       const onData = (chunk: Buffer): void => {
         chunks.push(chunk);
         total += chunk.length;
-        if (total >= need) {
+        if (total < need) {
+          return;
+        }
+        depth = SoloistPlaybackService.measureDepth(Buffer.concat(chunks));
+        // Undefined means it was all silence so far; keep listening rather than settle for it.
+        if (depth) {
           done();
         }
       };
-      const timer = setTimeout(done, 1_000);
+      const timer = setTimeout(done, DEPTH_PROBE_TIMEOUT_MS);
       stream.on('data', onData);
     });
     if (!total) {
       return undefined;
     }
-    const prefix = Buffer.concat(chunks);
-    stream.unshift(prefix);
-    return SoloistPlaybackService.measureDepth(prefix);
+    stream.unshift(Buffer.concat(chunks));
+    return depth;
   }
 
   /**
