@@ -848,21 +848,22 @@ export class SpotifyServiceManager {
    * displayName or a bridge label) — not our internal account id — so a direct
    * `spotify@<label>` lookup misses. Resolve the label back to the real account
    * or bridge id before giving up.
+   *
+   * Order matters, most specific first: an addressed account beats a bare service
+   * name. The Loxone app has only one streaming service, so it asks for every one
+   * of them as `spotify` and names the real one in `user` — resolving the bare
+   * `spotify` first meant that as soon as one Spotify account existed, it answered
+   * for Apple Music, SoundCloud and the rest. The same order also keeps a request
+   * addressed to the second of two Spotify accounts off the first one.
    */
   private resolveProviderId(service: string, user: string): ProviderId | null {
-    if (service) {
-      // A service-native request may hand the account over separately, as search
-      // does (`applemusic` + `p0gngd`). With several accounts of one service the
-      // service name alone would resolve to the first, so try the pair first.
-      if (user) {
-        const paired = this.normalizeServiceId(`${service}:${user}`);
-        if (this.providers.has(paired)) {
-          return paired;
-        }
-      }
-      const serviceId = this.normalizeServiceId(service);
-      if (this.providers.has(serviceId)) {
-        return serviceId;
+    // A service-native request may hand the account over separately, as search
+    // does (`applemusic` + `p0gngd`). With several accounts of one service the
+    // service name alone would resolve to the first, so try the pair first.
+    if (service && user) {
+      const paired = this.normalizeServiceId(`${service}:${user}`);
+      if (this.providers.has(paired)) {
+        return paired;
       }
     }
     if (user) {
@@ -883,6 +884,15 @@ export class SpotifyServiceManager {
         if (this.providers.has(bridgeProviderId)) {
           return bridgeProviderId;
         }
+      }
+    }
+    // Nothing named an account. The service on its own is enough when it names a
+    // provider outright (`applemusic`), or when the request simply carries no
+    // account — which is where the sole/default Spotify account comes in.
+    if (service) {
+      const serviceId = this.normalizeServiceId(service);
+      if (this.providers.has(serviceId)) {
+        return serviceId;
       }
     }
     return null;

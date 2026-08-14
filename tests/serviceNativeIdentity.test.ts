@@ -245,6 +245,53 @@ test('a service-native key with an account resolves to that account', async () =
   assert.equal(viaSearchForm?.name, 'Apple B');
 });
 
+// The Loxone app knows one streaming service, so it asks for all of them as
+// `spotify` and names the real one in `user`. Resolving the bare service name
+// before that user meant a single added Spotify account answered for every other
+// service at once — Apple Music, SoundCloud and the rest all listing Spotify.
+test('a Spotify account does not answer for the services disguised as it', async () => {
+  const configPort = { getConfig: () => ({ content: {} }) } as unknown as ConfigPort;
+  const manager = new SpotifyServiceManager(
+    configPort,
+    [{ id: 'acct1', user: 'rudy@example.com', displayName: 'Rudy' }],
+    'test-client',
+    SINGLE,
+  );
+
+  // `user` carries the advertised label; older clients echo the bridge id.
+  assert.equal((await manager.getFolder('spotify', 'Apple Music', 'root', 0, 1))?.name, 'Apple Music');
+  assert.equal(
+    (await manager.getFolder('spotify', 'bridge-applemusic-p0gngd', 'root', 0, 1))?.name,
+    'Apple Music',
+  );
+  assert.equal((await manager.getFolder('spotify', 'SoundCloud', 'root', 0, 1))?.name, 'SoundCloud');
+
+  // Real Spotify still resolves — by label, by account id, and unaddressed.
+  for (const user of ['Rudy', 'acct1', 'rudy@example.com', 'nouser', '']) {
+    assert.equal((await manager.getFolder('spotify', user, 'root', 0, 1))?.name, 'Rudy', `user ${user}`);
+  }
+});
+
+// Same precedence, second consequence: with two accounts the bare service name
+// resolved to the default one, so the second account browsed the first's library.
+test('a named Spotify account beats the default one', async () => {
+  const configPort = { getConfig: () => ({ content: {} }) } as unknown as ConfigPort;
+  const manager = new SpotifyServiceManager(
+    configPort,
+    [
+      { id: 'acct1', user: 'rudy@example.com', displayName: 'Rudy' },
+      { id: 'acct2', user: 'partner@example.com', displayName: 'Partner' },
+    ],
+    'test-client',
+    SINGLE,
+  );
+
+  assert.equal((await manager.getFolder('spotify', 'Partner', 'root', 0, 1))?.name, 'Partner');
+  assert.equal((await manager.getFolder('spotify', 'acct2', 'root', 0, 1))?.name, 'Partner');
+  // Unaddressed still falls back to the default account.
+  assert.equal((await manager.getFolder('spotify', 'nouser', 'root', 0, 1))?.name, 'Rudy');
+});
+
 
 // --- serviceLabelForAudiopath -----------------------------------------------
 
