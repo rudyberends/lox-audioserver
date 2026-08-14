@@ -34,6 +34,7 @@ import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { LibrespotSession } from '@sonn-audio/node-librespot';
 import { SoloistPlaybackService } from '@/adapters/inputs/spotify/soloist/soloistPlaybackService';
+import { isBrowserZoneId } from '@/application/zones/browserZoneRegistry';
 
 type AirplaySessionStopper = (zoneId: number, reason?: string) => void;
 type OutputErrorHandler = (zoneId: number, reason?: string) => void;
@@ -1946,7 +1947,12 @@ export class SpotifyInputService {
     // Connect turned off could not play Spotify at all. Running everywhere is the lesser cost, and
     // the switch is shown as fixed on while this backend is in use.
     if (this.soloist.isEnabled()) {
-      void this.soloist.syncZones(zones.map((zone) => zone.id));
+      // Browser tabs excluded: a Soloist makes its zone a device in the account's Spotify app,
+      // and a page someone happens to have open has no business appearing there — it would come
+      // and go with the tab, under a name nobody chose.
+      void this.soloist.syncZones(
+        zones.map((zone) => zone.id).filter((zoneId) => !isBrowserZoneId(zoneId)),
+      );
     } else {
       void this.soloist.stopAllZones();
     }

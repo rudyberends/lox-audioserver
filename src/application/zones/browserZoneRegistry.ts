@@ -20,6 +20,17 @@ const BROWSER_ZONE_ID_BASE = 9000;
 const BROWSER_ZONE_ID_LIMIT = 9999;
 
 /**
+ * Whether a zone id belongs to a browser tab rather than a room.
+ *
+ * Exported because anything that gives a zone something lasting — a device registered with a
+ * streaming service, a process of its own — has to leave these alone: they come and go with a
+ * page, and are never written to the configuration.
+ */
+export function isBrowserZoneId(zoneId: number): boolean {
+  return zoneId >= BROWSER_ZONE_ID_BASE && zoneId <= BROWSER_ZONE_ID_LIMIT;
+}
+
+/**
  * Client-side static buffer (ms) pushed to the Sendspin player.
  *
  * This tells the *client* to play later, which absorbs jitter on its own side. It does
