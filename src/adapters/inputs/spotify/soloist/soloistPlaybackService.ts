@@ -13,6 +13,7 @@ import {
   startPersistent,
   type SoloistRunHandle,
 } from '@/adapters/inputs/spotify/soloist/soloistProcess';
+import { fetchBuild } from '@/adapters/inputs/spotify/soloist/soloistUpdater';
 import {
   readTrack,
   SoloistWsClient,
@@ -24,6 +25,13 @@ import type { PlaybackMetadata } from '@/application/playback/audioManager';
 
 /** How long to wait for the track we asked for to actually be sounding. */
 const PLAY_START_TIMEOUT_MS = 20_000;
+/**
+ * How often to ask Spotify whether it has published a new build.
+ *
+ * Daily, because a build lasts 90 days and there is no hurry — and because with an etag the check
+ * costs a couple of hundred bytes, so there is nothing to save by doing it less.
+ */
+const BUILD_CHECK_INTERVAL_MS = 24 * 3600_000;
 
 export type SoloistReadiness =
   | { ready: true }
@@ -150,6 +158,7 @@ export class SoloistPlaybackService {
   private readonly durations = new Map<number, number>();
 
   private controller: SpotifyConnectController | null = null;
+  private buildTimer: NodeJS.Timeout | null = null;
 
   constructor(private readonly configPort: ConfigPort) {}
 
@@ -185,6 +194,7 @@ export class SoloistPlaybackService {
     if (!this.isEnabled()) {
       return;
     }
+    this.watchForBuilds();
     const wanted = new Set(zoneIds);
     // A zone that no longer does Spotify must stop appearing in the device list, which means its
     // process has to go — there is no way to run Soloist without it advertising itself.
@@ -200,6 +210,107 @@ export class SoloistPlaybackService {
     }
     for (const zoneId of wanted) {
       await this.ensureRunner(zoneId).catch(() => null);
+    }
+  }
+
+  /**
+   * Keep the program itself up to date.
+   *
+   * Soloist expires 90 days after it was built, and until now that meant someone had to notice a
+   * dead room, work out why, and go and fetch a new one. Spotify publishes builds as plain files
+   * with an etag, so this asks daily and installs what it finds. Switching the backend on with
+   * nothing installed fetches one straight away, which is the whole of the setup this step used
+   * to be.
+   */
+  private watchForBuilds(): void {
+    if (this.buildTimer) {
+      return;
+    }
+    void this.updateBuild('startup');
+    this.buildTimer = setInterval(() => void this.updateBuild('daily'), BUILD_CHECK_INTERVAL_MS);
+    // Nothing here should hold the process open.
+    this.buildTimer.unref?.();
+  }
+
+  private async updateBuild(reason: 'startup' | 'daily'): Promise<void> {
+    const installed = await probeBinary();
+    const known = installed.present ? this.settings.build : undefined;
+    const result = await fetchBuild(known);
+    if (result.status === 'unsupported-arch') {
+      this.log.info('spotify publishes no soloist for this machine; upload one by hand', {
+        arch: result.arch,
+      });
+      return;
+    }
+    if (result.status === 'failed') {
+      // Never fatal: an installed build keeps playing, and an absent one is already reported by
+      // readiness as the thing that is missing.
+      this.log.warn('could not fetch a soloist build', { reason, message: result.message });
+      await this.recordBuild({});
+      return;
+    }
+    if (result.status === 'unchanged') {
+      this.log.debug('soloist build is current', { reason });
+      await this.recordBuild({ signature: result.signature });
+      return;
+    }
+    await this.recordBuild({
+      signature: result.signature,
+      digest: result.digest,
+      installedAt: Date.now(),
+    });
+    await this.adoptNewBuild();
+  }
+
+  /**
+   * Put a freshly installed build to use.
+   *
+   * A running process holds its own copy of the program, so replacing the file changes nothing
+   * until it restarts — and restarting a room that is playing would cut the music for a program
+   * that has 90 days left. So it waits: rooms that are idle pick it up now, the rest at the next
+   * check, or whenever they next stop.
+   */
+  private async adoptNewBuild(): Promise<void> {
+    const playing = [...this.runners.values()].some((runner) => runner.stream !== null);
+    if (playing) {
+      this.log.info('new soloist build installed; rooms will pick it up once they are quiet');
+      return;
+    }
+    const zoneIds = [...this.runners.keys()];
+    for (const zoneId of zoneIds) {
+      const runner = this.runners.get(zoneId);
+      if (!runner) {
+        continue;
+      }
+      runner.ws.close();
+      runner.handle.stop();
+      this.runners.delete(zoneId);
+    }
+    for (const zoneId of zoneIds) {
+      await this.ensureRunner(zoneId).catch(() => null);
+    }
+    this.log.info('rooms restarted on the new soloist build', { zones: zoneIds.length });
+  }
+
+  private async recordBuild(patch: {
+    signature?: string;
+    digest?: string;
+    installedAt?: number;
+  }): Promise<void> {
+    try {
+      await this.configPort.updateConfig((cfg) => {
+        const spotify = cfg.content?.spotify;
+        if (!spotify) {
+          return;
+        }
+        const previous = spotify.soloist?.build ?? {};
+        spotify.soloist = {
+          ...(spotify.soloist ?? {}),
+          build: { ...previous, ...patch, checkedAt: Date.now() },
+        };
+      });
+    } catch {
+      /* best effort; the figure is a convenience, not state anything depends on */
     }
   }
 
@@ -757,6 +868,10 @@ export class SoloistPlaybackService {
   }
 
   public async shutdown(): Promise<void> {
+    if (this.buildTimer) {
+      clearInterval(this.buildTimer);
+      this.buildTimer = null;
+    }
     for (const [zoneId, runner] of [...this.runners]) {
       this.finishTrack(zoneId);
       runner.ws.close();

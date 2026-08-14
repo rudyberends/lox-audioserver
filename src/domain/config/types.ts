@@ -725,6 +725,16 @@ export interface SoloistConfig {
    * Stored so the admin screen can warn before a build dies rather than after.
    */
   expiry?: { daysAtCheck: number; checkedAt: number; version?: string };
+  /**
+   * The build that was fetched from Spotify, and when it was last looked for.
+   *
+   * `signature` is what the CDN says about the file — when it was published and how large it is —
+   * which is what the daily check compares; its etag proved meaningless. `digest` is what the
+   * program actually is, so a file that merely looks new does not restart a room. Absent, this
+   * server has never fetched a build: the program may still have been uploaded by hand, which
+   * stays possible for a machine with no way out to the internet.
+   */
+  build?: { signature?: string; digest?: string; checkedAt?: number; installedAt?: number };
 }
 
 export interface GlobalLineInConfig {

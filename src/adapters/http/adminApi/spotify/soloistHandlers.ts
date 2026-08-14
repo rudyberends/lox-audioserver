@@ -13,6 +13,7 @@ import {
   extractSoloistFromArchive,
   looksGzipped,
 } from '@/adapters/inputs/spotify/soloist/soloistArchive';
+import { buildUrlForHost } from '@/adapters/inputs/spotify/soloist/soloistUpdater';
 
 const log = createLogger('Content', 'Soloist');
 
@@ -81,6 +82,10 @@ export async function handleSoloistStatus(
     hasApiKey: Boolean(settings.apiKey?.trim()),
     lossless: settings.lossless !== false,
     expiry: settings.expiry ?? null,
+    // Where the program comes from now: this server fetches it, so the screen can say when it last
+    // looked rather than asking anyone to keep track of a 90-day clock.
+    build: settings.build ?? null,
+    autoUpdates: buildUrlForHost() !== null,
     hostArch: hostArch(),
     binary,
     zones,
