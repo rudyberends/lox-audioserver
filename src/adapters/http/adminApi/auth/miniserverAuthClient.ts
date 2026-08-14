@@ -408,6 +408,8 @@ export class MiniserverAuthClient {
     const decipher = createDecipheriv('aes-256-cbc', aesKey, aesIv);
     decipher.setAutoPadding(false);
     const plain = Buffer.concat([decipher.update(cipherBuf), decipher.final()]);
+    // Strips the AES zero-padding the Miniserver leaves on the plaintext.
+    // eslint-disable-next-line no-control-regex
     return plain.toString('utf8').replace(/\u0000+$/g, '');
   }
 
@@ -479,7 +481,7 @@ export class MiniserverAuthClient {
     const trimmed = raw.trim();
     if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
     try {
-      return JSON.parse(trimmed.replace(/\'/g, '"'));
+      return JSON.parse(trimmed.replace(/'/g, '"'));
     } catch {
       // fall through to more selective normalization
     }

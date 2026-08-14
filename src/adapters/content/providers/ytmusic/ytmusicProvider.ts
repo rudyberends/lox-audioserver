@@ -71,6 +71,7 @@ export class YtMusicProvider {
     playlists?: { items: ContentFolderItem[]; fetchedAt: number };
     artists?: { items: ContentFolderItem[]; fetchedAt: number };
   } = {};
+
   private artistTracksCache = new Map<string, { items: ContentFolderItem[]; fetchedAt: number }>();
   private albumTracksCache = new Map<string, { items: ContentFolderItem[]; fetchedAt: number }>();
   private readonly playlistMetaCacheTtlMs = 5 * 60_000;

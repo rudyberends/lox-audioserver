@@ -301,6 +301,7 @@ export class SendspinOutput implements ZoneOutput {
       ?.getPlayerTiming?.().staticDelayMs;
     return typeof reported === 'number' && reported >= 0 ? reported : null;
   }
+
   private lastMetadataSignature: string | null = null;
   private lastStreamSignature: string | null = null;
   private pcmRemainder: Buffer | null = null;
@@ -325,6 +326,7 @@ export class SendspinOutput implements ZoneOutput {
     floorUs: number | null;
     driftUs: number | null;
   } | null = null;
+
   /** The band the send loop holds the lead in: [targetLead, targetLead + this]. See startStream. */
   private leadMarginUs = 100_000;
   private streamToken = 0;
@@ -605,75 +607,99 @@ export class SendspinOutput implements ZoneOutput {
   private get clientId(): string {
     return this.primary.clientId;
   }
+
   private get resolvedClientId(): string {
     return this.primary.resolvedClientId;
   }
+
   private set resolvedClientId(value: string) {
     this.primary.resolvedClientId = value;
   }
+
   private get activeSession(): SendspinSession | null {
     return this.primary.session;
   }
+
   private set activeSession(value: SendspinSession | null) {
     this.primary.session = value;
   }
+
   private get clientConnected(): boolean {
     return this.primary.connected;
   }
+
   private set clientConnected(value: boolean) {
     this.primary.connected = value;
   }
+
   private get configuredLatencyMs(): number {
     return this.primary.configuredLatencyMs;
   }
+
   private set configuredLatencyMs(value: number) {
     this.primary.configuredLatencyMs = value;
   }
+
   private get lastKnownVolume(): number {
     return this.primary.lastKnownVolume;
   }
+
   private set lastKnownVolume(value: number) {
     this.primary.lastKnownVolume = value;
   }
+
   private get lastOutboundVolume(): number | null {
     return this.primary.lastOutboundVolume;
   }
+
   private set lastOutboundVolume(value: number | null) {
     this.primary.lastOutboundVolume = value;
   }
+
   private get lastOutboundVolumeAt(): number | null {
     return this.primary.lastOutboundVolumeAt;
   }
+
   private set lastOutboundVolumeAt(value: number | null) {
     this.primary.lastOutboundVolumeAt = value;
   }
+
   private get lastClientStateSignature(): string | null {
     return this.primary.lastClientStateSignature;
   }
+
   private set lastClientStateSignature(value: string | null) {
     this.primary.lastClientStateSignature = value;
   }
+
   private get initialClientStateSkipped(): boolean {
     return this.primary.initialClientStateSkipped;
   }
+
   private set initialClientStateSkipped(value: boolean) {
     this.primary.initialClientStateSkipped = value;
   }
+
   private get lastLoggedClientState(): string | null {
     return this.primary.lastLoggedClientState;
   }
+
   private set lastLoggedClientState(value: string | null) {
     this.primary.lastLoggedClientState = value;
   }
+
   private get lastLoggedMuted(): boolean | null {
     return this.primary.lastLoggedMuted;
   }
+
   private set lastLoggedMuted(value: boolean | null) {
     this.primary.lastLoggedMuted = value;
   }
+
   private get lastAppliedMuted(): boolean | null {
     return this.primary.lastAppliedMuted;
   }
+
   private set lastAppliedMuted(value: boolean | null) {
     this.primary.lastAppliedMuted = value;
   }
@@ -2494,7 +2520,7 @@ export class SendspinOutput implements ZoneOutput {
     });
   }
 
-  // eslint-disable-next-line max-len
+
   private async fetchAndSendArtwork(session?: { metadata?: PlaybackSession['metadata']; stream?: PlaybackSession['stream'] }): Promise<void> {
     const clientId = this.activeClientId();
     const preferredChannels: ArtworkChannel[] =

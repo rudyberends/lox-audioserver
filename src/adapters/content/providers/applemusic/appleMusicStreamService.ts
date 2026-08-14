@@ -121,6 +121,7 @@ export class AppleMusicStreamService {
     connections: 10,
     pipelining: 1,
   });
+
   private readonly bridgesByProvider = new Map<string, StreamingServiceConfig>();
   private readonly bridgesById = new Map<string, StreamingServiceConfig>();
   private readonly bearerTokens = new Map<string, BearerState>();

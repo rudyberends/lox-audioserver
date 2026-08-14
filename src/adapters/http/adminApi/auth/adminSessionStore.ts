@@ -148,7 +148,7 @@ export class AdminSessionStore {
       'HttpOnly',
       'SameSite=Lax',
     ];
-    if (Boolean((req.socket as { encrypted?: boolean }).encrypted)) {
+    if ((req.socket as { encrypted?: boolean }).encrypted) {
       parts.push('Secure');
     }
     return parts.join('; ');
@@ -162,7 +162,7 @@ export class AdminSessionStore {
       'SameSite=Lax',
       'Max-Age=0',
     ];
-    if (Boolean((req.socket as { encrypted?: boolean }).encrypted)) {
+    if ((req.socket as { encrypted?: boolean }).encrypted) {
       parts.push('Secure');
     }
     return parts.join('; ');

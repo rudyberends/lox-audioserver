@@ -73,6 +73,7 @@ export class SpotifyServiceManager {
     ProviderId,
     SpotifyAccountProvider | MusicAssistantBridgeProvider | AppleMusicProvider | DeezerProvider | TidalProvider | YtMusicProvider | YoutubeProvider | SoundCloudProvider
   >();
+
   private accounts: SpotifyAccountState[] = [];
   private bridges: StreamingServiceConfig[] = [];
   private clientId = resolveSpotifyClientId();
@@ -1229,7 +1230,7 @@ export class SpotifyServiceManager {
   }
 
   private parseSpotifyId(itemId: string): { type: 'track' | 'album' | 'artist' | 'playlist' | 'show'; id: string } | null {
-    let cleaned = this.sanitizeSpotifyId(itemId);
+    const cleaned = this.sanitizeSpotifyId(itemId);
     if (!cleaned) {
       return null;
     }

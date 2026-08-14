@@ -43,6 +43,7 @@ export class YtMusicStreamService {
     string,
     { signature: string; inflight?: Promise<void>; lastOkAt?: number; lastErrorAt?: number }
   >();
+
   private readonly warmupVideoId = 'dQw4w9WgXcQ';
 
   constructor(private readonly notifyOutputError: OutputErrorHandler, configPort: ConfigPort) {

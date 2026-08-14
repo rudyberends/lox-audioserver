@@ -1411,8 +1411,12 @@ class SpotifyConnectInstance {
     // before PCM output is complete (realtime-paced). Calling stop() immediately
     // would cut off the tail of the track. Instead we use endStreamOnStop:false and
     // watch for 300 ms of silence after end_of_track before ending the stream.
+    // Assigned once, further down, but the silence-watch closures below close over
+    // them first — so these have to be declared before the stream exists.
+    /* eslint-disable prefer-const */
     let rawStop: (() => void) | undefined;
     let streamRef: PassThrough | undefined;
+    /* eslint-enable prefer-const */
     let eotReceived = false;
     let silenceTimer: NodeJS.Timeout | undefined;
 

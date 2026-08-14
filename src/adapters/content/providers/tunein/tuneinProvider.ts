@@ -53,6 +53,7 @@ export class TuneInProvider {
     string,
     { url: string | null; fetchedAt: number; inFlight?: Promise<string | null> }
   >();
+
   private readonly tuneCacheTtlMs = 60 * 60 * 1000;
   private localStationsCache: { items: RadioStation[]; fetchedAt: number; inFlight?: Promise<RadioStation[]> } | null = null;
   private readonly customRadioStore: CustomRadioStore;
@@ -180,8 +181,7 @@ export class TuneInProvider {
       return cached.inFlight;
     }
 
-    let inFlight: Promise<RadioStation[]>;
-    inFlight = (async () => {
+    const inFlight: Promise<RadioStation[]> = (async () => {
       try {
         const outlines = await this.api.browsePresets(username);
         const stations = await this.mapTuneInItems(outlines);

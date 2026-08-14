@@ -143,7 +143,7 @@ export function createPlaylistEditHandlers(
       const newName = decodeSegment(reassembleAction(rest));
       const playlistId = resolvePlaylistId(idStr);
       if (playlistId === null) {
-        return buildResponse(command, 'playlist',[{ action: 'failed' }]);
+        return buildResponse(command, 'playlist', [{ action: 'failed' }]);
       }
       const playlist = contentManager.renameLocalPlaylist(playlistId, newName);
       if (!playlist) {
@@ -169,7 +169,7 @@ export function createPlaylistEditHandlers(
       const idStr = decodeSegment(rest[0]);
       const playlistId = resolvePlaylistId(idStr);
       if (playlistId === null) {
-        return buildResponse(command, 'playlist',[{ items: [] }]);
+        return buildResponse(command, 'playlist', [{ items: [] }]);
       }
       const removed = contentManager.deleteLocalPlaylist(playlistId);
       if (removed) {
@@ -199,7 +199,7 @@ export function createPlaylistEditHandlers(
       const playlistId = resolvePlaylistId(idStr);
       const parsed = parseUpdateAction(rest);
       if (playlistId === null || !parsed) {
-        return buildResponse(command, 'playlist',[{ action: 'failed' }]);
+        return buildResponse(command, 'playlist', [{ action: 'failed' }]);
       }
       const encodedId = encodeLoxoneId(playlistId, BASE_PLAYLIST);
       const { cmd, args } = parsed;
@@ -225,7 +225,7 @@ export function createPlaylistEditHandlers(
             user,
             name: playlist?.name,
           }, includeCommand ? command : undefined);
-          return buildResponse(command, 'playlist',[{ action: 'ok' }]);
+          return buildResponse(command, 'playlist', [{ action: 'ok' }]);
         }
         case 'additem':
         case 'addbrowsable': {
@@ -248,7 +248,7 @@ export function createPlaylistEditHandlers(
             cmd: service,
             user,
           }, command);
-          return buildResponse(command, 'playlist',[{ action: 'ok', items }]);
+          return buildResponse(command, 'playlist', [{ action: 'ok', items }]);
         }
         case 'removeById': {
           const position = await resolveTrackPosition(contentManager, playlistId, arg);
@@ -298,7 +298,7 @@ export function createPlaylistEditHandlers(
         }
         default:
           log.debug('unknown playlist update command', { cmd, arg });
-          return buildResponse(command, 'playlist',[{ action: 'ok' }]);
+          return buildResponse(command, 'playlist', [{ action: 'ok' }]);
       }
     },
   };

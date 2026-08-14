@@ -163,6 +163,8 @@ function sanitizeEventSoundFilename(input: string): string | null {
   if (!leaf || leaf === '.' || leaf === '..') {
     return null;
   }
+  // Control characters are exactly what this guard is here to reject in a filename.
+  // eslint-disable-next-line no-control-regex
   if (/[<>:"|?*\x00-\x1f]/.test(leaf)) {
     return null;
   }

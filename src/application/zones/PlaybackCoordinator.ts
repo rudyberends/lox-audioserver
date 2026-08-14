@@ -72,6 +72,7 @@ export class PlaybackCoordinator {
     patch: Partial<ZoneState>,
     force?: boolean,
   ) => void;
+
   private readonly stopAlert: (zoneId: number) => Promise<void>;
   private readonly log: ComponentLogger;
   private readonly notifier: NotifierPort;

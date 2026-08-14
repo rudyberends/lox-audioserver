@@ -37,7 +37,7 @@ export function createGlobalSearchHandlers(contentManager: ContentManager, notif
             provider,
             unique,
           );
-        } catch (error) {
+        } catch {
           notifier.notifyGlobalSearchError(source || 'unknown', unique);
         }
       })();

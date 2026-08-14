@@ -21,6 +21,7 @@ export class EngineAdapter implements EnginePort {
     profiles?: OutputProfile[],
     outputSettings?: AudioOutputSettings,
   ): void;
+
   public start(
     keyOrOptions: SessionKey | EngineStartOptions,
     source?: PlaybackSource,
@@ -46,6 +47,7 @@ export class EngineAdapter implements EnginePort {
     outputSettings?: AudioOutputSettings,
     options?: EngineHandoffOptions,
   ): void;
+
   public startWithHandoff(
     keyOrOptions: SessionKey | EngineStartOptions,
     source?: PlaybackSource,

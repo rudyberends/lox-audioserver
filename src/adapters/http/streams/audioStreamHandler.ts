@@ -284,6 +284,7 @@ export class AudioStreamHandler {
     // A session cover is only valid while that session lives, so it is not cached.
     await serveCover(res, session.cover ?? resolveSessionCover(session) ?? null, this.log);
   }
+
   private writeHeaders(
     res: ServerResponse,
     contentType = 'audio/mpeg',

@@ -328,7 +328,7 @@ export class AudioProxyHandler {
     }
     const match =
       /StreamTitle='([^']*)'/i.exec(text) ??
-      /StreamTitle=\"([^\"]*)\"/i.exec(text);
+      /StreamTitle="([^"]*)"/i.exec(text);
     const rawTitle = match?.[1]?.trim() ?? '';
     if (!rawTitle) {
       return null;

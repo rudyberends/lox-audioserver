@@ -31,6 +31,7 @@ export class AudioStreamEngine {
     private readonly isCrossfadeEnabled: () => boolean = () => true,
     private readonly onPcmFrame?: (zoneId: SessionKey, pcm: Buffer, timestampUs: number) => void,
   ) {}
+
   private onSessionTerminated?: (
     zoneId: SessionKey,
     stats: EngineSessionStats | null,

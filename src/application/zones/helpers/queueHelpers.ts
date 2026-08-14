@@ -160,7 +160,7 @@ export async function mapFolderItemsToQueue(
     coverurl: item.coverurl ?? item.thumbnail ?? '',
     ...(item.animatedCoverUrl ? { animatedCoverUrl: item.animatedCoverUrl } : {}),
     duration: Math.round(
-      (Number(item.duration ?? 0) ?? 0) > 0
+      Number(item.duration ?? 0) > 0
         ? Number(item.duration ?? 0)
         : audioType === 1
           ? 0

@@ -37,10 +37,12 @@ export class QueueStepDispatcher {
     number,
     { pending: number; running: boolean; timer?: NodeJS.Timeout }
   >();
+
   private readonly endOfTrackAdvanceState = new Map<
     number,
     { key: string; at: number; cooldownUntil: number; inFlight: boolean }
   >();
+
   public queueStepCoalesceMs = 25;
 
   constructor(private readonly deps: QueueStepDispatcherDeps) {}

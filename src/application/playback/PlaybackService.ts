@@ -17,6 +17,7 @@ export class PlaybackService {
     profiles?: OutputProfile[],
     outputSettings?: AudioOutputSettings,
   ): void;
+
   public start(
     ...args: [EngineStartOptions] | [SessionKey, PlaybackSource, OutputProfile[]?, AudioOutputSettings?]
   ): void {
@@ -31,6 +32,7 @@ export class PlaybackService {
     outputSettings?: AudioOutputSettings,
     options?: EngineHandoffOptions,
   ): void;
+
   public startWithHandoff(
     ...args: [EngineStartOptions] | [SessionKey, PlaybackSource, OutputProfile[]?, AudioOutputSettings?, EngineHandoffOptions?]
   ): void {

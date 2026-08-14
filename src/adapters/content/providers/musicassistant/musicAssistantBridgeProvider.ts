@@ -51,6 +51,7 @@ export class MusicAssistantBridgeProvider extends SpotifyAccountProvider {
     { alias: '3', id: 'recently_added_tracks' },
     { alias: '4', id: 'recently_added_albums' },
   ];
+
   private recommendationAliases = new Map<string, string>();
 
   constructor(options: MusicAssistantBridgeOptions) {
@@ -545,7 +546,7 @@ export class MusicAssistantBridgeProvider extends SpotifyAccountProvider {
     if (typeof source?.image === 'string') return resizeCoverUrl(source.image, COVER_ART_BROWSE_SIZE);
     if (typeof source?.cover === 'string') return resizeCoverUrl(source.cover, COVER_ART_BROWSE_SIZE);
     if (typeof source?.thumbnail === 'string')
-      return resizeCoverUrl(source.thumbnail, COVER_ART_BROWSE_SIZE);
+      {return resizeCoverUrl(source.thumbnail, COVER_ART_BROWSE_SIZE);}
     return '';
   }
 

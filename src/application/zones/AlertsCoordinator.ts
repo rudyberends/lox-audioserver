@@ -42,6 +42,7 @@ export class AlertsCoordinator {
     patch: Partial<ZoneState>,
     force?: boolean,
   ) => void;
+
   private readonly log: ComponentLogger;
   private readonly audioHelpers: ZoneAudioHelpers;
   private readonly zoneAudioPrefs: ZoneAudioPreferences;

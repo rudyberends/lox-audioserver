@@ -386,7 +386,7 @@ function buildPlaylistItem(index: number, media: MediaDetails): Record<string, u
 
 function buildPlayerItem(index: number, player: SlimClient): Record<string, unknown> {
   const seqNo = String(Math.floor(Date.now() / 1000));
-  const uuid = player.playerId.replace(/[:\-]/g, '');
+  const uuid = player.playerId.replace(/[:-]/g, '');
   return {
     playerindex: String(index),
     playerid: player.playerId,

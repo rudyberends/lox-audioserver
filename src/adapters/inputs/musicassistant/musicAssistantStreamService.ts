@@ -95,6 +95,7 @@ export class MusicAssistantStreamService {
   private lastConnectionStatus:
     | { ok: boolean; checkedAt: number; message?: string; host?: string; port?: number }
     | null = null;
+
   private streams = new Map<number, StreamEntry>();
   private playerToZone = new Map<string, number>();
   private zonePlayers = new Map<number, string>();
@@ -111,6 +112,7 @@ export class MusicAssistantStreamService {
   private switchAwayHandlers: {
     onSwitchAway?: (zoneId: number) => void;
   } = {};
+
   private lastPlayIntentAt = new Map<number, number>();
   /** Debounced stop-on-stream-end timers, cancelled when a new stream/start arrives. */
   private pendingStreamStopTimers = new Map<number, NodeJS.Timeout>();
@@ -125,6 +127,7 @@ export class MusicAssistantStreamService {
     updateMetadata?: (zoneId: number, metadata: Partial<PlaybackMetadata>) => void;
     updateTiming?: (zoneId: number, elapsed: number, duration: number) => void;
   } | null = null;
+
   private readonly configPort: ConfigPort;
 
   constructor(private readonly outputHandlers: OutputHandlers, configPort: ConfigPort) {

@@ -11,6 +11,9 @@ import { pruneExpiredSessions, type StreamProxyRoute } from '@/shared/streamProx
 import { randomUUID, createCipheriv, createHash } from 'node:crypto';
 import { Transform, Readable, PassThrough } from 'node:stream';
 import { once } from 'node:events';
+// egoroof-blowfish ships ESM only (main: dist/blowfish.mjs); require() keeps the
+// import synchronous here, which Node's require(esm) support makes safe.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { Blowfish } = require('egoroof-blowfish');
 
 const DEEZER_TRACK_URL = 'https://www.deezer.com/us/track';

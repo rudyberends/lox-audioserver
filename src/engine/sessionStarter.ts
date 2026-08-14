@@ -160,8 +160,7 @@ export class SessionStarter {
     });
 
     s.startTs = Date.now();
-    let proc: ReturnType<AudioSession['spawnFfmpeg']>;
-    proc = s.spawnFfmpeg(args, {
+    const proc: ReturnType<AudioSession['spawnFfmpeg']> = s.spawnFfmpeg(args, {
       restartOnFailure: false,
       logFirstChunk: false,
       onExit: () => {

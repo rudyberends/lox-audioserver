@@ -77,9 +77,9 @@ const DEFAULT_LATENCY_FRAMES = 22_050; // ~500ms requested
 const RAOP_LATENCY_MIN_FRAMES = 11_025;
 const SAMPLE_RATE = 44_100;
 // Per-output device-buffer override (`bufferMs` = total read-ahead the device
-// holds, i.e. what getLatencyMs() reports). Default keeps the snappy 750ms; the
-// range mirrors Music Assistant's RAOP buffer bounds.
-const DEFAULT_BUFFER_MS = 750;
+// holds, i.e. what getLatencyMs() reports). Unset keeps the snappy 750ms that
+// DEFAULT_LATENCY_FRAMES + RAOP_LATENCY_MIN_FRAMES already add up to; the range
+// mirrors Music Assistant's RAOP buffer bounds.
 const MIN_BUFFER_MS = 250;
 const MAX_BUFFER_MS = 5_000;
 const CHANNELS = 2;
@@ -137,8 +137,8 @@ export interface RaopSenderConfig {
    * Per-output device read-ahead BUFFER in milliseconds (distinct from the sync
    * offset `latencyMs`). Total audio the device buffers before playout — higher
    * trades start/skip snappiness for resilience against stutter / buffer underrun
-   * on slower or jittery devices. Default {@link DEFAULT_BUFFER_MS} (750ms),
-   * clamped to [{@link MIN_BUFFER_MS}, {@link MAX_BUFFER_MS}].
+   * on slower or jittery devices. Unset = 750ms; when set, clamped to
+   * [{@link MIN_BUFFER_MS}, {@link MAX_BUFFER_MS}].
    */
   bufferMs?: number;
   /** Forward libraop native logs at debug level. */

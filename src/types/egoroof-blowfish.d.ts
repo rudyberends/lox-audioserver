@@ -3,9 +3,11 @@ declare module 'egoroof-blowfish' {
     static MODE: {
       CBC: number;
     };
+
     static PADDING: {
       NULL: number;
     };
+
     static TYPE: {
       UINT8_ARRAY: number;
     };
@@ -15,6 +17,7 @@ declare module 'egoroof-blowfish' {
       mode?: number,
       padding?: number,
     );
+
     setIv(iv: Uint8Array | Buffer | string): void;
     decode(data: Uint8Array | Buffer, type?: number): Uint8Array;
   }

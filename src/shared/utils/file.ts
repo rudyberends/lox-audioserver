@@ -88,7 +88,7 @@ export async function writeJson(filePath: string, data: unknown): Promise<void> 
   await fs.writeFile(tmpPath, payload, 'utf-8');
   try {
     await fs.rename(tmpPath, filePath);
-  } catch (error) {
+  } catch {
     // On some platforms rename might fail if destination exists; fall back to remove+rename.
     try {
       await fs.rm(filePath, { force: true });

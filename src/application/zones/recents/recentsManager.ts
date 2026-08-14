@@ -343,12 +343,12 @@ export class RecentsManager {
       return { ...base, type: 2, station: item.station || name, contentType: 'Playlists' };
     }
     const tag =
-      /(?:^|[:\-])(?:library-)?album:/.test(p) ? 'album'
-      : /(?:^|[:\-])(?:library-)?artist:/.test(p) ? 'artist'
-      : /(?:^|[:\-])(?:library-)?playlist:/.test(p) ? 'playlist'
-      : /(?:^|[:\-])show:/.test(p) ? 'show'
-      : /(?:^|[:\-])episode:/.test(p) ? 'episode'
-      : /(?:^|[:\-])(?:library-)?track:/.test(p) ? 'track'
+      /(?:^|[:-])(?:library-)?album:/.test(p) ? 'album'
+      : /(?:^|[:-])(?:library-)?artist:/.test(p) ? 'artist'
+      : /(?:^|[:-])(?:library-)?playlist:/.test(p) ? 'playlist'
+      : /(?:^|[:-])show:/.test(p) ? 'show'
+      : /(?:^|[:-])episode:/.test(p) ? 'episode'
+      : /(?:^|[:-])(?:library-)?track:/.test(p) ? 'track'
       : undefined;
     return tag ? { ...base, tag } : base;
   }

@@ -27,15 +27,18 @@ module.exports = tseslint.config(
       // ---------------------------------------------------------------------
       // JavaScript Core Rules
       // ---------------------------------------------------------------------
-      quotes: ['warn', 'single'],
-      indent: ['warn', 2, { SwitchCase: 1 }],
+      // Pure formatting (quotes, indent, comma-dangle, brace-style, max-len) is
+      // Prettier's job — see prettier.config.cjs. eslint-config-prettier above
+      // switches those off deliberately; re-adding them here only re-creates the
+      // conflict it exists to prevent.
       semi: 'off',
-      'comma-dangle': ['warn', 'always-multiline'],
-      eqeqeq: ['warn', 'always'],
-      curly: ['warn', 'all'],
-      'brace-style': ['warn'],
+      // `== null` / `!= null` is the intended nullish check throughout this
+      // codebase: one test for both null and undefined.
+      eqeqeq: ['warn', 'always', { null: 'ignore' }],
+      // Single-line guards (`if (!x) return;`) are the house style; braces are
+      // still required the moment the body wraps onto its own line.
+      curly: ['warn', 'multi-line'],
       'prefer-arrow-callback': ['warn'],
-      'max-len': ['warn', 140],
       'no-console': ['warn'], // prefer logger
       'no-non-null-assertion': 'off',
       'comma-spacing': ['error'],

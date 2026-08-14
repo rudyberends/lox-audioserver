@@ -12,7 +12,7 @@
     "@": "dist"
   },
   "scripts": {
-    "lint": "eslint src/**.ts --max-warnings=0 && npm run depcheck",
+    "lint": "eslint src --max-warnings=0 && npm run depcheck",
     "depcheck": "depcruise --config .dependency-cruiser.cjs src",
     "watch": "nodemon",
     "fetch:admin": "node scripts/fetch-admin-dist.mjs",
