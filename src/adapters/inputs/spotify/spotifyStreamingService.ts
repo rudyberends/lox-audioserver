@@ -28,6 +28,11 @@ type NativeAddon = typeof import('@sonn-audio/node-librespot') & {
   ) => Promise<LibrespotSession | null>;
   startConnectDeviceWithCredentials?: (...args: unknown[]) => Promise<ConnectHandle>;
   startConnectDeviceWithToken?: (...args: unknown[]) => Promise<ConnectHandle>;
+  startZeroconfLogin?: (
+    deviceId: string,
+    name?: string,
+    timeoutMs?: number,
+  ) => Promise<CredentialsResult>;
 };
 type NativeStreamHandle = Pick<StreamHandle, 'stop' | 'sampleRate' | 'channels'>;
 
@@ -172,6 +177,42 @@ export type NativeStreamResult = NativeStreamHandle & {
 /**
  * Use an OAuth access token to obtain a reusable librespot credentials blob.
  */
+/**
+ * Bootstrap librespot credentials via a Zeroconf (Spotify Connect) handshake.
+ *
+ * Since ~2026-08-10 Spotify rejects `login5` auth built from an OAuth access token
+ * whose client id is not the desktop client (INVALID_CREDENTIALS), which kills the
+ * `loginWithAccessToken` / `startConnectDeviceWithToken` path. A real Zeroconf
+ * handshake still works (`AUTHENTICATION_STORED_SPOTIFY_CREDENTIALS`). This advertises
+ * a temporary Connect device; when the user selects it in the Spotify app, librespot
+ * returns a usable stored-credentials blob to persist as `librespotCredentials`.
+ * See librespot-org/librespot#1737, devgianlu/go-librespot#364.
+ */
+export async function pairLibrespotCredentialsViaZeroconf(params: {
+  deviceId: string;
+  name?: string;
+  timeoutMs?: number;
+}): Promise<{ username: string; credentials: string } | null> {
+  const { deviceId, name, timeoutMs } = params;
+  if (typeof addon.startZeroconfLogin !== 'function') {
+    log.warn('native librespot has no startZeroconfLogin; cannot Zeroconf-pair');
+    return null;
+  }
+  try {
+    const result = await addon.startZeroconfLogin(deviceId, name, timeoutMs);
+    const credentials = result?.credentialsJson;
+    if (!credentials) {
+      log.warn('zeroconf pairing returned no credentials payload');
+      return null;
+    }
+    return { username: result.username, credentials };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn('zeroconf pairing failed', { message });
+    return null;
+  }
+}
+
 export async function generateLibrespotCredentialsFromOAuth(params: {
   accessToken: string;
   deviceName?: string;

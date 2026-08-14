@@ -185,7 +185,11 @@ class SpotifyConnectInstance {
     }
 
     const native = await startNativeConnectHost({
-      credentialsPath: this.credentialsPayload ?? credPath,
+      // Only pass a real credentials blob. Falling back to credPath (a FILE PATH)
+      // makes startNativeConnectHost treat the path string as a JSON blob, so
+      // librespot fails with "invalid credentials json" and the access-token path
+      // is never reached.
+      credentialsPath: this.credentialsPayload ?? '',
       deviceName: deviceId,
       publishName,
       onEvent: (ev) => this.handleNativeEvent(ev),

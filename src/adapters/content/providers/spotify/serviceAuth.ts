@@ -9,6 +9,7 @@ import { consumePkceVerifier } from '@/adapters/content/providers/spotify/pkce';
 import { resolveSpotifyClientId } from '@/adapters/content/providers/spotify/utils';
 import {
   generateLibrespotCredentialsFromOAuth,
+  pairLibrespotCredentialsViaZeroconf,
 } from '@/adapters/inputs/spotify/spotifyStreamingService';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -259,6 +260,82 @@ export async function handleSpotifyLibrespotOAuth(
     log.warn('librespot oauth credential generation failed', { accountId, message });
     res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'librespot_oauth_failed', message }));
+  }
+}
+
+/**
+ * Bootstrap librespot credentials for an account via a Zeroconf handshake.
+ * Request (POST): /admin/api/spotify/librespot/zeroconf { accountId, deviceName?, timeoutMs? }
+ * Advertises a temporary Spotify Connect device; the request resolves once the user
+ * selects it in the Spotify app (or the timeout elapses). The returned stored-credentials
+ * blob is persisted as the account's librespotCredentials. This is the only auth path
+ * Spotify still accepts after its 2026-08 access-token change (see #333).
+ */
+export async function handleSpotifyLibrespotZeroconf(
+  req: IncomingMessage,
+  res: ServerResponse,
+  configPort: ConfigPort,
+  spotifyInputService: SpotifyInputService,
+): Promise<void> {
+  if (req.method !== 'POST') {
+    res.writeHead(405, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'method_not_allowed' }));
+    return;
+  }
+
+  const body = (await readJsonBody(req)) as
+    | { accountId?: string; deviceName?: string; timeoutMs?: number }
+    | null;
+  const accountId = (body?.accountId || '').trim();
+  const deviceName = (body?.deviceName || '').trim() || `${accountId || 'lox'} (pairing)`;
+  const timeoutMs =
+    typeof body?.timeoutMs === 'number' && Number.isFinite(body.timeoutMs)
+      ? Math.max(30_000, Math.min(300_000, body.timeoutMs))
+      : 120_000;
+
+  if (!accountId) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'missing_account' }));
+    return;
+  }
+
+  const cfg = configPort.getConfig();
+  const account = cfg.content?.spotify?.accounts?.find(
+    (acc) =>
+      acc.id === accountId ||
+      acc.user === accountId ||
+      acc.email === accountId ||
+      acc.spotifyId === accountId,
+  );
+  if (!account) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'account_not_found' }));
+    return;
+  }
+
+  try {
+    const deviceId = `lox-pair-${accountId}`.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 63) || 'lox-pair';
+    const result = await pairLibrespotCredentialsViaZeroconf({ deviceId, name: deviceName, timeoutMs });
+    if (!result) {
+      res.writeHead(408, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'zeroconf_pairing_failed' }));
+      return;
+    }
+    let parsed: string | Record<string, unknown> = result.credentials;
+    try {
+      parsed = JSON.parse(result.credentials);
+    } catch {
+      /* keep string */
+    }
+    await pushLibrespotCredentials(spotifyInputService, accountId, parsed);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, username: result.username }));
+    reinitializeSpotifyInputs(configPort, spotifyInputService, 'zeroconf_credentials_updated', accountId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn('zeroconf pairing failed', { accountId, message });
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'librespot_zeroconf_failed', message }));
   }
 }
 
