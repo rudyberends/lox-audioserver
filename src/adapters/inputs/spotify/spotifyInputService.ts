@@ -33,6 +33,7 @@ import {
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { LibrespotSession } from '@sonn-audio/node-librespot';
+import { SoloistPlaybackService } from '@/adapters/inputs/spotify/soloist/soloistPlaybackService';
 
 type AirplaySessionStopper = (zoneId: number, reason?: string) => void;
 type OutputErrorHandler = (zoneId: number, reason?: string) => void;
@@ -339,6 +340,10 @@ class SpotifyConnectInstance {
 
   public getZoneId(): number {
     return this.zoneId;
+  }
+
+  public getZoneName(): string {
+    return this.zoneName;
   }
 
   private async ensureCredentials(
@@ -1741,6 +1746,12 @@ export class SpotifyInputService {
   /** Set once syncZones has run, so instances aren't started before configuration. */
   private synced = false;
   private readonly pendingStartTimers = new Map<number, NodeJS.Timeout>();
+  /**
+   * The other way a zone can play Spotify. Owned here so the choice is made at the one place
+   * playback is requested, and everything upstream — queue, metadata, session tracking — stays
+   * unaware of which client produced the audio.
+   */
+  public readonly soloist: SoloistPlaybackService;
   constructor(
     private readonly notifyOutputError: OutputErrorHandler,
     private readonly configPort: ConfigPort,
@@ -1749,9 +1760,14 @@ export class SpotifyInputService {
     private readonly airplaySessionStopper: AirplaySessionStopper,
     private readonly playerRegistry: PlayerRegistryPort,
     private readonly streamProxy: SpotifyStreamProxyService,
-  ) {}
+  ) {
+    this.soloist = new SoloistPlaybackService(configPort);
+  }
 
   public stopActiveSession(zoneId: number, reason?: string): void {
+    if (this.soloist.isPlaying(zoneId)) {
+      void this.soloist.stopZone(zoneId, reason ?? 'stop');
+    }
     const instance = this.instances.get(zoneId);
     if (!instance) {
       return;
@@ -1887,10 +1903,26 @@ export class SpotifyInputService {
 
   public configure(controller: SpotifyConnectController): void {
     this.controller = controller;
+    // The soloist backend needs the same way back into a zone: with its process always running,
+    // a zone is a Connect device at all times and playback can start from a phone at any moment.
+    this.soloist.setController(controller);
   }
 
   public syncZones(zones: ZoneConfig[], spotifyConfig?: GlobalSpotifyConfig | null): void {
     this.configPort.ensureInputs();
+    // Every zone gets a Soloist, whatever the per-zone Connect switch says.
+    //
+    // That switch means "show this zone as a Spotify Connect target", and with librespot it is
+    // separable: the connect host is one thing, playing a track this server picked is another.
+    // Soloist cannot separate them — there is no option not to advertise, and `deactivate` only
+    // gives up being the *active* device — so honouring the switch would mean a zone that had
+    // Connect turned off could not play Spotify at all. Running everywhere is the lesser cost, and
+    // the switch is shown as fixed on while this backend is in use.
+    if (this.soloist.isEnabled()) {
+      void this.soloist.syncZones(zones.map((zone) => zone.id));
+    } else {
+      void this.soloist.stopAllZones();
+    }
     // Spotify Connect is opt-in per player; the only gate is zone.inputs.spotify.
     this.synced = true;
     if (!this.controller) {
@@ -2009,6 +2041,13 @@ export class SpotifyInputService {
 
   public async shutdown(): Promise<void> {
     this.clearQueuedStarts();
+    // Child processes and a sound server outlive us if nobody says otherwise.
+    await bestEffort(() => this.soloist.shutdown(), {
+      fallback: undefined,
+      onError: 'debug',
+      log: this.log,
+      label: 'soloist shutdown failed',
+    });
     await Promise.all(
       Array.from(this.instances.values()).map((instance) =>
         // Best-effort shutdown; continue stopping remaining instances.
@@ -2151,6 +2190,12 @@ export class SpotifyInputService {
     seekPositionMs = 0,
     accountId?: string,
   ): Promise<PlaybackSource | null> {
+    // A zone on the soloist backend never touches librespot. Falling back to it on failure would
+    // be worse than failing: the two disagree about which accounts can play at all, so a zone that
+    // was moved to soloist for that reason would silently go back to the client that cannot.
+    if (this.soloist.isEnabled()) {
+      return this.soloist.getPlaybackSource(zoneId, spotifyUri, seekPositionMs);
+    }
     const instance = this.instances.get(zoneId);
     if (!instance) {
       this.log.warn('spotify instance missing for zone', { zoneId });
@@ -2171,6 +2216,10 @@ export class SpotifyInputService {
     spotifyUri: string,
     accountId?: string,
   ): Promise<void> {
+    if (this.soloist.isEnabled()) {
+      // Nothing to warm: soloist resolves nothing ahead of time, it starts a process per track.
+      return;
+    }
     const instance = this.instances.get(zoneId);
     if (!instance) {
       return;

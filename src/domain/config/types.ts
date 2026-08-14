@@ -291,6 +291,8 @@ export interface SpotifyContentConfig {
   cacheEnabled?: boolean;
   /** Maximum size of the audio cache in megabytes. Defaults to 1024. */
   cacheSizeMb?: number;
+  /** Opt-in second playback backend; see {@link SoloistConfig}. */
+  soloist?: SoloistConfig;
 }
 
 export interface LibraryContentConfig {
@@ -688,6 +690,36 @@ export interface PowerGroupConfig {
 export interface GlobalSpotifyConfig {
   clientId?: string;
   accounts?: SpotifyAccountConfig[];
+}
+
+/**
+ * Spotify Soloist: Spotify's own headless client, run as a per-zone child process.
+ *
+ * Opt-in and experimental. It exists next to librespot rather than replacing it because the two
+ * fail in opposite places — librespot cannot get audio keys for accounts created after Nov 2025,
+ * and Soloist costs a per-user API key, a binary the user installs themselves, and a build that
+ * expires every 90 days.
+ */
+export interface SoloistConfig {
+  /**
+   * Which client plays Spotify, for the whole server. Off means the built-in one, so an existing
+   * installation keeps behaving exactly as it did.
+   *
+   * Deliberately not per zone. The two clients differ in what they need installed and how they log
+   * in, not in how a room sounds, so there is nothing a room-by-room choice would buy that is worth
+   * the setup it would ask of everyone.
+   */
+  enabled?: boolean;
+  /**
+   * Developer API key. Personal to whoever generated it and Premium-only, so it is never shipped
+   * and never defaulted — a zone on the soloist backend cannot start without one.
+   */
+  apiKey?: string;
+  /**
+   * The `client expires in N days` figure Soloist reports at startup, with when it was read.
+   * Stored so the admin screen can warn before a build dies rather than after.
+   */
+  expiry?: { daysAtCheck: number; checkedAt: number; version?: string };
 }
 
 export interface GlobalLineInConfig {

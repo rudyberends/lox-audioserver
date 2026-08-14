@@ -16,6 +16,11 @@ import {
   handleSpotifyLibrespotZeroconf,
   handleSpotifyOAuthCallback,
 } from '@/adapters/content/providers/spotify/serviceAuth';
+import {
+  handleSoloistBinaryUpload,
+  handleSoloistSettings,
+  handleSoloistStatus,
+} from '@/adapters/http/adminApi/spotify/soloistHandlers';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 import { defaultConfig } from '@/adapters/http/adminApi/config/configHandlers';
 import type { MusicAssistantConnectionResult } from '@/adapters/http/adminApi/musicassistant/musicAssistantHelpers';
@@ -36,6 +41,7 @@ export type SpotifyHandlerDeps = {
   zoneManager: ZoneManagerFacade;
   musicAssistantStreamService: MusicAssistantStreamService;
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
+  readBinaryBody: (req: IncomingMessage, res: ServerResponse, maxBytes: number) => Promise<Buffer | null>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
 };
 
@@ -102,6 +108,28 @@ export function buildSpotifyRoutes(deps: SpotifyHandlerDeps): Route[] {
       method: 'GET',
       pattern: /^\/spotify\/librespot\/status$/,
       handler: async (_req, res) => handleSpotifyLibrespotStatus(res, deps),
+    },
+    // Soloist: the opt-in second backend. Everything here is inert until a zone asks for it.
+    {
+      method: 'GET',
+      pattern: /^\/spotify\/soloist\/status$/,
+      handler: async (_req, res) => handleSoloistStatus(res, deps),
+    },
+    {
+      method: 'POST',
+      pattern: /^\/spotify\/soloist\/settings$/,
+      handler: async (req, res) => {
+        const body = (await deps.readJsonBody(req, res)) as
+          | { enabled?: boolean; apiKey?: string }
+          | null;
+        if (res.writableEnded) return;
+        await handleSoloistSettings(res, deps, body);
+      },
+    },
+    {
+      method: 'POST',
+      pattern: /^\/spotify\/soloist\/binary$/,
+      handler: async (req, res) => handleSoloistBinaryUpload(req, res, deps),
     },
     {
       method: 'DELETE',

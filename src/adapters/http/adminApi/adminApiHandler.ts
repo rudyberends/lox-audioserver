@@ -262,6 +262,7 @@ export class AdminApiHandler {
         zoneManager: this.zoneManager,
         musicAssistantStreamService: this.musicAssistantStreamService,
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
+        readBinaryBody: (req, res, max) => readBinaryBody(req, res, max),
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),
       ...buildAuthRoutes({
