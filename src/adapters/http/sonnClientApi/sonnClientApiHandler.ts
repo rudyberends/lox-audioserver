@@ -377,6 +377,10 @@ export class SonnClientApiHandler {
         ...this.buildDesiredState(deviceId, req),
         claimed: true,
         claimed_at: this.claimedAt(deviceId),
+        // Said out loud when a person did it. A device does not leave the server it belongs to
+        // because another one says it should — that is how it drifted away during a restart — but
+        // somebody pressing Claim is exactly the case where it must.
+        claimed_by_hand: claimedByHand ? true : undefined,
       });
       return;
     }
