@@ -70,6 +70,15 @@ type RegisterPayload = {
    * all of them.
    */
   claimed_by?: string;
+  /**
+   * The server this device believes runs it.
+   *
+   * Not the same as {@link claimed_by}, which says "I have been given away". This says "somebody
+   * already has me", and it is what stops a server adopting a device during another server's
+   * restart: for that minute it really is the only one answering, and nothing else can tell that
+   * minute apart from a house with one server.
+   */
+  attached_to?: string;
 };
 
 type StatusPayload = {
@@ -198,6 +207,15 @@ export class SonnClientApiHandler {
    * when the device is removed — for something that is stale minutes after it is read.
    */
   private readonly logsByDevice = new Map<string, DeviceLogs>();
+  /**
+   * Devices somebody has just claimed here, until they say they have heard it.
+   *
+   * A device names the server it believes runs it, and that normally decides: a server it does not
+   * name leaves it alone, however alone that server looks. Somebody pressing Claim is the exception
+   * — it is the one moment a person outranks the device — and it stays the exception only until the
+   * device answers with our name, which is the same poll.
+   */
+  private readonly pendingClaims = new Set<string>();
 
   constructor(
     private readonly configPort: ConfigPort,
@@ -334,8 +352,26 @@ export class SonnClientApiHandler {
     // Alone with this device, or already its server: take it on, which is what writing it into the
     // config means. With several servers in earshot the choice is a person's to make, so it is kept
     // in memory and offered on every one of their screens until one of them claims it.
-    const alone = (body?.servers?.length ?? 1) <= 1;
-    if (known || alone) {
+    //
+    // "Alone" is only ever a claim to adopt on. A device that says another server runs it is not
+    // ours to take, however alone we look — that server is restarting, or off for the evening, and
+    // the device will go back to it. Claiming it here is a button somebody presses, and after that
+    // this server knows it and the first branch above answers.
+    const attachedTo = (body?.attached_to ?? '').trim();
+    const namesUs = attachedTo ? this.isSelf(attachedTo, req) : false;
+    const attachedElsewhere = Boolean(attachedTo) && !namesUs;
+    // Somebody pressed Claim here. That outranks what the device believes, exactly once: it is how a
+    // device is moved, and how a stale entry on a server that adopted one by accident is corrected.
+    const claimedByHand = this.pendingClaims.has(deviceId);
+    if (namesUs || claimedByHand) {
+      this.pendingClaims.delete(deviceId);
+    }
+    // Ours when the device says so, when a person just said so, or when nothing else has it and we
+    // are the only server it can see. Knowing it from an earlier adoption is deliberately not
+    // enough: that is the entry a server keeps after taking a device during another's restart, and
+    // it is what made a speaker drift away and stay away.
+    const alone = (body?.servers?.length ?? 1) <= 1 && !attachedElsewhere;
+    if (namesUs || claimedByHand || (known && !attachedElsewhere) || alone) {
       await this.rememberDevice(registration);
       this.sendJson(res, 200, {
         ...this.buildDesiredState(deviceId, req),
@@ -348,6 +384,9 @@ export class SonnClientApiHandler {
     this.log.info('sonn client waiting to be claimed', {
       deviceId,
       servers: body?.servers?.length,
+      // Named when it is the reason we did not take it on, so a device that never appears here is
+      // explainable from this line alone.
+      attachedTo: attachedElsewhere ? body?.attached_to : undefined,
     });
     this.sendJson(res, 200, { claimed: false });
   }
@@ -957,6 +996,9 @@ export class SonnClientApiHandler {
     if (!registration || this.findDeviceConfig(deviceId)) {
       return false;
     }
+    // Noted as well as written: the device may still believe another server runs it, and this is
+    // what tells it otherwise on its next announcement.
+    this.pendingClaims.add(deviceId);
     await this.rememberDevice(registration);
     this.log.info('sonn client claimed', { deviceId });
     return true;
@@ -1004,6 +1046,7 @@ export class SonnClientApiHandler {
     this.registrations.delete(deviceId);
     this.statusByDevice.delete(deviceId);
     this.commandQueues.delete(deviceId);
+    this.pendingClaims.delete(deviceId);
     this.log.info('sonn client forgotten', { deviceId });
   }
 
