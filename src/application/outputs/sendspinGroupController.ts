@@ -9,15 +9,31 @@ import { getGroupByZone, onGroupChanged } from '@/application/groups/groupTracke
 import type { GroupRecord } from '@/application/groups/types/groupRecord';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
 
+/**
+ * One entry of a client's `supported_formats` list from client/hello.
+ *
+ * Declared structurally rather than taken from the module's types because older published
+ * node-sendspin builds do not expose the getter that returns these; see
+ * `SendspinOutput.getDeclaredFormats`.
+ */
+export type SendspinDeclaredFormat = {
+  codec?: string;
+  sample_rate?: number;
+  bit_depth?: number;
+  channels?: number;
+};
+
 export type SendspinGroupParticipant = {
   getClientId(): string;
   isClientConnected(): boolean;
   getBufferedFrames?(): Array<{ data: Buffer; timestampUs: number }>;
   getFutureFrames?(minFutureMs?: number): Array<{ data: Buffer; timestampUs: number }>;
   ensureClientReady?(): Promise<void> | void;
-  /** Leader hook: switch the shared stream to PCM now that it drives a group,
-   *  so members on any codec can decode it. No-op if already PCM. */
-  ensureGroupCodec?(): Promise<void> | void;
+  /** What this client said it can play, so a leader can pick a format the whole group takes. */
+  getDeclaredFormats?(): SendspinDeclaredFormat[];
+  /** Leader hook: rebuild the shared stream for the group it now drives, so every
+   *  member can decode it. No-op if the live format already suits them all. */
+  ensureGroupFormat?(): Promise<void> | void;
 };
 
 type PlayerStreamFormat = PlayerFormat;
@@ -29,6 +45,7 @@ type ControllerPayload = Parameters<SendspinSession['sendControllerState']>[0];
 export type SendspinGroupCoordinator = {
   register: (zoneId: number, participant: SendspinGroupParticipant) => void;
   unregister: (zoneId: number) => void;
+  getMemberDeclaredFormats: (leaderZoneId: number) => SendspinDeclaredFormat[][];
   notifyStreamStart: (leaderZoneId: number, format: PlayerStreamFormat) => void;
   notifyStreamEnd: (leaderZoneId: number) => void;
   broadcastFrame: (leaderZoneId: number, frame: { data: Buffer; timestampUs: number }) => void;
@@ -87,6 +104,31 @@ class SendspinGroupController {
 
   public register(zoneId: number, participant: SendspinGroupParticipant): void {
     this.participants.set(zoneId, participant);
+  }
+
+  /**
+   * What each connected member of this group declared it can play, one list per member.
+   *
+   * Members never negotiate for themselves — `notifyStreamStart` hands them the leader's
+   * format verbatim — so this is the only place their capabilities can enter the choice.
+   * An empty outer array means the zone leads nobody and is free to please itself.
+   */
+  public getMemberDeclaredFormats(leaderZoneId: number): SendspinDeclaredFormat[][] {
+    const group = getGroupByZone(leaderZoneId);
+    if (!group || group.leader !== leaderZoneId) {
+      return [];
+    }
+    const members = new Set<number>([group.leader, ...group.members]);
+    members.delete(leaderZoneId);
+    const declared: SendspinDeclaredFormat[][] = [];
+    for (const memberId of members) {
+      const participant = this.participants.get(memberId);
+      if (!participant?.isClientConnected()) {
+        continue;
+      }
+      declared.push(participant.getDeclaredFormats?.() ?? []);
+    }
+    return declared;
   }
 
   public unregister(zoneId: number): void {
@@ -213,9 +255,10 @@ class SendspinGroupController {
       return;
     }
 
-    // Make the leader stream PCM before feeding members, so a member on any
-    // codec can decode the shared audio. No-op if the leader is already PCM.
-    await leaderParticipant.ensureGroupCodec?.();
+    // Rebuild the leader's stream for the group before feeding members: it was negotiated
+    // for one client and may be a codec, or a rate, the new member cannot play. No-op when
+    // the live format already suits everyone.
+    await leaderParticipant.ensureGroupFormat?.();
 
     const snapshotTargets: SendspinGroupParticipant[] = [];
     for (const memberId of members) {

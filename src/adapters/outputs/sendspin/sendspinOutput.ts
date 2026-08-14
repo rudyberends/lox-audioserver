@@ -29,6 +29,7 @@ import type {
 } from '@/ports/OutputsTypes';
 import type { SendspinSession } from '@sonn-audio/node-sendspin';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
+import type { SendspinDeclaredFormat } from '@/application/outputs/sendspinGroupController';
 import type { PlaybackSource } from '@/ports/EngineTypes';
 import { probeFileFormat, type ProbedSourceFormat } from '@/engine/sourceProbe';
 import { FlacFrameSplitter } from '@/engine/flacFrameSplitter';
@@ -38,22 +39,17 @@ import {
   getStoredClientFormat,
   rememberClientFormat,
 } from '@/adapters/outputs/sendspin/sendspinFormatStore';
+import {
+  allDeclareFormat,
+  declaresFormat,
+} from '@/adapters/outputs/sendspin/sendspinFormatMatch';
 
 type SendspinFormat = PlayerFormatWithBitDepth<PcmBitDepth>;
 
 type ArtworkChannel = Parameters<SendspinSession['sendArtworkStreamStart']>[0][number];
 
-/**
- * One entry of a client's `supported_formats` list from client/hello. Declared
- * locally because older published node-sendspin builds do not expose the getter
- * that returns these; see getClientDeclaredFormats.
- */
-type ClientDeclaredFormat = {
-  codec?: string;
-  sample_rate?: number;
-  bit_depth?: number;
-  channels?: number;
-};
+/** One entry of a client's `supported_formats` list from client/hello. */
+type ClientDeclaredFormat = SendspinDeclaredFormat;
 
 // Multiple zones can be configured against the same Sendspin client. In that case we need
 // a single "controller" zone at a time; otherwise multiple outputs race and the client can
@@ -1990,18 +1986,28 @@ export class SendspinOutput implements ZoneOutput {
     }
   }
 
-  /** Switch the leader's live stream to PCM when it now drives a group, before
-   *  members are fed. No-op if not the playing owner, not a group leader, or
-   *  already PCM. Called by the group controller on membership changes so a
-   *  solo OPUS/FLAC stream becomes decodable for every (incl. PCM-only) member. */
-  public async ensureGroupCodec(): Promise<void> {
+  /**
+   * Rebuild the leader's live stream for the group it now drives, before members are fed.
+   *
+   * A solo stream is negotiated for exactly one client, and members get it verbatim, so two
+   * things can be wrong with it the moment a group forms: the codec (an OPUS/FLAC stream a
+   * PCM-only member cannot decode) and the rate — including the source's own native rate,
+   * which this zone is free to follow while it plays alone but a member may never have
+   * declared. Restarting settles both, because the choice is made again in `startStream`
+   * with the group in place.
+   *
+   * No-op if not the playing owner, not a group leader, or the live format already suits
+   * every member. Called by the group controller on membership changes.
+   */
+  public async ensureGroupFormat(): Promise<void> {
     if (!this.isOwner() || !this.clientConnected || this.playbackState !== 'playing') {
       return;
     }
     if (!this.isGroupLeaderWithMembers()) {
       return;
     }
-    if (this.activeOutputFormat?.codec === AudioCodec.PCM) {
+    const active = this.activeOutputFormat;
+    if (active && active.codec === AudioCodec.PCM && this.groupMembersAccept(active)) {
       return;
     }
     await this.startStream({ preserveAnchor: false });
@@ -2667,21 +2673,22 @@ export class SendspinOutput implements ZoneOutput {
    *    every sample and inflates the stream ~2.7x for nothing. At the native rate
    *    we hand the provider's decode to the player exactly as delivered.
    *
-   * Deliberately conservative — it only ever moves to a format the client listed
-   * in its own `supported_formats`, and returns `format` untouched when:
+   * Deliberately conservative — it only ever moves to a format every client that will hear
+   * this stream listed in its own `supported_formats`, and returns `format` untouched when:
    *  - the source format is unknown (no declaration, no probe),
    *  - the client never declared a matching entry,
-   *  - the zone is a group leader (members must share one format).
+   *  - the zone leads a group and a member never declared one either.
+   *
+   * That last case used to be "the zone leads a group", full stop, which is a rate rise the
+   * ear pays for whenever the group could have taken the source as it is: two rooms that
+   * both play 44.1 kHz untouched on their own were resampled to 48 kHz purely for being
+   * grouped. One format for the whole group is the real constraint — that it be the
+   * *leader's* negotiated one never was.
    */
   private async applyBitPerfectFormat(
     format: SendspinFormat,
     source: PlaybackSource,
   ): Promise<SendspinFormat> {
-    // Members of a group all decode the leader's stream; changing rate per source
-    // would desync them. Leave grouped zones on the negotiated format.
-    if (this.isGroupLeaderWithMembers()) {
-      return format;
-    }
     const native = await this.probeSourceFormat(source);
     if (!native) {
       return format;
@@ -2697,14 +2704,14 @@ export class SendspinOutput implements ZoneOutput {
     ) {
       return format;
     }
-    const declared = this.getClientDeclaredFormats();
-    const supportsNative = declared.some(
-      (fmt) =>
-        fmt.sample_rate === native.sampleRate &&
-        fmt.bit_depth === targetBitDepth &&
-        fmt.channels === native.channels,
-    );
-    if (!supportsNative) {
+    const target: SendspinFormat = {
+      ...format,
+      sampleRate: native.sampleRate,
+      channels: native.channels,
+      bitDepth: targetBitDepth,
+    };
+    const declared = this.getDeclaredFormats();
+    if (!declaresFormat(declared, target)) {
       this.log.debug('Sendspin native-format match skipped; client does not declare it', {
         zoneId: this.zoneId,
         clientId: this.clientId,
@@ -2713,20 +2720,30 @@ export class SendspinOutput implements ZoneOutput {
       });
       return format;
     }
+    // No leader-check needed: a zone that leads nobody has no member lists to fail.
+    if (!this.groupMembersAccept(target)) {
+      this.log.debug('Sendspin native-format match skipped; a grouped member does not declare it', {
+        zoneId: this.zoneId,
+        clientId: this.clientId,
+        source: { sampleRate: native.sampleRate, bitDepth: targetBitDepth, channels: native.channels },
+      });
+      return format;
+    }
     this.log.info('Sendspin matching source format to avoid resampling', {
       zoneId: this.zoneId,
       clientId: this.clientId,
       codecName: native.codecName,
       lossless: native.lossless,
+      grouped: this.isGroupLeaderWithMembers(),
       from: { sampleRate: format.sampleRate, bitDepth: format.bitDepth },
       to: { sampleRate: native.sampleRate, bitDepth: targetBitDepth },
     });
-    return {
-      ...format,
-      sampleRate: native.sampleRate,
-      channels: native.channels,
-      bitDepth: targetBitDepth,
-    };
+    return target;
+  }
+
+  /** Whether every connected member of this zone's group declared the given format. */
+  private groupMembersAccept(format: SendspinFormat): boolean {
+    return allDeclareFormat(this.ports.sendspinGroup.getMemberDeclaredFormats(this.zoneId), format);
   }
 
   /**
@@ -2737,9 +2754,19 @@ export class SendspinOutput implements ZoneOutput {
    * from older published builds, so the lookup is duck-typed rather than relying on
    * the module's type surface. An empty list simply means we keep the negotiated
    * format instead of moving to the source's native one.
+   *
+   * Asked of the core by client id, exactly as `getProtocolCapabilities` does, and not of the
+   * stored `activeSession`. Two ways to ask one question is one too many, and the stored field is
+   * the unreliable one: it is filled by the identify hook and cleared on disconnect, so a client
+   * this output adopted rather than shook hands with leaves it null — and a null one silently
+   * answers "declares nothing", which reads as "cannot play the source's rate". The API kept
+   * listing the formats all along, because it was already asking the other way.
+   *
+   * Public because a group leader asks its members for theirs: they are handed its stream
+   * without a say, so their lists are part of the leader's choice.
    */
-  private getClientDeclaredFormats(): ClientDeclaredFormat[] {
-    const session = this.activeSession as
+  public getDeclaredFormats(): ClientDeclaredFormat[] {
+    const session = sendspinCore.getSessionByClientId(this.activeClientId()) as
       | { getPlayerSupportedFormats?: () => ClientDeclaredFormat[] }
       | null
       | undefined;
@@ -2778,7 +2805,27 @@ export class SendspinOutput implements ZoneOutput {
       };
     }
     if (source.kind === 'file') {
-      // Local files are cheap to probe and have no session semantics.
+      /*
+       * The library already knows: it parsed every scanned file's format for its tags, and the audio
+       * manager attaches it to the source (see `declareFileFormat`). Reading it here is free and, more
+       * to the point, it works — the probe below shells out to `ffprobe`, and `ffmpeg-static` ships
+       * ffmpeg *only*, so on any install without a system ffmpeg there is no ffprobe to run. Every
+       * local file then came back "format unknown" and a 96 kHz/24-bit FLAC was resampled to whatever
+       * the client had negotiated, silently, because a failed probe degrades to exactly that.
+       *
+       * The probe stays as the fallback for files the library never scanned — alert sounds, anything
+       * outside a configured share — where there is nothing declared to read.
+       */
+      const declared = source.nativeFormat;
+      if (declared) {
+        return {
+          sampleRate: declared.sampleRate,
+          channels: declared.channels,
+          bitDepth: declared.bitDepth ?? null,
+          lossless: declared.lossless,
+          codecName: declared.codecName ?? '',
+        };
+      }
       return probeFileFormat(source.path);
     }
     // Pipe sources already declare their format; there is nothing to probe.

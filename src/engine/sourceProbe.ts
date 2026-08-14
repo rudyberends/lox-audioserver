@@ -28,6 +28,14 @@ const FFPROBE_BINARY: string = (() => {
 /** Probing must never stall playback; a slow/absent probe just means "unknown". */
 const PROBE_TIMEOUT_MS = 2000;
 
+/**
+ * Said once, and at `warn` rather than `debug`, because "unknown" is not a neutral answer here: a
+ * caller that cannot learn a file's format keeps the negotiated one, so a 96 kHz/24-bit FLAC is
+ * resampled and dithered without anything saying so. `ffmpeg-static` ships ffmpeg only, so an
+ * install with no system ffmpeg has no ffprobe at all and every unscanned file takes that path.
+ */
+let missingBinaryWarned = false;
+
 export interface ProbedSourceFormat {
   sampleRate: number;
   channels: number;
@@ -134,6 +142,12 @@ export async function probeFileFormat(filePath: string): Promise<ProbedSourceFor
       { timeout: PROBE_TIMEOUT_MS, maxBuffer: 1024 * 64 },
       (error, out) => {
         if (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !missingBinaryWarned) {
+            missingBinaryWarned = true;
+            log.warn('ffprobe not found; files the library has not scanned cannot be played untouched', {
+              binary: FFPROBE_BINARY,
+            });
+          }
           log.debug('ffprobe failed; source format unknown', { filePath, error: error.message });
           resolve(null);
           return;

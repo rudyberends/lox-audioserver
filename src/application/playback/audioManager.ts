@@ -308,7 +308,13 @@ export class AudioManager {
     }
     const startAtSec = this.normalizeStartAtSec(options?.startAtSec);
     const rawSource = playbackSource?.kind === 'url' ? playbackSource.url : undefined;
-    const decorated = this.decorateRadioSource(zoneId, playbackSource, metadata, rawSource);
+    // Declared here too, not only in `startPlayback`: a caller that resolved the source itself can
+    // still hand us a local file, and a file whose format nobody states is a file that gets
+    // resampled. `declareFileFormat` only ever fills a gap, so a source that already carries one
+    // passes through untouched.
+    const decorated = this.declareFileFormat(
+      this.decorateRadioSource(zoneId, playbackSource, metadata, rawSource),
+    );
     const effectiveSource = this.applyStartAt(decorated, startAtSec, metadata);
     return this.startWithResolvedSource(
       zoneId,
