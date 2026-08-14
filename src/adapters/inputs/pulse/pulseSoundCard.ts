@@ -104,9 +104,16 @@ export class PulseSoundCard {
     return this.cards.get(id)?.takeStream() ?? null;
   }
 
-  /** What the player asked to play in, once it has asked. */
+  /**
+   * What comes out of this card, once the player has said what it plays.
+   *
+   * Not always what the player sends: a decoder hands over float, and float cannot reach a 24-bit
+   * output without something converting it. That something used to be PulseAudio's own sink, and
+   * it is this card now — see `deliveredSpecOf`.
+   */
   public specFor(id: number): SampleSpec | null {
-    return this.cards.get(id)?.spec ?? null;
+    const spec = this.cards.get(id)?.spec;
+    return spec ? deliveredSpecOf(spec) : null;
   }
 
   /**
@@ -139,6 +146,36 @@ export class PulseSoundCard {
     this.cards.clear();
     await Promise.all(cards.map((card) => card.close()));
   }
+}
+
+/**
+ * What a card hands on, given what the player sends it.
+ *
+ * Float is how a decoder thinks and not how anything downstream takes it: no output declares a
+ * 32-bit format, and an engine asked to carry float has to convert it somewhere. Converting here
+ * is what a sound card does — the old PulseAudio sink was pinned to 24-bit for exactly this — and
+ * it is what lets everything after this point match the samples it is given instead of resampling
+ * them into the shape they were already in.
+ */
+export function deliveredSpecOf(spec: SampleSpec): SampleSpec {
+  return spec.format.startsWith('f') ? { ...spec, format: 's24le' } : spec;
+}
+
+/**
+ * Float samples into 24-bit words.
+ *
+ * Rounded rather than truncated, and clamped: Spotify's own normalisation can push a peak past
+ * full scale, and wrapping that would be a click where clipping is merely loud.
+ */
+export function floatToS24(chunk: Buffer): Buffer {
+  const samples = Math.floor(chunk.length / 4);
+  const out = Buffer.allocUnsafe(samples * 3);
+  for (let i = 0; i < samples; i += 1) {
+    const value = Math.max(-1, Math.min(1, chunk.readFloatLE(i * 4)));
+    const scaled = Math.round(value * 8388607);
+    out.writeUIntLE(scaled < 0 ? scaled + 0x1000000 : scaled, i * 3, 3);
+  }
+  return out;
 }
 
 /** How much audio a client may run ahead of us. One second is what a sound card would offer. */
@@ -307,7 +344,8 @@ class CardSocket {
       // Nobody has taken this track's stream yet. A sound card would keep accepting audio — and so
       // do we, holding the last moment of it, because that moment is the start of the song. Older
       // than that is the previous track and is dropped.
-      this.pending.push(chunk);
+      const converted = this.convert(chunk);
+      this.pending.push(converted);
       this.pendingBytes += chunk.length;
       while (this.pendingBytes > this.maxPending()) {
         const dropped = this.pending.shift();
@@ -316,8 +354,13 @@ class CardSocket {
       this.grant();
       return;
     }
-    stream.feed(chunk);
+    stream.feed(this.convert(chunk));
     this.grant();
+  }
+
+  /** Whatever arrives, in the shape this card hands on. */
+  private convert(chunk: Buffer): Buffer {
+    return this.spec?.format.startsWith('f') ? floatToS24(chunk) : chunk;
   }
 
   /** At most a second of audio may wait for a reader; beyond that it is not a start any more. */
@@ -335,8 +378,12 @@ class CardSocket {
     }
     const bytesPerSec = spec.rate * frameSize(spec);
     const target = Math.round(bytesPerSec * TARGET_BUFFER_SEC);
+    // Counted in what the player sends, not in what we hand on: those differ once float is being
+    // converted, and credit is a promise made to the player in its own units.
+    const asSent = frameSize(spec) / frameSize(deliveredSpecOf(spec));
     const held =
-      (this.stream && !this.stream.destroyed ? this.stream.readableLength : 0) + this.pendingBytes;
+      (this.stream && !this.stream.destroyed ? this.stream.readableLength * asSent : 0) +
+      this.pendingBytes;
     // One bound only: how much audio we are willing to be holding. Pacing by wall clock as well
     // was tried and made things worse — a session restart reads nothing for a moment, the clock
     // keeps running, and what follows is a burst and then a starved reader, which is a stutter.

@@ -783,11 +783,6 @@ export class SoloistPlaybackService {
         kind: 'pipe',
         path: `soloist-${zoneId}`,
         format: spec.format as 's16le' | 's24le' | 's32le' | 'f32le',
-        // What the samples carry, not how wide the words are. Spotify's ceiling is 24 bits and the
-        // decoder hands them over in float, so a source described by its container claims 32 — and
-        // an output that cannot take 32 then declines the whole comparison, sample rate included.
-        // That put a resampler in front of every track for the sake of a depth nothing had.
-        bitDepth: spec.format.startsWith('f') ? 24 : undefined,
         sampleRate: spec.rate,
         channels: spec.channels,
         realTime: false,

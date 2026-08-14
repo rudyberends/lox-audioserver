@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from './testHarness';
 import {
+  deliveredSpecOf,
+  floatToS24,
+} from '../src/adapters/inputs/pulse/pulseSoundCard';
+import {
   frame,
   frameSize,
   PA_CHANNEL_COMMAND,
@@ -71,4 +75,40 @@ test('a frame is measured in whole samples, so credit never splits one', () => {
   assert.equal(frameSize({ format: 'f32le', channels: 2, rate: 44100 }), 8);
   assert.equal(frameSize({ format: 's24le', channels: 2, rate: 44100 }), 6);
   assert.equal(frameSize({ format: 's16le', channels: 2, rate: 44100 }), 4);
+});
+
+test('float samples land where they belong in 24-bit words', () => {
+  // Silence, both extremes and a half: a wrong scale or the wrong byte order shows up in one of
+  // these four, and nowhere else would it be caught before someone heard it.
+  const floats = Buffer.alloc(16);
+  floats.writeFloatLE(0, 0);
+  floats.writeFloatLE(1, 4);
+  floats.writeFloatLE(-1, 8);
+  floats.writeFloatLE(0.5, 12);
+  const pcm = floatToS24(floats);
+  assert.equal(pcm.length, 12, 'four samples of three bytes');
+  assert.equal(pcm.readIntLE(0, 3), 0);
+  assert.equal(pcm.readIntLE(3, 3), 8388607, 'full scale, not wrapped');
+  assert.equal(pcm.readIntLE(6, 3), -8388607);
+  assert.equal(pcm.readIntLE(9, 3), 4194304, 'half scale is half the number');
+});
+
+test('anything past full scale clips rather than wraps', () => {
+  // Spotify normalises, and a normalised peak can exceed 1.0. Wrapping would put a click exactly
+  // at the loudest moment of a track.
+  const floats = Buffer.alloc(8);
+  floats.writeFloatLE(1.4, 0);
+  floats.writeFloatLE(-2, 4);
+  const pcm = floatToS24(floats);
+  assert.equal(pcm.readIntLE(0, 3), 8388607);
+  assert.equal(pcm.readIntLE(3, 3), -8388607);
+});
+
+test('a player that already sends integers is handed on untouched', () => {
+  assert.deepEqual(deliveredSpecOf({ format: 's16le', channels: 2, rate: 44100 }), {
+    format: 's16le',
+    channels: 2,
+    rate: 44100,
+  });
+  assert.equal(deliveredSpecOf({ format: 'f32le', channels: 2, rate: 44100 }).format, 's24le');
 });
