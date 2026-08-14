@@ -1,0 +1,12 @@
+{
+  // Type-checks the test suite, which the build's tsconfig deliberately leaves
+  // out (it emits from src only). `npm test` runs ts-node --transpile-only, so
+  // without this the tests are never type-checked at all and drift away from
+  // the signatures they exercise.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "tests/**/*.ts"]
+}

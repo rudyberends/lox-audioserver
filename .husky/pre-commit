@@ -1,5 +1,12 @@
 #!/usr/bin/env sh
-# ESLint over all of src plus the dependency-cruiser boundary check (~10s).
+# ESLint over all of src plus the dependency-cruiser boundary check (~9s), then
+# the type-check of src *and* tests (~8s).
+#
 # Deliberately not lint-staged: the rules are type-aware, so a change in one
 # file can surface an error in another that isn't staged.
+#
+# The tests are type-checked because `npm test` runs ts-node --transpile-only,
+# which erases types — without this a test can call a function with the wrong
+# arguments, pass, and hide the drift. In a hurry: git commit --no-verify.
 npm run lint
+npm run typecheck
