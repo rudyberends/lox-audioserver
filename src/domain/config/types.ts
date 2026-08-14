@@ -716,6 +716,11 @@ export interface SoloistConfig {
    */
   apiKey?: string;
   /**
+   * Ask Spotify for lossless rather than letting it choose. Defaults to on — it is the reason
+   * this backend exists. Off restores Spotify's own "Automatic", which adapts to the connection.
+   */
+  lossless?: boolean;
+  /**
    * The `client expires in N days` figure Soloist reports at startup, with when it was read.
    * Stored so the admin screen can warn before a build dies rather than after.
    */

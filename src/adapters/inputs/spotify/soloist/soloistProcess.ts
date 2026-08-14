@@ -34,6 +34,47 @@ export type SoloistBinaryStatus = {
 /** Spotify gives a build ninety days, then it exits with code 10 whatever else is right. */
 export const SOLOIST_BUILD_LIFETIME_DAYS = 90;
 
+/**
+ * The streaming quality this zone asks Spotify for.
+ *
+ * Set per Connect device, not per account, and it defaults to Spotify's "Automatic" — so without
+ * this every room would have to be found in the Spotify app and switched to lossless by hand,
+ * in a screen most people never open. Soloist keeps it in the same plain `key=value` file the app
+ * writes, and does not overwrite it on login, so setting it here holds.
+ *
+ * Only two states are worth offering: lossless, or leave Spotify to decide. The intermediate
+ * tiers are bitrate ceilings for metered connections, which is not what a wired room needs.
+ */
+const QUALITY_PREF = 'audio.play_bitrate_non_metered_enumeration';
+const QUALITY_LOSSLESS = '5';
+
+export async function applyQualityPreference(zoneId: number, lossless: boolean): Promise<void> {
+  const usersDir = path.join(soloistDataDir(zoneId), 'settings', 'Users');
+  let accounts: string[];
+  try {
+    accounts = await fsp.readdir(usersDir);
+  } catch {
+    // No account has signed in yet; the next start after pairing writes it.
+    return;
+  }
+  for (const account of accounts) {
+    const prefsPath = path.join(usersDir, account, 'prefs');
+    let lines: string[];
+    try {
+      lines = (await fsp.readFile(prefsPath, 'utf8')).split('\n');
+    } catch {
+      continue;
+    }
+    const kept = lines.filter((line) => line.trim() && !line.startsWith(`${QUALITY_PREF}=`));
+    if (lossless) {
+      kept.push(`${QUALITY_PREF}=${QUALITY_LOSSLESS}`);
+    }
+    const next = `${kept.join('\n')}\n`;
+    await fsp.writeFile(prefsPath, next, 'utf8').catch(() => undefined);
+  }
+  log.debug('soloist quality preference applied', { zoneId, lossless });
+}
+
 /** Whether this zone has been through a handshake in the Spotify app. */
 export async function isZonePaired(zoneId: number): Promise<boolean> {
   try {

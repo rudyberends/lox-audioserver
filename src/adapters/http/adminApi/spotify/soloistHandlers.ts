@@ -79,6 +79,7 @@ export async function handleSoloistStatus(
     ok: true,
     enabled: settings.enabled === true,
     hasApiKey: Boolean(settings.apiKey?.trim()),
+    lossless: settings.lossless !== false,
     expiry: settings.expiry ?? null,
     hostArch: hostArch(),
     binary,
@@ -90,7 +91,7 @@ export async function handleSoloistStatus(
 export async function handleSoloistSettings(
   res: ServerResponse,
   deps: SoloistHandlerDeps,
-  body: { enabled?: boolean; apiKey?: string } | null,
+  body: { enabled?: boolean; apiKey?: string; lossless?: boolean } | null,
 ): Promise<void> {
   await deps.configPort.updateConfig((cfg) => {
     const spotify = cfg.content?.spotify;
@@ -100,6 +101,9 @@ export async function handleSoloistSettings(
     const next = { ...(spotify.soloist ?? {}) };
     if (typeof body?.enabled === 'boolean') {
       next.enabled = body.enabled;
+    }
+    if (typeof body?.lossless === 'boolean') {
+      next.lossless = body.lossless;
     }
     if (typeof body?.apiKey === 'string') {
       const trimmed = body.apiKey.trim();

@@ -12,6 +12,7 @@ import {
   SOLOIST_SINK_RATE,
 } from '@/adapters/inputs/spotify/soloist/soloistSinkManager';
 import {
+  applyQualityPreference,
   isZonePaired,
   probeBinary,
   soloistDataDir,
@@ -198,6 +199,10 @@ export class SoloistPlaybackService {
     if (!(await this.sinks.ensureSink(zoneId))) {
       return null;
     }
+
+    // Ask Spotify for lossless before the process starts: the app applies a quality change from
+    // the next track, so setting it after would leave the first one at whatever it defaulted to.
+    await applyQualityPreference(zoneId, this.settings.lossless !== false);
 
     // Clear the port file first. Soloist writes it once it is listening, so a leftover from the
     // previous run is read as this one's address — the connection is refused, and the process that
