@@ -1,5 +1,5 @@
 # Stage 1: Install dependencies and build the project
-FROM node:24-bookworm-slim AS builder
+FROM node:24-trixie-slim AS builder
 WORKDIR /app
 COPY package*.json ./
 
@@ -22,7 +22,7 @@ RUN npm run build
 RUN npm prune --omit=dev
 
 # Stage 2: Build crelay binary
-FROM debian:bookworm-slim AS crelay-builder
+FROM debian:trixie-slim AS crelay-builder
 ARG CRELAY_REF=master
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -43,7 +43,7 @@ RUN curl -fsSL "https://github.com/ondrej1024/crelay/archive/${CRELAY_REF}.tar.g
     && install -m 0755 crelay /usr/local/bin/crelay
 
 # Stage 3: Runtime image with mount tools
-FROM node:24-bookworm-slim AS runtime
+FROM node:24-trixie-slim AS runtime
 ARG BUILD_VERSION
 ARG BUILD_TIMESTAMP
 ARG YTDLP_VERSION=2026.02.04
@@ -63,6 +63,11 @@ RUN apt-get update \
         libftdi1 \
         libhidapi-libusb0 \
         python3 \
+        # Spotify's Soloist is supplied by the user, not shipped, but it can only run here: it
+        # links against libatomic and reaches a sound card through libpulse, which it dlopens and
+        # points at this server's own. No sound daemon is involved, and none is installed.
+        libatomic1 \
+        libpulse0 \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -L -o /usr/local/bin/yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp" \
     && chmod +x /usr/local/bin/yt-dlp \

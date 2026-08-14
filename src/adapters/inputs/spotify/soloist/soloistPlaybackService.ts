@@ -750,12 +750,6 @@ export class SoloistPlaybackService {
     await this.audio.stop();
   }
 
-  /** Exposed so the pairing endpoint can reach the same audio socket. */
-  public async sinkEnvFor(zoneId: number): Promise<Record<string, string>> {
-    await this.audio.ensure(zoneId);
-    return this.audio.childEnv(zoneId);
-  }
-
   public dataDirFor(zoneId: number): string {
     return soloistDataDir(zoneId);
   }
