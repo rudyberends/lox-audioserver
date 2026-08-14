@@ -60,7 +60,9 @@ function sourceFormatFor(
   // out of it: both carry the same numbers, but raw PCM's bitrate follows from them exactly and
   // is worth stating. Everything else is described by whatever declared or probed it.
   if (source.kind === 'pipe' && source.sampleRate && source.channels && source.format) {
-    const bitDepth = pcmBitDepthFromFormat(source.format);
+    // What is in the samples outranks what the words could hold: a pipe is declared wide enough
+    // for the worst case it may carry, so the container alone would overstate a narrower master.
+    const bitDepth = source.bitDepth ?? pcmBitDepthFromFormat(source.format);
     return {
       codec: 'pcm',
       sampleRate: source.sampleRate,

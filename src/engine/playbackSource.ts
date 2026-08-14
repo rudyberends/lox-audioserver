@@ -69,6 +69,14 @@ export type PlaybackSource =
       path: string;
       preDelayMs?: number;
       format?: 's16le' | 's24le' | 's32le' | 's16be';
+      /**
+       * The width actually in use, when the samples are narrower than the words carrying them.
+       *
+       * A pipe is declared wide enough for the worst case it may carry, so a 16-bit master
+       * travelling in 24-bit words is padded rather than resolved. Without this the source is
+       * described by the size of its container and claims a resolution it never had.
+       */
+      bitDepth?: 16 | 24 | 32;
       sampleRate?: number;
       channels?: number;
       /** Whether ffmpeg should pace input with -re (default: true). */

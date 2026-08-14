@@ -28,6 +28,13 @@ import type { PlaybackMetadata } from '@/application/playback/audioManager';
 
 /** How long to wait for the track we asked for to actually be sounding. */
 const PLAY_START_TIMEOUT_MS = 20_000;
+/**
+ * How much audio to look at before deciding how wide the samples really are.
+ *
+ * 2048 frames is under fifty milliseconds at 44.1 kHz — long enough to catch signal, short enough
+ * that it does not show up as a delay before a track starts.
+ */
+const DEPTH_PROBE_FRAMES = 2048;
 
 export type SoloistReadiness =
   | { ready: true }
@@ -355,7 +362,7 @@ export class SoloistPlaybackService {
       this.controller?.startPlayback(
         zoneId,
         'spotify-connect',
-        this.pipeSourceFor(zoneId, stream),
+        this.pipeSourceFor(zoneId, stream, await this.probeDepth(stream)),
         this.metadataFor(track),
       );
       return;
@@ -450,7 +457,7 @@ export class SoloistPlaybackService {
       return null;
     }
     runner.stream = stream;
-    return this.pipeSourceFor(zoneId, stream);
+    return this.pipeSourceFor(zoneId, stream, await this.probeDepth(stream));
   }
 
   /**
@@ -461,11 +468,12 @@ export class SoloistPlaybackService {
    * small to absorb the disagreement. The format must match the sink exactly, pinned to what
    * Spotify lossless is so nothing converts on the way in.
    */
-  private pipeSourceFor(zoneId: number, stream: Readable): PlaybackSource {
+  private pipeSourceFor(zoneId: number, stream: Readable, bitDepth?: 16 | 24): PlaybackSource {
     return {
       kind: 'pipe',
       path: `soloist-${zoneId}`,
       format: SOLOIST_SINK_FORMAT,
+      bitDepth,
       sampleRate: SOLOIST_SINK_RATE,
       channels: SOLOIST_SINK_CHANNELS,
       realTime: false,
@@ -495,6 +503,60 @@ export class SoloistPlaybackService {
       const timer = setTimeout(() => finish(false), PLAY_START_TIMEOUT_MS);
       runner.ws.on('event', onEvent);
     });
+  }
+
+  /**
+   * How many bits of each sample carry anything.
+   *
+   * Everything Soloist decodes leaves it as float and arrives here in 24-bit words, so the pipe
+   * cannot say whether a track is a 24-bit master or a 16-bit one padded out — and most of
+   * Spotify's catalogue is the latter. The samples themselves can: a 16-bit value scaled into 24
+   * bits is an exact multiple of 256, so its low byte is always zero. Nothing in this chain fills
+   * those bits either, since there is no gain, no resample and no dither ahead of us.
+   *
+   * Silence is not evidence, so a quiet opening yields nothing rather than a wrong answer.
+   */
+  private static measureDepth(pcm: Buffer): 16 | 24 | undefined {
+    let lowByte = 0;
+    let anything = 0;
+    for (let i = 0; i + 2 < pcm.length; i += 3) {
+      lowByte |= pcm[i]!;
+      anything |= pcm[i]! | pcm[i + 1]! | pcm[i + 2]!;
+    }
+    if (!anything) {
+      return undefined;
+    }
+    return lowByte === 0 ? 16 : 24;
+  }
+
+  /** Read a little audio to measure it, then put it back so nothing is lost from the track. */
+  private async probeDepth(stream: Readable): Promise<16 | 24 | undefined> {
+    const need = DEPTH_PROBE_FRAMES * SOLOIST_SINK_CHANNELS * 3;
+    const chunks: Buffer[] = [];
+    let total = 0;
+    await new Promise<void>((resolve) => {
+      const done = (): void => {
+        clearTimeout(timer);
+        stream.off('data', onData);
+        stream.pause();
+        resolve();
+      };
+      const onData = (chunk: Buffer): void => {
+        chunks.push(chunk);
+        total += chunk.length;
+        if (total >= need) {
+          done();
+        }
+      };
+      const timer = setTimeout(done, 1_000);
+      stream.on('data', onData);
+    });
+    if (!total) {
+      return undefined;
+    }
+    const prefix = Buffer.concat(chunks);
+    stream.unshift(prefix);
+    return SoloistPlaybackService.measureDepth(prefix);
   }
 
   /**
