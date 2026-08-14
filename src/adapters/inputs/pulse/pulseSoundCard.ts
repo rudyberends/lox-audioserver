@@ -1,7 +1,7 @@
 import net from 'node:net';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { PassThrough } from 'node:stream';
+import { Readable } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import { resolveDataDir } from '@/shared/utils/file';
 import {
@@ -100,7 +100,7 @@ export class PulseSoundCard {
    * Handing out a fresh stream per track mirrors what a track change means to the engine: the old
    * one ends, and nothing of the previous track can arrive on the new one.
    */
-  public takeStream(id: number): PassThrough | null {
+  public takeStream(id: number): Readable | null {
     return this.cards.get(id)?.takeStream() ?? null;
   }
 
@@ -150,7 +150,7 @@ const MIN_REQUEST_SEC = 0.125;
 class CardSocket {
   private server: net.Server | null = null;
   private socket: net.Socket | null = null;
-  private stream: PassThrough | null = null;
+  private stream: CardStream | null = null;
   /** Bytes promised to the client and not yet arrived. */
   private granted = 0;
   private streamIndex = 0;
@@ -208,15 +208,17 @@ class CardSocket {
     this.pendingBytes = 0;
   }
 
-  public takeStream(): PassThrough {
+  public takeStream(): Readable {
     this.stream?.destroy();
-    // The engine reads this at the rate its outputs consume; that pull is what releases credit
-    // back to the player, so the reader decides the tempo rather than the decoder.
-    const stream = new PassThrough({ highWaterMark: 256 * 1024 });
-    stream.on('drain', () => this.grant());
+    // A Readable of our own rather than a PassThrough, because `_read` is the signal that matters:
+    // it fires whenever the consumer wants more, including the moment it comes back after the
+    // engine has restarted a session. Hanging the credit on writes and drains instead left the
+    // player waiting through exactly that gap — the room fell silent until something happened to
+    // set it going again.
+    const stream = new CardStream(() => this.grant());
     this.stream = stream;
     for (const chunk of this.pending) {
-      stream.write(chunk);
+      stream.feed(chunk);
     }
     this.discardPending();
     return stream;
@@ -314,10 +316,8 @@ class CardSocket {
       this.grant();
       return;
     }
-    if (stream.write(chunk)) {
-      this.grant();
-    }
-    // Otherwise the consumer is full; 'drain' grants again.
+    stream.feed(chunk);
+    this.grant();
   }
 
   /** At most a second of audio may wait for a reader; beyond that it is not a start any more. */
@@ -335,7 +335,13 @@ class CardSocket {
     }
     const bytesPerSec = spec.rate * frameSize(spec);
     const target = Math.round(bytesPerSec * TARGET_BUFFER_SEC);
-    const held = (this.stream && !this.stream.destroyed ? this.stream.writableLength : 0) + this.pendingBytes;
+    const held =
+      (this.stream && !this.stream.destroyed ? this.stream.readableLength : 0) + this.pendingBytes;
+    // One bound only: how much audio we are willing to be holding. Pacing by wall clock as well
+    // was tried and made things worse — a session restart reads nothing for a moment, the clock
+    // keeps running, and what follows is a burst and then a starved reader, which is a stutter.
+    // The engine sets the tempo, as it does for every other pipe source; this keeps the buffer
+    // shallow and lets it.
     const want = target - held - this.granted;
     if (want < Math.round(bytesPerSec * MIN_REQUEST_SEC)) {
       return;
@@ -460,7 +466,7 @@ class CardSocket {
       case PA.GET_PLAYBACK_LATENCY: {
         const spec = this.spec ?? { format: 'f32le', channels: 2, rate: 44100 };
         const bytesPerSec = spec.rate * frameSize(spec);
-        const held = this.stream && !this.stream.destroyed ? this.stream.writableLength : 0;
+        const held = this.stream && !this.stream.destroyed ? this.stream.readableLength : 0;
         // What we are still holding is exactly how far behind the sound is; saying so is what keeps
         // the player's own position honest.
         const body = new TagWriter()
@@ -537,6 +543,27 @@ class CardSocket {
       body.volume().u32(0).u32(0x10000).str(null).bool(false);
     }
     return body;
+  }
+}
+
+/**
+ * The audio of one card, as a stream the engine can read.
+ *
+ * `_read` is the whole point: Node calls it whenever the consumer has room, which is the only
+ * honest moment to let the player send more.
+ */
+class CardStream extends Readable {
+  constructor(private readonly onWanted: () => void) {
+    super({ highWaterMark: 256 * 1024 });
+  }
+
+  public override _read(): void {
+    this.onWanted();
+  }
+
+  /** Hand over audio as it arrives. Backpressure is expressed by granting, not by refusing. */
+  public feed(chunk: Buffer): void {
+    this.push(chunk);
   }
 }
 
