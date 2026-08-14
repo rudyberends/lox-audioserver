@@ -320,6 +320,8 @@ export class ZoneManager {
       outputRouter: this.outputRouter,
       stateStore: this.stateStore,
       applyPatch: (zoneId, patch, force) => this.applyPatch(zoneId, patch, force),
+      updateQueue: (zoneId, items, currentIndex) =>
+        this.updateQueueFromOutput(zoneId, items, currentIndex),
     });
     this.inputs = this.playbackCoordinator;
     this.queue = this.queueController;

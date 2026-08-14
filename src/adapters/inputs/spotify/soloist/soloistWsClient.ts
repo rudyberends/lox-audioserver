@@ -19,12 +19,32 @@ export type SoloistItem = {
   };
 };
 
+/**
+ * One line of the queue Soloist keeps.
+ *
+ * `uid` is its own handle on the entry, which survives a track appearing twice in the same list;
+ * `source` says where it came from — `context` for the album or playlist that is playing, against
+ * something the listener queued by hand.
+ */
+export type SoloistQueueEntry = {
+  uid?: string;
+  source?: string;
+  item?: SoloistItem;
+};
+
 export type SoloistStateEvent = {
   type: string;
   status?: SoloistStatus;
   item?: SoloistItem;
   position?: { position_ms?: number };
   volume?: number;
+  /**
+   * What Soloist has played and what it is about to play, either side of the current track — which
+   * is itself in neither list. Both arrive on `queue_changed`, unasked after every change and on
+   * request via `get_queue`.
+   */
+  previous?: SoloistQueueEntry[];
+  upcoming?: SoloistQueueEntry[];
   /**
    * Whether this device is the one Spotify is actually playing on.
    *
@@ -231,6 +251,17 @@ export class SoloistWsClient extends EventEmitter {
 
   public pause(): boolean {
     return this.send('pause');
+  }
+
+  /**
+   * Ask for the queue.
+   *
+   * It also arrives unasked whenever it changes, so this is only for the moment a zone is taken
+   * over: the takeover itself is announced as playback, and without asking, the queue would stay
+   * unknown until the listener happened to change something.
+   */
+  public requestQueue(): boolean {
+    return this.send('get_queue');
   }
 
   public seek(positionMs: number): boolean {

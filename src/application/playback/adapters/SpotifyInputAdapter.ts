@@ -1,6 +1,6 @@
 import type { PlaybackMetadata, PlaybackSource, CoverArtPayload } from '@/application/playback/audioManager';
 import type { InputAdapter } from '@/application/playback/inputAdapter';
-import type { SpotifyConnectController } from '@/ports/InputsPort';
+import type { InputPlaybackController } from '@/ports/InputsPort';
 
 /**
  * Thin facade to drive a ZonePlayer/queue first, falling back to the existing controller for legacy flows.
@@ -8,7 +8,7 @@ import type { SpotifyConnectController } from '@/ports/InputsPort';
 export class SpotifyInputAdapter {
   constructor(
     private readonly adapter: InputAdapter,
-    private readonly controller: SpotifyConnectController,
+    private readonly controller: InputPlaybackController,
     private readonly zoneId: number,
   ) {}
 

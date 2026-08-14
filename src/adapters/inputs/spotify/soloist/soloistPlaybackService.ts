@@ -12,7 +12,7 @@ import {
   SOLOIST_SINK_RATE,
 } from '@/adapters/inputs/spotify/soloist/soloistSinkManager';
 import {
-  applyQualityPreference,
+  applyPreferences,
   isZonePaired,
   probeBinary,
   soloistDataDir,
@@ -22,9 +22,10 @@ import {
 import {
   readTrack,
   SoloistWsClient,
+  type SoloistQueueEntry,
   type SoloistStateEvent,
 } from '@/adapters/inputs/spotify/soloist/soloistWsClient';
-import type { SpotifyConnectController } from '@/ports/InputsPort';
+import type { SpotifyConnectController, SpotifyQueueTrack } from '@/ports/InputsPort';
 import type { PlaybackMetadata } from '@/application/playback/audioManager';
 
 /** How long to wait for the track we asked for to actually be sounding. */
@@ -62,8 +63,77 @@ type ZoneRunner = {
   wantedUri: string | null;
   /** What is sounding now, so a repeat of the same event is not treated as a change. */
   currentUri: string | null;
+  /** The current track in full, since the queue Soloist reports leaves it out. */
+  currentTrack: SpotifyQueueTrack | null;
+  /** Either side of the current track, as Soloist last reported it. */
+  queue: { previous: string[]; upcoming: string[] };
+  /** Whether the app's pause is what stopped this zone, so its resume can start it again. */
+  appPaused: boolean;
   stream: Readable | null;
 };
+
+/**
+ * What a track change means when this server owns the queue.
+ *
+ * Soloist keeps a queue of its own whatever we do with it, so a track we did not ask for is either
+ * our own track ending — it moves on by itself — or someone reaching for the app's buttons. The two
+ * are told apart by where the new track sits: going back plays something Soloist has already
+ * played, and that is the only case the queue here must be walked backwards for.
+ */
+export function classifyTrackChange(
+  uri: string,
+  wantedUri: string | null,
+  queue: { previous: string[] },
+): 'ours' | 'back' | 'forward' {
+  if (!wantedUri || uri === wantedUri) {
+    return 'ours';
+  }
+  return queue.previous.includes(uri) ? 'back' : 'forward';
+}
+
+function urisOf(entries: SoloistQueueEntry[] | undefined): string[] {
+  return (entries ?? [])
+    .map((entry) => entry?.item?.uri)
+    .filter((uri): uri is string => Boolean(uri));
+}
+
+/**
+ * The app's queue with the current track put back where it belongs.
+ *
+ * `queue_changed` names what has been played and what is to come but not what is playing, so
+ * mirroring it verbatim would leave a gap at exactly the place a listener looks first — and the
+ * zone would have nothing to anchor its own position to.
+ */
+export function buildMirroredQueue(
+  current: SpotifyQueueTrack,
+  previous: SoloistQueueEntry[] | undefined,
+  upcoming: SoloistQueueEntry[] | undefined,
+): { tracks: SpotifyQueueTrack[]; currentIndex: number } {
+  const asTracks = (entries: SoloistQueueEntry[] | undefined): SpotifyQueueTrack[] =>
+    (entries ?? [])
+      .map((entry) => queueTrackOf(readTrack(entry?.item), entry?.uid))
+      .filter((track): track is SpotifyQueueTrack => track !== null);
+  const before = asTracks(previous);
+  return { tracks: [...before, current, ...asTracks(upcoming)], currentIndex: before.length };
+}
+
+/** A queue line, as the rest of this server wants a track described. */
+function queueTrackOf(
+  track: ReturnType<typeof readTrack>,
+  uid?: string,
+): SpotifyQueueTrack | null {
+  return track.uri
+    ? {
+      uri: track.uri,
+      ...(uid ? { uid } : {}),
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      coverUrl: track.coverUrl,
+      durationSec: track.durationSec,
+    }
+    : null;
+}
 
 /**
  * Plays Spotify through the user's own Soloist build instead of librespot.
@@ -202,7 +272,7 @@ export class SoloistPlaybackService {
 
     // Ask Spotify for lossless before the process starts: the app applies a quality change from
     // the next track, so setting it after would leave the first one at whatever it defaulted to.
-    await applyQualityPreference(zoneId, this.settings.lossless !== false);
+    await applyPreferences(zoneId, this.settings.lossless !== false);
 
     // Clear the port file first. Soloist writes it once it is listening, so a leftover from the
     // previous run is read as this one's address — the connection is refused, and the process that
@@ -237,6 +307,9 @@ export class SoloistPlaybackService {
       owner: 'queue',
       wantedUri: null,
       currentUri: null,
+      currentTrack: null,
+      queue: { previous: [], upcoming: [] },
+      appPaused: false,
       stream: null,
     };
     ws.on('event', (event: SoloistStateEvent) => this.onEvent(zoneId, event));
@@ -270,22 +343,94 @@ export class SoloistPlaybackService {
     const track = readTrack(event.item);
     const uri = track.uri;
 
+    // Nothing an inactive device reports is about this room. Connect tells every device the
+    // account owns what the account is doing, note for note — same track, same queue, same
+    // position — so a room that has been handed off keeps hearing about music playing somewhere
+    // else. Letting go here, before any of it is read, is what keeps two rooms from showing each
+    // other's track.
+    if (runner.owner === 'connect' && !runner.ws.isActive) {
+      this.log.info('spotify moved playback to another device', { zoneId });
+      runner.owner = 'queue';
+      runner.currentUri = null;
+      runner.currentTrack = null;
+      this.finishTrack(zoneId);
+      this.controller?.stopPlayback(zoneId);
+      return;
+    }
+
+    // Both lists arrive together on `queue_changed`, unasked after every change. They are what
+    // tells a step backwards from a step forwards, and while the app owns the zone they are also
+    // the only account anyone here has of what is coming.
+    if (Array.isArray(event.previous) || Array.isArray(event.upcoming)) {
+      runner.queue = {
+        previous: urisOf(event.previous),
+        upcoming: urisOf(event.upcoming),
+      };
+      if (runner.owner === 'connect') {
+        this.publishQueue(zoneId, runner, event);
+      }
+    }
+
     if (event.type === 'track_changed' && uri) {
-      if (runner.owner === 'queue' && runner.wantedUri && uri !== runner.wantedUri) {
-        // Our track finished and Soloist moved on by itself; the queue picks the next one.
-        this.log.debug('soloist moved past our track; ending the stream', {
-          zoneId,
-          expected: runner.wantedUri,
-          got: uri,
-        });
-        runner.ws.pause();
-        this.finishTrack(zoneId);
-        return;
+      if (runner.owner === 'queue') {
+        const change = classifyTrackChange(uri, runner.wantedUri, runner.queue);
+        if (change === 'back') {
+          // Someone pressed back on the phone. Soloist has already gone to its own previous track,
+          // which is not ours, so this zone's queue is walked back and the track it lands on is
+          // played over the top. Deliberately without pausing Soloist first: the pause comes back
+          // as an event indistinguishable from someone pausing on the phone, and the moment of the
+          // wrong track that pausing would save is shorter than the confusion it causes.
+          this.log.info('the spotify app stepped back a track', { zoneId });
+          runner.wantedUri = null;
+          this.controller?.transport(zoneId, 'previous');
+          return;
+        }
+        if (change === 'forward') {
+          // Someone pressed next on the phone. Ending the stream is not enough: a zone finishes a
+          // track when its own clock reaches the end, not when the audio stops arriving, so on a
+          // skip the room would fall silent and sit there for the rest of the track's length.
+          // Walking the queue on is what a skip actually means.
+          this.log.info('the spotify app skipped past our track', {
+            zoneId,
+            expected: runner.wantedUri,
+            got: uri,
+          });
+          runner.wantedUri = null;
+          this.controller?.transport(zoneId, 'next');
+          return;
+        }
       }
       if (runner.owner === 'connect' && uri !== runner.currentUri) {
         // The app moved to its own next track. The stream carries on; only the labels change.
         runner.currentUri = uri;
+        runner.currentTrack = queueTrackOf(track);
         this.publishTrack(zoneId, track);
+        return;
+      }
+    }
+
+    // Play and pause pressed on the app, for a zone this server is driving. Only from the room
+    // that is sounding: Connect tells every device what the account is doing, so an idle room
+    // hears about a pause that was never meant for it.
+    if (runner.owner === 'queue' && runner.wantedUri && runner.ws.isActive) {
+      if (event.status === 'idle' || event.status === 'stopped') {
+        // Autoplay is off, so Soloist stops at the end of a track rather than recommending its way
+        // onwards. Ending the stream is what the engine reads as the end, and the queue here picks
+        // what follows.
+        this.log.debug('soloist reached the end of our track', { zoneId, uri: runner.wantedUri });
+        this.finishTrack(zoneId);
+        return;
+      }
+      if (event.status === 'paused' && !runner.appPaused) {
+        this.log.info('the spotify app paused this zone', { zoneId });
+        runner.appPaused = true;
+        this.controller?.transport(zoneId, 'pause');
+        return;
+      }
+      if (event.status === 'playing' && runner.appPaused) {
+        this.log.info('the spotify app resumed this zone', { zoneId });
+        runner.appPaused = false;
+        this.controller?.transport(zoneId, 'resume');
         return;
       }
     }
@@ -303,17 +448,6 @@ export class SoloistPlaybackService {
       if (!ours && uri && uri !== runner.currentUri) {
         void this.adoptConnectPlayback(zoneId, event);
       }
-      return;
-    }
-
-    // Handed off to another device: this room is no longer the one playing, whatever else the
-    // account's state says about the track.
-    if (runner.owner === 'connect' && !runner.ws.isActive) {
-      this.log.info('spotify moved playback to another device', { zoneId });
-      runner.owner = 'queue';
-      runner.currentUri = null;
-      this.finishTrack(zoneId);
-      this.controller?.stopPlayback(zoneId);
       return;
     }
 
@@ -357,7 +491,12 @@ export class SoloistPlaybackService {
     const track = readTrack(event.item);
     runner.owner = 'connect';
     runner.currentUri = track.uri ?? null;
+    runner.currentTrack = queueTrackOf(track);
     runner.wantedUri = null;
+    runner.appPaused = false;
+    // A takeover is announced as playback, not as a queue, so the list has to be asked for once.
+    // After this it arrives by itself whenever the listener changes anything.
+    runner.ws.requestQueue();
 
     if (!runner.stream) {
       const stream = await this.openFifo(this.sinks.fifoPathFor(zoneId));
@@ -375,6 +514,21 @@ export class SoloistPlaybackService {
       return;
     }
     this.publishTrack(zoneId, track);
+  }
+
+  /** Hand the app's queue over to the zone, so a room shows the album someone put on. */
+  private publishQueue(zoneId: number, runner: ZoneRunner, event: SoloistStateEvent): void {
+    const current = runner.currentTrack;
+    if (!current) {
+      return;
+    }
+    const { tracks, currentIndex } = buildMirroredQueue(current, event.previous, event.upcoming);
+    this.log.debug('mirroring the spotify app queue', {
+      zoneId,
+      items: tracks.length,
+      currentIndex,
+    });
+    this.controller?.updateQueue(zoneId, tracks, currentIndex);
   }
 
   private publishTrack(zoneId: number, track: ReturnType<typeof readTrack>): void {
@@ -443,6 +597,8 @@ export class SoloistPlaybackService {
     runner.owner = 'queue';
     runner.wantedUri = uri;
     runner.currentUri = uri;
+    runner.currentTrack = null;
+    runner.appPaused = false;
 
     const playing = this.waitForPlaying(runner, uri);
     if (!runner.ws.play(uri)) {

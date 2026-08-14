@@ -48,7 +48,18 @@ export const SOLOIST_BUILD_LIFETIME_DAYS = 90;
 const QUALITY_PREF = 'audio.play_bitrate_non_metered_enumeration';
 const QUALITY_LOSSLESS = '5';
 
-export async function applyQualityPreference(zoneId: number, lossless: boolean): Promise<void> {
+/**
+ * Autoplay, which has to be off.
+ *
+ * Left on, Soloist reaches the end of a track and starts recommending — and since this server did
+ * not ask for that track, the only honest reading of it is that someone took the room over from
+ * the app. So a queue that simply ran out turned into a phantom takeover, and the room carried on
+ * with music nobody chose. Off, the end of a track is the end of a track, and this server decides
+ * what follows.
+ */
+const AUTOPLAY_PREF = 'player.autoplay';
+
+export async function applyPreferences(zoneId: number, lossless: boolean): Promise<void> {
   const usersDir = path.join(soloistDataDir(zoneId), 'settings', 'Users');
   let accounts: string[];
   try {
@@ -65,14 +76,18 @@ export async function applyQualityPreference(zoneId: number, lossless: boolean):
     } catch {
       continue;
     }
-    const kept = lines.filter((line) => line.trim() && !line.startsWith(`${QUALITY_PREF}=`));
+    const kept = lines.filter(
+      (line) =>
+        line.trim() && !line.startsWith(`${QUALITY_PREF}=`) && !line.startsWith(`${AUTOPLAY_PREF}=`),
+    );
     if (lossless) {
       kept.push(`${QUALITY_PREF}=${QUALITY_LOSSLESS}`);
     }
+    kept.push(`${AUTOPLAY_PREF}=false`);
     const next = `${kept.join('\n')}\n`;
     await fsp.writeFile(prefsPath, next, 'utf8').catch(() => undefined);
   }
-  log.debug('soloist quality preference applied', { zoneId, lossless });
+  log.debug('soloist preferences applied', { zoneId, lossless, autoplay: false });
 }
 
 /** Whether this zone has been through a handshake in the Spotify app. */

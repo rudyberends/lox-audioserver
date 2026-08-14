@@ -4,7 +4,9 @@ import type { PlaybackCoordinator } from '@/application/zones/PlaybackCoordinato
 import type { ZoneStateStore } from '@/application/zones/ZoneStateStore';
 import type { ZoneRepository } from '@/application/zones/ZoneRepository';
 import type { ZoneState } from '@/domain/zones/zoneState';
+import type { QueueItem } from '@/ports/types/queueTypes';
 import { buildVolumePatch } from '@/application/zones/playback/patchBuilder';
+import { mapSpotifyTracksToQueue } from '@/application/zones/state/spotifyQueueMirror';
 import {
   clampVolumeForZone,
   getZoneDefaultVolume,
@@ -32,10 +34,12 @@ export type InputSourceConfiguratorDeps = {
     | 'updateInputTiming'
     | 'setInputMode'
     | 'alignOutputFormat'
+    | 'handleCommand'
   >;
   outputRouter: Pick<OutputRouter, 'dispatchVolume'>;
   stateStore: Pick<ZoneStateStore, 'applyPatch'>;
   applyPatch: (zoneId: number, patch: Partial<ZoneState>, force?: boolean) => void;
+  updateQueue: (zoneId: number, items: QueueItem[], currentIndex: number) => void;
 };
 
 /**
@@ -107,7 +111,7 @@ export class InputSourceConfigurator {
   }
 
   private configureSpotify(): void {
-    const { playback, zoneRepo, outputRouter, stateStore, applyPatch } = this.deps;
+    const { playback, zoneRepo, outputRouter, stateStore, applyPatch, updateQueue } = this.deps;
     this.deps.inputsPort.configureSpotify({
       startPlayback: (zoneId, label, source, metadata) => {
         const ctx = zoneRepo.get(zoneId);
@@ -205,6 +209,18 @@ export class InputSourceConfigurator {
         ctx.queue.authority = 'local';
         playback.setInputMode(ctx, null);
         ctx.spotifyAdapter.stop();
+      },
+      // Pressed on the phone, meant for this room: the same instruction the zone's own buttons
+      // give, so it takes the same route and obeys the same queue.
+      transport: (zoneId, command) => {
+        playback.handleCommand(zoneId, command);
+      },
+      updateQueue: (zoneId, tracks, currentIndex) => {
+        const ctx = zoneRepo.get(zoneId);
+        if (!ctx || ctx.activeInput !== 'spotify') {
+          return;
+        }
+        updateQueue(zoneId, mapSpotifyTracksToQueue(tracks, ctx.config?.name ?? ''), currentIndex);
       },
     });
   }
