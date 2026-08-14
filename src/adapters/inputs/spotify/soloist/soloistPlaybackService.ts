@@ -1,16 +1,10 @@
-import { createReadStream } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { PlaybackSource } from '@/application/playback/audioManager';
-import {
-  SoloistSinkManager,
-  SOLOIST_SINK_CHANNELS,
-  SOLOIST_SINK_FORMAT,
-  SOLOIST_SINK_RATE,
-} from '@/adapters/inputs/spotify/soloist/soloistSinkManager';
+import { PulseSoundCard } from '@/adapters/inputs/pulse/pulseSoundCard';
 import {
   applyPreferences,
   isZonePaired,
@@ -30,15 +24,6 @@ import type { PlaybackMetadata } from '@/application/playback/audioManager';
 
 /** How long to wait for the track we asked for to actually be sounding. */
 const PLAY_START_TIMEOUT_MS = 20_000;
-/**
- * How much audio to look at before deciding how wide the samples really are.
- *
- * 2048 frames is under fifty milliseconds at 44.1 kHz — long enough to catch signal, short enough
- * that it does not show up as a delay before a track starts.
- */
-const DEPTH_PROBE_FRAMES = 2048;
-/** How long to keep waiting for audible samples before giving up on measuring at all. */
-const DEPTH_PROBE_TIMEOUT_MS = 3_000;
 
 export type SoloistReadiness =
   | { ready: true }
@@ -157,7 +142,8 @@ function queueTrackOf(
  */
 export class SoloistPlaybackService {
   private readonly log = createLogger('Input', 'Soloist');
-  private readonly sinks = new SoloistSinkManager();
+  /** The sound card Soloist plays into: no daemon, the audio lands in this process. */
+  private readonly audio = new PulseSoundCard();
   private readonly runners = new Map<number, ZoneRunner>();
   private readonly starting = new Map<number, Promise<ZoneRunner | null>>();
   /** Track lengths as Soloist reported them, so a position update can carry one. */
@@ -209,7 +195,7 @@ export class SoloistPlaybackService {
         runner.ws.close();
         runner.handle.stop();
         this.runners.delete(zoneId);
-        await this.sinks.removeSink(zoneId);
+        await this.audio.remove(zoneId);
       }
     }
     for (const zoneId of wanted) {
@@ -274,7 +260,7 @@ export class SoloistPlaybackService {
     if (!apiKey) {
       return null;
     }
-    if (!(await this.sinks.ensureSink(zoneId))) {
+    if (!(await this.audio.ensure(zoneId))) {
       return null;
     }
 
@@ -291,7 +277,7 @@ export class SoloistPlaybackService {
       zoneId,
       apiKey,
       deviceName: this.zoneName(zoneId),
-      env: this.sinks.childEnv(zoneId),
+      env: await this.audio.childEnv(zoneId),
     });
     void handle.expiresInDays.then((days) => {
       if (typeof days === 'number') {
@@ -524,18 +510,14 @@ export class SoloistPlaybackService {
     runner.ws.requestQueue();
 
     if (!runner.stream) {
-      const stream = await this.openFifo(this.sinks.fifoPathFor(zoneId));
-      if (!stream) {
+      const opened = this.openAudio(zoneId);
+      if (!opened) {
         return;
       }
-      runner.stream = stream;
+      runner.stream = opened.stream;
+      const source = opened.source;
       this.log.info('the spotify app took this zone over', { zoneId, uri: track.uri });
-      this.controller?.startPlayback(
-        zoneId,
-        'spotify-connect',
-        this.pipeSourceFor(zoneId, stream, await this.probeDepth(stream)),
-        this.metadataFor(track),
-      );
+      this.controller?.startPlayback(zoneId, 'spotify-connect', source, this.metadataFor(track));
       return;
     }
     this.publishTrack(zoneId, track);
@@ -586,6 +568,8 @@ export class SoloistPlaybackService {
     const stream = runner.stream;
     runner.stream = null;
     stream?.destroy();
+    // Whatever arrives from here on belongs to the track that is over.
+    this.audio.discardPending(zoneId);
   }
 
   /**
@@ -656,35 +640,43 @@ export class SoloistPlaybackService {
       runner.ws.seek(seekPositionMs);
     }
 
-    const fifoPath = this.sinks.fifoPathFor(zoneId);
-    const stream = await this.openFifo(fifoPath);
-    if (!stream) {
+    // The very first track of a session has to wait for Soloist to say what it plays in; after
+    // that the answer is already there.
+    await this.audio.waitForSpec(zoneId);
+    const opened = this.openAudio(zoneId);
+    if (!opened) {
       return null;
     }
-    runner.stream = stream;
-    const bitDepth = await this.probeDepth(stream);
-    this.log.info('soloist track depth measured', { zoneId, uri, bitDepth: bitDepth ?? 'unknown' });
-    return this.pipeSourceFor(zoneId, stream, bitDepth);
+    runner.stream = opened.stream;
+    return opened.source;
   }
 
   /**
-   * The zone's pipe, however playback came about.
+   * The zone's audio, however playback came about.
    *
-   * Not `realTime`: the sink is clocked, so the pacing is already upstream, and adding ffmpeg's
-   * `-re` puts a second timer on the same stream — which stutters against a pipe buffer far too
-   * small to absorb the disagreement. The format must match the sink exactly, pinned to what
-   * Spotify lossless is so nothing converts on the way in.
+   * Whatever Soloist asked to play in, we take: it decodes to float and says so when it opens the
+   * stream, and passing that on untouched is one conversion fewer than pinning a format and having
+   * something meet it. Not `realTime` — reading this stream is what releases the next grant, so the
+   * pacing is already ours and a second timer would only fight it.
    */
-  private pipeSourceFor(zoneId: number, stream: Readable, bitDepth?: 16 | 24): PlaybackSource {
+  private openAudio(zoneId: number): { stream: Readable; source: PlaybackSource } | null {
+    const stream = this.audio.takeStream(zoneId);
+    const spec = this.audio.specFor(zoneId);
+    if (!stream || !spec) {
+      this.log.warn('no audio stream for this zone yet', { zoneId });
+      return null;
+    }
     return {
-      kind: 'pipe',
-      path: `soloist-${zoneId}`,
-      format: SOLOIST_SINK_FORMAT,
-      bitDepth,
-      sampleRate: SOLOIST_SINK_RATE,
-      channels: SOLOIST_SINK_CHANNELS,
-      realTime: false,
       stream,
+      source: {
+        kind: 'pipe',
+        path: `soloist-${zoneId}`,
+        format: spec.format as 's16le' | 's24le' | 's32le' | 'f32le',
+        sampleRate: spec.rate,
+        channels: spec.channels,
+        realTime: false,
+        stream,
+      },
     };
   }
 
@@ -710,92 +702,6 @@ export class SoloistPlaybackService {
       const timer = setTimeout(() => finish(false), PLAY_START_TIMEOUT_MS);
       runner.ws.on('event', onEvent);
     });
-  }
-
-  /**
-   * How many bits of each sample carry anything.
-   *
-   * Everything Soloist decodes leaves it as float and arrives here in 24-bit words, so the pipe
-   * cannot say whether a track is a 24-bit master or a 16-bit one padded out — and most of
-   * Spotify's catalogue is the latter. The samples themselves can: a 16-bit value scaled into 24
-   * bits is an exact multiple of 256, so its low byte is always zero. Nothing in this chain fills
-   * those bits either, since there is no gain, no resample and no dither ahead of us.
-   *
-   * Silence is not evidence, so a quiet opening yields nothing rather than a wrong answer.
-   */
-  private static measureDepth(pcm: Buffer): 16 | 24 | undefined {
-    let lowByte = 0;
-    let anything = 0;
-    for (let i = 0; i + 2 < pcm.length; i += 3) {
-      lowByte |= pcm[i]!;
-      anything |= pcm[i]! | pcm[i + 1]! | pcm[i + 2]!;
-    }
-    if (!anything) {
-      return undefined;
-    }
-    return lowByte === 0 ? 16 : 24;
-  }
-
-  /**
-   * Read a little audio to measure it, then put it back so nothing is lost from the track.
-   *
-   * Keeps reading until something is actually audible. The pipe carries silence for a moment
-   * after a track is announced, and silence is not evidence — measuring the first frames that
-   * happen to arrive would call a 24-bit master 16-bit as often as it got it right.
-   */
-  private async probeDepth(stream: Readable): Promise<16 | 24 | undefined> {
-    const need = DEPTH_PROBE_FRAMES * SOLOIST_SINK_CHANNELS * 3;
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let depth: 16 | 24 | undefined;
-    await new Promise<void>((resolve) => {
-      const done = (): void => {
-        clearTimeout(timer);
-        stream.off('data', onData);
-        stream.pause();
-        resolve();
-      };
-      const onData = (chunk: Buffer): void => {
-        chunks.push(chunk);
-        total += chunk.length;
-        if (total < need) {
-          return;
-        }
-        depth = SoloistPlaybackService.measureDepth(Buffer.concat(chunks));
-        // Undefined means it was all silence so far; keep listening rather than settle for it.
-        if (depth) {
-          done();
-        }
-      };
-      const timer = setTimeout(done, DEPTH_PROBE_TIMEOUT_MS);
-      stream.on('data', onData);
-    });
-    if (!total) {
-      return undefined;
-    }
-    stream.unshift(Buffer.concat(chunks));
-    return depth;
-  }
-
-  /**
-   * Opening a FIFO read-only blocks until a writer shows up. Read-write never blocks and behaves
-   * identically here; the handle is owned so the descriptor is given back rather than collected.
-   */
-  private async openFifo(fifoPath: string): Promise<Readable | null> {
-    try {
-      const handle = await fsp.open(fifoPath, 'r+');
-      const stream = createReadStream(fifoPath, { fd: handle.fd, autoClose: false });
-      const close = (): void => {
-        void handle.close().catch(() => undefined);
-      };
-      stream.once('close', close);
-      stream.once('error', close);
-      return stream;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log.warn('could not open the soloist fifo', { fifoPath, message });
-      return null;
-    }
   }
 
   public async stopZone(zoneId: number, reason = 'stop'): Promise<void> {
@@ -841,12 +747,13 @@ export class SoloistPlaybackService {
       runner.handle.stop();
     }
     this.runners.clear();
-    await this.sinks.stop();
+    await this.audio.stop();
   }
 
-  /** Exposed so the pairing endpoint can reach the same sink environment. */
-  public sinkEnvFor(zoneId: number): Record<string, string> {
-    return this.sinks.childEnv(zoneId);
+  /** Exposed so the pairing endpoint can reach the same audio socket. */
+  public async sinkEnvFor(zoneId: number): Promise<Record<string, string>> {
+    await this.audio.ensure(zoneId);
+    return this.audio.childEnv(zoneId);
   }
 
   public dataDirFor(zoneId: number): string {

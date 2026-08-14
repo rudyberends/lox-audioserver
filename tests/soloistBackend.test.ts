@@ -1,11 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from './testHarness';
 import { SoloistPlaybackService } from '../src/adapters/inputs/spotify/soloist/soloistPlaybackService';
-import {
-  SOLOIST_SINK_CHANNELS,
-  SOLOIST_SINK_FORMAT,
-  SOLOIST_SINK_RATE,
-} from '../src/adapters/inputs/spotify/soloist/soloistSinkManager';
 import type { ConfigPort } from '../src/ports/ConfigPort';
 
 /**
@@ -56,14 +51,4 @@ test('readiness names the step that is missing rather than just refusing', async
     fakeConfigPort({ content: { spotify: { soloist: { enabled: true } } } }),
   );
   assert.deepEqual(await noKey.readiness(1), { ready: false, reason: 'no_api_key' });
-});
-
-test('the sink is pinned to what Spotify lossless actually is', () => {
-  // 24-bit/44.1 kHz is the ceiling, so a sink pinned there carries everything that can exist and
-  // claims nothing that cannot. A wider container would lose nothing either, but it would make the
-  // signal path report a resolution the source never had; another rate would insert a resampler
-  // ahead of our own DSP.
-  assert.equal(SOLOIST_SINK_RATE, 44100);
-  assert.equal(SOLOIST_SINK_FORMAT, 's24le');
-  assert.equal(SOLOIST_SINK_CHANNELS, 2);
 });

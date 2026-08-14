@@ -102,6 +102,8 @@ export function pcmBitDepthFromFormat(format: string): PcmBitDepth {
   if (format === 's24le') {
     return 24;
   }
+  // Float is 32 bits wide, and what it carries is whatever the decoder put there — a 16-bit master
+  // decoded to float is still a 16-bit master. The width is all this can honestly report.
   return 32;
 }
 

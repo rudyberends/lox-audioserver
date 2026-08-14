@@ -63,7 +63,7 @@ import './spotifyWebTokens.test';
 import './spotifyRecoveryPolicy.test';
 import './soloistBackend.test';
 import './soloistArchive.test';
-import './soloistDepth.test';
+import './pulseSoundCard.test';
 import './soloistTransport.test';
 import './spotifyFileFormat.test';
 import './deezerRetryStream.test';

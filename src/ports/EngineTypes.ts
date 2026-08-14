@@ -68,7 +68,7 @@ export type PlaybackSource =
       kind: 'pipe';
       path: string;
       preDelayMs?: number;
-      format?: 's16le' | 's24le' | 's32le' | 's16be';
+      format?: 's16le' | 's24le' | 's32le' | 's16be' | 'f32le';
       /**
        * The width actually in use, when the samples are narrower than the words carrying them.
        *
@@ -147,7 +147,7 @@ export type EngineInputSpec =
       preDelayMs?: number;
       stream?: NodeJS.ReadableStream;
       label?: string;
-      format?: 's16le' | 's24le' | 's32le' | 's16be';
+      format?: 's16le' | 's24le' | 's32le' | 's16be' | 'f32le';
       /** The width actually in use, when narrower than the words carrying it. */
       bitDepth?: 16 | 24 | 32;
       sampleRate?: number;
