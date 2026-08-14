@@ -64,6 +64,7 @@ import './spotifyRecoveryPolicy.test';
 import './soloistBackend.test';
 import './soloistArchive.test';
 import './soloistDepth.test';
+import './spotifyFileFormat.test';
 import './deezerRetryStream.test';
 import './subsonicIds.test';
 import './subsonicResponse.test';

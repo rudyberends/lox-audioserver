@@ -44,6 +44,32 @@ type OutputErrorHandler = (zoneId: number, reason?: string) => void;
 // re-resolve at advance time.
 const PREFETCH_MAX_AGE_MS = 8 * 60 * 1000;
 
+/**
+ * Read Spotify's own name for the file it served.
+ *
+ * The value is librespot's `AudioFileFormat` rendered as its enum name, so it says both the codec
+ * and, for the lossy tiers, the bitrate. Depth is left out on purpose: Spotify's lossless is
+ * "up to" 24-bit and the name does not say which a given track is, so claiming one would be a
+ * guess dressed as a measurement.
+ */
+export function describeSpotifyFile(format: string): {
+  sampleRate: number;
+  channels: number;
+  lossless: boolean;
+  codecName?: string;
+} {
+  const lossless = /FLAC/i.test(format);
+  const codecName = lossless
+    ? 'flac'
+    : /OGG|VORBIS/i.test(format)
+      ? 'vorbis'
+      : /AAC|MP4/i.test(format)
+        ? 'aac'
+        : undefined;
+  // Every tier Spotify serves is 44.1 kHz stereo; only the codec and bitrate move.
+  return { sampleRate: 44100, channels: 2, lossless, codecName };
+}
+
 function isValidSpotifyDeviceId(deviceId: string): boolean {
   return /^[0-9a-f]{40}$/i.test((deviceId || '').trim());
 }
@@ -1236,6 +1262,11 @@ class SpotifyConnectInstance {
         kind: 'url',
         url,
         inputFormat: isOgg ? 'ogg' : 'mp3',
+        // What Spotify actually served, which we already know and used to throw away after
+        // picking a demuxer. `resolveAudioFile` names the file it resolved — `FLAC_FLAC`,
+        // `OGG_VORBIS_320`, `AAC_320` — so a zone on this backend can say whether the track
+        // arrived lossless instead of describing the pipe it travelled in.
+        nativeFormat: describeSpotifyFile(resolved.format),
         realTime: false,
         lowLatency: false,
         startAtSec,
