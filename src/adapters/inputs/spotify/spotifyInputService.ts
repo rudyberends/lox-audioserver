@@ -118,8 +118,17 @@ class SpotifyConnectInstance {
    * survives a rejection is per device, which is what this holds. Keyed `<accountId>::<deviceId>`.
    */
   static deviceCredentials = new Map<string, string>();
-  /** Devices whose account-level blob Spotify has already refused; never replayed again. */
-  static rejectedCredentials = new Set<string>();
+  /**
+   * When Spotify last refused this device's blob, keyed the same way.
+   *
+   * A verdict, not a life sentence. It used to be a Set cleared only by a successful re-mint, which
+   * was survivable while minting could succeed. Since Spotify closed the access-token login path it
+   * cannot, so a single refusal — including a spurious one on a blob that is actually good — retired
+   * that device's credentials for the rest of the process. It expires now, so the worst a wrong
+   * verdict costs is one retry per {@link rejectionTtlMs}.
+   */
+  static rejectedCredentials = new Map<string, number>();
+  static readonly rejectionTtlMs = 30 * 60 * 1000;
   /** Last mint attempt per device, so a refusal that survives minting cannot spin. */
   static lastRemintAt = new Map<string, number>();
   static readonly remintCooldownMs = 10 * 60 * 1000;
@@ -232,7 +241,7 @@ class SpotifyConnectInstance {
       this.log.warn('spotify connect host start failed', { zoneId: this.zoneId, message });
       return null;
     });
-    if (!native && SpotifyConnectInstance.rejectedCredentials.has(this.deviceCredentialKey(deviceId))) {
+    if (!native && SpotifyConnectInstance.isRejected(this.deviceCredentialKey(deviceId))) {
       // Login was refused rather than unreachable: mint a blob for this device and try once more,
       // instead of handing the same refused one back on every scheduled restart.
       const minted = await this.mintCredentialsForDevice(deviceId, 'connect_login_refused');
@@ -405,7 +414,47 @@ class SpotifyConnectInstance {
   private markCredentialsRejected(deviceId: string): void {
     const key = this.deviceCredentialKey(deviceId);
     SpotifyConnectInstance.deviceCredentials.delete(key);
-    SpotifyConnectInstance.rejectedCredentials.add(key);
+    SpotifyConnectInstance.rejectedCredentials.set(key, Date.now());
+  }
+
+  /** Whether this device's blob is currently under a refusal verdict that has not yet expired. */
+  static isRejected(key: string): boolean {
+    const at = SpotifyConnectInstance.rejectedCredentials.get(key);
+    if (at === undefined) {
+      return false;
+    }
+    if (Date.now() - at < SpotifyConnectInstance.rejectionTtlMs) {
+      return true;
+    }
+    SpotifyConnectInstance.rejectedCredentials.delete(key);
+    return false;
+  }
+
+  /**
+   * Drop every per-device verdict held for an account.
+   *
+   * Called when a new account-level blob arrives. Without this a fresh blob is unreachable:
+   * `credentialsForDevice` consults the refusal flag before falling back to the account payload, so
+   * a zone that had already been refused would keep logging in with nothing at all — pairing would
+   * report success and change nothing until a restart.
+   */
+  static clearVerdictsForAccount(accountId: string): void {
+    const prefix = `${accountId}::`;
+    for (const key of [...SpotifyConnectInstance.rejectedCredentials.keys()]) {
+      if (key.startsWith(prefix)) {
+        SpotifyConnectInstance.rejectedCredentials.delete(key);
+      }
+    }
+    for (const key of [...SpotifyConnectInstance.deviceCredentials.keys()]) {
+      if (key.startsWith(prefix)) {
+        SpotifyConnectInstance.deviceCredentials.delete(key);
+      }
+    }
+    for (const key of [...SpotifyConnectInstance.lastRemintAt.keys()]) {
+      if (key.startsWith(prefix)) {
+        SpotifyConnectInstance.lastRemintAt.delete(key);
+      }
+    }
   }
 
   /**
@@ -418,7 +467,7 @@ class SpotifyConnectInstance {
     if (proven) {
       return proven;
     }
-    if (SpotifyConnectInstance.rejectedCredentials.has(key)) {
+    if (SpotifyConnectInstance.isRejected(key)) {
       return null;
     }
     return this.credentialsPayload;
@@ -440,7 +489,7 @@ class SpotifyConnectInstance {
     }
     SpotifyConnectInstance.lastRemintAt.set(key, Date.now());
     // Mark refused up front: if the mint fails, the seed must not be replayed on the next attempt.
-    SpotifyConnectInstance.rejectedCredentials.add(key);
+    SpotifyConnectInstance.rejectedCredentials.set(key, Date.now());
     SpotifyConnectInstance.deviceCredentials.delete(key);
 
     let accessToken: string | null | undefined;
@@ -1764,6 +1813,9 @@ export class SpotifyInputService {
     const serialized =
       typeof credentials === 'string' ? credentials : JSON.stringify(credentials, null, 2);
     SpotifyConnectInstance.accountCredentials.set(accountId, serialized);
+    // A new blob overrules every verdict recorded against the old one. Without this the zones that
+    // had already been refused would ignore the one credential that now works.
+    SpotifyConnectInstance.clearVerdictsForAccount(accountId);
     await bestEffort(
       () =>
         this.configPort.updateConfig((cfg) => {

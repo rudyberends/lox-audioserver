@@ -32,6 +32,11 @@ type NativeAddon = typeof import('@sonn-audio/node-librespot') & {
   ) => Promise<LibrespotSession | null>;
   startConnectDeviceWithCredentials?: (...args: unknown[]) => Promise<ConnectHandle>;
   startConnectDeviceWithToken?: (...args: unknown[]) => Promise<ConnectHandle>;
+  startZeroconfLogin?: (
+    deviceId: string,
+    name?: string,
+    timeoutMs?: number,
+  ) => Promise<CredentialsResult>;
 };
 type NativeStreamHandle = Pick<StreamHandle, 'stop' | 'sampleRate' | 'channels'>;
 
@@ -177,6 +182,45 @@ export type NativeStreamResult = NativeStreamHandle & {
   stream: NodeJS.ReadableStream;
   format: 's16le';
 };
+
+/**
+ * Obtain a credentials blob by letting the user hand one over from the Spotify app.
+ *
+ * This advertises a plain Connect device over mDNS and waits for someone to pick it; what comes back
+ * is the blob Spotify's own app minted during that handshake (`AUTHENTICATION_STORED_SPOTIFY_CREDENTIALS`).
+ *
+ * It exists because as of 2026-08-10 it is the only login Spotify still accepts. Blobs derived from
+ * an OAuth access token — which is what {@link generateLibrespotCredentialsFromOAuth} produces, and
+ * what every account added through the admin UI was holding — are refused with INVALID_CREDENTIALS
+ * (#333; also librespot-org/librespot#1737, devgianlu/go-librespot#364). No client id we can pass
+ * changes that, so nothing on the token path can be repaired; a person has to tap the device once.
+ *
+ * Resolves to null when the handshake times out or the native module is too old to offer it.
+ */
+export async function pairLibrespotCredentialsViaZeroconf(params: {
+  deviceId: string;
+  name?: string;
+  timeoutMs?: number;
+}): Promise<{ username: string; credentials: string } | null> {
+  const { deviceId, name, timeoutMs } = params;
+  if (typeof addon.startZeroconfLogin !== 'function') {
+    log.warn('native librespot has no startZeroconfLogin; cannot pair over zeroconf');
+    return null;
+  }
+  try {
+    const result = await addon.startZeroconfLogin(deviceId, name, timeoutMs);
+    const credentials = result?.credentialsJson;
+    if (!credentials) {
+      log.warn('zeroconf pairing returned no credentials payload');
+      return null;
+    }
+    return { username: result.username, credentials };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn('zeroconf pairing failed', { deviceId, message });
+    return null;
+  }
+}
 
 /**
  * Use an OAuth access token to obtain a reusable librespot credentials blob.

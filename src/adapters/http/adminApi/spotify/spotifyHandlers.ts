@@ -13,6 +13,7 @@ import {
   deleteSpotifyAccount,
   handleSpotifyLibrespotExport,
   handleSpotifyLibrespotOAuth,
+  handleSpotifyLibrespotZeroconf,
   handleSpotifyOAuthCallback,
 } from '@/adapters/content/providers/spotify/serviceAuth';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
@@ -63,6 +64,20 @@ export function buildSpotifyRoutes(deps: SpotifyHandlerDeps): Route[] {
           deps.spotifyInputService,
           deps.spotifyManagerProvider,
         ),
+    },
+    {
+      // Start a pairing handshake — the only login Spotify still accepts (#333). Returns at once;
+      // the GET below reports whether the user has picked the device yet.
+      method: 'POST',
+      pattern: /^\/spotify\/librespot\/zeroconf$/,
+      handler: async (req, res) =>
+        handleSpotifyLibrespotZeroconf(req, res, deps.configPort, deps.spotifyInputService),
+    },
+    {
+      method: 'GET',
+      pattern: /^\/spotify\/librespot\/zeroconf$/,
+      handler: async (req, res) =>
+        handleSpotifyLibrespotZeroconf(req, res, deps.configPort, deps.spotifyInputService),
     },
     {
       // Anchored and GET-only: the pattern used to be an unanchored prefix with no

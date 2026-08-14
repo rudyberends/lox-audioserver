@@ -9,6 +9,7 @@ import { consumePkceVerifier } from '@/adapters/content/providers/spotify/pkce';
 import { resolveSpotifyClientId } from '@/adapters/content/providers/spotify/utils';
 import {
   generateLibrespotCredentialsFromOAuth,
+  pairLibrespotCredentialsViaZeroconf,
 } from '@/adapters/inputs/spotify/spotifyStreamingService';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -212,14 +213,7 @@ export async function handleSpotifyLibrespotOAuth(
     return;
   }
 
-  const cfg = configPort.getConfig();
-  const account = cfg.content?.spotify?.accounts?.find(
-    (acc) =>
-      acc.id === accountId ||
-      acc.user === accountId ||
-      acc.email === accountId ||
-      acc.spotifyId === accountId,
-  );
+  const account = findSpotifyAccount(configPort, accountId);
   if (!account) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'account_not_found' }));
@@ -263,6 +257,180 @@ export async function handleSpotifyLibrespotOAuth(
 }
 
 /**
+ * A pairing handshake in flight, per account.
+ *
+ * Pairing finishes when a person picks the device in the Spotify app, so it is held here rather than
+ * on the request: a browser will not sit on a POST for two minutes, and the admin screen needs
+ * something to poll while it tells the user what to go and tap.
+ */
+type PairingState = {
+  state: 'pairing' | 'paired' | 'failed';
+  deviceName: string;
+  startedAt: number;
+  expiresAt: number;
+  username?: string;
+  error?: string;
+};
+
+const pairingByAccount = new Map<string, PairingState>();
+const PAIRING_RESULT_TTL_MS = 5 * 60 * 1000;
+
+function pairingSnapshot(accountId: string): PairingState | null {
+  const entry = pairingByAccount.get(accountId);
+  if (!entry) {
+    return null;
+  }
+  // A settled result is worth keeping only long enough for the screen that asked to read it.
+  if (entry.state !== 'pairing' && Date.now() - entry.expiresAt > PAIRING_RESULT_TTL_MS) {
+    pairingByAccount.delete(accountId);
+    return null;
+  }
+  if (entry.state === 'pairing' && Date.now() > entry.expiresAt) {
+    entry.state = 'failed';
+    entry.error = 'timed_out';
+  }
+  return entry;
+}
+
+function findSpotifyAccount(
+  configPort: ConfigPort,
+  accountId: string,
+): SpotifyAccountConfig | undefined {
+  return configPort
+    .getConfig()
+    .content?.spotify?.accounts?.find(
+      (acc) =>
+        acc.id === accountId ||
+        acc.user === accountId ||
+        acc.email === accountId ||
+        acc.spotifyId === accountId,
+    );
+}
+
+/**
+ * Pair an account by handshake, the only login Spotify still accepts (#333).
+ *
+ * POST /admin/api/spotify/librespot/zeroconf { accountId, deviceName?, timeoutMs? }
+ *   Starts advertising and returns immediately with the device name to show the user.
+ * GET  /admin/api/spotify/librespot/zeroconf?accountId=<id>
+ *   Reports how it is going: pairing | paired | failed.
+ *
+ * One handshake per account at a time — a second advertisement for the same account would just
+ * compete with the first for the same pick.
+ */
+export async function handleSpotifyLibrespotZeroconf(
+  req: IncomingMessage,
+  res: ServerResponse,
+  configPort: ConfigPort,
+  spotifyInputService: SpotifyInputService,
+): Promise<void> {
+  const json = (status: number, body: unknown): void => {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
+  };
+
+  if (req.method === 'GET') {
+    const { searchParams } = new URL(req.url ?? '', 'http://localhost');
+    const accountId = (searchParams.get('accountId') || '').trim();
+    if (!accountId) {
+      return json(400, { error: 'missing_account' });
+    }
+    const entry = pairingSnapshot(accountId);
+    if (!entry) {
+      return json(200, { ok: true, state: 'idle' });
+    }
+    return json(200, {
+      ok: true,
+      state: entry.state,
+      deviceName: entry.deviceName,
+      expiresAt: entry.expiresAt,
+      username: entry.username,
+      error: entry.error,
+    });
+  }
+
+  if (req.method !== 'POST') {
+    return json(405, { error: 'method_not_allowed' });
+  }
+
+  const body = (await readJsonBody(req)) as
+    | { accountId?: string; deviceName?: string; timeoutMs?: number }
+    | null;
+  const accountId = (body?.accountId || '').trim();
+  if (!accountId) {
+    return json(400, { error: 'missing_account' });
+  }
+
+  const account = findSpotifyAccount(configPort, accountId);
+  if (!account) {
+    return json(404, { error: 'account_not_found' });
+  }
+
+  const existing = pairingSnapshot(accountId);
+  if (existing?.state === 'pairing') {
+    return json(200, {
+      ok: true,
+      state: 'pairing',
+      deviceName: existing.deviceName,
+      expiresAt: existing.expiresAt,
+      alreadyRunning: true,
+    });
+  }
+
+  const deviceName = (body?.deviceName || '').trim() || 'Sonn (pairing)';
+  const timeoutMs =
+    typeof body?.timeoutMs === 'number' && Number.isFinite(body.timeoutMs)
+      ? Math.max(30_000, Math.min(300_000, body.timeoutMs))
+      : 120_000;
+  // librespot device ids are 40-hex; derive one from the account so repeat pairings reuse it
+  // instead of leaving a trail of one-off devices in the user's Spotify app.
+  const deviceId = crypto.createHash('sha1').update(`pair:${accountId}`).digest('hex');
+
+  const entry: PairingState = {
+    state: 'pairing',
+    deviceName,
+    startedAt: Date.now(),
+    expiresAt: Date.now() + timeoutMs,
+  };
+  pairingByAccount.set(accountId, entry);
+  log.info('spotify zeroconf pairing started', { accountId, deviceName, timeoutMs });
+
+  void (async () => {
+    try {
+      const result = await pairLibrespotCredentialsViaZeroconf({
+        deviceId,
+        name: deviceName,
+        timeoutMs,
+      });
+      if (!result) {
+        entry.state = 'failed';
+        entry.error = 'no_credentials';
+        log.warn('spotify zeroconf pairing produced no credentials', { accountId });
+        return;
+      }
+      let parsed: string | Record<string, unknown> = result.credentials;
+      try {
+        parsed = JSON.parse(result.credentials);
+      } catch {
+        /* keep string */
+      }
+      await pushLibrespotCredentials(spotifyInputService, accountId, parsed);
+      entry.state = 'paired';
+      entry.username = result.username;
+      log.info('spotify zeroconf pairing stored', { accountId, username: result.username });
+      reinitializeSpotifyInputs(configPort, spotifyInputService, 'zeroconf_paired', accountId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      entry.state = 'failed';
+      entry.error = message;
+      log.warn('spotify zeroconf pairing failed', { accountId, message });
+    }
+  })();
+
+  return json(202, { ok: true, state: 'pairing', deviceName, expiresAt: entry.expiresAt });
+}
+
+/**
  * Export existing librespot credentials for an account.
  * Request (GET): /admin/api/spotify/librespot/credentials?accountId=<id>
  * Response: { username, credentials }
@@ -284,14 +452,7 @@ export async function handleSpotifyLibrespotExport(
     res.end(JSON.stringify({ error: 'missing_account' }));
     return;
   }
-  const cfg = configPort.getConfig();
-  const account = cfg.content?.spotify?.accounts?.find(
-    (acc) =>
-      acc.id === accountId ||
-      acc.user === accountId ||
-      acc.email === accountId ||
-      acc.spotifyId === accountId,
-  );
+  const account = findSpotifyAccount(configPort, accountId);
   if (!account) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'account_not_found' }));
