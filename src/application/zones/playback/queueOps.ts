@@ -12,38 +12,24 @@ export function findQueueIndexByUri(items: QueueItem[], uri: string | undefined)
   );
 }
 
+/**
+ * Which side owns the queue for a play request. Spotify is absent on purpose: it
+ * plays through our own Connect host, so we drive its queue like any local one.
+ */
 export function resolveQueueAuthority(args: {
   isMusicAssistant: boolean;
   isAppleMusic: boolean;
   isDeezer: boolean;
   isTidal: boolean;
   isSoundcloud: boolean;
-  isSpotify: boolean;
-  bridgeProvider: string | null;
 }): QueueAuthority {
   const forceLocalQueue =
-    args.isAppleMusic ||
-    args.isDeezer ||
-    args.isTidal ||
-    args.isSoundcloud ||
-    (args.isSpotify && Boolean(args.bridgeProvider && args.bridgeProvider !== 'spotify'));
+    args.isAppleMusic || args.isDeezer || args.isTidal || args.isSoundcloud;
   if (forceLocalQueue) {
     return 'local';
   }
   if (args.isMusicAssistant) {
     return 'musicassistant';
-  }
-  if (args.isAppleMusic) {
-    return 'applemusic';
-  }
-  if (args.isDeezer) {
-    return 'deezer';
-  }
-  if (args.isTidal) {
-    return 'tidal';
-  }
-  if (args.isSpotify) {
-    return 'spotify';
   }
   return 'local';
 }

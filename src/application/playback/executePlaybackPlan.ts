@@ -83,34 +83,29 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
   }
 
   if (plan.playExternalLabel === 'spotify') {
-    const offloadEnabled = ctx.config.inputs?.spotify?.offload === true;
     const parsedUser = parseSpotifyUser(plan.audiopath);
     // When the queue normalizes to `spotify:...`, parsing yields `nouser`. Never pass `nouser`
     // to the spotify input, since it overrides the configured/default account selection.
     const accountId = parsedUser && parsedUser !== 'nouser' ? parsedUser : undefined;
-    let playbackSource: PlaybackSource | null = null;
-    if (!offloadEnabled) {
-      const seekPositionMs = normalizedStartAt ? Math.max(0, Math.round(normalizedStartAt * 1000)) : 0;
-      playbackSource = await inputs.getPlaybackSourceForUri(
-        ctx.id,
-        normalizeSpotifyAudiopath(plan.audiopath),
-        seekPositionMs,
-        accountId,
-      );
-    }
+    const seekPositionMs = normalizedStartAt ? Math.max(0, Math.round(normalizedStartAt * 1000)) : 0;
+    const playbackSource = await inputs.getPlaybackSourceForUri(
+      ctx.id,
+      normalizeSpotifyAudiopath(plan.audiopath),
+      seekPositionMs,
+      accountId,
+    );
     log.debug('startQueuePlayback spotify', {
       zoneId: ctx.id,
       audiopath: plan.audiopath,
       hasPlaybackSource: Boolean(playbackSource),
       playbackKind: playbackSource?.kind,
-      connectEnabled: offloadEnabled,
       queueSize: ctx.queue.items.length,
     });
-    if (!playbackSource && !offloadEnabled) {
+    if (!playbackSource) {
       log.warn('spotify input not ready; blocking playback to avoid skips', { zoneId: ctx.id });
       return null;
     }
-    const playbackIsPipe = playbackSource?.kind === 'pipe';
+    const playbackIsPipe = playbackSource.kind === 'pipe';
     const queueUris = ctx.queue.items.map((q) => q.audiopath);
     const queueIndex = ctx.queueController.currentIndex();
     const meta = {

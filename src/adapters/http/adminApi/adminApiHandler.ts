@@ -314,7 +314,6 @@ export class AdminApiHandler {
         snapcastCore: this.snapcastCore,
         squeezeliteCore: this.squeezeliteCore,
         musicAssistantStreamService: this.musicAssistantStreamService,
-        spotifyManagerProvider: this.spotifyManagerProvider,
         stateControllerDefinitions: STATE_CONTROLLER_DEFINITIONS,
         readJsonBody: (req, res, max) => readJsonBody(req, res, max),
         sendJson: (res, status, payload) => sendJson(res, status, payload),

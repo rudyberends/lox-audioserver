@@ -39,7 +39,7 @@ function buildConfigurator(opts: { activeInput?: ZoneContext['activeInput'] } = 
       queue: { authority: 'local' } as never,
       state: { volume: 30 } as never,
       config: { id: 1, volumes: { default: 25, min: 0, max: 100 } } as never,
-      outputs: [{ type: 'squeezelite' }, { type: 'spotify-input' }] as never,
+      outputs: [{ type: 'squeezelite' }] as never,
       spotifyAdapter: {
         start: (...args: unknown[]) => fakes.spotifyAdapterEvents.push(`start:${args[0]}`),
         updateMetadata: () => fakes.spotifyAdapterEvents.push('updateMetadata'),
@@ -167,7 +167,6 @@ test('Spotify Connect updateVolume bypasses player.setVolume to avoid feedback l
   fakes.spotify!.updateVolume(1, 55);
   assert.equal(fakes.stateStorePatches.length, 1, 'state-store should be patched');
   assert.equal(fakes.outputVolumeCalls.length, 1);
-  // Excludes spotify-input to avoid librespot echo
   assert.deepEqual(fakes.outputVolumeCalls[0]?.outputTypes, ['squeezelite']);
 });
 

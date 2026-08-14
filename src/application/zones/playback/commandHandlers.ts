@@ -26,7 +26,6 @@ type CommandCoordinator = {
     payload: PlaybackSession | null | undefined,
   ) => void;
   dispatchVolume: (ctx: ZoneContext, outputs: ZoneOutput[], volume: number) => void;
-  dispatchQueueStep: (ctx: ZoneContext, outputs: ZoneOutput[], delta: 1 | -1) => boolean;
   setInputMode: (ctx: ZoneContext | undefined, mode: ZoneContext['inputMode']) => void;
   setShuffle: (zoneId: number, enabled: boolean) => void;
   stepQueue: (zoneId: number, delta: number) => void;
@@ -449,7 +448,6 @@ function handleQueueStep(
     coordinator.log.debug('queue step ignored; mode not queue-driven', { zoneId, mode, delta });
     return;
   }
-  const dispatched = coordinator.dispatchQueueStep(ctx, ctx.outputs, delta);
   coordinator.log.debug('queue step', {
     zoneId,
     delta,
@@ -457,15 +455,15 @@ function handleQueueStep(
     authority: ctx.queue.authority,
     queueSize: ctx.queue.items.length,
     currentIndex: ctx.queue.items.length > 0 ? ctx.queueController.currentIndex() : -1,
-    dispatched,
     outputTypes: ctx.outputs.map((o) => o.type),
   });
-  if (!dispatched) {
-    if (coordinator.isLocalQueueAuthority(ctx.queue.authority)) {
-      coordinator.stepQueue(zoneId, delta);
-    } else {
-      coordinator.log.debug('queue step skipped; non-local authority and no dispatched output', { zoneId, authority: ctx.queue.authority });
-    }
+  if (coordinator.isLocalQueueAuthority(ctx.queue.authority)) {
+    coordinator.stepQueue(zoneId, delta);
+  } else {
+    coordinator.log.debug('queue step skipped; non-local authority', {
+      zoneId,
+      authority: ctx.queue.authority,
+    });
   }
 }
 

@@ -293,8 +293,16 @@ function normalizeZoneInputs(zone: ZoneConfig): void {
   }
   if (zone.inputs.spotify) {
     const sp = zone.inputs.spotify as unknown as Record<string, unknown>;
-    const connectVal = sp.connectEnabled ?? sp.offload;
-    zone.inputs.spotify.offload = connectVal === true;
+    // Offload (handing playback to a hardware Connect device) is gone: a zone either
+    // runs our own Connect host or nothing. `deviceId` used to mean two things, and on
+    // an offloaded zone it holds the *foreign* device's id — valid-looking enough that
+    // our Connect host would adopt it and collide with the real device in Spotify. So
+    // the flag and that borrowed id have to go together.
+    if (sp.offload === true || sp.connectEnabled === true) {
+      delete sp.deviceId;
+    }
+    delete sp.offload;
+    delete sp.connectEnabled;
     // Drop legacy native flag if present.
     if ('native' in zone.inputs.spotify!) {
       delete (zone.inputs.spotify as unknown as Record<string, unknown>).native;

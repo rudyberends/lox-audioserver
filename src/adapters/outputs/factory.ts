@@ -6,10 +6,6 @@ import {
   DLNA_OUTPUT_DEFINITION,
 } from '@/adapters/outputs/dlna/dlnaOutput';
 import {
-  SpotifyConnectInputController,
-  SPOTIFY_CONNECT_CONTROLLER_DEFINITION,
-} from '@/adapters/inputs/spotify/spotifyConnectController';
-import {
   AirPlayOutput,
   AIRPLAY_OUTPUT_DEFINITION,
   type AirPlayOutputConfig,
@@ -59,7 +55,6 @@ import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 
 type OutputDefinitions =
   | typeof DLNA_OUTPUT_DEFINITION
-  | typeof SPOTIFY_CONNECT_CONTROLLER_DEFINITION
   | typeof AIRPLAY_OUTPUT_DEFINITION
   | typeof SNAPCAST_OUTPUT_DEFINITION
   | typeof SENDSPIN_OUTPUT_DEFINITION
@@ -72,7 +67,6 @@ type OutputDefinitions =
 
 export const OUTPUT_DEFINITIONS: OutputDefinitions[] = [
   DLNA_OUTPUT_DEFINITION,
-  SPOTIFY_CONNECT_CONTROLLER_DEFINITION,
   AIRPLAY_OUTPUT_DEFINITION,
   SNAPCAST_OUTPUT_DEFINITION,
   SENDSPIN_OUTPUT_DEFINITION,
@@ -92,7 +86,6 @@ export function buildZoneOutputs(
   const outputs: ZoneOutput[] = [];
   const primaryOutput = getPrimaryOutputConfig(zone);
   const entries = primaryOutput ? [primaryOutput] : [];
-  let hasSpotifyController = false;
 
   for (const entry of entries) {
     const id = entry.id?.toLowerCase();
@@ -138,13 +131,6 @@ export function buildZoneOutputs(
         outputs.push(output);
       }
     }
-    if (id === 'spotify') {
-      const output = createSpotifyController(entry, zone, ports);
-      if (output) {
-        outputs.push(output);
-        hasSpotifyController = true;
-      }
-    }
     if (id === 'sonos') {
       const output = createSonosOutput(entry, zone, ports);
       if (output) {
@@ -162,16 +148,6 @@ export function buildZoneOutputs(
       if (output) {
         outputs.push(output);
       }
-    }
-  }
-
-  // Always create a Spotify Connect controller when the Spotify input is enabled,
-  // so Spotify content can be fetched even if no explicit output entry exists.
-  if (!hasSpotifyController && isSpotifyInputEnabled(zone)) {
-    const output = createSpotifyController(null, zone, ports);
-    if (output) {
-      outputs.push(output);
-      hasSpotifyController = true;
     }
   }
 
@@ -221,56 +197,6 @@ function createDlnaOutput(
   );
 }
 
-function createSpotifyController(
-  config: ZoneTransportConfig | null,
-  zone: ZoneConfig,
-  ports: OutputPorts,
-): ZoneOutput | null {
-  if (!isSpotifyInputEnabled(zone)) {
-    log.debug('Spotify Connect output skipped; spotify input disabled', {
-      zoneId: zone.id,
-    });
-    return null;
-  }
-  const spotifyInput = zone.inputs?.spotify;
-  const rawDeviceName = (config as Record<string, unknown> | null | undefined)?.name;
-  const rawDeviceId = (config as Record<string, unknown> | null | undefined)?.deviceId;
-  const deviceName =
-    typeof rawDeviceName === 'string' && rawDeviceName.trim()
-      ? rawDeviceName.trim()
-      : typeof spotifyInput?.publishName === 'string' && spotifyInput.publishName.trim()
-        ? spotifyInput.publishName.trim()
-        : zone.name;
-  const deviceId =
-    typeof rawDeviceId === 'string' && rawDeviceId.trim()
-      ? rawDeviceId.trim()
-      : typeof spotifyInput?.deviceId === 'string' && spotifyInput.deviceId.trim()
-        ? spotifyInput.deviceId.trim()
-        : undefined;
-  const connectEnabled = zone.inputs?.spotify?.offload === true;
-
-  if (connectEnabled) {
-    log.info('Spotify Connect output registered', {
-      zoneId: zone.id,
-      deviceName,
-      deviceId: deviceId || 'librespot-auto',
-    });
-
-    return new SpotifyConnectInputController(
-      zone.id,
-      zone.name,
-      { deviceName, deviceId },
-      ports.config,
-      ports.spotifyManagerProvider,
-      ports.spotifyDeviceRegistry,
-      ports.outputHandlers,
-    );
-  }
-
-  log.info('Spotify Connect output skipped; offload is false', { zoneId: zone.id });
-  return null;
-}
-
 function createSqueezeliteOutput(
   config: ZoneTransportConfig,
   zone: ZoneConfig,
@@ -306,11 +232,6 @@ function createMusicAssistantOutput(
   const cfg: MusicAssistantOutputConfig = { bridgeId, playerId };
   log.info('Music Assistant output registered', { zoneId: zone.id, bridgeId: bridgeId || '(auto)', playerId });
   return new MusicAssistantOutput(zone.id, zone.name, cfg, ports.config);
-}
-
-function isSpotifyInputEnabled(zone: ZoneConfig): boolean {
-  const cfg = zone.inputs?.spotify;
-  return cfg ? cfg.enabled !== false : true;
 }
 
 function createAirplayOutput(

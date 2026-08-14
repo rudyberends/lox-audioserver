@@ -23,8 +23,8 @@ import { resolvePlaybackSource as resolveDirectSource } from '@/application/play
  *     the same mechanism the DLNA track endpoint uses. No ranges: the bytes do
  *     not exist until the transcode produces them.
  *
- * Pure Spotify Connect-offload resolves to no PlaybackSource and 404s — it can
- * only be pushed to a Spotify-aware device, never pulled through the engine.
+ * Spotify resolves to no PlaybackSource and 404s: it only plays through a zone's
+ * own Connect host, never pulled through a zone-less engine session.
  */
 export class SubsonicStreamHandler {
   private readonly log = createLogger('Subsonic', 'Stream');

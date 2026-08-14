@@ -490,22 +490,13 @@ export class PlayRequestService {
   }
 
   private setQueueAuthorityForRequest(ctx: ZoneContext, req: ResolvedPlayRequest): void {
-    const bridgeProvider =
-      this.deps.audioHelpers.resolveBridgeProvider(req.queueAudiopath) ??
-      this.deps.audioHelpers.resolveBridgeProvider(req.resolvedTarget) ??
-      this.deps.audioHelpers.resolveBridgeProvider(req.uri);
     ctx.queue.authority = resolveQueueAuthority({
       isMusicAssistant: req.isMusicAssistant,
       isAppleMusic: req.isAppleMusic,
       isDeezer: req.isDeezer,
       isTidal: req.isTidal,
       isSoundcloud: req.isSoundcloud,
-      isSpotify: req.isSpotify,
-      bridgeProvider,
     });
-    if (req.isSpotify && ctx.config.inputs?.spotify?.offload !== true) {
-      ctx.queue.authority = 'local';
-    }
   }
 
   private async startFromCurrentQueueItem(

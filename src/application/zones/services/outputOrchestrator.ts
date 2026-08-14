@@ -31,67 +31,17 @@ export function selectPlayOutputs(
   return [];
 }
 
-export function dispatchQueueStep(
-  ctx: ZoneContext,
-  outputs: ZoneOutput[],
-  delta: number,
-  log: ComponentLogger,
-): boolean {
-  let handled = false;
-  outputs.forEach((output) => {
-    if (output.type === 'spotify-input' && ctx.activeInput && ctx.activeInput !== 'spotify') {
-      return;
-    }
-    if (typeof output.stepQueue !== 'function') {
-      return;
-    }
-    handled = true;
-    try {
-      const result = output.stepQueue(delta);
-      if (result instanceof Promise) {
-        void result.catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          log.warn('output queue step failed', {
-            zoneId: (output as { zoneId?: number }).zoneId,
-            message,
-          });
-        });
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log.warn('output queue step failed', {
-        zoneId: (output as { zoneId?: number }).zoneId,
-        message,
-      });
-    }
-  });
-  return handled;
-}
-
 export function dispatchVolume(
   ctx: ZoneContext,
   outputs: ZoneOutput[],
   volume: number,
   log: ComponentLogger,
 ): void {
-  const isActiveInput = (output: ZoneOutput): boolean => {
-    if (!ctx.activeInput) return false;
-    const type = output.type;
-    if (!type) return false;
-    if (type.endsWith('-input')) {
-      const inputName = type.slice(0, -'-input'.length);
-      return ctx.activeInput === inputName;
-    }
-    return false;
-  };
-
   outputs.forEach((output) => {
     if (typeof output.setVolume !== 'function') {
       return;
     }
-    const isOutput =
-      ctx.activeOutput == null ? output.type !== 'spotify-input' : output.type === ctx.activeOutput;
-    if (!isOutput && !isActiveInput(output)) {
+    if (ctx.activeOutput != null && output.type !== ctx.activeOutput) {
       return;
     }
     try {
@@ -132,22 +82,10 @@ export function dispatchOutputs(
   if (action === 'play' && (!payload || typeof payload !== 'object')) {
     return;
   }
-  const spotifyConnectEnabled = ctx.config.inputs?.spotify?.offload === true;
-  const payloadSource =
-    action === 'play' && payload && typeof payload === 'object'
-      ? (payload as PlaybackSession).source
-      : null;
-  const allowSpotifyController =
-    spotifyConnectEnabled &&
-    (ctx.activeInput === 'spotify' || payloadSource === 'spotify');
-  const controllers = allowSpotifyController
-    ? outputs.filter((t) => t.type === 'spotify-input')
-    : [];
   const hasPlaybackSource =
     action === 'play' && payload && typeof payload === 'object'
       ? Boolean((payload as PlaybackSession).playbackSource)
       : true;
-  const outputCandidates = outputs.filter((t) => t.type !== 'spotify-input');
   const isReady = (output: ZoneOutput): boolean => {
     const maybe = (output as { isReady?: () => boolean }).isReady;
     if (typeof maybe === 'function') {
@@ -161,13 +99,13 @@ export function dispatchOutputs(
   };
   const preferredOutputs =
     ctx.activeOutput != null
-      ? outputCandidates.filter((t) => t.type === ctx.activeOutput)
+      ? outputs.filter((t) => t.type === ctx.activeOutput)
       : [];
   const preferredReady = preferredOutputs.filter(isReady);
   const preferredTargets =
     preferredReady.length > 0
       ? preferredReady
-      : preferredOutputs.length > 0 && !outputCandidates.some(isReady)
+      : preferredOutputs.length > 0 && !outputs.some(isReady)
         ? preferredOutputs
         : [];
   const targetOutputs =
@@ -175,10 +113,10 @@ export function dispatchOutputs(
       ? hasPlaybackSource
         ? preferredTargets.length
           ? [preferredTargets[0]!]
-          : selectPlayOutputs(outputCandidates)
+          : selectPlayOutputs(outputs)
         : []
       : ctx.activeOutput
-        ? outputCandidates.filter((t) => t.type === ctx.activeOutput)
+        ? outputs.filter((t) => t.type === ctx.activeOutput)
         : [];
 
   if (action === 'play' && targetOutputs.length) {
@@ -204,7 +142,7 @@ export function dispatchOutputs(
     ctx.activeOutputTypes = new Set(ctx.activeOutput ? [ctx.activeOutput] : []);
   }
 
-  const targets = [...controllers, ...targetOutputs];
+  const targets = targetOutputs;
   // Only a failed `play` means the listener is left with silence, so only that one is escalated
   // to a playback error (which tears the session down and shows "Playback unavailable"). A
   // pause/resume/stop that did not reach the speaker leaves a valid session behind, and killing

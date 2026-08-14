@@ -235,7 +235,7 @@ export class AlertsCoordinator {
     media: AlertMediaResource,
     volume: number,
   ): Promise<boolean> {
-    const realOutputs = ctx.outputs.filter((o) => o.type !== 'spotify-input');
+    const realOutputs = ctx.outputs;
     if (realOutputs.length === 0) {
       return false;
     }
@@ -475,7 +475,7 @@ export class AlertsCoordinator {
   }
 
   private async waitForOutputReady(ctx: ZoneContext, timeoutMs = 2000): Promise<void> {
-    const outputs = ctx.outputs.filter((t) => t.type !== 'spotify-input');
+    const outputs = ctx.outputs;
     if (!outputs.length) {
       return;
     }

@@ -10,7 +10,6 @@ import {
   acquireMaApiForBridge,
   findMusicAssistantBridge,
 } from '@/shared/musicassistant/maBridgeResolver';
-import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
 import { sendspinCore } from '@sonn-audio/node-sendspin';
 import { bluetoothClientId } from '@/adapters/inputs/bluetooth/bluetoothInputService';
 import { OUTPUT_DEFINITIONS } from '@/adapters/outputs';
@@ -18,7 +17,6 @@ import { discoverAirplayDevices } from '@/adapters/outputs/airplay/airplayDiscov
 import { discoverGoogleCastDevices } from '@/adapters/outputs/googleCast/googleCastDiscovery';
 import { discoverDlnaDevices } from '@/adapters/outputs/dlna/dlnaDiscovery';
 import { discoverSonosDevices } from '@/adapters/outputs/sonos/sonosDiscovery';
-import { discoverSpotifyConnectDevices } from '@/adapters/content/providers/spotify/spotifyConnectDiscovery';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 
 /** Browser tabs are ephemeral local destinations, not physical output devices. */
@@ -40,7 +38,6 @@ export type TransportsHandlerDeps = {
   snapcastCore: SnapcastCore;
   squeezeliteCore: SqueezeliteCore;
   musicAssistantStreamService: MusicAssistantStreamService;
-  spotifyManagerProvider: SpotifyServiceManagerProvider;
   stateControllerDefinitions: readonly StateControllerDefinition[];
   readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
@@ -113,11 +110,6 @@ export function buildTransportsRoutes(deps: TransportsHandlerDeps): Route[] {
       method: 'GET',
       pattern: /^\/transports\/squeezelite\/clients$/,
       handler: async (_req, res) => handleSqueezeliteDiscovery(res, deps),
-    },
-    {
-      method: 'GET',
-      pattern: /^\/transports\/spotify\/devices$/,
-      handler: async (_req, res) => handleSpotifyDeviceDiscovery(res, deps),
     },
   ];
 }
@@ -582,19 +574,6 @@ function handleSqueezeliteDiscovery(res: ServerResponse, deps: TransportsHandler
   } catch (err) {
     deps.log.warn('squeezelite discovery failed', { err });
     deps.sendJson(res, 500, { error: 'squeezelite-discovery-failed' });
-  }
-}
-
-async function handleSpotifyDeviceDiscovery(
-  res: ServerResponse,
-  deps: TransportsHandlerDeps,
-): Promise<void> {
-  try {
-    const devices = await discoverSpotifyConnectDevices(deps.spotifyManagerProvider);
-    deps.sendJson(res, 200, { devices });
-  } catch (err) {
-    deps.log.warn('spotify device discovery failed', { err });
-    deps.sendJson(res, 500, { error: 'spotify-discovery-failed' });
   }
 }
 

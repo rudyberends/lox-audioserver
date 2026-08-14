@@ -138,7 +138,7 @@ class MixedGroupController implements MixedGroupCoordinator {
     if (!snapshot) {
       return 'unknown';
     }
-    const fallback = snapshot.transports.find((type) => type !== 'spotify-input') ?? null;
+    const fallback = snapshot.transports[0] ?? null;
     return snapshot.activeOutput ?? fallback ?? 'unknown';
   }
 

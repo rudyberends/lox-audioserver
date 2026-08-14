@@ -185,10 +185,6 @@ class SpotifyConnectInstance {
   }
 
   public async start(): Promise<void> {
-    if (this.config.offload) {
-      this.isReady = false;
-      return;
-    }
     if (this.isReady) {
       // Connect host is already running. Avoid restarting it unless explicitly
       // stopped first (e.g. via stopConnectHost() in scheduleRestart / credential change).
@@ -1959,8 +1955,7 @@ export class SpotifyInputService {
     const desired = new Set<number>();
     const connectZones = zones.filter((zone) => {
       const config = zone.inputs?.spotify ?? this.buildDefaultZoneConfig(zone);
-      const offloadEnabled = config.offload === true;
-      return Boolean(config.enabled) && !offloadEnabled;
+      return Boolean(config.enabled);
     });
     const connectZoneOrder = new Map<number, number>();
     connectZones.forEach((zone, index) => {
@@ -1976,8 +1971,7 @@ export class SpotifyInputService {
       this.deviceRegistry.setSpotifyDeviceId(zone.id, ensuredDeviceId);
 
       const config = zone.inputs?.spotify ?? this.buildDefaultZoneConfig(zone);
-      const offloadEnabled = config.offload === true;
-      const connectEnabled = Boolean(config?.enabled) && !offloadEnabled;
+      const connectEnabled = Boolean(config?.enabled);
       const account = this.resolveAccount(config.accountId) ?? defaultAccount;
       const credPath = 'inline';
       desired.add(zone.id);
@@ -2018,16 +2012,14 @@ export class SpotifyInputService {
         this.queueStart(zone.id, instance, delayMs, 'sync_new');
       } else {
         this.cancelQueuedStart(zone.id);
-        if (!offloadEnabled) {
-          // Best-effort warm start; failure will be retried via normal lifecycle.
-          void bestEffort(() => instance.start(), {
-            fallback: undefined,
-            onError: 'debug',
-            log: this.log,
-            label: 'spotify connect warm start failed',
-            context: { zoneId: zone.id },
-          });
-        }
+        // Best-effort warm start; failure will be retried via normal lifecycle.
+        void bestEffort(() => instance.start(), {
+          fallback: undefined,
+          onError: 'debug',
+          log: this.log,
+          label: 'spotify connect warm start failed',
+          context: { zoneId: zone.id },
+        });
         instance.stopConnectHost();
       }
     }

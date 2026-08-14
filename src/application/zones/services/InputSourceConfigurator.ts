@@ -167,13 +167,11 @@ export class InputSourceConfigurator {
         }
         const level = clampVolumeForZone(ctx.config, volume);
         // Patch zone state so the Loxone UI reflects the change.
-        // Do NOT route through player.setVolume: that triggers onPlayerVolume
-        // → dispatchVolume → SpotifyConnectInputController → Spotify API, which
-        // causes librespot to echo a volume event back → infinite loop.
+        // Do NOT route through player.setVolume: that triggers onPlayerVolume, and
+        // the volume we are handling here came from librespot in the first place —
+        // sending it back would have it echo another event → infinite loop.
         stateStore.applyPatch(zoneId, buildVolumePatch(level));
-        // Sync squeezelite hardware volume only; skip spotify-input to avoid the loop.
-        const nonInputOutputs = ctx.outputs.filter((o) => o.type !== 'spotify-input');
-        outputRouter.dispatchVolume(ctx, nonInputOutputs, level);
+        outputRouter.dispatchVolume(ctx, ctx.outputs, level);
       },
       updateTiming: (zoneId, elapsed, duration) => {
         const ctx = zoneRepo.get(zoneId);

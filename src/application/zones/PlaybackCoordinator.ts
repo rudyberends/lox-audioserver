@@ -463,7 +463,7 @@ export class PlaybackCoordinator {
         audiopath,
       });
     }
-    if (!this.hasPlaybackOutput(ctx, classification)) {
+    if (!this.hasPlaybackOutput(ctx)) {
       this.zonesMissingOutput.add(ctx.id);
       this.handlePlaybackError(ctx.id, 'No output configured', 'output');
       this.log.warn('playback blocked; no output configured', {
@@ -562,19 +562,8 @@ export class PlaybackCoordinator {
     return session;
   }
 
-  private hasPlaybackOutput(
-    ctx: ZoneContext,
-    classification: { isSpotify: boolean },
-  ): boolean {
-    const outputCandidates = ctx.outputs.filter((output) => output.type !== 'spotify-input');
-    if (outputCandidates.length > 0) {
-      return true;
-    }
-    const spotifyOffload = ctx.config.inputs?.spotify?.offload === true;
-    if (classification.isSpotify && spotifyOffload) {
-      return ctx.outputs.some((output) => output.type === 'spotify-input');
-    }
-    return false;
+  private hasPlaybackOutput(ctx: ZoneContext): boolean {
+    return ctx.outputs.length > 0;
   }
 
   private computeOutputLatencyMs(outputs: ZoneOutput[]): number {
@@ -681,7 +670,6 @@ export class PlaybackCoordinator {
         applyPatch: this.applyPatch,
         dispatchOutputs: this.dispatchOutputs.bind(this),
         dispatchVolume: this.dispatchVolume.bind(this),
-        dispatchQueueStep: this.dispatchQueueStep.bind(this),
         setInputMode: this.setInputMode.bind(this),
         setShuffle: this.queueController.setShuffle.bind(this.queueController),
         stepQueue: this.queueStepDispatcher.stepQueue.bind(this.queueStepDispatcher),
@@ -855,10 +843,6 @@ export class PlaybackCoordinator {
     const port = 7090;
     const normalized = pathname.startsWith('/') ? pathname : `/${pathname}`;
     return `http://${host}:${port}${normalized}`;
-  }
-
-  private dispatchQueueStep(ctx: ZoneContext, outputs: ZoneOutput[], delta: number): boolean {
-    return this.outputRouter.dispatchQueueStep(ctx, outputs, delta);
   }
 
   private dispatchOutputs(

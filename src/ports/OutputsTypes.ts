@@ -125,7 +125,6 @@ export interface ZoneOutput {
   stop(session: PlaybackSession | null): Promise<void> | void;
   setVolume?(level: number): Promise<void> | void;
   setPosition?(seconds: number): Promise<void> | void;
-  stepQueue?(delta: number): Promise<void> | void;
   /** Optional hook to push metadata/cover updates without restarting playback. */
   updateMetadata?(session: PlaybackSession | null): Promise<void> | void;
   /**

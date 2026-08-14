@@ -220,8 +220,8 @@ export interface MediaServerContentConfig {
   /**
    * Optional provider allowlist restricting which top-level services are exposed
    * (e.g. ['library','radio','soundcloud']). Absent = expose every browsable
-   * service the content layer offers. `outputOnly` providers (pure Spotify
-   * Connect offload) can never be exposed regardless of this list.
+   * service the content layer offers. `outputOnly` providers (Music Assistant
+   * offload) can never be exposed regardless of this list.
    */
   providers?: string[];
 }
@@ -737,10 +737,9 @@ export interface ZoneSpotifyConfig {
   enabled: boolean;
   publishName?: string;
   port?: number;
-  /** Enable offloading playback to a Spotify Connect device/controller. */
-  offload?: boolean;
   /** Link this zone to a Spotify account id from the global config. */
   accountId?: string;
+  /** This zone's own Connect device id, as advertised by our Connect host. */
   deviceId?: string;
   /** Optional librespot username to force login (disables discovery when set with password). */
   username?: string;

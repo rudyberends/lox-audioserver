@@ -22,8 +22,8 @@ import type { ContentItemMetadata } from '@/ports/ContentTypes';
  *   3. spin up a self-owned local engine session (no zone-id coupling),
  *   4. pipe its MP3 subscriber to the response and tear the session down on close.
  *
- * Pure Spotify (Connect-offload, output-only) resolves to no PlaybackSource and
- * returns 404 — it can't be pulled through the engine, matching the design note.
+ * Spotify resolves to no PlaybackSource and returns 404: it only plays through a
+ * zone's own Connect host, so there is nothing to pull through a zone-less engine.
  */
 export class TrackStreamHandler {
   private readonly log = createLogger('MediaServer', 'Track');

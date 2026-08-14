@@ -44,7 +44,7 @@ function resolveOutputProtocol(zoneManager: ZoneManagerFacade, zoneId: number): 
   if (!snapshot) {
     return 'unknown';
   }
-  const fallback = snapshot.transports.find((type) => type !== 'spotify-input') ?? null;
+  const fallback = snapshot.transports[0] ?? null;
   // Normalize to the protocol family (sendspin-cast/-dlna/-sonos → sendspin) so
   // the grouping match agrees with what the player shows; otherwise a Cast/DLNA
   // member is wrongly dropped from a sendspin group.

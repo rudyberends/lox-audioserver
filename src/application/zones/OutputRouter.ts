@@ -2,7 +2,6 @@ import type { ComponentLogger } from '@/shared/logging/logger';
 import type { AudioManager, PlaybackSession } from '@/application/playback/audioManager';
 import type { ZoneOutput } from '@/ports/OutputsTypes';
 import {
-  dispatchQueueStep,
   dispatchOutputs,
   dispatchVolume,
   selectPlayOutputs,
@@ -18,10 +17,6 @@ export class OutputRouter {
     private readonly outputErrorNotifier: (zoneId: number, reason?: string) => void,
     private readonly audioManager: AudioManager,
   ) {}
-
-  public dispatchQueueStep(ctx: ZoneContext, outputs: ZoneOutput[], delta: number): boolean {
-    return dispatchQueueStep(ctx, outputs, delta, this.log);
-  }
 
   public dispatchOutputs(
     ctx: ZoneContext,
@@ -66,12 +61,10 @@ export class OutputRouter {
     }
     ctx.lastMetadataDispatchAt = now;
     const session = this.audioManager.getSession(zoneId);
-    const outputTargets =
+    const targets =
       ctx.activeOutput !== null
         ? ctx.outputs.filter((t) => t.type === ctx.activeOutput)
-        : ctx.outputs.filter((t) => t.type !== 'spotify-input');
-    const controllerTargets = ctx.outputs.filter((t) => t.type === 'spotify-input');
-    const targets = [...outputTargets, ...controllerTargets];
+        : ctx.outputs;
 
     this.log.spam('dispatch output metadata', {
       zoneId,

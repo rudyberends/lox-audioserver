@@ -203,17 +203,9 @@ class FakeInputsPort implements InputsPort {
 }
 
 class FakeOutputRouter {
-  public readonly queueStepCalls: Array<{ zoneId: number; delta: number }> = [];
   public readonly outputCalls: Array<{ zoneId: number; action: string; session: PlaybackSession | null | undefined }> = [];
   public readonly volumeCalls: Array<{ zoneId: number; volume: number }> = [];
-  public shouldHandleQueueStep = false;
   public trace: string[] | null = null;
-
-  public dispatchQueueStep(ctx: ZoneContext, _outputs: ZoneOutput[], delta: number): boolean {
-    this.trace?.push('dispatchQueueStep');
-    this.queueStepCalls.push({ zoneId: ctx.id, delta });
-    return this.shouldHandleQueueStep;
-  }
 
   public dispatchOutputs(
     ctx: ZoneContext,
@@ -1060,26 +1052,25 @@ test('volume command rounds relative steps and forwards airplay volume', () => {
   assert.equal(patches[0]?.patch.volume, 26);
 });
 
-test('queueplus fallback only steps queue when output does not handle it', () => {
-  const { coordinator, ctx, outputRouter } = createHarness();
+test('queueplus steps the queue we drive, and leaves an externally owned one alone', () => {
+  const { coordinator, ctx } = createHarness();
   ctx.inputMode = 'queue';
-  ctx.queue.authority = 'local';
   let stepCalled = false;
   (coordinator as any).queueStepDispatcher.stepQueue = () => {
     stepCalled = true;
   };
 
-  outputRouter.shouldHandleQueueStep = true;
+  ctx.queue.authority = 'musicassistant';
   coordinator.handleCommand(ctx.id, 'queueplus');
   assert.equal(stepCalled, false);
 
-  outputRouter.shouldHandleQueueStep = false;
+  ctx.queue.authority = 'local';
   coordinator.handleCommand(ctx.id, 'queueplus');
   assert.equal(stepCalled, true);
 });
 
 test('next/previous commands map to queue stepping fallback', () => {
-  const { coordinator, ctx, outputRouter } = createHarness();
+  const { coordinator, ctx } = createHarness();
   ctx.inputMode = 'queue';
   ctx.queue.authority = 'local';
   const deltas: number[] = [];
@@ -1087,7 +1078,6 @@ test('next/previous commands map to queue stepping fallback', () => {
     deltas.push(delta);
   };
 
-  outputRouter.shouldHandleQueueStep = false;
   coordinator.handleCommand(ctx.id, 'next');
   coordinator.handleCommand(ctx.id, 'previous');
 
