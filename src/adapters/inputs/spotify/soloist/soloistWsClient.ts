@@ -269,6 +269,43 @@ export class SoloistWsClient extends EventEmitter {
   }
 
   /**
+   * Become the device Spotify plays on.
+   *
+   * Without this a `play` is a request to the account rather than to this room: Spotify sends it to
+   * whichever device currently holds the session, so a second room asking for a track has it start
+   * in the first one. Every room that is about to play has to take the account first.
+   */
+  public activate(): boolean {
+    return this.send('activate');
+  }
+
+  /**
+   * Wait until Spotify is playing on this device.
+   *
+   * Taking the account is not instant, and it is announced by a `device_changed` that carries the
+   * flag rather than by the reply to the command.
+   */
+  public async waitUntilActive(timeoutMs = 10_000): Promise<boolean> {
+    if (this.active) {
+      return true;
+    }
+    return new Promise((resolve) => {
+      const done = (ok: boolean): void => {
+        clearTimeout(timer);
+        this.off('event', onEvent);
+        resolve(ok);
+      };
+      const onEvent = (): void => {
+        if (this.active) {
+          done(true);
+        }
+      };
+      const timer = setTimeout(() => done(false), timeoutMs);
+      this.on('event', onEvent);
+    });
+  }
+
+  /**
    * Give up being the active Spotify device.
    *
    * Worth doing when a zone switches to another source: left active, this device keeps the

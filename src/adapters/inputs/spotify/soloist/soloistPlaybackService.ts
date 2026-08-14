@@ -69,6 +69,14 @@ type ZoneRunner = {
   queue: { previous: string[]; upcoming: string[] };
   /** Whether the app's pause is what stopped this zone, so its resume can start it again. */
   appPaused: boolean;
+  /**
+   * Whether a track is being set up right now.
+   *
+   * Taking the account makes Soloist start whatever the account was playing, a moment before it is
+   * told what this room actually wants. Read as ordinary events, that is a foreign track arriving
+   * out of nowhere — a skip, or a takeover — so nothing is read at all until the new track is on.
+   */
+  starting: boolean;
   stream: Readable | null;
 };
 
@@ -310,6 +318,7 @@ export class SoloistPlaybackService {
       currentTrack: null,
       queue: { previous: [], upcoming: [] },
       appPaused: false,
+      starting: false,
       stream: null,
     };
     ws.on('event', (event: SoloistStateEvent) => this.onEvent(zoneId, event));
@@ -340,21 +349,37 @@ export class SoloistPlaybackService {
     if (!runner) {
       return;
     }
+    if (runner.starting) {
+      return;
+    }
     const track = readTrack(event.item);
     const uri = track.uri;
 
-    // Nothing an inactive device reports is about this room. Connect tells every device the
-    // account owns what the account is doing, note for note — same track, same queue, same
-    // position — so a room that has been handed off keeps hearing about music playing somewhere
-    // else. Letting go here, before any of it is read, is what keeps two rooms from showing each
-    // other's track.
-    if (runner.owner === 'connect' && !runner.ws.isActive) {
-      this.log.info('spotify moved playback to another device', { zoneId });
-      runner.owner = 'queue';
-      runner.currentUri = null;
-      runner.currentTrack = null;
-      this.finishTrack(zoneId);
-      this.controller?.stopPlayback(zoneId);
+    // Nothing an inactive device reports is about this room, and everything below would act on it.
+    //
+    // Connect tells every device the account owns what the account is doing, note for note — same
+    // track, same queue, same position. A room that reads that as its own has no way to tell a
+    // listener's doing from another room's: two rooms on one account each saw the other's track
+    // start, read it as a skip, stepped their own queue and started playing, which made them the
+    // active device and set the other one off again. Neither could hold the account long enough to
+    // play anything.
+    if (!runner.ws.isActive) {
+      if (runner.owner === 'connect') {
+        this.log.info('spotify moved playback to another device', { zoneId });
+        runner.owner = 'queue';
+        runner.currentUri = null;
+        runner.currentTrack = null;
+        this.finishTrack(zoneId);
+        this.controller?.stopPlayback(zoneId);
+      } else if (runner.wantedUri) {
+        // A Spotify account plays on one device at a time, and this room has just lost it. Its
+        // audio has already stopped at the source, so saying so beats streaming silence.
+        this.log.info('spotify gave the account to another device; this zone stops', { zoneId });
+        runner.wantedUri = null;
+        runner.appPaused = false;
+        this.finishTrack(zoneId);
+        this.controller?.transport(zoneId, 'stop');
+      }
       return;
     }
 
@@ -595,20 +620,37 @@ export class SoloistPlaybackService {
     // deciding again — even if the app had taken the zone over a moment ago.
     this.finishTrack(zoneId);
     runner.owner = 'queue';
-    runner.wantedUri = uri;
-    runner.currentUri = uri;
     runner.currentTrack = null;
     runner.appPaused = false;
+    // Everything Soloist says between here and the first note of the new track is about what came
+    // before it, and reading any of it would be acting on a room that is mid-change.
+    runner.starting = true;
+    try {
+      // Take the account before asking for anything. A `play` from a device that does not hold the
+      // session is a request to the account, and Spotify sends it to whichever room does hold it —
+      // so starting a track in the kitchen started it in the living room instead.
+      if (!runner.ws.isActive) {
+        runner.ws.activate();
+        if (!(await runner.ws.waitUntilActive())) {
+          this.log.warn('soloist could not take the spotify account for this zone', { zoneId });
+          return null;
+        }
+      }
+      runner.wantedUri = uri;
+      runner.currentUri = uri;
 
-    const playing = this.waitForPlaying(runner, uri);
-    if (!runner.ws.play(uri)) {
-      this.log.warn('could not reach soloist to start the track', { zoneId, uri });
-      return null;
-    }
-    if (!(await playing)) {
-      this.log.warn('soloist did not start playing this track', { zoneId, uri });
-      runner.wantedUri = null;
-      return null;
+      const playing = this.waitForPlaying(runner, uri);
+      if (!runner.ws.play(uri)) {
+        this.log.warn('could not reach soloist to start the track', { zoneId, uri });
+        return null;
+      }
+      if (!(await playing)) {
+        this.log.warn('soloist did not start playing this track', { zoneId, uri });
+        runner.wantedUri = null;
+        return null;
+      }
+    } finally {
+      runner.starting = false;
     }
     if (seekPositionMs > 0) {
       runner.ws.seek(seekPositionMs);

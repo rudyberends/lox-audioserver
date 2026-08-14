@@ -60,8 +60,13 @@ export type InputPlaybackController = {
 
 export type AirplayController = InputPlaybackController;
 
-/** A transport button, pressed somewhere other than on the zone itself. */
-export type SpotifyTransportCommand = 'pause' | 'resume' | 'next' | 'previous';
+/**
+ * A transport instruction for a zone, arriving from somewhere other than the zone itself.
+ *
+ * `stop` is the odd one out: it is not a button anyone pressed but Spotify moving the account to
+ * another device, which leaves this room with nothing playing whether it admits it or not.
+ */
+export type SpotifyTransportCommand = 'pause' | 'resume' | 'next' | 'previous' | 'stop';
 
 /**
  * One track of a queue this server did not build.
