@@ -141,6 +141,44 @@ export function buildBrowsableServices(
     });
   }
 
+  // Spotify is the one service whose accounts do not live in
+  // `content.streamingServices`: they carry their own credentials and predate that neutral
+  // surface, so they sit in `content.spotify.accounts`. To a non-Loxone consumer a Spotify
+  // account is a service like any other, and reading only the bridge list meant an added
+  // account appeared in the Loxone app — which asks `listServiceEntries()`, and that does read
+  // the accounts — while `/api/v1/services`, DLNA and Subsonic never heard of it.
+  if (permitted('spotify')) {
+    const accounts = (config.getConfig().content?.spotify?.accounts ?? []).filter(
+      (account) => account && (account.id?.trim() || account.user?.trim()),
+    );
+    for (const account of accounts) {
+      const accountId = (account.id?.trim() || account.user?.trim())!;
+      // Same rule as `serviceNativeKey`: the bare service name while there is one of it, and
+      // the account appended once a second one makes the name ambiguous.
+      const key = accounts.length > 1 ? `spotify:${accountId}` : 'spotify';
+      const label =
+        account.displayName?.trim() || account.name?.trim() || account.user?.trim() || accountId;
+      services.push({
+        key,
+        provider: 'spotify',
+        title: accounts.length > 1 ? `${providerTitle('spotify')} — ${label}` : providerTitle('spotify'),
+        rootFolderId: 'root',
+        id3Probe: 'root',
+        // Named down to the account, unlike the bridge services above: the internal provider
+        // map is keyed `spotify@<accountId>`, so a bare `spotify` source matches nothing and
+        // the search would silently answer empty.
+        searchSource: `spotify@${accountId}`,
+        capabilities: capabilitiesFor('spotify'),
+        // The account goes in the `user` slot for the same reason — with several providers
+        // configured the manager refuses to guess rather than serve another account's library.
+        browse: (cm, folderId, offset, limit) =>
+          cm.getServiceFolder('spotify', accountId, folderId, offset, limit),
+        relatedArtists: (cm, folderId, limit) =>
+          cm.getRelatedArtists('spotify', accountId, folderId, limit),
+      });
+    }
+  }
+
   const bridges = config.getConfig().content.streamingServices ?? [];
   for (const bridge of bridges) {
     if (!bridge || bridge.enabled === false || !bridge.id) {

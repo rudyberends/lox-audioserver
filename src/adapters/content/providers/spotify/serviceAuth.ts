@@ -323,6 +323,7 @@ export async function handleSpotifyLibrespotZeroconf(
   res: ServerResponse,
   configPort: ConfigPort,
   spotifyInputService: SpotifyInputService,
+  contentManager: ContentManager,
 ): Promise<void> {
   const json = (status: number, body: unknown): void => {
     res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -419,6 +420,11 @@ export async function handleSpotifyLibrespotZeroconf(
       entry.username = result.username;
       log.info('spotify zeroconf pairing stored', { accountId, username: result.username });
       reinitializeSpotifyInputs(configPort, spotifyInputService, 'zeroconf_paired', accountId);
+      // Browsing holds its own librespot session, built once and cached on the content provider.
+      // Rebuilding the providers is what drops it, so without this the pathfinder keeps minting
+      // tokens off the credentials that were just replaced and browse stays broken while playback
+      // recovers.
+      contentManager.refreshFromConfig();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       entry.state = 'failed';

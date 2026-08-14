@@ -71,13 +71,25 @@ export function buildSpotifyRoutes(deps: SpotifyHandlerDeps): Route[] {
       method: 'POST',
       pattern: /^\/spotify\/librespot\/zeroconf$/,
       handler: async (req, res) =>
-        handleSpotifyLibrespotZeroconf(req, res, deps.configPort, deps.spotifyInputService),
+        handleSpotifyLibrespotZeroconf(
+          req,
+          res,
+          deps.configPort,
+          deps.spotifyInputService,
+          deps.contentManager,
+        ),
     },
     {
       method: 'GET',
       pattern: /^\/spotify\/librespot\/zeroconf$/,
       handler: async (req, res) =>
-        handleSpotifyLibrespotZeroconf(req, res, deps.configPort, deps.spotifyInputService),
+        handleSpotifyLibrespotZeroconf(
+          req,
+          res,
+          deps.configPort,
+          deps.spotifyInputService,
+          deps.contentManager,
+        ),
     },
     {
       // Anchored and GET-only: the pattern used to be an unanchored prefix with no
