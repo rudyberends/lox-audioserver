@@ -1,3 +1,9 @@
+// Load-bearing, despite what the lint rule says: `npm run watch` runs ts-node,
+// which only compiles what it can reach from the entry point instead of the
+// whole tsconfig `include`. Without this reference node-forge has no types
+// there and the dev server refuses to start (TS7016).
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference
+/// <reference path="../../../types/node-forge.d.ts" />
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import * as forge from 'node-forge';
