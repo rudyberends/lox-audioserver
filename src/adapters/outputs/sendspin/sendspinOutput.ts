@@ -2893,7 +2893,11 @@ export class SendspinOutput implements ZoneOutput {
       return {
         sampleRate: source.sampleRate,
         channels: source.channels,
-        bitDepth: pcmBitDepthFromFormat(source.format),
+        // What the samples carry outranks how wide the words are. A decoder that hands over float
+        // says 32 by its container while the content is 24 at most, and a client that declares no
+        // 32-bit format then fails this comparison on the depth — taking the sample rate down with
+        // it, and putting a resampler in front of a stream that needed none.
+        bitDepth: source.bitDepth ?? pcmBitDepthFromFormat(source.format),
         lossless: true,
         codecName: 'pcm',
       };
