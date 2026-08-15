@@ -402,7 +402,7 @@ curl -N http://server:7090/api/v1/events
 For visualizers, an individual zone also exposes the central audio analysis as an SSE stream:
 
 ```
-GET /api/v1/zones/{id}/analysis?types=loudness,spectrum,f_peak,peak,pitch&rate=20&bins=32
+GET /api/v1/zones/{id}/analysis?types=loudness,spectrum,f_peak,peak,pitch,stereo&rate=20&bins=32
 ```
 
 The stream starts with `analysis.ready`. After that, each `data:` line is one analysis event:
@@ -411,6 +411,7 @@ The stream starts with `analysis.ready`. After that, each `data:` line is one an
 {"type":"loudness","value":0.42,"timestampUs":1720000000000000}
 {"type":"spectrum","bins":[12,18,31],"timestampUs":1720000000050000}
 {"type":"pitch","midiQ88":17612,"confidence":0.81,"timestampUs":1720000000050000}
+{"type":"stereo","left":41200,"right":39880,"timestampUs":1720000000050000}
 ```
 
 `types` selects the features, `rate` is capped at 60 events per second and `bins` controls the
@@ -418,6 +419,13 @@ spectrum resolution. The stream is fed from the zone's PCM output, so it is inde
 Sendspin protocol; Sendspin and browser clients consume the same central analysis pipeline.
 Analysis is realtime data rather than zone state and is therefore deliberately not included in
 `zone.changed` or persisted in the zone object.
+
+`stereo` is the pair a meter bridge needs: the front left and right levels, each in the same
+encoding as `loudness`. It is not derivable from `loudness`, which is the mean power across the
+channels and therefore averages the stereo image away — a wide mix reads as one number there. A
+mono source answers with both sides equal rather than a silent right channel, which is the honest
+reading rather than a dead meter. Ask for the type only when you are drawing it: the per-channel
+levels are computed for the subscriptions that request them and for no others.
 
 ### Waveforms
 
@@ -860,6 +868,19 @@ inferring from `kind`.
 `POST /zones/{id}/play` — it round-trips exactly, and the queue routes take it too. Do not parse it: the encoding is not part
 of this contract, and ids stay valid across restarts and library rescans precisely because
 they do not encode anything you should rely on.
+
+### The container
+
+The `container` in a browse response is an item of the same shape — the thing you are inside.
+It answers the fields it can: `id`, `kind`, `name`, `browsable`, `playable`, and, where the
+provider knows them, `coverUrl` and `artist`.
+
+Those last two are worth stating because they used to be absent for everyone. A container
+described itself with a name and nothing else, so an album page had the album's tracks and no
+album cover — every row carried artwork its own container could not — and a client that wanted
+to open a record with its sleeve had to reach into the first child and hope. They are filled by
+the provider rather than inferred, so treat them as optional: the local library answers both, a
+streaming service may answer neither, and nothing is fabricated to fill the gap.
 
 ### Paging
 
