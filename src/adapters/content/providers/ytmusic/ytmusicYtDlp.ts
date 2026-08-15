@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveYtDlpPath } from '@/adapters/content/providers/ytmusic/ytdlpBinary';
 
 const execFileAsync = promisify(execFile);
 
@@ -43,7 +44,7 @@ export async function runYtDlp(
   args: string[],
   options?: YtDlpExecOptions,
 ): Promise<{ stdout: string; stderr: string }> {
-  const ytDlpPath = 'yt-dlp';
+  const ytDlpPath = await resolveYtDlpPath();
   const timeoutMs = typeof options?.timeoutMs === 'number' && options.timeoutMs > 0 ? options.timeoutMs : 20_000;
   try {
     const res = await execFileAsync(ytDlpPath, args, {

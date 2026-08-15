@@ -7,8 +7,12 @@ import { YtMusicStreamService } from '../src/adapters/content/providers/ytmusic/
 import { toProviderNode } from '../src/adapters/loxone/commands/utils/loxoneServiceFolders';
 
 // Ensure offline tests always use the repo-local yt-dlp mock (instead of the system yt-dlp).
+// Named outright rather than left to PATH order: a real yt-dlp downloaded through the
+// admin UI lives in `data/` and is preferred over PATH, which would otherwise take these
+// tests onto the network without saying so.
 const scriptsDir = path.resolve(__dirname, '..', 'scripts');
 process.env.PATH = `${scriptsDir}:${process.env.PATH ?? ''}`;
+process.env.YTDLP_BIN = path.join(scriptsDir, 'yt-dlp');
 
 function makeBridge(id: string): StreamingServiceConfig {
   return {

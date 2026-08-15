@@ -80,6 +80,7 @@ import {
   STATE_CONTROLLER_DEFINITIONS,
 } from '@/adapters/http/adminApi/zones/zonesHandlers';
 import { buildSpotifyRoutes } from '@/adapters/http/adminApi/spotify/spotifyHandlers';
+import { buildYtDlpRoutes } from '@/adapters/http/adminApi/ytdlp/ytdlpHandlers';
 import { buildMiscRoutes } from '@/adapters/http/adminApi/misc/miscHandlers';
 import { buildConfigRoutes } from '@/adapters/http/adminApi/config/configHandlers';
 import { buildSonnClientRoutes } from '@/adapters/http/adminApi/sonnclients/sonnClientAdminHandlers';
@@ -251,6 +252,10 @@ export class AdminApiHandler {
         readBinaryBody: (req, res, max) => readBinaryBody(req, res, max),
         sendJson: (res, status, payload) => sendJson(res, status, payload),
         sendHtml: (res, status, html) => sendHtml(res, status, html),
+      }),
+      ...buildYtDlpRoutes({
+        log: this.log,
+        sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),
       ...buildSpotifyRoutes({
         log: this.log,
