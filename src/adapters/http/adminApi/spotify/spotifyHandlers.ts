@@ -391,15 +391,10 @@ async function handleStreamingServiceCreate(
       }
     });
     deps.contentManager.refreshFromConfig();
-    if (
-      provider === 'applemusic' ||
-      provider === 'deezer' ||
-      provider === 'tidal' ||
-      provider === 'ytmusic' ||
-      provider === 'soundcloud'
-    ) {
-      deps.zoneManager.refreshContentProviders();
-    }
+    // Unconditionally: the refresh re-reads every provider's config and is cheap, while the
+    // list this used to be gated on had gone stale — YouTube was missing, so adding a YouTube
+    // service left its stream service without a bridge until the next restart.
+    deps.zoneManager.refreshContentProviders();
     deps.musicAssistantStreamService.configureFromConfig();
     const cfg = deps.configPort.getConfig();
     await deps.musicAssistantStreamService.registerZones(cfg.zones ?? []);
@@ -437,10 +432,9 @@ async function handleStreamingServiceDelete(
       );
     });
     deps.contentManager.refreshFromConfig();
-    const provider = typeof existing?.provider === 'string' ? existing.provider.trim().toLowerCase() : '';
-    if (provider === 'applemusic' || provider === 'deezer' || provider === 'tidal' || provider === 'ytmusic') {
-      deps.zoneManager.refreshContentProviders();
-    }
+    // Same as on create: gating this on a hand-kept list meant deleting a SoundCloud or
+    // YouTube service left its stream service holding the bridge that was just removed.
+    deps.zoneManager.refreshContentProviders();
     deps.musicAssistantStreamService.configureFromConfig();
     const cfg = deps.configPort.getConfig();
     await deps.musicAssistantStreamService.registerZones(cfg.zones ?? []);

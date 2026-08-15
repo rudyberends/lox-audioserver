@@ -9,7 +9,12 @@ import type {
   RadioMenuEntry,
   ScanStatus,
 } from '@/ports/ContentTypes';
-import { decodeAudiopath, detectServiceFromAudiopath, metadataKeyVariants } from '@/domain/zones/audiopath';
+import {
+  decodeAudiopath,
+  detectServiceFromAudiopath,
+  metadataKeyVariants,
+  parseServiceNativeAudiopath,
+} from '@/domain/zones/audiopath';
 import { buildBridgeRegistry, type BridgeRegistry } from '@/domain/zones/bridgeIdentity';
 import {
   LocalLibraryProvider,
@@ -954,129 +959,6 @@ export class ContentManager {
       }
     }
 
-    if (detectedService === 'applemusic') {
-      const providerSegment = (audiopath.split(':')[0] ?? '').trim();
-      const trackMatch = audiopath.match(/^([^:]+):(library-)?track:(.+)$/i);
-      if (trackMatch) {
-        const isLibrary = Boolean(trackMatch[2]);
-        const rawId = trackMatch[3] ?? '';
-        let trackId = rawId;
-        if (rawId.startsWith('b64_')) {
-          try {
-            trackId = Buffer.from(rawId.slice(4), 'base64').toString('utf-8');
-          } catch {
-            trackId = rawId;
-          }
-        }
-        const providerId = providerSegment || 'applemusic';
-        const track = await this.getServiceTrack(
-          providerId,
-          providerId.split('@')[1] ?? '',
-          `${isLibrary ? 'library-' : ''}track:${trackId}`,
-        );
-        if (track) {
-          return {
-            title: track.title ?? track.name ?? '',
-            artist: track.artist ?? '',
-            album: track.album ?? '',
-            coverurl: track.coverurl ?? '',
-            ...(track.animatedCoverUrl ? { animatedCoverUrl: track.animatedCoverUrl } : {}),
-            duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
-          };
-        }
-        this.log.debug('apple music metadata unresolved', {
-          audiopath,
-          providerId,
-          trackId,
-          isLibrary,
-        });
-      }
-    }
-
-    if (detectedService === 'deezer') {
-      const providerSegment = (audiopath.split(':')[0] ?? '').trim();
-      const trackMatch = audiopath.match(/^([^:]+):track:(.+)$/i);
-      if (trackMatch) {
-        const rawId = trackMatch[2] ?? '';
-        const providerId = providerSegment || 'deezer';
-        const track = await this.getServiceTrack(
-          providerId,
-          providerId.split('@')[1] ?? '',
-          `track:${rawId}`,
-        );
-        if (track) {
-          return {
-            title: track.title ?? track.name ?? '',
-            artist: track.artist ?? '',
-            album: track.album ?? '',
-            coverurl: track.coverurl ?? '',
-            duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
-          };
-        }
-        this.log.debug('deezer metadata unresolved', {
-          audiopath,
-          providerId,
-          trackId: rawId,
-        });
-      }
-    }
-
-    if (detectedService === 'tidal') {
-      const providerSegment = (audiopath.split(':')[0] ?? '').trim();
-      const trackMatch = audiopath.match(/^([^:]+):track:(.+)$/i);
-      if (trackMatch) {
-        const rawId = trackMatch[2] ?? '';
-        const providerId = providerSegment || 'tidal';
-        const track = await this.getServiceTrack(
-          providerId,
-          providerId.split('@')[1] ?? '',
-          `track:${rawId}`,
-        );
-        if (track) {
-          return {
-            title: track.title ?? track.name ?? '',
-            artist: track.artist ?? '',
-            album: track.album ?? '',
-            coverurl: track.coverurl ?? '',
-            duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
-          };
-        }
-        this.log.debug('tidal metadata unresolved', {
-          audiopath,
-          providerId,
-          trackId: rawId,
-        });
-      }
-    }
-
-    if (detectedService === 'soundcloud') {
-      const providerSegment = (audiopath.split(':')[0] ?? '').trim();
-      const trackMatch = audiopath.match(/^([^:]+):track:(.+)$/i);
-      if (trackMatch) {
-        const rawId = trackMatch[2] ?? '';
-        const providerId = providerSegment || 'soundcloud';
-        const track = await this.getServiceTrack(
-          providerId,
-          providerId.split('@')[1] ?? '',
-          `track:${rawId}`,
-        );
-        if (track) {
-          return {
-            title: track.title ?? track.name ?? '',
-            artist: track.artist ?? '',
-            album: track.album ?? '',
-            coverurl: track.coverurl ?? '',
-            duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
-          };
-        }
-        this.log.debug('soundcloud metadata unresolved', {
-          audiopath,
-          providerId,
-          trackId: rawId,
-        });
-      }
-    }
-
     if (audiopath.startsWith('library:')) {
       return this.library.resolveItem(audiopath);
     }
@@ -1100,6 +982,39 @@ export class ContentManager {
       }
     }
 
+    // One service-native lookup for every streaming provider, replacing the four
+    // near-identical per-provider blocks that used to stand here.
+    //
+    // They all matched with `^([^:]+):track:` — a pattern that cannot see an account slug,
+    // so `deezer:ab12:track:9` matched nothing and a server with two accounts of one
+    // service resolved no metadata at all. `parseServiceNativeAudiopath` is the domain's
+    // own parser and already knows a slug from a kind, so the rule lives in one place.
+    const native =
+      parseServiceNativeAudiopath(audiopath) ?? parseServiceNativeAudiopath(decodedPath);
+    if (native && native.kind === 'track') {
+      // Name the account when the path carries one: the provider registry refuses to guess
+      // between several accounts of a service rather than answer from the wrong library.
+      const service = native.slug ? `${native.service}:${native.slug}` : native.service;
+      if (this.requireSpotify().hasProvider(service)) {
+        const trackRef = `${native.isLibrary ? 'library-' : ''}track:${native.id}`;
+        // The id goes over raw: each provider decodes its own `b64_` form in getTrack().
+        const track = await this.getServiceTrack(service, native.slug ?? '', trackRef);
+        if (track) {
+          return {
+            title: track.title ?? track.name ?? '',
+            artist: track.artist ?? '',
+            album: track.album ?? '',
+            coverurl: track.coverurl ?? '',
+            ...(track.animatedCoverUrl ? { animatedCoverUrl: track.animatedCoverUrl } : {}),
+            duration: typeof track.duration === 'number' ? Math.round(track.duration) : undefined,
+          };
+        }
+        this.log.debug('service-native metadata unresolved', { audiopath, service, trackRef });
+      }
+    }
+
+    // The Loxone disguise (`spotify@<account>:track:…`) is not service-native — stored
+    // favourites and recents still arrive in that shape, so it keeps its own path.
     const normalized = audiopath.trim();
     const trackMatch = normalized.match(/^([^:]+):track:(.+)$/i);
     if (trackMatch) {

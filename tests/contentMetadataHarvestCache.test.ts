@@ -15,11 +15,15 @@ import type { QueueItem } from '../src/ports/types/queueTypes';
 import { createFavoritesManager } from '../src/application/zones/favorites/favoritesManager';
 import { createRecentsManager } from '../src/application/zones/recents/recentsManager';
 
+type TrackCall = { service: string; user: string; trackId: string };
+
 type ManagerHarness = {
   cm: ContentManager;
   calls: { getFolder: number; getTrack: number };
   setFolder: (folder: ContentFolder | null) => void;
   setTrack: (track: ContentFolderItem | null) => void;
+  /** How the last live lookup addressed the provider registry. */
+  lastTrackCall: () => TrackCall | null;
 };
 
 // Builds a ContentManager wired to a fake Spotify/bridge manager so we can count
@@ -28,13 +32,15 @@ function makeManager(): ManagerHarness {
   const calls = { getFolder: 0, getTrack: 0 };
   let folder: ContentFolder | null = null;
   let track: ContentFolderItem | null = null;
+  let trackCall: TrackCall | null = null;
   const fakeManager = {
     getFolder: async () => {
       calls.getFolder += 1;
       return folder;
     },
-    getTrack: async () => {
+    getTrack: async (service: string, user: string, trackId: string) => {
       calls.getTrack += 1;
+      trackCall = { service, user, trackId };
       return track;
     },
     hasProvider: () => true,
@@ -66,8 +72,20 @@ function makeManager(): ManagerHarness {
     setTrack: (next) => {
       track = next;
     },
+    lastTrackCall: () => trackCall,
   };
 }
+
+const LIVE_TRACK: ContentFolderItem = {
+  id: 't1',
+  name: 'Live Title',
+  type: 2,
+  title: 'Live Title',
+  artist: 'Live Artist',
+  album: 'Live Album',
+  coverurl: 'http://cover/live',
+  duration: 123,
+};
 
 function makeFolder(items: ContentFolderItem[]): ContentFolder {
   return { id: 'f', name: 'Folder', start: 0, totalitems: items.length, items };
@@ -303,6 +321,52 @@ test('recents record fills metadata from the harvest cache (no live lookup)', as
     assert.equal(stored.items[0]?.title, 'Harvested Song');
     assert.equal(calls.getTrack, 0);
   });
+});
+
+test('a service-native track resolves live and names no account when there is one', async () => {
+  const { cm, calls, setTrack, lastTrackCall } = makeManager();
+  setTrack(LIVE_TRACK);
+
+  const meta = await cm.resolveMetadata('applemusic:track:123');
+  assert.equal(meta?.title, 'Live Title');
+  assert.equal(calls.getTrack, 1);
+  assert.deepEqual(lastTrackCall(), { service: 'applemusic', user: '', trackId: 'track:123' });
+});
+
+test('a second account of one service is carried into the lookup, not dropped', async () => {
+  // The per-provider regexes this replaced were all `^([^:]+):track:`, which cannot match an
+  // account slug: `deezer:ab12:track:9` resolved to nothing at all on a two-account server.
+  const { cm, calls, setTrack, lastTrackCall } = makeManager();
+  setTrack(LIVE_TRACK);
+
+  const meta = await cm.resolveMetadata('deezer:ab12:track:9');
+  assert.equal(meta?.artist, 'Live Artist');
+  assert.equal(calls.getTrack, 1);
+  // Addressed down to the account, so the registry cannot answer from the other one.
+  assert.deepEqual(lastTrackCall(), { service: 'deezer:ab12', user: 'ab12', trackId: 'track:9' });
+});
+
+test('an Apple library track keeps its library- marker and its undecoded id', async () => {
+  const { cm, setTrack, lastTrackCall } = makeManager();
+  setTrack(LIVE_TRACK);
+
+  await cm.resolveMetadata('applemusic:p0gngd:library-track:b64_aWQ');
+  // The provider decodes `b64_` itself in getTrack(); passing it raw keeps that in one place.
+  assert.deepEqual(lastTrackCall(), {
+    service: 'applemusic:p0gngd',
+    user: 'p0gngd',
+    trackId: 'library-track:b64_aWQ',
+  });
+});
+
+test('the Loxone disguise still resolves through its own path', async () => {
+  const { cm, calls, setTrack } = makeManager();
+  setTrack(LIVE_TRACK);
+
+  // Stored favourites and recents come back in this shape; it is not service-native.
+  const meta = await cm.resolveMetadata('spotify@bridge-applemusic-x:track:abc');
+  assert.equal(meta?.title, 'Live Title');
+  assert.equal(calls.getTrack, 1);
 });
 
 test('radio/stream listing items are not harvested (live tunein path keeps station)', async () => {

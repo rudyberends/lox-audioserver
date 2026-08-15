@@ -345,6 +345,14 @@ export class ZoneManager {
     };
   }
 
+  /**
+   * Re-read every content provider's configuration.
+   *
+   * The single place that knows the list. Both zone-replacement paths call it rather than
+   * repeating the calls: the copy in `replaceZones` had drifted and left out YT Music and
+   * YouTube, so a config save that named its zones never refreshed those two while the
+   * other four were refreshed on the same request.
+   */
   public refreshContentProviders(): void {
     const contentPort = this.contentPort;
     contentPort.configureAppleMusic();
@@ -386,14 +394,7 @@ export class ZoneManager {
     inputsPort.syncBluetoothZones(zoneConfigs);
     inputsPort.syncSpotifyZones(zoneConfigs, inputs?.spotify ?? null);
     inputsPort.configureMusicAssistant(this.playbackCoordinator.getMusicAssistantInputHandlers());
-    const contentPort = this.contentPort;
-    contentPort.configureAppleMusic();
-    contentPort.configureDeezer();
-    contentPort.configureTidal();
-    contentPort.configureYtMusic();
-    contentPort.configureYoutube();
-    contentPort.configureSoundcloud();
-    this.playbackCoordinator.refreshMusicAssistantProviderId();
+    this.refreshContentProviders();
     await inputsPort.syncMusicAssistantZones(zoneConfigs);
     await this.stateControllers.replaceAll(zoneConfigs);
     const contexts = this.zoneRepo.list();
@@ -448,12 +449,7 @@ export class ZoneManager {
     inputsPort.syncBluetoothZones(allZones);
     inputsPort.syncSpotifyZones(allZones, effectiveInputs?.spotify ?? null);
     inputsPort.configureMusicAssistant(this.playbackCoordinator.getMusicAssistantInputHandlers());
-    const contentPort = this.contentPort;
-    contentPort.configureAppleMusic();
-    contentPort.configureDeezer();
-    contentPort.configureTidal();
-    contentPort.configureSoundcloud();
-    this.playbackCoordinator.refreshMusicAssistantProviderId();
+    this.refreshContentProviders();
     await inputsPort.syncMusicAssistantZones(allZones);
 
     // Push initial state for the updated zones.
