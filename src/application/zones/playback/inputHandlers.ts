@@ -31,6 +31,11 @@ type InputCoordinator = {
   updateInputMetadata: (zoneId: number, metadata: Partial<PlaybackMetadata>) => void;
 };
 
+/** True when the source starts part-way into the track — i.e. this play is a seek. */
+function hasStartOffset(source: PlaybackSource): boolean {
+  return (source.kind === 'url' || source.kind === 'file') && (source.startAtSec ?? 0) > 0;
+}
+
 export function playInputSource(args: {
   coordinator: InputCoordinator;
   zoneId: number;
@@ -48,9 +53,12 @@ export function playInputSource(args: {
     return;
   }
   const mode = decision.mode;
-  // Avoid re-dispatching outputs when the same input/track is already playing.
+  // Avoid re-dispatching outputs when the same input/track is already playing — unless the source
+  // asks to start part-way in, which is a seek and must reach the engine precisely because nothing
+  // about the track changed. A DLNA control point's Seek arrives as exactly that (the renderer
+  // replays the current URI at an offset) and was silently swallowed here.
   const currentAudiopath = ctx.queueController.current()?.audiopath ?? ctx.state.audiopath ?? '';
-  if (metadata?.audiopath && isActiveInputMode(ctx, mode) && isSameAudiopath(currentAudiopath, metadata.audiopath)) {
+  if (!hasStartOffset(playbackSource) && metadata?.audiopath && isActiveInputMode(ctx, mode) && isSameAudiopath(currentAudiopath, metadata.audiopath)) {
     const nextPipe = playbackSource?.kind === 'pipe'
       ? (playbackSource as { stream?: NodeJS.ReadableStream }).stream
       : null;

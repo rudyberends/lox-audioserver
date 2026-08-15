@@ -1542,3 +1542,47 @@ test('playContent does not double-stop external sessions', async () => {
 
   assert.equal(inputsPort.stopSpotifyCalls.length, 1);
 });
+
+/*
+ * A DLNA control point drives the zone over two SOAP services, and both used to stop at the
+ * coordinator: RenderingControl's SetVolume was dropped by the input-volume guard (dlna was not in
+ * it), and AVTransport's Seek — which the renderer replays as the same URI at an offset — looked
+ * like the track already playing and was skipped. Issue #339.
+ */
+test('a dlna cast can be seeked and its volume set, without losing the same-track skip', () => {
+  const { coordinator, ctx } = createHarness();
+  const player = ctx.player as unknown as FakePlayer;
+  const played: Array<{ source: PlaybackSource }> = [];
+  // Stand in for the real InputAdapter, which parks the audiopath on the zone — that is the state
+  // the same-track shortcut reads, so a stub that skips it would make this test prove nothing.
+  ctx.inputAdapter = {
+    playInput: (_label: string, source: PlaybackSource, metadata?: PlaybackMetadata) => {
+      played.push({ source });
+      ctx.state = applyZonePatch(ctx.state, { audiopath: metadata?.audiopath, mode: 'play' } as any);
+    },
+  } as any;
+
+  const cast: PlaybackSource = { kind: 'url', url: 'http://127.0.0.1:7090/streams/proxy?u=song' };
+  const metadata: PlaybackMetadata = {
+    title: 'Song',
+    artist: 'Artist',
+    album: 'Album',
+    audiopath: 'dlna-renderer://1/8f14e45fceea',
+  };
+
+  coordinator.playInputSource(ctx.id, 'dlna', cast, metadata);
+  assert.equal(played.length, 1);
+
+  // 35 lands on 36: a control point's slider is free-running, the zone's volume step is not.
+  coordinator.updateInputVolume(ctx.id, 35);
+  assert.equal(player.volume, 36);
+
+  // Still the same track and still no offset: nothing to do, the shortcut holds.
+  coordinator.playInputSource(ctx.id, 'dlna', cast, metadata);
+  assert.equal(played.length, 1);
+
+  // A seek: same URI, same audiopath, 61 seconds in. It has to reach the engine.
+  coordinator.playInputSource(ctx.id, 'dlna', { ...cast, startAtSec: 61 }, metadata);
+  assert.equal(played.length, 2);
+  assert.equal((played[1]?.source as { startAtSec?: number }).startAtSec, 61);
+});

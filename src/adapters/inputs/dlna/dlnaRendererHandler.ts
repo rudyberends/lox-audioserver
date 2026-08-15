@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createLogger } from '@/shared/logging/logger';
 import { buildProxyUrl } from '@/shared/urlProxy';
 import type { AirplayController } from '@/ports/InputsPort';
@@ -44,6 +45,18 @@ export class DlnaRendererHandler implements RendererHandler {
     this.log.info('renderer SetAVTransportURI', { zoneId: this.zoneId, uri: _uri });
   }
 
+  /**
+   * The audiopath the zone knows this cast by. It has to differ per URI: the zone treats a play of
+   * the audiopath it is already on as "nothing changed" and skips it, so a single per-zone id made
+   * every track after the first a no-op for any control point that pushes a new URI without
+   * stopping first. The URI itself is not usable as-is (it is long, and it is the control point's
+   * private HTTP address), so it is keyed by a digest of it.
+   */
+  private audiopathFor(uri: string): string {
+    const key = createHash('sha1').update(uri).digest('hex').slice(0, 12);
+    return `dlna-renderer://${this.zoneId}/${key}`;
+  }
+
   public onPlay(uri: string, startAtSec?: number): void {
     // Fresh start (or a seek, which the module signals as onPlay with an offset): hand the
     // pushed URL to the engine as the zone's source. onSeek stays a no-op so the seek doesn't
@@ -63,7 +76,7 @@ export class DlnaRendererHandler implements RendererHandler {
       realTime: true,
       restartOnFailure: false,
     };
-    const metadata = this.buildMetadata();
+    const metadata = this.buildMetadata(uri);
     this.controller.startPlayback(this.zoneId, 'dlna', source, metadata);
     if (metadata.coverurl) {
       // Cover is already a URL in the DIDL; nothing to upload — updateMetadata carries it.
@@ -99,7 +112,7 @@ export class DlnaRendererHandler implements RendererHandler {
   // onMute intentionally omitted — there was no app mapping for mute (local-only in the
   // renderer's own state, which the module tracks).
 
-  private buildMetadata(): PlaybackMetadata {
+  private buildMetadata(uri: string): PlaybackMetadata {
     const p = this.parsed;
     return {
       title: p?.title || 'DLNA',
@@ -107,7 +120,7 @@ export class DlnaRendererHandler implements RendererHandler {
       album: p?.album || '',
       coverurl: p?.albumArtUri || undefined,
       duration: this.durationSec || undefined,
-      audiopath: `dlna-renderer://${this.zoneId}`,
+      audiopath: this.audiopathFor(uri),
     };
   }
 }

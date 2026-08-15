@@ -70,3 +70,37 @@ test('a seek keeps the offset alongside the proxied url', () => {
   assert.ok(source && source.kind === 'url');
   assert.equal(new URL(source.url).pathname, '/streams/proxy');
 });
+
+/*
+ * The zone skips a play of the audiopath it is already on — that is what keeps a re-announced
+ * track from restarting. So the audiopath a cast carries has to change when the cast does:
+ * with one id per zone, every track after the first was that skip, for any control point that
+ * pushes a new URI without stopping in between. Issue #339.
+ */
+test('each cast uri gets its own audiopath, so a new track is a new track', () => {
+  const audiopaths: string[] = [];
+  const controller = {
+    startPlayback: (_zoneId: number, _label: string, _s: PlaybackSource, metadata?: { audiopath?: string }) => {
+      audiopaths.push(metadata?.audiopath ?? '');
+    },
+    updateMetadata: () => {},
+    updateCover: () => {},
+    updateVolume: () => {},
+    updateTiming: () => {},
+    pausePlayback: () => {},
+    resumePlayback: () => {},
+    stopPlayback: () => {},
+  } as unknown as AirplayController;
+  const handler = new DlnaRendererHandler(7, controller);
+
+  handler.onPlay('http://192.168.1.5:8200/MediaItems/12.mp3');
+  handler.onPlay('http://192.168.1.5:8200/MediaItems/13.mp3');
+  // A seek replays the current URI, and that one must keep the audiopath it had.
+  handler.onPlay('http://192.168.1.5:8200/MediaItems/13.mp3', 61);
+
+  assert.notEqual(audiopaths[0], audiopaths[1]);
+  assert.equal(audiopaths[1], audiopaths[2]);
+  // Still recognisably this zone's renderer, and still free of the control point's own address.
+  assert.ok(audiopaths.every((p) => p.startsWith('dlna-renderer://7/')));
+  assert.ok(audiopaths.every((p) => !p.includes('192.168.1.5')));
+});
