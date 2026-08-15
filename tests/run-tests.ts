@@ -65,6 +65,7 @@ import './spotifyAccountProvider.artist.test';
 import './spotifyWebTokens.test';
 import './spotifyRecoveryPolicy.test';
 import './soloistBackend.test';
+import './soloistBackendSwitch.test';
 import './soloistArchive.test';
 import './pulseSoundCard.test';
 import './pulseSoundCardWire.test';

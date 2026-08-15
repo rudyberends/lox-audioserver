@@ -128,6 +128,17 @@ class SpotifyConnectInstance {
   private isReady = false;
   private restarting = false;
   private stopping = false;
+  /**
+   * Retired for good, as opposed to stopped for a moment.
+   *
+   * `stopping` cannot say this: it is cleared again the instant {@link stop} returns, because a
+   * zone switching source stops and starts the same instance. A pending restart timer that fires
+   * after the instance has been thrown away would happily log in again — which is how a librespot
+   * Connect host outlived the backend switch and kept retrying credentials nothing wanted.
+   */
+  private disposed = false;
+  /** The pending restart, held so it can be called off rather than merely ignored on arrival. */
+  private restartTimer?: NodeJS.Timeout;
   private readonly restartBackoffMs = [4000, 8000, 15000, 30000, 45000, 60000];
   private restartBackoffIndex = 0;
   private restartStreak = { count: 0, firstAt: 0 };
@@ -212,6 +223,9 @@ class SpotifyConnectInstance {
   }
 
   public async start(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
     if (this.isReady) {
       // Connect host is already running. Avoid restarting it unless explicitly
       // stopped first (e.g. via stopConnectHost() in scheduleRestart / credential change).
@@ -301,6 +315,18 @@ class SpotifyConnectInstance {
     this.teardownPlaybackSession();
     this.stopping = false;
     this.isReady = false;
+  }
+
+  /**
+   * Stop, and stay stopped. For an instance that is being thrown away rather than paused.
+   */
+  public async dispose(): Promise<void> {
+    this.disposed = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = undefined;
+    }
+    await this.stop();
   }
 
   public updateConfig(config: ZoneSpotifyConfig): void {
@@ -601,7 +627,7 @@ class SpotifyConnectInstance {
   }
 
   private scheduleRestart(options?: { minDelayMs?: number; rateLimited?: boolean }): void {
-    if (this.restarting || this.stopping) {
+    if (this.restarting || this.stopping || this.disposed) {
       return;
     }
     const now = Date.now();
@@ -615,10 +641,11 @@ class SpotifyConnectInstance {
         attempts: this.restartStreak.count,
         windowMs: this.restartStreakWindowMs,
       });
-      setTimeout(() => {
+      this.restartTimer = setTimeout(() => {
+        this.restartTimer = undefined;
         this.restartStreak = { count: 0, firstAt: Date.now() };
         this.restartBackoffIndex = 0;
-        if (!this.stopping) {
+        if (!this.stopping && !this.disposed) {
           this.start().catch((error) => {
             const message = error instanceof Error ? error.message : String(error);
             this.log.warn('spotify connect restart after cooldown failed; scheduling retry', {
@@ -649,7 +676,8 @@ class SpotifyConnectInstance {
       baseDelayMs: baseDelay,
       rateLimited: options?.rateLimited === true,
     });
-    setTimeout(() => {
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = undefined;
       this.restarting = false;
       this.start().catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -1976,9 +2004,21 @@ export class SpotifyInputService {
       void this.soloist.syncZones(
         zones.map((zone) => zone.id).filter((zoneId) => !isBrowserZoneId(zoneId)),
       );
-    } else {
-      void this.soloist.stopAllZones();
+      // And with Soloist playing every zone, librespot has nothing left to do here.
+      //
+      // Leaving its Connect hosts up is not merely idle: the two clients cannot both be the
+      // account's device for a room, and the accounts this backend exists for are exactly the ones
+      // librespot cannot log in as — so every host it keeps alive sits in a restart loop refusing
+      // the same credentials, drowning the log in `Try another access point`. Switching backend
+      // means the old one goes away, timers and all.
+      this.synced = true;
+      this.clearQueuedStarts();
+      for (const zoneId of [...this.instances.keys()]) {
+        this.removeInstance(zoneId);
+      }
+      return;
     }
+    void this.soloist.stopAllZones();
     // Spotify Connect is opt-in per player; the only gate is zone.inputs.spotify.
     this.synced = true;
     if (!this.controller) {
@@ -2103,7 +2143,7 @@ export class SpotifyInputService {
     await Promise.all(
       Array.from(this.instances.values()).map((instance) =>
         // Best-effort shutdown; continue stopping remaining instances.
-        bestEffort(() => instance.stop(), {
+        bestEffort(() => instance.dispose(), {
           fallback: undefined,
           onError: 'debug',
           log: this.log,
@@ -2128,7 +2168,7 @@ export class SpotifyInputService {
     if (!instance) {
       return;
     }
-    instance.stop().catch((error) => {
+    instance.dispose().catch((error) => {
       this.log.warn('failed to stop spotify connect', {
         zoneId,
         message: error instanceof Error ? error.message : String(error),
