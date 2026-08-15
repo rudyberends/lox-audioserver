@@ -626,7 +626,7 @@ test('the events stream opens with a full snapshot so clients render immediately
     assert.match(String(res.headers['Content-Type']), /text\/event-stream/);
 
     const first = JSON.parse(res.body.replace(/^data: /, '').trim());
-    assert.equal(first.type, 'server.ready');
+    assert.equal(first.type, 'server.snapshot');
     assert.equal(first.zones[0].name, 'Kitchen');
   });
 });

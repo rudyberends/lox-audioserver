@@ -46,7 +46,7 @@ export class ApiEventHub {
    * published at all.
    *
    * The comparison is against the last zone we published, so a subscriber that joined
-   * mid-track still got its full snapshot from `server.ready` first and can apply
+   * mid-track still got its full snapshot from `server.snapshot` first and can apply
    * every tick after it.
    */
   public publishZoneChanged(zone: ApiZoneState): void {

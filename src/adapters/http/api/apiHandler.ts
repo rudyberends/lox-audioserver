@@ -1764,8 +1764,8 @@ export class ApiHandler {
   /**
    * SSE rather than a WebSocket: state is one-directional, so the socket buys
    * nothing, and `EventSource`/curl/Perl can all read this without a handshake
-   * library. Each stream opens with a `server.ready` snapshot so a client can
-   * render before the first state change arrives.
+   * library. Each stream opens with a `server.snapshot` so a client can render
+   * before the first state change arrives.
    */
   private streamAnalysis(
     req: IncomingMessage,
@@ -1907,7 +1907,7 @@ export class ApiHandler {
       res.write(`data: ${JSON.stringify(payload)}\n\n`);
     };
 
-    write({ type: 'server.ready', zones: this.snapshot() });
+    write({ type: 'server.snapshot', zones: this.snapshot() });
 
     // Local destinations are absent from this stream entirely, matching the snapshot. A tab
     // gets its own state over the Sendspin socket it already holds, so repeating it here would
@@ -1919,7 +1919,7 @@ export class ApiHandler {
       if (zoneId !== null && !visible(zoneId)) {
         return;
       }
-      if (event.type === 'server.ready') {
+      if (event.type === 'server.snapshot') {
         write({ ...event, zones: event.zones.filter((zone) => visible(zone.id)) });
         return;
       }

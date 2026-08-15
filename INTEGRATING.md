@@ -340,8 +340,13 @@ Server-Sent Events. Every message is a JSON object on a `data:` line with a `typ
 discriminator. The stream opens with a full snapshot, so a client can render before the
 first change arrives. A `: keep-alive` comment is sent every 25 s.
 
+That opening `server.snapshot` says your stream has state, not that the server has
+finished starting — [`GET /ready`](#supervising-the-server) is the only thing that
+answers that. It was called `server.ready` up to 4.0.0-beta.18, which read like a readiness claim
+and contradicted `/ready` whenever the two disagreed.
+
 ```
-data: {"type":"server.ready","zones":[ … ]}
+data: {"type":"server.snapshot","zones":[ … ]}
 
 data: {"type":"zone.changed","zone":{ … }}
 

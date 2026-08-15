@@ -389,9 +389,16 @@ export interface ApiZoneChangedEvent {
   zone: ApiZoneState;
 }
 
-/** Emitted once per connection, before any `zone.changed`, so clients render immediately. */
-export interface ApiServerReadyEvent {
-  type: 'server.ready';
+/**
+ * Emitted once per connection, before any `zone.changed`, so clients render immediately.
+ *
+ * Named for what it carries, not for a phase. It used to be `server.ready`, which read as a
+ * lifecycle claim and contradicted `/ready` whenever the two disagreed — a server still
+ * starting would open a stream by announcing `server.ready`. This event says "here is your
+ * state"; `GET /ready` is the only thing that says whether the server is ready.
+ */
+export interface ApiServerSnapshotEvent {
+  type: 'server.snapshot';
   zones: ApiZoneState[];
 }
 
@@ -430,7 +437,7 @@ export interface ApiRecentsChangedEvent {
 export type ApiEvent =
   | ApiZoneChangedEvent
   | ApiZoneProgressEvent
-  | ApiServerReadyEvent
+  | ApiServerSnapshotEvent
   | ApiQueueChangedEvent
   | ApiFavoritesChangedEvent
   | ApiRecentsChangedEvent;

@@ -214,7 +214,7 @@ export class MqttPublisher {
     if (event.type === 'zone.progress' && publishProgress) {
       await this.send(progressMessages(prefix, event.id, event.position));
     }
-    // server.ready is per-connection bookkeeping for SSE and means nothing here: this
+    // server.snapshot is per-connection bookkeeping for SSE and means nothing here: this
     // publisher already sends its own snapshot on connect.
   }
 
