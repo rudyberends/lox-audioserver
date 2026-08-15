@@ -6,7 +6,7 @@ import https from 'node:https';
 import os from 'node:os';
 import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { readBuildChannel, readBuildVersion, readPackageVersion } from '@/shared/serverVersion';
+import { readBuildChannel, readBuildVersion, readGitBranch, readPackageVersion } from '@/shared/serverVersion';
 import type { ComponentLogger } from '@/shared/logging/logger';
 import { logManager } from '@/shared/logging/logger';
 import { logBuffer } from '@/shared/logging/logBuffer';
@@ -416,6 +416,10 @@ function handleInfo(
       // string. Distinct from the update channel above, which is about which
       // releases this install is offered.
       buildChannel: readBuildChannel(),
+      // Only set when running from a working copy, and it is where the channel
+      // above came from in that case. Null in a container, which carries no
+      // repository.
+      gitBranch: containerized ? null : readGitBranch(),
       uptime: Math.floor(process.uptime()),
       name: cfg.system.audioserver.name ?? 'Unconfigured',
       serial: cfg.system.audioserver.macId ?? '',
