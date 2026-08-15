@@ -9,6 +9,7 @@ import path from 'node:path';
 import { test, tests, type TestFn } from './testHarness';
 import './architecture/importBoundaries.test';
 import './sessionKey.test';
+import './buildChannel.test';
 import './loxoneServiceFolders.test';
 import './serviceNativeIdentity.test';
 import './trackIdentity.test';

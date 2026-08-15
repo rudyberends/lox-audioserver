@@ -6,7 +6,7 @@ import https from 'node:https';
 import os from 'node:os';
 import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { readBuildVersion, readPackageVersion } from '@/shared/serverVersion';
+import { readBuildChannel, readBuildVersion, readPackageVersion } from '@/shared/serverVersion';
 import type { ComponentLogger } from '@/shared/logging/logger';
 import { logManager } from '@/shared/logging/logger';
 import { logBuffer } from '@/shared/logging/logBuffer';
@@ -411,6 +411,11 @@ function handleInfo(
     const payload = {
       ...bootstrap,
       version: buildVersion,
+      // Which artifact this is (dev/testing/beta/stable), so the UI can warn on a
+      // build never meant for a real system instead of guessing from the version
+      // string. Distinct from the update channel above, which is about which
+      // releases this install is offered.
+      buildChannel: readBuildChannel(),
       uptime: Math.floor(process.uptime()),
       name: cfg.system.audioserver.name ?? 'Unconfigured',
       serial: cfg.system.audioserver.macId ?? '',

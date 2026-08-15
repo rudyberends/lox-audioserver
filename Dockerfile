@@ -46,9 +46,13 @@ RUN curl -fsSL "https://github.com/ondrej1024/crelay/archive/${CRELAY_REF}.tar.g
 FROM node:24-trixie-slim AS runtime
 ARG BUILD_VERSION
 ARG BUILD_TIMESTAMP
+# Which artifact this is: dev | testing | beta | stable. Unset means dev, because
+# a build that does not claim to be a release is not one.
+ARG BUILD_CHANNEL
 ARG YTDLP_VERSION=2026.02.04
 ENV APP_VERSION=${BUILD_VERSION}
 ENV BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
+ENV BUILD_CHANNEL=${BUILD_CHANNEL}
 ENV XDG_CACHE_HOME=/app/data/.cache
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
