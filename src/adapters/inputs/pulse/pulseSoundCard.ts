@@ -423,18 +423,19 @@ class CardSocket {
       }
       case PA.GET_SERVER_INFO: {
         const spec = this.spec ?? { format: 'f32le', channels: 2, rate: 44100 };
-        reply(
-          tag,
-          new TagWriter()
-            .str('sonn')
-            .str('15.0')
-            .str('sonn')
-            .str('sonn')
-            .sampleSpec(spec)
-            .str(SINK_NAME)
-            .str(`${SINK_NAME}.monitor`)
-            .u32(0),
-        );
+        const body = new TagWriter()
+          .str('sonn')
+          .str('15.0')
+          .str('sonn')
+          .str('sonn')
+          .sampleSpec(spec)
+          .str(SINK_NAME)
+          .str(`${SINK_NAME}.monitor`)
+          .u32(0);
+        if (version >= 15) {
+          body.channelMap(spec.channels);
+        }
+        reply(tag, body);
         return version;
       }
       case PA.GET_SINK_INFO:
@@ -511,7 +512,7 @@ class CardSocket {
         return version;
       }
       case PA.GET_PLAYBACK_LATENCY: {
-        const spec = this.spec ?? { format: 'f32le', channels: 2, rate: 44100 };
+        const spec = this.spec ?? DEFAULT_SPEC;
         const bytesPerSec = spec.rate * frameSize(spec);
         const held = this.stream && !this.stream.destroyed ? this.stream.readableLength : 0;
         // What we are still holding is exactly how far behind the sound is; saying so is what keeps
@@ -568,7 +569,7 @@ class CardSocket {
   }
 
   private sinkInfo(version: number): TagWriter {
-    const spec = this.spec ?? { format: 'f32le', channels: 2, rate: 44100 };
+    const spec = this.spec ?? DEFAULT_SPEC;
     const body = new TagWriter()
       .u32(0)
       .str(SINK_NAME)
@@ -587,7 +588,10 @@ class CardSocket {
       body.proplist({ 'device.description': SINK_DESCRIPTION }).usec(Math.round(TARGET_BUFFER_SEC * 1e6));
     }
     if (version >= 15) {
-      body.volume().u32(0).u32(0x10000).str(null).bool(false);
+      // Base volume, state (0 = running), volume steps, and the card this belongs to — there is
+      // none, so the invalid index. A string here instead of that index is what a client reads as
+      // a broken reply, and it drops the whole connection rather than the one request.
+      body.volume().u32(0).u32(0x10000).u32(0xffffffff);
     }
     return body;
   }
@@ -608,6 +612,21 @@ class CardStream extends Readable {
     this.onWanted();
   }
 
+  /**
+   * Every read is a moment the buffer got smaller, and the only honest one to look again.
+   *
+   * `_read` alone is not enough. Node calls it once and then waits for a push before it will ask
+   * again, so a card that answers "not yet, I am still holding a second" is never asked a second
+   * time — and since the client may only send what it has been granted, no audio arrives to break
+   * the tie either. The room simply stopped after one second. Reads always keep coming, so this is
+   * where the credit is released.
+   */
+  public override read(size?: number): unknown {
+    const chunk = super.read(size) as unknown;
+    this.onWanted();
+    return chunk;
+  }
+
   /** Hand over audio as it arrives. Backpressure is expressed by granting, not by refusing. */
   public feed(chunk: Buffer): void {
     this.push(chunk);
@@ -615,4 +634,6 @@ class CardStream extends Readable {
 }
 
 const SINK_NAME = 'sonn';
+/** What this card says it is before a player has said what it wants. */
+const DEFAULT_SPEC: SampleSpec = { format: 's24le', channels: 2, rate: 44100 };
 const SINK_DESCRIPTION = 'Sonn';
