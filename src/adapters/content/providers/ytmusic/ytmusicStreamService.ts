@@ -120,24 +120,44 @@ export class YtMusicStreamService {
         ...(withCookies ? this.buildCookieArgs(cookieFile) : []),
         watchUrl,
       ];
+      // Resolve anonymously FIRST; the signed-in attempt is the fallback, not the
+      // preference. Measured against a real account: a cookied extraction yields a
+      // TVHTML5 url that googlevideo answers 403 to for its first ~45 seconds (6 of 6
+      // immediate tries, on two separate tracks), while the anonymous one is served
+      // straight away (6 of 6) — so asking with cookies handed ffmpeg a url that was
+      // dead on arrival, and the track died on opening.
+      //
+      // This used to fall back only when yt-dlp said "Requested format is not
+      // available", which held together for the wrong reason: the pinned yt-dlp
+      // *failed* the cookied attempt, so the fallback carried every playback. On a
+      // newer yt-dlp the cookied attempt succeeds and returns one of those 403 urls,
+      // and the fallback — keyed on an error that no longer happens — never fires.
+      //
+      // Cookies still earn their keep for anything not reachable anonymously, so the
+      // signed-in attempt stays, now on any failure rather than on one error string.
       let url = '';
       try {
-        const { stdout } = await runYtDlp(buildArgs(true), this.execOptions());
+        const { stdout } = await runYtDlp(buildArgs(false), this.execOptions());
         url = pickLastNonEmptyLine(stdout);
       } catch (err) {
-        // Cookied requests can hit "Requested format is not available" because the
-        // signed-in player client demands a PO token. Public audio formats are still
-        // reachable without cookies, so retry once unauthenticated.
-        const stderr = err instanceof YtDlpError ? err.stderr : '';
-        const formatUnavailable = /Requested format is not available/i.test(stderr);
-        if (!cookieFile || !formatUnavailable) {
+        if (!cookieFile) {
           throw err;
         }
-        this.log.debug('ytmusic stream retrying without cookies', {
+        this.log.debug('ytmusic stream retrying with cookies', {
           zoneId,
           providerId: request.providerId,
         });
-        const { stdout } = await runYtDlp(buildArgs(false), this.execOptions());
+        const { stdout } = await runYtDlp(buildArgs(true), this.execOptions());
+        url = pickLastNonEmptyLine(stdout);
+      }
+      if (!url && cookieFile) {
+        // Anonymous run exited cleanly but produced nothing (private or otherwise
+        // account-only content); the signed-in attempt is what that case needs.
+        this.log.debug('ytmusic stream empty anonymously; retrying with cookies', {
+          zoneId,
+          providerId: request.providerId,
+        });
+        const { stdout } = await runYtDlp(buildArgs(true), this.execOptions());
         url = pickLastNonEmptyLine(stdout);
       }
       if (!url) {
@@ -246,7 +266,8 @@ export class YtMusicStreamService {
     const runner = async (): Promise<void> => {
       const startedAt = Date.now();
       try {
-        const cookieFile = await this.ensureCookieFile(bridge);
+        // Anonymously, like playback itself now resolves — a warmup down a path no
+        // real request takes would prime the wrong caches and hide its own failures.
         const args = [
           '-g',
           '--js-runtimes',
@@ -256,12 +277,11 @@ export class YtMusicStreamService {
           '--skip-download',
           '-f',
           'bestaudio/best',
-          ...this.buildCookieArgs(cookieFile),
           buildYtMusicWatchUrl(this.warmupVideoId),
         ];
         await runYtDlp(args, { timeoutMs: 25_000 });
         const tookMs = Date.now() - startedAt;
-        this.log.debug('ytmusic warmup ok', { bridgeId: bridge.id, tookMs, hasCookie: Boolean(cookieFile) });
+        this.log.debug('ytmusic warmup ok', { bridgeId: bridge.id, tookMs });
         const entry = this.warmupStateByBridgeId.get(bridge.id);
         if (entry && entry.signature === signature) {
           entry.lastOkAt = Date.now();
@@ -331,8 +351,15 @@ export class YtMusicStreamService {
       const exp = parsed.searchParams.get('expire');
       const expSec = exp ? Number(exp) : NaN;
       if (Number.isFinite(expSec) && expSec > 0) {
-        // Keep a small safety margin; googlevideo URLs expire.
-        return Math.max(now + 10_000, Math.round(expSec * 1000) - 30_000);
+        // `expire` says roughly six hours, and this used to trust it — so a track played
+        // once handed the very same url to every later play for the rest of the day.
+        // That is the shape of the failure left standing: the tracks that never work are
+        // the ones with an entry here, while the same track resolved fresh streams fine.
+        // The cache is only worth the ~2s a yt-dlp resolve costs, and it only has to
+        // survive a retry of the attempt that filled it, so cap it there rather than
+        // believing a deadline that clearly outlives what the url can actually do.
+        const cap = now + 60_000;
+        return Math.min(cap, Math.max(now + 10_000, Math.round(expSec * 1000) - 30_000));
       }
     } catch {
       /* ignore */
