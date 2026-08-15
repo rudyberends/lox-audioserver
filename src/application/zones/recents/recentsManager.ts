@@ -7,7 +7,7 @@ import {
 import type { QueueItem } from '@/application/zones/zoneManager';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ContentPort } from '@/ports/ContentPort';
-import { detectItemType, detectServiceFromAudiopath, decodeAudiopath } from '@/domain/zones/audiopath';
+import { detectItemType, detectServiceFromAudiopath, decodeAudiopath, parseServiceNativeAudiopath } from '@/domain/zones/audiopath';
 import { bestEffort } from '@/shared/bestEffort';
 
 const MAX_RECENTS = 5;
@@ -163,8 +163,18 @@ export class RecentsManager {
         : service.service === 'spotify'
           ? defaultSpotifyUser ?? item.user ?? 'nouser'
           : item.user ?? 'nouser';
+    // `service.service` is the Loxone answer: it reports every bridged service as `spotify`,
+    // so it cannot decide whether this path wants a Spotify account glued in front of it.
+    // The path itself can. Without this an Apple Music track was stored as
+    // `spotify@applemusic:applemusic:track:…` — the account slot filled with a service name and
+    // the real path repeated behind it, which is the doubled form other readers work around.
+    const nativePath = parseServiceNativeAudiopath(item.audiopath);
+    const wantsSpotifyAccount = !nativePath || nativePath.service === 'spotify';
     const rawAudiopath =
-      service.service === 'spotify' && userForSpotify && !item.audiopath.startsWith('spotify@')
+      service.service === 'spotify' &&
+      userForSpotify &&
+      wantsSpotifyAccount &&
+      !item.audiopath.startsWith('spotify@')
         ? `spotify@${userForSpotify}:${item.audiopath.replace(/^spotify:/i, '')}`
         : item.audiopath;
     const audiopath = this.normalizeRecentAudiopath(

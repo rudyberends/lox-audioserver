@@ -82,3 +82,49 @@ test('recents manager maps legacy custom radio service to custom_stream', async 
     assert.equal(result.items[0]?.service, 'custom_stream');
   });
 });
+
+test('a bridged track is recorded under its own identity, not doubled behind an account', async () => {
+  await withTempCwd(async () => {
+    const recentsManager = createRecentsManager({
+      notifier: { notifyRecentlyPlayedChanged: () => {} } as any,
+      contentPort: {
+        getDefaultSpotifyAccountId: () => 'md123121',
+        resolveMetadata: async () => null,
+      } as any,
+    });
+
+    // `resolveService` answers `spotify` for every bridged service — that is the Loxone view.
+    // It must not decide that this path wants a Spotify account glued in front of it: doing so
+    // stored `spotify@applemusic:applemusic:track:…`, which is what the readers downstream
+    // have a special case for.
+    await recentsManager.record(27, {
+      audiopath: 'applemusic:track:b64_MTc5MTg4MzY2Nw==',
+      user: 'applemusic',
+      title: 'Something',
+    } as any);
+
+    const stored = await recentsManager.get(27);
+    assert.equal(stored.items[0]?.audiopath, 'applemusic:track:b64_MTc5MTg4MzY2Nw==');
+  });
+});
+
+test('a real Spotify track still gets its account', async () => {
+  await withTempCwd(async () => {
+    const recentsManager = createRecentsManager({
+      notifier: { notifyRecentlyPlayedChanged: () => {} } as any,
+      contentPort: {
+        getDefaultSpotifyAccountId: () => 'md123121',
+        resolveMetadata: async () => null,
+      } as any,
+    });
+
+    await recentsManager.record(27, {
+      audiopath: 'spotify:track:2bJtJv5NGkYUFP6prU3WSg',
+      user: 'nouser',
+      title: 'Something',
+    } as any);
+
+    const stored = await recentsManager.get(27);
+    assert.equal(stored.items[0]?.audiopath, 'spotify@md123121:track:2bJtJv5NGkYUFP6prU3WSg');
+  });
+});
