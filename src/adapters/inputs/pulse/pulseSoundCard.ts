@@ -351,6 +351,11 @@ class CardSocket {
   private stream: CardStream | null = null;
   /** Bytes promised to the client and not yet arrived. */
   private granted = 0;
+  /** The clock, in bytes: what may still be sent, filling at the rate the music plays. */
+  private tokens = 0;
+  private tokensAt = 0;
+  /** Set when the clock, not the buffer, is what says no — nothing else would come back to look. */
+  private tokenTimer: NodeJS.Timeout | null = null;
   private streamIndex = 0;
   private corked = true;
   private written = 0;
@@ -433,6 +438,10 @@ class CardSocket {
     // happened to set it going again.
     const stream = new CardStream(() => this.onReaderWanted());
     this.stream = stream;
+    // A new track starts with a full bucket, so the first second may be sent at once and the room
+    // has something to begin on.
+    this.tokens = this.spec ? this.spec.rate * frameSize(this.spec) * TARGET_BUFFER_SEC : 0;
+    this.tokensAt = Date.now();
     for (const entry of this.pending) {
       stream.feed(entry.data);
     }
@@ -633,20 +642,56 @@ class CardSocket {
     const bytesPerSec = spec.rate * frameSize(spec);
     const target = Math.round(bytesPerSec * TARGET_BUFFER_SEC);
     const held = this.heldAsSent();
-    // One bound only: how much audio we are willing to be holding. Pacing by wall clock as well
-    // was tried and made things worse — a session restart reads nothing for a moment, the clock
-    // keeps running, and what follows is a burst and then a starved reader, which is a stutter.
-    // The engine sets the tempo, as it does for every other pipe source; this keeps the buffer
-    // shallow and lets it.
-    const want = target - held - this.granted;
-    if (want < Math.round(bytesPerSec * MIN_REQUEST_SEC)) {
+    /*
+     * Two bounds, and the smaller wins.
+     *
+     * How much we are holding keeps the buffer shallow. Time keeps the player at the speed of the
+     * music — and that one is not optional. A sound card is a clock, which is what the sink this
+     * replaced was; without it the reader downstream takes everything on offer, the player runs
+     * ahead into buffers it cannot see, and it reaches the end of a track while the room is still
+     * a quarter of a minute behind. Then it moves on, and the room is dragged with it: a track of
+     * 1:03 ended after 52 seconds.
+     *
+     * A bucket rather than a running total, so time that passes with nobody reading — a session
+     * restarting, a zone paused — cannot be saved up and spent in a burst. It fills at the rate
+     * the music plays and holds at most one buffer's worth.
+     */
+    const now = Date.now();
+    this.tokens = Math.min(
+      target,
+      this.tokens + ((now - (this.tokensAt || now)) / 1000) * bytesPerSec,
+    );
+    this.tokensAt = now;
+    const minimum = Math.round(bytesPerSec * MIN_REQUEST_SEC);
+    const byBuffer = target - held - this.granted;
+    const want = Math.min(byBuffer, Math.floor(this.tokens));
+    if (want < minimum) {
+      // Room in the buffer but not yet on the clock: nothing else will come back to look, since
+      // audio only arrives once it is asked for. So a timer does, once there is enough to ask for.
+      if (byBuffer >= minimum) {
+        this.wakeWhenAllowed(minimum - this.tokens, bytesPerSec);
+      }
       return;
     }
     const ask = want - (want % frameSize(spec));
     this.granted += ask;
+    this.tokens -= ask;
     socket.write(
       frame(PA_CHANNEL_COMMAND, new TagWriter().u32(PA.REQUEST).u32(0xffffffff).u32(this.streamIndex).u32(ask).build()),
     );
+  }
+
+  /** Come back when the clock has caught up with what the buffer already has room for. */
+  private wakeWhenAllowed(missing: number, bytesPerSec: number): void {
+    if (this.tokenTimer) {
+      return;
+    }
+    const ms = Math.max(10, Math.ceil((missing / bytesPerSec) * 1000));
+    this.tokenTimer = setTimeout(() => {
+      this.tokenTimer = null;
+      this.grant();
+    }, ms);
+    this.tokenTimer.unref?.();
   }
 
   private onCommand(
