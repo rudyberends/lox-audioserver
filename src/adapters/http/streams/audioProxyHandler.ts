@@ -12,6 +12,36 @@ import {
 } from '@/shared/urlProxy';
 
 const MAX_PLAYLIST_BYTES = 1024 * 1024;
+/** Window size for hosts that refuse open-ended ranges; big enough to keep ahead of playback. */
+const RANGE_CHUNK_BYTES = 4 * 1024 * 1024;
+
+/** True for `bytes=N-` and for no Range at all — the shapes googlevideo answers with 403. */
+function isUnboundedRange(range: string | undefined): boolean {
+  if (!range) {
+    return true;
+  }
+  return /^bytes=\d*-$/i.test(range.trim());
+}
+
+function parseRangeStart(range: string | undefined): number {
+  const match = /^bytes=(\d+)-/i.exec((range ?? '').trim());
+  const start = match ? Number(match[1]) : 0;
+  return Number.isFinite(start) && start >= 0 ? start : 0;
+}
+
+function parseContentRange(value: string | null): { end: number; total: number | null } | null {
+  const match = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec((value ?? '').trim());
+  if (!match) {
+    return null;
+  }
+  const end = Number(match[2]);
+  const totalRaw = match[3];
+  const total = totalRaw === '*' ? null : Number(totalRaw);
+  if (!Number.isFinite(end)) {
+    return null;
+  }
+  return { end, total: total !== null && Number.isFinite(total) ? total : null };
+}
 
 export class AudioProxyHandler {
   private readonly log = createLogger('Http', 'AudioProxy');
@@ -44,12 +74,47 @@ export class AudioProxyHandler {
 
     const extraHeaders = decodeHeaders(url.searchParams.get('h'));
     const upstreamHeaders = this.buildUpstreamHeaders(req, extraHeaders);
+
+    // ffmpeg opens a stream with `Range: bytes=0-` — everything from here on. Some
+    // hosts (googlevideo) answer that, and a Range-less request, with a flat 403 while
+    // serving a bounded window of the very same url happily. So when the client wants
+    // the whole rest, ask upstream for a window instead and stitch the windows back
+    // into one response below. Asking unbounded first is not an option: the refusal
+    // also counts against that video's request budget, which throttles quickly.
+    const wantsRest = isUnboundedRange(upstreamHeaders.Range);
+    const restStart = wantsRest ? parseRangeStart(upstreamHeaders.Range) : 0;
+    const firstAttemptHeaders = wantsRest
+      ? { ...upstreamHeaders, Range: `bytes=${restStart}-${restStart + RANGE_CHUNK_BYTES - 1}` }
+      : upstreamHeaders;
+
     let upstream: Response;
     try {
       upstream = await fetch(target, {
-        headers: upstreamHeaders,
+        headers: firstAttemptHeaders,
         redirect: 'follow',
       });
+      if (wantsRest) {
+        this.log.debug('proxy windowed first attempt', {
+          clientRange: upstreamHeaders.Range ?? '(none)',
+          sentRange: firstAttemptHeaders.Range,
+          status: upstream.status,
+          sentHeaders: Object.keys(firstAttemptHeaders).join(','),
+        });
+      }
+      // A host that dislikes the window (or ignores ranges entirely, like a radio
+      // stream) gets asked again exactly the way the client asked — no regression for
+      // everything that was already working. Cancel the refused body first: dropping a
+      // Response without reading it leaves the connection held open.
+      if (wantsRest && !upstream.ok) {
+        await bestEffort(() => upstream.body?.cancel() ?? Promise.resolve(), {
+          fallback: undefined,
+          onError: 'debug',
+          log: this.log,
+          label: 'discarding refused window',
+          context: { target },
+        });
+        upstream = await fetch(target, { headers: upstreamHeaders, redirect: 'follow' });
+      }
     } catch (error) {
       this.log.warn('proxy fetch failed', {
         target,
@@ -70,6 +135,22 @@ export class AudioProxyHandler {
     if (upstream.ok && this.isPlaylistResponse(contentType, upstream.url)) {
       await this.respondPlaylist(res, upstream, contentType, extraHeaders);
       return;
+    }
+
+    // The window came back: hand the client one continuous body built from this window
+    // and the ones after it. Only when the host actually honoured the range (a 206 with
+    // a total) — a 200 means it ignored the range and is already streaming the lot.
+    if (wantsRest && upstream.ok && upstream.body && upstream.status === 206) {
+      const parsed = parseContentRange(upstream.headers.get('content-range'));
+      if (parsed?.total != null) {
+        await this.streamInBoundedChunks(res, target, upstreamHeaders, restStart, upstream, parsed, {
+          // Windowing upstream is our business, not the client's. One that never asked
+          // for a range must still be answered 200 with the whole body — a renderer
+          // handed an unrequested 206 is entitled to refuse it.
+          clientAskedForRange: typeof req.headers.range === 'string',
+        });
+        return;
+      }
     }
 
     if (!upstream.ok || !upstream.body) {
@@ -158,6 +239,142 @@ export class AudioProxyHandler {
       'Cache-Control': 'no-cache',
     });
     res.end(rewritten);
+  }
+
+  /**
+   * Walk the resource in bounded ranges and pour them into one response.
+   *
+   * The client asked for an open-ended range and the host said 403 to it. It will
+   * answer a bounded one, so we ask for a window at a time and keep writing into the
+   * same response body — the client sees a single continuous stream and never learns
+   * the fetch underneath was chopped up.
+   *
+   * Returns false if even the first bounded window is refused, leaving the caller to
+   * report the original failure; once bytes are on the wire there is no way back, so
+   * a later window failing just ends the response.
+   */
+  private async streamInBoundedChunks(
+    res: ServerResponse,
+    target: string,
+    baseHeaders: Record<string, string>,
+    startByte: number,
+    firstChunk: Response,
+    firstRange: { end: number; total: number | null },
+    opts: { clientAskedForRange: boolean },
+  ): Promise<void> {
+    let pos = startByte;
+    let total: number | null = firstRange.total;
+    let wroteHead = false;
+    // The opening window is already in hand — fetching it again would cost a request
+    // against the same per-video budget that makes this dance necessary.
+    let pending: { response: Response; range: { end: number; total: number | null } } | null = {
+      response: firstChunk,
+      range: firstRange,
+    };
+
+    while (total === null || pos < total) {
+      let chunk: Response;
+      let parsed: { end: number; total: number | null } | null;
+      if (pending) {
+        chunk = pending.response;
+        parsed = pending.range;
+        pending = null;
+      } else {
+        const end = pos + RANGE_CHUNK_BYTES - 1;
+        try {
+          chunk = await fetch(target, {
+            headers: { ...baseHeaders, Range: `bytes=${pos}-${end}` },
+            redirect: 'follow',
+          });
+        } catch (error) {
+          this.log.warn('proxy chunk fetch failed', {
+            target,
+            pos,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          break;
+        }
+        if (!chunk.ok || !chunk.body) {
+          this.log.warn('proxy chunk rejected mid-stream', { target, pos, status: chunk.status });
+          break;
+        }
+        parsed = parseContentRange(chunk.headers.get('content-range'));
+      }
+      if (!chunk.body) {
+        break;
+      }
+      if (total === null) {
+        total = parsed?.total ?? null;
+      }
+
+      if (!wroteHead) {
+        const headers: Record<string, string> = {
+          'Content-Type': chunk.headers.get('content-type') ?? 'application/octet-stream',
+          'Cache-Control': 'no-cache',
+          'Accept-Ranges': 'bytes',
+        };
+        // Advertise the whole remaining resource, not this first window — the client
+        // asked for everything from `pos` on, and that is what it is about to get.
+        if (total !== null) {
+          headers['Content-Length'] = String(total - pos);
+          if (opts.clientAskedForRange) {
+            headers['Content-Range'] = `bytes ${pos}-${total - 1}/${total}`;
+          }
+        }
+        res.writeHead(total !== null && opts.clientAskedForRange ? 206 : 200, headers);
+        wroteHead = true;
+      }
+
+      const body = Readable.fromWeb(chunk.body as unknown as Parameters<typeof Readable.fromWeb>[0]);
+      const finished = await this.pipeChunk(body, res);
+      if (!finished) {
+        return; // client went away; nothing left to serve it
+      }
+
+      const advanced = parsed ? parsed.end + 1 : pos + RANGE_CHUNK_BYTES;
+      if (advanced <= pos) {
+        break; // no forward progress; stop rather than spin
+      }
+      pos = advanced;
+      if (total === null) {
+        break; // without a total there is no way to know where to stop
+      }
+    }
+
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'proxy-chunk-failed' }));
+      return;
+    }
+    res.end();
+  }
+
+  /** Pipe one window into the response, keeping it open. False when the client is gone. */
+  private pipeChunk(body: Readable, res: ServerResponse): Promise<boolean> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (ok: boolean): void => {
+        if (settled) return;
+        settled = true;
+        body.removeListener('end', onEnd);
+        body.removeListener('error', onError);
+        res.removeListener('close', onClose);
+        resolve(ok);
+      };
+      const onEnd = (): void => done(true);
+      const onError = (): void => {
+        body.destroy();
+        done(false);
+      };
+      const onClose = (): void => {
+        body.destroy();
+        done(false);
+      };
+      body.on('end', onEnd);
+      body.on('error', onError);
+      res.on('close', onClose);
+      body.pipe(res, { end: false });
+    });
   }
 
   private async readTextResponse(upstream: Response): Promise<string | null> {
