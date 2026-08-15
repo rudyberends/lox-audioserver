@@ -49,13 +49,15 @@ const QUALITY_PREF = 'audio.play_bitrate_non_metered_enumeration';
 const QUALITY_LOSSLESS = '5';
 
 /**
- * Autoplay, which has to be off.
+ * Autoplay, asked to be off — and it is not.
  *
- * Left on, Soloist reaches the end of a track and starts recommending — and since this server did
- * not ask for that track, the only honest reading of it is that someone took the room over from
- * the app. So a queue that simply ran out turned into a phantom takeover, and the room carried on
- * with music nobody chose. Off, the end of a track is the end of a track, and this server decides
- * what follows.
+ * Left on, Soloist reaches the end of a track and starts recommending, which is Spotify deciding
+ * what a room plays. Writing this is what the setting is for, and it is written in the form
+ * Soloist writes its own booleans, in the file it keeps them in. Measured: it carries on anyway.
+ *
+ * So the preference stays — it costs nothing and states the intent, and a later build may honour
+ * it — but nothing depends on it. What actually keeps a room quiet is that this server silences
+ * the player itself the moment it moves past a track nobody here asked for.
  */
 const AUTOPLAY_PREF = 'player.autoplay';
 

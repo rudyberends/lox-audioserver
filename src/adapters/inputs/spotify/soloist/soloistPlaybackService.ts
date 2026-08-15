@@ -63,6 +63,14 @@ type ZoneRunner = {
   /** Whether the app's pause is what stopped this zone, so its resume can start it again. */
   appPaused: boolean;
   /**
+   * Whether the last pause was ours.
+   *
+   * Soloist reports a pause the same way whoever asked for it, and it reports two of them per
+   * pause. Without knowing which are ours, our own stop comes back as "someone paused this zone
+   * on their phone" — which is how a zone once paused and resumed itself in the space of a second.
+   */
+  selfPaused: boolean;
+  /**
    * Whether a track is being set up right now.
    *
    * Taking the account makes Soloist start whatever the account was playing, a moment before it is
@@ -418,6 +426,7 @@ export class SoloistPlaybackService {
       currentTrack: null,
       queue: { previous: [], upcoming: [] },
       appPaused: false,
+      selfPaused: false,
       starting: false,
       stream: null,
     };
@@ -521,6 +530,13 @@ export class SoloistPlaybackService {
             got: uri,
           });
           runner.wantedUri = null;
+          // Spotify carries on by itself whatever `player.autoplay` is set to — measured, the
+          // preference is written and ignored — so the room's own queue is not the only thing that
+          // decides what sounds next. Silencing it here is what keeps a zone that has run out of
+          // queue from leaving Spotify playing to nobody, holding the account as it goes. If the
+          // queue does have something, the play that follows starts it again.
+          runner.selfPaused = true;
+          runner.ws.pause();
           this.controller?.transport(zoneId, 'next');
           return;
         }
@@ -546,7 +562,7 @@ export class SoloistPlaybackService {
         this.finishTrack(zoneId);
         return;
       }
-      if (event.status === 'paused' && !runner.appPaused) {
+      if (event.status === 'paused' && !runner.appPaused && !runner.selfPaused) {
         this.log.info('the spotify app paused this zone', { zoneId });
         runner.appPaused = true;
         this.controller?.transport(zoneId, 'pause');
@@ -738,6 +754,7 @@ export class SoloistPlaybackService {
       runner.currentUri = uri;
 
       const playing = this.waitForPlaying(runner, uri);
+      runner.selfPaused = false;
       if (!runner.ws.play(uri)) {
         this.log.warn('could not reach soloist to start the track', { zoneId, uri });
         return null;
