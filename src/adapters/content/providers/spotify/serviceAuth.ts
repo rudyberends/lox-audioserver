@@ -20,8 +20,7 @@ import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInput
 import { pushLibrespotCredentials } from '@/adapters/inputs/spotify/spotifyInputService';
 import type { ConfigPort } from '@/ports/ConfigPort';
 
-const SPOTIFY_PUBLIC_REDIRECT_URI =
-  'https://sonn-audio.github.io/core/spotify-callback/';
+const SPOTIFY_PUBLIC_REDIRECT_URI = 'https://sonn-audio.github.io/callbacks/spotify/';
 
 const log = createLogger('Content', 'SpotifyAuth');
 
