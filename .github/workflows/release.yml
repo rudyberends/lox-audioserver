@@ -56,6 +56,24 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "prerelease=${{ github.event.release.prerelease }}" >> "$GITHUB_OUTPUT"
 
+      # Ahead of the image on purpose: this needs dist/ from Build and the tag from
+      # the step above, nothing from Docker — so the bundle is on the release in a
+      # minute instead of after the multi-arch build.
+      # Server-core self-update bundle consumed by POST /admin/api/server/update.
+      # dist/ is pure JS (arch-agnostic); node_modules is rebuilt on the target via
+      # npm ci, so a single tarball + the manifests is enough. public/ is excluded —
+      # the admin UI and player ship as their own bundles.
+      - name: Package server-dist bundle
+        shell: bash
+        run: |
+          tar -czf server-dist.tgz dist package.json package-lock.json
+          ls -lh server-dist.tgz
+
+      - name: Attach server-dist bundle to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.release_meta.outputs.tag }}" server-dist.tgz --clobber
+
       - name: Define Docker tags
         id: tags
         shell: bash
@@ -89,21 +107,6 @@ jobs:
           build-args: |
             BUILD_VERSION=${{ steps.release_meta.outputs.version }}
             BUILD_CHANNEL=${{ steps.release_meta.outputs.prerelease == 'true' && 'beta' || 'stable' }}
-
-      # Server-core self-update bundle consumed by POST /admin/api/server/update.
-      # dist/ is pure JS (arch-agnostic); node_modules is rebuilt on the target via
-      # npm ci, so a single tarball + the manifests is enough. public/ is excluded —
-      # the admin UI and player ship as their own bundles.
-      - name: Package server-dist bundle
-        shell: bash
-        run: |
-          tar -czf server-dist.tgz dist package.json package-lock.json
-          ls -lh server-dist.tgz
-
-      - name: Attach server-dist bundle to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ steps.release_meta.outputs.tag }}" server-dist.tgz --clobber
 
   dev:
     if: ${{ github.ref_name == 'dev' }}

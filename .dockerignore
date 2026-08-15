@@ -21,6 +21,8 @@ node_modules/
 
 # Local build artifacts
 dist/
+# The release bundle is now built before the image, so keep it out of the context.
+*.tgz
 coverage/
 logs/
 log/
