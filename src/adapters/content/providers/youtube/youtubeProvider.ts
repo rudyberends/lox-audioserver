@@ -3,6 +3,7 @@ import type { ContentFolder, ContentFolderItem, ContentServiceAccount, PlaylistE
 import { estimatedPage, knownPage, slicedPage } from '@/adapters/content/folderPage';
 import { createLogger } from '@/shared/logging/logger';
 import { DEFAULT_MIN_SEARCH_LIMIT } from '@/adapters/content/utils/searchLimits';
+import { stripAccountSlug } from '@/adapters/content/utils/folderIdPrefix';
 import {
   extractVideoId,
   runYtDlpJsonLines,
@@ -20,6 +21,9 @@ const enum FileType {
   File = 2,
   PlaylistBrowsable = 7,
 }
+
+/** The leading segments a folder id may open with; anything else is an account slug. */
+const FOLDER_KINDS = ['track', 'playlist', 'channel', 'genre', 'search'] as const;
 
 type SearchResult = {
   tracks?: ContentFolderItem[];
@@ -313,11 +317,14 @@ export class YoutubeProvider {
 
   private normalizeFolderId(folderId: string): FolderKind {
     const raw = (folderId || 'root').trim();
-    const stripped = raw
-      .replace(/^spotify@[^:]+:/i, '')
-      .replace(/^youtube@[^:]+:/i, '')
-      .replace(/^spotify[:/]/i, '')
-      .replace(/^youtube[:/]/i, '');
+    const stripped = stripAccountSlug(
+      raw
+        .replace(/^spotify@[^:]+:/i, '')
+        .replace(/^youtube@[^:]+:/i, '')
+        .replace(/^spotify[:/]/i, '')
+        .replace(/^youtube[:/]/i, ''),
+      FOLDER_KINDS,
+    );
     const lower = stripped.toLowerCase().trim();
 
     if (!lower || lower === 'root' || lower === 'start') return 'root';

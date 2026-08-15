@@ -3,6 +3,7 @@ import type { ContentFolder, ContentFolderItem, ContentServiceAccount, PlaylistE
 import { estimatedPage, knownPage, slicedPage } from '@/adapters/content/folderPage';
 import { createLogger } from '@/shared/logging/logger';
 import { DEFAULT_MIN_SEARCH_LIMIT } from '@/adapters/content/utils/searchLimits';
+import { stripAccountSlug } from '@/adapters/content/utils/folderIdPrefix';
 import { convertCookieToNetscape } from '@/adapters/content/providers/ytmusic/ytmusicCookie';
 import { ytmBrowse, type YtMusicInnertubeClientOptions } from '@/adapters/content/providers/ytmusic/ytmusicInnertube';
 import {
@@ -24,6 +25,9 @@ const enum FileType {
   File = 2,
   PlaylistBrowsable = 7,
 }
+
+/** The leading segments a folder id may open with; anything else is an account slug. */
+const FOLDER_KINDS = ['track', 'playlist', 'album', 'artist', 'genre'] as const;
 
 type SearchResult = {
   tracks?: ContentFolderItem[];
@@ -470,11 +474,14 @@ export class YtMusicProvider {
 
   private normalizeFolderId(folderId: string): FolderKind {
     const raw = (folderId || 'root').trim();
-    const stripped = raw
-      .replace(/^spotify@[^:]+:/i, '')
-      .replace(/^ytmusic@[^:]+:/i, '')
-      .replace(/^spotify[:/]/i, '')
-      .replace(/^ytmusic[:/]/i, '');
+    const stripped = stripAccountSlug(
+      raw
+        .replace(/^spotify@[^:]+:/i, '')
+        .replace(/^ytmusic@[^:]+:/i, '')
+        .replace(/^spotify[:/]/i, '')
+        .replace(/^ytmusic[:/]/i, ''),
+      FOLDER_KINDS,
+    );
     const key = (stripped.split('/').pop() ?? stripped).trim();
     const lower = key.toLowerCase();
 

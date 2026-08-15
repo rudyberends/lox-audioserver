@@ -61,6 +61,29 @@ test("ytmusic native: the Loxone app's artists slot still reaches the artists fo
   assert.ok(Array.isArray(folder?.items));
 });
 
+// A second account of the same service puts its slug in the audiopath
+// (`ytmusic:1ryw2i:playlist:…` instead of `ytmusic:playlist:…`). The provider used to
+// match `^playlist:` against that, recognise nothing, and hand back an empty folder —
+// so every playlist, album and track opened blank for anyone with two accounts.
+test('ytmusic native: a second account still opens its playlists and albums', async () => {
+  const bridge = { ...makeBridge('bridge-ytmusic-1ryw2i'), ytmusicCookie: 'SID=mock' };
+  const provider = new YtMusicProvider({
+    providerId: `spotify@${bridge.id}`,
+    serviceNativePrefix: 'ytmusic:1ryw2i',
+    bridge,
+  });
+
+  const playlist = await provider.getFolder('ytmusic:1ryw2i:playlist:VLPLakrH01Ik-_U', 0, 50);
+  assert.ok((playlist?.items?.length ?? 0) > 0, 'playlist of a second account came back empty');
+
+  const track = await provider.getFolder('ytmusic:1ryw2i:track:dQw4w9WgXcQ', 0, 50);
+  assert.equal(track?.items?.length, 1);
+
+  // The single-account form keeps working: `playlist` is a kind, not an account.
+  const single = await provider.getFolder('ytmusic:playlist:VLPLakrH01Ik-_U', 0, 50);
+  assert.equal(single?.items?.length, playlist?.items?.length);
+});
+
 test('ytmusic native: stream service resolves a direct url via yt-dlp', async () => {
   const bridge = makeBridge('bridge-ytmusic-test');
   const providerId = `spotify@${bridge.id}`;
