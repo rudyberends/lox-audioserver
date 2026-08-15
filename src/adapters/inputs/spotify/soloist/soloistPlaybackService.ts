@@ -322,6 +322,9 @@ export class SoloistPlaybackService {
       runner.handle.stop();
       this.runners.delete(zoneId);
     }
+    // The cards go too. They exist for these players and nothing else, and a socket left listening
+    // for a backend nobody selected is an open door onto a room with no one behind it.
+    await this.audio.stop();
   }
 
   /** Everything that has to be true before a zone can play, named so the UI can say which is not. */
