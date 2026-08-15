@@ -6,10 +6,12 @@ import { createLogger } from '@/shared/logging/logger';
 import { resolveDataDir } from '@/shared/utils/file';
 import {
   frame,
+  FrameSplitter,
   frameSize,
   PA,
   PA_CHANNEL_COMMAND,
   PA_PROTOCOL_VERSION,
+  sampleWidth,
   TagReader,
   TagWriter,
   type SampleSpec,
@@ -37,13 +39,27 @@ export class PulseSoundCard {
   private readonly cards = new Map<number, CardSocket>();
   private clientConfigWritten: Promise<string> | null = null;
 
-  /** Where the sockets live. Short paths matter: a unix socket path is capped near 100 bytes. */
+  /**
+   * @param owner what these cards are for, and part of every socket name.
+   *
+   * Ids are the caller's own — zone numbers here — and a second kind of player would bring its own
+   * numbering. Naming the owner is what keeps two of them from asking for the same socket, and it
+   * says at a glance whose a card is when you are looking at the directory.
+   */
+  constructor(private readonly owner: string) {}
+
+  /**
+   * Where the sockets live.
+   *
+   * Short paths matter: a unix socket address is capped near 100 bytes, which is why this is a
+   * directory of its own near the data root rather than something nested per owner.
+   */
   private get runtimeDir(): string {
     return resolveDataDir('pulse');
   }
 
   private socketPathFor(id: number): string {
-    return path.join(this.runtimeDir, `card-${id}.sock`);
+    return path.join(this.runtimeDir, `card-${this.owner}-${id}.sock`);
   }
 
   /**
@@ -149,34 +165,179 @@ export class PulseSoundCard {
 }
 
 /**
- * What a card hands on, given what the player sends it.
+ * What each format a player may ask for is handed on as.
  *
- * Float is how a decoder thinks and not how anything downstream takes it: no output declares a
- * 32-bit format, and an engine asked to carry float has to convert it somewhere. Converting here
- * is what a sound card does — the old PulseAudio sink was pinned to 24-bit for exactly this — and
- * it is what lets everything after this point match the samples it is given instead of resampling
- * them into the shape they were already in.
+ * The engine carries four shapes, all little-endian, and a card that accepts anything else has to
+ * be the one that meets it — that is what a sound card is for. Float is the case that matters:
+ * it is how a decoder thinks and nothing downstream takes it, and the old PulseAudio sink was
+ * pinned to 24-bit for exactly this reason. The rest are here so that "any Linux audio
+ * application" is true rather than nearly true; big-endian and 8-bit players are rare, but a rare
+ * player that is handed its own bytes back mislabelled sounds like noise, not like a bug.
  */
+const DELIVERED_FORMATS: Record<string, string> = {
+  u8: 's16le',
+  alaw: 's16le',
+  ulaw: 's16le',
+  s16le: 's16le',
+  s16be: 's16le',
+  s24le: 's24le',
+  s24be: 's24le',
+  s24_32le: 's24le',
+  s24_32be: 's24le',
+  s32le: 's32le',
+  s32be: 's32le',
+  f32le: 's24le',
+  f32be: 's24le',
+};
+
+/** What a card hands on, given what the player sends it. */
 export function deliveredSpecOf(spec: SampleSpec): SampleSpec {
-  return spec.format.startsWith('f') ? { ...spec, format: 's24le' } : spec;
+  return { ...spec, format: DELIVERED_FORMATS[spec.format] ?? 's24le' };
+}
+
+/** Whether this card can carry what a player is asking to send. */
+export function canCarry(spec: SampleSpec): boolean {
+  return (
+    DELIVERED_FORMATS[spec.format] !== undefined &&
+    spec.channels >= 1 &&
+    spec.channels <= 32 &&
+    spec.rate >= 4_000 &&
+    spec.rate <= 384_000
+  );
 }
 
 /**
  * Float samples into 24-bit words.
  *
  * Rounded rather than truncated, and clamped: Spotify's own normalisation can push a peak past
- * full scale, and wrapping that would be a click where clipping is merely loud.
+ * full scale, and wrapping that would be a click where clipping is merely loud. A sample that is
+ * not a number at all becomes silence rather than throwing halfway through a buffer.
  */
-export function floatToS24(chunk: Buffer): Buffer {
+export function floatToS24(chunk: Buffer, littleEndian = true): Buffer {
   const samples = Math.floor(chunk.length / 4);
   const out = Buffer.allocUnsafe(samples * 3);
   for (let i = 0; i < samples; i += 1) {
-    const value = Math.max(-1, Math.min(1, chunk.readFloatLE(i * 4)));
+    const raw = littleEndian ? chunk.readFloatLE(i * 4) : chunk.readFloatBE(i * 4);
+    const value = Number.isNaN(raw) ? 0 : Math.max(-1, Math.min(1, raw));
     const scaled = Math.round(value * 8388607);
     out.writeUIntLE(scaled < 0 ? scaled + 0x1000000 : scaled, i * 3, 3);
   }
   return out;
 }
+
+/** Unsigned 8-bit is centred on 128; everything else here is centred on zero. */
+function u8ToS16(chunk: Buffer): Buffer {
+  const out = Buffer.allocUnsafe(chunk.length * 2);
+  for (let i = 0; i < chunk.length; i += 1) {
+    out.writeInt16LE((chunk[i]! - 128) << 8, i * 2);
+  }
+  return out;
+}
+
+/** Reverse each sample's bytes. The incoming buffer belongs to the socket, so this copies. */
+function swapBytes(chunk: Buffer, width: 2 | 4): Buffer {
+  const out = Buffer.from(chunk);
+  if (width === 2) {
+    out.swap16();
+  } else {
+    out.swap32();
+  }
+  return out;
+}
+
+/** Three bytes at a time, which `Buffer.swap*` does not do. */
+function swap24(chunk: Buffer): Buffer {
+  const out = Buffer.allocUnsafe(chunk.length);
+  for (let i = 0; i + 2 < chunk.length; i += 3) {
+    out[i] = chunk[i + 2]!;
+    out[i + 1] = chunk[i + 1]!;
+    out[i + 2] = chunk[i]!;
+  }
+  return out;
+}
+
+/**
+ * 24 bits carried in a 32-bit word, down to a plain 24-bit word.
+ *
+ * Taking the whole word as 32-bit instead would be 48 dB quiet, which is the kind of mistake that
+ * is heard long before it is found.
+ */
+function s24In32ToS24(chunk: Buffer, littleEndian: boolean): Buffer {
+  const samples = Math.floor(chunk.length / 4);
+  const out = Buffer.allocUnsafe(samples * 3);
+  for (let i = 0; i < samples; i += 1) {
+    const at = i * 4;
+    const to = i * 3;
+    if (littleEndian) {
+      out[to] = chunk[at]!;
+      out[to + 1] = chunk[at + 1]!;
+      out[to + 2] = chunk[at + 2]!;
+    } else {
+      out[to] = chunk[at + 3]!;
+      out[to + 1] = chunk[at + 2]!;
+      out[to + 2] = chunk[at + 1]!;
+    }
+  }
+  return out;
+}
+
+/**
+ * The G.711 companding tables, expanded once.
+ *
+ * Both are one byte standing for a sample on a logarithmic scale, so a lookup is the whole
+ * conversion. Neither belongs to music, but a player is free to ask for them, and one that does
+ * would otherwise have its telephone bytes read as something else entirely.
+ */
+const ALAW_TO_S16 = buildTable((byte) => {
+  const value = byte ^ 0x55;
+  const mantissa = (value & 0x0f) << 4;
+  const exponent = (value & 0x70) >> 4;
+  const magnitude = exponent === 0 ? mantissa + 8 : (mantissa + 0x108) << (exponent - 1);
+  return value & 0x80 ? magnitude : -magnitude;
+});
+
+const ULAW_TO_S16 = buildTable((byte) => {
+  const value = ~byte & 0xff;
+  const magnitude = (((value & 0x0f) << 3) + 0x84) << ((value & 0x70) >> 4);
+  return value & 0x80 ? 0x84 - magnitude : magnitude - 0x84;
+});
+
+function buildTable(decode: (byte: number) => number): Int16Array {
+  const table = new Int16Array(256);
+  for (let byte = 0; byte < 256; byte += 1) {
+    table[byte] = decode(byte);
+  }
+  return table;
+}
+
+function companded(table: Int16Array): (chunk: Buffer) => Buffer {
+  return (chunk) => {
+    const out = Buffer.allocUnsafe(chunk.length * 2);
+    for (let i = 0; i < chunk.length; i += 1) {
+      out.writeInt16LE(table[chunk[i]!]!, i * 2);
+    }
+    return out;
+  };
+}
+
+/** How a format's bytes become what this card delivers. Absent means they already fit. */
+export function converterFor(format: string): ((chunk: Buffer) => Buffer) | undefined {
+  return CONVERTERS[format];
+}
+
+/** How each format is turned into what it is delivered as. Absent means the bytes already fit. */
+const CONVERTERS: Record<string, (chunk: Buffer) => Buffer> = {
+  u8: u8ToS16,
+  alaw: companded(ALAW_TO_S16),
+  ulaw: companded(ULAW_TO_S16),
+  s16be: (chunk) => swapBytes(chunk, 2),
+  s24be: swap24,
+  s24_32le: (chunk) => s24In32ToS24(chunk, true),
+  s24_32be: (chunk) => s24In32ToS24(chunk, false),
+  s32be: (chunk) => swapBytes(chunk, 4),
+  f32le: (chunk) => floatToS24(chunk, true),
+  f32be: (chunk) => floatToS24(chunk, false),
+};
 
 /** How much audio a client may run ahead of us. One second is what a sound card would offer. */
 const TARGET_BUFFER_SEC = 1;
@@ -198,9 +359,27 @@ class CardSocket {
    *
    * A player starts sounding a moment before this server has asked for the stream, and those first
    * frames are the start of the track. Holding them is what keeps a song from starting clipped.
+   *
+   * Each entry remembers what it cost the player to send as well as what it became, because the
+   * two differ the moment anything is converted, and every promise made to a client is in the
+   * client's own units.
    */
-  private pending: Buffer[] = [];
+  private pending: Array<{ data: Buffer; sent: number }> = [];
   private pendingBytes = 0;
+  /** Bytes of a sample that a write ended in the middle of; converting them alone would be wrong. */
+  private carry = EMPTY;
+  private bufferAttr = { maxlength: 4 << 20, tlength: 0, prebuf: 0, minreq: 0 };
+  /** Drains waiting for the audio still here to have been read. */
+  private draining: Array<{ tag: number; timer: NodeJS.Timeout; reply: (tag: number) => void }> = [];
+  /**
+   * The level the player asked for, remembered but not applied.
+   *
+   * A zone's volume belongs to the zone, and every output already applies it. Scaling the samples
+   * here as well would put a second taper on the same signal — two volumes, neither of them the
+   * one anybody set. Answering with what was asked keeps a client from seeing its setting vanish.
+   */
+  private volume: number[] = [];
+  private muted = false;
   private specWaiters: Array<(spec: SampleSpec | null) => void> = [];
   public spec: SampleSpec | null = null;
 
@@ -247,21 +426,78 @@ class CardSocket {
 
   public takeStream(): Readable {
     this.stream?.destroy();
-    // A Readable of our own rather than a PassThrough, because `_read` is the signal that matters:
-    // it fires whenever the consumer wants more, including the moment it comes back after the
-    // engine has restarted a session. Hanging the credit on writes and drains instead left the
-    // player waiting through exactly that gap — the room fell silent until something happened to
-    // set it going again.
-    const stream = new CardStream(() => this.grant());
+    // A Readable of our own rather than a PassThrough, because being read is the signal that
+    // matters: it happens whenever the consumer wants more, including the moment it comes back
+    // after the engine has restarted a session. Hanging the credit on writes and drains instead
+    // left the player waiting through exactly that gap — the room fell silent until something
+    // happened to set it going again.
+    const stream = new CardStream(() => this.onReaderWanted());
     this.stream = stream;
-    for (const chunk of this.pending) {
-      stream.feed(chunk);
+    for (const entry of this.pending) {
+      stream.feed(entry.data);
     }
     this.discardPending();
     return stream;
   }
 
+  /**
+   * Everything this card is still holding, counted in the bytes the player sent.
+   *
+   * One place, because there were two and they disagreed: the buffer is measured in what it will
+   * be handed on as, and a second of that is a different number of bytes from a second of what
+   * arrived. Reporting one against the other told the player its audio was closer to the speakers
+   * than it was.
+   */
+  private heldAsSent(): number {
+    const spec = this.spec;
+    const buffered = this.stream && !this.stream.destroyed ? this.stream.readableLength : 0;
+    if (!spec) {
+      return this.pendingBytes + buffered;
+    }
+    const asSent = frameSize(spec) / frameSize(deliveredSpecOf(spec));
+    return buffered * asSent + this.pendingBytes;
+  }
+
+  /** The consumer wants more: the buffer just got smaller, so look again at both promises. */
+  private onReaderWanted(): void {
+    this.settleDrainIfEmpty();
+    this.grant();
+  }
+
+  /**
+   * A drain is answered once what we hold has actually been read, not on arrival.
+   *
+   * Answering straight away tells a player its track finished while a second of it is still
+   * waiting to sound. The timer is only a floor under a reader that stops altogether: it is the
+   * time this audio would take to play, plus room to spare, so it can never answer early.
+   */
+  private awaitDrain(tag: number, reply: (tag: number) => void): void {
+    const held = this.heldAsSent();
+    if (held <= 0) {
+      reply(tag);
+      return;
+    }
+    const spec = this.spec;
+    const bytesPerSec = spec ? spec.rate * frameSize(spec) : 0;
+    const wait = bytesPerSec > 0 ? (held / bytesPerSec) * 1000 + 2_000 : 5_000;
+    this.draining.push({ tag, reply, timer: setTimeout(() => this.settleDrain(), wait) });
+  }
+
+  private settleDrainIfEmpty(): void {
+    if (this.draining.length > 0 && this.heldAsSent() <= 0) {
+      this.settleDrain();
+    }
+  }
+
+  private settleDrain(): void {
+    for (const waiter of this.draining.splice(0)) {
+      clearTimeout(waiter.timer);
+      waiter.reply(waiter.tag);
+    }
+  }
+
   public async close(): Promise<void> {
+    this.settleDrain();
     this.stream?.destroy();
     this.stream = null;
     this.socket?.destroy();
@@ -278,13 +514,16 @@ class CardSocket {
   }
 
   private onClient(socket: net.Socket): void {
-    // One player per card, so a second connection means the first is gone.
+    // One player per card, so a second connection means the first is gone, and nothing it was
+    // part-way through saying belongs to the one arriving now.
     this.socket?.destroy();
     this.socket = socket;
     this.granted = 0;
     this.corked = true;
+    this.carry = EMPTY;
+    this.settleDrain();
     let version = PA_PROTOCOL_VERSION;
-    let buffered = Buffer.alloc(0);
+    const frames = new FrameSplitter();
 
     const send = (payload: Buffer): void => {
       socket.write(frame(PA_CHANNEL_COMMAND, payload));
@@ -303,25 +542,29 @@ class CardSocket {
     });
 
     socket.on('data', (chunk: Buffer) => {
-      buffered = Buffer.concat([buffered, chunk]);
+      frames.push(chunk);
       for (;;) {
-        if (buffered.length < 20) {
+        let next: { channel: number; payload: Buffer } | null;
+        try {
+          next = frames.next();
+        } catch (error) {
+          // Not a frame boundary any more, so nothing after it can be trusted either.
+          this.log.warn('audio connection lost the thread', {
+            id: this.id,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          socket.destroy();
           return;
         }
-        const length = buffered.readUInt32BE(0);
-        const channel = buffered.readUInt32BE(4);
-        if (buffered.length < 20 + length) {
+        if (!next) {
           return;
         }
-        const payload = buffered.subarray(20, 20 + length);
-        buffered = buffered.subarray(20 + length);
-
-        if (channel !== PA_CHANNEL_COMMAND) {
-          this.onAudio(payload);
+        if (next.channel !== PA_CHANNEL_COMMAND) {
+          this.onAudio(next.payload);
           continue;
         }
         try {
-          const reader = new TagReader(payload);
+          const reader = new TagReader(next.payload);
           const command = reader.next() as number;
           const tag = reader.next() as number;
           version = this.onCommand(command, tag, reader, version, reply, send);
@@ -344,12 +587,10 @@ class CardSocket {
       // Nobody has taken this track's stream yet. A sound card would keep accepting audio — and so
       // do we, holding the last moment of it, because that moment is the start of the song. Older
       // than that is the previous track and is dropped.
-      const converted = this.convert(chunk);
-      this.pending.push(converted);
+      this.pending.push({ data: this.convert(chunk), sent: chunk.length });
       this.pendingBytes += chunk.length;
-      while (this.pendingBytes > this.maxPending()) {
-        const dropped = this.pending.shift();
-        this.pendingBytes -= dropped?.length ?? 0;
+      while (this.pendingBytes > this.maxPending() && this.pending.length > 1) {
+        this.pendingBytes -= this.pending.shift()?.sent ?? 0;
       }
       this.grant();
       return;
@@ -358,9 +599,22 @@ class CardSocket {
     this.grant();
   }
 
-  /** Whatever arrives, in the shape this card hands on. */
+  /**
+   * Whatever arrives, in the shape this card hands on.
+   *
+   * A write is not promised to stop on a sample boundary, and converting half a sample turns the
+   * rest of the buffer into noise, so the odd bytes wait here for the write that completes them.
+   */
   private convert(chunk: Buffer): Buffer {
-    return this.spec?.format.startsWith('f') ? floatToS24(chunk) : chunk;
+    const spec = this.spec;
+    const convert = spec ? converterFor(spec.format) : undefined;
+    if (!spec || !convert) {
+      return chunk;
+    }
+    const input = this.carry.length > 0 ? Buffer.concat([this.carry, chunk]) : chunk;
+    const whole = input.length - (input.length % sampleWidth(spec.format));
+    this.carry = whole === input.length ? EMPTY : Buffer.from(input.subarray(whole));
+    return whole === 0 ? EMPTY : convert(input.subarray(0, whole));
   }
 
   /** At most a second of audio may wait for a reader; beyond that it is not a start any more. */
@@ -378,12 +632,7 @@ class CardSocket {
     }
     const bytesPerSec = spec.rate * frameSize(spec);
     const target = Math.round(bytesPerSec * TARGET_BUFFER_SEC);
-    // Counted in what the player sends, not in what we hand on: those differ once float is being
-    // converted, and credit is a promise made to the player in its own units.
-    const asSent = frameSize(spec) / frameSize(deliveredSpecOf(spec));
-    const held =
-      (this.stream && !this.stream.destroyed ? this.stream.readableLength * asSent : 0) +
-      this.pendingBytes;
+    const held = this.heldAsSent();
     // One bound only: how much audio we are willing to be holding. Pacing by wall clock as well
     // was tried and made things worse — a session restart reads nothing for a moment, the clock
     // keeps running, and what follows is a burst and then a starved reader, which is a stutter.
@@ -422,7 +671,7 @@ class CardSocket {
         return version;
       }
       case PA.GET_SERVER_INFO: {
-        const spec = this.spec ?? { format: 'f32le', channels: 2, rate: 44100 };
+        const spec = this.spec ?? DEFAULT_SPEC;
         const body = new TagWriter()
           .str('sonn')
           .str('15.0')
@@ -462,6 +711,20 @@ class CardSocket {
         const prebuf = reader.next() as number;
         reader.next(); // minreq, ours to decide
 
+        if (!canCarry(spec)) {
+          // Saying no is the kind thing. libpulse tells the player its format was refused and it
+          // can ask for another; accepting would mean handing the engine bytes described as
+          // something they are not, which is heard as noise and looked for everywhere but here.
+          this.log.warn('a player asked to send audio this card cannot carry', {
+            id: this.id,
+            format: spec.format,
+            rate: spec.rate,
+            channels: spec.channels,
+          });
+          send(new TagWriter().u32(PA.ERROR).u32(tag).u32(3).build());
+          return version;
+        }
+
         this.spec = spec;
         for (const waiter of this.specWaiters.splice(0)) {
           waiter(spec);
@@ -469,9 +732,17 @@ class CardSocket {
         this.corked = corked;
         this.granted = 0;
         this.written = 0;
+        this.carry = EMPTY;
+        this.settleDrain();
         const bytesPerSec = spec.rate * frameSize(spec);
         const tlength = Math.round(bytesPerSec * TARGET_BUFFER_SEC);
         const minreq = Math.round(bytesPerSec * MIN_REQUEST_SEC);
+        this.bufferAttr = {
+          maxlength: maxlength === 0xffffffff ? 4 << 20 : maxlength,
+          tlength,
+          prebuf: prebuf === 0xffffffff ? 0 : prebuf,
+          minreq,
+        };
         this.log.info('player opened a stream', {
           id: this.id,
           format: spec.format,
@@ -486,10 +757,10 @@ class CardSocket {
         const body = new TagWriter().u32(this.streamIndex).u32(this.streamIndex).u32(initial);
         if (version >= 9) {
           body
-            .u32(maxlength === 0xffffffff ? 4 << 20 : maxlength)
-            .u32(tlength)
-            .u32(prebuf === 0xffffffff ? 0 : prebuf)
-            .u32(minreq);
+            .u32(this.bufferAttr.maxlength)
+            .u32(this.bufferAttr.tlength)
+            .u32(this.bufferAttr.prebuf)
+            .u32(this.bufferAttr.minreq);
         }
         if (version >= 12) {
           body.sampleSpec(spec).channelMap(spec.channels).u32(0).str(SINK_NAME).bool(false);
@@ -514,7 +785,7 @@ class CardSocket {
       case PA.GET_PLAYBACK_LATENCY: {
         const spec = this.spec ?? DEFAULT_SPEC;
         const bytesPerSec = spec.rate * frameSize(spec);
-        const held = this.stream && !this.stream.destroyed ? this.stream.readableLength : 0;
+        const held = this.heldAsSent();
         // What we are still holding is exactly how far behind the sound is; saying so is what keeps
         // the player's own position honest.
         const body = new TagWriter()
@@ -532,13 +803,74 @@ class CardSocket {
         return version;
       }
       case PA.FLUSH_PLAYBACK_STREAM: {
+        // A flush means this audio never sounded. Keeping it would have a player that seeked hear
+        // the second it had already sent before the jump, which is the one thing a seek must not do.
+        this.discardPending();
+        this.stream?.discard();
+        this.carry = EMPTY;
         this.granted = 0;
         reply(tag);
+        this.settleDrainIfEmpty();
+        this.grant();
         return version;
       }
       case PA.DELETE_PLAYBACK_STREAM: {
         this.corked = true;
         this.granted = 0;
+        this.carry = EMPTY;
+        // The next stream may well open in another format, and answering with this one's would
+        // have the engine set up for audio that never arrives.
+        this.spec = null;
+        this.settleDrain();
+        reply(tag);
+        return version;
+      }
+      case PA.DRAIN_PLAYBACK_STREAM: {
+        this.awaitDrain(tag, reply);
+        return version;
+      }
+      case PA.SET_STREAM_BUFFER_ATTR: {
+        // The answer has to carry the attributes back. A bare acknowledgement is read as a broken
+        // reply, and that costs the whole connection rather than this one request. What a client
+        // asks for is noted and not taken: the buffer is the card's, the same as on real hardware.
+        const body = new TagWriter()
+          .u32(this.bufferAttr.maxlength)
+          .u32(this.bufferAttr.tlength)
+          .u32(this.bufferAttr.prebuf)
+          .u32(this.bufferAttr.minreq);
+        if (version >= 13) {
+          body.usec(Math.round(TARGET_BUFFER_SEC * 1e6));
+        }
+        reply(tag, body);
+        return version;
+      }
+      case PA.GET_SINK_INPUT_INFO_LIST: {
+        // A list of one while a player is playing, and empty otherwise — an empty tagstruct is
+        // how "nothing here" is said, and is not the same as refusing the question.
+        reply(tag, this.spec ? this.sinkInputInfo(version) : new TagWriter());
+        return version;
+      }
+      case PA.GET_SINK_INPUT_INFO: {
+        if (!this.spec) {
+          // 5 = no such entity. Nothing is playing, so there is nothing to describe.
+          send(new TagWriter().u32(PA.ERROR).u32(tag).u32(5).build());
+          return version;
+        }
+        reply(tag, this.sinkInputInfo(version));
+        return version;
+      }
+      case PA.SET_SINK_INPUT_VOLUME: {
+        reader.next(); // sink input index; there is only one
+        const volumes = reader.next();
+        if (Array.isArray(volumes)) {
+          this.volume = volumes as number[];
+        }
+        reply(tag);
+        return version;
+      }
+      case PA.SET_SINK_INPUT_MUTE: {
+        reader.next(); // sink input index
+        this.muted = reader.next() === true;
         reply(tag);
         return version;
       }
@@ -546,12 +878,8 @@ class CardSocket {
         reply(tag, new TagWriter().u32(0).u32(0).u32(0).u32(0).u32(0));
         return version;
       }
-      case PA.DRAIN_PLAYBACK_STREAM:
       case PA.TRIGGER_PLAYBACK_STREAM:
       case PA.UPDATE_PLAYBACK_STREAM_PROPLIST:
-      case PA.SET_STREAM_BUFFER_ATTR:
-      case PA.SET_SINK_INPUT_VOLUME:
-      case PA.SET_SINK_INPUT_MUTE:
       case PA.SUBSCRIBE: {
         reply(tag);
         return version;
@@ -595,6 +923,42 @@ class CardSocket {
     }
     return body;
   }
+
+  /** The player's own stream, as it would appear on a real server. */
+  private sinkInputInfo(version: number): TagWriter {
+    const spec = this.spec ?? DEFAULT_SPEC;
+    const bytesPerSec = spec.rate * frameSize(spec);
+    const body = new TagWriter()
+      .u32(this.streamIndex)
+      .str(SINK_DESCRIPTION)
+      .u32(0xffffffff)
+      .u32(1)
+      .u32(0)
+      .sampleSpec(spec)
+      .channelMap(spec.channels)
+      .cvolumeOf(this.volumeFor(spec.channels))
+      .usec(bytesPerSec > 0 ? (this.heldAsSent() / bytesPerSec) * 1e6 : 0)
+      .usec(0)
+      // Nothing is resampled here; the engine is handed the rate the player chose.
+      .str('copy')
+      .str('sonn');
+    if (version >= 11) {
+      body.bool(this.muted);
+    }
+    if (version >= 13) {
+      body.proplist({ 'media.name': SINK_DESCRIPTION });
+    }
+    return body;
+  }
+
+  /** Whatever the player last set, padded to the channels it is playing in. */
+  private volumeFor(channels: number): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < channels; i += 1) {
+      out.push(this.volume[i] ?? this.volume[0] ?? 0x10000);
+    }
+    return out;
+  }
 }
 
 /**
@@ -629,7 +993,21 @@ class CardStream extends Readable {
 
   /** Hand over audio as it arrives. Backpressure is expressed by granting, not by refusing. */
   public feed(chunk: Buffer): void {
-    this.push(chunk);
+    if (chunk.length > 0) {
+      this.push(chunk);
+    }
+  }
+
+  /**
+   * Throw away what is buffered, for a flush.
+   *
+   * Reading it out is the only way to take audio back off a stream, and it is the honest one:
+   * whatever the engine has already been handed has gone, and this is the rest of it.
+   */
+  public discard(): void {
+    while (super.read() !== null) {
+      /* the player has said this audio never happened */
+    }
   }
 }
 
@@ -637,3 +1015,4 @@ const SINK_NAME = 'sonn';
 /** What this card says it is before a player has said what it wants. */
 const DEFAULT_SPEC: SampleSpec = { format: 's24le', channels: 2, rate: 44100 };
 const SINK_DESCRIPTION = 'Sonn';
+const EMPTY = Buffer.alloc(0);

@@ -151,7 +151,7 @@ function queueTrackOf(
 export class SoloistPlaybackService {
   private readonly log = createLogger('Input', 'Soloist');
   /** The sound card Soloist plays into: no daemon, the audio lands in this process. */
-  private readonly audio = new PulseSoundCard();
+  private readonly audio = new PulseSoundCard('soloist');
   private readonly runners = new Map<number, ZoneRunner>();
   private readonly starting = new Map<number, Promise<ZoneRunner | null>>();
   /** Track lengths as Soloist reported them, so a position update can carry one. */

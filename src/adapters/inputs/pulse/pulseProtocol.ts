@@ -28,6 +28,7 @@ export const PA = {
   GET_SINK_INFO_LIST: 22,
   GET_SOURCE_INFO_LIST: 24,
   GET_SINK_INPUT_INFO: 29,
+  GET_SINK_INPUT_INFO_LIST: 30,
   SUBSCRIBE: 35,
   SET_SINK_INPUT_VOLUME: 37,
   SET_SINK_INPUT_MUTE: 39,
@@ -57,6 +58,8 @@ export const PA_CHANNEL_COMMAND = 0xffffffff;
 /** Sample formats, by their position in `pa_sample_format`. */
 const SAMPLE_FORMATS: Record<number, string> = {
   0: 'u8',
+  1: 'alaw',
+  2: 'ulaw',
   3: 's16le',
   4: 's16be',
   5: 'f32le',
@@ -71,10 +74,128 @@ const SAMPLE_FORMATS: Record<number, string> = {
 
 export type SampleSpec = { format: string; channels: number; rate: number };
 
+/** What a sample format reads as when this card has never heard of it. */
+export const UNKNOWN_FORMAT = 'invalid';
+
+/**
+ * Bytes one sample of each format occupies.
+ *
+ * Spelled out rather than read off the name. Guessing from the digits in the string gets `u8`
+ * wrong, and a width that is wrong by a factor of four is a credit that is wrong by a factor of
+ * four — the player is told it may send an amount of audio nobody asked for.
+ */
+const SAMPLE_WIDTHS: Record<string, number> = {
+  u8: 1,
+  alaw: 1,
+  ulaw: 1,
+  s16le: 2,
+  s16be: 2,
+  s24le: 3,
+  s24be: 3,
+  s24_32le: 4,
+  s24_32be: 4,
+  s32le: 4,
+  s32be: 4,
+  f32le: 4,
+  f32be: 4,
+};
+
+/** Bytes one sample of this format occupies. */
+export function sampleWidth(format: string): number {
+  return SAMPLE_WIDTHS[format] ?? 4;
+}
+
 /** Bytes one frame of this spec occupies, which is how every credit here is counted. */
 export function frameSize(spec: SampleSpec): number {
-  const width = spec.format.includes('16') ? 2 : spec.format.includes('24le') || spec.format.includes('24be') ? 3 : 4;
-  return width * spec.channels;
+  return sampleWidth(spec.format) * spec.channels;
+}
+
+/**
+ * The largest frame this card will assemble.
+ *
+ * A length is four bytes off a socket and nothing else vouches for it. Without a ceiling, one bad
+ * number has this process waiting for four gigabytes that will never arrive, holding everything
+ * that has arrived meanwhile. Far above any real write, so no player ever meets it.
+ */
+export const MAX_FRAME_BYTES = 8 * 1024 * 1024;
+
+/**
+ * The socket's bytes, back into the frames they were sent as.
+ *
+ * Held as the list of reads it arrived in rather than one growing buffer. Joining the whole backlog
+ * on every socket read copies what was already copied, once per read, and this is the path every
+ * sample of every track travels.
+ */
+export class FrameSplitter {
+  private chunks: Buffer[] = [];
+  private total = 0;
+
+  public push(chunk: Buffer): void {
+    if (chunk.length === 0) {
+      return;
+    }
+    this.chunks.push(chunk);
+    this.total += chunk.length;
+  }
+
+  /** The next whole frame, or null while it is still arriving. */
+  public next(): { channel: number; payload: Buffer } | null {
+    const header = this.peek(20);
+    if (!header) {
+      return null;
+    }
+    const length = header.readUInt32BE(0);
+    if (length > MAX_FRAME_BYTES) {
+      throw new Error(`frame announced ${length} bytes, past anything a player sends`);
+    }
+    if (this.total < 20 + length) {
+      return null;
+    }
+    const channel = header.readUInt32BE(4);
+    this.take(20);
+    return { channel, payload: this.take(length) };
+  }
+
+  /** The first `n` bytes, joining only as far as it takes to see them. */
+  private peek(n: number): Buffer | null {
+    if (this.total < n) {
+      return null;
+    }
+    const head = this.chunks[0]!;
+    if (head.length >= n) {
+      return head.subarray(0, n);
+    }
+    const parts: Buffer[] = [];
+    let have = 0;
+    for (const chunk of this.chunks) {
+      parts.push(chunk);
+      have += chunk.length;
+      if (have >= n) {
+        break;
+      }
+    }
+    return Buffer.concat(parts).subarray(0, n);
+  }
+
+  /** Remove and return the first `n` bytes; a frame inside one read costs no copy at all. */
+  private take(n: number): Buffer {
+    const parts: Buffer[] = [];
+    let need = n;
+    while (need > 0) {
+      const head = this.chunks[0]!;
+      if (head.length <= need) {
+        parts.push(head);
+        need -= head.length;
+        this.chunks.shift();
+      } else {
+        parts.push(head.subarray(0, need));
+        this.chunks[0] = head.subarray(need);
+        need = 0;
+      }
+    }
+    this.total -= n;
+    return parts.length === 1 ? parts[0]! : Buffer.concat(parts);
+  }
 }
 
 /** Builds a tagstruct. Every method appends one value and returns `this`. */
@@ -162,6 +283,15 @@ export class TagWriter {
     for (let i = 0; i < channels; i += 1) {
       b.writeUInt32BE(volume, 2 + 4 * i);
     }
+    return this.raw(b);
+  }
+
+  /** The same, when the channels are not all at one level. */
+  public cvolumeOf(volumes: number[]): this {
+    const b = Buffer.alloc(2 + 4 * volumes.length);
+    b.write('v');
+    b.writeUInt8(volumes.length, 1);
+    volumes.forEach((volume, i) => b.writeUInt32BE(volume >>> 0, 2 + 4 * i));
     return this.raw(b);
   }
 
@@ -254,8 +384,11 @@ export class TagReader {
         return value;
       }
       case 'a': {
+        // A format nobody here knows is named as such rather than guessed at. Reading it as float
+        // would hand the engine one byte pattern described as another, which is noise at full
+        // scale — a stream is far better refused than accepted and mangled.
         const spec: SampleSpec = {
-          format: SAMPLE_FORMATS[this.buffer[this.offset]!] ?? 'f32le',
+          format: SAMPLE_FORMATS[this.buffer[this.offset]!] ?? UNKNOWN_FORMAT,
           channels: this.buffer[this.offset + 1]!,
           rate: this.buffer.readUInt32BE(this.offset + 2),
         };
@@ -268,9 +401,15 @@ export class TagReader {
         return count;
       }
       case 'v': {
+        // The levels themselves, not just how many: a client that sets a volume wants to read back
+        // what it set, and skipping past them leaves nothing to answer with.
         const count = this.buffer[this.offset]!;
+        const volumes: number[] = [];
+        for (let i = 0; i < count; i += 1) {
+          volumes.push(this.buffer.readUInt32BE(this.offset + 1 + 4 * i));
+        }
         this.offset += 1 + 4 * count;
-        return count;
+        return volumes;
       }
       case 'V': {
         const value = this.buffer.readUInt32BE(this.offset);
