@@ -109,6 +109,23 @@ import { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import { ServerHeartbeat } from '@/adapters/loxone/ws/serverHeartbeat';
 import { LoxoneConfigService } from '@/adapters/loxone/services/loxoneConfigService';
 import { stopWithTimeout } from '@/runtime/stopWithTimeout';
+import { startWithTimeout } from '@/runtime/startWithTimeout';
+
+/**
+ * How long a best-effort subsystem may take to start before startup carries on without it.
+ *
+ * Generous next to what these actually do — binding a socket and registering a device are
+ * millisecond work even on a busy Pi — because the bound exists to catch a start that never
+ * returns at all, not to police a slow one.
+ */
+const OPTIONAL_START_TIMEOUT_MS = 10_000;
+
+/**
+ * Loxone gets its own, much larger bound: its first start generates a 2048-bit RSA key in
+ * pure JS (see loadOrGenerateSelfSignedTls), which is tens of seconds of honest work on a
+ * Pi. Timing that out would cost a Miniserver its TLS listener to fix a hang it never had.
+ */
+const LOXONE_START_TIMEOUT_MS = 120_000;
 
 /**
  * Descriptor for services that need graceful shutdown coordination.
@@ -830,13 +847,18 @@ export function createRuntime(): Runtime {
       snapcastCore,
     });
 
+    // Not time-bounded, on purpose: these two are the server. A server that cannot open
+    // its own sockets has nothing to degrade to, and the error is the right answer.
     await httpService.start();
     await networkService.start();
     // Start the shared SSDP socket, then let the MediaServer register its device.
     // Per-zone renderer devices register via dlnaInputService.syncZones (driven by
     // zoneManager). All share this one advertiser / UDP :1900 socket.
-    await ssdpAdvertiser.start();
-    await mediaServer.start();
+    //
+    // Bounded from here on: everything below is a subsystem the server plays music
+    // without, and none of them is worth never reporting ready over.
+    await startWithTimeout('ssdp', () => ssdpAdvertiser.start(), OPTIONAL_START_TIMEOUT_MS);
+    await startWithTimeout('media-server', () => mediaServer!.start(), OPTIONAL_START_TIMEOUT_MS);
     // Deliberately not awaited into the startup path: an unreachable broker must not
     // hold up a server that plays music perfectly well without one. It retries itself.
     void mqttPublisher.start();
@@ -882,7 +904,7 @@ export function createRuntime(): Runtime {
     // Bring the Loxone subsystem up if it's connected. Same path a runtime connect
     // uses; persist=false because the flag is already set. A plain server skips it.
     if (loxoneEnabled) {
-      await enableLoxone(false);
+      await startWithTimeout('loxone', () => enableLoxone(false), LOXONE_START_TIMEOUT_MS);
     }
 
     // Not just a log line: this is what /ready and /health answer from, so a supervisor

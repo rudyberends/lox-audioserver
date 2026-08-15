@@ -10,6 +10,7 @@ import { test, tests, type TestFn } from './testHarness';
 import './architecture/importBoundaries.test';
 import './sessionKey.test';
 import './buildChannel.test';
+import './startWithTimeout.test';
 import './loxoneServiceFolders.test';
 import './serviceNativeIdentity.test';
 import './trackIdentity.test';
