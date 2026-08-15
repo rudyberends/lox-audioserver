@@ -1,8 +1,11 @@
+import type { StreamProvider } from '@/adapters/content/StreamProvider';
 import { createLogger } from '@/shared/logging/logger';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import type { TidalStreamService } from '@/adapters/content/providers/tidal/tidalStreamService';
 
-export class TidalStreamResolver {
+export class TidalStreamResolver implements StreamProvider {
+  public readonly provider = 'tidal';
+
   private readonly log = createLogger('Audio', 'TidalStream');
 
   constructor(private readonly streamService: TidalStreamService) {}
@@ -16,7 +19,7 @@ export class TidalStreamResolver {
     }
   }
 
-  public isTidalProvider(providerId: string): boolean {
+  public isProvider(providerId: string): boolean {
     return this.streamService.isTidalProvider(providerId);
   }
 

@@ -1,8 +1,11 @@
+import type { StreamProvider } from '@/adapters/content/StreamProvider';
 import { createLogger } from '@/shared/logging/logger';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import type { AppleMusicStreamService } from '@/adapters/content/providers/applemusic/appleMusicStreamService';
 
-export class AppleMusicStreamResolver {
+export class AppleMusicStreamResolver implements StreamProvider {
+  public readonly provider = 'applemusic';
+
   private readonly log = createLogger('Audio', 'AppleMusicStream');
 
   constructor(private readonly streamService: AppleMusicStreamService) {}
@@ -16,7 +19,7 @@ export class AppleMusicStreamResolver {
     }
   }
 
-  public isAppleMusicProvider(providerId: string): boolean {
+  public isProvider(providerId: string): boolean {
     return this.streamService.isAppleMusicProvider(providerId);
   }
 

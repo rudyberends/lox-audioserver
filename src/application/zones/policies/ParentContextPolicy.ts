@@ -8,11 +8,18 @@ export type ParentContext = {
 };
 
 type ProviderChecks = {
-  isAppleMusicProvider?: (providerId: string) => boolean;
-  isDeezerProvider?: (providerId: string) => boolean;
-  isTidalProvider?: (providerId: string) => boolean;
-  isSoundcloudProvider?: (providerId: string) => boolean;
+  providerForAudiopath?: (audiopath: string) => string | null;
 };
+
+/**
+ * Parents whose path is normalised rather than decoded.
+ *
+ * YT Music and YouTube are deliberately absent — they were absent when this was four
+ * separate `isXParent` checks too, and each site that asks "is this one of the streaming
+ * services" still names a slightly different set. Kept as-is here; unifying those sets is a
+ * behaviour decision, not a mechanical one.
+ */
+const NORMALIZED_PARENT_PROVIDERS = ['applemusic', 'deezer', 'tidal', 'soundcloud'];
 
 export function parseParentContext(raw: string): ParentContext | null;
 export function parseParentContext(raw: string, providers?: ProviderChecks): ParentContext | null;
@@ -36,21 +43,14 @@ export function parseParentContext(raw: string, providers?: ProviderChecks): Par
   const startIndex =
     indexPart && /^\d+$/.test(indexPart) ? Number(indexPart) : undefined;
 
-  const parentProvider = parentRaw.split(':')[0] ?? '';
-  const isAppleMusicParent =
-    Boolean(parentProvider && providers?.isAppleMusicProvider?.(parentProvider)) ||
-    /applemusic/i.test(parentRaw);
-  const isDeezerParent =
-    Boolean(parentProvider && providers?.isDeezerProvider?.(parentProvider)) ||
-    /deezer/i.test(parentRaw);
-  const isTidalParent =
-    Boolean(parentProvider && providers?.isTidalProvider?.(parentProvider)) ||
-    /tidal/i.test(parentRaw);
-  const isSoundcloudParent =
-    Boolean(parentProvider && providers?.isSoundcloudProvider?.(parentProvider)) ||
-    /soundcloud/i.test(parentRaw);
+  const parentProvider =
+    providers?.providerForAudiopath?.(parentRaw) ??
+    NORMALIZED_PARENT_PROVIDERS.find((provider) => parentRaw.toLowerCase().includes(provider)) ??
+    null;
+  const isServiceParent =
+    parentProvider !== null && NORMALIZED_PARENT_PROVIDERS.includes(parentProvider);
   return {
-    parent: (isAppleMusicParent || isDeezerParent || isTidalParent || isSoundcloudParent)
+    parent: isServiceParent
       ? normalizeSpotifyAudiopath(parentRaw)
       : decodeAudiopath(parentRaw),
     // Keep the original provider wrapper (e.g., spotify@bridge:track:...) for the item so routing stays intact.

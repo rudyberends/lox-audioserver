@@ -1,8 +1,11 @@
+import type { StreamProvider } from '@/adapters/content/StreamProvider';
 import { createLogger } from '@/shared/logging/logger';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import type { SoundCloudStreamService } from '@/adapters/content/providers/soundcloud/soundcloudStreamService';
 
-export class SoundCloudStreamResolver {
+export class SoundCloudStreamResolver implements StreamProvider {
+  public readonly provider = 'soundcloud';
+
   private readonly log = createLogger('Audio', 'SoundCloudStream');
 
   constructor(private readonly streamService: SoundCloudStreamService) {}
@@ -16,7 +19,7 @@ export class SoundCloudStreamResolver {
     }
   }
 
-  public isSoundcloudProvider(providerId: string): boolean {
+  public isProvider(providerId: string): boolean {
     return this.streamService.isSoundcloudProvider(providerId);
   }
 

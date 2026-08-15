@@ -430,14 +430,15 @@ export function createRuntime(): Runtime {
     };
   });
 
-  const contentAdapter = createContentAdapter(contentManager, {
-    appleMusic: appleMusicStreamResolver,
-    deezer: deezerStreamResolver,
-    tidal: tidalStreamResolver,
-    ytmusic: ytmusicStreamResolver,
-    youtube: youtubeStreamResolver,
-    soundcloud: soundcloudStreamResolver,
-  });
+  // Order decides which service claims an ambiguous audiopath first.
+  const contentAdapter = createContentAdapter(contentManager, [
+    appleMusicStreamResolver,
+    deezerStreamResolver,
+    tidalStreamResolver,
+    ytmusicStreamResolver,
+    youtubeStreamResolver,
+    soundcloudStreamResolver,
+  ]);
   const groupManager = createGroupManager({ notifier: ports.notifier, airplayGroup: airplayGroupController, configPort });
   const mixedGroupController = createMixedGroupController(configPort, audioManager);
   const favoritesManager = createFavoritesManager({ notifier: ports.notifier, contentPort: contentAdapter });

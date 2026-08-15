@@ -15,6 +15,7 @@ import {
   YoutubeApiClient,
   type YoutubeVideoEntry,
 } from '@/adapters/content/providers/youtube/youtubeApiClient';
+import type { ContentProvider, ProviderSearchResult } from '@/adapters/content/ContentProvider';
 
 const enum FileType {
   Folder = 1,
@@ -24,10 +25,6 @@ const enum FileType {
 
 /** The leading segments a folder id may open with; anything else is an account slug. */
 const FOLDER_KINDS = ['track', 'playlist', 'channel', 'genre', 'search'] as const;
-
-type SearchResult = {
-  tracks?: ContentFolderItem[];
-};
 
 interface YoutubeProviderOptions {
   providerId: string;
@@ -49,7 +46,7 @@ type FolderKind =
   | { type: 'track'; id: string }
   | { type: 'unknown'; raw: string };
 
-export class YoutubeProvider {
+export class YoutubeProvider implements ContentProvider {
   public readonly providerId: string;
   private readonly audiopathPrefix: string;
   private readonly log = createLogger('Content', 'YouTube');
@@ -224,7 +221,7 @@ export class YoutubeProvider {
     query: string,
     limits: Record<string, number>,
     maxLimit: number,
-  ): Promise<{ result: SearchResult; providerId: string; user: string }> {
+  ): Promise<ProviderSearchResult> {
     const limit = Math.min(
       Math.max(...(Object.values(limits).length ? Object.values(limits) : [maxLimit]), DEFAULT_MIN_SEARCH_LIMIT),
       maxLimit,

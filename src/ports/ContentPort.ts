@@ -13,18 +13,10 @@ export interface ContentPort {
   getBridgeRegistry(): BridgeRegistry;
   resolveMetadata(audiopath: string): Promise<ContentItemMetadata | null>;
   resolvePlaybackSource(args: PlaybackSourceResolveArgs): Promise<StreamResolution>;
-  configureAppleMusic(): void;
-  configureDeezer(): void;
-  configureTidal(): void;
-  configureYtMusic(): void;
-  configureYoutube(): void;
-  configureSoundcloud(): void;
-  isAppleMusicProvider(providerId: string): boolean;
-  isDeezerProvider(providerId: string): boolean;
-  isTidalProvider(providerId: string): boolean;
-  isYtMusicProvider(providerId: string): boolean;
-  isYoutubeProvider(providerId: string): boolean;
-  isSoundcloudProvider(providerId: string): boolean;
+  /** Re-read every content service's configuration (accounts, tokens, cookies). */
+  configureProviders(): void;
+  /** Which service owns this audiopath — `applemusic`, `ytmusic`, … — or null. */
+  providerForAudiopath(audiopath: string | null | undefined): string | null;
   getMediaFolder(folderId: string, offset: number, limit: number): Promise<ContentFolder | null>;
   /** Describe a container by id: a folder never names itself when browsed. */
   resolveFolder(service: string, user: string, folderId: string): Promise<ContentFolderItem | null>;

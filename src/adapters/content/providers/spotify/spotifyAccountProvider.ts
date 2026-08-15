@@ -6,6 +6,8 @@ import type {
   ContentServiceAccount,
   PlaylistEntry,
 } from '@/ports/ContentTypes';
+import type { ContentProvider, ProviderSearchResult } from '@/adapters/content/ContentProvider';
+import { searchSpotifyAccount } from '@/adapters/content/providers/spotify/spotifySearch';
 import { createHash } from 'node:crypto';
 import { createLogger, type ComponentLogger } from '@/shared/logging/logger';
 import { safeReadText } from '@/shared/bestEffort';
@@ -159,7 +161,7 @@ interface SpotifyApiResult<T> {
 /**
  * Wraps Spotify API operations for a single configured account.
  */
-export class SpotifyAccountProvider {
+export class SpotifyAccountProvider implements ContentProvider {
   public readonly providerId: string;
   /** Service-native audiopath prefix; see SpotifyAccountProviderOptions. */
   protected readonly audiopathPrefix: string;
@@ -1097,6 +1099,20 @@ export class SpotifyAccountProvider {
     const items = Array.isArray(data?.items) ? data.items : [];
     const mapped = items.map((episode) => this.mapEpisode(episode));
     return { items: mapped, total: data?.total ?? mapped.length };
+  }
+
+  /**
+   * Search this account — pathfinder where it reaches, the Web API for the rest.
+   *
+   * The same entry point every other provider has. Which of the two answered is Spotify's
+   * business, so the registry no longer needs a branch for it.
+   */
+  public async search(
+    query: string,
+    limits: Record<string, number>,
+    maxLimit: number,
+  ): Promise<ProviderSearchResult> {
+    return searchSpotifyAccount(this, query, limits, maxLimit);
   }
 
   /**

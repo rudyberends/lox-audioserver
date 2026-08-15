@@ -8,12 +8,8 @@ import type { ConfigPort } from '@/ports/ConfigPort';
 
 export type ZoneAudioHelpers = {
   isSpotifyAudiopath: (audiopath: string | null | undefined) => boolean;
-  isAppleMusicAudiopath: (audiopath: string | null | undefined) => boolean;
-  isDeezerAudiopath: (audiopath: string | null | undefined) => boolean;
-  isTidalAudiopath: (audiopath: string | null | undefined) => boolean;
-  isYtMusicAudiopath: (audiopath: string | null | undefined) => boolean;
-  isYoutubeAudiopath: (audiopath: string | null | undefined) => boolean;
-  isSoundcloudAudiopath: (audiopath: string | null | undefined) => boolean;
+  /** Which streaming service owns this audiopath — `applemusic`, `ytmusic`, … — or null. */
+  providerForAudiopath: (audiopath: string | null | undefined) => string | null;
   isMusicAssistantAudiopath: (audiopath: string | null | undefined) => boolean;
   resolveBridgeProvider: (rawAudiopath: string | undefined | null) => string | null;
   getInputAudioType: (ctx: ZoneContext, audiopathOverride?: string) => number | null;
@@ -39,12 +35,7 @@ export function createZoneAudioHelpers(
 ): ZoneAudioHelpers {
   return {
     isSpotifyAudiopath: (audiopath) => isSpotifyAudiopath(audiopath, contentPort),
-    isAppleMusicAudiopath: (audiopath) => isAppleMusicAudiopath(audiopath, contentPort),
-    isDeezerAudiopath: (audiopath) => isDeezerAudiopath(audiopath, contentPort),
-    isTidalAudiopath: (audiopath) => isTidalAudiopath(audiopath, contentPort),
-    isYtMusicAudiopath: (audiopath) => isYtMusicAudiopath(audiopath, contentPort),
-    isYoutubeAudiopath: (audiopath) => isYoutubeAudiopath(audiopath, contentPort),
-    isSoundcloudAudiopath: (audiopath) => isSoundcloudAudiopath(audiopath, contentPort),
+    providerForAudiopath: (audiopath) => contentPort.providerForAudiopath(audiopath),
     isMusicAssistantAudiopath,
     resolveBridgeProvider: (rawAudiopath) => resolveBridgeProvider(rawAudiopath, configPort),
     getInputAudioType,
@@ -73,154 +64,11 @@ export function isSpotifyAudiopath(
   if (lower.includes('musicassistant')) {
     return false;
   }
-  if (isAppleMusicAudiopath(decoded, contentPort)) {
-    return false;
-  }
-  if (isDeezerAudiopath(decoded, contentPort)) {
-    return false;
-  }
-  if (isTidalAudiopath(decoded, contentPort)) {
-    return false;
-  }
-  if (isYtMusicAudiopath(decoded, contentPort)) {
-    return false;
-  }
-  if (isYoutubeAudiopath(decoded, contentPort)) {
-    return false;
-  }
-  if (isSoundcloudAudiopath(decoded, contentPort)) {
+  // Another service owning the path is what disqualifies it, whichever service that is.
+  if (contentPort.providerForAudiopath(decoded)) {
     return false;
   }
   return lower.includes('spotify:') || lower.startsWith('spotify@');
-}
-
-export function isAppleMusicAudiopath(
-  audiopath: string | null | undefined,
-  contentPort: ContentPort,
-): boolean {
-  if (!audiopath) {
-    return false;
-  }
-  const raw = String(audiopath);
-  const rawProvider = raw.split(':')[0] ?? '';
-  if (rawProvider && contentPort.isAppleMusicProvider(rawProvider)) {
-    return true;
-  }
-  if (raw.toLowerCase().includes('applemusic')) {
-    return true;
-  }
-  const decoded = decodeAudiopath(raw) || raw;
-  const providerSegment = decoded.split(':')[0] ?? '';
-  if (providerSegment && contentPort.isAppleMusicProvider(providerSegment)) {
-    return true;
-  }
-  return decoded.toLowerCase().includes('applemusic');
-}
-
-export function isDeezerAudiopath(
-  audiopath: string | null | undefined,
-  contentPort: ContentPort,
-): boolean {
-  if (!audiopath) {
-    return false;
-  }
-  const raw = String(audiopath);
-  const rawProvider = raw.split(':')[0] ?? '';
-  if (rawProvider && contentPort.isDeezerProvider(rawProvider)) {
-    return true;
-  }
-  if (raw.toLowerCase().includes('deezer')) {
-    return true;
-  }
-  const decoded = decodeAudiopath(raw) || raw;
-  const providerSegment = decoded.split(':')[0] ?? '';
-  if (providerSegment && contentPort.isDeezerProvider(providerSegment)) {
-    return true;
-  }
-  return decoded.toLowerCase().includes('deezer');
-}
-
-export function isTidalAudiopath(
-  audiopath: string | null | undefined,
-  contentPort: ContentPort,
-): boolean {
-  if (!audiopath) {
-    return false;
-  }
-  const raw = String(audiopath);
-  const rawProvider = raw.split(':')[0] ?? '';
-  if (rawProvider && contentPort.isTidalProvider(rawProvider)) {
-    return true;
-  }
-  if (raw.toLowerCase().includes('tidal')) {
-    return true;
-  }
-  const decoded = decodeAudiopath(raw) || raw;
-  const providerSegment = decoded.split(':')[0] ?? '';
-  if (providerSegment && contentPort.isTidalProvider(providerSegment)) {
-    return true;
-  }
-  return decoded.toLowerCase().includes('tidal');
-}
-
-export function isYtMusicAudiopath(
-  audiopath: string | null | undefined,
-  contentPort: ContentPort,
-): boolean {
-  if (!audiopath) {
-    return false;
-  }
-  const raw = String(audiopath);
-  const rawProvider = raw.split(':')[0] ?? '';
-  if (rawProvider && contentPort.isYtMusicProvider(rawProvider)) {
-    return true;
-  }
-  if (raw.toLowerCase().includes('ytmusic') || raw.toLowerCase().includes('youtube music')) {
-    return true;
-  }
-  const decoded = decodeAudiopath(raw) || raw;
-  const providerSegment = decoded.split(':')[0] ?? '';
-  if (providerSegment && contentPort.isYtMusicProvider(providerSegment)) {
-    return true;
-  }
-  return decoded.toLowerCase().includes('ytmusic') || decoded.toLowerCase().includes('youtube music');
-}
-
-export function isYoutubeAudiopath(
-  audiopath: string | null | undefined,
-  contentPort: ContentPort,
-): boolean {
-  if (!audiopath) return false;
-  const raw = String(audiopath);
-  const rawProvider = raw.split(':')[0] ?? '';
-  if (rawProvider && contentPort.isYoutubeProvider(rawProvider)) return true;
-  const decoded = decodeAudiopath(raw) || raw;
-  const providerSegment = decoded.split(':')[0] ?? '';
-  if (providerSegment && contentPort.isYoutubeProvider(providerSegment)) return true;
-  return false;
-}
-
-export function isSoundcloudAudiopath(
-  audiopath: string | null | undefined,
-  contentPort: ContentPort,
-): boolean {
-  if (!audiopath) {
-    return false;
-  }
-  const raw = String(audiopath);
-  const rawProvider = raw.split(':')[0] ?? '';
-  if (rawProvider && contentPort.isSoundcloudProvider(rawProvider)) {
-    return true;
-  }
-  if (raw.toLowerCase().includes('soundcloud')) {
-    return true;
-  }
-  const decoded = decodeAudiopath(raw) || raw;
-  const providerSegment = decoded.split(':')[0] ?? '';
-  if (providerSegment && contentPort.isSoundcloudProvider(providerSegment)) {
-    return true;
-  }
-  return decoded.toLowerCase().includes('soundcloud');
 }
 
 export function isMusicAssistantAudiopath(audiopath: string | null | undefined): boolean {

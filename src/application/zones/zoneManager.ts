@@ -268,12 +268,7 @@ export class ZoneManager {
       isRadioAudiopath: audioHelpers.isRadioAudiopath,
       isSpotifyAudiopath: audioHelpers.isSpotifyAudiopath,
       isMusicAssistantAudiopath: audioHelpers.isMusicAssistantAudiopath,
-      isAppleMusicAudiopath: audioHelpers.isAppleMusicAudiopath,
-      isDeezerAudiopath: audioHelpers.isDeezerAudiopath,
-      isTidalAudiopath: audioHelpers.isTidalAudiopath,
-      isYtMusicAudiopath: audioHelpers.isYtMusicAudiopath,
-      isYoutubeAudiopath: audioHelpers.isYoutubeAudiopath,
-      isSoundcloudAudiopath: audioHelpers.isSoundcloudAudiopath,
+      providerForAudiopath: audioHelpers.providerForAudiopath,
       resolveBridgeProvider: audioHelpers.resolveBridgeProvider,
       getMusicAssistantUserId,
       getStateAudiotype: audioHelpers.getStateAudiotype,
@@ -354,13 +349,7 @@ export class ZoneManager {
    * other four were refreshed on the same request.
    */
   public refreshContentProviders(): void {
-    const contentPort = this.contentPort;
-    contentPort.configureAppleMusic();
-    contentPort.configureDeezer();
-    contentPort.configureTidal();
-    contentPort.configureYtMusic();
-    contentPort.configureYoutube();
-    contentPort.configureSoundcloud();
+    this.contentPort.configureProviders();
     this.playbackCoordinator.refreshMusicAssistantProviderId();
   }
 

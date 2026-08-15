@@ -14,14 +14,9 @@ import {
   mapPlaylist,
   mapTrack,
 } from '@/adapters/content/providers/soundcloud/soundcloudParsers';
+import type { ContentProvider, ProviderSearchCategories, ProviderSearchResult } from '@/adapters/content/ContentProvider';
 
 const SEARCH_DURATION_TOLERANCE_MS = 1000;
-
-type SearchResult = {
-  tracks?: ContentFolderItem[];
-  artists?: ContentFolderItem[];
-  playlists?: ContentFolderItem[];
-};
 
 interface SoundCloudProviderOptions {
   providerId: string;
@@ -37,7 +32,7 @@ interface SoundCloudProviderOptions {
  * likes and playlists. Mirrors the Deezer/Tidal bridge-provider facade so the
  * SpotifyServiceManager can drive it uniformly.
  */
-export class SoundCloudProvider {
+export class SoundCloudProvider implements ContentProvider {
   public readonly providerId: string;
   private readonly audiopathPrefix: string;
   private readonly label: string;
@@ -130,14 +125,14 @@ export class SoundCloudProvider {
     query: string,
     limits: Record<string, number>,
     maxLimit: number,
-  ): Promise<{ result: SearchResult; providerId: string; user: string }> {
+  ): Promise<ProviderSearchResult> {
     const limit = Math.min(
       Math.max(...(Object.values(limits).length ? Object.values(limits) : [maxLimit]), DEFAULT_MIN_SEARCH_LIMIT),
       maxLimit,
     );
     const requestedTypes = Object.keys(limits);
     const activeTypes = requestedTypes.length > 0 ? new Set(requestedTypes) : new Set(['track', 'artist', 'playlist']);
-    const result: SearchResult = {};
+    const result: ProviderSearchCategories = {};
     const tasks: Array<Promise<void>> = [];
 
     if (activeTypes.has('track')) {

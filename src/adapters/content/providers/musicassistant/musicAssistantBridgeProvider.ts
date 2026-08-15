@@ -204,7 +204,7 @@ export class MusicAssistantBridgeProvider extends SpotifyAccountProvider {
     return this.mapMaTrack(data);
   }
 
-  public async search(
+  public override async search(
     query: string,
     limits: Record<string, number>,
     maxLimit: number,

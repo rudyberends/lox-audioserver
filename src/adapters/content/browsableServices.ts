@@ -3,6 +3,7 @@ import type { ContentManager } from '@/adapters/content/contentManager';
 import type { ContentFolder, ContentFolderItem } from '@/ports/ContentTypes';
 import type { ProviderCapabilities } from '@/ports/ProviderCapabilities';
 import { capabilitiesFor } from '@/adapters/content/providerCapabilities';
+import { providerTitle } from '@/adapters/content/providerRegistry';
 import {
   searchSourceFromServiceKey,
   serviceNativeKey,
@@ -62,23 +63,6 @@ export type BrowsableService = {
     limit: number,
   ) => Promise<ContentFolderItem[]>;
 };
-
-const PROVIDER_TITLES: Record<string, string> = {
-  library: 'Library',
-  radio: 'Radio',
-  spotify: 'Spotify',
-  soundcloud: 'SoundCloud',
-  applemusic: 'Apple Music',
-  deezer: 'Deezer',
-  tidal: 'Tidal',
-  ytmusic: 'YouTube Music',
-  youtube: 'YouTube',
-  musicassistant: 'Music Assistant',
-};
-
-export function providerTitle(provider: string): string {
-  return PROVIDER_TITLES[provider] ?? provider;
-}
 
 /**
  * Normalise a configured provider allowlist. `null` means "no restriction" —

@@ -19,6 +19,7 @@ import {
 } from '@/adapters/content/providers/ytmusic/ytmusicYtDlp';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import type { ContentProvider, ProviderSearchResult } from '@/adapters/content/ContentProvider';
 
 const enum FileType {
   Folder = 1,
@@ -28,13 +29,6 @@ const enum FileType {
 
 /** The leading segments a folder id may open with; anything else is an account slug. */
 const FOLDER_KINDS = ['track', 'playlist', 'album', 'artist', 'genre'] as const;
-
-type SearchResult = {
-  tracks?: ContentFolderItem[];
-  albums?: ContentFolderItem[];
-  artists?: ContentFolderItem[];
-  playlists?: ContentFolderItem[];
-};
 
 interface YtMusicProviderOptions {
   providerId: string;
@@ -60,7 +54,7 @@ type FolderKind =
   | { type: 'album'; id: string }
   | { type: 'unknown'; raw: string };
 
-export class YtMusicProvider {
+export class YtMusicProvider implements ContentProvider {
   public readonly providerId: string;
   private readonly audiopathPrefix: string;
   private readonly log = createLogger('Content', 'YTMusic');
@@ -347,7 +341,7 @@ export class YtMusicProvider {
     query: string,
     limits: Record<string, number>,
     maxLimit: number,
-  ): Promise<{ result: SearchResult; providerId: string; user: string }> {
+  ): Promise<ProviderSearchResult> {
     const limit = Math.min(
       Math.max(...(Object.values(limits).length ? Object.values(limits) : [maxLimit]), DEFAULT_MIN_SEARCH_LIMIT),
       maxLimit,

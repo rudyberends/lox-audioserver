@@ -1,8 +1,11 @@
+import type { StreamProvider } from '@/adapters/content/StreamProvider';
 import { createLogger } from '@/shared/logging/logger';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import type { DeezerStreamService } from '@/adapters/content/providers/deezer/deezerStreamService';
 
-export class DeezerStreamResolver {
+export class DeezerStreamResolver implements StreamProvider {
+  public readonly provider = 'deezer';
+
   private readonly log = createLogger('Audio', 'DeezerStream');
 
   constructor(private readonly streamService: DeezerStreamService) {}
@@ -16,7 +19,7 @@ export class DeezerStreamResolver {
     }
   }
 
-  public isDeezerProvider(providerId: string): boolean {
+  public isProvider(providerId: string): boolean {
     return this.streamService.isDeezerProvider(providerId);
   }
 

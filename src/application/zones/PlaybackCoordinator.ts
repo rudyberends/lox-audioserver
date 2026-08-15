@@ -588,31 +588,22 @@ export class PlaybackCoordinator {
   } {
     const isSpotify = this.audioHelpers.isSpotifyAudiopath(audiopath);
     const isMusicAssistant = this.audioHelpers.isMusicAssistantAudiopath(audiopath);
-    const isAppleMusic = this.audioHelpers.isAppleMusicAudiopath(audiopath);
-    const isDeezer = this.audioHelpers.isDeezerAudiopath(audiopath);
-    const isTidal = this.audioHelpers.isTidalAudiopath(audiopath);
-    const isYtMusic = this.audioHelpers.isYtMusicAudiopath(audiopath);
-    const isYoutube = this.audioHelpers.isYoutubeAudiopath(audiopath);
-    const isSoundcloud = this.audioHelpers.isSoundcloudAudiopath(audiopath);
+    // One lookup answers which service owns the path; the flags below are that answer
+    // spelled out for the callers that still ask per service.
+    const owner = this.audioHelpers.providerForAudiopath(audiopath);
+    const isAppleMusic = owner === 'applemusic';
+    const isDeezer = owner === 'deezer';
+    const isTidal = owner === 'tidal';
+    const isYtMusic = owner === 'ytmusic';
+    const isYoutube = owner === 'youtube';
+    const isSoundcloud = owner === 'soundcloud';
     const nextInput: ZoneContext['inputMode'] =
       isSpotify
         ? 'spotify'
         : isMusicAssistant
           ? 'musicassistant'
           : 'queue';
-    const provider: ProviderKind = isAppleMusic
-      ? 'applemusic'
-      : isDeezer
-        ? 'deezer'
-        : isTidal
-          ? 'tidal'
-          : isYtMusic
-            ? 'ytmusic'
-          : isYoutube
-            ? 'youtube'
-          : isSoundcloud
-            ? 'soundcloud'
-          : null;
+    const provider = owner as ProviderKind;
     return {
       isSpotify,
       isMusicAssistant,
@@ -875,12 +866,10 @@ export class PlaybackCoordinator {
     if (this.audioHelpers.isRadioAudiopath(audiopath)) {
       return;
     }
-    const isAppleMusic = this.audioHelpers.isAppleMusicAudiopath(audiopath);
-    const isDeezer = this.audioHelpers.isDeezerAudiopath(audiopath);
-    const isTidal = this.audioHelpers.isTidalAudiopath(audiopath);
-    const isYtMusic = this.audioHelpers.isYtMusicAudiopath(audiopath);
-    const isYoutube = this.audioHelpers.isYoutubeAudiopath(audiopath);
-    if (!isAppleMusic && !isDeezer && !isTidal && !isYtMusic && !isYoutube) {
+    // SoundCloud is absent on purpose: it was absent from this list before, and adding it
+    // would start prefetching a service that never was. See the note in ParentContextPolicy.
+    const owner = this.audioHelpers.providerForAudiopath(audiopath);
+    if (!owner || owner === 'soundcloud') {
       return;
     }
     if (!this.isTrackAudiopath(audiopath)) {

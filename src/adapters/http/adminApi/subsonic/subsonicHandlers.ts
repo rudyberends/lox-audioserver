@@ -5,8 +5,8 @@ import type { Route } from '@/adapters/http/adminApi/routeTypes';
 import {
   buildBrowsableServices,
   parseProviderAllowlist,
-  providerTitle,
 } from '@/adapters/content/browsableServices';
+import { providerTitle } from '@/adapters/content/providerRegistry';
 import { musicFolderId } from '@/adapters/subsonic/subsonicIds';
 import { SubsonicAuthenticator } from '@/adapters/subsonic/subsonicAuthenticator';
 import { listUsers } from '@/application/auth/localUsers';

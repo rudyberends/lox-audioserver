@@ -26,12 +26,7 @@ type QueueControllerDeps = {
   isRadioAudiopath: (audiopath: string | undefined, audiotype?: number | null) => boolean;
   isSpotifyAudiopath: (audiopath: string | null | undefined) => boolean;
   isMusicAssistantAudiopath: (audiopath: string | null | undefined) => boolean;
-  isAppleMusicAudiopath: (audiopath: string | null | undefined) => boolean;
-  isDeezerAudiopath: (audiopath: string | null | undefined) => boolean;
-  isTidalAudiopath: (audiopath: string | null | undefined) => boolean;
-  isYtMusicAudiopath: (audiopath: string | null | undefined) => boolean;
-  isYoutubeAudiopath: (audiopath: string | null | undefined) => boolean;
-  isSoundcloudAudiopath: (audiopath: string | null | undefined) => boolean;
+  providerForAudiopath: (audiopath: string | null | undefined) => string | null;
   resolveBridgeProvider: (rawAudiopath: string | undefined | null) => string | null;
   getMusicAssistantUserId: () => string;
   getStateAudiotype: (ctx: ZoneContext, item?: QueueItem | null) => number | null;
@@ -941,23 +936,10 @@ export class QueueController {
       if (this.deps.isMusicAssistantAudiopath(item.audiopath)) {
         return 'musicassistant';
       }
-      if (this.deps.isAppleMusicAudiopath(item.audiopath)) {
-        return 'applemusic';
-      }
-      if (this.deps.isDeezerAudiopath(item.audiopath)) {
-        return 'deezer';
-      }
-      if (this.deps.isTidalAudiopath(item.audiopath)) {
-        return 'tidal';
-      }
-      if (this.deps.isYtMusicAudiopath(item.audiopath)) {
-        return 'ytmusic';
-      }
-      if (this.deps.isYoutubeAudiopath(item.audiopath)) {
-        return 'youtube';
-      }
-      if (this.deps.isSoundcloudAudiopath(item.audiopath)) {
-        return 'soundcloud';
+      // Whichever streaming service owns the path is the authority for the queue.
+      const provider = this.deps.providerForAudiopath(item.audiopath);
+      if (provider) {
+        return provider as QueueAuthority;
       }
       if (this.deps.isSpotifyAudiopath(item.audiopath)) {
         return 'spotify';

@@ -17,6 +17,7 @@ import {
 } from './appleMusicParsers';
 import { getShippedDeveloperToken, buildBaseHeaders, scrapeBearerToken } from './appleMusicAuth';
 import { collageKey, collageCachedUrl, ensureCollage } from '@/shared/playlistCollage';
+import type { ContentProvider, ProviderSearchCategories, ProviderSearchResult } from '@/adapters/content/ContentProvider';
 
 const APPLE_MUSIC_API_BASE = 'https://amp-api.music.apple.com/v1';
 const BEARER_TOKEN_TTL_MS = 30 * 60 * 1000;
@@ -37,13 +38,6 @@ function appleLocalizedText(value: unknown): string {
   return Object.values(record).find((candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0)?.trim() ?? '';
 }
 
-type SearchResult = {
-  tracks?: ContentFolderItem[];
-  albums?: ContentFolderItem[];
-  artists?: ContentFolderItem[];
-  playlists?: ContentFolderItem[];
-};
-
 interface AppleMusicProviderOptions {
   providerId: string;
   serviceNativePrefix?: string;
@@ -59,7 +53,7 @@ interface AppleMusicProviderOptions {
  * Lightweight Apple Music provider that mirrors the Spotify facade shape.
  * Uses the iTunes/Apple Music APIs for metadata (no playback).
  */
-export class AppleMusicProvider {
+export class AppleMusicProvider implements ContentProvider {
   public readonly providerId: string;
   private readonly audiopathPrefix: string;
   private readonly log = createLogger('Content', 'AppleMusic');
@@ -311,7 +305,7 @@ export class AppleMusicProvider {
     return typeof catalog === 'string' && catalog ? catalog : null;
   }
 
-  public async search(query: string, limits: Record<string, number>, maxLimit: number): Promise<{ result: SearchResult; providerId: string; user: string }> {
+  public async search(query: string, limits: Record<string, number>, maxLimit: number): Promise<ProviderSearchResult> {
     const limit = Math.min(
       Math.max(...(Object.values(limits).length ? Object.values(limits) : [maxLimit]), DEFAULT_MIN_SEARCH_LIMIT),
       maxLimit,
@@ -335,7 +329,7 @@ export class AppleMusicProvider {
     url.searchParams.set('types', activeTypes.join(','));
 
     const data = await this.fetchJson<any>(url.toString());
-    const result: SearchResult = {};
+    const result: ProviderSearchCategories = {};
     if (data?.results?.songs?.data) {
       const max = limits.track ?? limits.tracks ?? limit;
       result.tracks = data.results.songs.data.slice(0, max).map((t: unknown) => mapTrack(this.audiopathPrefix, t));

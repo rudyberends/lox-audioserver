@@ -159,12 +159,9 @@ export class QueueAdvanceController {
         }
         return;
       }
-      const isAppleMusic = this.deps.audioHelpers.isAppleMusicAudiopath(item.audiopath);
-      const isDeezer = this.deps.audioHelpers.isDeezerAudiopath(item.audiopath);
-      const isTidal = this.deps.audioHelpers.isTidalAudiopath(item.audiopath);
-      const isYtMusic = this.deps.audioHelpers.isYtMusicAudiopath(item.audiopath);
-      const isSoundcloud = this.deps.audioHelpers.isSoundcloudAudiopath(item.audiopath);
-      if (!isAppleMusic && !isDeezer && !isTidal && !isYtMusic && !isSoundcloud) {
+      // YouTube is absent as it was before; see ParentContextPolicy on these differing sets.
+      const owner = this.deps.audioHelpers.providerForAudiopath(item.audiopath);
+      if (!owner || owner === 'youtube') {
         return;
       }
       if (!isTrackAudiopath(item.audiopath)) {

@@ -102,10 +102,7 @@ export class PlayRequestService {
         encodeAudiopath,
         normalizeSpotifyAudiopath,
         sanitizeStation,
-        isAppleMusicProvider: (providerId: string) => this.deps.contentPort.isAppleMusicProvider(providerId),
-        isDeezerProvider: (providerId: string) => this.deps.contentPort.isDeezerProvider(providerId),
-        isTidalProvider: (providerId: string) => this.deps.contentPort.isTidalProvider(providerId),
-        isSoundcloudProvider: (providerId: string) => this.deps.contentPort.isSoundcloudProvider(providerId),
+        providerForAudiopath: (audiopath: string) => this.deps.contentPort.providerForAudiopath(audiopath),
         getMusicAssistantProviderId,
       },
     });
@@ -587,7 +584,7 @@ export class PlayRequestService {
     const shouldStayOnline =
       this.deps.audioHelpers.isMusicAssistantAudiopath(itemAudiopath) ||
       this.deps.audioHelpers.isSpotifyAudiopath(itemAudiopath) ||
-      this.deps.audioHelpers.isAppleMusicAudiopath(itemAudiopath);
+      this.deps.audioHelpers.providerForAudiopath(itemAudiopath) === 'applemusic';
     this.deps.applyPatch(
       ctx.id,
       shouldStayOnline

@@ -122,6 +122,7 @@ import './zoneHandlers.roomfavs.test';
 import './favoritesManager.compat.test';
 import './recentsManager.compat.test';
 import './contentMetadataHarvestCache.test';
+import './contentProviderDispatch.test';
 import './queueBuilderArtistFlatten.test';
 import './nowPlayingMetadata.test';
 import './publicApi.test';
@@ -193,18 +194,8 @@ const noopContentPort: ContentPort = {
   resolveFolder: async () => null,
   resolveMetadata: async () => null,
   resolvePlaybackSource: async () => ({ playbackSource: null, provider: 'library' }),
-  configureAppleMusic: () => {},
-  configureDeezer: () => {},
-  configureTidal: () => {},
-  configureYtMusic: () => {},
-  configureYoutube: () => {},
-  configureSoundcloud: () => {},
-  isAppleMusicProvider: () => false,
-  isDeezerProvider: () => false,
-  isTidalProvider: () => false,
-  isYtMusicProvider: () => false,
-  isYoutubeProvider: () => false,
-  isSoundcloudProvider: () => false,
+  configureProviders: () => {},
+  providerForAudiopath: () => null,
   getMediaFolder: async () => null,
   getServiceTrack: async () => null,
   getServiceFolder: async () => null,

@@ -182,13 +182,10 @@ export class CrossfadeController {
         // Use a sentinel pipe source so `resolvedSource` is truthy and the trigger fires.
         resolvedSource = { kind: 'pipe', path: 'spotify-xf-pending' };
       } else {
-        const isAppleMusic = this.deps.audioHelpers.isAppleMusicAudiopath(nextItem.audiopath);
-        const isDeezer = this.deps.audioHelpers.isDeezerAudiopath(nextItem.audiopath);
-        const isTidal = this.deps.audioHelpers.isTidalAudiopath(nextItem.audiopath);
-        const isYtMusic = this.deps.audioHelpers.isYtMusicAudiopath(nextItem.audiopath);
-        const isSoundcloud = this.deps.audioHelpers.isSoundcloudAudiopath(nextItem.audiopath);
+        // YouTube is absent here as it was before; see ParentContextPolicy on these sets.
+        const owner = this.deps.audioHelpers.providerForAudiopath(nextItem.audiopath);
 
-        if (isAppleMusic || isDeezer || isTidal || isYtMusic || isSoundcloud) {
+        if (owner && owner !== 'youtube') {
           const resolution = await this.deps.contentPort
             .resolvePlaybackSource({ audiopath: nextItem.audiopath, requester: { kind: 'zone', zoneId } })
             .catch(() => null);

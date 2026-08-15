@@ -1,8 +1,11 @@
+import type { StreamProvider } from '@/adapters/content/StreamProvider';
 import { createLogger } from '@/shared/logging/logger';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import type { YoutubeStreamService } from '@/adapters/content/providers/youtube/youtubeStreamService';
 
-export class YoutubeStreamResolver {
+export class YoutubeStreamResolver implements StreamProvider {
+  public readonly provider = 'youtube';
+
   private readonly log = createLogger('Audio', 'YoutubeStream');
 
   constructor(private readonly streamService: YoutubeStreamService) {}
@@ -16,7 +19,7 @@ export class YoutubeStreamResolver {
     }
   }
 
-  public isYoutubeProvider(providerId: string): boolean {
+  public isProvider(providerId: string): boolean {
     return this.streamService.isYoutubeProvider(providerId);
   }
 

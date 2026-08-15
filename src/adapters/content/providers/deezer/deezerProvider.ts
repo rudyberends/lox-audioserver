@@ -1,6 +1,7 @@
 import type { ContentFolder, ContentFolderItem, ContentServiceAccount, PlaylistEntry } from '@/ports/ContentTypes';
 import { createLogger } from '@/shared/logging/logger';
 import { DEFAULT_MIN_SEARCH_LIMIT } from '@/adapters/content/utils/searchLimits';
+import type { ContentProvider, ProviderSearchCategories, ProviderSearchResult } from '@/adapters/content/ContentProvider';
 
 const enum FileType {
   Folder = 1,
@@ -9,13 +10,6 @@ const enum FileType {
 }
 
 const DEEZER_API_BASE = 'https://api.deezer.com';
-
-type SearchResult = {
-  tracks?: ContentFolderItem[];
-  albums?: ContentFolderItem[];
-  artists?: ContentFolderItem[];
-  playlists?: ContentFolderItem[];
-};
 
 interface DeezerProviderOptions {
   providerId: string;
@@ -28,7 +22,7 @@ interface DeezerProviderOptions {
  * Lightweight Deezer catalog provider that mirrors the Apple Music facade shape.
  * Uses the public Deezer API for metadata (no playback).
  */
-export class DeezerProvider {
+export class DeezerProvider implements ContentProvider {
   public readonly providerId: string;
   private readonly audiopathPrefix: string;
   private readonly log = createLogger('Content', 'Deezer');
@@ -176,12 +170,12 @@ export class DeezerProvider {
     query: string,
     limits: Record<string, number>,
     maxLimit: number,
-  ): Promise<{ result: SearchResult; providerId: string; user: string }> {
+  ): Promise<ProviderSearchResult> {
     const limit = Math.min(
       Math.max(...(Object.values(limits).length ? Object.values(limits) : [maxLimit]), DEFAULT_MIN_SEARCH_LIMIT),
       maxLimit,
     );
-    const result: SearchResult = {};
+    const result: ProviderSearchCategories = {};
 
     const requestedTypes = Object.keys(limits);
     const activeTypes =

@@ -1,8 +1,11 @@
+import type { StreamProvider } from '@/adapters/content/StreamProvider';
 import { createLogger } from '@/shared/logging/logger';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import type { YtMusicStreamService } from '@/adapters/content/providers/ytmusic/ytmusicStreamService';
 
-export class YtMusicStreamResolver {
+export class YtMusicStreamResolver implements StreamProvider {
+  public readonly provider = 'ytmusic';
+
   private readonly log = createLogger('Audio', 'YTMusicStream');
 
   constructor(private readonly streamService: YtMusicStreamService) {}
@@ -16,7 +19,7 @@ export class YtMusicStreamResolver {
     }
   }
 
-  public isYtMusicProvider(providerId: string): boolean {
+  public isProvider(providerId: string): boolean {
     return this.streamService.isYtMusicProvider(providerId);
   }
 
