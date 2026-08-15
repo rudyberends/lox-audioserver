@@ -129,6 +129,7 @@ function handlePlayResume(
     coordinator.applyPatch(zoneId, { mode: 'play', clientState: 'on', power: 'on' });
     return;
   }
+  holdSpotify(coordinator, ctx, false);
   const session = ctx.player.resume();
   if (!session && isQueueDrivenInput(mode) && coordinator.isLocalQueueAuthority(ctx.queue.authority)) {
     const current = ctx.queueController.current();
@@ -225,6 +226,7 @@ function handlePause(
     coordinator.applyPatch(zoneId, { mode: 'pause', clientState: 'on', power: 'on' });
     return;
   }
+  holdSpotify(coordinator, ctx, true);
   const session = ctx.player.pause();
   coordinator.dispatchOutputs(ctx, ctx.outputs, 'pause', session ?? ctx.player.getSession());
   coordinator.applyPatch(zoneId, { mode: 'pause', clientState: 'on', power: 'on' });
@@ -517,6 +519,22 @@ function handleQueuePlayCurrent(
  * that anything the Spotify app played afterwards was read as a skip of a track this zone had long
  * finished with, and the room started its old queue up again.
  */
+/**
+ * Hold or release the Spotify player along with the room, when the room is on it.
+ *
+ * Pausing a zone used to pause only what this server sends onwards: the player kept going, reached
+ * the end of the track and Spotify moved to the next one — so a room picked up a minute later came
+ * back somewhere else entirely. Whoever is playing has to be paused too, and it is the same
+ * audiopath test as the stop above, for the same reason: a zone playing Spotify from its own queue
+ * has no input mode to key off.
+ */
+function holdSpotify(coordinator: CommandCoordinator, ctx: ZoneContext, paused: boolean): void {
+  if (!/^spotify[:@]/i.test(ctx.state.audiopath ?? '')) {
+    return;
+  }
+  void coordinator.playerCommand(ctx.id, paused ? 'pause' : 'resume');
+}
+
 function releaseSpotifyOnStop(coordinator: CommandCoordinator, ctx: ZoneContext): void {
   const audiopath = ctx.state.audiopath ?? '';
   if (!/^spotify[:@]/i.test(audiopath)) {

@@ -1943,6 +1943,9 @@ export class SpotifyInputService {
       return false;
     }
     const normalized = command.trim().toLowerCase();
+    if (normalized === 'pause' || normalized === 'resume') {
+      return this.soloist.setPaused(zoneId, normalized === 'pause');
+    }
     if (normalized !== 'next' && normalized !== 'previous') {
       return false;
     }

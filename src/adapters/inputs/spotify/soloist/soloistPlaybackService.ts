@@ -864,6 +864,28 @@ export class SoloistPlaybackService {
     return direction === 'next' ? runner.ws.skipNext() : runner.ws.skipPrevious();
   }
 
+  /**
+   * Hold or release the player along with its room.
+   *
+   * A zone paused in the app used to pause only what this server sends: Soloist played on to the
+   * end of the track, and Spotify then moved to the next — so a room resumed a minute later came
+   * back somewhere else entirely, if it came back at all.
+   *
+   * Returns false when this backend is not the one holding that room, so the caller can look
+   * elsewhere.
+   */
+  public setPaused(zoneId: number, paused: boolean): boolean {
+    const runner = this.runners.get(zoneId);
+    if (!runner || runner.owner !== 'queue' || !runner.wantedUri) {
+      return false;
+    }
+    this.log.debug('holding the player with its zone', { zoneId, paused });
+    // Marked as ours, so the pause Soloist reports back is not read as someone reaching for their
+    // phone — which would pause the zone a second time, or resume it against the listener.
+    runner.selfPaused = paused;
+    return paused ? runner.ws.pause() : runner.ws.resume();
+  }
+
   public isPlaying(zoneId: number): boolean {
     return Boolean(this.runners.get(zoneId)?.stream);
   }

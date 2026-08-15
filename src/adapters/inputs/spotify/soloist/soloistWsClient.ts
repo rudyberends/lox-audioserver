@@ -254,6 +254,16 @@ export class SoloistWsClient extends EventEmitter {
   }
 
   /**
+   * Carry on where it was paused.
+   *
+   * `play` with nothing to play is what resumes; there is no `resume` command — asking for one
+   * comes back as "unknown command".
+   */
+  public resume(): boolean {
+    return this.send('play');
+  }
+
+  /**
    * Ask for the queue.
    *
    * It also arrives unasked whenever it changes, so this is only for the moment a zone is taken
