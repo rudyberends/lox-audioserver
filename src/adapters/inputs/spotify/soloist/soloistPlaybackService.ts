@@ -542,9 +542,17 @@ export class SoloistPlaybackService {
         }
       }
       if (runner.owner === 'connect' && uri !== runner.currentUri) {
-        // The app moved to its own next track. The stream carries on; only the labels change.
         runner.currentUri = uri;
         runner.currentTrack = queueTrackOf(track);
+        if (!runner.stream) {
+          // Owned by the app but with nothing carrying its audio: the room was stopped or handed
+          // back at some point and the stream went with it, while the app kept sending. Only the
+          // labels moved after that — the track showed up in the room and stayed on stop, which
+          // reads as playback that never starts. Taking it over again is the whole of the fix.
+          void this.adoptConnectPlayback(zoneId, event);
+          return;
+        }
+        // The app moved to its own next track. The stream carries on; only the labels change.
         this.publishTrack(zoneId, track);
         return;
       }
@@ -574,6 +582,16 @@ export class SoloistPlaybackService {
         this.controller?.transport(zoneId, 'resume');
         return;
       }
+    }
+
+    // Someone reached for the app while the room stood paused — pressing next there, or play. The
+    // pause was this server's, so nothing else would lift it, and the room would sit silent while
+    // Spotify played on without it.
+    if (event.status === 'playing' && runner.owner === 'connect' && runner.selfPaused) {
+      this.log.info('the spotify app started this zone again', { zoneId });
+      runner.selfPaused = false;
+      this.controller?.resumePlayback(zoneId);
+      return;
     }
 
     if (event.status === 'playing') {
@@ -640,6 +658,10 @@ export class SoloistPlaybackService {
     runner.ws.requestQueue();
 
     if (!runner.stream) {
+      // The first track of a session has to wait for the player to say what it plays in; after
+      // that the answer is already there. Without this a takeover that arrives before the player
+      // has opened its stream finds no format and gives up, and nothing tries again.
+      await this.audio.waitForSpec(zoneId);
       const opened = this.openAudio(zoneId);
       if (!opened) {
         return;
