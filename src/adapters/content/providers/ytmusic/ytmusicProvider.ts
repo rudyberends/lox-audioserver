@@ -640,8 +640,16 @@ export class YtMusicProvider {
         .filter(Boolean) as ContentFolderItem[];
       return tracks.slice(0, opts.limit);
     } catch (err) {
+      // This one used to log only `err.message`, which for a yt-dlp that never ran said
+      // nothing a user could act on. Keep it at warn — an unusable folder is not a detail —
+      // and carry yt-dlp's own words with it.
       const msg = err instanceof Error ? err.message : String(err);
-      this.log.debug('ytmusic track search failed', { providerId: this.providerId, query: opts.query, message: msg });
+      this.log.warn('ytmusic track search failed', {
+        providerId: this.providerId,
+        query: opts.query,
+        message: msg,
+        ...(err instanceof YtDlpError && err.stderr ? { stderr: err.stderr.slice(0, 500) } : {}),
+      });
       return [];
     } finally {
       // Keep cookie file around for reuse.

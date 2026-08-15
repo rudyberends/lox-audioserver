@@ -8,13 +8,18 @@ export type YtDlpExecOptions = {
   env?: Record<string, string | undefined>;
 };
 
+/** Why the run ended: it never started, it outlived its timeout, or yt-dlp itself said no. */
+export type YtDlpFailure = 'spawn' | 'timeout' | 'exit';
+
 export class YtDlpError extends Error {
   public readonly exitCode: number | null;
   public readonly stderr: string;
-  constructor(message: string, opts: { exitCode: number | null; stderr?: string }) {
+  public readonly failure: YtDlpFailure;
+  constructor(message: string, opts: { exitCode: number | null; stderr?: string; failure?: YtDlpFailure }) {
     super(message);
     this.exitCode = opts.exitCode;
     this.stderr = opts.stderr ?? '';
+    this.failure = opts.failure ?? 'exit';
   }
 }
 
@@ -48,12 +53,31 @@ export async function runYtDlp(
     });
     return { stdout: String(res.stdout ?? ''), stderr: String(res.stderr ?? '') };
   } catch (err: unknown) {
-    const e = err as { stderr?: unknown; code?: unknown } | null;
+    const e = err as { stderr?: unknown; code?: unknown; killed?: unknown } | null;
     const stderr = String(e?.stderr ?? '');
     const code = typeof e?.code === 'number' ? e.code : null;
 
+    // Three very different problems used to share one message. A run that never
+    // started (yt-dlp absent, or its python3 interpreter absent — a missing
+    // interpreter fails the exec the same ENOENT way) and a run killed at the
+    // timeout both arrive with no numeric exit code, so "yt-dlp failed" was the
+    // whole report for both, and told a user nothing about which to go fix.
+    if (e?.code === 'ENOENT') {
+      throw new YtDlpError(
+        `yt-dlp could not be started: '${ytDlpPath}' not found (or its interpreter is missing)`,
+        { exitCode: null, stderr, failure: 'spawn' },
+      );
+    }
+    if (e?.killed === true) {
+      throw new YtDlpError(`yt-dlp timed out after ${timeoutMs} ms`, {
+        exitCode: null,
+        stderr,
+        failure: 'timeout',
+      });
+    }
+
     const message = `yt-dlp failed${code !== null ? ` (code ${code})` : ''}`;
-    throw new YtDlpError(message, { exitCode: code, stderr });
+    throw new YtDlpError(message, { exitCode: code, stderr, failure: 'exit' });
   }
 }
 
