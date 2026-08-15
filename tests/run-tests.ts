@@ -59,6 +59,7 @@ import './airplayStreamSession.test';
 import './audioStreamHandlerIcy.test';
 import './queueAuthority.test';
 import './queueMutations.test';
+import './queueEditIntake.test';
 import './ytmusicNative.mock.test';
 import './spotifyAccountProvider.playlists.test';
 import './spotifyAccountProvider.artist.test';

@@ -3,6 +3,7 @@ import type { ContentFolderItem } from '@/ports/ContentTypes';
 import type { ContentPort } from '@/ports/ContentPort';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import { decodeAudiopath, detectServiceFromAudiopath, parseServiceNativeAudiopath, BRIDGE_STREAMING_SERVICES } from '@/domain/zones/audiopath';
+import { toServiceNative } from '@/domain/zones/bridgeIdentity';
 import {
   createQueueItem,
   mapFolderItemsToQueue,
@@ -1011,13 +1012,25 @@ export class QueueController {
     return this.buildQueueForUri(audiopath, ctx.name, undefined, audiopath);
   }
 
+  /**
+   * A path arriving from outside, in the identity the core works in.
+   *
+   * The Loxone client sends a queue edit in the disguised `spotify@bridge-…` form, the same
+   * as a play request — but `playContent` translated it and these did not, so the queue could
+   * end up holding two spellings of one service depending on how the item got there.
+   * Idempotent on anything already service-native, which is what every other caller sends.
+   */
+  private toCoreAudiopath(audiopath: string): string {
+    return toServiceNative(audiopath, this.contentPort.getBridgeRegistry());
+  }
+
   /** Append the resolved item(s) for `audiopath` to the end of the queue. */
   public async appendUri(zoneId: number, audiopath: string): Promise<boolean> {
     const ctx = this.zoneRepo.get(zoneId);
     if (!ctx) {
       return false;
     }
-    const items = await this.resolveItemsForUri(ctx, audiopath);
+    const items = await this.resolveItemsForUri(ctx, this.toCoreAudiopath(audiopath));
     if (!items.length) {
       return false;
     }
@@ -1039,7 +1052,7 @@ export class QueueController {
     if (!ctx) {
       return -1;
     }
-    const items = await this.resolveItemsForUri(ctx, audiopath);
+    const items = await this.resolveItemsForUri(ctx, this.toCoreAudiopath(audiopath));
     if (!items.length) {
       return -1;
     }
