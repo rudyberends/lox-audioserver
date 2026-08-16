@@ -1,14 +1,11 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
-import { parseFile } from 'music-metadata';
+import { randomUUID } from 'node:crypto';
 import { connectAsync, type IClientOptions, type MqttClient } from 'mqtt';
 import type { AlertMediaResource } from '@/application/alerts/types';
 import type { TtsProvider } from '@/application/alerts/ttsProvider';
+import { storeTtsClip } from '@/application/alerts/ttsClipStore';
 import type { LoxBerryTtsProviderConfig } from '@/domain/config/types';
 import { createLogger } from '@/shared/logging/logger';
 
-const CACHE_DIR = path.resolve(process.cwd(), 'public', 'alerts', 'cache');
 const DEFAULT_MQTT_PORT = 1883;
 const DEFAULT_MQTTS_PORT = 8883;
 const DEFAULT_TIMEOUT_MS = 12_000;
@@ -32,7 +29,6 @@ type LoxBerryTtsResponse = {
 
 export class LoxBerryTtsProvider implements TtsProvider {
   private readonly log = createLogger('Alerts', 'LoxBerryTts');
-  private readonly durationCache = new Map<string, number>();
 
   constructor(private readonly config: LoxBerryTtsProviderConfig) {}
 
@@ -53,14 +49,7 @@ export class LoxBerryTtsProvider implements TtsProvider {
       if (!downloadUrl) {
         throw new Error('LoxBerry TTS response did not contain a downloadable MP3 URL');
       }
-      const cached = await this.cacheRemoteAudio(downloadUrl, normalizedText, language);
-      return (
-        cached ?? {
-          title: buildTitle(normalizedText),
-          relativePath: downloadUrl,
-          url: downloadUrl,
-        }
-      );
+      return await this.cacheRemoteAudio(downloadUrl, normalizedText, language);
     } catch (err) {
       this.log.error('failed to generate LoxBerry TTS clip', {
         provider: this.config.type,
@@ -118,59 +107,26 @@ export class LoxBerryTtsProvider implements TtsProvider {
     downloadUrl: string,
     text: string,
     language?: string,
-  ): Promise<AlertMediaResource | undefined> {
-    const digest = createHash('sha1')
-      .update(`${this.config.type}|${language ?? ''}|${downloadUrl}|${text}`)
-      .digest('hex');
-    const filename = `tts-loxberry-${digest}.mp3`;
-    const abs = path.join(CACHE_DIR, filename);
-    await fs.mkdir(CACHE_DIR, { recursive: true });
-    if (!(await exists(abs))) {
-      const res = await fetch(downloadUrl, {
-        headers: { Accept: 'audio/*,*/*' },
-        signal: AbortSignal.timeout(resolveTimeoutMs(this.config.timeoutMs)),
-      });
-      const contentType = res.headers.get('content-type') ?? '';
-      if (!res.ok || (contentType && !contentType.includes('audio') && !contentType.includes('octet-stream'))) {
-        throw new Error(`HTTP ${res.status} ${res.statusText} (ct=${contentType || 'none'})`);
-      }
-      const buffer = Buffer.from(await res.arrayBuffer());
-      await fs.writeFile(abs, buffer);
-      this.log.info('cached LoxBerry TTS clip', {
-        filename,
-        bytes: buffer.length,
-      });
-    }
-    const relativePath = `cache/${filename}`;
-    return {
-      title: buildTitle(text),
-      relativePath,
-      url: `alerts://cache/${encodeURIComponent(filename)}`,
-      duration: await this.resolveDuration(filename),
-    };
-  }
-
-  private async resolveDuration(filename: string): Promise<number | undefined> {
-    const cacheKey = `cache/${filename}`;
-    if (this.durationCache.has(cacheKey)) {
-      return this.durationCache.get(cacheKey);
-    }
-    const abs = path.join(CACHE_DIR, filename);
-    try {
-      const meta = await parseFile(abs);
-      const duration = meta.format.duration;
-      if (typeof duration === 'number' && duration > 0) {
-        const rounded = Math.round(duration);
-        this.durationCache.set(cacheKey, rounded);
-        return rounded;
-      }
-    } catch (err) {
-      this.log.debug('LoxBerry TTS duration probe failed', {
-        path: abs,
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-    return undefined;
+  ): Promise<AlertMediaResource> {
+    return storeTtsClip({
+      prefix: 'tts-loxberry',
+      extension: 'mp3',
+      cacheKey: [this.config.type, language ?? '', downloadUrl, text],
+      text,
+      produce: async () => {
+        const res = await fetch(downloadUrl, {
+          headers: { Accept: 'audio/*,*/*' },
+          signal: AbortSignal.timeout(resolveTimeoutMs(this.config.timeoutMs)),
+        });
+        const contentType = res.headers.get('content-type') ?? '';
+        if (!res.ok || (contentType && !contentType.includes('audio') && !contentType.includes('octet-stream'))) {
+          throw new Error(`HTTP ${res.status} ${res.statusText} (ct=${contentType || 'none'})`);
+        }
+        const buffer = Buffer.from(await res.arrayBuffer());
+        this.log.info('cached LoxBerry TTS clip', { bytes: buffer.length });
+        return buffer;
+      },
+    });
   }
 }
 
@@ -288,15 +244,3 @@ function trimTopicPrefix(value?: string): string {
   return value?.trim().replace(/^\/+|\/+$/g, '') ?? '';
 }
 
-async function exists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function buildTitle(text: string): string {
-  return text.length > 48 ? `${text.slice(0, 45)}...` : text;
-}
