@@ -181,6 +181,16 @@ export class AudioStreamHandler {
           : isFlac
             ? 'audio/flac'
             : 'audio/mpeg';
+    // Log every accepted pull. For a push output (DLNA/Cast/Sonos) this line is the only proof in
+    // the log that the device did more than accept the transport command — its absence after a
+    // "playback started" is the signature of a renderer that was armed but never fetched a byte.
+    this.log.info('stream request', {
+      zoneId,
+      requested: streamId,
+      streamId: session.stream.id,
+      profile: outputProfile,
+      remote: req.socket?.remoteAddress ?? 'unknown',
+    });
     this.streamEvents.recordStreamRequest({
       zoneId,
       streamId,

@@ -50,13 +50,21 @@ export class StreamEvents {
     zoneId: number;
     host?: string;
     timeoutMs: number;
+    notBefore?: number;
   }): Promise<StreamRequestEvent | null> {
-    const { zoneId, host, timeoutMs } = options;
+    const { zoneId, host, timeoutMs, notBefore } = options;
     const normalizedHost = host?.trim().toLowerCase() ?? '';
     const now = Date.now();
     const key = `${zoneId}|${normalizedHost || '*'}`;
     const cached = this.recentRequests.get(key);
-    if (cached && now - cached.timestamp <= this.recentWindowMs) {
+    // `notBefore` is what makes this usable as a per-track readiness check: the remembered
+    // request must postdate the moment the caller handed the renderer its URI, or the previous
+    // track's fetch would answer for this one.
+    if (
+      cached &&
+      now - cached.timestamp <= this.recentWindowMs &&
+      (notBefore === undefined || cached.timestamp >= notBefore)
+    ) {
       return cached;
     }
 

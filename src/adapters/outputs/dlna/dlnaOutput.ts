@@ -25,6 +25,13 @@ import {
  */
 const LOSSLESS_SINK_TYPES = new Set(['audio/flac', 'audio/x-flac']);
 
+/**
+ * How long a renderer gets, after being handed a URI and told to Play, to actually fetch the
+ * stream before we conclude it is not playing and re-arm it. Generous on purpose: a renderer that
+ * is going to pull does so within a second, and the cost of being wrong is an audible restart.
+ */
+const STREAM_FETCH_GRACE_MS = 5000;
+
 export interface DlnaOutputConfig {
   host?: string;
   controlUrl?: string;
@@ -104,8 +111,10 @@ function isAutoDiscoverEnabled(value: boolean | string | undefined): boolean {
  *
  * What stays here is app glue the module deliberately leaves to the host: building
  * DIDL from a PlaybackSession, resolving the stream URI + cover art, the per-track
- * dedup, the volume anti-feedback guard, and routing GENA volume events into zone
- * state. Transport-state is intentionally NOT reflected back (see onRemoteTransport).
+ * dedup, the readiness gate that treats the stream's own HTTP GET as proof of playback
+ * (see ensureStreamFetched), the volume anti-feedback guard, and routing GENA volume
+ * events into zone state. Transport-state is intentionally NOT reflected back (see
+ * onRemoteTransport).
  */
 export class DlnaOutput implements ZoneOutput {
   public readonly type = 'dlna';
@@ -120,6 +129,14 @@ export class DlnaOutput implements ZoneOutput {
   // after the initial play) and refresh now-playing without restarting playback.
   private lastPushedUri: string | null = null;
   private lastMetadataSignature: string | null = null;
+  // Whether the renderer has actually fetched the stream we pushed for the current track. A DLNA
+  // renderer answers Play with a 200 whether or not it ever pulls a byte, so the stream's first
+  // HTTP GET is the only proof of playback — it gates both the re-arm in ensureStreamFetched and
+  // the mid-playback metadata re-push.
+  private streamFetched = false;
+  // A metadata update that arrived before that proof, held until it is safe to send (see
+  // updateMetadata). Newest wins; it is folded into the re-arm when there is one.
+  private pendingMetadataSession: PlaybackSession | null = null;
   // Anti-feedback guard for VOLUME: our own SetVolume must not bounce back as a spurious user
   // change. (Transport-state is not reflected back — see onRemoteTransport.)
   private lastOutboundVolume?: number;
@@ -215,16 +232,101 @@ export class DlnaOutput implements ZoneOutput {
       return;
     }
     this.currentStreamKey = streamKey;
+    this.streamFetched = false;
+    this.pendingMetadataSession = null;
     const didl = this.buildDidlMetadata(streamUri, session);
     // Remember what we pushed so a later metadata update can decide whether to re-push (see
     // updateMetadata). The initial play() often fires before track metadata/duration has
     // resolved, so the first DIDL can be a title-less, duration-less audioBroadcast ("live").
     this.lastPushedUri = streamUri;
     this.lastMetadataSignature = this.metadataSignature(session);
-    // NOTE: the old adapter had a `waitForStreamRequest` fallback on a hard SetURI fault before
-    // Play. The module's setUri() drops that (it proceeds straight to Play, whose 701-retry is
-    // the real readiness gate) — behavior change to watch on a renderer that hard-faults SetURI.
+    const pushedAt = Date.now();
     await this.cp.setUri(streamUri, didl);
+    // Not awaited: if the push worked, audio is already on its way and the caller must not wait
+    // out the grace window to hear it.
+    void this.ensureStreamFetched(streamUri, didl, streamKey, pushedAt);
+  }
+
+  /**
+   * Confirm the renderer is playing by the only honest measure — it fetched the stream — and
+   * re-arm it once if it did not.
+   *
+   * The module's setUri() abandons SetAVTransportURI after a short window and presses Play anyway,
+   * because several renderers accept the URI and never reply (B&O/QPlay). On a slow renderer that
+   * does reply, just not in time (measured: issue #343, ~1.7s), Play then lands before the URI is
+   * committed: the transport reports playing, the title is on the display, volume commands work,
+   * and not one byte is ever fetched. Play's own 200 cannot tell that apart, and neither can its
+   * 701 retry. The stream request can.
+   *
+   * Deliberately zone-scoped rather than filtered on the renderer's address: a fetch we failed to
+   * recognise would restart audio that was fine, so any pull of this zone's stream counts as
+   * "something is playing this".
+   */
+  private async ensureStreamFetched(
+    uri: string,
+    didl: string,
+    streamKey: string,
+    pushedAt: number,
+  ): Promise<void> {
+    let since = pushedAt;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const seen = await this.ports.outputStreamEvents.waitForStreamRequest({
+        zoneId: this.zoneId,
+        timeoutMs: STREAM_FETCH_GRACE_MS,
+        notBefore: since,
+      });
+      // A new track, a pause or a stop took over; that push owns the renderer now.
+      if (this.currentStreamKey !== streamKey) {
+        return;
+      }
+      if (seen) {
+        this.onStreamFetched();
+        return;
+      }
+      if (attempt === 2) {
+        this.log.warn('DLNA renderer never fetched the stream', {
+          zoneId: this.zoneId,
+          zone: this.zoneName,
+          uri,
+        });
+        return;
+      }
+      // Re-arm with the newest metadata we have, so the retry doubles as the metadata push that
+      // was being held back — and ends in a Play, which is what the renderer is missing.
+      const refreshed = this.pendingMetadataSession;
+      let retryDidl = didl;
+      if (refreshed) {
+        retryDidl = this.buildDidlMetadata(uri, refreshed);
+        this.lastMetadataSignature = this.metadataSignature(refreshed);
+        this.pendingMetadataSession = null;
+      }
+      this.log.warn('DLNA renderer did not fetch the stream; re-arming', {
+        zoneId: this.zoneId,
+        zone: this.zoneName,
+        uri,
+      });
+      since = Date.now();
+      await this.cp.setUri(uri, retryDidl);
+      if (this.currentStreamKey !== streamKey) {
+        return;
+      }
+    }
+  }
+
+  /** The renderer is pulling audio: release any metadata update that was waiting on that proof. */
+  private onStreamFetched(): void {
+    this.streamFetched = true;
+    const pending = this.pendingMetadataSession;
+    this.pendingMetadataSession = null;
+    if (!pending) {
+      return;
+    }
+    void this.updateMetadata(pending).catch((err) => {
+      this.log.debug('DLNA held metadata update failed', {
+        zoneId: this.zoneId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
 
   /**
@@ -246,6 +348,14 @@ export class DlnaOutput implements ZoneOutput {
     }
     const signature = this.metadataSignature(session);
     if (signature === this.lastMetadataSignature) {
+      return;
+    }
+    // Nothing may touch the transport before the renderer has started pulling. A SetAVTransportURI
+    // that arrives while it is still arming replaces the URI it was told to play, and nothing
+    // presses Play again — silence with the new title on the display (issue #343). Radio makes this
+    // the common case: the station's first title resolves within a second of the initial push.
+    if (!this.streamFetched) {
+      this.pendingMetadataSession = session;
       return;
     }
     this.lastMetadataSignature = signature;

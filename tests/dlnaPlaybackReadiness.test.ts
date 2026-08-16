@@ -1,0 +1,169 @@
+import assert from 'node:assert/strict';
+import { test } from './testHarness';
+import { DlnaOutput } from '../src/adapters/outputs/dlna/dlnaOutput';
+import type { ConfigPort } from '../src/ports/ConfigPort';
+import type { OutputPorts } from '../src/adapters/outputs/outputPorts';
+import type { PlaybackSession } from '../src/application/playback/audioManager';
+import type {
+  OutputStreamRequestEvent,
+  OutputStreamRequestOptions,
+} from '../src/ports/OutputStreamEventsPort';
+import { makeOutputPortsFake } from './fakes/outputPorts';
+
+/**
+ * A renderer answers Play with a 200 whether or not it ever pulls a byte, which is how issue #343
+ * hid: transport "playing", title on the display, volume live, silence. These pin the fetch — the
+ * stream's own HTTP GET — as the readiness signal, and pin the ordering rule that follows from it.
+ */
+
+const configPortStub = {
+  getSystemConfig: () => ({ audioserver: { ip: '127.0.0.1' } }),
+  getConfig: () => ({ system: { audioserver: { ip: '127.0.0.1' } }, zones: [] }),
+  getZones: () => [],
+} as unknown as ConfigPort;
+
+type Deferred = {
+  promise: Promise<OutputStreamRequestEvent | null>;
+  settle: (value: OutputStreamRequestEvent | null) => void;
+};
+
+const deferred = (): Deferred => {
+  let settle: (value: OutputStreamRequestEvent | null) => void = () => undefined;
+  const promise = new Promise<OutputStreamRequestEvent | null>((resolve) => {
+    settle = resolve;
+  });
+  return { promise, settle };
+};
+
+/** Let the fire-and-forget readiness chain run to its next await. */
+const flush = async (): Promise<void> => {
+  for (let i = 0; i < 6; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+};
+
+type ControlPointStub = {
+  setUriCalls: string[];
+  metadataCalls: string[];
+};
+
+const makeOutput = (waits: Deferred[]): {
+  output: DlnaOutput;
+  cp: ControlPointStub;
+  waitOptions: OutputStreamRequestOptions[];
+} => {
+  const waitOptions: OutputStreamRequestOptions[] = [];
+  let waitIndex = 0;
+  const ports: OutputPorts = {
+    ...makeOutputPortsFake(configPortStub),
+    outputStreamEvents: {
+      waitForStreamRequest: (options: OutputStreamRequestOptions) => {
+        waitOptions.push(options);
+        const pending = waits[waitIndex];
+        waitIndex += 1;
+        return pending ? pending.promise : Promise.resolve(null);
+      },
+    },
+  };
+  // No host and no auto-discovery: nothing may reach the network from a test.
+  const output = new DlnaOutput(4, 'Wohnzimmer', { autoDiscover: false }, ports);
+  const cp: ControlPointStub = { setUriCalls: [], metadataCalls: [] };
+  (output as unknown as { cp: unknown }).cp = {
+    setUri: async (_uri: string, didl: string) => {
+      cp.setUriCalls.push(didl);
+      return true;
+    },
+    updateMetadata: async (_uri: string, didl: string) => {
+      cp.metadataCalls.push(didl);
+      return true;
+    },
+    subscribeEvents: async () => undefined,
+    getSinkContentTypes: async () => null,
+    play: async () => true,
+    stop: async () => true,
+    pause: async () => true,
+    setVolume: async () => true,
+    dispose: () => undefined,
+  };
+  return { output, cp, waitOptions };
+};
+
+const makeSession = (title: string, streamId = 'stream-1'): PlaybackSession =>
+  ({
+    source: 'tunein:station:abc',
+    playbackSource: 'http://stream.example/antenne.mp3',
+    stream: { id: streamId, url: `http://127.0.0.1:7090/streams/4/${streamId}.mp3` },
+    duration: 0,
+    metadata: { title, artist: '', album: '', duration: 0, isRadio: true },
+  }) as unknown as PlaybackSession;
+
+test('a renderer that never fetches the stream is re-armed, carrying the title it was owed', async () => {
+  // The failure this reproduces: SetAVTransportURI is abandoned on its short window, Play lands on
+  // a transport that was never armed, and the metadata re-push then arms it with no Play to follow.
+  // The re-arm is the missing Play, and it folds the held title in rather than sending a bare URI.
+  const fetchNeverArrives = deferred();
+  const { output, cp, waitOptions } = makeOutput([fetchNeverArrives]);
+
+  await output.play(makeSession(''));
+  assert.equal(cp.setUriCalls.length, 1, 'the initial push');
+  assert.ok(waitOptions[0]?.notBefore, 'the wait is scoped to this push, not a remembered one');
+
+  // The station title resolves while the renderer is still (supposedly) starting.
+  await output.updateMetadata(makeSession('ANTENNE BAYERN'));
+  assert.equal(cp.metadataCalls.length, 0, 'nothing may touch the transport before the fetch');
+  assert.equal(cp.setUriCalls.length, 1);
+
+  fetchNeverArrives.settle(null);
+  await flush();
+
+  assert.equal(cp.setUriCalls.length, 2, 'the renderer is re-armed once');
+  assert.match(cp.setUriCalls[1] ?? '', /ANTENNE BAYERN/, 'the re-arm carries the held title');
+  assert.equal(cp.metadataCalls.length, 0, 'the re-arm replaces the held update, not doubles it');
+});
+
+test('a renderer that fetches the stream is left alone, and gets its title afterwards', async () => {
+  const fetchArrives = deferred();
+  const { output, cp } = makeOutput([fetchArrives]);
+
+  await output.play(makeSession(''));
+  await output.updateMetadata(makeSession('ANTENNE BAYERN'));
+  assert.equal(cp.metadataCalls.length, 0, 'held until the renderer proves it is playing');
+
+  fetchArrives.settle({ zoneId: 4, streamId: 'stream-1', url: '/streams/4/current.mp3' });
+  await flush();
+
+  assert.equal(cp.setUriCalls.length, 1, 'a playing renderer is never restarted');
+  assert.equal(cp.metadataCalls.length, 1, 'the held title is released once the fetch lands');
+  assert.match(cp.metadataCalls[0] ?? '', /ANTENNE BAYERN/);
+});
+
+test('a fetch confirmed before any metadata arrives keeps updates immediate', async () => {
+  // The path a fast renderer takes: proof lands first, so a later title goes straight out as a
+  // metadata-only re-push (no Stop/Play) exactly as before.
+  const fetchArrives = deferred();
+  const { output, cp } = makeOutput([fetchArrives]);
+
+  await output.play(makeSession(''));
+  fetchArrives.settle({ zoneId: 4, streamId: 'stream-1', url: '/streams/4/current.mp3' });
+  await flush();
+
+  await output.updateMetadata(makeSession('ANTENNE BAYERN'));
+  assert.equal(cp.setUriCalls.length, 1);
+  assert.equal(cp.metadataCalls.length, 1);
+});
+
+test('a check left behind by the previous track re-arms nothing', async () => {
+  // The readiness check outlives its own track by the length of the grace window; it must not
+  // resurrect a URI the zone has already replaced.
+  const firstFetch = deferred();
+  const secondFetch = deferred();
+  const { output, cp } = makeOutput([firstFetch, secondFetch]);
+
+  await output.play(makeSession(''));
+  await output.play(makeSession('next track', 'stream-2'));
+  assert.equal(cp.setUriCalls.length, 2, 'each track pushes once');
+
+  firstFetch.settle(null);
+  await flush();
+  assert.equal(cp.setUriCalls.length, 2, 'the stale check re-arms nothing');
+});

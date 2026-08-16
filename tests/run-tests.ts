@@ -136,6 +136,7 @@ import './itemAbout.test';
 import './browseContainerIdentity.test';
 import './outputDelay.test';
 import './outputStreamFormat.test';
+import './dlnaPlaybackReadiness.test';
 import './waveform.test';
 import './serverHealth.test';
 import './mqttTopics.test';
