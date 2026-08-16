@@ -103,6 +103,7 @@ import './isRadioAudiopath.test';
 import './inferAudiotype.test';
 import './playlistTrackParentContext.test';
 import './audioManager.playbackPreDelay.test';
+import './audioManager.pauseResumeSession.test';
 import './sendspinLineInService.test';
 import './sendspinVisualizer.test';
 import './zoneArtworkColors.test';

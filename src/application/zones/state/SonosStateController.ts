@@ -255,6 +255,19 @@ export class SonosStateController implements ZoneStateController {
       this.log.warn('sonos command declined; no active group', { zoneId: this.zone.id, action });
       return false;
     }
+    if (action === 'play') {
+      const strategy = this.resolvePlayStrategy(this.client.player.group);
+      if (strategy.kind === 'none') {
+        // Same reasoning as above, one layer deeper: the speaker is idle and holds nothing of
+        // ours to reload, so every way of saying "play" to it is a no-op. Declining hands the
+        // command to local playback, which restarts the current queue item (issue #345).
+        this.log.debug('sonos play declined; speaker has nothing to resume', {
+          zoneId: this.zone.id,
+          reason: strategy.reason,
+        });
+        return false;
+      }
+    }
     void this.dispatchCommand(action);
     return true;
   }
@@ -439,31 +452,56 @@ export class SonosStateController implements ZoneStateController {
     }
   }
 
-  // For Sonos S2 a bare group.play() relies on the device's internal queue,
-  // which decays after idle (radio stream sessions expire, container becomes
-  // stale). The device then flips to PLAYING for ~200ms and drops back to
-  // STOPPED. Re-issuing playStreamUrl with the cached media URL forces Sonos
-  // to reload the source instead. Falls back to group.play() when paused
-  // (resume should keep position) or when we have no cached URL / no
-  // playStreamUrl (e.g. S1).
-  //
-  // Diagnostic logging is intentionally verbose: when this code misbehaves
-  // we want a single SPAM log to tell us exactly which branch ran, why, and
-  // with what cached state. Tune down once the path is proven reliable.
+  /**
+   * What, if anything, the speaker itself can do with a play command.
+   *
+   * - `resume`: it holds a paused source of its own; group.play() picks it up where it left off.
+   * - `reload`: it is idle but we know the media URL it last reported, so playStreamUrl can put
+   *   the source back. A bare group.play() would not: the device's internal queue decays after
+   *   idle (stream sessions expire, the container goes stale), so it flips to PLAYING for ~200ms
+   *   and drops back to STOPPED.
+   * - `none`: idle with nothing of ours to reload — which is the normal state after we paused our
+   *   own HTTP stream, because Sonos does not pause a length-less stream, it drops it. There is no
+   *   command that revives that, so the caller must hand the play back to local playback (#345).
+   *
+   * Note that `lastTrackMediaUrl` only ever fills for sources Sonos loaded itself: for our own
+   * stream the device reports an empty currentItem, so `reload` is in practice the external-source
+   * path. Music Assistant reaches the same conclusion from the other side and never asks the
+   * speaker to resume its own queue content either (providers/sonos/player.py).
+   */
+  private resolvePlayStrategy(
+    group: AnySonosGroup,
+  ): { kind: 'resume' } | { kind: 'reload'; url: string } | { kind: 'none'; reason: string } {
+    const rawState = String(group.playbackState ?? '');
+    if (rawState.toUpperCase().includes('PAUSED')) {
+      return { kind: 'resume' };
+    }
+    const hasPlayStreamUrl =
+      'playStreamUrl' in group && typeof (group as SonosGroup).playStreamUrl === 'function';
+    if (this.lastTrackMediaUrl && hasPlayStreamUrl) {
+      return { kind: 'reload', url: this.lastTrackMediaUrl };
+    }
+    return {
+      kind: 'none',
+      reason: !this.lastTrackMediaUrl
+        ? 'no-cached-media-url'
+        : 'no-s2-playStreamUrl (S1 or unsupported client)',
+    };
+  }
+
+  // Diagnostic logging is intentionally verbose: when this code misbehaves we want a single
+  // SPAM log to tell us exactly which branch ran, why, and with what cached state. Tune down
+  // once the path is proven reliable.
   private async dispatchPlay(group: AnySonosGroup): Promise<void> {
     const metadata = group.playbackMetadataStatus;
     const currentTrack = metadata?.currentItem?.track;
     const currentContainer = metadata?.container;
-    const rawState = String(group.playbackState ?? '');
-    const isPaused = rawState.toUpperCase().includes('PAUSED');
-    const hasPlayStreamUrl =
-      'playStreamUrl' in group && typeof (group as SonosGroup).playStreamUrl === 'function';
+    const strategy = this.resolvePlayStrategy(group);
 
     this.log.debug('sonos dispatch play: entry', {
       zoneId: this.zone.id,
-      playbackState: rawState,
-      isPaused,
-      hasS2PlayStreamUrl: hasPlayStreamUrl,
+      playbackState: String(group.playbackState ?? ''),
+      strategy: strategy.kind,
       observedTrackMediaUrl: currentTrack?.mediaUrl ?? null,
       observedTrackName: currentTrack?.name ?? null,
       cachedMediaUrl: this.lastTrackMediaUrl,
@@ -475,38 +513,19 @@ export class SonosStateController implements ZoneStateController {
       containerAccountId: currentContainer?.id?.accountId ?? null,
     });
 
-    if (isPaused) {
-      this.log.debug('sonos dispatch play: branch=resume (paused → group.play)', {
-        zoneId: this.zone.id,
-      });
-      await group.play();
-      return;
-    }
-
-    if (this.lastTrackMediaUrl && hasPlayStreamUrl) {
+    if (strategy.kind === 'reload') {
       const container = {
         _objectType: 'container' as const,
         name: this.lastTrackTitle ?? this.zone.name,
         type: 'trackList',
       };
-      this.log.debug('sonos dispatch play: branch=playStreamUrl', {
-        zoneId: this.zone.id,
-        url: this.lastTrackMediaUrl,
-        containerName: container.name,
-      });
-      await (group as SonosGroup).playStreamUrl(this.lastTrackMediaUrl, container);
+      await (group as SonosGroup).playStreamUrl(strategy.url, container);
       return;
     }
 
-    const fallbackReason = !this.lastTrackMediaUrl
-      ? 'no-cached-media-url'
-      : !hasPlayStreamUrl
-        ? 'no-s2-playStreamUrl (S1 or unsupported client)'
-        : 'unknown';
-    this.log.debug('sonos dispatch play: branch=group.play (fallback)', {
-      zoneId: this.zone.id,
-      reason: fallbackReason,
-    });
+    // `none` can still land here when the speaker changed state between handleCommand's check
+    // and this async continuation. group.play() is the only thing left to try, and it is what
+    // the old code did unconditionally.
     await group.play();
   }
 }

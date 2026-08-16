@@ -9,7 +9,12 @@ import type {
   OutputConfigDefinition,
   ZoneOutput,
 } from '@/ports/OutputsTypes';
-import { SonosClient, type SonosGroup, type SonosPlayer } from '@sonn-audio/node-sonos';
+import {
+  SonosClient,
+  type Container as SonosContainer,
+  type SonosGroup,
+  type SonosPlayer,
+} from '@sonn-audio/node-sonos';
 import { resolveDlnaEndpoints } from '@/adapters/outputs/dlna/dlnaDiscovery';
 import { resolveSessionCover, isHttpUrl } from '@/shared/coverArt';
 import {
@@ -118,6 +123,10 @@ const S2_CONNECTION_LOST_ERRORS = new Set([
 function isS2ConnectionLost(err: unknown): boolean {
   return err instanceof Error && S2_CONNECTION_LOST_ERRORS.has(err.name);
 }
+
+/** Identity we stamp on the containers we hand to Sonos; see buildS2Container. */
+const SONOS_CONTAINER_SERVICE_ID = 'sonn';
+const SONOS_CONTAINER_SERVICE_NAME = 'Sonn';
 
 export class SonosOutput implements ZoneOutput {
   public readonly type = 'sonos';
@@ -261,13 +270,13 @@ export class SonosOutput implements ZoneOutput {
     if (!session?.playbackSource) {
       return;
     }
-    if (await this.tryS2Group('pause', (group) => group.pause(), this.commandTimeoutMs)) {
-      return;
-    }
-    if (!(await this.ensureEndpoints())) {
-      return;
-    }
-    await this.runCommand('Pause', this.buildPauseBody());
+    // Sonos cannot pause a source it did not queue itself. Our stream is a length-less HTTP
+    // resource with no range support, and pausing one makes the speaker abort the track rather
+    // than hold it: it reports STOPPED, drops the connection, and afterwards refuses to resume.
+    // Music Assistant hit the same wall and settled on the same answer — stop the speaker and
+    // let the server side own the pause (music-assistant/support#3758, our issue #345). The
+    // resume path re-issues playStreamUrl with the position we kept, which does work.
+    await this.stop(session);
   }
 
   public async resume(session: PlaybackSession | null): Promise<void> {
@@ -803,12 +812,28 @@ export class SonosOutput implements ZoneOutput {
     void client.disconnect().catch(() => undefined);
   }
 
-  private buildS2Container(session: PlaybackSession): { _objectType: 'container'; name: string; type: string } {
+  /**
+   * Metadata that travels with the stream URL. The `id`/`service` block is what makes the
+   * speaker hand our own identity back in its playback metadata: without it the container comes
+   * back as `objectId=-1, serviceId=null` and nothing downstream can tell our stream apart from
+   * something a user started in the Sonos app. Music Assistant tags its containers the same way
+   * and keys its whole "is this mine?" decision off it (providers/sonos/player.py).
+   */
+  private buildS2Container(session: PlaybackSession): SonosContainer {
     const title = session.metadata?.title || this.zoneName;
     return {
       _objectType: 'container',
       name: title,
       type: 'trackList',
+      id: {
+        _objectType: 'id',
+        serviceId: SONOS_CONTAINER_SERVICE_ID,
+        objectId: `${SONOS_CONTAINER_SERVICE_ID}:${this.zoneId}:${session.stream.id}`,
+      },
+      service: {
+        _objectType: 'service',
+        name: SONOS_CONTAINER_SERVICE_NAME,
+      },
     };
   }
 
@@ -1053,18 +1078,6 @@ export class SonosOutput implements ZoneOutput {
       <InstanceID>0</InstanceID>
       <Speed>1</Speed>
     </u:Play>
-  </s:Body>
-</s:Envelope>`;
-  }
-
-  private buildPauseBody(): string {
-    return `<?xml version="1.0" encoding="utf-8"?>
-<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
-  s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
-  <s:Body>
-    <u:Pause xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
-      <InstanceID>0</InstanceID>
-    </u:Pause>
   </s:Body>
 </s:Envelope>`;
   }

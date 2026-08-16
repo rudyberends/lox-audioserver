@@ -50,9 +50,30 @@ test('sonos pause falls back to SOAP and drops the client when the websocket is 
 
   await output.pause(session);
 
-  assert.deepEqual(soapActions, ['Pause']);
+  assert.deepEqual(soapActions, ['Stop'], 'pause of our own stream is sent as Stop; see #345');
   assert.equal(output.s2Client, null, 'stale client must be dropped so the next command reconnects');
   assert.deepEqual(disconnected, [true]);
+});
+
+test('sonos pause stops the speaker instead of pausing our own stream', async () => {
+  // Issue #345 / music-assistant/support#3758: Sonos cannot hold a length-less HTTP stream. It
+  // aborts the track on pause and then refuses to resume it, so the pause lives on our side and
+  // the speaker gets a clean stop that playStreamUrl can reload from.
+  const calls: string[] = [];
+  const { output, soapActions } = createOutput(async () => {
+    calls.push('s2');
+  });
+  output.s2Client.player.group.pause = async () => {
+    calls.push('pause');
+  };
+  output.s2Client.player.group.stop = async () => {
+    calls.push('stop');
+  };
+
+  await output.pause(session);
+
+  assert.deepEqual(calls, ['stop']);
+  assert.deepEqual(soapActions, []);
 });
 
 test('sonos stop and resume survive a stale websocket too', async () => {
@@ -91,7 +112,7 @@ test('sonos keeps the client on a refused command; only connection loss drops it
 
   await output.pause(session);
 
-  assert.deepEqual(soapActions, ['Pause'], 'a refused S2 command still falls back to SOAP');
+  assert.deepEqual(soapActions, ['Stop'], 'a refused S2 command still falls back to SOAP');
   assert.notEqual(output.s2Client, null, 'a refused command says nothing about the socket');
 });
 
@@ -143,16 +164,68 @@ test('a failed pause or stop is not escalated to a fatal playback error', async 
   assert.deepEqual(playErrors, ['Not connected'], 'silence after play must still surface');
 });
 
-test('sonos state controller declines transport commands when it has no live group', () => {
-  const controller = new SonosStateController({
+function createStateController() {
+  return new SonosStateController({
     zone: { id: 5, name: 'Büro', output: { host: '192.168.20.34' } as any } as any,
     onStatePatch: () => undefined,
   } as any) as any;
+}
+
+test('sonos state controller declines transport commands when it has no live group', () => {
+  const controller = createStateController();
 
   assert.equal(controller.handleCommand('play'), false, 'declining hands the command back to local playback');
 
   let dispatched = 0;
-  controller.client = { player: { group: { play: async () => { dispatched += 1; } } } };
+  controller.client = {
+    player: { group: { playbackState: 'PLAYBACK_STATE_PAUSED', play: async () => { dispatched += 1; } } },
+  };
   assert.equal(controller.handleCommand('play'), true);
   assert.equal(controller.handleCommand('nonsense'), false);
+});
+
+test('sonos state controller declines play when the idle speaker has nothing to resume', async () => {
+  // Issue #345: after we paused our own stream the speaker sits IDLE with an empty container, so
+  // group.play() reaches nothing. Declining hands the play to local playback, which restarts the
+  // current queue item — the same conclusion Music Assistant reached for its own queue content.
+  const controller = createStateController();
+  let played = 0;
+  controller.client = {
+    player: { group: { playbackState: 'PLAYBACK_STATE_IDLE', play: async () => { played += 1; } } },
+  };
+
+  assert.equal(controller.handleCommand('play'), false);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(played, 0, 'a play the speaker cannot honour must not be sent at all');
+
+  // Non-play transport commands are unaffected: they act on whatever the speaker is doing.
+  let stopped = 0;
+  controller.client.player.group.stop = async () => { stopped += 1; };
+  assert.equal(controller.handleCommand('stop'), true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(stopped, 1);
+});
+
+test('sonos state controller reloads an idle speaker through the media url it reported itself', async () => {
+  const controller = createStateController();
+  const reloads: Array<{ url: string; container: any }> = [];
+  controller.client = {
+    player: {
+      group: {
+        playbackState: 'PLAYBACK_STATE_IDLE',
+        play: async () => undefined,
+        playStreamUrl: async (url: string, container: any) => {
+          reloads.push({ url, container });
+        },
+      },
+    },
+  };
+  controller.lastTrackMediaUrl = 'http://speaker/radio.mp3';
+  controller.lastTrackTitle = 'Some Station';
+
+  assert.equal(controller.handleCommand('play'), true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(reloads.length, 1);
+  assert.equal(reloads[0]?.url, 'http://speaker/radio.mp3');
+  assert.equal(reloads[0]?.container.name, 'Some Station');
 });

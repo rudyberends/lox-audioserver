@@ -359,9 +359,17 @@ export class AudioManager {
     }
     // If we never tore down the engine, just flip state.
     if (this.playbackService.hasSession(zoneSessionKey(zoneId))) {
+      const now = Date.now();
       session.state = 'playing';
-      session.updatedAt = Date.now();
-      session.startedAt = Date.now() - (session.elapsed ?? 0) * 1000;
+      session.updatedAt = now;
+      session.startedAt = now - (session.elapsed ?? 0) * 1000;
+      // Restart the "is this session actively driving?" grace window, exactly as a restart on an
+      // existing session does. An output that dropped its HTTP connection during the pause (Sonos
+      // always does) needs a moment to come back, and until it has, subscriber count is 0 —
+      // without this the stale timestamps make hasActiveLocalSession say no and the first state
+      // patch from the speaker tears the session down mid-resume.
+      session.playbackStartedAt = now;
+      session.firstAudioReadyAt = undefined;
       this.log.debug('playback resumed (reusing engine session)', { zoneId, source: session.source });
       return session;
     }

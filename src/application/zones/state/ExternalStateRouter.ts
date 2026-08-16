@@ -1,6 +1,6 @@
 import type { ComponentLogger } from '@/shared/logging/logger';
 import type { ZoneState } from '@/domain/zones/zoneState';
-import type { AudioManager } from '@/application/playback/audioManager';
+import type { AudioManager, PlaybackSession } from '@/application/playback/audioManager';
 import type { ZoneRepository } from '@/application/zones/ZoneRepository';
 import type { QueueItem } from '@/application/zones/internal/zoneTypes';
 import { resolveZoneStateControllerId } from '@/application/zones/state/authorityPolicies';
@@ -52,7 +52,23 @@ export class ExternalStateRouter {
       this.deps.applyPatch(zoneId, propagated);
       return;
     }
-    if (this.deps.audioManager.getSession(zoneId)) {
+    const session = this.deps.audioManager.getSession(zoneId);
+    if (session) {
+      if (isOwnPauseEcho(session, patch)) {
+        // Not a stale session: it is the pause we just performed, coming back at us. Sonos does
+        // not pause a length-less HTTP stream — it drops the connection and reports STOPPED —
+        // so tearing the session down here is what left the zone with nothing to resume and the
+        // follow-up play deflected to the controller (issue #345). Keep the session (its source
+        // and elapsed position are the resume point) and keep reporting 'pause': the local state
+        // is authoritative for our own content, exactly as time/duration are above.
+        const propagated: Partial<ZoneState> = { ...patch };
+        delete propagated.mode;
+        delete propagated.time;
+        delete propagated.duration;
+        if (Object.keys(propagated).length === 0) return;
+        this.deps.applyPatch(zoneId, propagated);
+        return;
+      }
       // Session object can outlive real output playback; drop it before accepting external authority.
       this.deps.audioManager.stopPlayback(zoneId);
       this.deps.log.info('cleared stale local session before external state patch', {
@@ -90,4 +106,16 @@ export class ExternalStateRouter {
     }
     this.deps.notifyQueueUpdated(zoneId, items.length);
   }
+}
+
+/**
+ * True when the patch is the speaker echoing back a pause we performed ourselves.
+ *
+ * A paused session that still owns a playback source is ours by definition — a zone only reaches
+ * that state through our own pause path. What ends it is the device reporting that it is playing
+ * again: that is either our resume (which flips the session back to 'playing' first, so it never
+ * gets here) or something else taking the speaker over, and then the session really is stale.
+ */
+function isOwnPauseEcho(session: PlaybackSession, patch: Partial<ZoneState>): boolean {
+  return session.state === 'paused' && Boolean(session.playbackSource) && patch.mode !== 'play';
 }

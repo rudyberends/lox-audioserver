@@ -111,6 +111,45 @@ test('ExternalStateRouter onStatePatch clears stale session before external auth
   assert.deepEqual(fakes.applied[0]?.patch, { volume: 70, mode: 'stop' });
 });
 
+test('ExternalStateRouter onStatePatch keeps a paused session when the speaker reports it stopped', () => {
+  // Issue #345: Sonos does not pause our length-less HTTP stream, it drops it and reports
+  // STOPPED. Treating that echo as a stale session tore down the engine, which left the zone
+  // with nothing to resume and deflected the follow-up play to the state controller.
+  const { router, fakes } = buildRouter({ controller: 'sonos' });
+  fakes.sessions.set(1, { state: 'paused', playbackSource: { kind: 'file' } } as PlaybackSession);
+  router.onStatePatch(1, { mode: 'stop', title: 'Our track', time: 0, duration: 296 });
+  assert.deepEqual(fakes.stopCalls, [], 'the session is the resume point and must survive');
+  assert.equal(fakes.applied.length, 1);
+  assert.deepEqual(
+    fakes.applied[0]?.patch,
+    { title: 'Our track' },
+    'local state stays authoritative for mode/time/duration of our own content',
+  );
+});
+
+test('ExternalStateRouter onStatePatch drops a paused session once the speaker plays something else', () => {
+  const { router, fakes } = buildRouter({ controller: 'sonos' });
+  fakes.sessions.set(1, { state: 'paused', playbackSource: { kind: 'file' } } as PlaybackSession);
+  router.onStatePatch(1, { mode: 'play', title: 'Foreign' });
+  assert.deepEqual(fakes.stopCalls, [1], 'a real external takeover still clears the session');
+  assert.deepEqual(fakes.applied[0]?.patch, { mode: 'play', title: 'Foreign' });
+});
+
+test('ExternalStateRouter onStatePatch still clears a paused output-only session', () => {
+  // No playbackSource means no engine and no resume point, so there is nothing to protect.
+  const { router, fakes } = buildRouter({ controller: 'sonos' });
+  fakes.sessions.set(1, { state: 'paused', playbackSource: null } as PlaybackSession);
+  router.onStatePatch(1, { mode: 'stop' });
+  assert.deepEqual(fakes.stopCalls, [1]);
+});
+
+test('ExternalStateRouter onStatePatch drops mode-only echoes for a paused session', () => {
+  const { router, fakes } = buildRouter({ controller: 'sonos' });
+  fakes.sessions.set(1, { state: 'paused', playbackSource: { kind: 'file' } } as PlaybackSession);
+  router.onStatePatch(1, { mode: 'stop' });
+  assert.equal(fakes.applied.length, 0, 'nothing is left to apply, so no broadcast');
+});
+
 test('ExternalStateRouter onStatePatch applies fully when no local session and no stale session', () => {
   const { router, fakes } = buildRouter({ controller: 'beolink' });
   router.onStatePatch(1, { volume: 70, mode: 'play' });
