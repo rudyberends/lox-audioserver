@@ -392,6 +392,7 @@ async function handleSystemUpdate(
           loxoneEnabled?: boolean;
           setupComplete?: boolean;
           managedPlayers?: boolean;
+          crossfadeSec?: number;
         };
         miniserver?: { ip?: string; port?: number; protocol?: 'http' | 'https' };
       }
@@ -416,6 +417,7 @@ async function handleSystemUpdate(
   const rawLoxoneEnabled = hasAudioserver ? body.audioserver!.loxoneEnabled : undefined;
   const rawSetupComplete = hasAudioserver ? body.audioserver!.setupComplete : undefined;
   const rawManagedPlayers = hasAudioserver ? body.audioserver!.managedPlayers : undefined;
+  const rawCrossfadeSec = hasAudioserver ? body.audioserver!.crossfadeSec : undefined;
   const rawMiniserverIp = hasMiniserver ? body.miniserver!.ip : undefined;
   const rawMiniserverPort = hasMiniserver ? body.miniserver!.port : undefined;
   const rawMiniserverProtocol = hasMiniserver ? body.miniserver!.protocol : undefined;
@@ -426,6 +428,7 @@ async function handleSystemUpdate(
     typeof rawLoxoneEnabled !== 'boolean' &&
     typeof rawSetupComplete !== 'boolean' &&
     typeof rawManagedPlayers !== 'boolean' &&
+    typeof rawCrossfadeSec !== 'number' &&
     typeof rawMiniserverIp !== 'string' &&
     typeof rawMiniserverPort !== 'number' &&
     typeof rawMiniserverProtocol !== 'string'
@@ -456,6 +459,15 @@ async function handleSystemUpdate(
       return;
     }
     normalizedIp = trimmedIp;
+  }
+  // 0 disables crossfading; the upper bound matches the admin UI's input range.
+  let normalizedCrossfadeSec: number | null = null;
+  if (typeof rawCrossfadeSec === 'number') {
+    if (!Number.isFinite(rawCrossfadeSec) || rawCrossfadeSec < 0 || rawCrossfadeSec > 20) {
+      deps.sendJson(res, 400, { error: 'invalid-crossfade-sec' });
+      return;
+    }
+    normalizedCrossfadeSec = rawCrossfadeSec;
   }
   let normalizedMiniserverIp: string | null = null;
   if (typeof rawMiniserverIp === 'string') {
@@ -506,6 +518,9 @@ async function handleSystemUpdate(
     }
     if (typeof rawManagedPlayers === 'boolean') {
       cfg.system.audioserver.managedPlayers = rawManagedPlayers;
+    }
+    if (normalizedCrossfadeSec !== null) {
+      cfg.system.audioserver.crossfadeSec = normalizedCrossfadeSec;
     }
     if (typeof rawLoxoneEnabled === 'boolean') {
       cfg.system.audioserver.loxoneEnabled = rawLoxoneEnabled;
