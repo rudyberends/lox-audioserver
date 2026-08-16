@@ -118,6 +118,7 @@ import './alertHandlers.playeventfile.test';
 import './alertHandlers.zoneRoutes.test';
 import './alertsCoordinator.test';
 import './alertsManager.volume.test';
+import './ttsProviders.test';
 import './loxberryTtsProvider.test';
 import './zoneHandlers.roomfavs.test';
 import './favoritesManager.compat.test';

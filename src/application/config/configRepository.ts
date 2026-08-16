@@ -2,9 +2,11 @@ import path from 'node:path';
 import type { StoragePort } from '@/ports/StoragePort';
 import { defaultMacId } from '@/shared/utils/mac';
 import { defaultLocalIp } from '@/shared/utils/net';
+import { OPENAI_TTS_FORMATS } from '@/domain/config/types';
 import type {
   AudioServerConfig,
   LoxBerryTtsProviderConfig,
+  OpenAiTtsProviderConfig,
   RawAudioConfig,
   TtsProviderConfig,
   ZoneConfig,
@@ -252,33 +254,82 @@ export function normalizeContent(config: AudioServerConfig): boolean {
 
 function normalizeTtsProvider(provider: unknown): TtsProviderConfig {
   if (typeof provider === 'string') {
-    return { type: provider === 'loxberry-tts' ? 'loxberry-tts' : 'internal' } as TtsProviderConfig;
+    return isExternalProviderType(provider) ? ({ type: provider } as TtsProviderConfig) : { type: 'internal' };
   }
   if (!provider || typeof provider !== 'object') {
     return { type: 'internal' };
   }
-  const { port: legacyPort, ...raw } = provider as Partial<LoxBerryTtsProviderConfig> & { type?: string; port?: number };
-  if (raw.type !== 'loxberry-tts') {
-    return { type: 'internal' };
+  const raw = provider as { type?: string };
+  switch (raw.type) {
+    case 'loxberry-tts':
+      return normalizeLoxBerryTtsProvider(provider);
+    case 'openai-tts':
+      return normalizeOpenAiTtsProvider(provider);
+    default:
+      return { type: 'internal' };
   }
-  const mqttPort =
-    typeof raw.mqttPort === 'number' && Number.isInteger(raw.mqttPort) && raw.mqttPort > 0 && raw.mqttPort <= 65535
-      ? raw.mqttPort
-      : typeof legacyPort === 'number' && Number.isInteger(legacyPort) && legacyPort > 0 && legacyPort <= 65535
-        ? legacyPort
-        : undefined;
-  const timeoutMs =
-    typeof raw.timeoutMs === 'number' && Number.isFinite(raw.timeoutMs) && raw.timeoutMs > 0
-      ? Math.round(raw.timeoutMs)
-      : undefined;
+}
+
+function isExternalProviderType(value: string): value is 'loxberry-tts' | 'openai-tts' {
+  return value === 'loxberry-tts' || value === 'openai-tts';
+}
+
+function normalizeLoxBerryTtsProvider(provider: unknown): LoxBerryTtsProviderConfig {
+  const { port: legacyPort, ...raw } = provider as Partial<LoxBerryTtsProviderConfig> & { port?: number };
+  const mqttPort = normalizePort(raw.mqttPort) ?? normalizePort(legacyPort);
   return {
     ...raw,
     type: 'loxberry-tts',
     enabled: raw.enabled !== false,
     protocol: raw.protocol === 'mqtts' ? 'mqtts' : 'mqtt',
     mqttPort,
-    timeoutMs,
+    timeoutMs: normalizeTimeoutMs(raw.timeoutMs),
   };
+}
+
+function normalizeOpenAiTtsProvider(provider: unknown): OpenAiTtsProviderConfig {
+  const raw = provider as Partial<OpenAiTtsProviderConfig>;
+  const format = OPENAI_TTS_FORMATS.find((candidate) => candidate === raw.format);
+  const speed =
+    typeof raw.speed === 'number' && Number.isFinite(raw.speed)
+      ? Math.min(Math.max(raw.speed, 0.25), 4)
+      : undefined;
+  return {
+    ...raw,
+    type: 'openai-tts',
+    enabled: raw.enabled !== false,
+    baseUrl: trimmedOrUndefined(raw.baseUrl),
+    apiKey: trimmedOrUndefined(raw.apiKey),
+    model: trimmedOrUndefined(raw.model),
+    voice: trimmedOrUndefined(raw.voice),
+    instructions: trimmedOrUndefined(raw.instructions),
+    voiceByLanguage: normalizeVoiceByLanguage(raw.voiceByLanguage),
+    format,
+    speed,
+    timeoutMs: normalizeTimeoutMs(raw.timeoutMs),
+  };
+}
+
+function normalizeVoiceByLanguage(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .map(([code, voice]) => [code.trim().toLowerCase(), typeof voice === 'string' ? voice.trim() : ''] as const)
+    .filter(([code, voice]) => code.length > 0 && voice.length > 0);
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function normalizePort(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 65535 ? value : undefined;
+}
+
+function normalizeTimeoutMs(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
+}
+
+function trimmedOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeZoneInputs(zone: ZoneConfig): void {

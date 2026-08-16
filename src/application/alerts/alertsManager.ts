@@ -2,10 +2,11 @@ import { createLogger } from '@/shared/logging/logger';
 import path from 'node:path';
 import { FileAlertProvider } from '@/application/alerts/fileAlertProvider';
 import { GoogleTtsProvider } from '@/application/alerts/googleTtsProvider';
-import { LoxBerryTtsProvider } from '@/application/alerts/loxberryTtsProvider';
+import { createTtsProvider, isExternalTtsProvider } from '@/application/alerts/ttsProviderFactory';
+import type { TtsProvider } from '@/application/alerts/ttsProvider';
 import type { AlertAction, AlertActionResult, AlertMediaResource } from '@/application/alerts/types';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
-import type { LoxBerryTtsProviderConfig, ZoneVolumesConfig } from '@/domain/config/types';
+import type { TtsProviderConfig, ZoneVolumesConfig } from '@/domain/config/types';
 import type { ConfigPort } from '@/ports/ConfigPort';
 
 const DEFAULT_ALERT_VOLUME = 30;
@@ -17,7 +18,7 @@ export class AlertsManager {
   private readonly log = createLogger('Alerts', 'Manager');
   private readonly fileProvider = new FileAlertProvider();
   private readonly internalTtsProvider = new GoogleTtsProvider();
-  private readonly externalProviders = new Map<string, LoxBerryTtsProvider>();
+  private readonly externalProviders = new Map<string, TtsProvider>();
   private zoneManager: ZoneManagerFacade | null = null;
   private configPort: ConfigPort | null = null;
 
@@ -162,30 +163,36 @@ export class AlertsManager {
 
   private async resolveTtsMedia(text: string, language: string): Promise<AlertMediaResource | undefined> {
     const ttsConfig = this.configPort?.getConfig().content?.tts;
-    const provider = ttsConfig?.provider;
+    const providerConfig = ttsConfig?.provider;
     const fallbackToInternal = ttsConfig?.fallbackToInternal !== false;
-    if (provider?.type === 'loxberry-tts') {
-      if (provider.enabled !== false) {
-        const media = await this.getExternalProvider(provider).generate(text, language);
-        if (media || !fallbackToInternal) {
-          return media;
-        }
-        this.log.warn('falling back to internal TTS provider', { provider: provider.type });
-      } else if (!fallbackToInternal) {
-        return undefined;
+    const external = this.getExternalProvider(providerConfig);
+    if (external) {
+      const media = await external.generate(text, language);
+      if (media || !fallbackToInternal) {
+        return media;
       }
+      this.log.warn('falling back to internal TTS provider', { provider: providerConfig?.type });
+    } else if (isExternalTtsProvider(providerConfig) && !fallbackToInternal) {
+      // An external provider is configured but switched off, and the operator
+      // asked for no fallback — staying silent is the configured answer.
+      return undefined;
     }
     return this.internalTtsProvider.generate(text, language);
   }
 
-  private getExternalProvider(providerConfig: LoxBerryTtsProviderConfig): LoxBerryTtsProvider {
+  private getExternalProvider(providerConfig: TtsProviderConfig | undefined): TtsProvider | null {
+    if (!isExternalTtsProvider(providerConfig)) {
+      return null;
+    }
     const cacheKey = JSON.stringify(providerConfig);
     const existing = this.externalProviders.get(cacheKey);
     if (existing) {
       return existing;
     }
-    const provider = new LoxBerryTtsProvider(providerConfig);
-    this.externalProviders.set(cacheKey, provider);
+    const provider = createTtsProvider(providerConfig);
+    if (provider) {
+      this.externalProviders.set(cacheKey, provider);
+    }
     return provider;
   }
 

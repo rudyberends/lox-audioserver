@@ -306,10 +306,45 @@ export interface TtsContentConfig {
   fallbackToInternal?: boolean;
 }
 
-export type TtsProviderConfig = InternalTtsProviderConfig | LoxBerryTtsProviderConfig;
+export type TtsProviderConfig =
+  | InternalTtsProviderConfig
+  | LoxBerryTtsProviderConfig
+  | OpenAiTtsProviderConfig;
 
 export interface InternalTtsProviderConfig {
   type: 'internal';
+}
+
+/** Audio containers `/v1/audio/speech` can answer in that carry their own header. */
+export const OPENAI_TTS_FORMATS = ['mp3', 'opus', 'aac', 'flac', 'wav'] as const;
+
+export type OpenAiTtsFormat = (typeof OPENAI_TTS_FORMATS)[number];
+
+/**
+ * Any server speaking OpenAI's `/v1/audio/speech` schema — OpenAI, a router
+ * such as OpenRouter or LiteLLM, or a local engine like Kokoro-FastAPI.
+ */
+export interface OpenAiTtsProviderConfig {
+  type: 'openai-tts';
+  enabled?: boolean;
+  /** Origin, `…/v1`, or the full speech URL. Defaults to OpenAI's own. */
+  baseUrl?: string;
+  /** Optional: local servers usually accept any key, or none at all. */
+  apiKey?: string;
+  model?: string;
+  voice?: string;
+  format?: OpenAiTtsFormat;
+  /** Playback rate the backend renders at, 0.25–4.0. */
+  speed?: number;
+  /**
+   * Voice per language code, for backends that ship language-specific voices.
+   * The schema has no language field, so this is the only way the requested
+   * language can reach the backend.
+   */
+  voiceByLanguage?: Record<string, string>;
+  /** Style direction, honoured by `gpt-4o-mini-tts` and some local engines. */
+  instructions?: string;
+  timeoutMs?: number;
 }
 
 export interface LoxBerryTtsProviderConfig {
