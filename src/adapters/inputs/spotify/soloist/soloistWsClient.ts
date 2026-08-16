@@ -1,6 +1,4 @@
 import { EventEmitter } from 'node:events';
-import fsp from 'node:fs/promises';
-import path from 'node:path';
 import WebSocket from 'ws';
 import { createLogger } from '@/shared/logging/logger';
 
@@ -55,6 +53,11 @@ export type SoloistStateEvent = {
   is_active?: boolean;
 };
 
+/** Soloist refuses anything outside 0-100, and a zone's level can arrive as a fraction. */
+export function clampVolume(volume: number): number {
+  return Math.max(0, Math.min(100, Math.round(volume)));
+}
+
 /** Title, artist, album, duration and art, as this server's metadata shape wants them. */
 export function readTrack(item: SoloistItem | undefined): {
   uri?: string;
@@ -89,8 +92,9 @@ export function readTrack(item: SoloistItem | undefined): {
 /**
  * The control channel of one zone's Soloist.
  *
- * Soloist writes the port it chose into `<data-dir>/ws.port` once it is up, so the address is
- * discovered rather than configured — which also means a zone cannot collide with another.
+ * On a port this server picked and handed the process, so there is nothing to discover: Soloist
+ * publishes the number it chose for itself only when it was given one, which leaves a process
+ * started on port 0 listening somewhere unknowable. See `startPersistent`.
  */
 export class SoloistWsClient extends EventEmitter {
   private readonly log = createLogger('Input', 'SoloistWs');
@@ -103,7 +107,7 @@ export class SoloistWsClient extends EventEmitter {
 
   constructor(
     private readonly zoneId: number,
-    private readonly dataDir: string,
+    private readonly port: number,
   ) {
     super();
     // Defensive: nothing here emits 'error', but an EventEmitter without a listener for it throws,
@@ -113,19 +117,18 @@ export class SoloistWsClient extends EventEmitter {
 
   public async connect(timeoutMs = 15_000): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
-    const port = await this.waitForPort(timeoutMs);
-    if (port === null) {
-      this.log.warn('soloist never published a websocket port', { zoneId: this.zoneId });
-      return false;
-    }
-    // The port appears a moment before the socket accepts, so a single refusal means "not yet"
-    // rather than "not there". Giving up on the first one killed the process that was starting.
+    // The process takes a moment to bind, so a refusal means "not yet" rather than "not there".
+    // Giving up on the first one killed the process that was starting.
     while (Date.now() < deadline) {
-      if (await this.tryConnect(port)) {
+      if (await this.tryConnect(this.port)) {
         return true;
       }
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
+    this.log.warn('soloist never answered on its control port', {
+      zoneId: this.zoneId,
+      port: this.port,
+    });
     return false;
   }
 
@@ -157,24 +160,6 @@ export class SoloistWsClient extends EventEmitter {
         }
       });
     });
-  }
-
-  private async waitForPort(timeoutMs: number): Promise<number | null> {
-    const portFile = path.join(this.dataDir, 'ws.port');
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      try {
-        const raw = (await fsp.readFile(portFile, 'utf8')).trim();
-        const port = Number.parseInt(raw, 10);
-        if (Number.isFinite(port) && port > 0) {
-          return port;
-        }
-      } catch {
-        /* not written yet */
-      }
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-    return null;
   }
 
   private handleMessage(raw: WebSocket.RawData): void {
@@ -285,6 +270,17 @@ export class SoloistWsClient extends EventEmitter {
 
   public seek(positionMs: number): boolean {
     return this.send('seek', { position_ms: Math.max(0, Math.round(positionMs)) });
+  }
+
+  /**
+   * Tell Spotify what level the room is at, so the app's slider stands where the zone does.
+   *
+   * A label, not a taper. Soloist is started at 100 and never attenuates, and the sound card it
+   * plays into keeps the level it is handed rather than applying it — so this number reaches the
+   * slider and the volume Connect reports for this device, and nothing else.
+   */
+  public setVolume(volume: number): boolean {
+    return this.send('set_volume', { volume: clampVolume(volume) });
   }
 
   /**

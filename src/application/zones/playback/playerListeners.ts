@@ -27,6 +27,8 @@ type PlayerListenerCoordinator = {
     payload: PlaybackSession | null | undefined,
   ) => void;
   dispatchVolume: (ctx: ZoneContext, outputs: ZoneOutput[], volume: number) => void;
+  /** Say what the room is at, for an input whose own client draws a slider for it. */
+  spotifyVolume?: (zoneId: number, volume: number) => void;
   buildAbsoluteCoverUrl: (pathname: string) => string;
   audioHelpers: ZoneAudioHelpers;
   stopAlert: (zoneId: number) => Promise<void>;
@@ -163,6 +165,10 @@ function onPlayerStarted(
       outputs: outputs.map((o) => o.type),
     });
     coordinator.dispatchVolume(ctx, outputs, volume);
+    // And to the Spotify app, when Spotify is what started. A Connect device carries a level of its
+    // own, remembered from whenever it last played; saying what the room is at replaces it, so the
+    // slider stands where the zone does instead of where some other room left it.
+    coordinator.spotifyVolume?.(zoneId, volume);
     const patch = {
       ...buildStartedPatch({ ctx, session, audioHelpers: coordinator.audioHelpers }),
       volume,
@@ -328,6 +334,10 @@ function onPlayerVolume(
   const clamped = clampVolumeForZone(ctx.config, level);
   coordinator.applyPatch(zoneId, buildVolumePatch(clamped));
   coordinator.dispatchVolume(ctx, outputs, clamped);
+  // Every volume the zone settles on passes here — a command, a mute, a group, or the Spotify app
+  // itself. Told unconditionally: only the input service can say whether Spotify is what this room
+  // is playing, and a level it has just reported is one it already knows, so nothing echoes.
+  coordinator.spotifyVolume?.(zoneId, clamped);
 }
 
 function onPlayerEnded(coordinator: PlayerListenerCoordinator, zoneId: number): void {

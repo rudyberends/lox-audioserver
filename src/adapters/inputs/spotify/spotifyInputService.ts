@@ -1980,6 +1980,20 @@ export class SpotifyInputService {
     return this.soloist.skip(zoneId, normalized);
   }
 
+  /**
+   * Put a zone's level on the Spotify app's slider, for the backend that can be told.
+   *
+   * Only Soloist: librespot's device volume is its own software gain, and setting it would put a
+   * second taper on audio the zone has already turned down. Soloist is run at full scale and the
+   * sound card it plays into ignores the level, so there the number is nothing but the label.
+   */
+  public setDeviceVolume(zoneId: number, volumePercent: number): void {
+    if (!this.soloist.isEnabled()) {
+      return;
+    }
+    this.soloist.setVolume(zoneId, volumePercent);
+  }
+
   public configure(controller: SpotifyConnectController): void {
     this.controller = controller;
     // The soloist backend needs the same way back into a zone: with its process always running,

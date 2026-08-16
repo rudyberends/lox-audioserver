@@ -150,6 +150,10 @@ export class InputsAdapter implements InputsPort {
     this.deps.airplay.remoteVolume(...args);
   }
 
+  public spotifyVolume(...args: Parameters<InputsPort['spotifyVolume']>): void {
+    this.deps.spotify.setDeviceVolume(...args);
+  }
+
   public async playerCommand(
     ...args: Parameters<InputsPort['playerCommand']>
   ): ReturnType<InputsPort['playerCommand']> {

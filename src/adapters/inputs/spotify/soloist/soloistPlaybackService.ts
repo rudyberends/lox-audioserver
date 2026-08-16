@@ -1,5 +1,3 @@
-import fsp from 'node:fs/promises';
-import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
@@ -9,12 +7,14 @@ import {
   applyPreferences,
   isZonePaired,
   probeBinary,
+  reserveWsPort,
   soloistDataDir,
   startPersistent,
   type SoloistRunHandle,
 } from '@/adapters/inputs/spotify/soloist/soloistProcess';
 import { fetchBuild } from '@/adapters/inputs/spotify/soloist/soloistUpdater';
 import {
+  clampVolume,
   readTrack,
   SoloistWsClient,
   type SoloistQueueEntry,
@@ -32,6 +32,13 @@ const PLAY_START_TIMEOUT_MS = 20_000;
  * costs a couple of hundred bytes, so there is nothing to save by doing it less.
  */
 const BUILD_CHECK_INTERVAL_MS = 24 * 3600_000;
+/**
+ * How long a volume arriving around an activation is treated as Connect's rather than a listener's.
+ *
+ * Four seconds, the same window the librespot backend needed: the handshake reports the device's
+ * stored level once the account moves, sometimes more than once, and always within a moment of it.
+ */
+const ACTIVATION_VOLUME_LATCH_MS = 4000;
 
 export type SoloistReadiness =
   | { ready: true }
@@ -46,6 +53,14 @@ export type SoloistReadiness =
  * would cut off the very thing they asked for.
  */
 type Owner = 'queue' | 'connect';
+
+/**
+ * The volume Connect hands a device when that device takes the account, still to be dropped.
+ *
+ * `value` is empty until the first one arrives: which level it is cannot be known in advance, and
+ * recognising its repeats after the window has closed is the whole point of remembering it.
+ */
+export type VolumeLatch = { until: number; value: number | null };
 
 /** One zone's Soloist: the process, its control channel, and whatever it is playing. */
 type ZoneRunner = {
@@ -79,6 +94,16 @@ type ZoneRunner = {
    */
   starting: boolean;
   stream: Readable | null;
+  /**
+   * The level this zone and Soloist last agreed on.
+   *
+   * Both directions write it, which is what keeps them from chasing each other: a `set_volume` of
+   * ours comes straight back as a `volume_changed`, and a level equal to the one already agreed is
+   * nobody asking for anything.
+   */
+  volume: number | null;
+  /** Armed while the volume Connect reports for an activation is still to be ignored. */
+  volumeLatch: VolumeLatch | null;
 };
 
 /**
@@ -98,6 +123,48 @@ export function classifyTrackChange(
     return 'ours';
   }
   return queue.previous.includes(uri) ? 'back' : 'forward';
+}
+
+/**
+ * Whether a volume Soloist reports is somebody moving the slider in the Spotify app.
+ *
+ * Two kinds are not. Our own `set_volume` arrives back as a `volume_changed` a moment later, and
+ * Connect hands a device its stored level the instant that device takes the account — the device
+ * picker's slider rather than anyone's hand, and following it would overwrite the zone's own
+ * default at the start of every session. So a level inside the activation window is dropped, and
+ * afterwards only repeats of the one seen there.
+ *
+ * The window has to expire even when nothing arrived in it. Measured on a real start, the burst
+ * either never comes or comes while the zone is still setting the track up, where every event is
+ * ignored anyway — and a latch left waiting for it swallows the first genuine turn of the knob
+ * instead. Its late arrival is the lesser risk of the two, and the level this server sends on
+ * starting makes it unlikely: what Connect then has stored for the device is the room's own level.
+ *
+ * The latch that comes back is what the caller should keep: `null` once released.
+ */
+export function classifyVolumeReport(args: {
+  level: number;
+  /** The level the zone and Soloist last agreed on, if any. */
+  agreed: number | null;
+  latch: VolumeLatch | null;
+  now: number;
+}): { follow: boolean; latch: VolumeLatch | null; reason: 'listener' | 'echo' | 'activation' } {
+  const { level, agreed, latch, now } = args;
+  if (level === agreed) {
+    return { follow: false, latch, reason: 'echo' };
+  }
+  if (latch && now < latch.until) {
+    // The first one seen is Connect's, and remembering it keeps its repeats recognisable later.
+    return {
+      follow: false,
+      latch: { until: latch.until, value: latch.value ?? level },
+      reason: 'activation',
+    };
+  }
+  if (latch && latch.value !== null && level === latch.value) {
+    return { follow: false, latch, reason: 'activation' };
+  }
+  return { follow: true, latch: null, reason: 'listener' };
 }
 
 function urisOf(entries: SoloistQueueEntry[] | undefined): string[] {
@@ -390,15 +457,25 @@ export class SoloistPlaybackService {
     // the next track, so setting it after would leave the first one at whatever it defaulted to.
     await applyPreferences(zoneId, this.settings.lossless !== false);
 
-    // Clear the port file first. Soloist writes it once it is listening, so a leftover from the
-    // previous run is read as this one's address — the connection is refused, and the process that
-    // was about to publish the real port gets killed for it.
-    await fsp.rm(path.join(soloistDataDir(zoneId), 'ws.port'), { force: true }).catch(() => undefined);
+    // The control channel's port is settled here rather than by Soloist, so there is nothing to
+    // wait for a file to tell us. A zone whose port cannot be reserved gets no process: it would
+    // play and then answer to nothing, which is worse than saying so.
+    let wsPort: number;
+    try {
+      wsPort = await reserveWsPort();
+    } catch (error) {
+      this.log.warn('no free port for this zone\'s control channel', {
+        zoneId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
 
     const handle = startPersistent({
       zoneId,
       apiKey,
       deviceName: this.zoneName(zoneId),
+      wsPort,
       env: await this.audio.childEnv(zoneId),
     });
     void handle.expiresInDays.then((days) => {
@@ -407,7 +484,7 @@ export class SoloistPlaybackService {
       }
     });
 
-    const ws = new SoloistWsClient(zoneId, soloistDataDir(zoneId));
+    const ws = new SoloistWsClient(zoneId, wsPort);
     if (!(await ws.connect())) {
       handle.stop();
       return null;
@@ -429,6 +506,8 @@ export class SoloistPlaybackService {
       selfPaused: false,
       starting: false,
       stream: null,
+      volume: null,
+      volumeLatch: null,
     };
     ws.on('event', (event: SoloistStateEvent) => this.onEvent(zoneId, event));
     // If the process dies the control channel goes with it; drop the runner so the next play
@@ -489,6 +568,14 @@ export class SoloistPlaybackService {
         this.finishTrack(zoneId);
         this.controller?.transport(zoneId, 'stop');
       }
+      return;
+    }
+
+    // The slider in the Spotify app. Only `volume_changed` — the level rides along on every
+    // `playback_state` as well, where it says what the device is set to rather than that anybody
+    // just changed it, and acting on those would put the app's level back on the zone continually.
+    if (event.type === 'volume_changed' && typeof event.volume === 'number') {
+      this.onVolumeReported(zoneId, runner, event.volume);
       return;
     }
 
@@ -636,6 +723,64 @@ export class SoloistPlaybackService {
   }
 
   /**
+   * A level the Spotify app set, on its way to the zone's own volume.
+   *
+   * Deliberately the zone's volume rather than a gain on the way in: Soloist is run at 100 and the
+   * sound card it plays into keeps the level it is handed instead of applying it, so this number
+   * has touched no samples. Handing it to the zone puts it exactly where a listener turning the
+   * knob in any other client puts it — at the output, which for most of them is the speaker's own
+   * volume — and it costs the stream nothing.
+   */
+  private onVolumeReported(zoneId: number, runner: ZoneRunner, reported: number): void {
+    const level = clampVolume(reported);
+    const verdict = classifyVolumeReport({
+      level,
+      agreed: runner.volume,
+      latch: runner.volumeLatch,
+      now: Date.now(),
+    });
+    runner.volumeLatch = verdict.latch;
+    if (!verdict.follow) {
+      this.log.debug('not following a volume soloist reported', {
+        zoneId,
+        level,
+        reason: verdict.reason,
+      });
+      return;
+    }
+    runner.volume = level;
+    this.log.info('the spotify app set this zone\'s volume', { zoneId, level });
+    this.controller?.zoneVolume(zoneId, level);
+  }
+
+  /**
+   * Put the zone's own level on the app's slider.
+   *
+   * Only for a zone Soloist is carrying. Every zone has a process — that is what makes it pickable
+   * in the app at all — and telling an idle one would move the slider of a room playing something
+   * else, and spend a Connect state update saying so.
+   *
+   * Returns whether it was this backend's to answer, so a caller can try elsewhere.
+   */
+  public setVolume(zoneId: number, level: number): boolean {
+    const runner = this.runners.get(zoneId);
+    if (!runner || !runner.ws.isActive) {
+      return false;
+    }
+    if (runner.owner !== 'connect' && !runner.wantedUri) {
+      return false;
+    }
+    const clamped = clampVolume(level);
+    if (clamped === runner.volume) {
+      return true;
+    }
+    // Somebody has settled what the room is at, which is the question the latch was holding open.
+    runner.volumeLatch = null;
+    runner.volume = clamped;
+    return runner.ws.setVolume(clamped);
+  }
+
+  /**
    * Follow playback that started in the Spotify app.
    *
    * The zone is a Connect device whenever its Soloist is up, so this can happen at any moment and
@@ -658,6 +803,10 @@ export class SoloistPlaybackService {
     runner.ws.requestQueue();
 
     if (!runner.stream) {
+      // A takeover is an activation as much as one of ours is, and it arrives with the level the
+      // app remembered for this device. The zone applies its own on starting, so the same latch
+      // keeps Connect's out of the way here.
+      runner.volumeLatch = { until: Date.now() + ACTIVATION_VOLUME_LATCH_MS, value: null };
       // The first track of a session has to wait for the player to say what it plays in; after
       // that the answer is already there. Without this a takeover that arrives before the player
       // has opened its stream finds no format and gives up, and nothing tries again.
@@ -766,6 +915,10 @@ export class SoloistPlaybackService {
       // session is a request to the account, and Spotify sends it to whichever room does hold it —
       // so starting a track in the kitchen started it in the living room instead.
       if (!runner.ws.isActive) {
+        // Taking the account brings the device's stored volume with it. The zone's own default is
+        // applied by the play-start path and has to win, so what Connect reports here is latched
+        // and dropped until somebody actually moves a slider.
+        runner.volumeLatch = { until: Date.now() + ACTIVATION_VOLUME_LATCH_MS, value: null };
         runner.ws.activate();
         if (!(await runner.ws.waitUntilActive())) {
           this.log.warn('soloist could not take the spotify account for this zone', { zoneId });
@@ -867,6 +1020,11 @@ export class SoloistPlaybackService {
     // Hand the account's playback back rather than keeping it pinned to a room that stopped
     // listening; the process stays up so the zone remains pickable in the Spotify app.
     runner.ws.deactivate();
+    // An idle device's volume can be moved in the app without this room hearing about it, so what
+    // the two last agreed on stops being true. Forgetting it makes the next session say its level
+    // out loud instead of assuming the slider is already right.
+    runner.volume = null;
+    runner.volumeLatch = null;
     this.finishTrack(zoneId);
   }
 

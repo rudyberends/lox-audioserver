@@ -88,6 +88,7 @@ class FakeInputsPort implements InputsPort {
   public readonly switchAwayCalls: number[] = [];
   public readonly remoteControlCalls: Array<{ zoneId: number; command: string }> = [];
   public readonly remoteVolumeCalls: Array<{ zoneId: number; volume: number }> = [];
+  public readonly spotifyVolumeCalls: Array<{ zoneId: number; volume: number }> = [];
   public readonly playerCommandCalls: Array<{ zoneId: number; command: string; args?: Record<string, unknown> }> = [];
   public readonly requestLineInStopCalls: string[] = [];
   public readonly requestLineInControlCalls: Array<{ inputId: string; command: LineInControlCommand }> = [];
@@ -222,6 +223,10 @@ class FakeInputsPort implements InputsPort {
 
   public remoteVolume(zoneId: number, volumePercent: number): void {
     this.remoteVolumeCalls.push({ zoneId, volume: volumePercent });
+  }
+
+  public spotifyVolume(zoneId: number, volumePercent: number): void {
+    this.spotifyVolumeCalls.push({ zoneId, volume: volumePercent });
   }
 
   public async playerCommand(

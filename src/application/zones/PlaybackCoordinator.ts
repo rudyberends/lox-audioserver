@@ -755,6 +755,7 @@ export class PlaybackCoordinator {
         applyPatch: this.applyPatch,
         dispatchOutputs: this.dispatchOutputs.bind(this),
         dispatchVolume: this.dispatchVolume.bind(this),
+        spotifyVolume: (id, volume) => this.inputsPort.spotifyVolume(id, volume),
         buildAbsoluteCoverUrl: this.buildAbsoluteCoverUrl.bind(this),
         audioHelpers: this.audioHelpers,
         stopAlert: this.stopAlert,

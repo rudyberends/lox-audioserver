@@ -177,6 +177,11 @@ export class InputSourceConfigurator {
         stateStore.applyPatch(zoneId, buildVolumePatch(level));
         outputRouter.dispatchVolume(ctx, ctx.outputs, level);
       },
+      // The Spotify app's slider on a backend that has not touched the audio, so this is an
+      // ordinary volume request and travels the ordinary way: the zone's own volume, whichever
+      // input mode it is in. Soloist plays through the engine like any queue source, so a zone
+      // it is carrying is often not in spotify mode at all — the guard above would drop it.
+      zoneVolume: (zoneId, level) => playback.updateInputVolume(zoneId, level),
       updateTiming: (zoneId, elapsed, duration) => {
         const ctx = zoneRepo.get(zoneId);
         if (!ctx || ctx.activeInput !== 'spotify') {

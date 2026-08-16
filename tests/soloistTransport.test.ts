@@ -3,6 +3,7 @@ import { test } from './testHarness';
 import {
   buildMirroredQueue,
   classifyTrackChange,
+  classifyVolumeReport,
 } from '../src/adapters/inputs/spotify/soloist/soloistPlaybackService';
 import { mapSpotifyTracksToQueue } from '../src/application/zones/state/spotifyQueueMirror';
 
@@ -97,4 +98,85 @@ test('an entry without a track is left out rather than mirrored empty', () => {
     'Kitchen',
   );
   assert.deepEqual(items.map((item) => item.audiopath), ['spotify:track:1']);
+});
+
+/**
+ * The volume in the Spotify app reaches the room by way of the zone's own volume, so the only
+ * question is which of the levels Soloist reports is somebody actually asking for something.
+ */
+
+const NOW = 1_000_000;
+
+test('a level nobody here set is somebody moving the slider', () => {
+  const verdict = classifyVolumeReport({ level: 55, agreed: null, latch: null, now: NOW });
+  assert.equal(verdict.follow, true);
+  assert.equal(verdict.reason, 'listener');
+});
+
+test('the level we just told soloist about comes straight back and is not a change', () => {
+  // Every `set_volume` of ours is echoed as a `volume_changed`. Following it would put the level
+  // back on the zone, which pushes it out again — the two would chase each other.
+  const verdict = classifyVolumeReport({ level: 40, agreed: 40, latch: null, now: NOW });
+  assert.equal(verdict.follow, false);
+  assert.equal(verdict.reason, 'echo');
+});
+
+test('the volume connect hands a device on activation is dropped, and so are its repeats', () => {
+  // Picking a room in the app announces the level Spotify remembered for it, more than once and
+  // all within a moment. The zone's own default has to survive that.
+  const latch = { until: NOW + 4000, value: null };
+  const first = classifyVolumeReport({ level: 100, agreed: null, latch, now: NOW + 10 });
+  assert.equal(first.follow, false);
+  assert.equal(first.reason, 'activation');
+  assert.equal(first.latch?.value, 100);
+
+  // Long after the window, the same value is still Connect's rather than anyone's hand.
+  const later = classifyVolumeReport({
+    level: 100,
+    agreed: null,
+    latch: first.latch,
+    now: NOW + 60_000,
+  });
+  assert.equal(later.follow, false);
+  assert.equal(later.reason, 'activation');
+});
+
+test('a different level during the handshake burst is still not a listener', () => {
+  // The burst can carry more than one value, and none of them is somebody reaching for the app.
+  const verdict = classifyVolumeReport({
+    level: 70,
+    agreed: null,
+    latch: { until: NOW + 4000, value: 100 },
+    now: NOW + 500,
+  });
+  assert.equal(verdict.follow, false);
+  assert.equal(verdict.reason, 'activation');
+  // The value first seen is kept: it is the one whose repeats have to stay recognisable.
+  assert.equal(verdict.latch?.value, 100);
+});
+
+test('moving the slider after the window releases the latch for good', () => {
+  const verdict = classifyVolumeReport({
+    level: 35,
+    agreed: null,
+    latch: { until: NOW + 4000, value: 100 },
+    now: NOW + 5000,
+  });
+  assert.equal(verdict.follow, true);
+  assert.equal(verdict.reason, 'listener');
+  assert.equal(verdict.latch, null);
+});
+
+test('a latch that never saw a value stops guarding when its window closes', () => {
+  // Measured: on a real start the burst either never arrives or arrives while the track is still
+  // being set up, where events are ignored regardless. Holding the latch open for it costs the
+  // first genuine turn of the knob, which is the one thing that must not be lost.
+  const verdict = classifyVolumeReport({
+    level: 55,
+    agreed: null,
+    latch: { until: NOW + 4000, value: null },
+    now: NOW + 5000,
+  });
+  assert.equal(verdict.follow, true);
+  assert.equal(verdict.reason, 'listener');
 });

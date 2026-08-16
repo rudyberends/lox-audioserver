@@ -1,10 +1,31 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import fsp from 'node:fs/promises';
+import net from 'node:net';
 import path from 'node:path';
 import { createLogger } from '@/shared/logging/logger';
 import { resolveDataDir } from '@/shared/utils/file';
 
 const log = createLogger('Audio', 'SoloistProcess');
+
+/**
+ * A free port for one zone's control channel, from the only authority on what is free.
+ *
+ * Bound and released again rather than held: the point is to be told a number nothing else is
+ * using, and Soloist has to be the one listening on it. That leaves a moment in which something
+ * else could take it, in which case the process starts, the connection is refused for the whole
+ * attempt window, and the zone tries again on a fresh number the next time it plays.
+ */
+export function reserveWsPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      probe.close(() => (port > 0 ? resolve(port) : reject(new Error('no free port'))));
+    });
+  });
+}
 
 /** Where the user's own Soloist build lives. Never shipped — Spotify forbids redistributing it. */
 export function soloistBinaryPath(): string {
@@ -208,17 +229,23 @@ export function startPersistent(params: {
   zoneId: number;
   apiKey: string;
   deviceName: string;
+  wsPort: number;
   env: Record<string, string>;
   onLine?: (line: string) => void;
 }): SoloistRunHandle {
-  const { zoneId, apiKey, deviceName, env, onLine } = params;
+  const { zoneId, apiKey, deviceName, wsPort, env, onLine } = params;
   const args = [
     '-n', deviceName,
     '-k', apiKey,
     '-D', soloistDataDir(zoneId),
     '-C', soloistCacheDir(zoneId),
-    // Port 0: Soloist picks a free one and writes it to <data-dir>/ws.port, so zones cannot collide.
-    '-w', '127.0.0.1:0',
+    // A port of our own choosing rather than 0. Asking Soloist to pick one is what its help
+    // suggests, and on 1.3.7.276 it then listens on the port it picked but publishes only
+    // `ws.addr` — the address without the number — so nothing can find it: `soloist ctl status`
+    // says "ws: not available" about the daemon's own socket. Given an explicit port it writes
+    // both files and answers on it, which is measurable, so we name the port and skip the
+    // discovery. Zones still cannot collide: each one is handed a free port before it starts.
+    '-w', `127.0.0.1:${wsPort}`,
     // Volume belongs to the engine. Anything below 100 is applied in software before the sink and
     // ends the bit-exactness this backend exists for.
     '-i', '100',

@@ -102,6 +102,16 @@ export type SpotifyConnectController = InputPlaybackController & {
    * queue this server built would replace what the listener chose here.
    */
   updateQueue(zoneId: number, tracks: SpotifyQueueTrack[], currentIndex: number): void;
+  /**
+   * The slider in the Spotify app, for a backend that leaves the audio alone.
+   *
+   * Separate from {@link InputPlaybackController.updateVolume} because the two mean different
+   * things. That one reports a level the source has already applied to what it hands over, so the
+   * zone only has to show it. This one is a request: Soloist runs at full scale and never
+   * attenuates, so the level has touched nothing yet and belongs on the zone's own volume, applied
+   * where every other client's volume is applied.
+   */
+  zoneVolume(zoneId: number, level: number): void;
 };
 
 export type MusicAssistantInputHandlers = {
@@ -160,6 +170,13 @@ export interface InputsPort {
   switchAway(zoneId: number): Promise<void>;
   remoteControl(zoneId: number, command: AirplayRemoteCommand): void;
   remoteVolume(zoneId: number, volumePercent: number): void;
+  /**
+   * Tell the Spotify app what level a zone is at, so its slider follows the room.
+   *
+   * Sent for every zone volume change and ignored unless Spotify is what that zone is playing —
+   * the input service is the only thing that knows, and it answers for itself.
+   */
+  spotifyVolume(zoneId: number, volumePercent: number): void;
   playerCommand(zoneId: number, command: string, args?: Record<string, unknown>): Promise<boolean>;
   requestLineInStop(inputId: string): void;
   requestLineInControl(inputId: string, command: LineInControlCommand): void;
