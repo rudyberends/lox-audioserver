@@ -15,7 +15,7 @@ async function postSystem(
   let payload: unknown = null;
   const routes = buildConfigRoutes({
     readJsonBody: async () => body,
-    sendJson: (_res, code, value) => {
+    sendJson: (_res: ServerResponse, code: number, value: unknown) => {
       status = code;
       payload = value;
     },
