@@ -3,6 +3,7 @@ import type { FavoriteItem, FavoriteResponse } from '@/application/zones/favorit
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ContentPort } from '@/ports/ContentPort';
 import type { ZoneManagerFacade } from '@/application/zones/createZoneManager';
+import { BRIDGE_STREAMING_SERVICES, parseServiceNativeAudiopath } from '@/domain/zones/audiopath';
 import { bestEffort } from '@/shared/bestEffort';
 
 function createItem(id: number, slot: number, title: string, audiopath: string): FavoriteItem {
@@ -283,6 +284,25 @@ function detectTypeFromAudiopath(audiopath: string): string {
     }
     return 'library_track';
   }
+  // A service-native streaming path (`applemusic:album:b64_…`) names its own kind. The client
+  // knows only Spotify as a streaming service, so every one of them is announced as a
+  // `spotify_*` type — the same as the disguised form below. Without this they fell through to
+  // `custom_stream`, which is a RADIO type in the client's favourite union
+  // (PreProcessingPlayableRadioFavScheme, comps.js module 169736): every Apple Music favourite
+  // was being rendered as a radio station.
+  const native = parseServiceNativeAudiopath(audiopath);
+  if (native && BRIDGE_STREAMING_SERVICES.has(native.service)) {
+    switch (native.kind) {
+      case 'album':
+        return 'spotify_album';
+      case 'artist':
+        return 'spotify_artist';
+      case 'playlist':
+        return 'spotify_playlist';
+      default:
+        return 'spotify_track';
+    }
+  }
   if (lower.startsWith('spotify:')) {
     // Apple Music (bridge) library items carry a `library-` kind prefix
     // (e.g. `spotify:library-artist:…`); match both the plain and library forms.
@@ -356,6 +376,11 @@ function detectService(
   if (lower.startsWith('spotify:')) {
     return { name: 'spotify', type: 3 };
   }
+  // Service-native streaming, announced under the only streaming service the client knows.
+  const native = parseServiceNativeAudiopath(audiopath);
+  if (native && BRIDGE_STREAMING_SERVICES.has(native.service)) {
+    return { name: 'spotify', type: 3 };
+  }
   if (lower.startsWith('tunein:')) {
     return { name: 'tunein', type: 3 };
   }
@@ -404,6 +429,12 @@ const AUTHORITATIVE_ITEM_TYPES = new Set([
 
 function resolveFavoriteType(storedType: unknown, audiopath: string): string {
   const detected = detectTypeFromAudiopath(audiopath);
+  // A service-native path names its own kind, so it beats whatever was stored — including the
+  // `custom_stream` that favourites saved before this shape was recognised still carry. Those
+  // are in the stored files today and would otherwise keep announcing themselves as radio.
+  if (parseServiceNativeAudiopath(audiopath) && detected.startsWith('spotify_')) {
+    return detected;
+  }
   // The audiopath is authoritative for an item's kind: heal stale mislabels
   // (e.g. an Apple `library-artist` saved as spotify_track, or a local
   // `library:artist:` saved as library_track) instead of trusting the stored type.

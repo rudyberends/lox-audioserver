@@ -4,6 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from './testHarness';
 import { createRecentsManager } from '../src/application/zones/recents/recentsManager';
+import { buildBridgeRegistry } from '../src/domain/zones/bridgeIdentity';
+
+// No bridged services configured: `normalizeForClient` asks for the registry to put the Loxone
+// envelope back on a bridged path, and an empty one leaves every path as it is.
+const EMPTY_REGISTRY = buildBridgeRegistry([]);
 
 async function withTempCwd(fn: () => Promise<void>): Promise<void> {
   const originalCwd = process.cwd();
@@ -43,7 +48,7 @@ test('recents manager normalizes local library items to client-compatible audiop
 
     const recentsManager = createRecentsManager({
       notifier: { notifyRecentlyPlayedChanged: () => {} } as any,
-      contentPort: { getDefaultSpotifyAccountId: () => null } as any,
+      contentPort: { getDefaultSpotifyAccountId: () => null, getBridgeRegistry: () => EMPTY_REGISTRY } as any,
     });
 
     const result = await recentsManager.get(27);
@@ -75,7 +80,7 @@ test('recents manager maps legacy custom radio service to custom_stream', async 
 
     const recentsManager = createRecentsManager({
       notifier: { notifyRecentlyPlayedChanged: () => {} } as any,
-      contentPort: { getDefaultSpotifyAccountId: () => null } as any,
+      contentPort: { getDefaultSpotifyAccountId: () => null, getBridgeRegistry: () => EMPTY_REGISTRY } as any,
     });
 
     const result = await recentsManager.get(15);
@@ -90,6 +95,7 @@ test('a bridged track is recorded under its own identity, not doubled behind an 
       contentPort: {
         getDefaultSpotifyAccountId: () => 'md123121',
         resolveMetadata: async () => null,
+        getBridgeRegistry: () => EMPTY_REGISTRY,
       } as any,
     });
 
@@ -115,6 +121,7 @@ test('a real Spotify track still gets its account', async () => {
       contentPort: {
         getDefaultSpotifyAccountId: () => 'md123121',
         resolveMetadata: async () => null,
+        getBridgeRegistry: () => EMPTY_REGISTRY,
       } as any,
     });
 

@@ -8,6 +8,7 @@ import type { QueueItem } from '@/application/zones/zoneManager';
 import type { NotifierPort } from '@/ports/NotifierPort';
 import type { ContentPort } from '@/ports/ContentPort';
 import { detectItemType, detectServiceFromAudiopath, decodeAudiopath, parseServiceNativeAudiopath } from '@/domain/zones/audiopath';
+import { toLoxoneAudiopath } from '@/domain/zones/bridgeIdentity';
 import { bestEffort } from '@/shared/bestEffort';
 
 const MAX_RECENTS = 5;
@@ -332,7 +333,16 @@ export class RecentsManager {
 
   private normalizeForClient(item: RecentItem): RecentItem {
     const normalizedService = this.normalizeRecentService(item.service, item.audiopath);
-    const audiopath = this.normalizeRecentAudiopath(item.audiopath, normalizedService);
+    // The Loxone envelope goes back on here, and it is not decoration: the client derives the
+    // item's serviceId from the audiopath with `audiopath.replace(/spotify@(.*?):.*/, '$1')`
+    // (comps.js, PreProcessingSpotifyItemScheme). A service-native path does not match that
+    // regex, so `replace` returns the whole path and the serviceId becomes the audiopath —
+    // which is then what comes back on the play command. Storage stays service-native; only
+    // this one payload speaks Loxone, the same as the queue and state emitters.
+    const audiopath = this.normalizeRecentAudiopath(
+      toLoxoneAudiopath(item.audiopath, this.contentPort.getBridgeRegistry()),
+      normalizedService,
+    );
     const name = item.name || item.title || '';
     // The native client's recently-played schema is a strict discriminated union
     // (one bad item drops the whole list). Mirror the browse/search item shape it

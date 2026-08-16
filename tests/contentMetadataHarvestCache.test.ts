@@ -6,6 +6,7 @@ import { test } from './testHarness';
 import { ContentManager, createContentManager } from '../src/adapters/content/contentManager';
 import { CustomRadioStore } from '../src/adapters/content/providers/customRadioStore';
 import { metadataKeyVariants, normalizeProviderAudiopath } from '../src/domain/zones/audiopath';
+import { buildBridgeRegistry } from '../src/domain/zones/bridgeIdentity';
 import type { ContentFolder, ContentFolderItem } from '../src/ports/ContentTypes';
 import type { ContentPort } from '../src/ports/ContentPort';
 import type { NotifierPort } from '../src/ports/NotifierPort';
@@ -308,6 +309,7 @@ test('recents record fills metadata from the harvest cache (no live lookup)', as
     const contentPort = {
       resolveMetadata: (p: string) => cm.resolveMetadata(p),
       getDefaultSpotifyAccountId: () => null,
+      getBridgeRegistry: () => buildBridgeRegistry([]),
     } as unknown as ContentPort;
     const recents = createRecentsManager({
       notifier: { notifyRecentlyPlayedChanged: () => {} } as unknown as NotifierPort,
