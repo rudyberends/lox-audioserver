@@ -76,3 +76,16 @@ test('an unowned path resolves to nothing rather than to the first provider', as
   assert.equal(resolution.playbackSource, null);
   assert.deepEqual(calls.started, []);
 });
+
+test('a service named in the raw text never outranks one named by the decoded prefix', () => {
+  const calls: Calls = { configured: [], started: [] };
+  const adapter = createContentAdapter({} as unknown as ContentManager, [
+    makeProvider('applemusic', ['applemusic'], calls),
+    makeProvider('deezer', ['deezer'], calls),
+  ]);
+  // Base64 that decodes to an Apple Music path, wrapped in an envelope whose text says deezer.
+  // The chain of per-service helpers this replaced asked all four questions about Apple Music
+  // before it asked anything about Deezer; the order is part of the contract, not an accident.
+  const inner = Buffer.from('applemusic:track:99', 'utf-8').toString('base64');
+  assert.equal(adapter.providerForAudiopath(`deezer-ish:track:b64_${inner}`), 'applemusic');
+});

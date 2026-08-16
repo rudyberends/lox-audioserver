@@ -56,6 +56,12 @@ export class ContentAdapter implements ContentPort {
    * and each caller its own chain of them. A registered prefix decides it; the service name
    * appearing in the path is the fallback for the shapes that predate service-native ids
    * (stored favourites, Loxone recents), which is what the per-service helpers did too.
+   *
+   * The loops are nested provider-outer, candidate-inner, and that order is the contract: it
+   * asks all four questions about one service (raw prefix, raw text, decoded prefix, decoded
+   * text) before moving to the next, exactly as the chain of separate helpers did. Testing all
+   * services against the raw path first would hand a path to whichever service its *text*
+   * happens to mention over the one its decoded prefix actually names.
    */
   public providerForAudiopath(audiopath: string | null | undefined): string | null {
     if (!audiopath) {
@@ -63,14 +69,14 @@ export class ContentAdapter implements ContentPort {
     }
     const raw = String(audiopath);
     const decoded = decodeAudiopath(raw) || raw;
-    for (const candidate of raw === decoded ? [raw] : [raw, decoded]) {
-      const segment = candidate.split(':')[0] ?? '';
-      const lower = candidate.toLowerCase();
-      for (const provider of this.streamProviders) {
+    const candidates = raw === decoded ? [raw] : [raw, decoded];
+    for (const provider of this.streamProviders) {
+      for (const candidate of candidates) {
+        const segment = candidate.split(':')[0] ?? '';
         if (segment && provider.isProvider(segment)) {
           return provider.provider;
         }
-        if (lower.includes(provider.provider)) {
+        if (candidate.toLowerCase().includes(provider.provider)) {
           return provider.provider;
         }
       }

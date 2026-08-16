@@ -29,8 +29,20 @@ export type ProviderDefinition = {
   id: string;
   /** Name for a person to read, when the account carries no label of its own. */
   title: string;
+  /**
+   * Icon URL announced with this service's entry.
+   *
+   * The Loxone app draws its own Spotify glyph for anything announced as `cmd: 'spotify'`,
+   * which is all of them, so it never fetches these. Carried anyway: the field is part of a
+   * payload that has to stay exactly as it was, and a consumer that is not that app may read
+   * it. Kept beside the name rather than in a table of its own.
+   */
+  icon: string;
   create: (args: ProviderConstructionArgs) => ContentProvider;
 };
+
+const SPOTIFY_ICON =
+  'https://extended-app-content.s3.eu-central-1.amazonaws.com/audioZone/services/Icon-Spotify.svg';
 
 /**
  * Every content service this server can be configured with.
@@ -51,6 +63,7 @@ export const CONTENT_PROVIDERS: readonly ProviderDefinition[] = [
   {
     id: 'musicassistant',
     title: 'Music Assistant',
+    icon: '/admin/providers/music-assistant.png',
     create: ({ providerId, serviceNativePrefix, label, bridge }) =>
       new MusicAssistantBridgeProvider({
         providerId,
@@ -65,6 +78,7 @@ export const CONTENT_PROVIDERS: readonly ProviderDefinition[] = [
   {
     id: 'applemusic',
     title: 'Apple Music',
+    icon: '/admin/providers/apple-music.svg',
     create: ({ providerId, serviceNativePrefix, label, bridge, coverHost }) =>
       new AppleMusicProvider({
         providerId,
@@ -78,6 +92,7 @@ export const CONTENT_PROVIDERS: readonly ProviderDefinition[] = [
   {
     id: 'deezer',
     title: 'Deezer',
+    icon: 'https://extended-app-content.s3.eu-central-1.amazonaws.com/audioZone/services/Icon-Deezer.svg',
     create: ({ providerId, serviceNativePrefix, label, bridge }) =>
       new DeezerProvider({
         providerId,
@@ -89,6 +104,7 @@ export const CONTENT_PROVIDERS: readonly ProviderDefinition[] = [
   {
     id: 'tidal',
     title: 'Tidal',
+    icon: 'https://extended-app-content.s3.eu-central-1.amazonaws.com/audioZone/services/Icon-Tidal.svg',
     create: ({ providerId, serviceNativePrefix, label, bridge }) =>
       new TidalProvider({
         providerId,
@@ -101,18 +117,21 @@ export const CONTENT_PROVIDERS: readonly ProviderDefinition[] = [
   {
     id: 'ytmusic',
     title: 'YouTube Music',
+    icon: '/admin/providers/youtube-music.svg',
     create: ({ providerId, serviceNativePrefix, label, bridge }) =>
       new YtMusicProvider({ providerId, serviceNativePrefix, label, bridge }),
   },
   {
     id: 'youtube',
     title: 'YouTube',
+    icon: '/admin/providers/youtube.svg',
     create: ({ providerId, serviceNativePrefix, label, bridge }) =>
       new YoutubeProvider({ providerId, serviceNativePrefix, label, bridge }),
   },
   {
     id: 'soundcloud',
     title: 'SoundCloud',
+    icon: '/admin/providers/soundcloud.svg',
     create: ({ providerId, serviceNativePrefix, label, bridge }) =>
       new SoundCloudProvider({
         providerId,
@@ -147,4 +166,15 @@ const EXTRA_TITLES: Record<string, string> = {
 export function providerTitle(provider: string): string {
   const key = (provider || '').trim().toLowerCase();
   return BY_ID.get(key)?.title ?? EXTRA_TITLES[key] ?? provider;
+}
+
+/**
+ * The icon announced with a service entry.
+ *
+ * Spotify's own, and the fallback for anything unrecognised — which is what the table this
+ * replaced did, and what the payload has to keep doing.
+ */
+export function providerIcon(provider: string): string {
+  const key = (provider || '').trim().toLowerCase();
+  return BY_ID.get(key)?.icon ?? SPOTIFY_ICON;
 }

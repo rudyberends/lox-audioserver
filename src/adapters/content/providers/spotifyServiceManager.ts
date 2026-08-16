@@ -15,7 +15,7 @@ import {
 } from '@/adapters/content/providers/spotify/spotifyAccountProvider';
 import { FakeSpotifyAccountProvider } from '@/adapters/content/providers/spotify/fakeSpotifyAccountProvider';
 import type { ContentProvider } from '@/adapters/content/ContentProvider';
-import { providerDefinition, providerTitle } from '@/adapters/content/providerRegistry';
+import { providerDefinition, providerIcon, providerTitle } from '@/adapters/content/providerRegistry';
 import { resolveSpotifyClientId } from '@/adapters/content/providers/spotify/utils';
 import { parseSearchLimits } from '@/adapters/content/utils/searchLimits';
 import { resolveCoverHost } from '@/shared/utils/net';
@@ -23,15 +23,6 @@ import { serviceNativeKey, slugFromBridgeId } from '@/domain/media/serviceIdenti
 
 type ProviderId = string;
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
-/**
- * The icon every service entry carries.
- *
- * There used to be one per provider here. The Loxone app draws its own Spotify glyph for
- * anything announced as `cmd: 'spotify'` — which is all of them — so those URLs were never
- * fetched, and this field only ever reaches that app.
- */
-const SERVICE_ICON =
-  'https://extended-app-content.s3.eu-central-1.amazonaws.com/audioZone/services/Icon-Spotify.svg';
 
 export interface SpotifyServiceDevice {
   id: string;
@@ -162,7 +153,7 @@ export class SpotifyServiceManager {
       return {
         cmd: 'spotify',
         name: providerTitle('spotify'),
-        icon: SERVICE_ICON,
+        icon: providerIcon('spotify'),
         id: acc.id || acc.user || acc.email || '',
         user: this.displayLabel(acc),
         email: acc.email ?? '',
@@ -184,7 +175,7 @@ export class SpotifyServiceManager {
         cmd: 'spotify',
         // For bridges, omit the friendly name; clients can display sourceName/provider instead.
         name: '',
-        icon: SERVICE_ICON,
+        icon: providerIcon(providerType),
         id: bridge.id,
         user: bridge.label || bridge.id,
         email: email || '',
