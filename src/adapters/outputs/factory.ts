@@ -192,9 +192,31 @@ function createDlnaOutput(
   return new DlnaOutput(
     zone.id,
     zone.name,
-    { host, controlUrl, autoDiscover, deviceName: deviceName || undefined },
+    {
+      host,
+      controlUrl,
+      autoDiscover,
+      deviceName: deviceName || undefined,
+      streamFormat: readStreamFormat(config),
+    },
     ports,
   );
+}
+
+/**
+ * The configured sound quality, as every output that supports one reads it.
+ *
+ * Each factory below hands its output a narrow, explicitly-built config rather than the raw entry,
+ * which is why this has to be forwarded by name: without it the outputs parse `undefined`, resolve
+ * to `auto`, and a configured preference is silently ignored.
+ */
+function readStreamFormat(config: ZoneTransportConfig): string | undefined {
+  const raw = (config as Record<string, unknown>).streamFormat;
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function createSqueezeliteOutput(
@@ -229,7 +251,7 @@ function createMusicAssistantOutput(
     log.warn('Music Assistant output skipped; missing playerId', { zoneId: zone.id });
     return null;
   }
-  const cfg: MusicAssistantOutputConfig = { bridgeId, playerId };
+  const cfg: MusicAssistantOutputConfig = { bridgeId, playerId, streamFormat: readStreamFormat(config) };
   log.info('Music Assistant output registered', { zoneId: zone.id, bridgeId: bridgeId || '(auto)', playerId });
   return new MusicAssistantOutput(zone.id, zone.name, cfg, ports.config);
 }
@@ -313,6 +335,7 @@ function createSonosOutput(
     networkScan: (config as Record<string, unknown>).networkScan,
     householdId: (config as Record<string, unknown>).householdId as string | undefined,
     deviceName: (config as Record<string, unknown>).deviceName as string | undefined,
+    streamFormat: readStreamFormat(config),
   } as SonosOutputConfig, ports);
 }
 
@@ -471,7 +494,7 @@ function createGoogleCastOutput(
     });
     return new SendspinCastOutput(zone.id, zone.name, sendspinCastConfig, ports);
   }
-  const googleCastConfig: GoogleCastOutputConfig = { host, name };
+  const googleCastConfig: GoogleCastOutputConfig = { host, name, streamFormat: readStreamFormat(config) };
   log.info('Google Cast output registered', { zoneId: zone.id, host });
   return new GoogleCastOutput(zone.id, zone.name, googleCastConfig, ports);
 }
