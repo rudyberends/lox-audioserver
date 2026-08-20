@@ -219,6 +219,22 @@ export class SendspinOutput implements ZoneOutput {
    * not — a client that only ever says `synchronized` must still be reported as such.
    */
   private reactedClientState: 'synchronized' | 'error' | 'external_source' | null = null;
+  /**
+   * Auto-recover a stuck client re-anchor (WIP).
+   *
+   * The reference sendspin client re-anchors its own timeline on an audio underflow
+   * ("Audio underflow detected; requesting re-anchor"). When that client-local
+   * re-anchor does not converge — observed after Spotify single-active-device
+   * switching — the room desyncs and plays nothing while ALSA stays RUNNING. The
+   * protocol carries no inbound re-anchor request, so the only signal that reaches
+   * the server is a `state: 'error'` player-state report (and identical repeats are
+   * deduped away here, so we cannot count them — we act on the first transition,
+   * debounced). If the client is still in `error` after the debounce while we
+   * believe we are playing, force a fresh server anchor — what a client restart
+   * does, without the restart.
+   */
+  private clientErrorReanchorTimer: NodeJS.Timeout | null = null;
+  private lastAutoReanchorMs = 0;
   private externalSourceActive = false;
   private restartTimer: NodeJS.Timeout | null = null;
   private bufferedChunks: Array<{ data: Buffer; timestampUs: number }> = [];
@@ -940,6 +956,52 @@ export class SendspinOutput implements ZoneOutput {
     }
   }
 
+  /** Debounce before assuming a reported client error is a stuck re-anchor, not a transient. */
+  private static readonly AUTO_REANCHOR_DEBOUNCE_MS = 4000;
+  /** Minimum gap between forced server re-anchors so a persistently-erroring client is not thrashed. */
+  private static readonly AUTO_REANCHOR_COOLDOWN_MS = 30000;
+
+  /**
+   * See the `clientErrorReanchorTimer` field docs. Acts on the *first* `error`
+   * transition (repeats are deduped upstream), cancels if the client recovers to
+   * `synchronized` within the debounce, and re-anchors at most once per cooldown.
+   *
+   * WIP / unverified: whether the reference client actually reports `state: 'error'`
+   * during this specific underflow storm — and whether a server-side fresh anchor
+   * converges it, or a full client restart is required — still needs a live capture.
+   */
+  private maybeAutoReanchorOnError(state?: string): void {
+    if (state === 'synchronized' && this.clientErrorReanchorTimer) {
+      clearTimeout(this.clientErrorReanchorTimer);
+      this.clientErrorReanchorTimer = null;
+      return;
+    }
+    if (state !== 'error' || this.playbackState !== 'playing' || !this.isOwner()) {
+      return;
+    }
+    if (this.clientErrorReanchorTimer) {
+      return; // a recovery is already pending
+    }
+    this.clientErrorReanchorTimer = setTimeout(() => {
+      this.clientErrorReanchorTimer = null;
+      // Recovered on its own, or no longer playing → nothing to do.
+      if (this.clientState !== 'error' || this.playbackState !== 'playing' || !this.isOwner()) {
+        return;
+      }
+      const now = Date.now();
+      if (now - this.lastAutoReanchorMs < SendspinOutput.AUTO_REANCHOR_COOLDOWN_MS) {
+        return;
+      }
+      this.lastAutoReanchorMs = now;
+      this.log.warn('Sendspin client stuck in error while playing — forcing a fresh anchor', {
+        zoneId: this.zoneId,
+        clientId: this.clientId,
+      });
+      void this.startStream({ preserveAnchor: false });
+    }, SendspinOutput.AUTO_REANCHOR_DEBOUNCE_MS);
+    this.clientErrorReanchorTimer.unref?.();
+  }
+
   private handleClientState(update: { state?: string; volume?: number; muted?: boolean }): void {
     const signature = JSON.stringify({
       state: update.state,
@@ -966,6 +1028,8 @@ export class SendspinOutput implements ZoneOutput {
     if (nextState) {
       this.clientState = nextState;
     }
+    // WIP: recover a client whose own underflow re-anchor never converged.
+    this.maybeAutoReanchorOnError(update.state);
     /*
      * Ignore the client's opening volume report, not merely its first message.
      *
