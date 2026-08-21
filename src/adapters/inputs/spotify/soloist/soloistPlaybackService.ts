@@ -492,6 +492,20 @@ export class SoloistPlaybackService {
       return;
     }
 
+    // Just became the active device again, but with nothing carrying our audio.
+    //
+    // The handoff that moved the account away tore this zone's stream down (finishTrack), and coming
+    // back is announced as a `device_changed`, which carries no `status` — so the `status === 'playing'`
+    // adopt below never fires on it. Mid-track that is harmless: the `playing` and `track_changed`
+    // events that follow re-adopt it. But when the switch back lands in the last seconds of a track,
+    // Soloist reaches the track's end before any of those arrive and then sends none, leaving the zone
+    // owner=`queue`, no stream, stuck at end-of-track while Soloist plays on into a pipe nobody reads.
+    // Re-adopting here reopens the pipe so playback is consumed again and advances. See #352.
+    if (event.type === 'device_changed' && !runner.stream) {
+      void this.adoptConnectPlayback(zoneId, event);
+      return;
+    }
+
     // Both lists arrive together on `queue_changed`, unasked after every change. They are what
     // tells a step backwards from a step forwards, and while the app owns the zone they are also
     // the only account anyone here has of what is coming.
