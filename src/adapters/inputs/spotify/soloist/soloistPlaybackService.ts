@@ -492,6 +492,16 @@ export class SoloistPlaybackService {
       return;
     }
 
+    // Volume set from the Spotify app. Soloist sends this only to the device it targets — the active
+    // one — as a dedicated `volume_changed`, so it is safe to apply straight to the zone. The `volume`
+    // that also rides along on every `playback_state` is the account-level value Connect broadcasts to
+    // every device at once, and applying that would pull idle rooms to the playing room's level, so it
+    // is deliberately not read here. Mirrors the librespot backend's `updateVolume`. See #344.
+    if (event.type === 'volume_changed' && typeof event.volume === 'number') {
+      this.controller?.updateVolume(zoneId, event.volume);
+      return;
+    }
+
     // Both lists arrive together on `queue_changed`, unasked after every change. They are what
     // tells a step backwards from a step forwards, and while the app owns the zone they are also
     // the only account anyone here has of what is coming.
