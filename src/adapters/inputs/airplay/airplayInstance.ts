@@ -835,7 +835,12 @@ function deriveHardwareAddress(sourceMac: string, zoneId: number): string {
     const value = Number.parseInt(slice, 16);
     bytes.push(Number.isFinite(value) ? value : 0);
   }
-  bytes[5] = ((bytes[5] ?? 0) + (zoneId & 0xff)) & 0xff;
+  // The per-zone `sourceMac` values are not guaranteed unique (several zones share
+  // one here), so *adding* zoneId to the base's last byte can land two zones on the
+  // same address — e.g. sourceMac ..68 +zoneId 5 and ..67 +zoneId 6 both yield ..6D,
+  // so Wohnzimmer and Elternbad advertised the same RAOP identifier and AirPlay played
+  // into the wrong room. zoneId is unique, so set the last byte from it directly. #356
+  bytes[5] = zoneId & 0xff;
   return bytes.map((byte) => byte.toString(16).padStart(2, '0')).join(':');
 }
 
