@@ -42,12 +42,14 @@ function serveDataUri(
     return;
   }
   const [, mime, payload] = match;
+  const bytes = Buffer.from(payload ?? '', 'base64');
   res.writeHead(200, {
     ...headers,
     'Content-Type': mime || 'image/jpeg',
+    'Content-Length': bytes.length,
     'Cache-Control': cacheControl,
   });
-  res.end(Buffer.from(payload ?? '', 'base64'));
+  res.end(bytes);
 }
 
 async function proxyFromHttp(
@@ -63,9 +65,11 @@ async function proxyFromHttp(
       coverUnavailable(res);
       return;
     }
+    const upstreamLength = response.headers.get('content-length');
     res.writeHead(200, {
       ...headers,
       'Content-Type': response.headers.get('content-type') ?? 'image/jpeg',
+      ...(upstreamLength ? { 'Content-Length': upstreamLength } : {}),
       'Cache-Control': cacheControl,
     });
     const stream = Readable.fromWeb(
@@ -131,9 +135,15 @@ export async function serveCover(
   }
   const headers: Record<string, string> = etag ? { ETag: etag } : {};
   if (typeof source !== 'string') {
+    // Content-Length matters beyond politeness here. Without it the response is
+    // chunked, and a client that stores the image rather than just showing it --
+    // the Loxone app caches covers in IndexedDB -- gets a Blob of unknown size,
+    // which Safari refuses to write ("Error preparing Blob/File data"). Opening
+    // the same url in a tab looks fine, because nothing is stored.
     res.writeHead(200, {
       ...headers,
       'Content-Type': source.mime || 'image/jpeg',
+      'Content-Length': source.data.length,
       'Cache-Control': cacheControl,
     });
     res.end(source.data);

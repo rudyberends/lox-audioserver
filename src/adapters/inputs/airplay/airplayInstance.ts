@@ -75,6 +75,8 @@ export class AirplayInstance {
    * its own audiopath is what tells such a client this is a different track.
    */
   private trackToken = 0;
+  /** Identifies the artwork we last published, so a repeat push changes nothing. */
+  private coverFingerprint = '';
   private lastTimingPushMs = 0;
 
   constructor(
@@ -713,7 +715,12 @@ export class AirplayInstance {
           : typeof artwork === 'string'
             ? Buffer.from(artwork, 'base64')
             : null;
-        if (buf?.length) {
+        // The sender pushes the same artwork more than once per track. Minting a
+        // fresh cover url each time makes a client abandon the download it had
+        // started and begin again, so the picture mostly never arrives at all.
+        const fingerprint = buf?.length ? createHash('sha1').update(buf).digest('hex') : '';
+        if (buf?.length && fingerprint !== this.coverFingerprint) {
+          this.coverFingerprint = fingerprint;
           this.coverArt = { data: buf, mime: artworkMime ?? detectMimeType(buf) };
           const coverUrl = this.controller.updateCover(this.zoneId, this.coverArt);
           this.coverUrl = typeof coverUrl === 'string' ? coverUrl : undefined;
@@ -928,6 +935,7 @@ export class AirplayInstance {
       this.controller.updateTiming(this.zoneId, 0, 0);
     }
     if (clearCoverArt) {
+      this.coverFingerprint = '';
       this.coverArt = undefined;
       const player = this.playerRegistry.getPlayer(this.zoneId);
       if (player) {
