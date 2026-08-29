@@ -5,6 +5,8 @@ import {
   RealtimeSender,
   createIdentity,
   setVolume as sendVolume,
+  setMetadata as sendMetadata,
+  setArtwork as sendArtwork,
   setupRealtimeStream,
   FRAMES_PER_PACKET,
   type SenderIdentity,
@@ -146,6 +148,8 @@ export class Ap2Sender implements AirplaySender {
   private starting = false;
   private paused = false;
   private sourcePaused = false;
+  /** Wall-clock instant the first sample must be audible, for a synced group. */
+  private groupStartUnixMs: number | null = null;
   private silenceLogged = false;
 
   constructor(
@@ -190,21 +194,37 @@ export class Ap2Sender implements AirplaySender {
   }
 
   /**
-   * Grouped playback is not implemented on the AirPlay 2 path yet: it needs one
-   * shared anchor across members, which is a different start contract. Falling
-   * back to a solo start keeps the zone audible instead of silently dropping it
-   * out of the group.
+   * Start as a member of a sync group.
+   *
+   * `basePlayNtp` is the shared instant every member is handed, in the
+   * unix-epoch NTP fixed point the RAOP path uses (seconds << 32 | fraction).
+   * Our PTP timeline is the host's realtime clock, the same base, so the two
+   * protocols can express one instant — which is what lets a mixed group of
+   * AirPlay 1 and AirPlay 2 zones line up.
+   *
+   * A track change inside a running group arrives with `reAnchor` false: the
+   * session and its timeline stay, only the source is swapped, or every track
+   * boundary would cost a re-anchor.
    */
   public async startForGroup(
     source: NodeJS.ReadableStream,
     volume: number,
-    _basePlayNtp: bigint,
-    _reAnchor: boolean,
+    basePlayNtp: bigint,
+    reAnchor: boolean,
   ): Promise<boolean> {
-    this.log.warn('AirPlay 2 has no synced-group support yet; starting this zone on its own', {
-      ...this.context,
-    });
-    return this.start(source, volume);
+    if (this.sender && !reAnchor) {
+      this.rebind(source);
+      return true;
+    }
+    if (this.sender && reAnchor) {
+      this.stop();
+    }
+    this.groupStartUnixMs = ntpToUnixMs(basePlayNtp);
+    try {
+      return await this.start(source, volume);
+    } finally {
+      this.groupStartUnixMs = null;
+    }
   }
 
   public pause(): void {
@@ -245,8 +265,15 @@ export class Ap2Sender implements AirplaySender {
     }
   }
 
-  /** Not carried on this path yet; the receiver simply shows nothing. */
-  public updateMetadata(_payload: {
+  /**
+   * Track metadata, pushed as a DMAP blob over the control channel.
+   *
+   * Apple's own now-playing screen rides the MediaRemote channel, which needs
+   * credentials from a PIN pairing and so is out of reach of a transiently
+   * paired session; this is the path that is open, and some receivers withhold
+   * audio until they have had it.
+   */
+  public updateMetadata(payload: {
     title?: string;
     artist?: string;
     album?: string;
@@ -254,11 +281,40 @@ export class Ap2Sender implements AirplaySender {
     elapsedMs?: number;
     durationMs?: number;
   }): void {
-    /* no-op until the MediaRemote channel is ported */
+    const connection = this.connection;
+    const sender = this.sender;
+    if (!connection || !sender) {
+      return;
+    }
+    const position = sender.rtpPosition;
+    void sendMetadata(
+      connection.rtsp,
+      connection.sessionUrl,
+      { title: payload.title, artist: payload.artist, album: payload.album },
+      position,
+    ).catch((err: unknown) => this.logMetadataFailure('metadata', err));
+
+    if (payload.cover?.data?.length) {
+      void sendArtwork(
+        connection.rtsp,
+        connection.sessionUrl,
+        payload.cover.mime ?? 'image/jpeg',
+        payload.cover.data,
+        position,
+      ).catch((err: unknown) => this.logMetadataFailure('artwork', err));
+    }
   }
 
+  /** Carried inside the metadata blob; there is no separate progress verb here. */
   public setProgress(_elapsedMs: number, _durationMs: number): void {
-    /* no-op until the MediaRemote channel is ported */
+    /* no-op */
+  }
+
+  private logMetadataFailure(what: string, err: unknown): void {
+    this.log.debug(`${what} not accepted`, {
+      ...this.context,
+      message: err instanceof Error ? err.message : String(err),
+    });
   }
 
   public stop(): void {
@@ -319,7 +375,7 @@ export class Ap2Sender implements AirplaySender {
         sockets.data,
         sockets.control,
       );
-      this.sender.start();
+      this.sender.start(this.groupStartUnixMs ?? undefined);
       this.startSendLoop();
       this.log.info('AirPlay 2 sender started', {
         ...this.context,
@@ -472,6 +528,16 @@ export class Ap2Sender implements AirplaySender {
       this.packetsDue++;
     }
   }
+}
+
+/**
+ * Unix-epoch NTP fixed point (seconds << 32 | fraction) to milliseconds — the
+ * form the group controller hands out, shared with the RAOP path.
+ */
+function ntpToUnixMs(ntp: bigint): number {
+  const seconds = ntp >> 32n;
+  const fraction = ntp & 0xffff_ffffn;
+  return Number(seconds) * 1000 + Number((fraction * 1000n) >> 32n);
 }
 
 function clampVolume(value: number, fallback: number): number {
