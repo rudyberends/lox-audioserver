@@ -107,6 +107,21 @@ export class PulseSoundCard {
     return {
       PULSE_SERVER: `unix:${this.socketPathFor(id)}`,
       PULSE_CLIENTCONFIG: await this.clientConfigPath(),
+      /*
+       * And nothing else means PipeWire too.
+       *
+       * A player that speaks both protocols asks PipeWire first and only falls back to
+       * PulseAudio when there is no answer — Soloist dlopens `libpipewire-0.3.so.0` before it
+       * ever looks at `libpulse.so.0`. `PULSE_SERVER` is then never read: on a host with a
+       * PipeWire session the decoded audio goes to the machine's own speakers and this card
+       * waits for a client that never arrives, which reaches the zone as a track that is
+       * "playing" with no stream to start.
+       *
+       * PipeWire looks for its socket in this directory, and the only socket here is ours. That
+       * is a narrower lie than moving XDG_RUNTIME_DIR, which everything else in the child reads
+       * as well.
+       */
+      PIPEWIRE_RUNTIME_DIR: this.runtimeDir,
     };
   }
 
