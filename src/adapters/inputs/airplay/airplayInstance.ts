@@ -58,6 +58,8 @@ export class AirplayInstance {
   private pcmChannels = DEFAULT_CHANNELS;
   private pcmLogged = false;
   private pcmBackpressured = false;
+  private pcmBytesIn = 0;
+  private pcmStatsTimer: NodeJS.Timeout | null = null;
   private pcmBytesTotal = 0;
   private lastTimingPushMs = 0;
 
@@ -280,6 +282,14 @@ export class AirplayInstance {
           durationMs: (event as { durationMs?: number }).durationMs,
           duration: (event as { duration?: number }).duration,
           elapsedMs: (event as { elapsedMs?: number }).elapsedMs,
+        });
+        break;
+      case 'progress':
+        // Position and length only ever come from the sender -- the audio
+        // itself carries no notion of where in the track it is.
+        this.applyMetadataFromObject({
+          durationMs: event.durationMs,
+          elapsedMs: event.elapsedMs,
         });
         break;
       case 'artwork':
@@ -531,6 +541,26 @@ export class AirplayInstance {
         zoneId: this.zoneId,
       });
     }
+    if (!this.pcmStatsTimer) {
+      // Once a second: how much audio is queued between the sender and whatever
+      // consumes it. A depth that keeps climbing means the consumer is behind;
+      // a flat one that is simply large is only latency.
+      this.pcmStatsTimer = setInterval(() => {
+        const stream = this.pcmStream;
+        if (!stream) {
+          return;
+        }
+        this.log.debug('airplay input state', {
+          zoneId: this.zoneId,
+          bufferedMs: Math.round((stream.writableLength / (44100 * 4)) * 1000),
+          bytesInPerSec: this.pcmBytesIn,
+          paused: stream.isPaused(),
+        });
+        this.pcmBytesIn = 0;
+      }, 1000);
+      this.pcmStatsTimer.unref?.();
+    }
+    this.pcmBytesIn += payload.length;
     if (!this.pcmLogged) {
       this.pcmLogged = true;
       this.log.info('airplay pcm stream started', {
@@ -861,6 +891,10 @@ export class AirplayInstance {
   }
 
   private endPcmStream(): void {
+    if (this.pcmStatsTimer) {
+      clearInterval(this.pcmStatsTimer);
+      this.pcmStatsTimer = null;
+    }
     if (!this.pcmStream) {
       return;
     }
