@@ -105,7 +105,13 @@ export class AudioProxyHandler {
       // stream) gets asked again exactly the way the client asked — no regression for
       // everything that was already working. Cancel the refused body first: dropping a
       // Response without reading it leaves the connection held open.
-      if (wantsRest && !upstream.ok) {
+      //
+      // An `icy-metaint` on the answer says the same thing from the other side: this is
+      // a live radio stream carrying metadata blocks at fixed offsets into its body. Not
+      // every one of them ignores ranges — an nginx-fronted Shoutcast serves the window
+      // happily, 206 and a fabricated gigabyte of Content-Length — but those offsets only
+      // hold within one unbroken body, so windowing it is never right regardless.
+      if (wantsRest && (!upstream.ok || upstream.headers.has('icy-metaint'))) {
         await bestEffort(() => upstream.body?.cancel() ?? Promise.resolve(), {
           fallback: undefined,
           onError: 'debug',
@@ -140,7 +146,9 @@ export class AudioProxyHandler {
     // The window came back: hand the client one continuous body built from this window
     // and the ones after it. Only when the host actually honoured the range (a 206 with
     // a total) — a 200 means it ignored the range and is already streaming the lot.
-    if (wantsRest && upstream.ok && upstream.body && upstream.status === 206) {
+    // Never an icy stream: stitched windows would splice metadata blocks into the audio
+    // and `streamInBoundedChunks` forwards no `icy-metaint` for a client to skip them by.
+    if (wantsRest && upstream.ok && upstream.body && upstream.status === 206 && !icyMetaInt) {
       const parsed = parseContentRange(upstream.headers.get('content-range'));
       if (parsed?.total != null) {
         await this.streamInBoundedChunks(res, target, upstreamHeaders, restStart, upstream, parsed, {
