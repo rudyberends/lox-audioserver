@@ -65,6 +65,16 @@ export class AirplayInstance {
   private pcmStatsTimer: NodeJS.Timeout | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   private pcmBytesTotal = 0;
+  /**
+   * Bumped on every track change so the audiopath we publish changes with it.
+   *
+   * An AirPlay zone has no real queue: the sender pushes one continuous stream
+   * and only the metadata changes. A queue-driven client (the Loxone app) reads
+   * that as one long track and keeps running its own progress clock across a
+   * track change, however faithfully we broadcast `time=0`. Giving each track
+   * its own audiopath is what tells such a client this is a different track.
+   */
+  private trackToken = 0;
   private lastTimingPushMs = 0;
 
   constructor(
@@ -296,9 +306,10 @@ export class AirplayInstance {
           title: event.title,
           artist: event.artist,
           album: event.album,
-          durationMs: (event as { durationMs?: number }).durationMs,
-          duration: (event as { duration?: number }).duration,
-          elapsedMs: (event as { elapsedMs?: number }).elapsedMs,
+          // DMAP carries the track length with every metadata push, where the
+          // sender's progress updates are sparse -- so this is the length that
+          // can be relied on to arrive for each new track.
+          durationMs: event.durationMs,
         });
         break;
       case 'progress':
@@ -749,6 +760,7 @@ export class AirplayInstance {
       (artist && resolvedArtist !== prevArtist) ||
       (album && resolvedAlbum !== prevAlbum);
     if (trackChanged) {
+      this.trackToken += 1;
       this.pcmBytesTotal = 0;
       this.currentElapsedSec = 0;
       this.lastTimingPushMs = 0;
@@ -875,6 +887,7 @@ export class AirplayInstance {
       album: this.currentMetadata.album ?? '',
       coverurl: this.coverUrl,
       duration: this.currentMetadata.duration,
+      audiopath: `airplay://${this.sourceMac}/${this.trackToken}`,
     };
   }
 
