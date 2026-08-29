@@ -54,6 +54,17 @@ export class PipeSourceAdapter {
       } catch {
         /* ignore */
       }
+      // unpipe() stops the stream flowing, which is right when we were its only
+      // reader. A session replaced mid-setup is the exception: a format change
+      // builds the replacement before the old session lets go, so by now the new
+      // one has adopted this same source and resumed it. Leaving it paused here
+      // strands it -- listener attached, nobody left to resume it -- and the zone
+      // stays silent until the source disconnects and starts over. Our own
+      // listener is already gone by this point, so anything still listening is
+      // someone else's.
+      if (this.stream.listenerCount('data') > 0) {
+        this.stream.resume();
+      }
     }
     this.stream = undefined;
     this.dataListener = undefined;
