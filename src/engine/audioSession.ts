@@ -128,6 +128,8 @@ export class AudioSession {
   private readonly createdAt = Date.now();
   private readonly sourcePreDelayMs?: number;
   private sourceFormat: EngineSessionStats['sourceFormat'];
+  /** Length of the source as ffmpeg reported it, or null while nobody has said (see `observeSourceDuration`). */
+  private sourceDurationSec: number | null = null;
   private readonly bitPerfect: boolean;
   private readonly dspApplied: boolean;
   private debugTapStream?: fs.WriteStream;
@@ -350,7 +352,14 @@ export class AudioSession {
       (this.sourceFormat?.codec.startsWith('pcm_') === true || this.sourceFormat?.codec === 'flac');
     this.bitPerfect = losslessSource && this.args.isBitPerfect(this.equalizerBands);
     this.dspApplied = !this.args.isBitPerfect(this.equalizerBands);
-    this.pipeline = new TwoStagePipeline(this.log, { zoneId: this.zoneId, profile: this.profile });
+    this.pipeline = new TwoStagePipeline(
+      this.log,
+      { zoneId: this.zoneId, profile: this.profile },
+      // The decoder reads *this* session's source, so its banner describes this track. The crossfade
+      // decoders in `Crossfader` deliberately do not report here: those read the *next* track, and
+      // their duration would overwrite the playing one.
+      (message) => this.observeBanner(message),
+    );
     this.starter = new SessionStarter(this);
     this.crossfader = new Crossfader(this);
   }
@@ -541,7 +550,7 @@ export class AudioSession {
         onStderr: (message: string) => {
           this.lastStderrLine = message;
           this.lastStderrAt = Date.now();
-          this.observeSourceFormat(message);
+          this.observeBanner(message);
           this.log.debug('ffmpeg stderr', { zoneId: this.zoneId, message });
         },
         onExit: (code, signal) => {
@@ -952,7 +961,12 @@ export class AudioSession {
     if (this.sourceFormat) {
       return;
     }
-    const match = /Stream #\d+:\d+(?:\[[^\]]*\])?(?:\([^)]*\))?: Audio: ([A-Za-z0-9_]+)[^,]*, (\d+) Hz, ([^,]+?)(?:, ([a-z0-9]+)(?: \((\d+) bit\))?)?(?:, (\d+) kb\/s)?$/.exec(
+    // The trailing `(?:\s+\([a-z][a-z ]*\))*` is ffmpeg's disposition list — `(default)`, sometimes
+    // `(default) (forced)`. Every stream inside an mp4/m4a container carries one, so anchoring straight
+    // at `$` meant this reader missed exactly the sources it exists for: the Apple Music segments and
+    // m4a files whose format nobody declares. Verified against real ffmpeg output for aac, alac, mp3,
+    // flac and opus.
+    const match = /Stream #\d+:\d+(?:\[[^\]]*\])?(?:\([^)]*\))?: Audio: ([A-Za-z0-9_]+)[^,]*, (\d+) Hz, ([^,]+?)(?:, ([a-z0-9]+)(?: \((\d+) bit\))?)?(?:, (\d+) kb\/s)?(?:\s+\([a-z][a-z ]*\))*$/.exec(
       message.trim(),
     );
     if (!match) {
@@ -1000,6 +1014,67 @@ export class AudioSession {
     });
   }
 
+  /**
+   * Read whatever ffmpeg's input banner states about the source.
+   *
+   * One entry point for both halves of the banner, and the one the decoder in {@link TwoStagePipeline}
+   * feeds too: that process is a second ffmpeg on the same source, and until it reported here the
+   * two-stage topologies learned nothing from a banner we were already paying for.
+   */
+  /** @internal */ public observeBanner(chunk: string): void {
+    // Split first: ffmpeg writes the whole banner in one go, so `Duration:` and `Stream #0:0` usually
+    // arrive in a single chunk. Both readers match against one line, and the format reader anchors its
+    // pattern at the end of the string — which a multi-line chunk never satisfies, so it was quietly
+    // missing exactly the banners it exists to read.
+    for (const line of chunk.split('\n')) {
+      const message = line.trim();
+      if (!message) {
+        continue;
+      }
+      this.observeSourceFormat(message);
+      this.observeSourceDuration(message);
+    }
+  }
+
+  /**
+   * How long the source runs, from ffmpeg's own read of it.
+   *
+   * The last line of defence for a track whose provider never said. Everything that ends a track needs
+   * a length — `ZonePlayer`'s clock and the engine-exit path both refuse to fire `ended` without one —
+   * and the alternative used to be a hardcoded 2:00 placeholder that truncated any track it was wrong
+   * about (#350). This states the real number instead, without a second HTTP request or an ffprobe
+   * (which `ffmpeg-static` does not ship).
+   *
+   * The line looks like:
+   *   `Duration: 00:04:00.00, start: 0.000000, bitrate: 256 kb/s`
+   *
+   * **How soon it arrives is a property of the source, not of us.** A seekable HTTP source — every real
+   * CDN — or one whose index sits at the front answers within the first tens of kilobytes. A
+   * non-seekable stream whose index sits at the *end* only answers once ffmpeg has read the whole
+   * thing, i.e. as the track finishes, which is why the engine-exit path must be able to end a track
+   * that still has no length at all. Live sources say `N/A` and are left at null, which is the truth.
+   */
+  private observeSourceDuration(message: string): void {
+    if (this.sourceDurationSec !== null) {
+      return;
+    }
+    const match = /^\s*Duration:\s*(\d+):(\d{2}):(\d{2})(?:\.(\d+))?/.exec(message);
+    if (!match) {
+      return;
+    }
+    const [, h, m, sec, frac] = match;
+    const seconds =
+      Number(h) * 3600 + Number(m) * 60 + Number(sec) + (frac ? Number(`0.${frac}`) : 0);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      return;
+    }
+    this.sourceDurationSec = Math.round(seconds);
+    this.log.debug('source duration read from ffmpeg', {
+      zoneId: this.zoneId,
+      durationSec: this.sourceDurationSec,
+    });
+  }
+
   public getStats(): EngineSessionStats {
     const drops = this.fanout.drops;
     return {
@@ -1021,6 +1096,7 @@ export class AudioSession {
       },
       crossfading: this.crossfadeActive,
       sourceFormat: this.sourceFormat,
+      sourceDurationSec: this.sourceDurationSec,
       bufferedBytes: this.buffer.bytes,
       totalBytes: this.totalBytes,
       lastUpdated: this.lastBpsTs || null,

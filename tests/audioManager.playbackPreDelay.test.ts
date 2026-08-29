@@ -62,6 +62,7 @@ class EngineSpy implements EnginePort {
 const outputNotifier = {
   notifyOutputError: () => {},
   notifyOutputState: () => {},
+  notifySourceDuration: () => {},
 };
 
 test('audio manager applies zone playback pre-delay to external URL sources', () => {

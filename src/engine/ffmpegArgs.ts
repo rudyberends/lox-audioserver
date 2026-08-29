@@ -242,19 +242,33 @@ export class FfmpegArgBuilder {
       return this.source.logLevel;
     }
     /*
-     * `info` when — and only when — nobody could tell us what the source is.
+     * `info` when — and only when — nobody could tell us what the source is or how long it runs.
      *
      * A stream URL arrives with no native format unless its provider declares one, and Apple Music,
      * TuneIn and most radio do not: the API then reports "source not reported" for the whole track while
      * ffmpeg has printed the answer on its own stderr and we asked it not to. At `info` the input banner
-     * (`Stream #0:0: Audio: aac (LC), 44100 Hz, stereo, fltp, 256 kb/s`) is printed and
-     * `AudioSession.observeSourceFormat` reads it.
+     * is printed and `AudioSession` reads both facts out of it:
+     *
+     *   Duration: 00:04:00.00, start: 0.000000, bitrate: 256 kb/s
+     *   Stream #0:0: Audio: aac (LC), 44100 Hz, stereo, fltp, 256 kb/s
+     *
+     * The duration half matters as much as the format half. Nothing downstream can end a track it has
+     * no length for — the zone clock and the engine-exit path both need one to fire `ended` — and the
+     * alternative to reading it here was inventing a placeholder, which is how a favourite whose
+     * metadata lookup missed ended up being cut off at exactly 2:00 (#350).
      *
      * `-nostats` keeps the rest quiet, so this costs one banner rather than a progress line every half
-     * second — see `sessionStarter`. Sources we already know (probed files, declared streams) stay at
-     * `error`, so nothing changes for them.
+     * second — see `sessionStarter`. Staying at `error` whenever both facts are already in hand is what
+     * keeps an HLS source (which logs a line per segment at `info`) from burying its own real errors in
+     * `lastStderr`.
      */
-    return this.sourceNativeFormat ? 'error' : 'info';
+    const durationKnown =
+      // A pipe carries raw PCM, so ffmpeg states `Duration: N/A` for it no matter the log level.
+      // There is nothing to learn from the banner, and the input adapter driving the pipe (librespot,
+      // Soloist, line-in) reports the position and length itself.
+      this.source.kind === 'pipe' ||
+      (typeof this.source.knownDurationSec === 'number' && this.source.knownDurationSec > 0);
+    return this.sourceNativeFormat && durationKnown ? 'error' : 'info';
   }
 
   /**

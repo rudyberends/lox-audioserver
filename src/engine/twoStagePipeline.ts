@@ -28,6 +28,15 @@ export class TwoStagePipeline {
   constructor(
     private readonly log: TwoStagePipelineLogger,
     private readonly logContext: Record<string, unknown>,
+    /**
+     * Where the decoder's stderr goes besides the log.
+     *
+     * The decoder is a second ffmpeg reading the same source, so its banner states the source format
+     * and the source duration exactly as the single-stage process's does. It used to go nowhere but
+     * `log.debug`, which meant every two-stage topology — the DSP path included — learned nothing from
+     * a banner we were already asking for and paying for.
+     */
+    private readonly onStderr?: (message: string) => void,
   ) {}
 
   /**
@@ -69,7 +78,9 @@ export class TwoStagePipeline {
 
     proc.stderr?.on('data', (c: Buffer) => {
       const msg = c.toString().trim();
-      if (msg) this.log.debug('decoder stderr', { ...this.logContext, message: msg });
+      if (!msg) return;
+      this.onStderr?.(msg);
+      this.log.debug('decoder stderr', { ...this.logContext, message: msg });
     });
     proc.on('exit', (code, signal) => {
       this.log.debug('decoder exited', { ...this.logContext, code, signal });

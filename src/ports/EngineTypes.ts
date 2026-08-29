@@ -29,6 +29,15 @@ export type PlaybackSource =
         lossless: boolean;
         codecName?: string;
       };
+      /**
+       * How long this source is, when whoever resolved it already knows.
+       *
+       * The engine decodes nothing differently for it: the only thing it decides is whether ffmpeg's
+       * input banner is worth asking for (see `FfmpegArgBuilder.getLogLevel`). A source that arrives
+       * with neither a native format nor a duration is one we know nothing about, and that banner
+       * states both — so the engine reads the length off ffmpeg rather than anyone guessing it.
+       */
+      knownDurationSec?: number;
     }
   | {
       kind: 'url';
@@ -63,6 +72,15 @@ export type PlaybackSource =
         lossless: boolean;
         codecName?: string;
       };
+      /**
+       * How long this source is, when whoever resolved it already knows.
+       *
+       * The engine decodes nothing differently for it: the only thing it decides is whether ffmpeg's
+       * input banner is worth asking for (see `FfmpegArgBuilder.getLogLevel`). A source that arrives
+       * with neither a native format nor a duration is one we know nothing about, and that banner
+       * states both — so the engine reads the length off ffmpeg rather than anyone guessing it.
+       */
+      knownDurationSec?: number;
     }
   | {
       kind: 'pipe';
@@ -106,6 +124,15 @@ export type EngineInputSpec =
         lossless: boolean;
         codecName?: string;
       };
+      /**
+       * How long this source is, when whoever resolved it already knows.
+       *
+       * The engine decodes nothing differently for it: the only thing it decides is whether ffmpeg's
+       * input banner is worth asking for (see `FfmpegArgBuilder.getLogLevel`). A source that arrives
+       * with neither a native format nor a duration is one we know nothing about, and that banner
+       * states both — so the engine reads the length off ffmpeg rather than anyone guessing it.
+       */
+      knownDurationSec?: number;
     }
   | {
       kind: 'url';
@@ -140,6 +167,15 @@ export type EngineInputSpec =
         lossless: boolean;
         codecName?: string;
       };
+      /**
+       * How long this source is, when whoever resolved it already knows.
+       *
+       * The engine decodes nothing differently for it: the only thing it decides is whether ffmpeg's
+       * input banner is worth asking for (see `FfmpegArgBuilder.getLogLevel`). A source that arrives
+       * with neither a native format nor a duration is one we know nothing about, and that banner
+       * states both — so the engine reads the length off ffmpeg rather than anyone guessing it.
+       */
+      knownDurationSec?: number;
     }
   | {
       kind: 'pipe';

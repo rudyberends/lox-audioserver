@@ -1275,9 +1275,12 @@ export class SpotifyAccountProvider implements ContentProvider {
     const cover =
       this.extractImage(episode?.images) ??
       this.extractImage(episode?.show?.images);
+    // Undefined, never a stand-in number: a guessed length is indistinguishable from a real one and
+    // the zone clock ends a track at whatever it is told (#350). Every other provider already answers
+    // this way; Spotify was the only one inventing a value.
     const durationSec = Number.isFinite(episode?.duration_ms)
       ? Math.max(1, Math.round(Number(episode.duration_ms) / 1000))
-      : 120;
+      : undefined;
     const name = String(episode?.name ?? 'Episode');
     return {
       id: this.makeUri('episode', id),
@@ -1337,7 +1340,7 @@ export class SpotifyAccountProvider implements ContentProvider {
         type: FileType.File,
         artist: entry.owner ?? '',
         album: entry.album ?? '',
-        duration: entry.durationSec ?? 120,
+        duration: entry.durationSec,
         tag: entry.kind,
       } as ContentFolderItem;
     }
@@ -1361,7 +1364,7 @@ export class SpotifyAccountProvider implements ContentProvider {
     const cover = this.extractImage(coverImages);
     const durationSec = Number.isFinite(track?.duration_ms)
       ? Math.max(1, Math.round(Number(track.duration_ms) / 1000))
-      : 120;
+      : undefined;
 
     return {
       id: this.makeUri('track', id),

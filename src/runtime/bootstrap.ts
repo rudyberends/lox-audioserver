@@ -304,6 +304,10 @@ export function createRuntime(): Runtime {
   const outputNotifier = {
     notifyOutputError: outputHandlersProxy.onOutputError,
     notifyOutputState: outputHandlersProxy.onOutputState,
+    // Not an output talking back: this is the engine reporting a track length ffmpeg worked out for a
+    // source that arrived without one, and it has to reach the zone's clock to end the track.
+    notifySourceDuration: (zoneId: number, durationSec: number) =>
+      requireZoneManager().applySourceDuration(zoneId, durationSec),
   };
   // Source the Apple Music developer token live from config for the auth flow and API bearer.
   setAppleMusicDeveloperTokenSource(() => configPort.getConfig().content?.appleMusic?.developerToken);

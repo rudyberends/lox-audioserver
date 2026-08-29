@@ -61,7 +61,7 @@ function buildManager() {
   const engine = new LiveEngine();
   const manager = new AudioManager(
     new PlaybackService(engine),
-    { notifyOutputError: () => {}, notifyOutputState: () => {} },
+    { notifyOutputError: () => {}, notifyOutputState: () => {}, notifySourceDuration: () => {} },
     new ZoneAudioPreferences(),
   );
   manager.startExternalPlayback(1, 'track', { kind: 'file', path: '/tmp/track.mp3' }, undefined, true);

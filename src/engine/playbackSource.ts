@@ -29,6 +29,14 @@ export type PlaybackSource =
         lossless: boolean;
         codecName?: string;
       };
+      /**
+       * How long this source is, when whoever resolved it already knows.
+       *
+       * Decides nothing about decoding — only whether ffmpeg's input banner is worth asking for
+       * (see `FfmpegArgBuilder.getLogLevel`). Omit it and the engine reads the length off ffmpeg
+       * instead, which is the only thing standing between an unknown length and a guessed one.
+       */
+      knownDurationSec?: number;
     }
   | {
       kind: 'url';
@@ -63,6 +71,14 @@ export type PlaybackSource =
         lossless: boolean;
         codecName?: string;
       };
+      /**
+       * How long this source is, when whoever resolved it already knows.
+       *
+       * Decides nothing about decoding — only whether ffmpeg's input banner is worth asking for
+       * (see `FfmpegArgBuilder.getLogLevel`). Omit it and the engine reads the length off ffmpeg
+       * instead, which is the only thing standing between an unknown length and a guessed one.
+       */
+      knownDurationSec?: number;
     }
   | {
       kind: 'pipe';

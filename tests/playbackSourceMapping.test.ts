@@ -31,6 +31,7 @@ test('a url source survives the round trip with every field set', () => {
     lowLatency: false,
     restartOnFailure: true,
     nativeFormat: { sampleRate: 44100, channels: 2, bitDepth: 16, lossless: false, codecName: 'aac' },
+    knownDurationSec: 240,
   };
   assert.deepEqual(toPlaybackSource(toEngineInputSpec(source)), source);
 });
@@ -47,6 +48,7 @@ test('a file source survives the round trip with every field set', () => {
     // Dropping this one would cost a scanned library track its bit-perfect bypass, silently: the
     // engine would simply not know the format and resample as if it were unknown.
     nativeFormat: { sampleRate: 44100, channels: 2, bitDepth: 16, lossless: true, codecName: 'flac' },
+    knownDurationSec: 187,
   };
   assert.deepEqual(toPlaybackSource(toEngineInputSpec(source)), source);
 });
@@ -89,6 +91,7 @@ test('every optional field of the engine spec is carried both ways', () => {
     lowLatency: true,
     restartOnFailure: false,
     nativeFormat: { sampleRate: 96000, channels: 2, bitDepth: 24, lossless: true, codecName: 'flac' },
+    knownDurationSec: 512,
   };
   const back = toEngineInputSpec(toPlaybackSource(spec));
   assert.deepEqual(Object.keys(back).sort(), Object.keys(spec).sort());

@@ -50,6 +50,14 @@ type OutputState = {
 type OutputNotifier = {
   notifyOutputError: (zoneId: number, reason?: string) => void;
   notifyOutputState: (zoneId: number, state: OutputState) => void;
+  /**
+   * The length of what is playing, learned after the fact.
+   *
+   * Only ever fires for a track that started without one. The zone clock is what ends a track, and it
+   * was handed a 0 at start, so telling the session alone would change nothing — this reaches the
+   * player itself. See `AudioManager.watchSourceDuration`.
+   */
+  notifySourceDuration: (zoneId: number, durationSec: number) => void;
 };
 
 /**
@@ -62,6 +70,20 @@ export class AudioManager {
   private readonly sessions = new Map<number, PlaybackSession>();
   private readonly playRequestTimes = new Map<number, { requestedAt: number; uri?: string; type?: string }>();
   private readonly playRequestMaxAgeMs = 60_000;
+  /**
+   * Zones whose track started without a length, waiting for ffmpeg to state one.
+   *
+   * Cleared the moment a duration is adopted, the session stops, or the window below runs out — a
+   * genuinely live source never answers and must not be polled for the rest of its life.
+   */
+  private readonly durationWatchers = new Map<number, NodeJS.Timeout>();
+  private readonly durationPollMs = 500;
+  /**
+   * How long to keep asking. Generous, because a stream whose index sits at the end only states its
+   * length once ffmpeg has read it all — but bounded, because that case is also caught for free when
+   * the engine exits (see `handleEngineTermination`), and a live source would otherwise be polled forever.
+   */
+  private readonly durationWatchMs = 30_000;
   private readonly playbackService: PlaybackService;
   private readonly outputNotifier: OutputNotifier;
   private readonly prefs: ZoneAudioPreferences;
@@ -403,6 +425,8 @@ export class AudioManager {
       resumeAtSec && resumeAtSec > 0 ? Date.now() - resumeAtSec * 1000 : Date.now();
     session.elapsed = boundedElapsed;
     session.firstAudioReadyAt = undefined;
+    // A resume respawns ffmpeg, so the banner comes round again for a track that still has no length.
+    this.watchSourceDuration(zoneId);
     this.log.debug('playback resumed', { zoneId, source: session.source });
     return session;
   }
@@ -413,6 +437,7 @@ export class AudioManager {
       return null;
     }
     this.playbackService.stop(zoneSessionKey(zoneId), 'stop', { discardSubscribers: true });
+    this.clearDurationWatch(zoneId);
     this.sessions.delete(zoneId);
     this.log.debug('playback stopped', { zoneId, source: session.source });
     return session;
@@ -608,6 +633,93 @@ export class AudioManager {
     session.cover = cover;
     session.updatedAt = Date.now();
     return cover ? session.stream.coverUrl : undefined;
+  }
+
+  /**
+   * Wait for ffmpeg to say how long a track is, when nothing else could.
+   *
+   * A track that starts with no length cannot be ended by anything downstream: `ZonePlayer`'s clock and
+   * the engine-exit path both need one to fire `ended`, so the queue would sit on it forever. The old
+   * answer was to invent 2:00 and cut the track off there (#350); this asks the one party that actually
+   * finds out — the ffmpeg already decoding it, which prints the length in its input banner.
+   *
+   * A poll rather than an event because the engine port exposes its sessions by `getSessionStats` and
+   * nothing else; it is a map lookup twice a second, only for a zone that is missing a length, and it
+   * stops the moment one arrives.
+   */
+  private watchSourceDuration(zoneId: number): void {
+    this.clearDurationWatch(zoneId);
+    const session = this.sessions.get(zoneId);
+    if (!session || (session.duration ?? 0) > 0) {
+      return;
+    }
+    // Radio has no length by definition, and a pipe's producer (librespot, Soloist, line-in) reports
+    // position and length itself — neither has anything to learn here.
+    const kind = session.playbackSource?.kind;
+    if (session.metadata?.isRadio || (kind !== 'file' && kind !== 'url')) {
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      const current = this.sessions.get(zoneId);
+      if (!current || current.state !== 'playing' || (current.duration ?? 0) > 0) {
+        this.clearDurationWatch(zoneId);
+        return;
+      }
+      const learned = this.readEngineSourceDuration(zoneId);
+      if (learned) {
+        this.adoptSourceDuration(zoneId, learned, 'ffmpeg banner');
+        return;
+      }
+      if (Date.now() - startedAt >= this.durationWatchMs) {
+        this.clearDurationWatch(zoneId);
+      }
+    }, this.durationPollMs);
+    timer.unref?.();
+    this.durationWatchers.set(zoneId, timer);
+  }
+
+  private clearDurationWatch(zoneId: number): void {
+    const timer = this.durationWatchers.get(zoneId);
+    if (timer) {
+      clearInterval(timer);
+      this.durationWatchers.delete(zoneId);
+    }
+  }
+
+  /** The length ffmpeg read off this zone's source, or null while it has not said. */
+  private readEngineSourceDuration(zoneId: number): number | null {
+    if (!this.playbackService.hasSession(zoneSessionKey(zoneId))) {
+      return null;
+    }
+    for (const stat of this.playbackService.getSessionStats(zoneSessionKey(zoneId))) {
+      const value = stat.sourceDurationSec;
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+        return Math.round(value);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Adopt a length that arrived after the track started, and tell the clock that has to act on it.
+   *
+   * The session is not enough: `ZonePlayer` was handed the length at start and owns it from then on, so
+   * without the notification the progress bar would fill in while the track still never ended.
+   */
+  private adoptSourceDuration(zoneId: number, durationSec: number, via: string): void {
+    this.clearDurationWatch(zoneId);
+    const session = this.sessions.get(zoneId);
+    if (!session || (session.duration ?? 0) > 0) {
+      return;
+    }
+    session.duration = durationSec;
+    if (session.metadata) {
+      session.metadata.duration = durationSec;
+    }
+    session.updatedAt = Date.now();
+    this.log.info('source duration learned', { zoneId, durationSec, via });
+    this.outputNotifier.notifySourceDuration(zoneId, durationSec);
   }
 
   public updateSessionTiming(zoneId: number, elapsed: number, duration: number): void {
@@ -819,6 +931,16 @@ export class AudioManager {
     if (inputPrefs?.urlRealTime === false && effectiveSource?.kind === 'url') {
       effectiveSource = { ...effectiveSource, realTime: false };
     }
+    // Say so when the length is already settled. The engine decodes nothing differently for it; it only
+    // stops asking ffmpeg for its input banner, which is how a source nobody could describe gets its
+    // real length read off stderr instead of guessed (see `FfmpegArgBuilder.getLogLevel`).
+    if (
+      (effectiveSource?.kind === 'url' || effectiveSource?.kind === 'file') &&
+      typeof metadata?.duration === 'number' &&
+      metadata.duration > 0
+    ) {
+      effectiveSource = { ...effectiveSource, knownDurationSec: Math.round(metadata.duration) };
+    }
     this.log.info('startWithResolvedSource', {
       zoneId,
       label,
@@ -981,6 +1103,7 @@ export class AudioManager {
       firstAudioReadyAt: undefined,
     };
     this.sessions.set(zoneId, session);
+    this.watchSourceDuration(zoneId);
     this.log.info(outputOnly ? 'playback started (output-only)' : 'playback started', {
       zoneId,
       source: label,
@@ -1108,26 +1231,14 @@ export class AudioManager {
     return sortedA.every((p, idx) => p === sortedB[idx]);
   }
 
+  /**
+   * `EngineSessionStats` rather than a hand-written copy of its shape. The copy that stood here had
+   * already drifted — it was missing `sourceFormat` and `processing` — so a fact the engine reports
+   * was simply invisible at this end until someone noticed and retyped it.
+   */
   private handleEngineTermination(
     key: SessionKey,
-    stats: {
-      profile: OutputProfile;
-      bps: number | null;
-      bufferedBytes: number;
-      totalBytes: number;
-      lastUpdated: number | null;
-      subscribers: number;
-      restarts: number;
-      lastError: string | null;
-      lastErrorAt: number | null;
-      lastStderr: string | null;
-      lastStderrAt: number | null;
-      lastExitCode: number | null;
-      lastExitSignal: string | null;
-      lastExitAt: number | null;
-      subscriberDrops: number;
-      lastSubscriberDropAt: number | null;
-    } | null,
+    stats: EngineSessionStats | null,
     reason?: string,
   ): void {
     // For zone playback the session key IS the zoneId; a non-zone (ephemeral)
@@ -1138,6 +1249,17 @@ export class AudioManager {
     const exitCode = stats?.lastExitCode;
     const exitSignal = stats?.lastExitSignal;
     const stderr = stats?.lastStderr?.trim();
+    // Last chance to learn the length, and for one shape of source it is the *only* chance: a
+    // non-seekable stream whose index sits at the end states its duration when ffmpeg has read the
+    // whole thing — which is here. Adopting it now still ends the track correctly, because the zone
+    // clock (not this exit) is what times the end for the unpaced sources every pull output uses.
+    if ((session.duration ?? 0) <= 0 && !session.metadata?.isRadio) {
+      const learned = stats?.sourceDurationSec;
+      if (typeof learned === 'number' && Number.isFinite(learned) && learned > 0) {
+        this.adoptSourceDuration(zoneId, Math.round(learned), 'ffmpeg banner at end of source');
+      }
+    }
+    this.clearDurationWatch(zoneId);
     const duration = session.duration ?? session.metadata?.duration ?? 0;
     const elapsedFromClock = session.startedAt
       ? Math.round(Math.max(0, Date.now() - session.startedAt) / 1000)

@@ -37,6 +37,7 @@ export function toEngineInputSpec(source: PlaybackSource): EngineInputSpec {
         lowLatency: source.lowLatency,
         restartOnFailure: source.restartOnFailure,
         nativeFormat: source.nativeFormat,
+        knownDurationSec: source.knownDurationSec,
       };
     case 'pipe':
       return {
@@ -58,6 +59,7 @@ export function toEngineInputSpec(source: PlaybackSource): EngineInputSpec {
         startAtSec: source.startAtSec,
         realTime: source.realTime,
         nativeFormat: source.nativeFormat,
+        knownDurationSec: source.knownDurationSec,
       };
     default:
       throw new Error('Unknown PlaybackSource.');
@@ -88,6 +90,7 @@ export function toPlaybackSource(input: EngineInputSpec): PlaybackSource {
         lowLatency: input.lowLatency,
         restartOnFailure: input.restartOnFailure,
         nativeFormat: input.nativeFormat,
+        knownDurationSec: input.knownDurationSec,
       };
     case 'pipe':
       return {
@@ -109,6 +112,7 @@ export function toPlaybackSource(input: EngineInputSpec): PlaybackSource {
         startAtSec: input.startAtSec,
         realTime: input.realTime,
         nativeFormat: input.nativeFormat,
+        knownDurationSec: input.knownDurationSec,
       };
     case 'silence':
       throw new Error('EngineInputSpec kind "silence" is not supported by the audio engine.');

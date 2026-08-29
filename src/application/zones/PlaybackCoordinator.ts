@@ -702,6 +702,30 @@ export class PlaybackCoordinator {
     });
   }
 
+  /**
+   * Hand the zone a track length that only turned up after playback began.
+   *
+   * Reaches the player rather than only the zone state, because the player's clock is what ends a
+   * track: it was started with a 0 and would otherwise run past the end of a track forever, leaving
+   * the queue sitting on it. Patching `duration` as well is what moves the progress bar.
+   *
+   * Only ever called for a track that started without a length — see `AudioManager.watchSourceDuration`.
+   */
+  public applySourceDuration(zoneId: number, durationSec: number): void {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx || !Number.isFinite(durationSec) || durationSec <= 0) {
+      return;
+    }
+    const player = ctx.player.getState();
+    if (player.duration > 0) {
+      return;
+    }
+    const elapsed = Math.max(0, Math.min(player.time, durationSec));
+    ctx.player.updateTiming(elapsed, Math.round(durationSec));
+    this.applyPatch(zoneId, { duration: Math.round(durationSec) });
+    this.log.debug('source duration applied to zone', { zoneId, durationSec, elapsed });
+  }
+
   public handlePlaybackError(
     zoneId: number,
     reason: string | undefined,

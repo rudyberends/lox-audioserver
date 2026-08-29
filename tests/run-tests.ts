@@ -59,6 +59,7 @@ import './airplayVolumeAssert.test';
 import './airplayStreamSession.test';
 import './airplayHardwareAddress.test';
 import './audioStreamHandlerIcy.test';
+import './audioProxyIcyStream.test';
 import './queueAuthority.test';
 import './queueMutations.test';
 import './queueEditIntake.test';
@@ -255,6 +256,13 @@ async function createZoneHarness(): Promise<ZoneHarness> {
     const spotifyDeviceRegistryModule = require('../src/adapters/outputs/spotify/deviceRegistry') as typeof import('../src/adapters/outputs/spotify/deviceRegistry');
     const spotifyDeviceRegistry = new spotifyDeviceRegistryModule.SpotifyDeviceRegistry();
 
+    let zoneManagerRef: ZoneManagerFacade | null = null;
+    const requireZoneManager = (): ZoneManagerFacade => {
+      if (!zoneManagerRef) {
+        throw new Error('zone manager not configured');
+      }
+      return zoneManagerRef;
+    };
     let outputHandlers: ReturnType<ZoneManagerFacade['getOutputHandlers']> | null = null;
     const requireOutputHandlers = (): ReturnType<ZoneManagerFacade['getOutputHandlers']> => {
       if (!outputHandlers) {
@@ -276,6 +284,8 @@ async function createZoneHarness(): Promise<ZoneHarness> {
     const outputNotifier = {
       notifyOutputError: outputHandlersProxy.onOutputError,
       notifyOutputState: outputHandlersProxy.onOutputState,
+      notifySourceDuration: (zoneId: number, durationSec: number) =>
+        requireZoneManager().applySourceDuration(zoneId, durationSec),
     };
     const { AudioManager } = require('../src/application/playback/audioManager') as typeof import('../src/application/playback/audioManager');
     const { ZoneAudioPreferences } = require('../src/application/playback/ZoneAudioPreferences') as typeof import('../src/application/playback/ZoneAudioPreferences');
@@ -387,6 +397,7 @@ async function createZoneHarness(): Promise<ZoneHarness> {
     });
     const groupTracker = require('../src/application/groups/groupTracker') as typeof import('../src/application/groups/groupTracker');
     groupManager.initOnce({ zoneManager });
+    zoneManagerRef = zoneManager;
     outputHandlers = zoneManager.getOutputHandlers();
     const updateQueueFromOutput = outputHandlers.onQueueUpdate;
 
@@ -636,6 +647,7 @@ test('audio manager active local session detection ignores stale no-subscriber s
   const manager = new AudioManager(new PlaybackService(engine), {
     notifyOutputError: () => {},
     notifyOutputState: () => {},
+    notifySourceDuration: () => {},
   }, new ZoneAudioPreferences());
 
   manager.startPlayback(1, 'https://example.com/test.mp3', {
@@ -698,6 +710,7 @@ test('spotify pipe track change after pause restarts engine instead of continuin
   const manager = new AudioManager(new PlaybackService(engine), {
     notifyOutputError: () => {},
     notifyOutputState: () => {},
+    notifySourceDuration: () => {},
   }, new ZoneAudioPreferences());
 
   const playbackSource = {
@@ -760,6 +773,7 @@ test('spotify explicit serviceplay restarts same pipe when request uri changed b
   const manager = new AudioManager(new PlaybackService(engine), {
     notifyOutputError: () => {},
     notifyOutputState: () => {},
+    notifySourceDuration: () => {},
   }, new ZoneAudioPreferences());
 
   const playbackSource = {

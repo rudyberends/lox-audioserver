@@ -114,13 +114,14 @@ export function createQueueItem(
       ? userFromUri || defaultSpotifyUserId || null
       : null;
   const user = metaUser && metaUser !== 'nouser' ? metaUser : defaultSpotifyUser ?? 'nouser';
-  const isLineIn = normalizedUri.toLowerCase().startsWith('linein:');
+  // 0 means "nobody has said yet", and it is left at 0 rather than filled with a guess. The guess used
+  // to be 120, which is indistinguishable from a real two-minute track: the zone clock ends a track at
+  // its duration, so every track whose metadata lookup missed was cut off at exactly 2:00 (#350). What
+  // fills this in afterwards is ffmpeg's own read of the source — see `AudioManager.watchSourceDuration`.
   const duration =
     typeof metadata?.duration === 'number' && metadata.duration > 0
       ? Math.round(metadata.duration)
-      : inferredType === 1 || inferredType === 3 || isLineIn
-        ? 0
-        : 120;
+      : 0;
   const station = sanitizeStation(metadata?.station, normalizedUri);
   // First-class service identity for neutral consumers (own player, DLNA).
   const native = parseServiceNativeAudiopath(normalizedUri);
@@ -159,13 +160,10 @@ export async function mapFolderItemsToQueue(
     audiotype: audioType,
     coverurl: item.coverurl ?? item.thumbnail ?? '',
     ...(item.animatedCoverUrl ? { animatedCoverUrl: item.animatedCoverUrl } : {}),
-    duration: Math.round(
-      Number(item.duration ?? 0) > 0
-        ? Number(item.duration ?? 0)
-        : audioType === 1
-          ? 0
-          : 120,
-    ),
+    // Left at 0 when the provider did not say, never guessed — see `createQueueItem` for what the
+    // guess cost. A queue row with no length shows none, which is the truth, and the engine states
+    // the real one once the track plays.
+    duration: Math.round(Number(item.duration ?? 0) > 0 ? Number(item.duration ?? 0) : 0),
     qindex: 0,
     station: audioType === 1 || audioType === 4 ? station ?? '' : '',
     title: item.title ?? item.name ?? zoneName,

@@ -45,6 +45,13 @@ export type EngineSessionStats = {
     bitDepth: number | null;
     bitrate: number | null;
   } | null;
+  /**
+   * Length of the source in seconds, once ffmpeg has stated it, else null.
+   *
+   * Read off the input banner rather than probed — see `AudioSession.observeSourceDuration`. Null means
+   * "nobody has said yet", which for a live source is permanent and correct.
+   */
+  sourceDurationSec?: number | null;
   bufferedBytes: number;
   totalBytes: number;
   lastUpdated: number | null;

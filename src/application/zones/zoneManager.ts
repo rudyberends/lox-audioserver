@@ -341,6 +341,16 @@ export class ZoneManager {
   }
 
   /**
+   * A track length that arrived after playback started, on its way to the zone's clock.
+   *
+   * The engine learns it from ffmpeg for sources nobody could describe up front; see
+   * `AudioManager.watchSourceDuration` for why anything at all has to be learned this late.
+   */
+  public applySourceDuration(zoneId: number, durationSec: number): void {
+    this.playbackCoordinator.applySourceDuration(zoneId, durationSec);
+  }
+
+  /**
    * Re-read every content provider's configuration.
    *
    * The single place that knows the list. Both zone-replacement paths call it rather than

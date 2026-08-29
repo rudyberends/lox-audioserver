@@ -55,9 +55,9 @@ export function createZoneHandlers(
     audioCfgGetRoomFavs: (command: string) => audioCfgGetRoomFavs(favoritesManager, command),
     audioCfgRoomFavs: (command: string) => audioCfgRoomFavs(favoritesManager, command),
     audioFavoritePlay: (command: string) =>
-      audioFavoritePlay(zoneManager, favoritesManager, fadeController, command),
+      audioFavoritePlay(zoneManager, favoritesManager, contentManager, fadeController, command),
     audioRoomFavPlus: (command: string) =>
-      audioRoomFavPlus(zoneManager, favoritesManager, command),
+      audioRoomFavPlus(zoneManager, favoritesManager, contentManager, command),
   };
 }
 
@@ -451,6 +451,7 @@ async function audioCfgRoomFavs(
 async function audioFavoritePlay(
   zoneManager: ZoneManagerFacade,
   favoritesManager: FavoritesManager,
+  contentManager: ContentManager,
   fadeController: FadeControllerPort,
   command: string,
 ) {
@@ -458,7 +459,7 @@ async function audioFavoritePlay(
   const zoneId = parseNumberPart(parts[1], 0);
   const favoriteId = parseNumberPart(parts[4], 0);
   const fadeOpts = fadeController.parseFadeOptions(command);
-  await playFavorite(zoneManager, favoritesManager, zoneId, favoriteId);
+  await playFavorite(zoneManager, favoritesManager, contentManager, zoneId, favoriteId);
   if (fadeOpts.fade) {
     const duration = fadeOpts.fadeDurationMs ?? 120_000;
     void fadeController.fadeIn(zoneId, duration);
@@ -469,6 +470,7 @@ async function audioFavoritePlay(
 async function audioRoomFavPlus(
   zoneManager: ZoneManagerFacade,
   favoritesManager: FavoritesManager,
+  contentManager: ContentManager,
   command: string,
 ) {
   const parts = splitCommand(command);
@@ -502,7 +504,7 @@ async function audioRoomFavPlus(
 
   const next = favorites.items[nextIndex];
   if (next) {
-    await playFavorite(zoneManager, favoritesManager, zoneId, next.id);
+    await playFavorite(zoneManager, favoritesManager, contentManager, zoneId, next.id);
     metadata.lastFavoriteId = next.id;
   }
 
@@ -512,6 +514,7 @@ async function audioRoomFavPlus(
 async function playFavorite(
   zoneManager: ZoneManagerFacade,
   favoritesManager: FavoritesManager,
+  contentManager: ContentManager,
   zoneId: number,
   favoriteId: number,
 ): Promise<void> {
@@ -519,11 +522,24 @@ async function playFavorite(
   if (!favorite) {
     return;
   }
+  // A stored favourite has a title, an artist and a cover, but never a length: the file it lives in has
+  // no field for one. So ask, on the same terms `playToZone` asks — a race against a short timeout, so a
+  // slow provider costs latency between tap and audio rather than blocking the play. Without this a
+  // favourite started with no length at all and had to be rescued downstream (#350).
+  const resolved = await Promise.race([
+    contentManager.resolveMetadata(sanitizeMetadataTarget(favorite.audiopath)),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 800).unref?.()),
+  ]);
   const favoriteMetadata = {
     title: favorite.title ?? favorite.name ?? '',
     artist: favorite.artist ?? '',
     album: favorite.album ?? '',
     coverurl: favorite.coverurl ?? '',
+    // The favourite's own fields win for everything the user can see — they are what the row showed
+    // and renaming a favourite is meant to stick. Only the length comes from the lookup.
+    ...(typeof resolved?.duration === 'number' && resolved.duration > 0
+      ? { duration: resolved.duration }
+      : {}),
   };
   void zoneManager.playContent(zoneId, favorite.audiopath, 'favorite', favoriteMetadata);
   const ctxMetadata = zoneManager.getMetadata(zoneId);

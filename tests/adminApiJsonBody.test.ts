@@ -121,6 +121,9 @@ function createHandler(): AdminApiHandler {
     notifyOutputState: () => {
       /* noop */
     },
+    notifySourceDuration: () => {
+      /* noop */
+    },
   }, zoneAudioPrefs);
   const outputHandlers = {
     onQueueUpdate: () => {

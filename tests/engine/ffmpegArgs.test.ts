@@ -133,24 +133,46 @@ test('buildOutputArgs(flac) ends with -f flac and includes compression_level', (
   assert.ok(args.includes('-compression_level'));
 });
 
-test('getLogLevel is quiet unless the source format is unknown', () => {
-  // `info` is how the input banner gets printed, which is the only way to learn the native format of a
-  // stream whose provider did not declare one — `AudioSession.observeSourceFormat` reads it. A source we
-  // already know stays quiet, and an explicit request from the caller always wins.
+test('getLogLevel is quiet only when both the format and the length are already known', () => {
+  // `info` is how the input banner gets printed, and both halves of it are read: the native format of a
+  // stream whose provider did not declare one, and the length of a source nobody could state. Either one
+  // missing is worth the banner — a track with no length cannot be ended by anything downstream, which
+  // is what made a favourite stop at 2:00 (#350). An explicit request from the caller always wins.
+  const probedFormat = { sampleRate: 44100, channels: 2, bitDepth: 16 as const, lossless: true };
   assert.equal(
-    new FfmpegArgBuilder({ kind: 'file', path: '/tmp/x' }, 'mp3', defaultOutput, false, undefined, {
-      sampleRate: 44100,
-      channels: 2,
-      bitDepth: 16,
-      lossless: true,
-    }).getLogLevel(),
+    new FfmpegArgBuilder(
+      { kind: 'file', path: '/tmp/x', knownDurationSec: 187 },
+      'mp3',
+      defaultOutput,
+      false,
+      undefined,
+      probedFormat,
+    ).getLogLevel(),
     'error',
-    'a probed source needs no banner',
+    'a scanned track states both facts; nothing left to read',
+  );
+  assert.equal(
+    new FfmpegArgBuilder({ kind: 'file', path: '/tmp/x' }, 'mp3', defaultOutput, false, undefined, probedFormat)
+      .getLogLevel(),
+    'info',
+    'a known format with an unknown length still needs the banner',
   );
   assert.equal(
     makeBuilder({ kind: 'file', path: '/tmp/x' }).getLogLevel(),
     'info',
     'an unknown source is worth one banner',
+  );
+  assert.equal(
+    new FfmpegArgBuilder(
+      { kind: 'pipe', path: '/tmp/p', format: 's16le', sampleRate: 44100, channels: 2 },
+      'mp3',
+      defaultOutput,
+      false,
+      undefined,
+      probedFormat,
+    ).getLogLevel(),
+    'error',
+    'a pipe carries raw PCM: ffmpeg reports no length for it at any log level',
   );
   assert.equal(
     makeBuilder({ kind: 'url', url: 'http://x', logLevel: 'verbose' }).getLogLevel(),
