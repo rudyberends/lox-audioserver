@@ -41,6 +41,15 @@ const STREAM_FETCH_GRACE_MS = 5000;
  */
 const VOLUME_ECHO_WINDOW_MS = 5000;
 
+/**
+ * How long the renderer's own volume reports are distrusted around a transport change we
+ * initiated. A SoundTouch reports volume 0 when told to Stop and re-asserts its own remembered
+ * level after SetAVTransportURI — neither is the user turning a knob, and adopting them left the
+ * zone parked at 0 or desynced from what the room actually plays at (issue #358, third report).
+ * Reports inside the window still update what we know of the device; they are just not adopted.
+ */
+const TRANSPORT_TRANSITION_GUARD_MS = 5000;
+
 export interface DlnaOutputConfig {
   host?: string;
   controlUrl?: string;
@@ -160,6 +169,8 @@ export class DlnaOutput implements ZoneOutput {
   private lastKnownVolume?: number;
   private lastKnownMuted?: boolean;
   private lastKnownLevel?: number;
+  // Until when the renderer's own volume reports are transition noise, not user intent.
+  private transportTransitionUntil = 0;
   private eventsSubscribed = false;
   private disposed = false;
   private readonly streamFormat: StreamFormatPreference;
@@ -259,6 +270,7 @@ export class DlnaOutput implements ZoneOutput {
     this.lastPushedUri = streamUri;
     this.lastMetadataSignature = this.metadataSignature(session);
     const pushedAt = Date.now();
+    this.armTransitionGuard();
     await this.cp.setUri(streamUri, didl);
     // Not awaited: if the push worked, audio is already on its way and the caller must not wait
     // out the grace window to hear it.
@@ -324,6 +336,7 @@ export class DlnaOutput implements ZoneOutput {
         uri,
       });
       since = Date.now();
+      this.armTransitionGuard();
       await this.cp.setUri(uri, retryDidl);
       if (this.currentStreamKey !== streamKey) {
         return;
@@ -334,6 +347,19 @@ export class DlnaOutput implements ZoneOutput {
   /** The renderer is pulling audio: release any metadata update that was waiting on that proof. */
   private onStreamFetched(): void {
     this.streamFetched = true;
+    // The renderer has demonstrably settled, so put the zone's level back if the device drifted
+    // during the transition — a SoundTouch restores its own remembered volume around a source
+    // change and may override a level written mid-transition (issue #358, third report). No-op
+    // when the device already stands where the zone does.
+    const zoneVolume = this.ports.zoneManager.getZoneState(this.zoneId)?.volume;
+    if (typeof zoneVolume === 'number' && Math.round(zoneVolume) !== this.lastKnownLevel) {
+      void this.setVolume(zoneVolume).catch((err) => {
+        this.log.debug('DLNA post-transition volume re-assert failed', {
+          zoneId: this.zoneId,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
     const pending = this.pendingMetadataSession;
     this.pendingMetadataSession = null;
     if (!pending) {
@@ -388,6 +414,7 @@ export class DlnaOutput implements ZoneOutput {
     // Clear the dedup key so a resume/play of the SAME track re-issues transport commands
     // instead of being coalesced away (its stream.id is unchanged across pause→resume).
     this.currentStreamKey = null;
+    this.armTransitionGuard();
     await this.cp.pause();
   }
 
@@ -396,6 +423,7 @@ export class DlnaOutput implements ZoneOutput {
       await this.play(session);
       return;
     }
+    this.armTransitionGuard();
     await this.cp.play();
   }
 
@@ -404,6 +432,7 @@ export class DlnaOutput implements ZoneOutput {
       return;
     }
     this.currentStreamKey = null;
+    this.armTransitionGuard();
     await this.cp.stop();
   }
 
@@ -635,9 +664,12 @@ export class DlnaOutput implements ZoneOutput {
    * An event arriving before any level is known (no write yet, nothing evented) only seeds: it
    * is the GENA initial state dump, not a user change. An unchanged level is a keep-alive/renew
    * snapshot (issue #314, stiwy18) and stays silent. A level that matches a recent write of ours
-   * is our own echo — recorded, never answered. What remains is a genuine device-side change,
-   * which the zone adopts; its answering dispatch back to us lands in the echo window, so the
-   * exchange converges instead of oscillating.
+   * is our own echo — recorded, never answered. A change reported while we are moving the
+   * renderer's transport is its own transition noise (0 at Stop, a self-restored level after
+   * SetURI) — recorded, not adopted; onStreamFetched re-asserts the zone's level if the device
+   * drifted. What remains is a genuine device-side change, which the zone adopts; its answering
+   * dispatch back to us lands in the echo window, so the exchange converges instead of
+   * oscillating.
    */
   private onRemoteRendering(event: DlnaRenderingEvent): void {
     if (this.disposed) {
@@ -666,8 +698,19 @@ export class DlnaOutput implements ZoneOutput {
     const seed = this.lastKnownLevel === undefined;
     const unchanged = level === this.lastKnownLevel;
     const echo = this.isRecentOutboundVolume(level);
+    const transitioning = Date.now() < this.transportTransitionUntil;
     this.lastKnownLevel = level;
-    const decision = seed ? 'seed' : echo ? 'echo' : unchanged ? 'unchanged' : muteFlipped && !volumeChanged ? 'mute' : 'volume';
+    const decision = seed
+      ? 'seed'
+      : echo
+        ? 'echo'
+        : unchanged
+          ? 'unchanged'
+          : transitioning
+            ? 'transition'
+            : muteFlipped && !volumeChanged
+              ? 'mute'
+              : 'volume';
     this.log.debug('DLNA remote volume event', {
       zoneId: this.zoneId,
       volume: reportedVolume,
@@ -683,6 +726,11 @@ export class DlnaOutput implements ZoneOutput {
     } else if (decision === 'volume') {
       this.ports.zoneManager.handleCommand(this.zoneId, 'volume_set', String(level));
     }
+  }
+
+  /** Distrust the renderer's own volume reports for a while: we are moving its transport. */
+  private armTransitionGuard(): void {
+    this.transportTransitionUntil = Date.now() + TRANSPORT_TRANSITION_GUARD_MS;
   }
 
   /** True when this level matches one we sent recently — the echo of our own write. */

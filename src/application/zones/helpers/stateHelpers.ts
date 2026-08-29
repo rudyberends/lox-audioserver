@@ -23,11 +23,19 @@ export function clampVolumeForZone(zone: ZoneConfig, value: number): number {
   return clamp(Math.round(stepped), 0, maxVol);
 }
 
+/**
+ * The zone's configured default volume, falling back to a sensible level when none is set.
+ * The fallback must not be 0: this value seeds the zone state, the fresh-start dispatch and
+ * the unmute restore, and 0 in all of those means a zone that starts muted (issue #358, an
+ * unconfigured zone began every play in silence). An explicit 0 stays the user's choice.
+ */
 export function getZoneDefaultVolume(zone: ZoneConfig): number {
   const configured =
-    typeof zone.volumes?.default === 'number' ? zone.volumes.default : 0;
+    typeof zone.volumes?.default === 'number' ? zone.volumes.default : FALLBACK_DEFAULT_VOLUME;
   return clampVolumeForZone(zone, configured);
 }
+
+const FALLBACK_DEFAULT_VOLUME = 25;
 
 export function cloneQueueState(queue: QueueState): QueueState {
   return {
