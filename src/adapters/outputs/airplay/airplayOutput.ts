@@ -4,6 +4,8 @@ import type { PlaybackSession } from '@/application/playback/audioManager';
 import { zoneSessionKey } from '@/ports/types/SessionKey';
 import type { PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
 import { RaopSender, computeGroupAnchorNtp } from '@/adapters/outputs/airplay/raopSender';
+import { Ap2Sender } from '@/adapters/outputs/airplay/ap2Sender';
+import { parseAirplayProtocol, type AirplaySender } from '@/adapters/outputs/airplay/airplaySender';
 import { AirplayStreamSession } from '@/adapters/outputs/airplay/airplayStreamSession';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import { waitForReadableStream } from '@/shared/audio/streamReadiness';
@@ -14,6 +16,12 @@ export interface AirPlayOutputConfig {
   name?: string;
   password?: string;
   debug?: boolean;
+  /**
+   * Which protocol drives the device: `airplay1` (RAOP, the default) or
+   * `airplay2`. Apple receivers on OS 27 and later accept an AirPlay 1 session
+   * and then render nothing, so they need `airplay2`.
+   */
+  protocol?: string;
   /** Device encryption types (mDNS TXT `et`), resolved by the AdminUI picker. */
   et?: string;
   /** Device metadata capabilities (mDNS TXT `md`), resolved by the AdminUI picker. */
@@ -70,6 +78,14 @@ export const AIRPLAY_OUTPUT_DEFINITION: OutputConfigDefinition = {
         'Device read-ahead buffer in ms (default 750). Raise (e.g. 1500) for devices that stutter or underrun; higher = more resilient but slower start/skip. Range 250–5000.',
     },
     {
+      id: 'protocol',
+      label: 'AirPlay protocol',
+      type: 'text',
+      placeholder: 'airplay1',
+      description:
+        'Which protocol drives this device: "airplay1" (default, RAOP) or "airplay2". Apple devices on OS 27 and later no longer play AirPlay 1 — they accept the session and stay silent — so HomePods and Apple TVs need "airplay2". AirPlay 2 requires the server to reach UDP ports 319 and 320.',
+    },
+    {
       id: 'debug',
       label: 'Debug logging',
       type: 'text',
@@ -88,7 +104,7 @@ export const AIRPLAY_OUTPUT_DEFINITION: OutputConfigDefinition = {
 export class AirPlayOutput implements ZoneOutput {
   public readonly type = 'airplay';
   private readonly log = createLogger('Output', 'AirPlay');
-  private readonly sender: RaopSender;
+  private readonly sender: AirplaySender;
   private readonly streamSession: AirplayStreamSession;
   private currentVolume = 0;
   private running = false;
@@ -117,7 +133,19 @@ export class AirPlayOutput implements ZoneOutput {
     private readonly ports: OutputPorts,
     initialVolume?: number,
   ) {
-    this.sender = new RaopSender(
+    const protocol = parseAirplayProtocol(config.protocol);
+    this.sender = protocol === 'airplay2'
+      ? new Ap2Sender(
+          {
+            host: config.host.trim(),
+            ...(typeof config.port === 'number' ? { port: config.port } : {}),
+            ...(config.password?.trim() ? { password: config.password.trim() } : {}),
+            name: zoneName,
+            onUnavailable: (reason: string) => this.handleSenderUnavailable(reason),
+          },
+          { zoneId, zoneName },
+        )
+      : new RaopSender(
       {
         host: config.host.trim(),
         port: typeof config.port === 'number' ? config.port : undefined,
@@ -139,7 +167,14 @@ export class AirPlayOutput implements ZoneOutput {
     if (Number.isFinite(initialVolume)) {
       this.currentVolume = Math.min(100, Math.max(0, Math.round(initialVolume as number)));
     }
-    this.log.info('AirPlay output config', { zoneId, zoneName, host: config.host.trim() });
+    this.log.info('AirPlay output config', {
+      zoneId,
+      zoneName,
+      host: config.host.trim(),
+      port: config.port,
+      protocol,
+      et: config.et,
+    });
     this.ports.airplayGroup.register(this.zoneId, this);
   }
 
