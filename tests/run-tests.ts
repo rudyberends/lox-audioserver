@@ -125,6 +125,7 @@ import './zoneHandlers.serviceplay.test';
 import './alertHandlers.playeventfile.test';
 import './alertHandlers.zoneRoutes.test';
 import './alertsCoordinator.test';
+import './playbackErrorOrigin.test';
 import './alertsManager.volume.test';
 import './ttsProviders.test';
 import './loxberryTtsProvider.test';

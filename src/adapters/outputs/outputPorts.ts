@@ -8,6 +8,7 @@ import type { SqueezeliteGroupCoordinator } from '@/application/outputs/squeezel
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { EnginePort } from '@/ports/EnginePort';
 import type { GroupTrackerPort } from '@/ports/GroupTrackerPort';
+import type { PlaybackErrorOrigin } from '@/ports/types/playback';
 import type { SendspinHookRegistryPort } from '@/adapters/outputs/sendspin/sendspinHookRegistry';
 import type { SendspinClientConnector } from '@/adapters/outputs/sendspin/sendspinClientConnector';
 import type { SpotifyServiceManagerProvider } from '@/adapters/content/providers/spotifyServiceManager';
@@ -29,7 +30,7 @@ type OutputState = {
 
 type OutputHandlers = {
   onQueueUpdate: (zoneId: number, items: QueueItem[], currentIndex: number) => void;
-  onOutputError: (zoneId: number, reason?: string) => void;
+  onOutputError: (zoneId: number, reason?: string, origin?: PlaybackErrorOrigin) => void;
   onOutputState: (zoneId: number, state: OutputState) => void;
 };
 

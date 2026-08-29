@@ -1,5 +1,6 @@
 import type { ZoneContext } from '@/application/zones/internal/zoneTypes';
 import type { ZoneState } from '@/domain/zones/zoneState';
+import type { PlaybackErrorOrigin } from '@/ports/types/playback';
 import type { ComponentLogger } from '@/shared/logging/logger';
 
 const IGNORED_PLAYER_ERROR_REASONS = new Set([
@@ -46,14 +47,25 @@ export function handlePlaybackError(args: {
   reason: string | undefined;
   source: 'player' | 'output';
   extraLog?: Record<string, unknown>;
+  origin?: PlaybackErrorOrigin;
 }): void {
-  const { coordinator, zoneId, reason, source, extraLog } = args;
+  const { coordinator, zoneId, reason, source, extraLog, origin } = args;
   const ctx = coordinator.getZone(zoneId);
   if (!ctx) {
     return;
   }
   const normalized = typeof reason === 'string' ? reason.trim() : '';
   if (normalized && IGNORED_PLAYER_ERROR_REASONS.has(normalized)) {
+    return;
+  }
+  if (hasMovedOn(ctx, origin)) {
+    coordinator.log.debug('ignoring playback error from a source the zone has moved on from', {
+      zoneId,
+      reason: normalized || undefined,
+      source,
+      origin,
+      inputMode: ctx.inputMode,
+    });
     return;
   }
   const cleaned = normalized ? normalized.replace(/\s+/g, ' ') : '';
@@ -77,4 +89,16 @@ export function handlePlaybackError(args: {
     ctx.player.stop();
   }
   coordinator.log.warn('playback error', { zoneId, reason: cleaned || undefined, title, source, ...extraLog });
+}
+
+/**
+ * True when the error concerns a source this zone no longer plays.
+ *
+ * An announcement, a next track or a switch of input replaces what a zone renders in
+ * milliseconds, while the source it displaced can take seconds to notice and complain.
+ * Acting on that complaint stops the wrong thing — a TTS clip fell silent 0.6 s in
+ * because the librespot session it had just replaced reported a dead audio key (#293).
+ */
+function hasMovedOn(ctx: ZoneContext, origin: PlaybackErrorOrigin | undefined): boolean {
+  return origin !== undefined && ctx.inputMode !== origin.input;
 }

@@ -17,6 +17,7 @@ import type { PlaybackMetadata, PlaybackSource, CoverArtPayload } from '@/applic
 import type { SpotifyConnectController } from '@/ports/InputsPort';
 import { PassThrough } from 'node:stream';
 import type { PlayerRegistryPort } from '@/ports/PlayerRegistryPort';
+import type { PlaybackErrorOrigin } from '@/ports/types/playback';
 import {
   createNativeLibrespotSession,
   generateLibrespotCredentialsFromOAuth,
@@ -37,7 +38,15 @@ import { SoloistPlaybackService } from '@/adapters/inputs/spotify/soloist/solois
 import { isBrowserZoneId } from '@/application/zones/browserZoneRegistry';
 
 type AirplaySessionStopper = (zoneId: number, reason?: string) => void;
-type OutputErrorHandler = (zoneId: number, reason?: string) => void;
+type OutputErrorHandler = (zoneId: number, reason?: string, origin?: PlaybackErrorOrigin) => void;
+
+/**
+ * Every error here is about Spotify playback, and librespot reports them asynchronously —
+ * often after the room has moved on to an announcement or another source. Stamping the
+ * origin lets the zone ignore what no longer concerns it instead of stopping what is
+ * playing now (#293).
+ */
+const SPOTIFY_ERROR_ORIGIN: PlaybackErrorOrigin = { input: 'spotify' };
 
 // How long a prefetched direct-proxy source stays usable. Kept comfortably under
 // the proxy session's 10-min TTL (PROXY_SESSION_MAX_AGE_MS) so we never hand
@@ -448,7 +457,7 @@ class SpotifyConnectInstance {
       deviceId,
       message,
     });
-    this.notifyOutputError(this.zoneId, 'spotify credentials rejected');
+    this.notifyOutputError(this.zoneId, 'spotify credentials rejected', SPOTIFY_ERROR_ORIGIN);
     this.stopConnectHost();
     this.scheduleRestart({ minDelayMs: 1000 });
   }
@@ -770,7 +779,7 @@ class SpotifyConnectInstance {
         // Likely invalid/insufficient access token scopes; avoid tight loops.
         this.restartStreak = { count: 10, firstAt: Date.now() };
       }
-      this.notifyOutputError(this.zoneId, `spotify ${message}`);
+      this.notifyOutputError(this.zoneId, `spotify ${message}`, SPOTIFY_ERROR_ORIGIN);
       this.stopConnectHost();
       this.scheduleRestart({
         rateLimited,
@@ -792,7 +801,7 @@ class SpotifyConnectInstance {
           distinctTracks: result.distinctTracks,
           windowMs: result.windowMs,
         });
-        this.notifyOutputError(this.zoneId, 'spotify unavailable loop detected');
+        this.notifyOutputError(this.zoneId, 'spotify unavailable loop detected', SPOTIFY_ERROR_ORIGIN);
         this.stopConnectHost();
         this.scheduleRestart({ minDelayMs: 500 });
       }
@@ -1169,7 +1178,7 @@ class SpotifyConnectInstance {
             return;
           }
           const message = errorMsg.length > 0 ? errorMsg : errorCode.length > 0 ? errorCode : 'playback failed';
-          this.notifyOutputError(this.zoneId, `spotify ${message}`);
+          this.notifyOutputError(this.zoneId, `spotify ${message}`, SPOTIFY_ERROR_ORIGIN);
           this.stopNativeStream(true);
           void this.closeNativeSession('stream_error');
           return;

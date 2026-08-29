@@ -24,6 +24,7 @@ import {
 } from '@/application/zones/internal/musicAssistantProvider';
 import { ZoneRepository } from '@/application/zones/ZoneRepository';
 import type { ConfigPort } from '@/ports/ConfigPort';
+import type { PlaybackErrorOrigin } from '@/ports/types/playback';
 import { attachPlayerListeners } from '@/application/zones/playback/playerListeners';
 import { handleZoneCommand } from '@/application/zones/playback/commandHandlers';
 import { QueueStepDispatcher } from '@/application/zones/playback/QueueStepDispatcher';
@@ -744,6 +745,7 @@ export class PlaybackCoordinator {
     reason: string | undefined,
     source: 'player' | 'output',
     extraLog?: Record<string, unknown>,
+    origin?: PlaybackErrorOrigin,
   ): void {
     const ctx = this.zoneRepo.get(zoneId);
     const normalized = typeof reason === 'string' ? reason.trim().toLowerCase() : '';
@@ -770,6 +772,7 @@ export class PlaybackCoordinator {
       reason,
       source,
       extraLog,
+      origin,
     });
   }
 

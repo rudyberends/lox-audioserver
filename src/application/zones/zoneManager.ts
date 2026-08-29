@@ -26,6 +26,7 @@ import { getGroupByZone } from '@/application/groups/groupTracker';
 import type { OutputsPort } from '@/ports/OutputsPort';
 import type { OutputSyncStatus, ZoneOutput } from '@/ports/OutputsTypes';
 import type { InputsPort } from '@/ports/InputsPort';
+import type { PlaybackErrorOrigin } from '@/ports/types/playback';
 import type {
   QueueItem,
   QueueState,
@@ -83,7 +84,7 @@ type OutputState = {
   uri?: string;
 };
 
-type OutputErrorHandler = (zoneId: number, reason?: string) => void;
+type OutputErrorHandler = (zoneId: number, reason?: string, origin?: PlaybackErrorOrigin) => void;
 
 type OutputStateHandler = (zoneId: number, state: OutputState) => void;
 
@@ -331,8 +332,8 @@ export class ZoneManager {
       onQueueUpdate: (zoneId, items, currentIndex) => {
         this.updateQueueFromOutput(zoneId, items, currentIndex);
       },
-      onOutputError: (zoneId, reason) => {
-        this.playbackCoordinator.handlePlaybackError(zoneId, reason, 'output');
+      onOutputError: (zoneId, reason, origin) => {
+        this.playbackCoordinator.handlePlaybackError(zoneId, reason, 'output', undefined, origin);
       },
       onOutputState: (zoneId, state) => {
         this.playbackCoordinator.updateOutputState(zoneId, state);

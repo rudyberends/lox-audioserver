@@ -70,3 +70,18 @@ export interface PlaybackSession {
    */
   recentStreamIds?: { id: string; expiresAt: number }[];
 }
+
+/**
+ * What a playback error is about, when the reporter knows.
+ *
+ * Errors from an input service travel to the zone asynchronously, and by the time one
+ * lands the zone may well be playing something else: an announcement, the next track,
+ * another input. Acting on it then stops the wrong thing — a TTS clip fell silent
+ * because the librespot session it had just replaced reported a dead audio key (#293).
+ * Naming the input lets the zone drop what it has moved past. Omit it for errors about
+ * the zone's renderer, which apply whatever the source.
+ */
+export type PlaybackErrorOrigin = {
+  /** The input service reporting; its errors only count while it is the zone's input. */
+  input: 'spotify' | 'airplay' | 'musicassistant' | 'linein' | 'bluetooth' | 'dlna';
+};

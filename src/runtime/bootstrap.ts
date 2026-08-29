@@ -294,8 +294,8 @@ export function createRuntime(): Runtime {
     onQueueUpdate: (zoneId, items, currentIndex) => {
       requireOutputHandlers().onQueueUpdate(zoneId, items, currentIndex);
     },
-    onOutputError: (zoneId, reason) => {
-      requireOutputHandlers().onOutputError(zoneId, reason);
+    onOutputError: (zoneId, reason, origin) => {
+      requireOutputHandlers().onOutputError(zoneId, reason, origin);
     },
     onOutputState: (zoneId, state) => {
       requireOutputHandlers().onOutputState(zoneId, state);
