@@ -90,6 +90,7 @@ import './localLibraryStore.sourceFormat.test';
 import './localLibraryProvider.folders.test';
 import './localLibraryResolveItem.test';
 import './zonePlayerEndGuard.test';
+import './zonePlayerPreDelayClock.test';
 import './durationRegression.test';
 import './sourceDurationLearned.test';
 import './runtimeShutdown.test';

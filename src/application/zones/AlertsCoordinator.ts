@@ -8,6 +8,7 @@ import type { ConfigPort } from '@/ports/ConfigPort';
 import type { NativeAlertRequest, ZoneOutput } from '@/ports/OutputsTypes';
 import { AudioType } from '@/domain/zones/enums';
 import { cloneQueueState, clampVolumeForZone } from '@/application/zones/helpers/stateHelpers';
+import { resolveSessionPreDelayMs } from '@/application/playback/playbackPreDelay';
 import { buildBaseUrl } from '@/shared/streamUrl';
 import type { ZoneAudioHelpers } from '@/application/zones/internal/zoneAudioHelpers';
 import { PlaybackCoordinator } from '@/application/zones/PlaybackCoordinator';
@@ -177,6 +178,10 @@ export class AlertsCoordinator {
     // engine starts at 44.1 kHz and restarts mid-clip to 48 kHz — that race renders the
     // short alert as noise (the "doorbell noise" report).
     this.playbackCoordinator.alignOutputFormat(zoneId, playUrl);
+    // Music takes its end-of-track guard from the output's latency on every start; the
+    // alert path never did, so a clip inherited whatever the previous track left behind
+    // (a forced end-of-track resets it to zero) and ended before the sink had played it.
+    this.playbackCoordinator.applyOutputEndGuard(ctx);
 
     const session = ctx.player.playUri(playUrl, metadata);
     if (!session) {
@@ -193,12 +198,13 @@ export class AlertsCoordinator {
     this.applyPatch(zoneId, { volume: clampedVolume });
 
     if (durationMs && durationMs > 0) {
-      // The auto-stop timer starts now, but audible content does not begin until the
-      // engine has emitted the prepended wake-up silence (playbackPreDelayMs / the
-      // multi-zone floor). Without accounting for it the timer fires preDelay-too-early
-      // and clips the tail of every alert (the duration timer "starts on click" while
-      // sound starts late) — issue #293. Add the effective pre-delay to the window.
-      const preDelayMs = this.resolveEffectivePreDelayMs(zoneId, preDelayFloorMs);
+      // The auto-stop timer runs on wall clock from here, but audible content does not
+      // begin until the engine has emitted the prepended wake-up silence. Without
+      // accounting for it the timer fires preDelay-too-early and clips the tail of every
+      // alert (the timer "starts on click" while sound starts late) — issue #293. Read
+      // what the engine actually prepended off the session rather than re-deriving it,
+      // so the window can never disagree with the stream it is timing.
+      const preDelayMs = resolveSessionPreDelayMs(session);
       const clampedMs = Math.min(preDelayMs + durationMs + 150, 2147483647);
       ctx.alert.stopTimer = setTimeout(() => {
         // Timer fires after we release the lock, so go through the public
@@ -296,28 +302,6 @@ export class AlertsCoordinator {
       .map((segment) => encodeURIComponent(segment))
       .join('/');
     return `${baseUrl}/alerts/${encoded}`;
-  }
-
-  /**
-   * Mirror the effective pre-delay audioManager will prepend for this alert so the
-   * auto-stop timer waits for the silence too. Matches audioManager.applyZonePlaybackPreDelay:
-   * the zone's own wake-up delay is skipped when its amp is already on, but the multi-zone
-   * floor always applies. Computed before the mode→play patch flips power, so a cold zone
-   * still counts its own delay — consistent with what the engine actually inserts.
-   */
-  private resolveEffectivePreDelayMs(zoneId: number, preDelayFloorMs: number): number {
-    const floor = preDelayFloorMs > 0 ? Math.max(0, Math.round(preDelayFloorMs)) : 0;
-    let zoneDelay = 0;
-    let powerOn = false;
-    try {
-      const rawZoneDelay = this.zoneAudioPrefs.getPlaybackPreDelayMs?.(zoneId);
-      zoneDelay =
-        Number.isFinite(rawZoneDelay) && (rawZoneDelay ?? 0) > 0 ? Math.max(0, Math.round(rawZoneDelay ?? 0)) : 0;
-      powerOn = this.zoneAudioPrefs.getPowerStateResolver?.()?.(zoneId) === true;
-    } catch {
-      // Prefs lookups are best-effort; never let pre-delay accounting fail an alert.
-    }
-    return Math.max(floor, powerOn ? 0 : zoneDelay);
   }
 
   private resolveHandoffDrainMs(ctx: ZoneContext): number {

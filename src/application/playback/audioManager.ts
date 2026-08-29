@@ -9,6 +9,7 @@ import type {
 } from '@/ports/EngineTypes';
 export type { PlaybackSource, OutputProfile } from '@/ports/EngineTypes';
 import { resolvePlaybackSource } from '@/application/playback/sourceResolver';
+import { resolveSourcePreDelayMs } from '@/application/playback/playbackPreDelay';
 import { decodeAudiopath } from '@/domain/zones/audiopath';
 import type { AudioOutputSettings } from '@/ports/types/audioFormat';
 import { zoneSessionKey, type SessionKey } from '@/ports/types/SessionKey';
@@ -242,7 +243,7 @@ export class AudioManager {
     }
     const rawFloor = this.prefs.getAlertPreDelayFloorMs(zoneId);
     const floor = Number.isFinite(rawFloor) && (rawFloor ?? 0) > 0 ? Math.max(0, Math.round(rawFloor ?? 0)) : 0;
-    const sourceDelay = Number.isFinite(source.preDelayMs) ? Math.max(0, Math.round(source.preDelayMs ?? 0)) : 0;
+    const sourceDelay = resolveSourcePreDelayMs(source);
     const effectiveDelay = Math.max(sourceDelay, floor, powerOn ? 0 : zoneDelay);
     if (effectiveDelay <= 0 || sourceDelay === effectiveDelay) {
       return source;

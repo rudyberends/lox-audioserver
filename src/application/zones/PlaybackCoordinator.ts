@@ -476,12 +476,8 @@ export class PlaybackCoordinator {
     }
     this.zonesMissingOutput.delete(ctx.id);
     // Apply preferred output from the primary target output so we can resample/format accordingly.
-    const outputTargets =
-      ctx.activeOutput !== null
-        ? ctx.outputs.filter((output) => output.type === ctx.activeOutput)
-        : this.selectPlayOutputs(ctx.outputs, null);
-    const latencyMs = this.computeOutputLatencyMs(outputTargets);
-    ctx.player.setEndGuardMs(latencyMs);
+    const outputTargets = this.resolvePlaybackOutputs(ctx);
+    this.applyOutputEndGuard(ctx, outputTargets);
     const isRadio = this.audioHelpers.isRadioAudiopath(audiopath);
     const settings = computePreferredPlaybackSettings({
       zoneId: ctx.id,
@@ -572,6 +568,23 @@ export class PlaybackCoordinator {
       .map((output) => output.getLatencyMs?.())
       .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
       .reduce((max, value) => Math.max(max, value), 0);
+  }
+
+  /** The outputs a play command will actually reach for this zone. */
+  private resolvePlaybackOutputs(ctx: ZoneContext): ZoneOutput[] {
+    return ctx.activeOutput !== null
+      ? ctx.outputs.filter((output) => output.type === ctx.activeOutput)
+      : this.selectPlayOutputs(ctx.outputs, null);
+  }
+
+  /**
+   * Let the zone clock run past `duration` by however long the output lags behind the
+   * server, so a track (or an alert) is only declared over once the room has heard it.
+   * Every start goes through here — the guard is per-playback state and a previous track
+   * may have zeroed it to force an end-of-track.
+   */
+  public applyOutputEndGuard(ctx: ZoneContext, outputs = this.resolvePlaybackOutputs(ctx)): void {
+    ctx.player.setEndGuardMs(this.computeOutputLatencyMs(outputs));
   }
 
   private classifyAudiopath(audiopath: string): {

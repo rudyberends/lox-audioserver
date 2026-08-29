@@ -6,6 +6,7 @@ import {
   type PlaybackSession,
   type PlaybackSource,
 } from '@/application/playback/audioManager';
+import { resolveSourcePreDelayMs } from '@/application/playback/playbackPreDelay';
 import type { PlayerEvent, PlayerEventMap, PlayerState } from '@/application/playback/types';
 
 type Listener<T> = (payload: T) => void;
@@ -23,6 +24,8 @@ export class ZonePlayer {
   private readonly listeners = new Map<PlayerEvent, Set<Listener<any>>>();
   private state: PlayerState = { mode: 'stopped', time: 0, duration: 0, playbackSource: null };
   private tickTimer?: NodeJS.Timeout;
+  /** Pending start of the ticker while the engine's wake-up silence still plays out. */
+  private tickStartTimer?: NodeJS.Timeout;
   private lastTickAt = 0;
   private endedEmitted = false;
   private tickerToken = 0;
@@ -237,6 +240,10 @@ export class ZonePlayer {
 
   private startTicker(): void {
     this.stopTicker();
+    this.beginTicking();
+  }
+
+  private beginTicking(): void {
     this.lastTickAt = Date.now();
     this.tickTimer = setInterval(() => this.tick(), TICK_INTERVAL_MS);
   }
@@ -259,7 +266,6 @@ export class ZonePlayer {
       }
       this.state.time = startAtSec;
       this.emit('position', this.state.time, this.state.duration);
-      this.lastTickAt = Date.now();
       if (session.playRequestAt && session.playRequestAt !== this.lastPlayRequestAtLogged) {
         const now = Date.now();
         const playbackStartedAt = session.playbackStartedAt ?? session.updatedAt ?? null;
@@ -282,12 +288,35 @@ export class ZonePlayer {
       if (!ready) {
         this.log.debug('ticker started without first chunk', { zoneId: this.zoneId, timeoutMs });
       }
-      this.tickTimer = setInterval(() => this.tick(), TICK_INTERVAL_MS);
+      // The engine prepends the amp's wake-up silence to the stream (see
+      // AudioManager.applyZonePlaybackPreDelay), and that silence arrives as ordinary
+      // audio — the first chunk is the start of it, not of the music. Counting it as
+      // playing time made the clock run ahead of what the room hears and reach
+      // `duration` that much too early: the zone ended a track (and cut the tail off
+      // every alert, #293) while the last seconds were still to be played. Hold the
+      // clock until the silence has run out.
+      const preDelayMs = resolveSourcePreDelayMs(session.playbackSource);
+      if (preDelayMs > 0) {
+        this.log.debug('clock waits out amp wake-up silence', { zoneId: this.zoneId, preDelayMs });
+        this.tickStartTimer = setTimeout(() => {
+          this.tickStartTimer = undefined;
+          if (this.tickerToken !== token) {
+            return;
+          }
+          this.beginTicking();
+        }, preDelayMs);
+        return;
+      }
+      this.beginTicking();
     });
   }
 
   private stopTicker(): void {
     this.tickerToken += 1;
+    if (this.tickStartTimer) {
+      clearTimeout(this.tickStartTimer);
+      this.tickStartTimer = undefined;
+    }
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = undefined;

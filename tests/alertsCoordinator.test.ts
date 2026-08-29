@@ -94,6 +94,7 @@ test('startAlert applies alert volume after switching to the alert source', asyn
         _ctx.inputMode = mode;
       },
       alignOutputFormat: () => {},
+      applyOutputEndGuard: () => {},
     } as any,
     applyPatch: (zoneId, patch) => {
       assert.equal(zoneId, zone.id);
@@ -169,7 +170,13 @@ test('startAlert stop timer waits for the playback pre-delay so the tail is not 
     spotifyAdapter: {},
     metadata: {},
     outputs: [],
-    player: { setVolume: () => {}, playUri: () => ({}) as any },
+    // The engine prepends 3 s of amp wake-up silence to this alert and says so on the
+    // session it hands back.
+    player: {
+      setVolume: () => {},
+      playUri: () =>
+        ({ playbackSource: { kind: 'file', path: '/tmp/bell.mp3', preDelayMs: 3000 } }) as any,
+    },
     outputTimingActive: false,
     lastOutputTimingAt: 0,
     lastZoneBroadcastAt: 0,
@@ -192,6 +199,7 @@ test('startAlert stop timer waits for the playback pre-delay so the tail is not 
         _ctx.inputMode = mode;
       },
       alignOutputFormat: () => {},
+      applyOutputEndGuard: () => {},
     } as any,
     applyPatch: (_zoneId, patch) => {
       ctx.state = { ...ctx.state, ...(patch as Record<string, unknown>) };
@@ -201,10 +209,6 @@ test('startAlert stop timer waits for the playback pre-delay so the tail is not 
     zoneAudioPrefs: {
       setTransientGainDb: () => {},
       setAlertPreDelayFloorMs: () => {},
-      // Cold zone with a 3 s wake-up delay: the engine prepends 3 s of silence, so the
-      // auto-stop timer must wait that long extra or it clips the tail (the user-reported bug).
-      getPlaybackPreDelayMs: () => 3000,
-      getPowerStateResolver: () => () => false,
     } as any,
   });
 
@@ -308,6 +312,7 @@ test('alert restore settles to stop when playback cannot resume (releases power-
         _ctx.inputMode = mode;
       },
       alignOutputFormat: () => {},
+      applyOutputEndGuard: () => {},
       // Resume fails: no session is returned.
       startQueuePlayback: async () => null,
     } as any,
