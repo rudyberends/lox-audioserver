@@ -105,7 +105,15 @@ function onPlayerPaused(
   }
   coordinator.applyPatch(zoneId, { mode: 'pause', clientState: 'on', power: 'on' });
   const ctx = coordinator.getZone(zoneId);
-  if (ctx && !ctx.alert && ctx.config.playback?.resetVolumeOnPause === true) {
+  // A zone without a configured default volume resolves to 0, and "reset to the default"
+  // must not mean "reset to silence": the reset parked the zone at 0, so the next play
+  // started muted and fought the renderer's own level (issue #358, second report).
+  if (
+    ctx &&
+    !ctx.alert &&
+    ctx.config.playback?.resetVolumeOnPause === true &&
+    getZoneDefaultVolume(ctx.config) > 0
+  ) {
     scheduleResetVolumeOnPause(coordinator, ctx);
   }
 }

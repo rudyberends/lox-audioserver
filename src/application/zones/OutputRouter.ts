@@ -112,24 +112,34 @@ export class OutputRouter {
     );
   }
 
+  /**
+   * Dispose a zone's outputs when their context dies. Stop is not enough: an output holds
+   * standing machinery beyond the playing session — a DLNA output keeps a GENA subscription
+   * with its renewal loop and callback server — and left undisposed it survives a zone rebuild
+   * as a zombie that keeps injecting the renderer's volume events into the zone (issue #358).
+   */
+  public disposeOutputs(zoneId: number, outputs: ZoneOutput[]): void {
+    for (const output of outputs ?? []) {
+      try {
+        const result = output.dispose();
+        if (result instanceof Promise) {
+          void result.catch((error) => {
+            this.log.warn('output dispose failed', {
+              zoneId,
+              message: (error as Error).message,
+            });
+          });
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.warn('output dispose failed', { zoneId, message });
+      }
+    }
+  }
+
   public disposeAllOutputs(zoneRepo: ZoneRepository): void {
     for (const ctx of zoneRepo.list()) {
-      for (const output of ctx.outputs ?? []) {
-        try {
-          const result = output.dispose();
-          if (result instanceof Promise) {
-            void result.catch((error) => {
-              this.log.warn('output dispose failed', {
-                zoneId: ctx.id,
-                message: (error as Error).message,
-              });
-            });
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          this.log.warn('output dispose failed', { zoneId: ctx.id, message });
-        }
-      }
+      this.disposeOutputs(ctx.id, ctx.outputs ?? []);
     }
     clearPlayers();
   }

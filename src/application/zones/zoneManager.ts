@@ -494,6 +494,11 @@ export class ZoneManager {
       const message = error instanceof Error ? error.message : String(error);
       this.log.warn('zone dispose failed', { zoneId, message });
     }
+    // The outputs die with their context — registerAll already disposed before rebuilding, but
+    // this path (replaceZones/removeZone) only stopped them. The replaced DLNA output survived
+    // as a zombie: its GENA subscription kept renewing, and every volume echo it heard was
+    // re-injected into the zone as a user change, sustaining the oscillation of issue #358.
+    this.outputRouter.disposeOutputs(zoneId, ctx.outputs);
     unregisterPlayer(zoneId);
     this.zoneRepo.delete(zoneId);
   }

@@ -161,6 +161,7 @@ export class DlnaOutput implements ZoneOutput {
   private lastKnownMuted?: boolean;
   private lastKnownLevel?: number;
   private eventsSubscribed = false;
+  private disposed = false;
   private readonly streamFormat: StreamFormatPreference;
   /** Set once this renderer has actually failed on a lossless stream; outranks the preference. */
   private losslessFailed = false;
@@ -419,6 +420,11 @@ export class DlnaOutput implements ZoneOutput {
   }
 
   public dispose(): void {
+    // The flag, not just cp.dispose(): unsubscribing is asynchronous and best-effort, so a
+    // NOTIFY already in flight (or a renderer that keeps notifying a dead SID) would still
+    // land in onRemoteRendering — and a replaced instance must never write into the zone it
+    // no longer serves (the issue #358 zombie).
+    this.disposed = true;
     this.cp.dispose();
     this.log.debug('disposed', { zoneId: this.zoneId });
   }
@@ -603,6 +609,9 @@ export class DlnaOutput implements ZoneOutput {
   }
 
   private onRemoteTransport(event: DlnaTransportEvent): void {
+    if (this.disposed) {
+      return;
+    }
     // We subscribe to AVTransport so the renderer keeps sending RenderingControl (volume)
     // events on the same connection, and for future use, but we deliberately do NOT reflect
     // device-side play/pause back into zone state. For a push output feeding a non-resumable
@@ -631,6 +640,9 @@ export class DlnaOutput implements ZoneOutput {
    * exchange converges instead of oscillating.
    */
   private onRemoteRendering(event: DlnaRenderingEvent): void {
+    if (this.disposed) {
+      return;
+    }
     const reportedVolume =
       typeof event.volume === 'number' && Number.isFinite(event.volume)
         ? Math.min(100, Math.max(0, Math.round(event.volume)))

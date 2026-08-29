@@ -43,6 +43,7 @@ const makeOutput = (): Harness => {
   const output = new DlnaOutput(1, 'Büro', { autoDiscover: false }, ports);
   (output as unknown as { cp: unknown }).cp = {
     setVolume: async () => true,
+    dispose: () => undefined,
   };
   const emit = (event: RenderingEvent): void => {
     (output as unknown as { onRemoteRendering: (e: RenderingEvent) => void }).onRemoteRendering(event);
@@ -103,4 +104,16 @@ test('a genuine device-side volume turn still reaches the zone', () => {
   emit({ volume: 30, muted: false });
   emit({ volume: 45 });
   assert.deepEqual(commands, [{ command: 'volume_set', payload: '45' }]);
+});
+
+test('a disposed output never writes into the zone again', () => {
+  // The second #358 report: a zone rebuild replaced the output but nobody disposed the old
+  // one, so its still-subscribed twin re-injected every echo as a user change. Unsubscribing
+  // is best-effort, so the guard must hold even for events that still arrive after dispose.
+  const { output, commands, emit } = makeOutput();
+  emit({ volume: 21, muted: false });
+  output.dispose();
+  emit({ volume: 0, muted: true });
+  emit({ volume: 21, muted: false });
+  assert.equal(commands.length, 0);
 });
