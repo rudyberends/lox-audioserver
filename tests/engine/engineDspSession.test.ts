@@ -1,5 +1,6 @@
 import { zoneSessionKey } from '../../src/ports/types/SessionKey';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { test } from '../testHarness';
 import { AudioSession, type OutputProfile } from '../../src/engine/audioSession';
@@ -248,4 +249,56 @@ test('a fixed output gain alone is enough to own the chain', () => {
   assert.equal(session.engineDspMode, true);
   assert.ok(session.dsp);
   session.stop(true);
+});
+
+/**
+ * A child process exits before Node has read what it wrote — the kernel still holds the tail. Ending
+ * the DSP stage from the decoder's exit handler therefore raced `decoder.stdout.pipe(dsp)`, and lost
+ * every time: the queued chunk landed on an ended writable, the stage raised
+ * ERR_STREAM_WRITE_AFTER_END, and the error handler answered that by tearing the session down. The
+ * rest of the track went with it — measured at ~5 s off the end of every Spotify track, on Sonos and
+ * on DLNA alike, followed by silence until the zone clock ended the track for real (#322).
+ */
+test('a decoder that exits while its pipe is still draining keeps the tail (#322)', async () => {
+  const session = makeSession('pcm', EQ);
+  session.start();
+
+  const subscriber = session.createSubscriber({ primeWithBuffer: false, label: 'test' });
+  assert.ok(subscriber);
+  let bytes = 0;
+  subscriber!.on('data', (chunk: Buffer) => {
+    bytes += chunk.length;
+  });
+
+  feedDecoder(session, 1024);
+  await settle();
+  const beforeTail = bytes;
+  assert.ok(beforeTail > 0, 'the session is running');
+
+  // The tail and the exit right behind it: written by the decoder, not yet read by us.
+  feedDecoder(session, 1024);
+  (session.pipeline.decoder as unknown as EventEmitter).emit('exit', 0, null);
+  await settle();
+
+  assert.equal(bytes, beforeTail + 1024 * 2 * 2, 'every byte written before the exit still arrives');
+  assert.equal(session.engineDspMode, true, 'and the session is not torn down on the way');
+  session.stop(true);
+});
+
+test('and when that pipe really does drain, the stage still ends the session', async () => {
+  const session = makeSession('pcm', EQ);
+  session.start();
+
+  const subscriber = session.createSubscriber({ primeWithBuffer: false, label: 'test' });
+  subscriber!.on('data', () => {});
+  const stdout = session.pipeline.decoder?.stdout as unknown as PassThrough;
+
+  feedDecoder(session, 1024);
+  (session.pipeline.decoder as unknown as EventEmitter).emit('exit', 0, null);
+  // What the exit no longer does, stdout's own end still must: nothing else would ever finish the
+  // stage, and a zone whose session never tears down never starts the next track.
+  stdout.end();
+  await settle();
+
+  assert.equal(session.engineDspMode, false, 'the drained pipe ends the stage, which ends the session');
 });

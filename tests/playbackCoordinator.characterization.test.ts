@@ -1323,6 +1323,25 @@ test('player started keeps current volume when already active', () => {
   assert.equal((patches[0]?.patch as any).volume, 42);
 });
 
+/**
+ * Between two queue tracks the output runs dry and echoes STOPPED back into the zone, so `state.mode`
+ * reads 'stop' while the zone is in fact mid-queue. Reading that as a cold start put the zone default
+ * back on the outputs after every single song (#322). The player is the one that knows better: a
+ * queue advance never calls `ZonePlayer.stop()`.
+ */
+test('player started keeps current volume across a queue step that left the output stopped', () => {
+  const { ctx, patches, outputRouter } = createHarness();
+  ctx.state.mode = 'stop';
+  ctx.state.volume = 42;
+  ctx.playerActive = true;
+
+  const player = ctx.player as unknown as EventEmitter;
+  player.emit('started', null);
+
+  assert.equal(outputRouter.volumeCalls[0]?.volume, 42);
+  assert.equal((patches[0]?.patch as any).volume, 42);
+});
+
 test('player started preserves alert volume even when zone was stopped', () => {
   const { ctx, patches, outputRouter } = createHarness();
   // AlertsCoordinator sets state.volume to the per-event slider value before playUri starts.

@@ -285,13 +285,33 @@ export class SessionStarter {
       headroomDb: dsp.headroomDb,
       equalizer: spec.bands ? [...spec.bands] : null,
     });
+    // Ending the stage is `decoder.stdout.pipe(dsp)`'s job, and it does it on stdout's `end` — the
+    // moment Node has read the pipe dry. The decoder *process* exits before that: the kernel still
+    // holds what it wrote. Ending the stage from this handler therefore raced that drain and lost
+    // every single time. The next chunk landed on an ended writable, `dsp` emitted
+    // ERR_STREAM_WRITE_AFTER_END, and the error handler below answered it with `cleanup()` — so the
+    // session was gone 4 ms after the decoder exited and seconds before the track was over, taking
+    // the encoder's unflushed output with it. That cost the last ~5 s of every track and left the
+    // zone silent until the clock ended the track for real (#322).
+    //
+    // A clean exit now ends nothing here. What still needs a hand is a stdout that will never drain
+    // by itself: a decoder that failed to spawn, and one whose stdout `terminateDecoder` has
+    // unhooked — which is how an EQ change restarts a PCM-profile zone, where this stage's `end` is
+    // the only thing that drives the restart.
+    const endStage = (): void => {
+      if (!dsp.destroyed && !dsp.writableEnded) {
+        dsp.end();
+      }
+    };
     const decoder = s.pipeline.spawnDecoder(decoderArgs, {
-      onEnded: () => {
-        // End the stage so a codec encoder flushes and finishes; the PCM profile's own 'end' handler
-        // below takes it from there.
-        if (!dsp.destroyed && !dsp.writableEnded) {
-          dsp.end();
+      onEnded: (reason) => {
+        if (reason === 'exit' && decoder.stdout.listenerCount('data') > 0) {
+          // Still piped, so stdout's `end` will end the stage. `close` is the backstop for a stdout
+          // destroyed rather than drained, which unpipes without ending anything.
+          decoder.stdout.once('close', endStage);
+          return;
         }
+        endStage();
       },
     });
     decoder.stdout.pipe(dsp);
@@ -327,7 +347,11 @@ export class SessionStarter {
     }
     dsp.on('error', (err: Error) => {
       s.log.warn('engine dsp stage error', { zoneId: s.zoneId, message: err.message });
-      if (!s.ending) {
+      // A write arriving after the stage finished says the producer outlived the stage, not that the
+      // session is broken — everything downstream is already flushing on its own terms. Tearing the
+      // session down is what threw the encoder's remaining output away (#322), so this one error is
+      // logged and otherwise left alone.
+      if (!s.ending && (err as NodeJS.ErrnoException).code !== 'ERR_STREAM_WRITE_AFTER_END') {
         s.cleanup();
       }
     });

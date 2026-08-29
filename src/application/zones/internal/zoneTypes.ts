@@ -121,4 +121,16 @@ export interface ZoneContext {
    * volume changes during the window.
    */
   resetVolumeTimer?: NodeJS.Timeout;
+  /**
+   * Is the zone's own player between a start and a stop?
+   *
+   * The zone *state* cannot answer this: an output that runs dry echoes STOPPED back into
+   * `state.mode`, so a zone stepping from one queue track to the next reads as stopped for as long
+   * as the gap lasts. This flag follows the player instead — `ZonePlayer.stop()` is the only thing
+   * that clears it, and a queue advance never calls it — so a start can tell "the zone was off"
+   * apart from "the previous track just finished" (#322).
+   *
+   * Undefined on a zone that has not played yet, which is a cold start and is treated as one.
+   */
+  playerActive?: boolean;
 }

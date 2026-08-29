@@ -130,9 +130,18 @@ function onPlayerStarted(
   // case the play should start at the default (reference Loxone: pause =
   // volume back to default for the next play).
   const hadPendingReset = ctxReset?.resetVolumeTimer !== undefined;
+  // Does the player agree that this zone is off? `state.mode` alone does not settle it: an output
+  // that runs dry between two queue tracks echoes STOPPED back into the zone state, so a plain
+  // `state.mode === 'stop'` read every track change as a cold start and put the zone default back
+  // on the outputs — the volume moved on its own after every song (#322). This flag is the veto on
+  // that false positive and nothing more: `ZonePlayer.stop()` is the only thing that clears it, and
+  // a queue advance never calls it. `state.mode` stays the signal, so a paused or playing zone is
+  // still not a fresh start whatever the flag says.
+  const wasPlayerActive = ctxReset?.playerActive === true;
   if (ctxReset) {
     ctxReset.outputTimingActive = false;
     ctxReset.lastOutputTimingAt = 0;
+    ctxReset.playerActive = true;
     clearResetVolumeTimer(ctxReset);
   }
   const ctxLocal = coordinator.getZone(zoneId);
@@ -144,8 +153,7 @@ function onPlayerStarted(
     // During an alert, the alert flow has already set state.volume to the
     // per-event volume (e.g. the TTS slider value). Don't replace it.
     const isFreshStart =
-      !ctx.alert &&
-      (ctx.state.mode === 'stop' || hadPendingReset);
+      !ctx.alert && ((ctx.state.mode === 'stop' && !wasPlayerActive) || hadPendingReset);
     const volume = isFreshStart
       ? getZoneDefaultVolume(ctx.config)
       : clampVolumeForZone(ctx.config, ctx.state.volume);
@@ -166,6 +174,7 @@ function onPlayerStarted(
       activeInput: ctx.activeInput,
       isFreshStart,
       hadPendingReset,
+      wasPlayerActive,
       mode: ctx.state.mode,
       stateVolume: ctx.state.volume,
       defaultVolume: getZoneDefaultVolume(ctx.config),
@@ -198,6 +207,7 @@ function onPlayerResumed(
   if (ctxReset) {
     ctxReset.outputTimingActive = false;
     ctxReset.lastOutputTimingAt = 0;
+    ctxReset.playerActive = true;
     clearResetVolumeTimer(ctxReset);
   }
   const ctxLocal = coordinator.getZone(zoneId);
@@ -234,6 +244,8 @@ function onPlayerStopped(
   if (ctxReset) {
     ctxReset.outputTimingActive = false;
     ctxReset.lastOutputTimingAt = 0;
+    // The zone is off until something starts it again, and the next start is a cold one.
+    ctxReset.playerActive = false;
     clearResetVolumeTimer(ctxReset);
   }
   const ctxLocal = coordinator.getZone(zoneId);
