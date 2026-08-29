@@ -8,7 +8,6 @@ import { createHash } from 'node:crypto';
 import { PassThrough } from 'stream';
 import Bonjour from 'bonjour-service';
 import { AirPlayReceiver, sendRemoteCommand, type ReceiverEvent } from '@sonn-audio/node-airplay';
-import { loadAppleRsa } from './appleRsa';
 
 /** How long a sender may go quiet before we call it a pause. */
 const AUDIO_IDLE_PAUSE_MS = 1500;
@@ -151,12 +150,6 @@ export class AirplayInstance {
       portRange,
       host,
     });
-    const rsa = loadAppleRsa();
-    if (!rsa) {
-      this.log.warn('airplay receiver has no rsa key; senders that require encryption will refuse it', {
-        zoneId: this.zoneId,
-      });
-    }
     try {
       const receiver = new AirPlayReceiver(
         {
@@ -164,7 +157,6 @@ export class AirplayInstance {
           model: this.config.model || 'SonnCoreAirplay',
           ...(this.hardwareAddress ? { mac: Buffer.from(this.hardwareAddress.replace(/[^0-9a-f]/gi, ''), 'hex') } : {}),
           port: portBase,
-          ...(rsa ? { rsa } : {}),
           onRequest: (info) =>
             this.log.info('airplay rtsp request', {
               zoneId: this.zoneId,
