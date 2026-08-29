@@ -272,7 +272,6 @@ function createAirplayOutput(
   const name = extras?.name as string | undefined;
   const password = extras?.password as string | undefined;
   const debug = extras?.debug;
-  const protocol = extras?.protocol;
   const et = extras?.et;
   const md = extras?.md;
   const latencyMs = extras?.latencyMs;
@@ -292,7 +291,6 @@ function createAirplayOutput(
       password,
       port: Number.isFinite(port) ? port : undefined,
       debug: typeof debug === 'boolean' ? debug : undefined,
-      protocol: typeof protocol === 'string' ? protocol : undefined,
       et: typeof et === 'string' ? et : undefined,
       md: typeof md === 'string' ? md : undefined,
       latencyMs: typeof latencyMs === 'number' ? latencyMs : undefined,

@@ -3,9 +3,8 @@ import type { PassThrough } from 'node:stream';
 import type { PlaybackSession } from '@/application/playback/audioManager';
 import { zoneSessionKey } from '@/ports/types/SessionKey';
 import type { PreferredOutput, OutputConfigDefinition, ZoneOutput } from '@/ports/OutputsTypes';
-import { RaopSender, computeGroupAnchorNtp } from '@/adapters/outputs/airplay/raopSender';
-import { Ap2Sender } from '@/adapters/outputs/airplay/ap2Sender';
-import { parseAirplayProtocol, type AirplaySender } from '@/adapters/outputs/airplay/airplaySender';
+import { Ap2Sender, computeGroupAnchorNtp } from '@/adapters/outputs/airplay/ap2Sender';
+import type { AirplaySender } from '@/adapters/outputs/airplay/airplaySender';
 import { AirplayStreamSession } from '@/adapters/outputs/airplay/airplayStreamSession';
 import type { OutputPorts } from '@/adapters/outputs/outputPorts';
 import { waitForReadableStream } from '@/shared/audio/streamReadiness';
@@ -16,12 +15,6 @@ export interface AirPlayOutputConfig {
   name?: string;
   password?: string;
   debug?: boolean;
-  /**
-   * Which protocol drives the device: `airplay1` (RAOP, the default) or
-   * `airplay2`. Apple receivers on OS 27 and later accept an AirPlay 1 session
-   * and then render nothing, so they need `airplay2`.
-   */
-  protocol?: string;
   /** Device encryption types (mDNS TXT `et`), resolved by the AdminUI picker. */
   et?: string;
   /** Device metadata capabilities (mDNS TXT `md`), resolved by the AdminUI picker. */
@@ -78,14 +71,6 @@ export const AIRPLAY_OUTPUT_DEFINITION: OutputConfigDefinition = {
         'Device read-ahead buffer in ms (default 750). Raise (e.g. 1500) for devices that stutter or underrun; higher = more resilient but slower start/skip. Range 250–5000.',
     },
     {
-      id: 'protocol',
-      label: 'AirPlay protocol',
-      type: 'text',
-      placeholder: 'airplay1',
-      description:
-        'Which protocol drives this device: "airplay1" (default, RAOP) or "airplay2". Apple devices on OS 27 and later no longer play AirPlay 1 — they accept the session and stay silent — so HomePods and Apple TVs need "airplay2". AirPlay 2 requires the server to reach UDP ports 319 and 320.',
-    },
-    {
       id: 'debug',
       label: 'Debug logging',
       type: 'text',
@@ -96,10 +81,13 @@ export const AIRPLAY_OUTPUT_DEFINITION: OutputConfigDefinition = {
 };
 
 /**
- * AirPlay (RAOP) output backed by node-libraop. libraop owns all realtime
- * streaming (RTP timing, ALAC, retransmit, device read-ahead); we just feed it a
- * continuous PCM stream and let its backpressure pace us. The stream is kept
- * alive across track switches so a track change is metadata-only (no zap).
+ * AirPlay output, driven by node-airplay. The sender owns the realtime side —
+ * pairing, timing, ALAC and the encrypted RTP stream — and picks its own lane
+ * per device: AirPlay 2 with PTP for receivers that serve it, the NTP lane for
+ * those that advertise PTP without answering, and the sender's own read-ahead
+ * for the rest. We feed it a continuous PCM stream and let its backpressure
+ * pace us. The stream is kept alive across track switches so a track change is
+ * metadata-only (no zap).
  */
 export class AirPlayOutput implements ZoneOutput {
   public readonly type = 'airplay';
@@ -133,30 +121,13 @@ export class AirPlayOutput implements ZoneOutput {
     private readonly ports: OutputPorts,
     initialVolume?: number,
   ) {
-    const protocol = parseAirplayProtocol(config.protocol);
-    this.sender = protocol === 'airplay2'
-      ? new Ap2Sender(
-          {
-            host: config.host.trim(),
-            ...(typeof config.port === 'number' ? { port: config.port } : {}),
-            ...(config.password?.trim() ? { password: config.password.trim() } : {}),
-            name: zoneName,
-            onUnavailable: (reason: string) => this.handleSenderUnavailable(reason),
-          },
-          { zoneId, zoneName },
-        )
-      : new RaopSender(
+    this.sender = new Ap2Sender(
       {
         host: config.host.trim(),
-        port: typeof config.port === 'number' ? config.port : undefined,
-        password: config.password?.trim() || undefined,
-        et: typeof config.et === 'string' ? config.et : undefined,
-        md: typeof config.md === 'string' ? config.md : undefined,
-        latencyMs: typeof config.latencyMs === 'number' ? config.latencyMs : undefined,
-        bufferMs: typeof config.bufferMs === 'number' ? config.bufferMs : undefined,
-        debug: config.debug === true,
-        onUnavailable: (reason) => this.handleSenderUnavailable(reason),
-        onDeviceResolved: (info) => this.persistResolvedConfig(info),
+        ...(typeof config.port === 'number' ? { port: config.port } : {}),
+        ...(config.password?.trim() ? { password: config.password.trim() } : {}),
+        name: zoneName,
+        onUnavailable: (reason: string) => this.handleSenderUnavailable(reason),
       },
       { zoneId, zoneName },
     );
@@ -172,7 +143,6 @@ export class AirPlayOutput implements ZoneOutput {
       zoneName,
       host: config.host.trim(),
       port: config.port,
-      protocol,
       et: config.et,
     });
     this.ports.airplayGroup.register(this.zoneId, this);
@@ -587,32 +557,6 @@ export class AirPlayOutput implements ZoneOutput {
    * values directly and no longer depends on runtime discovery (which matters for
    * MFi devices whose `et` is required for auth-setup).
    */
-  private persistResolvedConfig(info: { et?: string; md?: string; port: number }): void {
-    void this.ports.config
-      .updateConfig((cfg) => {
-        const output = cfg.zones.find((z) => z.id === this.zoneId)?.output;
-        if (!output || output.id !== 'airplay') {
-          return;
-        }
-        if (info.et !== undefined) output.et = info.et;
-        if (info.md !== undefined) output.md = info.md;
-        if (info.port) output.port = info.port;
-      })
-      .then(() => {
-        this.log.info('AirPlay config self-healed from discovery', {
-          zoneId: this.zoneId,
-          et: info.et,
-          md: info.md,
-          port: info.port,
-        });
-      })
-      .catch((err) => {
-        this.log.warn('AirPlay config self-heal failed', {
-          zoneId: this.zoneId,
-          message: err instanceof Error ? err.message : String(err),
-        });
-      });
-  }
 
   private async waitForEngine(retries = 5, delayMs = 150): Promise<boolean> {
     let attempts = 0;

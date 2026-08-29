@@ -2,16 +2,11 @@
  * The seam between an AirPlay zone output and the protocol that drives the
  * device.
  *
- * There are two implementations and they speak different protocols to the same
- * speakers: {@link RaopSender} does AirPlay 1 (RAOP) through node-libraop, and
- * `Ap2Sender` does AirPlay 2 through node-airplay. Which one a zone uses is a
- * per-output setting, because the answer is not the same for every device —
- * Apple receivers on OS 27 no longer render AirPlay 1 at all, while plenty of
- * third-party gear has years of proven mileage on it.
- *
  * Keeping this interface exactly as wide as the output actually needs is the
- * point: it is what lets both live side by side without the output knowing
- * which one it holds.
+ * point: the output drives a device without knowing which protocol reaches it.
+ * Today that is always node-airplay, which chooses its own lane per receiver;
+ * the seam is what made replacing the previous native sender a swap rather than
+ * a rewrite, and what will make the next one the same.
  */
 export interface AirplaySender {
   /** Connect (if needed) and feed PCM from `source`. */
@@ -57,17 +52,3 @@ export interface AirplaySender {
   getLatencyMs(): number;
 }
 
-/** Which protocol an AirPlay output drives its device with. */
-export type AirplayProtocol = 'airplay1' | 'airplay2';
-
-/**
- * Read the per-output protocol choice. Unset stays on AirPlay 1: switching a
- * working zone is the user's call, not a silent upgrade.
- */
-export function parseAirplayProtocol(value: unknown): AirplayProtocol {
-  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  if (text === 'airplay2' || text === 'ap2' || text === '2') {
-    return 'airplay2';
-  }
-  return 'airplay1';
-}

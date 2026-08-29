@@ -9,11 +9,11 @@ import type { AudioManager } from '@/application/playback/audioManager';
 const GROUP_PREBUFFER_MS = 3000;
 
 /**
- * A grouped AirPlay output. With node-libraop every device is an independent
+ * A grouped AirPlay output. Every device is an independent
  * RAOP sender, so multiroom is "one shared PCM stream, N senders": the leader
  * owns the engine stream and each member feeds its own sender from it. (Members
  * start as close together as the event loop allows; sample-accurate sync would
- * require exposing a shared `ntpstart` anchor in node-libraop — a follow-up.)
+ * share one anchor instant, which node-airplay now takes on start().)
  */
 export type AirplayGroupParticipant = {
   getZoneId(): number;

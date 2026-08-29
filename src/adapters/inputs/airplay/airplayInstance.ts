@@ -6,9 +6,9 @@ import os from 'node:os';
 import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { PassThrough } from 'stream';
-import * as libraop from '@sonn-audio/node-libraop';
-import { startReceiver, stopReceiver } from '@sonn-audio/node-libraop';
-import type { RaopEvent, ReceiverOptions } from '@sonn-audio/node-libraop/dist/types';
+import Bonjour from 'bonjour-service';
+import { AirPlayReceiver, sendRemoteCommand, type ReceiverEvent } from '@sonn-audio/node-airplay';
+import { loadAppleRsa } from './appleRsa';
 
 export interface AirplayInstanceController {
   startPlayback(
@@ -28,7 +28,6 @@ export interface AirplayInstanceController {
 
 const DEFAULT_SAMPLE_RATE = 44100;
 const DEFAULT_CHANNELS = 2;
-type LibraopRemoteCommand = 'play' | 'pause' | 'stop' | 'next' | 'prev' | 'previous';
 
 export class AirplayInstance {
   private readonly log: ComponentLogger;
@@ -45,7 +44,11 @@ export class AirplayInstance {
   private sessionActive = false;
   private currentElapsedSec = 0;
   private currentDurationSec = 0;
-  private receiverHandle: number | null = null;
+  private receiver: AirPlayReceiver | null = null;
+  private advertiser: InstanceType<typeof Bonjour> | null = null;
+  /** The streaming device's remote-control identity, for play/pause/skip back at it. */
+  private dacpId: string | null = null;
+  private activeRemote: string | null = null;
   private httpRequest: http.ClientRequest | null = null;
   private httpResponse: http.IncomingMessage | null = null;
   private httpPort?: number;
@@ -54,6 +57,7 @@ export class AirplayInstance {
   private pcmSampleRate = DEFAULT_SAMPLE_RATE;
   private pcmChannels = DEFAULT_CHANNELS;
   private pcmLogged = false;
+  private pcmBackpressured = false;
   private pcmBytesTotal = 0;
   private lastTimingPushMs = 0;
 
@@ -72,7 +76,7 @@ export class AirplayInstance {
   }
 
   public async start(): Promise<void> {
-    if (this.receiverHandle !== null) {
+    if (this.receiver !== null) {
       return;
     }
     await this.startServer();
@@ -122,15 +126,6 @@ export class AirplayInstance {
   private async startServer(): Promise<void> {
     const { portBase, portRange } = this.resolvePorts();
     const host = this.resolveHostAddress();
-    const options: ReceiverOptions = {
-      name: this.zoneName,
-      model: this.config.model || 'SonnCoreAirplay',
-      mac: this.hardwareAddress,
-      metadata: true,
-      portBase,
-      portRange,
-      host,
-    };
     this.httpHost = host;
     this.log.info('starting AirPlay receiver', {
       zoneId: this.zoneId,
@@ -138,14 +133,52 @@ export class AirplayInstance {
       portRange,
       host,
     });
+    const rsa = loadAppleRsa();
+    if (!rsa) {
+      this.log.warn('airplay receiver has no rsa key; senders that require encryption will refuse it', {
+        zoneId: this.zoneId,
+      });
+    }
     try {
-      this.receiverHandle = startReceiver(options, (event) => this.handleRaopEvent(event));
+      const receiver = new AirPlayReceiver(
+        {
+          name: this.zoneName,
+          model: this.config.model || 'SonnCoreAirplay',
+          ...(this.hardwareAddress ? { mac: Buffer.from(this.hardwareAddress.replace(/[^0-9a-f]/gi, ''), 'hex') } : {}),
+          port: portBase,
+          ...(rsa ? { rsa } : {}),
+          onRequest: (info) =>
+            this.log.info('airplay rtsp request', {
+              zoneId: this.zoneId,
+              method: info.method,
+              appleChallenge: info.appleChallenge,
+              encryptedKey: info.encryptedKey,
+              headers: info.headers.join(','),
+            }),
+        },
+        (event) => this.handleRaopEvent(event),
+      );
+      const advertisement = await receiver.start();
+      this.receiver = receiver;
+
+      // The receiver deliberately publishes nothing itself, so the service that
+      // makes it findable is ours to announce.
+      this.advertiser = new Bonjour();
+      this.advertiser.publish({
+        name: advertisement.instanceName,
+        type: 'raop',
+        protocol: 'tcp',
+        port: advertisement.port,
+        txt: advertisement.txt,
+      });
+
       this.log.info('airplay receiver ready', {
         zoneId: this.zoneId,
-        handle: this.receiverHandle,
+        port: advertisement.port,
+        name: advertisement.instanceName,
       });
     } catch (error) {
-      this.receiverHandle = null;
+      this.receiver = null;
       this.log.error('failed to start airplay receiver', {
         zoneId: this.zoneId,
         message: error instanceof Error ? error.message : String(error),
@@ -154,9 +187,9 @@ export class AirplayInstance {
   }
 
   private async stopServer(): Promise<void> {
-    if (this.receiverHandle !== null) {
+    if (this.receiver !== null) {
       try {
-        stopReceiver(this.receiverHandle);
+        this.receiver?.stop();
       } catch (error) {
         this.log.warn('failed to stop airplay receiver', {
           zoneId: this.zoneId,
@@ -164,7 +197,16 @@ export class AirplayInstance {
         });
       }
     }
-    this.receiverHandle = null;
+    this.receiver = null;
+    try {
+      this.advertiser?.unpublishAll();
+      this.advertiser?.destroy();
+    } catch {
+      /* the service goes away with the process anyway */
+    }
+    this.advertiser = null;
+    this.dacpId = null;
+    this.activeRemote = null;
     this.stopHttpStream();
     this.httpPort = undefined;
     this.httpHost = undefined;
@@ -202,15 +244,20 @@ export class AirplayInstance {
     return fallbackHost;
   }
 
-  private handleRaopEvent(event: RaopEvent): void {
+  private handleRaopEvent(event: ReceiverEvent): void {
     this.log.debug('airplay raop event', { zoneId: this.zoneId, type: event.type });
     switch (event.type) {
       case 'stream':
+        // The PCM arrives as events on this path, so there is no stream to go
+        // and fetch — the port is only worth noting.
         this.log.info('airplay stream announced', { zoneId: this.zoneId, port: event.port });
-        this.startHttpStream(event.port);
+        break;
+      case 'remote':
+        this.dacpId = event.dacpId;
+        this.activeRemote = event.activeRemote;
+        this.log.debug('airplay remote identity', { zoneId: this.zoneId, dacpId: event.dacpId });
         break;
       case 'play':
-        this.startHttpStream(this.httpPort);
         this.handlePlaybackStart();
         break;
       case 'pause':
@@ -236,15 +283,9 @@ export class AirplayInstance {
         });
         break;
       case 'artwork':
-        this.applyMetadataFromObject({
-          title: event.title,
-          artist: event.artist,
-          album: event.album,
-          durationMs: (event as { durationMs?: number }).durationMs,
-          duration: (event as { duration?: number }).duration,
-          elapsedMs: (event as { elapsedMs?: number }).elapsedMs,
-          artwork: event.data,
-        });
+        // Cover art arrives on its own; the track fields came with the metadata
+        // event before it and must not be blanked here.
+        this.applyMetadataFromObject({ artwork: event.data });
         break;
       case 'pcm':
         this.handlePcmFrame(event.data, event.sampleRate, event.channels);
@@ -284,48 +325,94 @@ export class AirplayInstance {
     }
   }
 
+  /**
+   * Send a transport command back to the device streaming into this zone.
+   *
+   * The sender publishes an `_dacp._tcp` service named `iTunes_Ctrl_<DACP-ID>`,
+   * and hands us both that id and an `Active-Remote` token in its RTSP headers.
+   * Resolving the service is a live mDNS lookup each time: the sender may have
+   * moved, and the answer is only useful for as long as the session lasts.
+   */
   public sendRemoteCommand(
     command: 'Play' | 'Pause' | 'PlayPause' | 'Stop' | 'Next' | 'Previous' | 'ToggleMute',
   ): void {
-    const handle = this.receiverHandle;
     const remoteCommand = this.resolveRemoteCommand(command);
-    const sender = (libraop as Record<string, unknown>).sendRemoteCommand as
-      | ((receiverHandle: number, cmd: LibraopRemoteCommand) => boolean)
-      | undefined;
-    if (!handle || !remoteCommand || typeof sender !== 'function') {
+    if (!remoteCommand || !this.dacpId || !this.activeRemote) {
       this.log.debug('remote command unavailable (airplay server)', {
         zoneId: this.zoneId,
         command,
-        hasHandle: Boolean(handle),
-        hasSender: typeof sender === 'function',
-        mapped: remoteCommand ?? null,
+        hasIdentity: Boolean(this.dacpId && this.activeRemote),
       });
       return;
     }
-    const sent = sender(handle, remoteCommand);
-    if (!sent) {
-      this.log.warn('airplay remote command not sent', { zoneId: this.zoneId, command });
+    void this.resolveDacpEndpoint(this.dacpId)
+      .then(async (endpoint) => {
+        if (!endpoint) {
+          this.log.debug('airplay remote control service not found', {
+            zoneId: this.zoneId,
+            dacpId: this.dacpId,
+          });
+          return;
+        }
+        const sent = await sendRemoteCommand(
+          endpoint.host,
+          endpoint.port,
+          this.activeRemote as string,
+          remoteCommand,
+        );
+        if (!sent) {
+          this.log.warn('airplay remote command not sent', { zoneId: this.zoneId, command });
+        }
+      })
+      .catch((error: unknown) => {
+        this.log.debug('airplay remote command failed', {
+          zoneId: this.zoneId,
+          command,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
+
+  /** Find the sender's `_dacp._tcp` service, or null when it does not answer in time. */
+  private async resolveDacpEndpoint(
+    dacpId: string,
+  ): Promise<{ host: string; port: number } | null> {
+    const wanted = `iTunes_Ctrl_${dacpId}`.toLowerCase();
+    const bonjour = new Bonjour();
+    try {
+      return await new Promise<{ host: string; port: number } | null>((resolve) => {
+        const browser = bonjour.find({ type: 'dacp', protocol: 'tcp' }, (service) => {
+          if ((service.name ?? '').toLowerCase() !== wanted) {
+            return;
+          }
+          const address =
+            (service.addresses ?? []).find((value) => value.includes('.')) ?? service.host;
+          if (address && service.port) {
+            clearTimeout(timer);
+            browser.stop();
+            resolve({ host: address, port: service.port });
+          }
+        });
+        const timer = setTimeout(() => {
+          browser.stop();
+          resolve(null);
+        }, 2000);
+      });
+    } finally {
+      bonjour.destroy();
     }
   }
 
+  /**
+   * Not available on this path. RAOP has no verb for a receiver to set the
+   * SENDER's volume — the old native server exposed one, but it only ever
+   * mirrored what the sender had already told us.
+   */
   public setRemoteVolume(percent: number): void {
-    const handle = this.receiverHandle;
-    const setVolume = (libraop as Record<string, unknown>).setRemoteVolume as
-      | ((receiverHandle: number, volume: number) => boolean)
-      | undefined;
-    if (!handle || typeof setVolume !== 'function') {
-      this.log.debug('remote volume unavailable (airplay server)', {
-        zoneId: this.zoneId,
-        percent,
-        hasHandle: Boolean(handle),
-        hasSetter: typeof setVolume === 'function',
-      });
-      return;
-    }
-    const sent = setVolume(handle, percent);
-    if (!sent) {
-      this.log.warn('airplay remote volume not sent', { zoneId: this.zoneId, percent });
-    }
+    this.log.debug('remote volume unavailable (airplay server)', {
+      zoneId: this.zoneId,
+      percent,
+    });
   }
 
   private startHttpStream(port: number | undefined): void {
@@ -433,9 +520,16 @@ export class AirplayInstance {
     } else if (!this.isPlaying) {
       this.handlePlaybackResume();
     }
+    // A live stream sits at its buffer limit whenever the consumer reads in
+    // larger blocks than the sender writes, which is the normal steady state
+    // here rather than a fault. Log the transitions, not every packet: nothing
+    // is dropped either way, so per-chunk logging is pure noise.
     const ok = this.pcmStream.write(payload);
-    if (!ok) {
-      this.log.debug('backpressure on pcm stream', { zoneId: this.zoneId });
+    if (ok !== !this.pcmBackpressured) {
+      this.pcmBackpressured = !ok;
+      this.log.debug(ok ? 'pcm stream draining again' : 'pcm stream at buffer limit', {
+        zoneId: this.zoneId,
+      });
     }
     if (!this.pcmLogged) {
       this.pcmLogged = true;
@@ -479,9 +573,10 @@ export class AirplayInstance {
     }
   }
 
+  /** Map a zone command onto the DACP verb the sender's remote service expects. */
   private resolveRemoteCommand(
     command: 'Play' | 'Pause' | 'PlayPause' | 'Stop' | 'Next' | 'Previous' | 'ToggleMute',
-  ): LibraopRemoteCommand | null {
+  ): 'play' | 'pause' | 'playpause' | 'stop' | 'nextitem' | 'previtem' | 'mutetoggle' | null {
     switch (command) {
       case 'Play':
         return 'play';
@@ -492,11 +587,11 @@ export class AirplayInstance {
       case 'Stop':
         return 'stop';
       case 'Next':
-        return 'next';
+        return 'nextitem';
       case 'Previous':
-        return 'prev';
+        return 'previtem';
       case 'ToggleMute':
-        return null;
+        return 'mutetoggle';
       default:
         return null;
     }

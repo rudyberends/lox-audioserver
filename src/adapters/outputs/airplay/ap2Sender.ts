@@ -12,6 +12,7 @@ import {
   FRAMES_PER_PACKET,
   type SenderIdentity,
 } from '@sonn-audio/node-airplay';
+import { ntpNow } from '@sonn-audio/node-airplay';
 import { createLogger } from '@/shared/logging/logger';
 import type { AirplaySender } from '@/adapters/outputs/airplay/airplaySender';
 
@@ -38,18 +39,25 @@ const LEAD_MS = 500;
  * seconds of silence between SETUP and the first packet ends the session, and
  * the sender keeps streaming into the void with nothing to show for it).
  */
-const PRIME_MS = LEAD_MS + 250;
+const PRIME_MS = 400;
 const SEND_TICK_MS = 4;
 /**
  * Backpressure bounds. The engine produces faster than realtime, so without
  * these the ring simply grows — and everything in it is audio the listener has
  * to sit through before a skip is heard. Measured before this existed: a track
- * change kept playing the old track for the best part of ten seconds. Pause the
- * source above PAUSE_RING_BYTES, resume below RESUME_RING_BYTES; MAX_RING_BYTES
- * is only a last-resort cap for a source that ignores both.
+ * change kept playing the old track for the best part of ten seconds.
+ *
+ * The window is deliberately wide and sits well above {@link PRIME_MS}. A LIVE
+ * source — an AirPlay input feeding this output — never stops for a paused
+ * reader, so every pause simply pushes the backlog one buffer upstream and the
+ * input logs a failed write for every packet that arrives meanwhile. Priming to
+ * the pause threshold made that permanent. With this spacing a realtime source
+ * settles below the gate and never trips it, while a source that genuinely runs
+ * fast is still held. MAX_RING_BYTES is the last-resort cap for one that ignores
+ * both.
  */
-const PAUSE_RING_BYTES = Math.round(SAMPLE_RATE * BYTES_PER_FRAME * 0.5);
-const RESUME_RING_BYTES = Math.round(SAMPLE_RATE * BYTES_PER_FRAME * 0.15);
+const PAUSE_RING_BYTES = Math.round(SAMPLE_RATE * BYTES_PER_FRAME * 1.2);
+const RESUME_RING_BYTES = Math.round(SAMPLE_RATE * BYTES_PER_FRAME * 0.7);
 const MAX_RING_BYTES = SAMPLE_RATE * BYTES_PER_FRAME * 3;
 
 /**
@@ -115,6 +123,16 @@ class SharedPtp {
 
 const sharedPtp = new SharedPtp();
 
+/**
+ * A shared playback instant `prebufferMs` from now, as unix-epoch NTP.
+ *
+ * Every member of a sync group is handed the same value, so they map the same
+ * frame to the same moment however far ahead each one runs.
+ */
+export function computeGroupAnchorNtp(prebufferMs: number): bigint {
+  return ntpNow() + (BigInt(Math.max(0, Math.round(prebufferMs))) * (1n << 32n)) / 1000n;
+}
+
 export interface Ap2SenderConfig {
   host: string;
   port?: number;
@@ -143,6 +161,7 @@ export class Ap2Sender implements AirplaySender {
   private ringBytes = 0;
 
   private sendTimer: NodeJS.Timeout | null = null;
+  private statsTimer: NodeJS.Timeout | null = null;
   private startedAt = 0;
   private packetsDue = 0;
   private currentVolume = 30;
@@ -153,7 +172,6 @@ export class Ap2Sender implements AirplaySender {
   private groupStartUnixMs: number | null = null;
   private ntpResponder: NtpTimingResponder | null = null;
   private timing: 'ptp' | 'ntp' = 'ptp';
-  private silenceLogged = false;
 
   constructor(
     private readonly config: Ap2SenderConfig,
@@ -414,6 +432,7 @@ export class Ap2Sender implements AirplaySender {
       );
       this.sender.start(this.groupStartUnixMs ?? undefined);
       this.startSendLoop();
+      this.startStats();
       this.log.info('AirPlay 2 sender started', {
         ...this.context,
         host: this.config.host,
@@ -501,8 +520,25 @@ export class Ap2Sender implements AirplaySender {
     return this.ringBytes > 0;
   }
 
+  /**
+   * Let the source run again once the ring has drained enough.
+   *
+   * This must be reachable on EVERY path through the reader, not only after a
+   * successful read: a ring that empties while the source is paused would
+   * otherwise never resume it, and the stall propagates all the way back up the
+   * chain — a live AirPlay input then fills its whole buffer and reports a
+   * failed write for every packet that arrives.
+   */
+  private maybeResume(): void {
+    if (this.sourcePaused && this.ringBytes <= RESUME_RING_BYTES) {
+      this.sourcePaused = false;
+      this.source?.resume();
+    }
+  }
+
   private takePacket(): Buffer | null {
     if (this.ringBytes < BYTES_PER_PACKET) {
+      this.maybeResume();
       return null;
     }
     const parts: Buffer[] = [];
@@ -520,10 +556,7 @@ export class Ap2Sender implements AirplaySender {
       }
     }
     this.ringBytes -= BYTES_PER_PACKET;
-    if (this.sourcePaused && this.ringBytes <= RESUME_RING_BYTES) {
-      this.sourcePaused = false;
-      this.source?.resume();
-    }
+    this.maybeResume();
     return Buffer.concat(parts);
   }
 
@@ -536,14 +569,46 @@ export class Ap2Sender implements AirplaySender {
     this.sendTimer = setInterval(() => this.pump(), SEND_TICK_MS);
   }
 
+  /** Once a second: what the sender is actually doing, rather than inferred. */
+  private startStats(): void {
+    this.statsTimer = setInterval(() => {
+      const sender = this.sender;
+      if (!sender) {
+        return;
+      }
+      this.log.debug('ap2 sender state', {
+        ...this.context,
+        ringMs: Math.round((this.ringBytes / (SAMPLE_RATE * BYTES_PER_FRAME)) * 1000),
+        sourcePaused: this.sourcePaused,
+        packetsSent: sender.packetsSent,
+        rtxAnswered: sender.rtxAnswered,
+        timing: this.timing,
+      });
+    }, 1000);
+  }
+
   private stopSendLoop(): void {
+    if (this.statsTimer) {
+      clearInterval(this.statsTimer);
+      this.statsTimer = null;
+    }
     if (this.sendTimer) {
       clearInterval(this.sendTimer);
       this.sendTimer = null;
     }
   }
 
-  /** Keep the receiver one lead ahead of its render line, then track realtime. */
+  /**
+   * Send what the source has given us, never more than a lead ahead of realtime.
+   *
+   * The wall clock is a CEILING here, not a metronome. An earlier version
+   * treated it as the latter — it filled every gap with silence and counted the
+   * packet anyway — which is right for a file the engine reads at its own pace,
+   * and wrong for a live source. On a live input the sender at the other end is
+   * the clock: every inserted packet of silence pushes us permanently ahead of
+   * it, the backlog grows by exactly that much, and the ring ends up against
+   * its gate for good. So on an empty ring we simply wait.
+   */
   private pump(): void {
     const sender = this.sender;
     if (!sender || this.paused) {
@@ -554,17 +619,9 @@ export class Ap2Sender implements AirplaySender {
     while (this.packetsDue * FRAMES_PER_PACKET < dueFrames) {
       const pcm = this.takePacket();
       if (!pcm) {
-        // A gap in the source still has to be filled: the RTP timeline may not
-        // stall, or the receiver's anchor drifts away from the audio.
-        sender.sendPacket(Buffer.alloc(BYTES_PER_PACKET));
-        if (!this.silenceLogged) {
-          this.silenceLogged = true;
-          this.log.debug('source underrun; sending silence', this.context);
-        }
-      } else {
-        sender.sendPacket(pcm);
-        this.silenceLogged = false;
+        return; // nothing to send yet; the clock will catch us up
       }
+      sender.sendPacket(pcm);
       this.packetsDue++;
     }
   }
