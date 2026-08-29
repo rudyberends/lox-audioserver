@@ -90,6 +90,7 @@ import './localLibraryProvider.folders.test';
 import './localLibraryResolveItem.test';
 import './zonePlayerEndGuard.test';
 import './durationRegression.test';
+import './sourceDurationLearned.test';
 import './runtimeShutdown.test';
 import './sourceResolver.test';
 import './beolinkStateController.test';
