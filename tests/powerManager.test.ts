@@ -498,6 +498,89 @@ test('system power manager serializes concurrent calls to the same device (#293)
   assert.equal(maxActive, 1);
 });
 
+function gpioAction(overrides: Partial<{ pin: number; activeHigh: boolean; chip: string; gpiosetPath: string }> = {}) {
+  return {
+    type: 'gpio',
+    config: {
+      pin: 62,
+      activeHigh: true,
+      chip: 'gpiochip0',
+      gpiosetPath: 'gpioset',
+      ...overrides,
+    },
+  } as any;
+}
+
+test('system power manager uses v1 gpioset arguments on libgpiod v1 (#354)', async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const runner: PowerCommandRunner = async (file, args) => {
+    calls.push({ file, args });
+    return { stdout: args[0] === '--version' ? 'gpioset (libgpiod) v1.6.3\n' : '', stderr: '' };
+  };
+  const executor = new SystemPowerManagerExecutor(runner);
+  await executor.execute(gpioAction(), 1);
+
+  assert.deepEqual(calls, [
+    { file: 'gpioset', args: ['--version'] },
+    { file: 'gpioset', args: ['/dev/gpiochip0', '62=1'] },
+  ]);
+});
+
+test('system power manager uses v2 gpioset arguments on libgpiod v2 (#354)', async () => {
+  // Trixie ships libgpiod v2: the chip must be passed via -c, and -t0 makes gpioset set the
+  // value and exit instead of holding the line forever.
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const runner: PowerCommandRunner = async (file, args) => {
+    calls.push({ file, args });
+    return { stdout: args[0] === '--version' ? 'gpioset (libgpiod) v2.2.1\n' : '', stderr: '' };
+  };
+  const executor = new SystemPowerManagerExecutor(runner);
+  await executor.execute(gpioAction({ pin: 21, activeHigh: false }), 1);
+
+  assert.deepEqual(calls, [
+    { file: 'gpioset', args: ['--version'] },
+    { file: 'gpioset', args: ['-t', '0', '-c', '/dev/gpiochip0', '21=0'] },
+  ]);
+});
+
+test('system power manager probes the gpioset version once per binary (#354)', async () => {
+  let versionProbes = 0;
+  const runner: PowerCommandRunner = async (_file, args) => {
+    if (args[0] === '--version') {
+      versionProbes += 1;
+      return { stdout: 'gpioset (libgpiod) v2.2.1\n', stderr: '' };
+    }
+    return { stdout: '', stderr: '' };
+  };
+  const executor = new SystemPowerManagerExecutor(runner);
+  await executor.execute(gpioAction(), 1);
+  await executor.execute(gpioAction(), 0);
+
+  assert.equal(versionProbes, 1);
+});
+
+test('system power manager falls back to v1 gpioset arguments when the probe fails (#354)', async () => {
+  const calls: Array<string[]> = [];
+  const runner: PowerCommandRunner = async (_file, args) => {
+    calls.push(args);
+    if (args[0] === '--version') {
+      throw new Error('spawn gpioset ENOENT');
+    }
+    return { stdout: '', stderr: '' };
+  };
+  const executor = new SystemPowerManagerExecutor(runner);
+  await executor.execute(gpioAction(), 1);
+  // A failed probe is not cached, so the next write probes again.
+  await executor.execute(gpioAction(), 0);
+
+  assert.deepEqual(calls, [
+    ['--version'],
+    ['/dev/gpiochip0', '62=1'],
+    ['--version'],
+    ['/dev/gpiochip0', '62=0'],
+  ]);
+});
+
 test('system power manager retries crelay on transient HID errors (#293)', async () => {
   let attempts = 0;
   const runner: PowerCommandRunner = async (_file, _args) => {

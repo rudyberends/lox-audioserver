@@ -323,6 +323,11 @@ export class SystemPowerManagerExecutor implements PowerManagerExecutor {
   // per-zone and shared-group managers, so this chain serializes access across both of them.
   private readonly deviceChains = new Map<string, Promise<void>>();
 
+  // libgpiod v2 changed the gpioset CLI incompatibly: the chip moved from a positional
+  // argument into `-c`, and the tool holds the requested line until it is killed instead of
+  // exiting (#354). The major version decides the argument shape, probed once per binary.
+  private readonly gpiosetMajorVersions = new Map<string, Promise<number>>();
+
   // Injectable command runner (defaults to execFile); overridable so the crelay retry path
   // can be unit-tested without spawning a real subprocess.
   constructor(private readonly runCommand: PowerCommandRunner = (file, args) => execFileAsync(file, args)) {}
@@ -354,7 +359,35 @@ export class SystemPowerManagerExecutor implements PowerManagerExecutor {
   private async writeGpio(config: NormalizedGpioConfig, signal: PowerSignal): Promise<void> {
     const value = resolvePhysicalValue(signal, config.activeHigh);
     const chipRef = config.chip.includes('/') ? config.chip : `/dev/${config.chip}`;
-    await this.runCommand(config.gpiosetPath, [chipRef, `${config.pin}=${value}`]);
+    const assignment = `${config.pin}=${value}`;
+    const major = await this.gpiosetMajorVersion(config.gpiosetPath);
+    // v2 needs `-t0`: a lone zero toggle period makes it set the value and exit, matching
+    // v1's default mode. Without it gpioset keeps holding the line and the process (and the
+    // next request for the same pin, which would see EBUSY) never completes.
+    const args = major >= 2 ? ['-t', '0', '-c', chipRef, assignment] : [chipRef, assignment];
+    await this.runCommand(config.gpiosetPath, args);
+  }
+
+  private gpiosetMajorVersion(gpiosetPath: string): Promise<number> {
+    const cached = this.gpiosetMajorVersions.get(gpiosetPath);
+    if (cached) {
+      return cached;
+    }
+    // Both v1 and v2 print "gpioset (libgpiod) vX.Y.Z" for --version.
+    const probe = this.runCommand(gpiosetPath, ['--version']).then(
+      (result) => {
+        const match = /\(libgpiod\)\s+v?(\d+)\./.exec(commandOutput(result));
+        return match ? Number(match[1]) : 1;
+      },
+      () => {
+        // Probe failed (binary missing/broken): fall back to v1 arguments so the actual set
+        // surfaces the real error, and drop the cache entry so a fixed binary is re-probed.
+        this.gpiosetMajorVersions.delete(gpiosetPath);
+        return 1;
+      },
+    );
+    this.gpiosetMajorVersions.set(gpiosetPath, probe);
+    return probe;
   }
 
   private async callUrl(config: NormalizedUrlConfig, signal: PowerSignal): Promise<void> {
@@ -408,6 +441,16 @@ export class SystemPowerManagerExecutor implements PowerManagerExecutor {
       }
     }
   }
+}
+
+function commandOutput(result: unknown): string {
+  if (typeof result === 'string') {
+    return result;
+  }
+  if (result && typeof result === 'object' && 'stdout' in result) {
+    return String((result as { stdout?: unknown }).stdout ?? '');
+  }
+  return '';
 }
 
 function deviceKey(action: NormalizedPowerAction): string {
