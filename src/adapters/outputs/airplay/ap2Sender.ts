@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import {
   AirPlayConnection,
+  NtpTimingResponder,
   PtpEngine,
   RealtimeSender,
   createIdentity,
@@ -150,6 +151,8 @@ export class Ap2Sender implements AirplaySender {
   private sourcePaused = false;
   /** Wall-clock instant the first sample must be audible, for a synced group. */
   private groupStartUnixMs: number | null = null;
+  private ntpResponder: NtpTimingResponder | null = null;
+  private timing: 'ptp' | 'ntp' = 'ptp';
   private silenceLogged = false;
 
   constructor(
@@ -329,6 +332,9 @@ export class Ap2Sender implements AirplaySender {
       sharedPtp.release(this.config.host);
       this.ptp = null;
     }
+    this.ntpResponder?.stop();
+    this.ntpResponder = null;
+    this.timing = 'ptp';
     this.log.info('AirPlay 2 sender stopped', this.context);
   }
 
@@ -351,7 +357,37 @@ export class Ap2Sender implements AirplaySender {
         onEvent: (event) => this.handleSessionEvent(event),
       });
       this.connection = connection;
-      await connection.setupSession(this.config.name ?? 'sonn');
+      let session = await connection.setupSession(this.config.name ?? 'sonn');
+
+      // A receiver can advertise SupportsPTP, accept the PTP SETUP with a 200,
+      // and then never probe our clock — after which it renders silence while
+      // everything here looks healthy (measured on a BeoLab 50). It gives
+      // itself away by answering with a timing port of its own, so take it at
+      // its word rather than its advertisement and redo the session on the NTP
+      // lane. Apple receivers never do this, and must not: NTP timing is what
+      // makes THEM silent.
+      if (session.wantsNtpTiming) {
+        this.log.info('receiver asked for NTP timing; re-running the session on that lane', {
+          ...this.context,
+          host: this.config.host,
+        });
+        connection.close();
+        this.ntpResponder = new NtpTimingResponder();
+        const timingPort = await this.ntpResponder.start();
+        const ntpConnection = await AirPlayConnection.open({
+          host: this.config.host,
+          ...(this.config.port !== undefined ? { port: this.config.port } : {}),
+          ...(this.config.password !== undefined ? { password: this.config.password } : {}),
+          identity: identity.bytes,
+          onEvent: (event) => this.handleSessionEvent(event),
+        });
+        this.connection = ntpConnection;
+        session = await ntpConnection.setupSession(this.config.name ?? 'sonn', {
+          timing: 'ntp',
+          timingPort,
+        });
+        this.timing = 'ntp';
+      }
 
       const sockets = await RealtimeSender.bindSockets();
       const stream = await setupRealtimeStream(connection.rtsp, connection.sessionUrl, {
@@ -369,6 +405,7 @@ export class Ap2Sender implements AirplaySender {
           controlPort: stream.controlPort,
           audioKey: connection.hap.sharedSecret,
           ptp: this.ptp,
+          timing: this.timing,
           leadMs: LEAD_MS,
           onLog: (message) => this.log.debug('rtp', { ...this.context, message }),
         },
@@ -380,6 +417,7 @@ export class Ap2Sender implements AirplaySender {
       this.log.info('AirPlay 2 sender started', {
         ...this.context,
         host: this.config.host,
+        timing: this.timing,
         leadMs: LEAD_MS,
       });
       return true;
@@ -393,6 +431,8 @@ export class Ap2Sender implements AirplaySender {
       this.connection = null;
       sharedPtp.release(this.config.host);
       this.ptp = null;
+      this.ntpResponder?.stop();
+      this.ntpResponder = null;
       return false;
     }
   }
