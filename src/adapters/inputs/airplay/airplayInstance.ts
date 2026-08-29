@@ -4,6 +4,7 @@ import type { PlaybackMetadata, PlaybackSource, CoverArtPayload } from '@/applic
 import type { PlayerRegistryPort } from '@/ports/PlayerRegistryPort';
 import os from 'node:os';
 import http from 'node:http';
+import { createHash } from 'node:crypto';
 import { PassThrough } from 'stream';
 import * as libraop from '@sonn-audio/node-libraop';
 import { startReceiver, stopReceiver } from '@sonn-audio/node-libraop';
@@ -825,17 +826,16 @@ function detectMimeType(buffer: Buffer): string {
   return 'image/jpeg';
 }
 
-function deriveHardwareAddress(sourceMac: string, zoneId: number): string {
-  const fallback = '504f94ff0000';
-  const cleaned = (sourceMac || fallback).replace(/[^a-fA-F0-9]/g, '').toLowerCase();
-  const normalized = (cleaned.length >= 12 ? cleaned.slice(-12) : (cleaned + fallback).slice(0, 12));
-  const bytes: number[] = [];
-  for (let i = 0; i < 6; i++) {
-    const slice = normalized.slice(i * 2, i * 2 + 2);
-    const value = Number.parseInt(slice, 16);
-    bytes.push(Number.isFinite(value) ? value : 0);
-  }
-  bytes[5] = ((bytes[5] ?? 0) + (zoneId & 0xff)) & 0xff;
+export function deriveHardwareAddress(sourceMac: string, zoneId: number): string {
+  // sourceMac is the serial of whichever Loxone device carries the zone's outputs:
+  // zones on one extension share it, and sibling devices differ only in the last
+  // bytes, so no arithmetic on it yields a unique RAOP identifier (#356). Hash
+  // serial+zone instead, and mark the address locally administered so it can never
+  // collide with a real device's MAC.
+  const serial = (sourceMac || '').replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+  const digest = createHash('sha256').update(`airplay:${serial}:${zoneId}`).digest();
+  const bytes = Array.from(digest.subarray(0, 6));
+  bytes[0] = ((bytes[0] ?? 0) | 0x02) & 0xfe; // unicast, locally administered
   return bytes.map((byte) => byte.toString(16).padStart(2, '0')).join(':');
 }
 

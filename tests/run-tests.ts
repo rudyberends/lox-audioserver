@@ -57,6 +57,7 @@ import './outputFactory.streamFormat.test';
 import './airplayPcmStream.test';
 import './airplayVolumeAssert.test';
 import './airplayStreamSession.test';
+import './airplayHardwareAddress.test';
 import './audioStreamHandlerIcy.test';
 import './queueAuthority.test';
 import './queueMutations.test';
