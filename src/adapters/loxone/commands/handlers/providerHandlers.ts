@@ -170,9 +170,13 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
       void contentManager.rescanLibrary();
       return buildEmptyResponse(command);
     },
+    // The app reads the state off a field: `0 !== data[0].scanning`. A bare number
+    // makes that read `undefined`, so the library counts as permanently re-indexing —
+    // and a re-indexing library browser throws away every content chunk it is handed,
+    // leaving the list at whatever arrived in the first moments (#347).
     audioCfgScanStatus: (command: string) => {
       const status = contentManager.getScanStatus();
-      return buildResponse(command, 'scanstatus', [status]);
+      return buildResponse(command, 'scanstatus', [{ scanning: status }]);
     },
     audioCfgStorageList: async (command: string) => {
       const storages = await contentManager.listStorages();
