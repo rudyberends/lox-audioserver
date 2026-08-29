@@ -10,6 +10,9 @@ import Bonjour from 'bonjour-service';
 import { AirPlayReceiver, sendRemoteCommand, type ReceiverEvent } from '@sonn-audio/node-airplay';
 import { loadAppleRsa } from './appleRsa';
 
+/** How long a sender may go quiet before we call it a pause. */
+const AUDIO_IDLE_PAUSE_MS = 1500;
+
 export interface AirplayInstanceController {
   startPlayback(
     zoneId: number,
@@ -60,6 +63,7 @@ export class AirplayInstance {
   private pcmBackpressured = false;
   private pcmBytesIn = 0;
   private pcmStatsTimer: NodeJS.Timeout | null = null;
+  private idleTimer: NodeJS.Timeout | null = null;
   private pcmBytesTotal = 0;
   private lastTimingPushMs = 0;
 
@@ -247,7 +251,14 @@ export class AirplayInstance {
   }
 
   private handleRaopEvent(event: ReceiverEvent): void {
-    this.log.debug('airplay raop event', { zoneId: this.zoneId, type: event.type });
+    // Everything except the audio itself: a line per packet is ~86 a second,
+    // and the log buffer rebuilds its whole 500 KB on every append, which
+    // stalls the event loop for seconds at a time and turns into audible
+    // stutter. The chunk line at spam level and the once-a-second input state
+    // cover the audio path.
+    if (event.type !== 'pcm') {
+      this.log.debug('airplay raop event', { zoneId: this.zoneId, type: event.type });
+    }
     switch (event.type) {
       case 'stream':
         // The PCM arrives as events on this path, so there is no stream to go
@@ -266,7 +277,13 @@ export class AirplayInstance {
         this.handlePlaybackPause();
         break;
       case 'flush':
-        this.handlePlaybackPause();
+        // A RAOP FLUSH means "drop what you have buffered, a new position is
+        // coming" -- not "pause". Every sender issues one right after RECORD,
+        // and treating that as a transport pause lands it in the middle of the
+        // output negotiating its stream, which leaves the zone paused for good.
+        // A real pause shows up as the audio simply stopping; the idle watchdog
+        // below is what notices that.
+        this.log.debug('airplay flush', { zoneId: this.zoneId });
         break;
       case 'stop':
         this.handlePlaybackStop();
@@ -561,6 +578,7 @@ export class AirplayInstance {
       this.pcmStatsTimer.unref?.();
     }
     this.pcmBytesIn += payload.length;
+    this.noteAudioActivity();
     if (!this.pcmLogged) {
       this.pcmLogged = true;
       this.log.info('airplay pcm stream started', {
@@ -800,6 +818,25 @@ export class AirplayInstance {
     }
   }
 
+  /**
+   * A sender does not announce a pause: it just stops sending audio (and its
+   * RTSP session stays open, so nothing else tells us either). Treat a gap as
+   * the pause it is, and let the next packet resume.
+   */
+  private noteAudioActivity(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+    }
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (this.isPlaying) {
+        this.log.debug('airplay audio went quiet; pausing', { zoneId: this.zoneId });
+        this.handlePlaybackPause();
+      }
+    }, AUDIO_IDLE_PAUSE_MS);
+    this.idleTimer.unref?.();
+  }
+
   private handlePlaybackPause(): void {
     if (!this.sessionActive || !this.isPlaying) {
       return;
@@ -894,6 +931,10 @@ export class AirplayInstance {
     if (this.pcmStatsTimer) {
       clearInterval(this.pcmStatsTimer);
       this.pcmStatsTimer = null;
+    }
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
     }
     if (!this.pcmStream) {
       return;
