@@ -51,6 +51,12 @@ export interface ActiveAlertState {
   reportedDurationSec?: number;
   durationMs?: number;
   stopTimer?: NodeJS.Timeout;
+  /**
+   * Pending announcement-volume change, waiting for the alert's first audible
+   * sample. The room only reaches the alert level once the output has played
+   * out what it still had buffered, and that buffer holds the previous source.
+   */
+  volumeTimer?: NodeJS.Timeout;
   snapshot: AlertSnapshot;
 }
 

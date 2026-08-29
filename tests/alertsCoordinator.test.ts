@@ -346,3 +346,215 @@ test('alert restore settles to stop when playback cannot resume (releases power-
   assert.equal(ctx.state.mode, 'stop');
   assert.equal(patches[patches.length - 1]?.mode, 'stop');
 });
+
+test('the announcement volume waits for the alert to be audible (#359)', async () => {
+  // Zone plays music through an output holding a 600 ms buffer, and the engine leads
+  // the alert with 400 ms of amp wake-up silence. Raising the room on the spot would
+  // blast the second of music the output has yet to play at bell volume.
+  const zone: ZoneConfig = {
+    id: 1,
+    name: 'Living',
+    sourceMac: '00:00:00:00:00:01',
+    volumes: {
+      default: 20,
+      alarm: 20,
+      fire: 20,
+      bell: 55,
+      buzzer: 20,
+      tts: 20,
+      volstep: 1,
+      fading: 0,
+      maxVolume: 100,
+    },
+  };
+
+  const zoneRepo = new ZoneRepository();
+  const playerVolumes: number[] = [];
+  const ctx = {
+    id: zone.id,
+    name: zone.name,
+    sourceMac: zone.sourceMac,
+    config: zone,
+    state: { ...buildInitialState(zone), mode: 'play', volume: 20 },
+    queue: { items: [], shuffle: false, repeat: 0, currentIndex: 0, authority: 'local' },
+    queueController: { setItems: () => {}, currentIndex: () => 0, current: () => null },
+    inputAdapter: {},
+    spotifyAdapter: {},
+    metadata: {},
+    outputs: [],
+    player: {
+      setVolume: (level: number) => playerVolumes.push(level),
+      playUri: () =>
+        ({ playbackSource: { kind: 'file', path: '/tmp/bell.mp3', preDelayMs: 400 } }) as any,
+      stop: () => {},
+    },
+    outputTimingActive: false,
+    lastOutputTimingAt: 0,
+    lastZoneBroadcastAt: 0,
+    lastPositionUpdateAt: 0,
+    lastPositionValue: 0,
+    lastPlaybackErrorAt: 0,
+    activeOutputTypes: new Set<string>(),
+    activeOutput: 'sendspin-cast',
+    activeInput: null,
+    lastMetadataDispatchAt: 0,
+    inputMode: 'queue',
+  } as unknown as ZoneContext;
+  zoneRepo.set(zone.id, ctx);
+
+  const coordinator = new AlertsCoordinator({
+    zones: zoneRepo,
+    configPort: alertConfigPort,
+    playbackCoordinator: {
+      setInputMode: (_ctx: ZoneContext, mode: ZoneContext['inputMode']) => {
+        _ctx.inputMode = mode;
+      },
+      alignOutputFormat: () => {},
+      applyOutputEndGuard: () => {},
+      getOutputLatencyMs: () => 600,
+    } as any,
+    applyPatch: (_zoneId, patch) => {
+      ctx.state = { ...ctx.state, ...(patch as Record<string, unknown>) };
+    },
+    log: { warn: () => {}, debug: () => {} } as any,
+    audioHelpers: { resolveAlertEventType: () => 0 } as any,
+    zoneAudioPrefs: {
+      setTransientGainDb: () => {},
+      setAlertPreDelayFloorMs: () => {},
+    } as any,
+  });
+
+  // Capture the scheduled timers instead of waiting them out.
+  const scheduled: Array<{ ms: number; fire: () => void }> = [];
+  const realSetTimeout = global.setTimeout;
+  (global as any).setTimeout = (fn: (...a: unknown[]) => void, ms?: number) => {
+    scheduled.push({ ms: ms ?? 0, fire: () => fn() });
+    const handle = realSetTimeout(() => {}, 1_000_000);
+    handle.unref?.();
+    return handle;
+  };
+  try {
+    await coordinator.startAlert(
+      zone.id,
+      'bell',
+      { title: 'bell', url: 'alerts://bell.mp3', relativePath: 'bell.mp3', duration: 4 },
+      55,
+    );
+  } finally {
+    (global as any).setTimeout = realSetTimeout;
+  }
+
+  // Nothing was sent to the outputs yet: the room is still hearing the outgoing track.
+  assert.deepEqual(playerVolumes, []);
+  assert.equal(ctx.state.volume, 20);
+
+  // The volume is scheduled for the wake-up silence plus the output's buffer, a
+  // quarter second early so the level is at the device before the bell reaches it.
+  const volumeTimer = scheduled.find((entry) => entry.ms === 400 + 600 - 250);
+  assert.ok(volumeTimer, `expected a 750 ms volume timer, got ${scheduled.map((e) => e.ms).join()}`);
+  volumeTimer.fire();
+  assert.deepEqual(playerVolumes, [55]);
+  assert.equal(ctx.state.volume, 55);
+});
+
+test('a stopped alert does not get its volume applied afterwards (#359)', async () => {
+  const zone: ZoneConfig = {
+    id: 1,
+    name: 'Living',
+    sourceMac: '00:00:00:00:00:01',
+    volumes: {
+      default: 20,
+      alarm: 20,
+      fire: 20,
+      bell: 55,
+      buzzer: 20,
+      tts: 20,
+      volstep: 1,
+      fading: 0,
+      maxVolume: 100,
+    },
+  };
+
+  const zoneRepo = new ZoneRepository();
+  const playerVolumes: number[] = [];
+  const ctx = {
+    id: zone.id,
+    name: zone.name,
+    sourceMac: zone.sourceMac,
+    config: zone,
+    state: { ...buildInitialState(zone), mode: 'stop', volume: 20 },
+    queue: { items: [], shuffle: false, repeat: 0, currentIndex: 0, authority: 'local' },
+    queueController: { setItems: () => {}, currentIndex: () => 0, current: () => null },
+    inputAdapter: {},
+    spotifyAdapter: {},
+    metadata: {},
+    outputs: [],
+    player: {
+      setVolume: (level: number) => playerVolumes.push(level),
+      playUri: () => ({ playbackSource: { kind: 'file', path: '/tmp/bell.mp3' } }) as any,
+      stop: () => {},
+    },
+    outputTimingActive: false,
+    lastOutputTimingAt: 0,
+    lastZoneBroadcastAt: 0,
+    lastPositionUpdateAt: 0,
+    lastPositionValue: 0,
+    lastPlaybackErrorAt: 0,
+    activeOutputTypes: new Set<string>(),
+    activeOutput: 'sendspin-cast',
+    activeInput: null,
+    lastMetadataDispatchAt: 0,
+    inputMode: 'queue',
+  } as unknown as ZoneContext;
+  zoneRepo.set(zone.id, ctx);
+
+  const coordinator = new AlertsCoordinator({
+    zones: zoneRepo,
+    configPort: alertConfigPort,
+    playbackCoordinator: {
+      setInputMode: (_ctx: ZoneContext, mode: ZoneContext['inputMode']) => {
+        _ctx.inputMode = mode;
+      },
+      alignOutputFormat: () => {},
+      applyOutputEndGuard: () => {},
+      getOutputLatencyMs: () => 800,
+    } as any,
+    applyPatch: (_zoneId, patch) => {
+      ctx.state = { ...ctx.state, ...(patch as Record<string, unknown>) };
+    },
+    log: { warn: () => {}, debug: () => {} } as any,
+    audioHelpers: { resolveAlertEventType: () => 0 } as any,
+    zoneAudioPrefs: {
+      setTransientGainDb: () => {},
+      setAlertPreDelayFloorMs: () => {},
+    } as any,
+  });
+
+  const scheduled: Array<{ ms: number; fire: () => void }> = [];
+  const realSetTimeout = global.setTimeout;
+  (global as any).setTimeout = (fn: (...a: unknown[]) => void, ms?: number) => {
+    scheduled.push({ ms: ms ?? 0, fire: () => fn() });
+    const handle = realSetTimeout(() => {}, 1_000_000);
+    handle.unref?.();
+    return handle;
+  };
+  try {
+    await coordinator.startAlert(
+      zone.id,
+      'bell',
+      { title: 'bell', url: 'alerts://bell.mp3', relativePath: 'bell.mp3', duration: 4 },
+      55,
+    );
+    await coordinator.stopAlert(zone.id);
+  } finally {
+    (global as any).setTimeout = realSetTimeout;
+  }
+
+  // The alert ended before its level was due; firing the stale timer now would
+  // leave the room parked at bell volume with the music back on.
+  const volumeTimer = scheduled.find((entry) => entry.ms === 800 - 250);
+  assert.ok(volumeTimer);
+  volumeTimer.fire();
+  assert.deepEqual(playerVolumes, [20]);
+  assert.equal(ctx.state.volume, 20);
+});

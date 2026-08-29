@@ -5,6 +5,7 @@ import type { AlertMediaResource } from '@/application/alerts/types';
 import type { ZoneState } from '@/domain/zones/zoneState';
 import type { AlertSnapshot, ZoneContext } from '@/application/zones/internal/zoneTypes';
 import type { ConfigPort } from '@/ports/ConfigPort';
+import type { PlaybackSession } from '@/ports/types/playback';
 import type { NativeAlertRequest, ZoneOutput } from '@/ports/OutputsTypes';
 import { AudioType } from '@/domain/zones/enums';
 import { cloneQueueState, clampVolumeForZone } from '@/application/zones/helpers/stateHelpers';
@@ -20,6 +21,15 @@ const TTS_FIXED_GAIN_DB = 6;
 // This is a safety net; we also try to reduce output buffering for alerts where possible.
 const MIN_ALERT_AUDIBLE_MS = 2500;
 const ALERT_STOP_MARGIN_MS = 750;
+/**
+ * How far ahead of the alert's first audible sample the announcement volume is set.
+ *
+ * The level has to travel to the device, so aiming exactly at the sample risks the
+ * first moment of the bell coming out at the music level. Early by this much is the
+ * safe side of that: it costs a fraction of a second of outgoing music at alert
+ * volume instead of the whole output buffer's worth (#359).
+ */
+const ALERT_VOLUME_LEAD_MARGIN_MS = 250;
 
 type AlertsCoordinatorDeps = {
   zones: ZoneRepository;
@@ -70,10 +80,10 @@ export class AlertsCoordinator {
     type: string,
     media: AlertMediaResource,
     volume: number,
-    preDelayFloorMs = 0,
+    startDelayMs = 0,
   ): Promise<void> {
     return this.runSerialized(zoneId, () =>
-      this.startAlertLocked(zoneId, type, media, volume, preDelayFloorMs),
+      this.startAlertLocked(zoneId, type, media, volume, startDelayMs),
     );
   }
 
@@ -101,7 +111,7 @@ export class AlertsCoordinator {
     type: string,
     media: AlertMediaResource,
     volume: number,
-    preDelayFloorMs = 0,
+    startDelayMs = 0,
   ): Promise<void> {
     const ctx = this.zoneRepo.get(zoneId);
     if (!ctx) {
@@ -139,7 +149,7 @@ export class AlertsCoordinator {
 	    const playUrl = media.url;
 	    const title = media.title ?? type;
 
-	    ctx.alert = {
+	    const alertRecord: NonNullable<ZoneContext['alert']> = {
 	      type,
 	      title,
 	      url: playUrl,
@@ -147,6 +157,7 @@ export class AlertsCoordinator {
 	      durationMs,
 	      snapshot,
 	    };
+	    ctx.alert = alertRecord;
 
     this.playbackCoordinator.setInputMode(ctx, 'alert');
 
@@ -169,9 +180,10 @@ export class AlertsCoordinator {
       this.zoneAudioPrefs.setTransientGainDb(zoneId, TTS_FIXED_GAIN_DB);
     }
 
-    // Keep multi-zone alerts in sync: when a sibling zone is cold its wake-up
-    // delay is forced on this zone too, so warm and cold zones start together.
-    this.zoneAudioPrefs.setAlertPreDelayFloorMs(zoneId, preDelayFloorMs > 0 ? preDelayFloorMs : null);
+    // Keep multi-zone alerts in sync: the caller works out how much silence this
+    // zone has to lead with so its first audible sample lands with every sibling's
+    // — a cold zone's amp wake-up and a slow output's buffer both count (#359).
+    this.zoneAudioPrefs.setAlertPreDelayFloorMs(zoneId, startDelayMs > 0 ? startDelayMs : null);
 
     // Align the engine to the sink's preferred format (e.g. a 48 kHz/24-bit sendspin
     // client) BEFORE playing the alert. The bell/TTS file is 44.1 kHz; without this the
@@ -194,8 +206,17 @@ export class AlertsCoordinator {
     // alert source. Setting it earlier dispatched SetVolume to the *previous* stream's transport,
     // so the still-playing radio briefly blasted at the alert volume before the source swapped
     // (issue #279). The Sonos output stashes this as pendingVolume and applies it after its Play.
-    ctx.player.setVolume(clampedVolume);
-    this.applyPatch(zoneId, { volume: clampedVolume });
+    //
+    // Switching the source is not the same as being heard, though: the alert leads with the
+    // engine's wake-up silence, and the output still has to play out what it had buffered —
+    // which is the outgoing music. Raising the room the instant playUri returned made that
+    // music blast at announcement level before the bell arrived (#359), so the level waits
+    // out the lead and lands with the alert's first audible sample.
+    const volumeDelayMs = Math.max(
+      this.resolveAudibleLeadMs(ctx, session) - ALERT_VOLUME_LEAD_MARGIN_MS,
+      0,
+    );
+    this.scheduleAlertVolume(ctx, alertRecord, clampedVolume, volumeDelayMs);
 
     if (durationMs && durationMs > 0) {
       // The auto-stop timer runs on wall clock from here, but audible content does not
@@ -228,6 +249,55 @@ export class AlertsCoordinator {
       sourceName: ctx.name,
     });
 	  }
+
+  /**
+   * How long after `playUri` the alert's first sample actually reaches the room:
+   * the silence the engine prepended to this very stream, plus the buffer the
+   * output is holding. Read off the running session rather than re-derived, so it
+   * can never disagree with what is playing.
+   */
+  private resolveAudibleLeadMs(ctx: ZoneContext, session: PlaybackSession | null): number {
+    const preDelayMs = resolveSessionPreDelayMs(session);
+    let outputLatencyMs = 0;
+    try {
+      outputLatencyMs = this.playbackCoordinator.getOutputLatencyMs(ctx);
+    } catch {
+      // Latency is an optimisation; a failure here must not cost the alert its volume.
+    }
+    const total = preDelayMs + (Number.isFinite(outputLatencyMs) ? outputLatencyMs : 0);
+    return total > 0 ? Math.round(total) : 0;
+  }
+
+  /** Put the room at the announcement level, waiting `delayMs` for the alert to be audible. */
+  private scheduleAlertVolume(
+    ctx: ZoneContext,
+    alert: NonNullable<ZoneContext['alert']>,
+    volume: number,
+    delayMs: number,
+  ): void {
+    const apply = (): void => {
+      ctx.player.setVolume(volume);
+      this.applyPatch(ctx.id, { volume });
+    };
+
+    if (delayMs <= 0) {
+      apply();
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      // The alert can end while we wait — a short clip, or a stop from the
+      // Miniserver. Its restore has put the room back by then, and the level it
+      // restored must not be overwritten with the announcement's.
+      if (this.zoneRepo.get(ctx.id) !== ctx || ctx.alert !== alert) {
+        return;
+      }
+      alert.volumeTimer = undefined;
+      apply();
+    }, Math.min(delayMs, 2147483647));
+    timer.unref?.();
+    alert.volumeTimer = timer;
+  }
 
   /**
    * Try to play the alert as a native overlay on the zone's output(s). Mirrors MA's
@@ -330,6 +400,10 @@ export class AlertsCoordinator {
     }
     if (activeAlert.stopTimer) {
       clearTimeout(activeAlert.stopTimer);
+    }
+    if (activeAlert.volumeTimer) {
+      clearTimeout(activeAlert.volumeTimer);
+      activeAlert.volumeTimer = undefined;
     }
     this.zoneAudioPrefs.setTransientGainDb(zoneId, null);
     this.zoneAudioPrefs.setAlertPreDelayFloorMs(zoneId, null);

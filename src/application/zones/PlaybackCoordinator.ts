@@ -564,6 +564,18 @@ export class PlaybackCoordinator {
     return ctx.outputs.length > 0;
   }
 
+  /**
+   * How far this zone's playback outputs lag behind the server, in ms.
+   *
+   * The largest buffer among them, because that is the one the room waits for;
+   * 0 when no output reports a figure. Used to line up an alert with the moment
+   * it is actually heard — both to align sibling zones and to time the
+   * announcement volume (#359).
+   */
+  public getOutputLatencyMs(ctx: ZoneContext): number {
+    return this.computeOutputLatencyMs(this.resolvePlaybackOutputs(ctx));
+  }
+
   private computeOutputLatencyMs(outputs: ZoneOutput[]): number {
     return outputs
       .map((output) => output.getLatencyMs?.())

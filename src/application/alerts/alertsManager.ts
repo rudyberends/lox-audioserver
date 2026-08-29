@@ -68,11 +68,17 @@ export class AlertsManager {
       this.log.warn('no media resolved for alert', { type: normalizedType });
       return { success: false, type: normalizedType, action, reason: 'media-unavailable' };
     }
-    const preDelayFloorMs = this.zones.getAlertPreDelayFloorMs(zones);
+    const startDelays = this.zones.getAlertStartDelaysMs(zones);
     await Promise.all(
       zones.map(async (zoneId) => {
         const volume = this.resolveAlertVolume(zoneId, normalizedType, volumeOverride);
-        await this.zones.startAlert(zoneId, normalizedType, media, volume, preDelayFloorMs);
+        await this.zones.startAlert(
+          zoneId,
+          normalizedType,
+          media,
+          volume,
+          startDelays.get(zoneId) ?? 0,
+        );
       }),
     );
 
@@ -93,11 +99,11 @@ export class AlertsManager {
     if (!media) {
       return { success: false, type: 'uploaded', action: 'on', reason: 'media-unavailable' };
     }
-    const preDelayFloorMs = this.zones.getAlertPreDelayFloorMs(zones);
+    const startDelays = this.zones.getAlertStartDelaysMs(zones);
     await Promise.all(
       zones.map(async (zoneId) => {
         const volume = this.resolveAlertVolume(zoneId, 'uploaded');
-        await this.zones.startAlert(zoneId, 'uploaded', media, volume, preDelayFloorMs);
+        await this.zones.startAlert(zoneId, 'uploaded', media, volume, startDelays.get(zoneId) ?? 0);
       }),
     );
 
@@ -121,13 +127,19 @@ export class AlertsManager {
     if (!media) {
       return { success: false, type: 'playeventfile', action: 'on', reason: 'media-unavailable' };
     }
-    const preDelayFloorMs = this.zones.getAlertPreDelayFloorMs(
+    const startDelays = this.zones.getAlertStartDelaysMs(
       normalizedTargets.map((entry) => entry.zoneId),
     );
     await Promise.all(
       normalizedTargets.map(async ({ zoneId, volume }) => {
         const resolvedVolume = this.resolveAlertVolume(zoneId, 'playeventfile', volume);
-        await this.zones.startAlert(zoneId, 'playeventfile', media, resolvedVolume, preDelayFloorMs);
+        await this.zones.startAlert(
+          zoneId,
+          'playeventfile',
+          media,
+          resolvedVolume,
+          startDelays.get(zoneId) ?? 0,
+        );
       }),
     );
 

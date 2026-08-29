@@ -124,6 +124,7 @@ import './equalizer.test';
 import './zoneHandlers.serviceplay.test';
 import './alertHandlers.playeventfile.test';
 import './alertHandlers.zoneRoutes.test';
+import './alertStartAlignment.test';
 import './alertsCoordinator.test';
 import './playbackErrorOrigin.test';
 import './alertsManager.volume.test';

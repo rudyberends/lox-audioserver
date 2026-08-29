@@ -57,6 +57,10 @@ import {
   getZoneDefaultVolume,
 } from '@/application/zones/helpers/stateHelpers';
 import {
+  computeAlertStartDelays,
+  type AlertZoneLead,
+} from '@/application/zones/helpers/alertStartAlignment';
+import {
   formatEqualizerSettings,
   normalizeEqualizerBands,
   type EqualizerBands,
@@ -734,29 +738,46 @@ export class ZoneManager {
     type: string,
     media: AlertMediaResource,
     volume: number,
-    preDelayFloorMs = 0,
+    startDelayMs = 0,
   ): Promise<void> {
-    return this.alertsCoordinator.startAlert(zoneId, type, media, volume, preDelayFloorMs);
+    return this.alertsCoordinator.startAlert(zoneId, type, media, volume, startDelayMs);
   }
 
   /**
-   * Wake-up delay (ms) that should be forced on every zone of a multi-zone
-   * alert so they start in sync. It is the largest configured playback
-   * pre-delay among the target zones whose amp is currently cold; returns 0
-   * when every target is already warm (no alignment needed).
+   * Wake-up silence (ms) per zone that makes a multi-zone alert land in every
+   * room at the same moment.
+   *
+   * Two things sit between "the alert started" and "the alert is heard": a cold
+   * amp needs its configured wake-up delay before it passes anything, and the
+   * output itself holds a buffer — a sendspin or Snapcast client plays what it
+   * was handed some hundreds of ms ago. Only the first used to be counted, and
+   * only when a zone was cold: with music already playing everywhere no amp is
+   * cold, every zone got a floor of 0, and each room rang on its own output's
+   * schedule instead of together (#359).
+   *
+   * So every zone is padded up to the slowest one — prepend `slowest lead minus
+   * my own output buffer`, never less than my own amp's wake-up delay. A single
+   * zone, or zones whose outputs report the same buffer, resolve to exactly the
+   * delay they had before.
    */
-  public getAlertPreDelayFloorMs(zoneIds: number[]): number {
-    let floor = 0;
+  public getAlertStartDelaysMs(zoneIds: number[]): Map<number, number> {
+    const leads: AlertZoneLead[] = [];
     for (const zoneId of zoneIds) {
-      if (this.powerManager.isSignalOn(zoneId)) {
+      const ctx = this.zoneRepo.get(zoneId);
+      if (!ctx) {
         continue;
       }
-      const delay = this.zoneAudioPrefs.getPlaybackPreDelayMs(zoneId) ?? 0;
-      if (Number.isFinite(delay) && delay > floor) {
-        floor = Math.max(0, Math.round(delay));
-      }
+      const rawWakeUp = this.powerManager.isSignalOn(zoneId)
+        ? 0
+        : (this.zoneAudioPrefs.getPlaybackPreDelayMs(zoneId) ?? 0);
+      const rawLatency = this.playbackCoordinator.getOutputLatencyMs(ctx);
+      leads.push({
+        zoneId,
+        wakeUpMs: Number.isFinite(rawWakeUp) ? Math.max(0, Math.round(rawWakeUp)) : 0,
+        outputLatencyMs: Number.isFinite(rawLatency) ? Math.max(0, Math.round(rawLatency)) : 0,
+      });
     }
-    return floor;
+    return computeAlertStartDelays(leads);
   }
 
   public async stopAlert(zoneId: number): Promise<void> {
