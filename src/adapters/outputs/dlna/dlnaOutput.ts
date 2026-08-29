@@ -32,6 +32,15 @@ const LOSSLESS_SINK_TYPES = new Set(['audio/flac', 'audio/x-flac']);
  */
 const STREAM_FETCH_GRACE_MS = 5000;
 
+/**
+ * How long a volume we sent stays recognizable as our own GENA echo. Renderers moderate their
+ * LastChange events (the Bose SoundTouch batches them at ~1s) and a SetVolume round trip has been
+ * seen to take ~2s, so an echo can trail its write considerably — and trail *other* writes made
+ * in between. Entries are not consumed on match: one write can surface in several moderated
+ * events, and one coalesced event can answer several writes.
+ */
+const VOLUME_ECHO_WINDOW_MS = 5000;
+
 export interface DlnaOutputConfig {
   host?: string;
   controlUrl?: string;
@@ -138,11 +147,19 @@ export class DlnaOutput implements ZoneOutput {
   // updateMetadata). Newest wins; it is folded into the re-arm when there is one.
   private pendingMetadataSession: PlaybackSession | null = null;
   // Anti-feedback guard for VOLUME: our own SetVolume must not bounce back as a spurious user
-  // change. (Transport-state is not reflected back — see onRemoteTransport.)
-  private lastOutboundVolume?: number;
-  private lastOutboundVolumeAt = 0;
+  // change. Remembering only the last write was not enough (issue #358): with two levels in
+  // flight, each delayed echo compared against the *other* value, passed for a user change, was
+  // re-sent, and produced the next echo — a self-sustaining oscillation. So every level sent
+  // within the window stays suppressible until it ages out.
+  // (Transport-state is not reflected back at all — see onRemoteTransport.)
+  private readonly recentOutboundVolumes: Array<{ volume: number; at: number }> = [];
+  // The renderer's state as we know it: device volume and mute flag from its GENA events combine
+  // into the audible level in onRemoteRendering. lastKnownLevel is that level as of the last event
+  // OR our last write — the write must move the baseline too, or a device asserting its own level
+  // right after a write would look like a repeat of its previous event and be dropped.
   private lastKnownVolume?: number;
   private lastKnownMuted?: boolean;
+  private lastKnownLevel?: number;
   private eventsSubscribed = false;
   private readonly streamFormat: StreamFormatPreference;
   /** Set once this renderer has actually failed on a lossless stream; outranks the preference. */
@@ -391,10 +408,11 @@ export class DlnaOutput implements ZoneOutput {
 
   public async setVolume(level: number): Promise<void> {
     const clamped = Math.max(0, Math.min(100, Math.round(level)));
-    // Record before sending so a GENA volume echo from this same change is suppressed.
-    this.lastOutboundVolume = clamped;
-    this.lastOutboundVolumeAt = Date.now();
+    // Record before sending so the GENA echo of this write is recognized whenever it arrives —
+    // the renderer may report it back well after we have already sent another level.
+    this.recentOutboundVolumes.push({ volume: clamped, at: Date.now() });
     this.lastKnownVolume = clamped;
+    this.lastKnownLevel = clamped;
     if (await this.cp.setVolume(clamped)) {
       this.log.info('DLNA volume set', { zoneId: this.zoneId, volume: clamped });
     }
@@ -598,40 +616,71 @@ export class DlnaOutput implements ZoneOutput {
     });
   }
 
+  /**
+   * One decision per RenderingControl event. Volume and Mute are read as a single report of the
+   * renderer's audible level (`muted ? 0 : volume`) and answered with at most one zone command —
+   * reacting to the two fields separately sent two SetVolumes per event, and on renderers that
+   * flip Mute alongside volume (Bose SoundTouch) it doubled the very echoes that fed the
+   * oscillation of issue #358.
+   *
+   * An event arriving before any level is known (no write yet, nothing evented) only seeds: it
+   * is the GENA initial state dump, not a user change. An unchanged level is a keep-alive/renew
+   * snapshot (issue #314, stiwy18) and stays silent. A level that matches a recent write of ours
+   * is our own echo — recorded, never answered. What remains is a genuine device-side change,
+   * which the zone adopts; its answering dispatch back to us lands in the echo window, so the
+   * exchange converges instead of oscillating.
+   */
   private onRemoteRendering(event: DlnaRenderingEvent): void {
-    if (typeof event.volume === 'number' && Number.isFinite(event.volume)) {
-      const vol = Math.min(100, Math.max(0, Math.round(event.volume)));
-      const now = Date.now();
-      const recentlySent = this.lastOutboundVolumeAt > 0 && now - this.lastOutboundVolumeAt < 1500;
-      const outboundMatches =
-        this.lastOutboundVolume != null && Math.abs(vol - this.lastOutboundVolume) <= 2;
-      const suppressed = recentlySent && outboundMatches;
-      this.log.debug('DLNA remote volume event', {
-        zoneId: this.zoneId,
-        vol,
-        suppressed,
-        unchanged: vol === this.lastKnownVolume,
-      });
-      if (!suppressed && vol !== this.lastKnownVolume) {
-        this.lastKnownVolume = vol;
-        this.ports.zoneManager.handleCommand(this.zoneId, 'volume_set', String(vol));
-      }
+    const reportedVolume =
+      typeof event.volume === 'number' && Number.isFinite(event.volume)
+        ? Math.min(100, Math.max(0, Math.round(event.volume)))
+        : undefined;
+    const volumeChanged = reportedVolume !== undefined && reportedVolume !== this.lastKnownVolume;
+    const muteFlipped =
+      typeof event.muted === 'boolean' &&
+      this.lastKnownMuted !== undefined &&
+      event.muted !== this.lastKnownMuted;
+    if (reportedVolume !== undefined) {
+      this.lastKnownVolume = reportedVolume;
     }
     if (typeof event.muted === 'boolean') {
-      // Only act on an actual mute-state CHANGE. RenderingControl NOTIFYs (including the
-      // periodic keep-alive/renew snapshots) always carry <Mute val="0"/>, so firing on every
-      // event re-sent SetVolume every ~25s on an idle zone (issue #314, stiwy18). First event
-      // just seeds lastKnownMuted without emitting.
-      const first = this.lastKnownMuted === undefined;
-      if (!first && event.muted !== this.lastKnownMuted) {
-        this.ports.zoneManager.handleCommand(
-          this.zoneId,
-          'volume_set',
-          event.muted ? '0' : String(this.lastKnownVolume ?? 0),
-        );
-      }
       this.lastKnownMuted = event.muted;
     }
+    if (this.lastKnownVolume === undefined) {
+      // A mute flag with no level ever seen to attach it to says nothing actionable yet.
+      return;
+    }
+    const level = this.lastKnownMuted === true ? 0 : this.lastKnownVolume;
+    const seed = this.lastKnownLevel === undefined;
+    const unchanged = level === this.lastKnownLevel;
+    const echo = this.isRecentOutboundVolume(level);
+    this.lastKnownLevel = level;
+    const decision = seed ? 'seed' : echo ? 'echo' : unchanged ? 'unchanged' : muteFlipped && !volumeChanged ? 'mute' : 'volume';
+    this.log.debug('DLNA remote volume event', {
+      zoneId: this.zoneId,
+      volume: reportedVolume,
+      muted: event.muted,
+      level,
+      decision,
+    });
+    if (decision === 'mute') {
+      // The renderer's own mute key, volume standing still. Routed as the zone's mute so the
+      // level survives in volumeBeforeMute instead of being clobbered by a bare zero — a bare
+      // zero in zone state is what the next play start would dispatch (issue #358's ignition).
+      this.ports.zoneManager.handleCommand(this.zoneId, 'mute', this.lastKnownMuted ? 'on' : 'off');
+    } else if (decision === 'volume') {
+      this.ports.zoneManager.handleCommand(this.zoneId, 'volume_set', String(level));
+    }
+  }
+
+  /** True when this level matches one we sent recently — the echo of our own write. */
+  private isRecentOutboundVolume(level: number): boolean {
+    const cutoff = Date.now() - VOLUME_ECHO_WINDOW_MS;
+    while (this.recentOutboundVolumes[0] !== undefined && this.recentOutboundVolumes[0].at < cutoff) {
+      this.recentOutboundVolumes.shift();
+    }
+    // ±2 absorbs renderers that quantize to their own volume steps.
+    return this.recentOutboundVolumes.some((entry) => Math.abs(entry.volume - level) <= 2);
   }
 }
 
