@@ -85,6 +85,22 @@ const SPOTIFY_ROOT_FOLDERS: ReadonlyArray<{
   { type: 'podcasts', name: 'Podcasts' },
 ];
 
+/**
+ * Whether librespot may mint the pathfinder tokens.
+ *
+ * Off, because the call does not fail — it kills the process. `getTokens()` on a session whose
+ * login actually works takes the server down from inside the native addon, and a standalone
+ * reproducer gave SIGSEGV, SIGBUS and SIGABRT across three runs of the same call. The account
+ * whose stored credentials have gone stale is refused before it gets that far, which is why one
+ * of two accounts could browse all day and the other took the server with it.
+ *
+ * What that costs is the personalised hub described at getPathfinderSession: both accounts now
+ * browse on the scraped web tokens, which is what the account with stale credentials was already
+ * doing. Set `SONN_LIBRESPOT_PATHFINDER_TOKENS=1` to ask librespot again — the way to check
+ * whether a new build of the addon has fixed it.
+ */
+const LIBRESPOT_PATHFINDER_TOKENS = process.env.SONN_LIBRESPOT_PATHFINDER_TOKENS === '1';
+
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
 const SPOTIFY_HTTP_TIMEOUT_MS = 10_000;
 /** Spotify's stable "Music" browse hub: the source for "Popular Playlists" (the
@@ -1698,7 +1714,9 @@ export class SpotifyAccountProvider implements ContentProvider {
     if (!this.pathfinderSession) {
       this.pathfinderSession = {
         getTokens: async () => {
-          const librespot = await this.getLibrespotSession().catch(() => null);
+          const librespot = LIBRESPOT_PATHFINDER_TOKENS
+            ? await this.getLibrespotSession().catch(() => null)
+            : null;
           if (librespot && supportsPathfinder(librespot)) {
             try {
               return await librespot.getTokens();
