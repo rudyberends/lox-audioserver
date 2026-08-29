@@ -62,7 +62,7 @@
   },
   "dependencies": {
     "@sonn-audio/node-googlecast": "^0.1.2",
-    "@sonn-audio/node-libraop": "^0.3.7",
+    "@sonn-audio/node-libraop": "^0.3.8",
     "@sonn-audio/node-librespot": "^0.5.2",
     "@sonn-audio/node-sendspin": "^0.6.1",
     "@sonn-audio/node-slimproto": "0.1.4",
