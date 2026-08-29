@@ -550,7 +550,10 @@ export class AudioStreamHandler {
     const artist = session.metadata?.artist;
     const text = title && artist ? `${artist} - ${title}` : title || session.source || 'Audio';
     const safe = (text ?? '').replace(/\s+/g, ' ').trim();
-    const payload = `StreamTitle='${safe.replace(/'/g, '')}';`;
+    // Readers end the value at `';`, so an apostrophe inside the title travels fine and
+    // only that exact pair has to go — dropping every quote turned "Don't Go" into
+    // "Dont Go" on the renderer (issue #348).
+    const payload = `StreamTitle='${safe.replace(/';/g, "'")}';`;
     const raw = Buffer.from(payload, 'utf8');
     const maxLen = 255 * 16;
     const trimmed = raw.length > maxLen ? raw.subarray(0, maxLen) : raw;

@@ -179,3 +179,51 @@ test('audio proxy: a host that only serves bounded ranges is still stitched byte
     await upstream.close();
   }
 });
+
+// Issue #348: a value in an icy metadata block ends at `';`, so a title may carry an
+// apostrophe of its own. Capturing up to the first quote handed "Yazoo - Don't Go" to the
+// zone as artist "Yazoo", title "Don" — the split runs after the parse, so only the tail
+// went missing and the truncation looked like a display bug.
+function parseIcy(text: string): { title: string; artist: string } | null {
+  const handler = new AudioProxyHandler({} as any);
+  return (handler as any).parseIcyMetadata(Buffer.from(text, 'utf8'));
+}
+
+test('audio proxy: an apostrophe in the stream title survives the icy parse', () => {
+  assert.deepEqual(parseIcy("StreamTitle='Yazoo - Don't Go';StreamUrl='';"), {
+    artist: 'Yazoo',
+    title: "Don't Go",
+  });
+});
+
+test('audio proxy: icy titles with several apostrophes stay whole', () => {
+  assert.deepEqual(parseIcy("StreamTitle='Guns N' Roses - Sweet Child O' Mine';"), {
+    artist: "Guns N' Roses",
+    title: "Sweet Child O' Mine",
+  });
+});
+
+test('audio proxy: an icy block that omits the trailing semicolon still parses', () => {
+  assert.deepEqual(parseIcy("StreamTitle='Yazoo - Don't Go'"), {
+    artist: 'Yazoo',
+    title: "Don't Go",
+  });
+});
+
+test('audio proxy: a semicolon inside the title is not a terminator', () => {
+  assert.deepEqual(parseIcy("StreamTitle='Sepultura - Dead Embryonic Cells; Live';StreamUrl='';"), {
+    artist: 'Sepultura',
+    title: 'Dead Embryonic Cells; Live',
+  });
+});
+
+test('audio proxy: double-quoted icy titles keep their apostrophes too', () => {
+  assert.deepEqual(parseIcy('StreamTitle="Yazoo - Don\'t Go";'), {
+    artist: 'Yazoo',
+    title: "Don't Go",
+  });
+});
+
+test('audio proxy: an empty icy title is still ignored', () => {
+  assert.equal(parseIcy("StreamTitle='';StreamUrl='';"), null);
+});

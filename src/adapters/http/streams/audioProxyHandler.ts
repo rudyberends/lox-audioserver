@@ -551,9 +551,15 @@ export class AudioProxyHandler {
     if (!text) {
       return null;
     }
+    // ICY packs `key='value';` pairs, and a value is allowed to hold an apostrophe of its
+    // own — the terminator is `';`, not a bare quote. Ending the capture at the first
+    // quote served "Yazoo - Don't Go" as "Yazoo - Don" (issue #348). Stations that leave
+    // the trailing `;` off the last pair fall back to a quote at the end of the block.
     const match =
-      /StreamTitle='([^']*)'/i.exec(text) ??
-      /StreamTitle="([^"]*)"/i.exec(text);
+      /StreamTitle='([\s\S]*?)';/i.exec(text) ??
+      /StreamTitle='([\s\S]*)'\s*$/i.exec(text) ??
+      /StreamTitle="([\s\S]*?)";/i.exec(text) ??
+      /StreamTitle="([\s\S]*)"\s*$/i.exec(text);
     const rawTitle = match?.[1]?.trim() ?? '';
     if (!rawTitle) {
       return null;
