@@ -367,7 +367,7 @@ export class Ap2Sender implements AirplaySender {
     }
 
     try {
-      const connection = await AirPlayConnection.open({
+      let connection = await AirPlayConnection.open({
         host: this.config.host,
         ...(this.config.port !== undefined ? { port: this.config.port } : {}),
         ...(this.config.password !== undefined ? { password: this.config.password } : {}),
@@ -400,6 +400,10 @@ export class Ap2Sender implements AirplaySender {
           onEvent: (event) => this.handleSessionEvent(event),
         });
         this.connection = ntpConnection;
+        // Everything past here talks to the receiver, and the connection it was
+        // reached on just changed. Keeping the old one in hand leaves the rest
+        // of the setup addressing a socket that was closed two lines ago.
+        connection = ntpConnection;
         session = await ntpConnection.setupSession(this.config.name ?? 'sonn', {
           timing: 'ntp',
           timingPort,
@@ -407,14 +411,25 @@ export class Ap2Sender implements AirplaySender {
         this.timing = 'ntp';
       }
 
+      // Bound before the stream is set up, so they have to be released by hand
+      // when anything after this throws: only a sender that got as far as being
+      // constructed will ever close them itself, and a retry loop that leaks two
+      // sockets a go eats the process.
       const sockets = await RealtimeSender.bindSockets();
-      const stream = await setupRealtimeStream(connection.rtsp, connection.sessionUrl, {
-        audioKey: connection.hap.sharedSecret,
-        localDataPort: sockets.dataPort,
-        localControlPort: sockets.controlPort,
-        streamConnectionId: Math.floor(Math.random() * 0x7fff_ffff),
-      });
-      await sendVolume(connection.rtsp, connection.sessionUrl, this.currentVolume);
+      let stream;
+      try {
+        stream = await setupRealtimeStream(connection.rtsp, connection.sessionUrl, {
+          audioKey: connection.hap.sharedSecret,
+          localDataPort: sockets.dataPort,
+          localControlPort: sockets.controlPort,
+          streamConnectionId: Math.floor(Math.random() * 0x7fff_ffff),
+        });
+        await sendVolume(connection.rtsp, connection.sessionUrl, this.currentVolume);
+      } catch (err) {
+        sockets.data.close();
+        sockets.control.close();
+        throw err;
+      }
 
       this.sender = new RealtimeSender(
         {
