@@ -577,6 +577,7 @@ export class AirplayInstance {
           bufferedMs: Math.round((stream.writableLength / (44100 * 4)) * 1000),
           bytesInPerSec: this.pcmBytesIn,
           paused: stream.isPaused(),
+          ...(this.receiver?.stats ?? {}),
         });
         this.pcmBytesIn = 0;
       }, 1000);
