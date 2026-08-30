@@ -147,6 +147,10 @@ export class DlnaOutput implements ZoneOutput {
   // after the initial play) and refresh now-playing without restarting playback.
   private lastPushedUri: string | null = null;
   private lastMetadataSignature: string | null = null;
+  // Whether the item the renderer currently holds is a duration-less live broadcast. A
+  // mid-playback SetAVTransportURI is only worth its risk when that flips to a real track
+  // (see updateMetadata).
+  private lastPushedBroadcast = false;
   // Whether the renderer has actually fetched the stream we pushed for the current track. A DLNA
   // renderer answers Play with a 200 whether or not it ever pulls a byte, so the stream's first
   // HTTP GET is the only proof of playback — it gates both the re-arm in ensureStreamFetched and
@@ -269,6 +273,7 @@ export class DlnaOutput implements ZoneOutput {
     // resolved, so the first DIDL can be a title-less, duration-less audioBroadcast ("live").
     this.lastPushedUri = streamUri;
     this.lastMetadataSignature = this.metadataSignature(session);
+    this.lastPushedBroadcast = this.isBroadcastItem(session);
     const pushedAt = Date.now();
     this.armTransitionGuard();
     await this.cp.setUri(streamUri, didl);
@@ -328,6 +333,7 @@ export class DlnaOutput implements ZoneOutput {
       if (refreshed) {
         retryDidl = this.buildDidlMetadata(uri, refreshed);
         this.lastMetadataSignature = this.metadataSignature(refreshed);
+        this.lastPushedBroadcast = this.isBroadcastItem(refreshed);
         this.pendingMetadataSession = null;
       }
       this.log.warn('DLNA renderer did not fetch the stream; re-arming', {
@@ -374,13 +380,19 @@ export class DlnaOutput implements ZoneOutput {
   }
 
   /**
-   * Refresh the renderer's now-playing when track metadata arrives after the
-   * initial play() — the common case being title/artist/duration resolving a
-   * moment later, which flips the item from a duration-less `audioBroadcast`
-   * ("live") to a `musicTrack` with a progress bar.
+   * Refresh the renderer's now-playing when track metadata arrives after the initial play() —
+   * specifically when a duration resolves and flips the item from a duration-less
+   * `audioBroadcast` ("live") to a `musicTrack` with a progress bar.
    *
-   * Re-sends SetAVTransportURI ONLY (no Stop/Play) so playback isn't interrupted;
-   * deduped on a metadata signature so an unchanged update is a no-op.
+   * That flip is the ONLY change worth a mid-playback push. Re-sending SetAVTransportURI without
+   * a Stop/Play was assumed to leave playback alone; on a Frontier Silicon renderer (HAMA
+   * DIR-3100, issue #343) it tears the transport down instead — measured: the device disconnected
+   * from the stream 60ms after the push and went to STOPPED, with no Play to bring it back. Radio
+   * made that the every-time case, because an ICY title lands a second into every station.
+   *
+   * So a title/artist/album change on its own no longer reaches the transport. It costs a stale
+   * line on the renderer's display and nothing else: a new track pushes a fresh item through
+   * play() anyway, and in-band ICY carries the live title to renderers that ask for it.
    */
   public async updateMetadata(session: PlaybackSession | null): Promise<void> {
     if (!session) {
@@ -402,7 +414,19 @@ export class DlnaOutput implements ZoneOutput {
       this.pendingMetadataSession = session;
       return;
     }
+    // Record the update either way, so the next comparison is against what we last saw rather
+    // than against a signature we already declined to send.
     this.lastMetadataSignature = signature;
+    const isBroadcast = this.isBroadcastItem(session);
+    if (!this.lastPushedBroadcast || isBroadcast) {
+      this.log.debug('DLNA now-playing update not sent to a playing renderer', {
+        zoneId: this.zoneId,
+        title: session.metadata?.title ?? '',
+      });
+      return;
+    }
+    // The renderer is about to hold a track, so nothing arriving after this is worth a push.
+    this.lastPushedBroadcast = false;
     const didl = this.buildDidlMetadata(uri, session);
     await this.cp.updateMetadata(uri, didl);
   }
@@ -560,11 +584,8 @@ export class DlnaOutput implements ZoneOutput {
     const cover = this.resolveCoverArt(session);
     // Radio/alerts are open-ended broadcasts; a track advertises its duration so the renderer
     // can show a progress bar. Alerts must stay duration-less (see Sonos notes) to avoid a clip.
-    const duration =
-      session.metadata?.isRadio || session.metadata?.isAlert
-        ? ''
-        : this.formatDlnaDuration(session.duration);
-    const isStream = !duration;
+    const isStream = this.isBroadcastItem(session);
+    const duration = isStream ? '' : this.formatDlnaDuration(session.duration);
     const mediaClass = isStream
       ? 'object.item.audioItem.audioBroadcast'
       : 'object.item.audioItem.musicTrack';
@@ -596,6 +617,17 @@ export class DlnaOutput implements ZoneOutput {
       return coverSource;
     }
     return resolveAbsoluteUrl(this.buildBaseUrl(), session.stream.coverUrl) ?? coverSource;
+  }
+
+  /**
+   * Whether the renderer is (or would be) holding a duration-less live broadcast rather than a
+   * track with a timeline — the `upnp:class` buildDidlMetadata puts on the item.
+   */
+  private isBroadcastItem(session: PlaybackSession): boolean {
+    if (session.metadata?.isRadio || session.metadata?.isAlert) {
+      return true;
+    }
+    return !this.formatDlnaDuration(session.duration);
   }
 
   private formatDlnaDuration(durationSeconds: number | undefined): string {

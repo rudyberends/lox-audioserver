@@ -97,6 +97,16 @@ const makeSession = (title: string, streamId = 'stream-1'): PlaybackSession =>
     metadata: { title, artist: '', album: '', duration: 0, isRadio: true },
   }) as unknown as PlaybackSession;
 
+/** The same stream once a duration has resolved: a track with a timeline, not a live broadcast. */
+const makeTrackSession = (title: string, duration = 317, streamId = 'stream-1'): PlaybackSession =>
+  ({
+    source: 'tunein:station:abc',
+    playbackSource: 'http://stream.example/antenne.mp3',
+    stream: { id: streamId, url: `http://127.0.0.1:7090/streams/4/${streamId}.mp3` },
+    duration,
+    metadata: { title, artist: '', album: '', duration, isRadio: false },
+  }) as unknown as PlaybackSession;
+
 test('a renderer that never fetches the stream is re-armed, carrying the title it was owed', async () => {
   // The failure this reproduces: SetAVTransportURI is abandoned on its short window, Play lands on
   // a transport that was never armed, and the metadata re-push then arms it with no Play to follow.
@@ -121,7 +131,10 @@ test('a renderer that never fetches the stream is re-armed, carrying the title i
   assert.equal(cp.metadataCalls.length, 0, 'the re-arm replaces the held update, not doubles it');
 });
 
-test('a renderer that fetches the stream is left alone, and gets its title afterwards', async () => {
+test('a station title never reaches the transport of a renderer that is playing', async () => {
+  // Issue #343, second report: the held title was released the instant the DIR-3100 connected,
+  // and that SetAVTransportURI dropped it off the stream 60ms later. A live broadcast's title
+  // buys a display line and is not worth a transport command.
   const fetchArrives = deferred();
   const { output, cp } = makeOutput([fetchArrives]);
 
@@ -133,13 +146,17 @@ test('a renderer that fetches the stream is left alone, and gets its title after
   await flush();
 
   assert.equal(cp.setUriCalls.length, 1, 'a playing renderer is never restarted');
-  assert.equal(cp.metadataCalls.length, 1, 'the held title is released once the fetch lands');
-  assert.match(cp.metadataCalls[0] ?? '', /ANTENNE BAYERN/);
+  assert.equal(cp.metadataCalls.length, 0, 'and a live station title never disturbs it');
+
+  // Every later ICY title is the same decision, not just the one that was held.
+  await output.updateMetadata(makeSession('Mike & The Mechanics - Over my shoulder'));
+  assert.equal(cp.metadataCalls.length, 0);
+  assert.equal(cp.setUriCalls.length, 1);
 });
 
-test('a fetch confirmed before any metadata arrives keeps updates immediate', async () => {
-  // The path a fast renderer takes: proof lands first, so a later title goes straight out as a
-  // metadata-only re-push (no Stop/Play) exactly as before.
+test('a duration resolving mid-track still flips the item to a real track', async () => {
+  // The update the re-push exists for: the item stops being a duration-less audioBroadcast and
+  // becomes a musicTrack with a progress bar. One push, and only one.
   const fetchArrives = deferred();
   const { output, cp } = makeOutput([fetchArrives]);
 
@@ -147,9 +164,30 @@ test('a fetch confirmed before any metadata arrives keeps updates immediate', as
   fetchArrives.settle({ zoneId: 4, streamId: 'stream-1', url: '/streams/4/current.mp3' });
   await flush();
 
-  await output.updateMetadata(makeSession('ANTENNE BAYERN'));
+  await output.updateMetadata(makeTrackSession('Control'));
+  assert.equal(cp.setUriCalls.length, 1, 'a playing renderer is never restarted');
+  assert.equal(cp.metadataCalls.length, 1, 'the broadcast-to-track flip is pushed');
+  assert.match(cp.metadataCalls[0] ?? '', /musicTrack/);
+  assert.match(cp.metadataCalls[0] ?? '', /duration="00:05:17"/);
+
+  // Once it is a track, a later title change is display-only again.
+  await output.updateMetadata(makeTrackSession('Control (remaster)'));
+  assert.equal(cp.metadataCalls.length, 1, 'no second push for a title alone');
+});
+
+test('a track pushed with its duration already known is never re-pushed', async () => {
+  // Radio Paradise: title, artist and duration all resolve before play(), so the item starts as a
+  // musicTrack. Nothing that arrives later may touch the transport.
+  const fetchArrives = deferred();
+  const { output, cp } = makeOutput([fetchArrives]);
+
+  await output.play(makeTrackSession('Control'));
+  fetchArrives.settle({ zoneId: 4, streamId: 'stream-1', url: '/streams/4/current.mp3' });
+  await flush();
+
+  await output.updateMetadata(makeTrackSession('Control', 318));
   assert.equal(cp.setUriCalls.length, 1);
-  assert.equal(cp.metadataCalls.length, 1);
+  assert.equal(cp.metadataCalls.length, 0);
 });
 
 test('a check left behind by the previous track re-arms nothing', async () => {
