@@ -7,6 +7,7 @@ import type {
   RadioStation,
 } from '@/ports/ContentTypes';
 import { TuneInClient } from '@/adapters/content/providers/tunein/tuneinClient';
+import { expandPresetOutlines } from '@/adapters/content/providers/tunein/tuneinPresets';
 import { resizeTuneInCoverUrl, COVER_ART_BROWSE_SIZE } from '@/shared/coverArt';
 
 const DEFAULT_ICON =
@@ -183,25 +184,28 @@ export class TuneInProvider {
 
     const inFlight: Promise<RadioStation[]> = (async () => {
       try {
-        const outlines = await this.api.browsePresets(username);
-        const stations = await this.mapTuneInItems(outlines);
-        const items = stations.length ? stations : DEMO_STATIONS;
+        const { outlines } = await this.api.browsePresets(username);
+        const expanded = await expandPresetOutlines(this.api, outlines, username, (id, message) =>
+          log.debug('tunein preset folder failed', { id, message }),
+        );
+        const items = await this.mapTuneInItems(expanded);
+        // An account with a name TuneIn knows keeps whatever it has, empty included.
+        // Substituting the demo list here is what made a configured-but-unparsed
+        // account indistinguishable from an unconfigured one (issue #362).
         this.localStationsCache = { items, fetchedAt: Date.now() };
         return items;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         log.warn('failed to load TuneIn presets', { message });
-        this.localStationsCache = { items: DEMO_STATIONS, fetchedAt: Date.now() };
-        return DEMO_STATIONS;
-      } finally {
-        // Clear inFlight so subsequent calls can refresh after the TTL.
-        const next = this.localStationsCache;
-        if (next?.inFlight) delete next.inFlight;
+        // Leave the previous entry (or nothing) in place rather than caching the
+        // failure: a hiccup must not hold the list empty for the rest of the TTL.
+        this.localStationsCache = cached ?? null;
+        return cached?.items ?? [];
       }
     })();
 
     this.localStationsCache = {
-      items: cached?.items ?? DEMO_STATIONS,
+      items: cached?.items ?? [],
       fetchedAt: cached?.fetchedAt ?? 0,
       inFlight,
     };

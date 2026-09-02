@@ -6,6 +6,10 @@ import type { CustomRadioStore } from '@/adapters/content/providers/customRadioS
 import type { LoxoneWsNotifier } from '@/adapters/loxone/ws/notifier';
 import type { StorageConfig } from '@/adapters/content/storage/storageManager';
 import { TuneInClient } from '@/adapters/content/providers/tunein/tuneinClient';
+import {
+  countPlayablePresets,
+  expandPresetOutlines,
+} from '@/adapters/content/providers/tunein/tuneinPresets';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 import type { WebdavServer } from '@/adapters/webdav/webdavServer';
 
@@ -637,11 +641,21 @@ async function handleTuneInValidate(
   }
   try {
     const api = new TuneInClient();
-    const outlines = await api.browsePresets(username);
-    const presetCount = Array.isArray(outlines)
-      ? outlines.filter((entry: any) => entry && entry.type === 'audio').length
-      : 0;
-    deps.sendJson(res, 200, { valid: true, presetCount });
+    const { title, outlines } = await api.browsePresets(username);
+    if (!title) {
+      // TuneIn answers 200 with an empty body for a name it does not know, so an
+      // absent head title is what makes a typo reportable at all (issue #362).
+      deps.sendJson(res, 200, {
+        valid: false,
+        error: 'tunein-username-invalid',
+        message: 'TuneIn username not found.',
+      });
+      return;
+    }
+    // Count what the browser will actually show: presets filed in folders or grouped
+    // into sections are stations too, and used to count as zero.
+    const expanded = await expandPresetOutlines(api, outlines, username);
+    deps.sendJson(res, 200, { valid: true, presetCount: countPlayablePresets(expanded) });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const isInvalid = /(TuneIn error|HTTP 4\d\d)/i.test(message);

@@ -172,6 +172,7 @@ import './adminZoneStates.test';
 import './adminInfo.test';
 import './updateCheck.test';
 import './coverArtTuneIn.test';
+import './tuneinPresets.test';
 import './mountDiagnostics.test';
 import type { ZoneConfig } from '../src/domain/config/types';
 import { applyZonePatch } from '../src/domain/zones/reducer';
