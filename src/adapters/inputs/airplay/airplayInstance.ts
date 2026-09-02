@@ -2,15 +2,24 @@ import { createLogger, type ComponentLogger } from '@/shared/logging/logger';
 import type { ZoneAirplayConfig } from '@/domain/config/types';
 import type { PlaybackMetadata, PlaybackSource, CoverArtPayload } from '@/application/playback/audioManager';
 import type { PlayerRegistryPort } from '@/ports/PlayerRegistryPort';
+import type { MdnsBrowser, MdnsPort, MdnsRegistration } from '@/ports/MdnsPort';
+import { advertisableIpv4Addresses } from '@/shared/utils/net';
 import os from 'node:os';
 import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { PassThrough } from 'stream';
-import Bonjour from 'bonjour-service';
-import { AirPlayReceiver, sendRemoteCommand, type ReceiverEvent } from '@sonn-audio/node-airplay';
+import {
+  AirPlayReceiver,
+  sendRemoteCommand,
+  type ReceiverAdvertisement,
+  type ReceiverEvent,
+} from '@sonn-audio/node-airplay';
 
 /** How long a sender may go quiet before we call it a pause. */
 const AUDIO_IDLE_PAUSE_MS = 1500;
+
+/** How long to wait for the sender's remote-control service to answer. */
+const DACP_LOOKUP_TIMEOUT_MS = 2000;
 
 export interface AirplayInstanceController {
   startPlayback(
@@ -47,7 +56,7 @@ export class AirplayInstance {
   private currentElapsedSec = 0;
   private currentDurationSec = 0;
   private receiver: AirPlayReceiver | null = null;
-  private advertiser: InstanceType<typeof Bonjour> | null = null;
+  private advertisement: MdnsRegistration | null = null;
   /** The streaming device's remote-control identity, for play/pause/skip back at it. */
   private dacpId: string | null = null;
   private activeRemote: string | null = null;
@@ -85,6 +94,7 @@ export class AirplayInstance {
     private config: ZoneAirplayConfig,
     private readonly controller: AirplayInstanceController,
     private readonly playerRegistry: PlayerRegistryPort,
+    private readonly mdns: MdnsPort,
   ) {
     this.zoneName = zoneName;
     this.log = createLogger('Input', `AirPlay][${zoneName}`);
@@ -151,12 +161,78 @@ export class AirplayInstance {
       host,
     });
     try {
+      const { receiver, advertisement } = await this.listenOnFreePort(portBase, portRange);
+      this.receiver = receiver;
+
+      // The receiver deliberately publishes nothing itself, so the service that
+      // makes it findable is ours to announce.
+      //
+      // The hostname matters as much as the service does (#363). Left to itself
+      // the responder uses this machine's own name for the SRV target -- a bare
+      // label, outside `.local`, so a sender drops the address records that came
+      // with it and asks unicast DNS instead. In a container that name is
+      // `sonn-core` and resolves nowhere: the zone is listed and unreachable,
+      // which reads as "it used to work". Publish the same per-zone `<MAC>.local`
+      // the native receiver did, pinned to the one address we are reachable on.
+      const hostname = `${advertisement.instanceName.split('@')[0]}.local`;
+      const addresses = this.advertisableAddress(host);
+      this.advertisement = this.mdns.publish({
+        name: advertisement.instanceName,
+        type: 'raop',
+        protocol: 'tcp',
+        port: advertisement.port,
+        host: hostname,
+        ...(addresses ? { addresses } : {}),
+        txt: advertisement.txt,
+      });
+
+      this.log.info('airplay receiver ready', {
+        zoneId: this.zoneId,
+        port: advertisement.port,
+        name: advertisement.instanceName,
+        hostname,
+        address: addresses?.[0] ?? host,
+      });
+    } catch (error) {
+      this.receiver = null;
+      this.log.error('failed to start airplay receiver', {
+        zoneId: this.zoneId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * The address to pin the advertisement to, when it is one a LAN client can actually reach.
+   *
+   * {@link resolveHostAddress} falls back to the first non-internal interface, and on a host
+   * running containers that can be a bridge. Pinning it would advertise an address nothing off
+   * this machine can route; handing back nothing lets the responder narrow the set itself.
+   */
+  private advertisableAddress(host: string | undefined): string[] | undefined {
+    return host && advertisableIpv4Addresses().includes(host) ? [host] : undefined;
+  }
+
+  /**
+   * Claim the first free port in the zone's range.
+   *
+   * Zones derive their base port from their id, so two servers -- or a stale
+   * process on the way out -- can want the same one, and a receiver that cannot
+   * bind is a room that never appears at all. The native receiver walked the
+   * range for that reason; binding the base port alone brought that back.
+   */
+  private async listenOnFreePort(
+    portBase: number,
+    portRange: number,
+  ): Promise<{ receiver: AirPlayReceiver; advertisement: ReceiverAdvertisement }> {
+    const attempts = Math.max(1, portRange);
+    for (let offset = 0; offset < attempts; offset++) {
       const receiver = new AirPlayReceiver(
         {
           name: this.zoneName,
           model: this.config.model || 'SonnCoreAirplay',
           ...(this.hardwareAddress ? { mac: Buffer.from(this.hardwareAddress.replace(/[^0-9a-f]/gi, ''), 'hex') } : {}),
-          port: portBase,
+          port: portBase + offset,
           onRequest: (info) =>
             this.log.info('airplay rtsp request', {
               zoneId: this.zoneId,
@@ -168,32 +244,20 @@ export class AirplayInstance {
         },
         (event) => this.handleRaopEvent(event),
       );
-      const advertisement = await receiver.start();
-      this.receiver = receiver;
-
-      // The receiver deliberately publishes nothing itself, so the service that
-      // makes it findable is ours to announce.
-      this.advertiser = new Bonjour();
-      this.advertiser.publish({
-        name: advertisement.instanceName,
-        type: 'raop',
-        protocol: 'tcp',
-        port: advertisement.port,
-        txt: advertisement.txt,
-      });
-
-      this.log.info('airplay receiver ready', {
-        zoneId: this.zoneId,
-        port: advertisement.port,
-        name: advertisement.instanceName,
-      });
-    } catch (error) {
-      this.receiver = null;
-      this.log.error('failed to start airplay receiver', {
-        zoneId: this.zoneId,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      try {
+        return { receiver, advertisement: await receiver.start() };
+      } catch (error) {
+        if (!isAddressInUse(error) || offset === attempts - 1) {
+          throw error;
+        }
+        this.log.debug('airplay port taken; trying the next one', {
+          zoneId: this.zoneId,
+          port: portBase + offset,
+        });
+      }
     }
+    // Unreachable: the loop either returns or throws on its last attempt.
+    throw new Error('no free port in range');
   }
 
   private async stopServer(): Promise<void> {
@@ -209,12 +273,11 @@ export class AirplayInstance {
     }
     this.receiver = null;
     try {
-      this.advertiser?.unpublishAll();
-      this.advertiser?.destroy();
+      this.advertisement?.stop();
     } catch {
       /* the service goes away with the process anyway */
     }
-    this.advertiser = null;
+    this.advertisement = null;
     this.dacpId = null;
     this.activeRemote = null;
     this.stopHttpStream();
@@ -410,29 +473,38 @@ export class AirplayInstance {
     dacpId: string,
   ): Promise<{ host: string; port: number } | null> {
     const wanted = `iTunes_Ctrl_${dacpId}`.toLowerCase();
-    const bonjour = new Bonjour();
-    try {
-      return await new Promise<{ host: string; port: number } | null>((resolve) => {
-        const browser = bonjour.find({ type: 'dacp', protocol: 'tcp' }, (service) => {
-          if ((service.name ?? '').toLowerCase() !== wanted) {
-            return;
-          }
-          const address =
-            (service.addresses ?? []).find((value) => value.includes('.')) ?? service.host;
-          if (address && service.port) {
-            clearTimeout(timer);
-            browser.stop();
-            resolve({ host: address, port: service.port });
-          }
-        });
-        const timer = setTimeout(() => {
-          browser.stop();
-          resolve(null);
-        }, 2000);
+    return await new Promise<{ host: string; port: number } | null>((resolve) => {
+      let browser: MdnsBrowser | null = null;
+      let timer: NodeJS.Timeout | null = null;
+      let settled = false;
+      const finish = (endpoint: { host: string; port: number } | null): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+        }
+        browser?.stop();
+        resolve(endpoint);
+      };
+      browser = this.mdns.browse({ type: 'dacp', protocol: 'tcp' }, (service) => {
+        if ((service.name ?? '').toLowerCase() !== wanted) {
+          return;
+        }
+        const address =
+          (service.addresses ?? []).find((value) => value.includes('.')) ?? service.host;
+        if (address && service.port) {
+          finish({ host: address, port: service.port });
+        }
       });
-    } finally {
-      bonjour.destroy();
-    }
+      if (settled) {
+        // Answered from cache before browse() returned: stop what finish() could not see yet.
+        browser.stop();
+        return;
+      }
+      timer = setTimeout(() => finish(null), DACP_LOOKUP_TIMEOUT_MS);
+    });
   }
 
   /**
@@ -995,6 +1067,11 @@ export class AirplayInstance {
     }
   }
 
+}
+
+/** A port someone else already holds -- worth moving along for, unlike any other bind failure. */
+function isAddressInUse(error: unknown): boolean {
+  return (error as { code?: string } | null)?.code === 'EADDRINUSE';
 }
 
 function detectMimeType(buffer: Buffer): string {

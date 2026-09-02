@@ -46,6 +46,7 @@ import './beoremoteApi.test';
 import './sonnClientApi.test';
 import './beoremoteKeys.test';
 import './localLibraryStore.rollup.test';
+import './airplayAdvertisement.test';
 import './mdnsAdvertisedAddresses.test';
 import './lineInCommandQueue.test';
 import './lineInActivationService.test';
@@ -328,9 +329,19 @@ async function createZoneHarness(): Promise<ZoneHarness> {
       noopPlayerRegistry,
       new spotifyStreamProxyModule.SpotifyStreamProxyService(),
     );
-    airplayInputService = new airplayInputServiceModule.AirplayInputService((zoneId, reason) => {
-      spotifyInputService.stopActiveSession(zoneId, reason);
-    }, noopPlayerRegistry);
+    // No responder in tests: nothing here starts a receiver, so publishing is a no-op.
+    const noopMdns = {
+      publish: () => ({ stop: () => {} }),
+      browse: () => ({ stop: () => {} }),
+      shutdown: () => {},
+    };
+    airplayInputService = new airplayInputServiceModule.AirplayInputService(
+      (zoneId, reason) => {
+        spotifyInputService.stopActiveSession(zoneId, reason);
+      },
+      noopPlayerRegistry,
+      noopMdns,
+    );
     if (!airplayInputService) {
       throw new Error('airplay input service not initialized');
     }

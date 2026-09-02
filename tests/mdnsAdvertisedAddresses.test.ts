@@ -101,6 +101,29 @@ test('advertising never offers a bridge address alongside a real one', () => {
   );
 });
 
+test('a pinned address set is exhaustive, IPv6 included', () => {
+  // A caller that knows which address it wants reached (an AirPlay zone does) passes it in. Leaving
+  // its IPv6 records behind would hand a sender a second, unasked-for way in -- including a
+  // link-local address with no scope, which resolves and then cannot connect.
+  const service = new MdnsService();
+  const records = [
+    { type: 'SRV', data: { port: 6005 } },
+    { type: 'A', data: '192.168.1.209' },
+    { type: 'A', data: '172.17.0.1' },
+    { type: 'AAAA', data: 'fe80::20c:29ff:fe0e:5497' },
+  ];
+  const fake = { records: () => records.slice() };
+  (service as unknown as {
+    restrictAdvertisedAddresses: (s: unknown, t: string, pinned?: string[]) => void;
+  }).restrictAdvertisedAddresses(fake, 'raop', ['192.168.1.209']);
+  assert.deepEqual(fake.records().map((r) => r.type), ['SRV', 'A']);
+  assert.deepEqual(
+    fake.records().filter((r) => r.type === 'A').map((r) => r.data),
+    ['192.168.1.209'],
+  );
+  service.shutdown();
+});
+
 test('publish drops A-records for addresses we would not hand out', () => {
   const service = new MdnsService();
   const records = [

@@ -39,7 +39,7 @@ export class MdnsService implements MdnsPort {
       host: options.host,
       txt: options.txt,
     });
-    this.restrictAdvertisedAddresses(service, options.type);
+    this.restrictAdvertisedAddresses(service, options.type, options.addresses);
     service.start?.();
     return {
       stop: () => {
@@ -63,9 +63,12 @@ export class MdnsService implements MdnsPort {
    * different machine that happens to use the same private range on its own side.
    *
    * Wrapping records() is the narrowest place to fix it; the alternative is patching the library.
-   * IPv6 and non-address records are passed through untouched.
+   *
+   * A caller that knows exactly which address it wants reached passes `pinned`, and then that set
+   * is exhaustive: an IPv6 address it did not name is dropped along with the extra A-records.
+   * Without one only IPv4 is narrowed and IPv6 passes through, as it always did.
    */
-  private restrictAdvertisedAddresses(service: unknown, type: string): void {
+  private restrictAdvertisedAddresses(service: unknown, type: string, pinned?: string[]): void {
     const target = service as { records?: () => AdvertisedRecord[] };
     const original = target.records;
     if (typeof original !== 'function') {
@@ -76,14 +79,14 @@ export class MdnsService implements MdnsPort {
     }
     target.records = () => {
       const records = original.call(service);
-      const allowed = new Set(advertisableIpv4Addresses());
+      const allowed = new Set(pinned?.length ? pinned : advertisableIpv4Addresses());
       if (!allowed.size) {
         return records;
       }
-      return records.filter(
-        (record) =>
-          record.type !== 'A' || typeof record.data !== 'string' || allowed.has(record.data),
-      );
+      return records.filter((record) => {
+        const narrowed = record.type === 'A' || (record.type === 'AAAA' && !!pinned?.length);
+        return !narrowed || typeof record.data !== 'string' || allowed.has(record.data);
+      });
     };
   }
 

@@ -14,6 +14,11 @@ export type MdnsPublishOptions = {
   protocol?: 'tcp' | 'udp';
   port: number;
   host?: string;
+  /**
+   * The exact addresses to publish for {@link host}, when the caller knows which one it wants a
+   * client to use. Defaults to every address of this machine that is not a container bridge.
+   */
+  addresses?: string[];
   txt?: Record<string, string>;
 };
 

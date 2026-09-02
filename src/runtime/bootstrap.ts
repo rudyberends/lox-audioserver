@@ -375,9 +375,13 @@ export function createRuntime(): Runtime {
     playerRegistry,
     spotifyStreamProxyService,
   );
-  airplayInputService = new AirplayInputService((zoneId, reason) => {
-    spotifyInputService.stopActiveSession(zoneId, reason);
-  }, playerRegistry);
+  airplayInputService = new AirplayInputService(
+    (zoneId, reason) => {
+      spotifyInputService.stopActiveSession(zoneId, reason);
+    },
+    playerRegistry,
+    mdnsService,
+  );
   if (!airplayInputService) {
     throw new Error('airplay input service not initialized');
   }
