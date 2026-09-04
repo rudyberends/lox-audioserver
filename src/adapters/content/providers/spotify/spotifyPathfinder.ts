@@ -422,7 +422,13 @@ export async function fetchPlaylistTracks(
     playlistV2?: { __typename?: string; content?: { totalCount?: number; items?: Array<{ itemV2?: { data?: TrackData } }> } };
   }>(session, 'fetchPlaylist', { uri: playlistUri, offset, limit, enableWatchFeedEntrypoint: false });
   const pl = data?.playlistV2;
-  if (!pl || pl.__typename === 'GenericError') {
+  // `playlistV2` is a union, and only its Playlist member carries `content`. Anything the token
+  // cannot read resolves to NotFound instead — which, now that the bearer is scraped anonymously
+  // from the web player rather than minted by a librespot session, is every private playlist.
+  // "Could not read this" is not the same answer as "a playlist with no tracks": reporting them
+  // alike handed the caller an empty page it took for the truth, so the Web API fallback that
+  // *can* read the owner's own private playlists never ran (#365).
+  if (!pl?.content) {
     return null;
   }
   const items = (pl.content?.items ?? [])
@@ -447,7 +453,10 @@ export async function fetchAlbumTracks(
     };
   }>(session, 'getAlbum', { uri: albumUri, locale: '', offset, limit });
   const album = data?.albumUnion;
-  if (!album || album.__typename === 'GenericError') {
+  // Same union shape as playlistV2 above: only the Album member carries `tracksV2`, and an album
+  // this token cannot read answers NotFound. Fall through to the Web API rather than passing an
+  // empty tracklist off as the album's own (#365).
+  if (!album?.tracksV2) {
     return null;
   }
   const albumCover = firstSource(album.coverArt?.sources);
