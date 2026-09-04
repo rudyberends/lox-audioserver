@@ -934,7 +934,8 @@ export class ZoneManager {
       replaceQueue: (items, startIndex = 0) => {
         queueController.setItems(items, startIndex);
         queue.shuffle = false;
-        queue.repeat = 0;
+        // Repeat stays, for the same reason it stays across a queue built here: it belongs to the
+        // zone rather than to the list, and the client is never told it was cleared. See #371.
         return queueController.current();
       },
       applyPatch: (patch) => this.applyPatch(config.id, patch),

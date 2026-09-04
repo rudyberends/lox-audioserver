@@ -1253,6 +1253,21 @@ test('playContent rebuild path starts playback and records recents', async () =>
   assert.equal(notifierTracker.queueUpdated.length, 1);
 });
 
+test('playContent rebuild keeps the zone\'s repeat mode', async () => {
+  // #371: repeat-one looked broken because the queue rebuild cleared it without telling the
+  // client, so switching repeat on and then picking the track to repeat turned it off again.
+  const { coordinator, ctx } = createHarness();
+  ctx.state.mode = 'stop';
+  (coordinator as any).startQueuePlayback = async () => ({}) as PlaybackSession;
+
+  coordinator.handleCommand(ctx.id, 'repeat', 'one');
+  assert.equal(ctx.queue.repeat, 3);
+
+  await coordinator.playContent(ctx.id, 'library://track/one', 'track', { title: 'One', artist: '', album: '' });
+
+  assert.equal(ctx.queue.repeat, 3);
+});
+
 test('playContent unplayable path stops outputs and applies stop patch', async () => {
   const { coordinator, ctx, patches, outputRouter } = createHarness();
   ctx.state.mode = 'stop';

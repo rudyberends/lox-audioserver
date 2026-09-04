@@ -350,7 +350,11 @@ export class PlayRequestService {
     } else {
       ctx.queue.shuffle = false;
     }
-    ctx.queue.repeat = 0;
+    // Repeat deliberately survives a new queue. It is a zone setting, not a property of the list:
+    // the client shows it as one, is never told it was cleared, and clearing it here is what made
+    // repeat-one look broken (#371) — switch it on, then pick the track to repeat, and the pick
+    // silently turned it off again while the icon stayed lit. Shuffle above is the other case: it
+    // reorders the queue itself, so a new queue really does start unshuffled, and it says so.
     if (ctx.queue.shuffle) {
       const preserveCurrent = typeof pendingShuffle !== 'boolean';
       this.deps.queueController.reorderQueue(ctx, 'shuffle', {
