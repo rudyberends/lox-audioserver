@@ -39,6 +39,15 @@ const BUILD_CHECK_INTERVAL_MS = 24 * 3600_000;
  * stored level once the account moves, sometimes more than once, and always within a moment of it.
  */
 const ACTIVATION_VOLUME_LATCH_MS = 4000;
+/**
+ * How close to the end of a track counts as having reached it.
+ *
+ * Soloist reports a position against a duration it also reports, and at the end of a track the two
+ * are equal to the millisecond — this is slack for the rounding, not for a gap anyone has measured.
+ * Its cost is a `next` pressed in the last two seconds being read as the track simply ending, which
+ * comes to the same thing a moment later.
+ */
+const NATURAL_END_TOLERANCE_MS = 2000;
 
 export type SoloistReadiness =
   | { ready: true }
@@ -69,6 +78,8 @@ type ZoneRunner = {
   owner: Owner;
   /** The track this zone was told to play, while the queue owns it. */
   wantedUri: string | null;
+  /** How far Soloist has got into that track, and so whether it is still on it. */
+  progress: TrackProgress;
   /** What is sounding now, so a repeat of the same event is not treated as a change. */
   currentUri: string | null;
   /** The current track in full, since the queue Soloist reports leaves it out. */
@@ -105,6 +116,47 @@ type ZoneRunner = {
   /** Armed while the volume Connect reports for an activation is still to be ignored. */
   volumeLatch: VolumeLatch | null;
 };
+
+/**
+ * How far Soloist has got into the track this server asked for.
+ *
+ * `ended` is the one thing that tells our own track running out apart from someone reaching for the
+ * app, and there is no event for it: Soloist announces the end of a track by moving to another one,
+ * which is exactly what a listener pressing next looks like. What separates them is where it was
+ * when it left — at the end, or somewhere in the middle.
+ */
+export type TrackProgress = { durationMs: number; ended: boolean };
+
+/** Nothing known yet: what every track starts from. */
+export const NO_PROGRESS: TrackProgress = { durationMs: 0, ended: false };
+
+/**
+ * Fold one of Soloist's reports into what is known about our own track.
+ *
+ * Length and position both arrive on the same reports, so there is no earlier event to have caught:
+ * the one that carries a track to its end carries its length with it. A report naming another track
+ * says nothing about ours and is left out; one naming no track at all — `position_sync` — is about
+ * whatever is current, which is still ours until a change says otherwise.
+ *
+ * `ended` sticks. Everything Soloist does after our track ran out belongs to a track this room is
+ * no longer following, including the position it starts reporting for it.
+ */
+export function readTrackProgress(
+  progress: TrackProgress,
+  sample: { uri?: string; wantedUri: string; durationMs?: number; positionMs?: number },
+): TrackProgress {
+  if (progress.ended || (sample.uri && sample.uri !== sample.wantedUri)) {
+    return progress;
+  }
+  const reported = sample.uri === sample.wantedUri ? sample.durationMs ?? 0 : 0;
+  const durationMs = reported > 0 ? reported : progress.durationMs;
+  const positionMs = sample.positionMs;
+  const ended =
+    durationMs > 0 &&
+    typeof positionMs === 'number' &&
+    positionMs >= durationMs - NATURAL_END_TOLERANCE_MS;
+  return durationMs === progress.durationMs && !ended ? progress : { durationMs, ended };
+}
 
 /**
  * What a track change means when this server owns the queue.
@@ -499,6 +551,7 @@ export class SoloistPlaybackService {
       ws,
       owner: 'queue',
       wantedUri: null,
+      progress: NO_PROGRESS,
       currentUri: null,
       currentTrack: null,
       queue: { previous: [], upcoming: [] },
@@ -585,6 +638,11 @@ export class SoloistPlaybackService {
       return;
     }
 
+    // How far Soloist has got into our own track, kept up to date while it is still on it. Read
+    // before anything acts on this event, because the event that carries our track to its end is
+    // also the one that has to be judged against it.
+    this.noteProgress(runner, event, uri);
+
     // The slider in the Spotify app. Only `volume_changed` — the level rides along on every
     // `playback_state` as well, where it says what the device is set to rather than that anybody
     // just changed it, and acting on those would put the app's level back on the zone continually.
@@ -608,6 +666,13 @@ export class SoloistPlaybackService {
 
     if (event.type === 'track_changed' && uri) {
       if (runner.owner === 'queue') {
+        if (runner.wantedUri && runner.progress.ended) {
+          // Our track played to its end and Soloist went on to something of its own. Nobody
+          // pressed anything, so nothing here may step the queue: this zone ends a track when its
+          // own clock reaches the end, and stepping now would land two tracks on one ending.
+          this.stopAfterOurTrack(zoneId, runner, uri);
+          return;
+        }
         const change = classifyTrackChange(uri, runner.wantedUri, runner.queue);
         if (change === 'back') {
           // Someone pressed back on the phone. Soloist has already gone to its own previous track,
@@ -672,6 +737,13 @@ export class SoloistPlaybackService {
         return;
       }
       if (event.status === 'paused' && !runner.appPaused && !runner.selfPaused) {
+        if (runner.progress.ended) {
+          // Not a listener's pause but Soloist stopping where our track ran out — on its way to
+          // whatever it has decided to play next, or already there. Pausing the room for that
+          // left it standing still with a queue full of tracks.
+          this.stopAfterOurTrack(zoneId, runner, uri);
+          return;
+        }
         this.log.info('the spotify app paused this zone', { zoneId });
         runner.appPaused = true;
         this.controller?.transport(zoneId, 'pause');
@@ -704,8 +776,12 @@ export class SoloistPlaybackService {
       }
       // Playing something nobody here asked for means the zone was taken over from the Spotify
       // app. Adopting it is the whole of Connect: open the pipe and let the zone follow along.
+      //
+      // Except in the moment after our own track ended, where the something is Spotify carrying on
+      // by itself and this server is already telling it to stop. Adopting that would put a track
+      // nobody chose into the room, over the top of the queue's own next one.
       const ours = runner.owner === 'queue' && runner.wantedUri && uri === runner.wantedUri;
-      if (!ours && uri && uri !== runner.currentUri) {
+      if (!ours && !runner.progress.ended && uri && uri !== runner.currentUri) {
         void this.adoptConnectPlayback(zoneId, event);
       }
       return;
@@ -811,6 +887,7 @@ export class SoloistPlaybackService {
     runner.currentUri = track.uri ?? null;
     runner.currentTrack = queueTrackOf(track);
     runner.wantedUri = null;
+    runner.progress = NO_PROGRESS;
     runner.appPaused = false;
     // A takeover is announced as playback, not as a queue, so the list has to be asked for once.
     // After this it arrives by itself whenever the listener changes anything.
@@ -873,6 +950,49 @@ export class SoloistPlaybackService {
     };
   }
 
+  /**
+   * Follow Soloist through the track this server asked for.
+   *
+   * Only while the queue is the one driving: a zone the app owns has no track of ours to be at the
+   * end of, and everything an inactive device reports is the account's playback in another room.
+   */
+  private noteProgress(runner: ZoneRunner, event: SoloistStateEvent, uri: string | undefined): void {
+    if (runner.owner !== 'queue' || !runner.wantedUri) {
+      return;
+    }
+    const durationSec = readTrack(event.item).durationSec;
+    runner.progress = readTrackProgress(runner.progress, {
+      uri,
+      wantedUri: runner.wantedUri,
+      durationMs: typeof durationSec === 'number' ? durationSec * 1000 : undefined,
+      positionMs: event.position?.position_ms,
+    });
+  }
+
+  /**
+   * Our track is over; keep Soloist from playing on past it.
+   *
+   * Deliberately nothing else. The room is still hearing the end of the track — the output holds
+   * whatever the engine has already sent it — and the zone ends it on its own clock, the way it
+   * ends every track. All that is needed here is that Spotify does not carry on by itself: the
+   * `player.autoplay` preference is written and, measured, ignored, so without this the account
+   * would keep playing to nobody, holding it against the room that wants it next. The stream is
+   * left alone; the next track's `getPlaybackSource` closes it, once the room has had the last of
+   * what is in it.
+   */
+  private stopAfterOurTrack(zoneId: number, runner: ZoneRunner, wentTo?: string): void {
+    this.log.debug('soloist reached the end of our track', {
+      zoneId,
+      uri: runner.wantedUri,
+      ...(wentTo && wentTo !== runner.wantedUri ? { wentTo } : {}),
+    });
+    if (runner.selfPaused) {
+      return;
+    }
+    runner.selfPaused = true;
+    runner.ws.pause();
+  }
+
   /** End the engine's view of the current track without touching the process. */
   private finishTrack(zoneId: number): void {
     const runner = this.runners.get(zoneId);
@@ -880,6 +1000,7 @@ export class SoloistPlaybackService {
       return;
     }
     runner.wantedUri = null;
+    runner.progress = NO_PROGRESS;
     const stream = runner.stream;
     runner.stream = null;
     stream?.destroy();
@@ -940,6 +1061,7 @@ export class SoloistPlaybackService {
         }
       }
       runner.wantedUri = uri;
+      runner.progress = NO_PROGRESS;
       runner.currentUri = uri;
 
       const playing = this.waitForPlaying(runner, uri);
