@@ -971,6 +971,27 @@ test('output URI mismatch is ignored before first audio chunk for local queue', 
   assert.equal(patches[1]?.patch.qid, 'id-2');
 });
 
+test('a stopped output does not wind the queue back onto the track that finished', () => {
+  // The engine session of a track that has ended is torn down after the queue has already moved
+  // on, and it reports itself stopped with that track's uri. Read as "this is the current entry",
+  // it put the queue back on a track the room had left: `next` then replayed what was playing.
+  const { coordinator, ctx, playbackQueue } = createHarness();
+  const items = [
+    makeQueueItem({ title: 'One', audiopath: 'library://track/one', unique_id: 'id-1' }),
+    makeQueueItem({ title: 'Two', audiopath: 'library://track/two', unique_id: 'id-2' }),
+  ];
+  playbackQueue.setItems(items, 1);
+  ctx.queue.authority = 'local';
+  ctx.inputMode = 'queue';
+
+  coordinator.updateOutputState(ctx.id, {
+    status: 'stopped',
+    uri: items[0]!.audiopath,
+  });
+
+  assert.equal(ctx.queueController.currentIndex(), 1);
+});
+
 test('output stopped near end does not force end timing for controllable radio', () => {
   const { coordinator, ctx } = createHarness();
   const player = ctx.player as unknown as FakePlayer;

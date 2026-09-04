@@ -51,7 +51,13 @@ export function updateOutputState(args: {
       ctx.player.updateTiming(duration, duration);
     }
   }
-  const matchedIndex = state.uri && ctx.queue.items.length
+  // Which queue entry an output is on is only ever told by an output that is on one. A `stopped`
+  // report names the track that has just finished, and the session it comes from is torn down
+  // *after* the queue has moved to the next one — so reading it as "this is where the queue is"
+  // wound the index back onto the track the room had already left. Everything then disagreed with
+  // what was sounding: `next` played the track that was already on (twice in a row, to a listener),
+  // and the queue highlighted the wrong line. The end-of-track force above still reads it.
+  const matchedIndex = state.uri && state.status !== 'stopped' && ctx.queue.items.length
     ? findQueueIndexByUri(ctx.queue.items, state.uri)
     : -1;
   const session = ctx.player.getSession();
