@@ -12,8 +12,64 @@ import {
 } from '@/shared/urlProxy';
 
 const MAX_PLAYLIST_BYTES = 1024 * 1024;
+/** A pointer playlist may name another one; stop before a cycle turns into a crawl. */
+const MAX_PLAYLIST_HOPS = 3;
+/** A `.pls` lists mirrors, so a dead first entry is not a dead station — try a few. */
+const MAX_PLAYLIST_ENTRIES = 3;
 /** Window size for hosts that refuse open-ended ranges; big enough to keep ahead of playback. */
 const RANGE_CHUNK_BYTES = 4 * 1024 * 1024;
+
+/**
+ * True only for a playlist ffmpeg can open itself.
+ *
+ * Its hls demuxer probes for `#EXTM3U` *and* one of the tags that make the file a
+ * manifest rather than a pointer — that pair is the whole test, mirrored here.
+ */
+function isHlsManifest(body: string): boolean {
+  if (!/^\s*#EXTM3U/.test(body)) {
+    return false;
+  }
+  return /#EXT-X-(?:STREAM-INF|TARGETDURATION|MEDIA-SEQUENCE)[:\s]/i.test(body);
+}
+
+/**
+ * The urls a pointer playlist names, in mirror order.
+ *
+ * The two flavours have to be told apart first: in a pls every other line (`[playlist]`,
+ * `NumberOfEntries=2`) is bookkeeping that resolves into a perfectly valid relative url
+ * and would be tried as a mirror, while in an m3u a bare line *is* the entry.
+ */
+function playlistEntries(body: string, baseUrl: string): string[] {
+  const lines = body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const isPls = lines.some((line) => /^\[playlist\]$/i.test(line) || /^File\d+\s*=/i.test(line));
+  const candidates = isPls
+    ? lines
+        .map((line) => /^File(\d+)\s*=\s*(.+)$/i.exec(line))
+        .filter((match): match is RegExpExecArray => match !== null)
+        .sort((a, b) => Number(a[1]) - Number(b[1]))
+        .map((match) => (match[2] ?? '').trim())
+    : lines.filter((line) => !line.startsWith('#'));
+
+  const entries: string[] = [];
+  for (const candidate of candidates) {
+    // Anything with markup or whitespace in it is not an entry: a host that answers a
+    // dead url with an html page under an `audio/x-mpegurl` header gets read as a
+    // playlist, and `<!doctype html>` resolves against the base into a perfectly
+    // fetchable url. Chasing those is how one junk page becomes several requests.
+    if (!candidate || /[<>"\s]/.test(candidate)) {
+      continue;
+    }
+    try {
+      const absolute = new URL(candidate, baseUrl);
+      if (absolute.protocol === 'http:' || absolute.protocol === 'https:') {
+        entries.push(absolute.toString());
+      }
+    } catch {
+      // Not a url — a stray line or a local file path we cannot reach anyway.
+    }
+  }
+  return entries;
+}
 
 /** True for `bytes=N-` and for no Range at all — the shapes googlevideo answers with 403. */
 function isUnboundedRange(range: string | undefined): boolean {
@@ -43,6 +99,12 @@ function parseContentRange(value: string | null): { end: number; total: number |
   return { end, total: total !== null && Number.isFinite(total) ? total : null };
 }
 
+interface UpstreamFetchOptions {
+  upstreamHeaders: Record<string, string>;
+  wantsRest: boolean;
+  restStart: number;
+}
+
 export class AudioProxyHandler {
   private readonly log = createLogger('Http', 'AudioProxy');
 
@@ -65,8 +127,8 @@ export class AudioProxyHandler {
     }
 
     const url = new URL(req.url ?? '/', 'http://localhost');
-    const target = url.searchParams.get('u') ?? '';
-    if (!target) {
+    const requested = url.searchParams.get('u') ?? '';
+    if (!requested) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'missing-target' }));
       return;
@@ -83,47 +145,14 @@ export class AudioProxyHandler {
     // also counts against that video's request budget, which throttles quickly.
     const wantsRest = isUnboundedRange(upstreamHeaders.Range);
     const restStart = wantsRest ? parseRangeStart(upstreamHeaders.Range) : 0;
-    const firstAttemptHeaders = wantsRest
-      ? { ...upstreamHeaders, Range: `bytes=${restStart}-${restStart + RANGE_CHUNK_BYTES - 1}` }
-      : upstreamHeaders;
+    const fetchOpts = { upstreamHeaders, wantsRest, restStart };
 
     let upstream: Response;
     try {
-      upstream = await fetch(target, {
-        headers: firstAttemptHeaders,
-        redirect: 'follow',
-      });
-      if (wantsRest) {
-        this.log.debug('proxy windowed first attempt', {
-          clientRange: upstreamHeaders.Range ?? '(none)',
-          sentRange: firstAttemptHeaders.Range,
-          status: upstream.status,
-          sentHeaders: Object.keys(firstAttemptHeaders).join(','),
-        });
-      }
-      // A host that dislikes the window (or ignores ranges entirely, like a radio
-      // stream) gets asked again exactly the way the client asked — no regression for
-      // everything that was already working. Cancel the refused body first: dropping a
-      // Response without reading it leaves the connection held open.
-      //
-      // An `icy-metaint` on the answer says the same thing from the other side: this is
-      // a live radio stream carrying metadata blocks at fixed offsets into its body. Not
-      // every one of them ignores ranges — an nginx-fronted Shoutcast serves the window
-      // happily, 206 and a fabricated gigabyte of Content-Length — but those offsets only
-      // hold within one unbroken body, so windowing it is never right regardless.
-      if (wantsRest && (!upstream.ok || upstream.headers.has('icy-metaint'))) {
-        await bestEffort(() => upstream.body?.cancel() ?? Promise.resolve(), {
-          fallback: undefined,
-          onError: 'debug',
-          log: this.log,
-          label: 'discarding refused window',
-          context: { target },
-        });
-        upstream = await fetch(target, { headers: upstreamHeaders, redirect: 'follow' });
-      }
+      upstream = await this.fetchUpstream(requested, fetchOpts);
     } catch (error) {
       this.log.warn('proxy fetch failed', {
-        target,
+        target: requested,
         message: error instanceof Error ? error.message : String(error),
       });
       res.writeHead(502, { 'Content-Type': 'application/json' });
@@ -131,17 +160,27 @@ export class AudioProxyHandler {
       return;
     }
 
+    // A `.m3u`/`.pls` that only points at the real stream is not something ffmpeg can
+    // open — its one m3u demuxer is the HLS one, and that needs a manifest, not a list
+    // of urls (issue #368). Handing such a pointer straight on, right for HLS where
+    // ffmpeg takes over from here, leaves it with a text file where it wanted audio. So
+    // follow the pointer ourselves and stream what it names.
+    const resolved = await this.followPointerPlaylists(res, upstream, requested, {
+      ...fetchOpts,
+      extraHeaders,
+    });
+    if (!resolved) {
+      return;
+    }
+    upstream = resolved.response;
+    const target = resolved.target;
+
     const contentType = upstream.headers.get('content-type') ?? 'application/octet-stream';
     const contentLength = upstream.headers.get('content-length');
     const acceptRanges = upstream.headers.get('accept-ranges');
     const contentRange = upstream.headers.get('content-range');
     const icyMetaInt = upstream.headers.get('icy-metaint');
     const zoneId = this.resolveZoneId(req);
-
-    if (upstream.ok && this.isPlaylistResponse(contentType, upstream.url)) {
-      await this.respondPlaylist(res, upstream, contentType, extraHeaders);
-      return;
-    }
 
     // The window came back: hand the client one continuous body built from this window
     // and the ones after it. Only when the host actually honoured the range (a 206 with
@@ -229,19 +268,144 @@ export class AudioProxyHandler {
     return headers;
   }
 
-  private async respondPlaylist(
+  /**
+   * One upstream request, with the windowing dance a range-hostile host needs.
+   *
+   * Throws whatever `fetch` throws; the caller decides what a dead host means.
+   */
+  private async fetchUpstream(target: string, opts: UpstreamFetchOptions): Promise<Response> {
+    const { upstreamHeaders, wantsRest, restStart } = opts;
+    const firstAttemptHeaders = wantsRest
+      ? { ...upstreamHeaders, Range: `bytes=${restStart}-${restStart + RANGE_CHUNK_BYTES - 1}` }
+      : upstreamHeaders;
+
+    let upstream = await fetch(target, {
+      headers: firstAttemptHeaders,
+      redirect: 'follow',
+    });
+    if (wantsRest) {
+      this.log.debug('proxy windowed first attempt', {
+        clientRange: upstreamHeaders.Range ?? '(none)',
+        sentRange: firstAttemptHeaders.Range,
+        status: upstream.status,
+        sentHeaders: Object.keys(firstAttemptHeaders).join(','),
+      });
+    }
+    // A host that dislikes the window (or ignores ranges entirely, like a radio
+    // stream) gets asked again exactly the way the client asked — no regression for
+    // everything that was already working. Cancel the refused body first: dropping a
+    // Response without reading it leaves the connection held open.
+    //
+    // An `icy-metaint` on the answer says the same thing from the other side: this is
+    // a live radio stream carrying metadata blocks at fixed offsets into its body. Not
+    // every one of them ignores ranges — an nginx-fronted Shoutcast serves the window
+    // happily, 206 and a fabricated gigabyte of Content-Length — but those offsets only
+    // hold within one unbroken body, so windowing it is never right regardless.
+    if (wantsRest && (!upstream.ok || upstream.headers.has('icy-metaint'))) {
+      await this.discardBody(upstream, 'discarding refused window', target);
+      upstream = await fetch(target, { headers: upstreamHeaders, redirect: 'follow' });
+    }
+    return upstream;
+  }
+
+  /**
+   * Walk `.m3u`/`.pls` pointers until an actual audio response is in hand.
+   *
+   * Returns null when the answer is already on the wire: a real HLS manifest, rewritten
+   * and served for ffmpeg's hls demuxer to take from here, or a pointer leading nowhere.
+   */
+  private async followPointerPlaylists(
     res: ServerResponse,
+    first: Response,
+    firstTarget: string,
+    opts: UpstreamFetchOptions & { extraHeaders?: Record<string, string> },
+  ): Promise<{ response: Response; target: string } | null> {
+    let upstream = first;
+    let target = firstTarget;
+
+    for (let hop = 0; ; hop++) {
+      const contentType = upstream.headers.get('content-type') ?? 'application/octet-stream';
+      if (!upstream.ok || !this.isPlaylistResponse(contentType, upstream.url)) {
+        return { response: upstream, target };
+      }
+      if (hop >= MAX_PLAYLIST_HOPS) {
+        this.log.warn('playlist keeps pointing at playlists', { target });
+        await this.discardBody(upstream, 'abandoning playlist chain', target);
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'playlist-too-deep' }));
+        return null;
+      }
+
+      const text = await this.readTextResponse(upstream);
+      if (text == null) {
+        res.writeHead(upstream.status || 502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'playlist-read-failed' }));
+        return null;
+      }
+      if (isHlsManifest(text)) {
+        this.respondPlaylist(res, text, upstream, contentType, opts.extraHeaders);
+        return null;
+      }
+
+      const next = await this.fetchFirstReachableEntry(text, upstream.url, opts);
+      if (!next) {
+        this.log.warn('playlist names no reachable stream', { target });
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'playlist-unplayable' }));
+        return null;
+      }
+      this.log.debug('followed pointer playlist', { from: target, to: next.target });
+      upstream = next.response;
+      target = next.target;
+    }
+  }
+
+  /** The first entry of a pointer playlist that answers — the rest are its mirrors. */
+  private async fetchFirstReachableEntry(
+    body: string,
+    baseUrl: string,
+    opts: UpstreamFetchOptions,
+  ): Promise<{ response: Response; target: string } | null> {
+    const entries = playlistEntries(body, baseUrl).slice(0, MAX_PLAYLIST_ENTRIES);
+    for (const entry of entries) {
+      let response: Response;
+      try {
+        response = await this.fetchUpstream(entry, opts);
+      } catch (error) {
+        this.log.debug('playlist entry unreachable', {
+          entry,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+      if (response.ok) {
+        return { response, target: entry };
+      }
+      this.log.debug('playlist entry refused', { entry, status: response.status });
+      await this.discardBody(response, 'discarding refused playlist entry', entry);
+    }
+    return null;
+  }
+
+  /** Drop a response we will not read: leaving the body open holds the connection. */
+  private async discardBody(response: Response, label: string, target: string): Promise<void> {
+    await bestEffort(() => response.body?.cancel() ?? Promise.resolve(), {
+      fallback: undefined,
+      onError: 'debug',
+      log: this.log,
+      label,
+      context: { target },
+    });
+  }
+
+  private respondPlaylist(
+    res: ServerResponse,
+    body: string,
     upstream: Response,
     contentType: string,
     extraHeaders?: Record<string, string>,
-  ): Promise<void> {
-    const text = await this.readTextResponse(upstream);
-    if (text == null) {
-      res.writeHead(upstream.status || 502, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'playlist-read-failed' }));
-      return;
-    }
-    const rewritten = this.rewritePlaylist(text, upstream.url, extraHeaders);
+  ): void {
+    const rewritten = this.rewriteM3u(body, upstream.url, extraHeaders);
     res.writeHead(upstream.status || 200, {
       'Content-Type': contentType,
       'Cache-Control': 'no-cache',
@@ -405,18 +569,6 @@ export class AudioProxyHandler {
     return text;
   }
 
-  private rewritePlaylist(
-    body: string,
-    baseUrl: string,
-    headers?: Record<string, string>,
-  ): string {
-    const lower = baseUrl.toLowerCase();
-    if (lower.endsWith('.pls') || body.includes('File1=')) {
-      return this.rewritePls(body, baseUrl, headers);
-    }
-    return this.rewriteM3u(body, baseUrl, headers);
-  }
-
   private rewriteM3u(
     body: string,
     baseUrl: string,
@@ -432,24 +584,6 @@ export class AudioProxyHandler {
         return this.rewriteHlsUriLine(line, baseUrl, headers);
       }
       return this.wrapProxyUrl(trimmed, baseUrl, headers);
-    });
-    return proxied.join('\n');
-  }
-
-  private rewritePls(
-    body: string,
-    baseUrl: string,
-    headers?: Record<string, string>,
-  ): string {
-    const lines = body.split(/\r?\n/);
-    const proxied = lines.map((line) => {
-      const match = /^File(\d+)=(.+)$/i.exec(line.trim());
-      if (!match) {
-        return line;
-      }
-      const url = (match[2] ?? '').trim();
-      const wrapped = this.wrapProxyUrl(url, baseUrl, headers);
-      return `File${match[1]}=${wrapped}`;
     });
     return proxied.join('\n');
   }
