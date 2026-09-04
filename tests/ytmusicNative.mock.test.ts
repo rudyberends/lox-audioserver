@@ -10,6 +10,7 @@ import {
   isSignedOutResponse,
 } from '../src/adapters/content/providers/ytmusic/ytmusicInnertube';
 import { getYtMusicAuthStatus } from '../src/adapters/content/providers/ytmusic/ytmusicAuthState';
+import { providerDefinition } from '../src/adapters/content/providerRegistry';
 
 // Ensure offline tests always use the repo-local yt-dlp mock (instead of the system yt-dlp).
 // Named outright rather than left to PATH order: a real yt-dlp downloaded through the
@@ -210,4 +211,25 @@ test('ytmusic native: a dead PO Token server must not take playback down', async
   const res = await streamService.startStreamForAudiopath(1, `${providerId}:track:dQw4w9WgXcQ`);
   assert.equal(lastError, undefined);
   assert.equal(res.playbackSource?.kind, 'url');
+});
+
+test('ytmusic native: registering an account settles its cookie verdict', async () => {
+  // The verdict has to exist before anyone browses, or a fresh server has nothing to
+  // report and the service list looks healthy while the library is empty. Registration
+  // is where that check is kicked off, so this pins the wiring rather than the request.
+  const definition = providerDefinition('ytmusic');
+  assert.ok(definition);
+
+  const bridge = makeBridge('bridge-ytmusic-registered');
+  assert.equal(getYtMusicAuthStatus(bridge.id).state, 'unknown');
+  definition!.create({
+    providerId: `spotify@${bridge.id}`,
+    serviceNativePrefix: 'ytmusic',
+    label: 'YouTube Music',
+    bridge,
+  });
+
+  // No cookie configured: answered locally as "not set up", never as a request to
+  // YouTube — which is also what keeps this suite offline.
+  assert.equal(getYtMusicAuthStatus(bridge.id).state, 'missing');
 });

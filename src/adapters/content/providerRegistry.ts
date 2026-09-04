@@ -5,6 +5,7 @@ import { DeezerProvider } from '@/adapters/content/providers/deezer/deezerProvid
 import { TidalProvider } from '@/adapters/content/providers/tidal/tidalProvider';
 import { MusicAssistantBridgeProvider } from '@/adapters/content/providers/musicassistant/musicAssistantBridgeProvider';
 import { YtMusicProvider } from '@/adapters/content/providers/ytmusic/ytmusicProvider';
+import { scheduleYtMusicCookieCheck } from '@/adapters/content/providers/ytmusic/ytmusicAuthState';
 import { YoutubeProvider } from '@/adapters/content/providers/youtube/youtubeProvider';
 import { SoundCloudProvider } from '@/adapters/content/providers/soundcloud/soundcloudProvider';
 
@@ -118,8 +119,13 @@ export const CONTENT_PROVIDERS: readonly ProviderDefinition[] = [
     id: 'ytmusic',
     title: 'YouTube Music',
     icon: '/admin/providers/youtube-music.svg',
-    create: ({ providerId, serviceNativePrefix, label, bridge }) =>
-      new YtMusicProvider({ providerId, serviceNativePrefix, label, bridge }),
+    create: ({ providerId, serviceNativePrefix, label, bridge }) => {
+      // Ask once, here, whether the cookie still signs in. An expired one is
+      // otherwise indistinguishable from an empty library until someone browses,
+      // and on a server nobody has browsed yet there is nothing to report at all.
+      scheduleYtMusicCookieCheck(bridge.id, bridge.ytmusicCookie);
+      return new YtMusicProvider({ providerId, serviceNativePrefix, label, bridge });
+    },
   },
   {
     id: 'youtube',

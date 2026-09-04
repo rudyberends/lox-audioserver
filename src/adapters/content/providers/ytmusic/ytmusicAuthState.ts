@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { createLogger } from '@/shared/logging/logger';
 import {
   YtMusicCookieExpiredError,
@@ -101,4 +102,56 @@ export async function verifyYtMusicCookie(cookie: string): Promise<YtMusicAuthSt
     const message = err instanceof Error ? err.message : String(err);
     return { state: 'unknown', checkedAt: Date.now(), message };
   }
+}
+
+/**
+ * Establish a cookie's verdict without waiting for someone to browse.
+ *
+ * Recording the verdict as requests happen answers "why is my library empty" only
+ * once the library has been asked for, which on a fresh server is never — the state
+ * reads `unknown` and the setup screen has nothing to show. So each configured
+ * account is checked once in the background when it is registered.
+ *
+ * Deduped on the cookie itself: config refreshes rebuild providers freely, and this
+ * must not turn each one into another request to YouTube. A changed cookie is a new
+ * signature and gets checked again immediately.
+ */
+const CHECK_TTL_MS = 6 * 60 * 60_000;
+
+const checksByBridgeId = new Map<string, { signature: string; checkedAt: number }>();
+
+export function scheduleYtMusicCookieCheck(bridgeId: string, cookie: string | undefined): void {
+  const id = String(bridgeId || '').trim();
+  const value = typeof cookie === 'string' ? cookie.trim() : '';
+  if (!id) return;
+  if (!value) {
+    // Nothing to ask YouTube about; the account is simply not configured yet.
+    recordYtMusicAuth(id, 'missing');
+    return;
+  }
+
+  const signature = crypto.createHash('sha256').update(value).digest('hex');
+  const previous = checksByBridgeId.get(id);
+  if (previous && previous.signature === signature && Date.now() - previous.checkedAt < CHECK_TTL_MS) {
+    return;
+  }
+  // Claimed before the request so concurrent refreshes cannot both start one.
+  checksByBridgeId.set(id, { signature, checkedAt: Date.now() });
+
+  const timer = setTimeout(() => {
+    void (async () => {
+      try {
+        const verdict = await verifyYtMusicCookie(value);
+        recordYtMusicAuth(id, verdict.state, verdict.message);
+      } catch (err) {
+        // Never a startup failure: an unreachable YouTube says nothing about the cookie.
+        log.debug('ytmusic background cookie check failed', {
+          bridgeId: id,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        checksByBridgeId.delete(id);
+      }
+    })();
+  }, 0);
+  timer.unref?.();
 }
