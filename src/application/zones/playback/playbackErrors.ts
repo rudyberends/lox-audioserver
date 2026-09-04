@@ -97,7 +97,7 @@ export function handlePlaybackError(args: {
  * An announcement, a next track or a switch of input replaces what a zone renders in
  * milliseconds, while the source it displaced can take seconds to notice and complain.
  * Acting on that complaint stops the wrong thing — a TTS clip fell silent 0.6 s in
- * because the librespot session it had just replaced reported a dead audio key (#293).
+ * because the Spotify session it had just replaced reported a dead audio key (#293).
  */
 function hasMovedOn(ctx: ZoneContext, origin: PlaybackErrorOrigin | undefined): boolean {
   return origin !== undefined && ctx.inputMode !== origin.input;

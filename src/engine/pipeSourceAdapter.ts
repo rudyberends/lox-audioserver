@@ -1,9 +1,9 @@
 /**
- * Tracks a single upstream pipe source (librespot, Spotify pcm, etc.) plus its
+ * Tracks a single upstream pipe source (a Spotify run, line-in, Bluetooth) plus its
  * data/error/end/close listeners. Callers `adopt()` a stream, attach handlers
  * through the typed methods, and `detach()` to clean up. Adopting a new stream
  * automatically detaches the previous one — this lets crossfade swap the
- * underlying librespot stream without leaking listeners.
+ * underlying stream without leaking listeners.
  */
 export class PipeSourceAdapter {
   private stream?: NodeJS.ReadableStream;
@@ -32,7 +32,7 @@ export class PipeSourceAdapter {
     this.stream.on('error', listener);
   }
 
-  /** Single listener fired by either 'end' or 'close' (librespot uses both inconsistently). */
+  /** Single listener fired by either 'end' or 'close'; producers use both inconsistently. */
   public onEndOrClose(listener: () => void): void {
     if (!this.stream) return;
     this.endListener = listener;

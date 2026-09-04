@@ -596,7 +596,7 @@ async function handleContentUpdate(
   const body = (await deps.readJsonBody(req, res)) as
     | {
         radio?: { tuneInUsername?: string | null; radioParadise?: { enabled?: boolean } };
-        spotify?: { clientId?: string | null; cacheEnabled?: boolean; cacheSizeMb?: number };
+        spotify?: { clientId?: string | null };
         library?: { enabled?: boolean; autoScan?: boolean };
         tts?: AudioServerConfig['content']['tts'];
         mediaServer?: { enabled?: boolean; friendlyName?: string };
@@ -635,8 +635,6 @@ async function handleContentUpdate(
             ? body.spotify.clientId.trim()
             : '',
         accounts: cfg.content.spotify?.accounts ?? [],
-        ...(typeof body.spotify.cacheEnabled === 'boolean' && { cacheEnabled: body.spotify.cacheEnabled }),
-        ...(typeof body.spotify.cacheSizeMb === 'number' && { cacheSizeMb: body.spotify.cacheSizeMb }),
       };
     }
     if (body.library) {

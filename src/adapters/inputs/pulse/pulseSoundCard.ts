@@ -163,6 +163,17 @@ export class PulseSoundCard {
     this.cards.get(id)?.discardPending();
   }
 
+  /**
+   * Forget what the last player played in, before starting the next one.
+   *
+   * `waitForSpec` answers at once when a format is already known, which is right for a player that
+   * keeps one stream open and wrong for one that is replaced every track: the answer would be the
+   * previous player's, given before the new one had connected.
+   */
+  public forgetSpec(id: number): void {
+    this.cards.get(id)?.forgetSpec();
+  }
+
   public async remove(id: number): Promise<void> {
     const card = this.cards.get(id);
     if (!card) {
@@ -444,6 +455,10 @@ class CardSocket {
     this.pendingBytes = 0;
   }
 
+  public forgetSpec(): void {
+    this.spec = null;
+  }
+
   public takeStream(): Readable {
     this.stream?.destroy();
     // A Readable of our own rather than a PassThrough, because being read is the signal that
@@ -562,6 +577,12 @@ class CardSocket {
     socket.on('close', () => {
       if (this.socket === socket) {
         this.socket = null;
+        // What this player was playing in is not what the next one will be playing in, and it is
+        // not always given the chance to say so: a player that is killed mid-track never deletes
+        // its stream. Leaving the format behind would have the next track answered with it before
+        // its player has even connected — for a card that gets a new player on every track, that
+        // is the difference between waiting for the real answer and guessing the last one.
+        this.spec = null;
       }
     });
 

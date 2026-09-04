@@ -2,7 +2,7 @@ import { PassThrough } from 'node:stream';
 
 /**
  * Upstream throttle hooks. Called when the fanout wants more or less data
- * from whatever feeds it (ffmpeg stdout, a librespot pipe, etc.). The upstream
+ * from whatever feeds it (ffmpeg stdout, a live producer's pipe, etc.). The upstream
  * decides whether a pause/resume actually takes effect — the fanout just
  * signals intent.
  */

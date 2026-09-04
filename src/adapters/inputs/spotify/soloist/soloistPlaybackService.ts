@@ -4,14 +4,21 @@ import type { ConfigPort } from '@/ports/ConfigPort';
 import type { PlaybackSource } from '@/application/playback/audioManager';
 import { PulseSoundCard } from '@/adapters/inputs/pulse/pulseSoundCard';
 import {
+  accountStore,
   applyPreferences,
-  isZonePaired,
+  hasStoredSession,
   probeBinary,
   reserveWsPort,
-  soloistDataDir,
   startPersistent,
+  zoneStore,
   type SoloistRunHandle,
+  type SoloistStore,
 } from '@/adapters/inputs/spotify/soloist/soloistProcess';
+import {
+  SoloistTrackRun,
+  type TrackRunEnd,
+  type TrackRunFailure,
+} from '@/adapters/inputs/spotify/soloist/soloistTrackRun';
 import { fetchBuild } from '@/adapters/inputs/spotify/soloist/soloistUpdater';
 import {
   clampVolume,
@@ -23,8 +30,6 @@ import {
 import type { SpotifyConnectController, SpotifyQueueTrack } from '@/ports/InputsPort';
 import type { PlaybackMetadata } from '@/application/playback/audioManager';
 
-/** How long to wait for the track we asked for to actually be sounding. */
-const PLAY_START_TIMEOUT_MS = 20_000;
 /**
  * How often to ask Spotify whether it has published a new build.
  *
@@ -40,28 +45,40 @@ const BUILD_CHECK_INTERVAL_MS = 24 * 3600_000;
  */
 const ACTIVATION_VOLUME_LATCH_MS = 4000;
 /**
- * How close to the end of a track counts as having reached it.
+ * How long a track waits for another room to let go of the account's store.
  *
- * Soloist reports a position against a duration it also reports, and at the end of a track the two
- * are equal to the millisecond — this is slack for the rounding, not for a gap anyone has measured.
- * Its cost is a `next` pressed in the last two seconds being read as the track simply ending, which
- * comes to the same thing a moment later.
+ * An account plays in one room at a time — Spotify's rule, and the engine's too, since one store
+ * takes one run. So a second room asking for the same account is refused rather than allowed to
+ * steal the first one's music, which is the right way round. Short wait only, for the case where
+ * the first room has just stopped and its process is on its way out.
  */
-const NATURAL_END_TOLERANCE_MS = 2000;
+const STORE_WAIT_MS = 1500;
 
+/** Everything that has to be true before an account can play, named so the UI can say which is not. */
 export type SoloistReadiness =
   | { ready: true }
-  | { ready: false; reason: 'disabled' | 'no_api_key' | 'no_binary' | 'not_executable' | 'not_paired' };
+  | {
+    ready: false;
+    reason: 'no_api_key' | 'no_binary' | 'not_executable' | 'no_account' | 'not_paired';
+  };
 
 /**
- * Who is deciding what plays.
+ * Who is deciding what plays in a room.
  *
- * `queue` is this server working through its own list, one track at a time: a change to anything
- * else means the track ended. `connect` is someone driving the zone from the Spotify app, where
- * Soloist owns the queue and moving to the next track is ordinary — ending the session there
- * would cut off the very thing they asked for.
+ * `idle` is nobody: the room's daemon is sitting there advertising itself, and anything it reports
+ * playing is somebody picking the room in their Spotify app — which is the one state a takeover
+ * can be adopted from.
+ *
+ * `queue` is this server working through its own list, and it no longer goes through that daemon at
+ * all: every track is its own `--single-track` run from the account it came from. While the queue
+ * owns a room, everything the daemon says is about an account playing somewhere else, so none of it
+ * is read. That is what the split bought — the end of a track, a pause and a skip used to arrive
+ * looking identical.
+ *
+ * `connect` is someone driving the room from the Spotify app, where Soloist owns the queue and
+ * moving to the next track is ordinary rather than something to be read into.
  */
-type Owner = 'queue' | 'connect';
+type Owner = 'idle' | 'queue' | 'connect';
 
 /**
  * The volume Connect hands a device when that device takes the account, still to be dropped.
@@ -71,39 +88,19 @@ type Owner = 'queue' | 'connect';
  */
 export type VolumeLatch = { until: number; value: number | null };
 
-/** One zone's Soloist: the process, its control channel, and whatever it is playing. */
+/** One zone's Connect device: the process, its control channel, and whatever it is playing. */
 type ZoneRunner = {
   handle: SoloistRunHandle;
   ws: SoloistWsClient;
   owner: Owner;
-  /** The track this zone was told to play, while the queue owns it. */
-  wantedUri: string | null;
-  /** How far Soloist has got into that track, and so whether it is still on it. */
-  progress: TrackProgress;
+  /** The run playing this room's own queue, when there is one. Never this daemon. */
+  track: SoloistTrackRun | null;
   /** What is sounding now, so a repeat of the same event is not treated as a change. */
   currentUri: string | null;
   /** The current track in full, since the queue Soloist reports leaves it out. */
   currentTrack: SpotifyQueueTrack | null;
   /** Either side of the current track, as Soloist last reported it. */
   queue: { previous: string[]; upcoming: string[] };
-  /** Whether the app's pause is what stopped this zone, so its resume can start it again. */
-  appPaused: boolean;
-  /**
-   * Whether the last pause was ours.
-   *
-   * Soloist reports a pause the same way whoever asked for it, and it reports two of them per
-   * pause. Without knowing which are ours, our own stop comes back as "someone paused this zone
-   * on their phone" — which is how a zone once paused and resumed itself in the space of a second.
-   */
-  selfPaused: boolean;
-  /**
-   * Whether a track is being set up right now.
-   *
-   * Taking the account makes Soloist start whatever the account was playing, a moment before it is
-   * told what this room actually wants. Read as ordinary events, that is a foreign track arriving
-   * out of nowhere — a skip, or a takeover — so nothing is read at all until the new track is on.
-   */
-  starting: boolean;
   stream: Readable | null;
   /**
    * The level this zone and Soloist last agreed on.
@@ -116,66 +113,6 @@ type ZoneRunner = {
   /** Armed while the volume Connect reports for an activation is still to be ignored. */
   volumeLatch: VolumeLatch | null;
 };
-
-/**
- * How far Soloist has got into the track this server asked for.
- *
- * `ended` is the one thing that tells our own track running out apart from someone reaching for the
- * app, and there is no event for it: Soloist announces the end of a track by moving to another one,
- * which is exactly what a listener pressing next looks like. What separates them is where it was
- * when it left — at the end, or somewhere in the middle.
- */
-export type TrackProgress = { durationMs: number; ended: boolean };
-
-/** Nothing known yet: what every track starts from. */
-export const NO_PROGRESS: TrackProgress = { durationMs: 0, ended: false };
-
-/**
- * Fold one of Soloist's reports into what is known about our own track.
- *
- * Length and position both arrive on the same reports, so there is no earlier event to have caught:
- * the one that carries a track to its end carries its length with it. A report naming another track
- * says nothing about ours and is left out; one naming no track at all — `position_sync` — is about
- * whatever is current, which is still ours until a change says otherwise.
- *
- * `ended` sticks. Everything Soloist does after our track ran out belongs to a track this room is
- * no longer following, including the position it starts reporting for it.
- */
-export function readTrackProgress(
-  progress: TrackProgress,
-  sample: { uri?: string; wantedUri: string; durationMs?: number; positionMs?: number },
-): TrackProgress {
-  if (progress.ended || (sample.uri && sample.uri !== sample.wantedUri)) {
-    return progress;
-  }
-  const reported = sample.uri === sample.wantedUri ? sample.durationMs ?? 0 : 0;
-  const durationMs = reported > 0 ? reported : progress.durationMs;
-  const positionMs = sample.positionMs;
-  const ended =
-    durationMs > 0 &&
-    typeof positionMs === 'number' &&
-    positionMs >= durationMs - NATURAL_END_TOLERANCE_MS;
-  return durationMs === progress.durationMs && !ended ? progress : { durationMs, ended };
-}
-
-/**
- * What a track change means when this server owns the queue.
- *
- * Soloist keeps a queue of its own whatever we do with it, so a track we did not ask for is either
- * our own track ending — it moves on by itself — or someone reaching for the app's buttons. The two
- * are told apart by where the new track sits: going back plays something Soloist has already
- * played, and that is the only case the queue here must be walked backwards for.
- */
-export function classifyTrackChange(
-  uri: string,
-  wantedUri: string | null,
-  queue: { previous: string[] },
-): 'ours' | 'back' | 'forward' {
-  if (!wantedUri || uri === wantedUri) {
-    return 'ours';
-  }
-  return queue.previous.includes(uri) ? 'back' : 'forward';
-}
 
 /**
  * Whether a volume Soloist reports is somebody moving the slider in the Spotify app.
@@ -264,22 +201,42 @@ function queueTrackOf(
 }
 
 /**
- * Plays Spotify through the user's own Soloist build instead of librespot.
+ * Plays Spotify through the user's own Soloist build.
  *
- * A second backend, not a replacement: librespot cannot obtain audio keys for accounts made after
- * Nov 2025, while Soloist costs a personal API key, a binary the user installs, and a build that
- * expires every 90 days. A zone picks one; absent a choice it stays on librespot.
+ * Two jobs, and they are deliberately separate processes on separate stores.
  *
- * One process per zone, kept running and driven over its WebSocket. Per-track processes were the
- * first shape tried, and the data directory's lock rules them out: a zone gets one instance, and
- * wanting that zone to appear in the Spotify app means that instance must stay up. Driving the
- * running one costs no login per track and brings seeking and real events with it.
+ * A room is a Spotify Connect device: one daemon per zone, kept running, advertising itself and
+ * never signed in from here. Whoever picks the room in their own Spotify app is the one who signs
+ * it in, so a room belongs to whoever took it last and there is nothing to pair from this side.
+ *
+ * A room playing this server's own queue is one `--single-track` run per track, started from the
+ * store of the account the track came from. That is what makes the end of a track a fact rather
+ * than a guess — the process exits — and what makes playing from a second account nothing more
+ * than starting from a second directory.
  */
 export class SoloistPlaybackService {
   private readonly log = createLogger('Input', 'Soloist');
   /** The sound card Soloist plays into: no daemon, the audio lands in this process. */
   private readonly audio = new PulseSoundCard('soloist');
   private readonly runners = new Map<number, ZoneRunner>();
+  /**
+   * Track runs for rooms with no Connect daemon of their own.
+   *
+   * A room only has a daemon when Soloist is the chosen player and the room has been synced; a
+   * track can be asked for before that, and it plays regardless — the daemon is what makes a room
+   * appear in the Spotify app, not what makes it sound.
+   */
+  private readonly orphanRuns = new Map<number, SoloistTrackRun>();
+  /**
+   * Runs that have been told to stop but may not have gone yet, per room.
+   *
+   * A data directory holds a lock, so the next track cannot start from the same account until the
+   * previous process has actually exited. Killing it is not the same as it having gone: measured,
+   * a run spawned straight after a kill is refused outright — which is what a skip looked like.
+   */
+  private readonly draining = new Map<number, Promise<void>>();
+  /** Why the last track would not start, so the screen can say something better than "no". */
+  private lastFailure: TrackRunFailure | null = null;
   private readonly starting = new Map<number, Promise<ZoneRunner | null>>();
   /** Track lengths as Soloist reported them, so a position update can carry one. */
   private readonly durations = new Map<number, number>();
@@ -303,19 +260,27 @@ export class SoloistPlaybackService {
     return this.configPort.getConfig()?.content?.spotify?.soloist ?? {};
   }
 
-  /** Whether Spotify plays through Soloist at all. One choice, for every zone. */
+  /**
+   * Whether this server can play Spotify at all, which is the same question as whether it has a key.
+   *
+   * The key is personal and Premium-only, so it is never there by accident: somebody went and got
+   * it, and the only reason to do that is to play Spotify. Clearing it is how you turn this off.
+   */
   public isEnabled(): boolean {
-    return this.settings.enabled === true;
+    return Boolean(this.settings.apiKey?.trim());
   }
 
   /**
    * Start a Soloist for every zone, so each one is a Connect device from the moment the server is.
    *
-   * Eager on purpose. A zone with no process is not in the Spotify app's device list, so it can
-   * neither be logged in nor taken over — and starting one is also how a zone gets logged in at
-   * all: with no stored session it advertises and waits for someone to pick it. Lazily starting on
-   * the first play would mean a room could only be reached from a phone after it had already been
-   * played from here, which is backwards.
+   * Eager on purpose, and this is the whole of what these processes are for: a room with no process
+   * is not in the Spotify app's device list, so nobody can pick it. Starting one is also how a room
+   * comes to be signed in at all — with no stored session it advertises itself and waits, and
+   * whoever picks it is the one who signs it in. Lazily starting on the first play would mean a
+   * room could only be reached from a phone after it had already been played from here, which is
+   * backwards.
+   *
+   * Playing this server's own queue does not go through any of them; see `getPlaybackSource`.
    */
   public async syncZones(zoneIds: number[]): Promise<void> {
     if (!this.isEnabled()) {
@@ -359,7 +324,7 @@ export class SoloistPlaybackService {
     this.buildTimer.unref?.();
   }
 
-  private async updateBuild(reason: 'startup' | 'daily'): Promise<void> {
+  private async updateBuild(reason: 'startup' | 'daily' | 'expired'): Promise<void> {
     const installed = await probeBinary();
     const known = installed.present ? this.settings.build : undefined;
     const result = await fetchBuild(known);
@@ -443,6 +408,10 @@ export class SoloistPlaybackService {
 
   /** Stop every zone's Soloist, for when the backend is switched off. */
   public async stopAllZones(): Promise<void> {
+    for (const run of this.orphanRuns.values()) {
+      run.stop();
+    }
+    this.orphanRuns.clear();
     for (const [zoneId, runner] of [...this.runners]) {
       this.finishTrack(zoneId);
       runner.ws.close();
@@ -455,10 +424,7 @@ export class SoloistPlaybackService {
   }
 
   /** Everything that has to be true before a zone can play, named so the UI can say which is not. */
-  public async readiness(zoneId: number): Promise<SoloistReadiness> {
-    if (this.settings.enabled !== true) {
-      return { ready: false, reason: 'disabled' };
-    }
+  public async readiness(accountId: string): Promise<SoloistReadiness> {
     if (!this.settings.apiKey?.trim()) {
       return { ready: false, reason: 'no_api_key' };
     }
@@ -469,11 +435,39 @@ export class SoloistPlaybackService {
     if (!binary.executable) {
       return { ready: false, reason: 'not_executable' };
     }
-    if (!(await isZonePaired(zoneId))) {
-      // The process runs and advertises regardless; what it cannot do yet is be told what to play.
+    if (!accountId) {
+      return { ready: false, reason: 'no_account' };
+    }
+    if (!(await hasStoredSession(accountStore(accountId)))) {
+      // Rooms need no pairing at all now; an account does, once, and until then there is no stored
+      // session for a run to restore — it would advertise itself and wait for nobody.
       return { ready: false, reason: 'not_paired' };
     }
     return { ready: true };
+  }
+
+  /** Why the last track would not play, so a screen can name it rather than saying nothing. */
+  public lastPlaybackFailure(): TrackRunFailure | null {
+    return this.lastFailure;
+  }
+
+  /** Which accounts can play, for the screen that offers to pair the ones that cannot. */
+  public async pairedAccounts(): Promise<Array<{ id: string; label: string; paired: boolean }>> {
+    const accounts = this.configPort.getConfig()?.content?.spotify?.accounts ?? [];
+    return Promise.all(
+      accounts
+        .filter((account) => Boolean(account.id))
+        .map(async (account) => ({
+          id: account.id as string,
+          label: account.displayName || account.name || account.user || (account.id as string),
+          paired: await hasStoredSession(accountStore(account.id as string)),
+        })),
+    );
+  }
+
+  /** The store one account's playback runs from, for the pairing flow to sign in. */
+  public storeForAccount(accountId: string): SoloistStore {
+    return accountStore(accountId);
   }
 
   private zoneName(zoneId: number): string {
@@ -505,9 +499,15 @@ export class SoloistPlaybackService {
       return null;
     }
 
-    // Ask Spotify for lossless before the process starts: the app applies a quality change from
-    // the next track, so setting it after would leave the first one at whatever it defaulted to.
-    await applyPreferences(zoneId, this.settings.lossless !== false);
+    // Stated before the process starts, because that is the only time the engine reads them — and
+    // for a room, whoever signs it in gets the room's quality rather than whatever their app had
+    // set for a device they have never opened the settings of.
+    await applyPreferences(zoneStore(zoneId), {
+      lossless: this.settings.lossless !== false,
+      // The app is driving; Spotify's own normalization is the one a listener expects here, and
+      // nothing of ours is normalizing what comes through.
+      normalize: true,
+    });
 
     // The control channel's port is settled here rather than by Soloist, so there is nothing to
     // wait for a file to tell us. A zone whose port cannot be reserved gets no process: it would
@@ -549,15 +549,12 @@ export class SoloistPlaybackService {
     const runner: ZoneRunner = {
       handle,
       ws,
-      owner: 'queue',
-      wantedUri: null,
-      progress: NO_PROGRESS,
+      // Nobody is driving a room that has only just started advertising itself.
+      owner: 'idle',
+      track: null,
       currentUri: null,
       currentTrack: null,
       queue: { previous: [], upcoming: [] },
-      appPaused: false,
-      selfPaused: false,
-      starting: false,
       stream: null,
       volume: null,
       volumeLatch: null,
@@ -578,19 +575,21 @@ export class SoloistPlaybackService {
   }
 
   /**
-   * Watch for the track we asked for going away.
+   * What the room's Connect daemon reports, which is only ever about the app.
    *
-   * Soloist keeps its own queue and moves on by itself when a track ends, so there is no "finished"
-   * event to wait for — what arrives is a `track_changed` naming something nobody asked for. That
-   * is the end of our track, and ending the stream is what turns it into the EOF the engine already
-   * advances on.
+   * This daemon no longer plays anything of ours, so nothing here has to tell our track apart from
+   * somebody else's any more: while the queue owns the room, every one of these events is the
+   * account doing something in another room and is dropped on sight. That is the whole of what the
+   * split bought — the end of a track, a pause and a skip used to arrive looking identical.
    */
   private onEvent(zoneId: number, event: SoloistStateEvent): void {
     const runner = this.runners.get(zoneId);
     if (!runner) {
       return;
     }
-    if (runner.starting) {
+    // This server is driving the room from its own queue, through a run of its own. Whatever the
+    // room's Connect device has to say, it is not about the music that is playing in here.
+    if (runner.owner === 'queue') {
       return;
     }
     const track = readTrack(event.item);
@@ -602,46 +601,32 @@ export class SoloistPlaybackService {
     // track, same queue, same position. A room that reads that as its own has no way to tell a
     // listener's doing from another room's: two rooms on one account each saw the other's track
     // start, read it as a skip, stepped their own queue and started playing, which made them the
-    // active device and set the other one off again. Neither could hold the account long enough to
-    // play anything.
+    // active device and set the other one off again.
     if (!runner.ws.isActive) {
-      if (runner.owner === 'connect') {
-        this.log.info('spotify moved playback to another device', { zoneId });
-        runner.owner = 'queue';
-        runner.currentUri = null;
-        runner.currentTrack = null;
-        this.finishTrack(zoneId);
-        this.controller?.stopPlayback(zoneId);
-      } else if (runner.wantedUri) {
-        // A Spotify account plays on one device at a time, and this room has just lost it. Its
-        // audio has already stopped at the source, so saying so beats streaming silence.
-        this.log.info('spotify gave the account to another device; this zone stops', { zoneId });
-        runner.wantedUri = null;
-        runner.appPaused = false;
-        this.finishTrack(zoneId);
-        this.controller?.transport(zoneId, 'stop');
+      if (runner.owner !== 'connect') {
+        // An idle room hears every note of what the account is doing elsewhere. None of it is its
+        // business until somebody picks this room.
+        return;
       }
+      this.log.info('spotify moved playback to another device', { zoneId });
+      runner.owner = 'idle';
+      runner.currentUri = null;
+      runner.currentTrack = null;
+      this.finishTrack(zoneId);
+      this.controller?.stopPlayback(zoneId);
       return;
     }
 
-    // Just became the active device again, but with nothing carrying our audio.
+    // Just became the active device again, but with nothing carrying its audio.
     //
-    // The handoff that moved the account away tore this zone's stream down (finishTrack), and coming
-    // back is announced as a `device_changed`, which carries no `status` — so the `status === 'playing'`
-    // adopt below never fires on it. Mid-track that is harmless: the `playing` and `track_changed`
-    // events that follow re-adopt it. But when the switch back lands in the last seconds of a track,
-    // Soloist reaches the track's end before any of those arrive and then sends none, leaving the zone
-    // owner=`queue`, no stream, stuck at end-of-track while Soloist plays on into a pipe nobody reads.
-    // Re-adopting here reopens the pipe so playback is consumed again and advances. See #352.
+    // The handoff that moved the account away tore this zone's stream down, and coming back is
+    // announced as a `device_changed`, which carries no `status` — so the `status === 'playing'`
+    // adopt below never fires on it. Re-adopting here reopens the pipe so playback is consumed
+    // again and advances. See #352.
     if (event.type === 'device_changed' && !runner.stream) {
       void this.adoptConnectPlayback(zoneId, event);
       return;
     }
-
-    // How far Soloist has got into our own track, kept up to date while it is still on it. Read
-    // before anything acts on this event, because the event that carries our track to its end is
-    // also the one that has to be judged against it.
-    this.noteProgress(runner, event, uri);
 
     // The slider in the Spotify app. Only `volume_changed` — the level rides along on every
     // `playback_state` as well, where it says what the device is set to rather than that anybody
@@ -651,143 +636,38 @@ export class SoloistPlaybackService {
       return;
     }
 
-    // Both lists arrive together on `queue_changed`, unasked after every change. They are what
-    // tells a step backwards from a step forwards, and while the app owns the zone they are also
-    // the only account anyone here has of what is coming.
+    // Both lists arrive together on `queue_changed`, unasked after every change. While the app owns
+    // the room they are the only account anyone here has of what is coming.
     if (Array.isArray(event.previous) || Array.isArray(event.upcoming)) {
       runner.queue = {
         previous: urisOf(event.previous),
         upcoming: urisOf(event.upcoming),
       };
-      if (runner.owner === 'connect') {
-        this.publishQueue(zoneId, runner, event);
-      }
+      this.publishQueue(zoneId, runner, event);
     }
 
-    if (event.type === 'track_changed' && uri) {
-      if (runner.owner === 'queue') {
-        if (runner.wantedUri && runner.progress.ended) {
-          // Our track played to its end and Soloist went on to something of its own. Nobody
-          // pressed anything, so nothing here may step the queue: this zone ends a track when its
-          // own clock reaches the end, and stepping now would land two tracks on one ending.
-          this.stopAfterOurTrack(zoneId, runner, uri);
-          return;
-        }
-        const change = classifyTrackChange(uri, runner.wantedUri, runner.queue);
-        if (change === 'back') {
-          // Someone pressed back on the phone. Soloist has already gone to its own previous track,
-          // which is not ours, so this zone's queue is walked back and the track it lands on is
-          // played over the top. Deliberately without pausing Soloist first: the pause comes back
-          // as an event indistinguishable from someone pausing on the phone, and the moment of the
-          // wrong track that pausing would save is shorter than the confusion it causes.
-          this.log.info('the spotify app stepped back a track', { zoneId });
-          runner.wantedUri = null;
-          this.controller?.transport(zoneId, 'previous');
-          return;
-        }
-        if (change === 'forward') {
-          // Someone pressed next on the phone. Ending the stream is not enough: a zone finishes a
-          // track when its own clock reaches the end, not when the audio stops arriving, so on a
-          // skip the room would fall silent and sit there for the rest of the track's length.
-          // Walking the queue on is what a skip actually means.
-          this.log.info('the spotify app skipped past our track', {
-            zoneId,
-            expected: runner.wantedUri,
-            got: uri,
-          });
-          runner.wantedUri = null;
-          // Spotify carries on by itself whatever `player.autoplay` is set to — measured, the
-          // preference is written and ignored — so the room's own queue is not the only thing that
-          // decides what sounds next. Silencing it here is what keeps a zone that has run out of
-          // queue from leaving Spotify playing to nobody, holding the account as it goes. If the
-          // queue does have something, the play that follows starts it again.
-          runner.selfPaused = true;
-          runner.ws.pause();
-          this.controller?.transport(zoneId, 'next');
-          return;
-        }
-      }
-      if (runner.owner === 'connect' && uri !== runner.currentUri) {
-        runner.currentUri = uri;
-        runner.currentTrack = queueTrackOf(track);
-        if (!runner.stream) {
-          // Owned by the app but with nothing carrying its audio: the room was stopped or handed
-          // back at some point and the stream went with it, while the app kept sending. Only the
-          // labels moved after that — the track showed up in the room and stayed on stop, which
-          // reads as playback that never starts. Taking it over again is the whole of the fix.
-          void this.adoptConnectPlayback(zoneId, event);
-          return;
-        }
-        // The app moved to its own next track. The stream carries on; only the labels change.
-        this.publishTrack(zoneId, track);
+    if (event.type === 'track_changed' && uri && uri !== runner.currentUri) {
+      runner.currentUri = uri;
+      runner.currentTrack = queueTrackOf(track);
+      if (!runner.stream) {
+        // Owned by the app but with nothing carrying its audio: the room was stopped or handed
+        // back at some point and the stream went with it, while the app kept sending. Only the
+        // labels moved after that — the track showed up in the room and stayed on stop, which
+        // reads as playback that never starts. Taking it over again is the whole of the fix.
+        void this.adoptConnectPlayback(zoneId, event);
         return;
       }
-    }
-
-    // Play and pause pressed on the app, for a zone this server is driving. Only from the room
-    // that is sounding: Connect tells every device what the account is doing, so an idle room
-    // hears about a pause that was never meant for it.
-    if (runner.owner === 'queue' && runner.wantedUri && runner.ws.isActive) {
-      if (event.status === 'idle' || event.status === 'stopped') {
-        // Autoplay is off, so Soloist stops at the end of a track rather than recommending its way
-        // onwards. Ending the stream is what the engine reads as the end, and the queue here picks
-        // what follows.
-        this.log.debug('soloist reached the end of our track', { zoneId, uri: runner.wantedUri });
-        this.finishTrack(zoneId);
-        return;
-      }
-      if (event.status === 'paused' && !runner.appPaused && !runner.selfPaused) {
-        if (runner.progress.ended) {
-          // Not a listener's pause but Soloist stopping where our track ran out — on its way to
-          // whatever it has decided to play next, or already there. Pausing the room for that
-          // left it standing still with a queue full of tracks.
-          this.stopAfterOurTrack(zoneId, runner, uri);
-          return;
-        }
-        this.log.info('the spotify app paused this zone', { zoneId });
-        runner.appPaused = true;
-        this.controller?.transport(zoneId, 'pause');
-        return;
-      }
-      if (event.status === 'playing' && runner.appPaused) {
-        this.log.info('the spotify app resumed this zone', { zoneId });
-        runner.appPaused = false;
-        this.controller?.transport(zoneId, 'resume');
-        return;
-      }
-    }
-
-    // Someone reached for the app while the room stood paused — pressing next there, or play. The
-    // pause was this server's, so nothing else would lift it, and the room would sit silent while
-    // Spotify played on without it.
-    if (event.status === 'playing' && runner.owner === 'connect' && runner.selfPaused) {
-      this.log.info('the spotify app started this zone again', { zoneId });
-      runner.selfPaused = false;
-      this.controller?.resumePlayback(zoneId);
+      // The app moved to its own next track. The stream carries on; only the labels change.
+      this.publishTrack(zoneId, track);
       return;
     }
 
     if (event.status === 'playing') {
-      // Only when this device is the one sounding. Connect pushes the account's playback to every
-      // device it has, so an idle room reports the same track, status and position as the room
-      // actually playing — adopting on that would light up every room at once with the same song.
-      if (!runner.ws.isActive) {
-        return;
-      }
       // Playing something nobody here asked for means the zone was taken over from the Spotify
       // app. Adopting it is the whole of Connect: open the pipe and let the zone follow along.
-      //
-      // Except in the moment after our own track ended, where the something is Spotify carrying on
-      // by itself and this server is already telling it to stop. Adopting that would put a track
-      // nobody chose into the room, over the top of the queue's own next one.
-      const ours = runner.owner === 'queue' && runner.wantedUri && uri === runner.wantedUri;
-      if (!ours && !runner.progress.ended && uri && uri !== runner.currentUri) {
+      if (uri && uri !== runner.currentUri) {
         void this.adoptConnectPlayback(zoneId, event);
       }
-      return;
-    }
-
-    if (runner.owner !== 'connect') {
       return;
     }
     if (event.status === 'paused') {
@@ -796,7 +676,7 @@ export class SoloistPlaybackService {
     }
     if (event.status === 'idle' || event.status === 'stopped') {
       this.log.info('the spotify app stopped this zone', { zoneId });
-      runner.owner = 'queue';
+      runner.owner = 'idle';
       runner.currentUri = null;
       this.finishTrack(zoneId);
       this.controller?.stopPlayback(zoneId);
@@ -846,18 +726,20 @@ export class SoloistPlaybackService {
   /**
    * Put the zone's own level on the app's slider.
    *
-   * Only for a zone Soloist is carrying. Every zone has a process — that is what makes it pickable
-   * in the app at all — and telling an idle one would move the slider of a room playing something
-   * else, and spend a Connect state update saying so.
+   * Only for a room the app is driving, and only while that room is the one sounding: this is the
+   * slider a listener is looking at, and telling an idle device would move the one belonging to
+   * whatever room actually has the account.
+   *
+   * Never a track run of ours. Those are started at 100 and stay there — the level Soloist is told
+   * is applied to the samples before they reach the card, and a run that is not being looked at in
+   * any app has no slider for the number to stand on. The room's own output is where its volume
+   * belongs.
    *
    * Returns whether it was this backend's to answer, so a caller can try elsewhere.
    */
   public setVolume(zoneId: number, level: number): boolean {
     const runner = this.runners.get(zoneId);
-    if (!runner || !runner.ws.isActive) {
-      return false;
-    }
-    if (runner.owner !== 'connect' && !runner.wantedUri) {
+    if (!runner || !runner.ws.isActive || runner.owner !== 'connect') {
       return false;
     }
     const clamped = clampVolume(level);
@@ -886,9 +768,6 @@ export class SoloistPlaybackService {
     runner.owner = 'connect';
     runner.currentUri = track.uri ?? null;
     runner.currentTrack = queueTrackOf(track);
-    runner.wantedUri = null;
-    runner.progress = NO_PROGRESS;
-    runner.appPaused = false;
     // A takeover is announced as playback, not as a queue, so the list has to be asked for once.
     // After this it arrives by itself whenever the listener changes anything.
     runner.ws.requestQueue();
@@ -951,56 +830,28 @@ export class SoloistPlaybackService {
   }
 
   /**
-   * Follow Soloist through the track this server asked for.
+   * End the room's view of what is playing, whichever of the two was playing it.
    *
-   * Only while the queue is the one driving: a zone the app owns has no track of ours to be at the
-   * end of, and everything an inactive device reports is the account's playback in another room.
+   * A track run is put down here rather than left to finish: it holds the account, and an account
+   * held by a room that has stopped listening is an account the next room cannot have.
    */
-  private noteProgress(runner: ZoneRunner, event: SoloistStateEvent, uri: string | undefined): void {
-    if (runner.owner !== 'queue' || !runner.wantedUri) {
-      return;
-    }
-    const durationSec = readTrack(event.item).durationSec;
-    runner.progress = readTrackProgress(runner.progress, {
-      uri,
-      wantedUri: runner.wantedUri,
-      durationMs: typeof durationSec === 'number' ? durationSec * 1000 : undefined,
-      positionMs: event.position?.position_ms,
-    });
-  }
-
-  /**
-   * Our track is over; keep Soloist from playing on past it.
-   *
-   * Deliberately nothing else. The room is still hearing the end of the track — the output holds
-   * whatever the engine has already sent it — and the zone ends it on its own clock, the way it
-   * ends every track. All that is needed here is that Spotify does not carry on by itself: the
-   * `player.autoplay` preference is written and, measured, ignored, so without this the account
-   * would keep playing to nobody, holding it against the room that wants it next. The stream is
-   * left alone; the next track's `getPlaybackSource` closes it, once the room has had the last of
-   * what is in it.
-   */
-  private stopAfterOurTrack(zoneId: number, runner: ZoneRunner, wentTo?: string): void {
-    this.log.debug('soloist reached the end of our track', {
-      zoneId,
-      uri: runner.wantedUri,
-      ...(wentTo && wentTo !== runner.wantedUri ? { wentTo } : {}),
-    });
-    if (runner.selfPaused) {
-      return;
-    }
-    runner.selfPaused = true;
-    runner.ws.pause();
-  }
-
-  /** End the engine's view of the current track without touching the process. */
   private finishTrack(zoneId: number): void {
     const runner = this.runners.get(zoneId);
+    // A room playing without a Connect daemon of its own still has a run to put down, so this is
+    // read before the runner is: there is nothing to look the run up on otherwise.
+    const track = runner?.track ?? this.orphanRuns.get(zoneId) ?? null;
+    if (runner) {
+      runner.track = null;
+    }
+    this.orphanRuns.delete(zoneId);
+    if (track) {
+      // Kept so the next track can wait for the store rather than being refused it.
+      this.draining.set(zoneId, track.stop());
+    }
     if (!runner) {
+      this.audio.discardPending(zoneId);
       return;
     }
-    runner.wantedUri = null;
-    runner.progress = NO_PROGRESS;
     const stream = runner.stream;
     runner.stream = null;
     stream?.destroy();
@@ -1019,78 +870,168 @@ export class SoloistPlaybackService {
     zoneId: number,
     uri: string,
     seekPositionMs = 0,
+    accountId?: string,
   ): Promise<PlaybackSource | null> {
-    const ready = await this.readiness(zoneId);
+    const account = accountId ?? (await this.defaultAccount());
+    const ready = await this.readiness(account);
     if (!ready.ready) {
-      this.log.warn('soloist cannot play this zone yet', { zoneId, reason: ready.reason });
+      this.log.warn('soloist cannot play this track yet', { zoneId, reason: ready.reason, account });
       return null;
     }
-    const runner = await this.ensureRunner(zoneId);
-    if (!runner) {
-      return null;
-    }
-    // Here it matters: a command sent before the session is restored comes back refused rather
-    // than queued. The zone is signed in — readiness said so — so this is only about timing.
-    if (!(await runner.ws.waitUntilReady())) {
-      this.log.warn('soloist has not finished logging in', { zoneId });
+    if (!(await this.audio.ensure(zoneId))) {
       return null;
     }
 
-    // Whatever was sounding is over as far as the engine is concerned, and this server is
-    // deciding again — even if the app had taken the zone over a moment ago.
+    // Whatever was sounding is over, and this server is deciding again — even if the app had taken
+    // the zone over a moment ago. The Connect daemon is left running: it is what keeps the room
+    // pickable in the app, and from here on nothing it says is about this room's music.
+    const runner = this.runners.get(zoneId);
     this.finishTrack(zoneId);
-    runner.owner = 'queue';
-    runner.currentTrack = null;
-    runner.appPaused = false;
-    // Everything Soloist says between here and the first note of the new track is about what came
-    // before it, and reading any of it would be acting on a room that is mid-change.
-    runner.starting = true;
-    try {
-      // Take the account before asking for anything. A `play` from a device that does not hold the
-      // session is a request to the account, and Spotify sends it to whichever room does hold it —
-      // so starting a track in the kitchen started it in the living room instead.
-      if (!runner.ws.isActive) {
-        // Taking the account brings the device's stored volume with it. The zone's own default is
-        // applied by the play-start path and has to win, so what Connect reports here is latched
-        // and dropped until somebody actually moves a slider.
-        runner.volumeLatch = { until: Date.now() + ACTIVATION_VOLUME_LATCH_MS, value: null };
-        runner.ws.activate();
-        if (!(await runner.ws.waitUntilActive())) {
-          this.log.warn('soloist could not take the spotify account for this zone', { zoneId });
-          return null;
-        }
-      }
-      runner.wantedUri = uri;
-      runner.progress = NO_PROGRESS;
-      runner.currentUri = uri;
-
-      const playing = this.waitForPlaying(runner, uri);
-      runner.selfPaused = false;
-      if (!runner.ws.play(uri)) {
-        this.log.warn('could not reach soloist to start the track', { zoneId, uri });
-        return null;
-      }
-      if (!(await playing)) {
-        this.log.warn('soloist did not start playing this track', { zoneId, uri });
-        runner.wantedUri = null;
-        return null;
-      }
-    } finally {
-      runner.starting = false;
+    // The previous run's store is the same directory this one needs, and its lock outlives the
+    // kill by a moment. Waiting here is what makes a skip work.
+    const draining = this.draining.get(zoneId);
+    if (draining) {
+      this.draining.delete(zoneId);
+      await draining;
     }
-    if (seekPositionMs > 0) {
-      runner.ws.seek(seekPositionMs);
+    if (runner) {
+      runner.owner = 'queue';
+      runner.currentTrack = null;
+      runner.currentUri = null;
+      if (runner.ws.isActive) {
+        // Only when it holds the account: a room the app was playing into has to let go, or two
+        // players end up talking to one sound card and the first one to have connected is dropped
+        // mid-track without ever being told.
+        runner.ws.pause();
+        runner.ws.deactivate();
+      }
+    }
+    // The player behind this card is replaced on every track, so what the last one played in says
+    // nothing about the next: without forgetting it, the format is answered before its player has
+    // even connected.
+    this.audio.forgetSpec(zoneId);
+
+    const start = async (): Promise<Awaited<ReturnType<typeof SoloistTrackRun.start>>> =>
+      SoloistTrackRun.start({
+        zoneId,
+        uri,
+        accountId: account,
+        apiKey: this.settings.apiKey?.trim() ?? '',
+        deviceName: this.zoneName(zoneId),
+        lossless: this.settings.lossless !== false,
+        // Nobody else is normalizing this audio, and the engine is the only thing in the path that
+        // knows what Spotify measured for the track.
+        normalize: true,
+        seekPositionMs,
+        env: await this.audio.childEnv(zoneId),
+        onEnd: (end) => this.onTrackEnded(zoneId, uri, end),
+      });
+    let started = await start();
+    if (!started.ok && started.failure === 'store_busy') {
+      // Another room may have stopped a moment ago and still be letting go. Tried once more, and
+      // then left alone: a store that is still busy belongs to a room that is playing, and taking
+      // it would stop that room's music to start this one.
+      await new Promise((resolve) => setTimeout(resolve, STORE_WAIT_MS));
+      started = await start();
+    }
+    if (!started.ok) {
+      this.log.warn('soloist would not play this track', {
+        zoneId,
+        uri,
+        account,
+        reason: started.failure,
+      });
+      this.lastFailure = started.failure;
+      if (started.failure === 'expired') {
+        // A build past its ninety days exits the moment it starts, and the daily check may be
+        // hours away. Fetching now is what makes the next track work instead of every track until
+        // tomorrow — and there is no point retrying this one: the room has already waited.
+        void this.updateBuild('expired');
+      }
+      return null;
+    }
+    this.lastFailure = null;
+    if (runner) {
+      runner.track = started.run;
+    } else {
+      // A room with no Connect daemon still plays: the daemon is what makes it appear in the app,
+      // not what makes it sound. Kept here so stopping and pausing still find the run.
+      this.orphanRuns.set(zoneId, started.run);
     }
 
-    // The very first track of a session has to wait for Soloist to say what it plays in; after
-    // that the answer is already there.
+    // The player opens its stream a moment after it starts sounding, and every track brings a new
+    // one, so this waits on every track rather than only the first of a session.
     await this.audio.waitForSpec(zoneId);
     const opened = this.openAudio(zoneId);
     if (!opened) {
+      started.run.stop();
       return null;
     }
-    runner.stream = opened.stream;
+    if (runner) {
+      runner.stream = opened.stream;
+    }
     return opened.source;
+  }
+
+  /**
+   * What became of a track this server put on.
+   *
+   * `ended` is left alone on purpose. The room is still hearing the last of the track out of the
+   * output's buffer, and it finishes it on its own clock the way it finishes every track — the
+   * next track's `getPlaybackSource` is what closes the stream, once the room has had what was in
+   * it. The other endings are not endings at all: the room would sit in silence for the rest of a
+   * track that has stopped arriving, so it is told.
+   */
+  private onTrackEnded(zoneId: number, uri: string, end: TrackRunEnd): void {
+    const runner = this.runners.get(zoneId);
+    const current = runner?.track ?? this.orphanRuns.get(zoneId) ?? null;
+    if (current && current.uri !== uri) {
+      // A later track already replaced this one; its ending says nothing about what is playing.
+      return;
+    }
+    if (runner) {
+      runner.track = null;
+    }
+    this.orphanRuns.delete(zoneId);
+    if (end.reason === 'ended' || end.reason === 'stopped') {
+      this.log.debug('the soloist run for this track is done', { zoneId, uri, reason: end.reason });
+      return;
+    }
+    if (end.reason === 'taken') {
+      // Somebody picked this room, or another one, in their Spotify app. Either way the account is
+      // theirs now — and if it was this room they picked, its daemon is the one holding it, so the
+      // room goes back to being adoptable rather than staying pinned to a queue it cannot play.
+      if (runner) {
+        runner.owner = 'idle';
+      }
+      this.controller?.transport(zoneId, 'stop');
+      return;
+    }
+    this.log.warn('spotify playback stopped for this room', { zoneId, uri, detail: end.detail });
+    this.controller?.transport(zoneId, 'stop');
+  }
+
+  /** The run carrying this room's queue, wherever it is being kept. */
+  private trackRunFor(zoneId: number): SoloistTrackRun | null {
+    return this.runners.get(zoneId)?.track ?? this.orphanRuns.get(zoneId) ?? null;
+  }
+
+  /**
+   * Which account plays when nothing said.
+   *
+   * A queue item normally carries the account it was browsed from, and that is the one that plays.
+   * Absent one — a bare `spotify:track:…` from somewhere older — the first account that has been
+   * paired stands in, which is the only answer that is right on a server with one account and
+   * defensible on a server with several.
+   */
+  private async defaultAccount(): Promise<string> {
+    for (const account of this.configPort.getConfig()?.content?.spotify?.accounts ?? []) {
+      const id = account.id?.trim();
+      if (id && (await hasStoredSession(accountStore(id)))) {
+        return id;
+      }
+    }
+    return '';
   }
 
   /**
@@ -1122,37 +1063,19 @@ export class SoloistPlaybackService {
     };
   }
 
-  private waitForPlaying(runner: ZoneRunner, uri: string): Promise<boolean> {
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (ok: boolean): void => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        runner.ws.off('event', onEvent);
-        clearTimeout(timer);
-        resolve(ok);
-      };
-      const onEvent = (event: SoloistStateEvent): void => {
-        // `playing` alone is not enough: it also arrives for whatever was sounding before ours
-        // started. The status has to be accompanied by our own uri.
-        if (event.status === 'playing' && (!event.item?.uri || event.item.uri === uri)) {
-          finish(true);
-        }
-      };
-      const timer = setTimeout(() => finish(false), PLAY_START_TIMEOUT_MS);
-      runner.ws.on('event', onEvent);
-    });
-  }
-
   public async stopZone(zoneId: number, reason = 'stop'): Promise<void> {
     const runner = this.runners.get(zoneId);
     if (!runner) {
+      // A room can be playing without a Connect daemon of its own, and its run still has to go:
+      // it holds the account, and an account held for a room that stopped listening is one the
+      // next room cannot have.
+      this.finishTrack(zoneId);
       return;
     }
     this.log.debug('stopping soloist playback for zone', { zoneId, reason });
-    runner.ws.pause();
+    if (runner.owner === 'connect') {
+      runner.ws.pause();
+    }
     // Hand the account's playback back rather than keeping it pinned to a room that stopped
     // listening; the process stays up so the zone remains pickable in the Spotify app.
     runner.ws.deactivate();
@@ -1161,6 +1084,9 @@ export class SoloistPlaybackService {
     // out loud instead of assuming the slider is already right.
     runner.volume = null;
     runner.volumeLatch = null;
+    // Back to nobody driving, which is what makes the room adoptable again: while this server was
+    // driving it, everything its daemon reported was deliberately ignored.
+    runner.owner = 'idle';
     this.finishTrack(zoneId);
   }
 
@@ -1191,19 +1117,33 @@ export class SoloistPlaybackService {
    * elsewhere.
    */
   public setPaused(zoneId: number, paused: boolean): boolean {
-    const runner = this.runners.get(zoneId);
-    if (!runner || runner.owner !== 'queue' || !runner.wantedUri) {
+    const run = this.trackRunFor(zoneId);
+    if (!run) {
       return false;
     }
     this.log.debug('holding the player with its zone', { zoneId, paused });
-    // Marked as ours, so the pause Soloist reports back is not read as someone reaching for their
-    // phone — which would pause the zone a second time, or resume it against the listener.
-    runner.selfPaused = paused;
-    return paused ? runner.ws.pause() : runner.ws.resume();
+    // Nothing to mark as ours any more: a `--single-track` run is in no Spotify app, so a pause it
+    // reports can only be the one just asked for.
+    if (paused) {
+      run.pause();
+    } else {
+      run.resume();
+    }
+    return true;
+  }
+
+  /** Move within the track that is playing, for a room this server is driving. */
+  public seek(zoneId: number, positionMs: number): boolean {
+    const run = this.trackRunFor(zoneId);
+    if (!run) {
+      return false;
+    }
+    run.seek(positionMs);
+    return true;
   }
 
   public isPlaying(zoneId: number): boolean {
-    return Boolean(this.runners.get(zoneId)?.stream);
+    return Boolean(this.runners.get(zoneId)?.stream) || this.orphanRuns.has(zoneId);
   }
 
   /** Keep the reported expiry fresh so the admin screen can warn before a build stops working. */
@@ -1230,6 +1170,10 @@ export class SoloistPlaybackService {
       clearInterval(this.buildTimer);
       this.buildTimer = null;
     }
+    for (const run of this.orphanRuns.values()) {
+      run.stop();
+    }
+    this.orphanRuns.clear();
     for (const [zoneId, runner] of [...this.runners]) {
       this.finishTrack(zoneId);
       runner.ws.close();
@@ -1239,7 +1183,27 @@ export class SoloistPlaybackService {
     await this.audio.stop();
   }
 
+  /**
+   * Follow a renamed room into the Spotify app.
+   *
+   * The name is fixed at spawn, so the process has to start again for a rename to show up in
+   * anybody's device list. A room that is playing is left alone: a new label is not worth cutting
+   * the music for, and the next start picks it up anyway.
+   */
+  public async renameZone(zoneId: number, name: string): Promise<void> {
+    const runner = this.runners.get(zoneId);
+    if (!runner || runner.owner !== 'idle' || runner.track) {
+      return;
+    }
+    this.log.info('restarting a room\'s soloist under its new name', { zoneId, name });
+    runner.ws.close();
+    runner.handle.stop();
+    this.runners.delete(zoneId);
+    await this.ensureRunner(zoneId).catch(() => null);
+  }
+
+  /** Where a room's Connect device keeps its identity, for anything that has to look at it. */
   public dataDirFor(zoneId: number): string {
-    return soloistDataDir(zoneId);
+    return zoneStore(zoneId).data;
   }
 }

@@ -264,7 +264,7 @@ export class FfmpegArgBuilder {
      */
     const durationKnown =
       // A pipe carries raw PCM, so ffmpeg states `Duration: N/A` for it no matter the log level.
-      // There is nothing to learn from the banner, and the input adapter driving the pipe (librespot,
+      // There is nothing to learn from the banner, and the input adapter driving the pipe (a Spotify run,
       // Soloist, line-in) reports the position and length itself.
       this.source.kind === 'pipe' ||
       (typeof this.source.knownDurationSec === 'number' && this.source.knownDurationSec > 0);
@@ -560,7 +560,7 @@ export class FfmpegArgBuilder {
     }
 
     // Nothing alters the audio and nothing needs converting: no filter at all. `isBitPerfect` holds
-    // for lossy sources too (see its docstring); the pipe case covers a librespot-style feed that
+    // for lossy sources too (see its docstring); the pipe case covers a live feed that
     // already arrives in exactly the output format.
     if (!dsp.length && (fromBus || this.isBitPerfect(equalizerBands) || this.pipeMatchesOutput())) {
       return [];
@@ -581,7 +581,7 @@ export class FfmpegArgBuilder {
       osr: sampleRate,
       osf,
       dither: osf === 's16' ? DITHER_METHOD : null,
-      // For live pipe inputs (e.g. librespot), ffmpeg's async clock correction can build up
+      // For live pipe inputs, ffmpeg's async clock correction can build up
       // noticeable startup latency before the first output chunk.
       async: this.source.kind !== 'pipe',
     });

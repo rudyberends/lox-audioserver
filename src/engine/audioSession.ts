@@ -325,7 +325,7 @@ export class AudioSession {
          * cannot see — so a 44.1 kHz/24-bit feed matched by a 44.1 kHz/24-bit output still got the
          * terminal soxr stage, converting samples into the format they were already in. Spotify via
          * Soloist is that feed. `pipeMatchesOutput` stays below as the fallback for a pipe that
-         * declares nothing; it only ever recognised the 16-bit librespot shape.
+         * declares nothing; it only ever recognised a fixed 16-bit shape.
          *
          * `lossless` is a claim about these samples and not their origin: raw PCM arrives as-is, so
          * the declared depth is the real one and there is no encoder between us and it.

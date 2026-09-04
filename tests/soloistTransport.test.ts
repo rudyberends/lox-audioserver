@@ -2,40 +2,14 @@ import assert from 'node:assert/strict';
 import { test } from './testHarness';
 import {
   buildMirroredQueue,
-  classifyTrackChange,
   classifyVolumeReport,
-  NO_PROGRESS,
-  readTrackProgress,
 } from '../src/adapters/inputs/spotify/soloist/soloistPlaybackService';
 import { mapSpotifyTracksToQueue } from '../src/application/zones/state/spotifyQueueMirror';
 
 /**
- * Soloist keeps a queue of its own no matter who is driving it, so a track this server did not ask
- * for is ambiguous: it is either our track ending or someone reaching for the app's buttons. The
- * queue it reports is what tells those apart.
+ * What is left of reading Soloist's events, now that a track this server put on is its own process.
+ * The queue it reports belongs entirely to the Spotify app, and so does the volume.
  */
-
-const queue = { previous: ['spotify:track:a', 'spotify:track:b'] };
-
-test('the track we asked for is ours, whatever the queue says about it', () => {
-  assert.equal(classifyTrackChange('spotify:track:c', 'spotify:track:c', queue), 'ours');
-  // Even a track that has been played before: playing it again is not a step backwards.
-  assert.equal(classifyTrackChange('spotify:track:a', 'spotify:track:a', queue), 'ours');
-});
-
-test('a track Soloist has already played means someone pressed back', () => {
-  assert.equal(classifyTrackChange('spotify:track:b', 'spotify:track:c', queue), 'back');
-});
-
-test('anything else is forward, whether the track ended or was skipped', () => {
-  // Both look identical from here, and both mean the same to the queue: this track is over.
-  assert.equal(classifyTrackChange('spotify:track:z', 'spotify:track:c', queue), 'forward');
-});
-
-test('with nothing asked for there is nothing to have moved past', () => {
-  // A zone the app owns outright: every change is the app's business, not a queue step.
-  assert.equal(classifyTrackChange('spotify:track:z', null, queue), 'ours');
-});
 
 const entry = (id: string, name: string) => ({
   uid: `uid-${id}`,
@@ -181,71 +155,4 @@ test('a latch that never saw a value stops guarding when its window closes', () 
   });
   assert.equal(verdict.follow, true);
   assert.equal(verdict.reason, 'listener');
-});
-
-/**
- * The end of our own track, which arrives looking exactly like a listener pressing next: Soloist
- * moves to a track nobody here asked for. Where it was when it left is what tells them apart, and
- * getting it wrong costs a queue step nobody made — the room skips a track, or plays one twice.
- */
-
-const startOf = (uri: string, durationMs: number) => ({
-  uri,
-  wantedUri: uri,
-  durationMs,
-  positionMs: 0,
-});
-
-test('a track Soloist is still in the middle of has not ended', () => {
-  const progress = readTrackProgress(NO_PROGRESS, startOf('spotify:track:c', 200_000));
-  assert.deepEqual(progress, { durationMs: 200_000, ended: false });
-  assert.equal(
-    readTrackProgress(progress, { uri: 'spotify:track:c', wantedUri: 'spotify:track:c', positionMs: 120_000 }).ended,
-    false,
-  );
-});
-
-test('a position that reaches the length Soloist reported is the end of the track', () => {
-  const started = readTrackProgress(NO_PROGRESS, startOf('spotify:track:c', 355_154));
-  const ended = readTrackProgress(started, {
-    uri: 'spotify:track:c',
-    wantedUri: 'spotify:track:c',
-    durationMs: 355_154,
-    positionMs: 355_154,
-  });
-  assert.equal(ended.ended, true);
-});
-
-test('a position with no track named is about the track we are on', () => {
-  // `position_sync` carries no item at all, and it is the only position some events bring.
-  const started = readTrackProgress(NO_PROGRESS, startOf('spotify:track:c', 200_000));
-  assert.equal(readTrackProgress(started, { wantedUri: 'spotify:track:c', positionMs: 199_500 }).ended, true);
-});
-
-test('what Soloist reports for another track says nothing about ours', () => {
-  // The autoplay track it moves to starts at 0 of its own length. Read as ours, that would undo
-  // the end we had just seen — and the zone would take the move for a skip all over again.
-  const started = readTrackProgress(NO_PROGRESS, startOf('spotify:track:c', 200_000));
-  const ended = readTrackProgress(started, {
-    uri: 'spotify:track:c',
-    wantedUri: 'spotify:track:c',
-    positionMs: 200_000,
-  });
-  const foreign = readTrackProgress(ended, {
-    uri: 'spotify:track:z',
-    wantedUri: 'spotify:track:c',
-    durationMs: 230_000,
-    positionMs: 0,
-  });
-  assert.equal(foreign.ended, true);
-  assert.equal(foreign.durationMs, 200_000);
-});
-
-test('with no length reported yet nothing counts as an ending', () => {
-  // A zone that never heard a duration must fall back to treating a change as someone's doing,
-  // which is what it did before there was a position to read at all.
-  assert.equal(
-    readTrackProgress(NO_PROGRESS, { wantedUri: 'spotify:track:c', positionMs: 500_000 }).ended,
-    false,
-  );
 });

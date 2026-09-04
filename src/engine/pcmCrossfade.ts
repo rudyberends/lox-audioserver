@@ -18,7 +18,7 @@ export interface PcmChunkSource {
 /**
  * Adopts a Readable stream; `isEnded()` flips when the stream emits `end`.
  * Used when the source's lifetime is governed by the stream itself
- * (pipe-source from librespot, fade-in pipe stream).
+ * (pipe-source from a live producer, fade-in pipe stream).
  */
 export function streamChunkSource(stream: NodeJS.ReadableStream): PcmChunkSource {
   let ended = false;
@@ -97,7 +97,7 @@ export interface PcmBlendOptions {
  * and emits a frame-aligned blended buffer until `totalFrames` is reached.
  *
  * Stall handling: a Spotify pipe-source PassThrough never fires `'end'` when
- * the track ends — librespot just stops writing. If we waited for `*Ended` we
+ * the track ends — a live producer just stops writing. If we waited for `*Ended` we
  * would spin forever (which previously caused the blend to hang for minutes
  * and orphan the whole audio session). When one source has been silent longer
  * than STALL_MS *after producing at least one chunk* we treat its samples as
@@ -105,8 +105,8 @@ export interface PcmBlendOptions {
  * `totalFrames`.
  *
  * Sources that have never produced data get a separate STARTUP_TIMEOUT_MS
- * budget (librespot needs ~600 ms before its first PCM chunk arrives).
- * Without this we would bail at framesProcessed=0 whenever the OLD librespot
+ * budget (a producer can need most of a second before its first PCM chunk arrives).
+ * Without this we would bail at framesProcessed=0 whenever the OLD producer
  * was already stalled before the trigger fired (e.g., a 4 s pcm_stall right
  * before song-end).
  */

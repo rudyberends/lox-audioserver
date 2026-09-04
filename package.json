@@ -1,7 +1,7 @@
 {
   "name": "sonn-core",
   "version": "4.0.0-beta.20",
-  "description": "Complete multiroom audio solution — runs standalone or integrates with Loxone as a full Loxone Audio Server emulation",
+  "description": "Complete multiroom audio solution \u2014 runs standalone or integrates with Loxone as a full Loxone Audio Server emulation",
   "private": true,
   "repository": {
     "type": "git",
@@ -63,7 +63,6 @@
   "dependencies": {
     "@sonn-audio/node-airplay": "^0.1.1",
     "@sonn-audio/node-googlecast": "^0.1.2",
-    "@sonn-audio/node-librespot": "^0.5.2",
     "@sonn-audio/node-sendspin": "^0.6.1",
     "@sonn-audio/node-slimproto": "0.1.4",
     "@sonn-audio/node-snapcast": "^0.2.2",

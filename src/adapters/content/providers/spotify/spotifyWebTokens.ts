@@ -1,7 +1,7 @@
 /**
- * Pathfinder tokens without librespot.
+ * Pathfinder tokens, scraped from the public web player.
  *
- * The pathfinder module needs exactly two credentials, and until now both came from a librespot
+ * The pathfinder module needs exactly two credentials, and both used to come from a librespot
  * session — which means the whole editorial half of the Spotify tree (Popular Playlists, Genres
  * & Moods and everything under it, and the tracks of any Spotify-owned playlist) went blank
  * whenever that session could not be opened. None of it has a Web API equivalent: the browse
@@ -23,7 +23,7 @@
  * What this cannot do is be *someone*: the bearer is anonymous, so editorial content arrives
  * but the account's own algorithmic shelves (Discover Weekly, Release Radar, Daily Mix, Made For
  * You) do not — measured absent. Those still need a logged-in token, which is why the provider
- * prefers librespot's when it has one and treats this as the floor rather than the ceiling.
+ * used librespot's when it had one and treated this as the floor rather than the ceiling.
  */
 import { createLogger } from '@/shared/logging/logger';
 import type { SessionTokens } from '@/adapters/content/providers/spotify/spotifyPathfinder';
@@ -209,7 +209,7 @@ async function mint(): Promise<SessionTokens> {
 }
 
 /**
- * The librespot-free token source, as a `PathfinderSession`.
+ * The token source, as a `PathfinderSession`.
  *
  * A module-level singleton on purpose: the pathfinder layer caches tokens in a `WeakMap` keyed
  * on the session object, so handing out a fresh object per call would defeat that cache and

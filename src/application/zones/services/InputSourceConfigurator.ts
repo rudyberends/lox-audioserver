@@ -48,7 +48,7 @@ export type InputSourceConfiguratorDeps = {
  *
  * AirPlay is a straight pass-through to playback-coordinator input methods.
  * Spotify Connect has authority gates (e.g. AirPlay blocks Connect take-over)
- * and dedicated volume handling that avoids feedback loops with librespot.
+ * and dedicated volume handling that avoids feedback loops with the input.
  */
 export class InputSourceConfigurator {
   private readonly deps: InputSourceConfiguratorDeps;
@@ -137,7 +137,7 @@ export class InputSourceConfigurator {
           ctx.queue.authority = 'spotify';
           playback.setInputMode(ctx, 'spotify');
           // Sync zone volume to the Connect device immediately so it does not
-          // start at librespot's default (100%).
+          // start at the input's own default (100%).
           const initialVolume = ctx.state.volume ?? getZoneDefaultVolume(ctx.config);
           outputRouter.dispatchVolume(ctx, ctx.outputs, initialVolume);
         }
@@ -172,7 +172,7 @@ export class InputSourceConfigurator {
         const level = clampVolumeForZone(ctx.config, volume);
         // Patch zone state so the Loxone UI reflects the change.
         // Do NOT route through player.setVolume: that triggers onPlayerVolume, and
-        // the volume we are handling here came from librespot in the first place —
+        // the volume we are handling here came from the input in the first place —
         // sending it back would have it echo another event → infinite loop.
         stateStore.applyPatch(zoneId, buildVolumePatch(level));
         outputRouter.dispatchVolume(ctx, ctx.outputs, level);

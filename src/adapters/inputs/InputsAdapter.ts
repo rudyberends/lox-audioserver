@@ -118,16 +118,12 @@ export class InputsAdapter implements InputsPort {
     return this.deps.spotify.getPlaybackSourceForUri(...args);
   }
 
-  public prefetchPlaybackSourceForUri(...args: Parameters<InputsPort['prefetchPlaybackSourceForUri']>): ReturnType<InputsPort['prefetchPlaybackSourceForUri']> {
-    return this.deps.spotify.prefetchPlaybackSourceForUri(...args);
+  public prefetchPlaybackSourceForUri(): ReturnType<InputsPort['prefetchPlaybackSourceForUri']> {
+    return this.deps.spotify.prefetchPlaybackSourceForUri();
   }
 
   public getPlaybackSource(...args: Parameters<InputsPort['getPlaybackSource']>): ReturnType<InputsPort['getPlaybackSource']> {
     return this.deps.spotify.getPlaybackSource(...args);
-  }
-
-  public markSessionActive(...args: Parameters<InputsPort['markSessionActive']>): void {
-    this.deps.spotify.markSessionActive(...args);
   }
 
   public stopAirplaySession(...args: Parameters<InputsPort['stopAirplaySession']>): void {
@@ -208,17 +204,6 @@ export class InputsAdapter implements InputsPort {
     }
   }
 
-  public startCrossfadeStream(...args: Parameters<InputsPort['startCrossfadeStream']>): ReturnType<InputsPort['startCrossfadeStream']> {
-    return this.deps.spotify.startCrossfadeStream(...args);
-  }
-
-  public stopCrossfadeStream(...args: Parameters<InputsPort['stopCrossfadeStream']>): void {
-    this.deps.spotify.stopCrossfadeStream(...args);
-  }
-
-  public releaseCrossfadeStream(...args: Parameters<InputsPort['releaseCrossfadeStream']>): void {
-    this.deps.spotify.releaseCrossfadeStream(...args);
-  }
 }
 
 export function createInputsAdapter(deps: InputsAdapterDeps): InputsAdapter {

@@ -5,10 +5,14 @@ import { createLogger } from '@/shared/logging/logger';
 import type { ConfigPort } from '@/ports/ConfigPort';
 import type { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
 import {
-  isZonePaired,
   probeBinary,
   soloistBinaryPath,
 } from '@/adapters/inputs/spotify/soloist/soloistProcess';
+import {
+  cancelAccountPairing,
+  pairingSnapshot,
+  startAccountPairing,
+} from '@/adapters/inputs/spotify/soloist/soloistPairing';
 import {
   extractSoloistFromArchive,
   looksGzipped,
@@ -56,6 +60,7 @@ export type SoloistHandlerDeps = {
   configPort: ConfigPort;
   spotifyInputService: SpotifyInputService;
   readBinaryBody: (req: IncomingMessage, res: ServerResponse, maxBytes: number) => Promise<Buffer | null>;
+  readJsonBody: (req: IncomingMessage, res: ServerResponse, maxBytes?: number) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
 };
 
@@ -67,18 +72,16 @@ export async function handleSoloistStatus(
   const cfg = deps.configPort.getConfig();
   const settings = cfg.content?.spotify?.soloist ?? {};
   const binary = await probeBinary();
-  // Which client plays is one choice for the whole server; a zone appears here only because
-  // Soloist has to be paired once per room, whatever that choice is.
-  const zones = await Promise.all(
-    (cfg.zones ?? []).map(async (zone) => ({
-      zoneId: zone.id,
-      name: zone.name,
-      paired: await isZonePaired(zone.id),
-    })),
-  );
+  // Accounts, not rooms. A room signs itself in — it advertises and whoever picks it in their own
+  // Spotify app is the one who takes it — but playback this server drives has nobody to ask at the
+  // moment a track starts, so each account is signed in once, here.
+  const accounts = (await deps.spotifyInputService.soloistAccounts()).map((account) => ({
+    ...account,
+    pairing: pairingSnapshot(account.id) ?? { state: 'idle' as const },
+  }));
   deps.sendJson(res, 200, {
     ok: true,
-    enabled: settings.enabled === true,
+    // The key is the switch: with one there is Spotify, without one there is not.
     hasApiKey: Boolean(settings.apiKey?.trim()),
     lossless: settings.lossless !== false,
     expiry: settings.expiry ?? null,
@@ -88,7 +91,7 @@ export async function handleSoloistStatus(
     autoUpdates: buildUrlForHost() !== null,
     hostArch: hostArch(),
     binary,
-    zones,
+    accounts,
   });
 }
 
@@ -96,7 +99,7 @@ export async function handleSoloistStatus(
 export async function handleSoloistSettings(
   res: ServerResponse,
   deps: SoloistHandlerDeps,
-  body: { enabled?: boolean; apiKey?: string; lossless?: boolean } | null,
+  body: { apiKey?: string; lossless?: boolean } | null,
 ): Promise<void> {
   await deps.configPort.updateConfig((cfg) => {
     const spotify = cfg.content?.spotify;
@@ -104,9 +107,6 @@ export async function handleSoloistSettings(
       return;
     }
     const next = { ...(spotify.soloist ?? {}) };
-    if (typeof body?.enabled === 'boolean') {
-      next.enabled = body.enabled;
-    }
     if (typeof body?.lossless === 'boolean') {
       next.lossless = body.lossless;
     }
@@ -202,4 +202,75 @@ export async function handleSoloistBinaryUpload(
   const binary = await probeBinary();
   log.info('soloist binary stored', { version: binary.version, arch: elf.arch });
   await handleSoloistStatus(res, deps);
+}
+
+
+/** Start signing an account's playback store in, and report on one already under way. */
+export async function handleSoloistPairing(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: SoloistHandlerDeps,
+): Promise<void> {
+  const cfg = deps.configPort.getConfig();
+  const settings = cfg.content?.spotify?.soloist ?? {};
+
+  if (req.method === 'GET') {
+    const { searchParams } = new URL(req.url ?? '', 'http://localhost');
+    const accountId = (searchParams.get('accountId') || '').trim();
+    if (!accountId) {
+      deps.sendJson(res, 400, { error: 'missing-account' });
+      return;
+    }
+    deps.sendJson(res, 200, { ok: true, ...(pairingSnapshot(accountId) ?? { state: 'idle' }) });
+    return;
+  }
+
+  const body = (await deps.readJsonBody(req, res)) as
+    | { accountId?: string; deviceName?: string; timeoutMs?: number; cancel?: boolean }
+    | null;
+  if (res.writableEnded) {
+    return;
+  }
+  const accountId = (body?.accountId || '').trim();
+  if (!accountId) {
+    deps.sendJson(res, 400, { error: 'missing-account' });
+    return;
+  }
+  if (body?.cancel) {
+    cancelAccountPairing(accountId);
+    deps.sendJson(res, 200, { ok: true, state: 'idle' });
+    return;
+  }
+  const apiKey = settings.apiKey?.trim();
+  if (!apiKey) {
+    deps.sendJson(res, 400, { error: 'no-api-key' });
+    return;
+  }
+  const binary = await probeBinary();
+  if (!binary.present || !binary.executable) {
+    deps.sendJson(res, 400, { error: 'no-binary' });
+    return;
+  }
+  const accounts = await deps.spotifyInputService.soloistAccounts();
+  const account = accounts.find((entry) => entry.id === accountId);
+  if (!account) {
+    deps.sendJson(res, 404, { error: 'account-not-found' });
+    return;
+  }
+  // Named after the account rather than the server, because this is what the listener is about to
+  // pick out of a device list that may already hold every room in the house.
+  const deviceName = (body?.deviceName || '').trim() || `Sonn — ${account.label}`;
+  // Which Spotify account this one is supposed to be, so signing in from the wrong app is caught
+  // rather than quietly leaving a store that browses as one person and plays as another.
+  const expectedSpotifyId = (cfg.content?.spotify?.accounts ?? [])
+    .find((entry) => entry.id === accountId)?.spotifyId?.trim();
+  const state = await startAccountPairing({
+    accountId,
+    apiKey,
+    deviceName,
+    ...(expectedSpotifyId ? { expectedSpotifyId } : {}),
+    ...(typeof body?.timeoutMs === 'number' ? { timeoutMs: body.timeoutMs } : {}),
+  });
+  log.info('soloist pairing offered', { accountId, deviceName });
+  deps.sendJson(res, 202, { ok: true, ...state });
 }

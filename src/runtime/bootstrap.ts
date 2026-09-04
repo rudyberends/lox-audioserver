@@ -55,7 +55,6 @@ import { SendspinLineInService } from '@/adapters/inputs/linein/sendspinLineInSe
 import { MusicAssistantStreamService } from '@/adapters/inputs/musicassistant/musicAssistantStreamService';
 import { MusicAssistantInputService } from '@/adapters/inputs/musicassistant/musicAssistantInputService';
 import { SpotifyInputService } from '@/adapters/inputs/spotify/spotifyInputService';
-import { SpotifyStreamProxyService } from '@/adapters/inputs/spotify/spotifyStreamProxyService';
 import { LineInIngestRegistry } from '@/adapters/inputs/linein/lineInIngestRegistry';
 import { LineInActivationRegistry } from '@/adapters/inputs/linein/lineInActivationRegistry';
 import { createLineInSourceAdapter } from '@/adapters/inputs/linein/lineInSourceAdapter';
@@ -359,22 +358,7 @@ export function createRuntime(): Runtime {
   const musicAssistantStreamService = new MusicAssistantStreamService(outputHandlersProxy, configPort);
   const musicAssistantInputService = new MusicAssistantInputService(musicAssistantStreamService);
   let airplayInputService: AirplayInputService | null = null;
-  const stopAirplaySession = (zoneId: number, reason?: string) => {
-    if (!airplayInputService) {
-      throw new Error('airplay input service not initialized');
-    }
-    airplayInputService.stopActiveSession(zoneId, reason);
-  };
-  const spotifyStreamProxyService = new SpotifyStreamProxyService();
-  const spotifyInputService = new SpotifyInputService(
-    outputHandlersProxy.onOutputError,
-    configPort,
-    spotifyManagerProvider,
-    spotifyDeviceRegistry,
-    stopAirplaySession,
-    playerRegistry,
-    spotifyStreamProxyService,
-  );
+  const spotifyInputService = new SpotifyInputService(configPort);
   airplayInputService = new AirplayInputService(
     (zoneId, reason) => {
       spotifyInputService.stopActiveSession(zoneId, reason);
@@ -842,7 +826,6 @@ export function createRuntime(): Runtime {
         tidalStreamService.getProxyRoute(),
         deezerStreamService.getProxyRoute(),
         appleMusicStreamService.getProxyRoute(),
-        spotifyStreamProxyService.getProxyRoute(),
       ],
       mediaServer,
       mqttPublisher,

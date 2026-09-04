@@ -3,11 +3,10 @@
  * the same backend the web player uses. Replaces the Feb-2026-restricted Web API
  * for browse/playlist/album/artist/search.
  *
- * Auth: librespot only mints the tokens (`session.getTokens()` → first-party
- * bearer + client-token); all HTTP, persisted-query-hash scraping and parsing
- * live here in TS. Persisted-query hashes rotate per Spotify web-player deploy,
- * so we scrape them from the live bundle, cache them, and re-scrape once on
- * PersistedQueryNotFound.
+ * Auth: a `PathfinderSession` mints the tokens (first-party bearer + client-token) and nothing
+ * else; all HTTP, persisted-query-hash scraping and parsing live here in TS. Persisted-query
+ * hashes rotate per Spotify web-player deploy, so we scrape them from the live bundle, cache
+ * them, and re-scrape once on PersistedQueryNotFound.
  */
 import { createLogger } from '@/shared/logging/logger';
 
@@ -24,8 +23,8 @@ export const BROWSE_ROOT_URI = 'spotify:genre:browse';
 /**
  * The credentials a pathfinder request needs.
  *
- * Exported because librespot is no longer the only thing that can produce them — see
- * `spotifyWebTokens`, which scrapes the same pair off the public web player.
+ * Exported for `spotifyWebTokens`, which scrapes the pair off the public web player — the only
+ * source there is now.
  */
 export interface SessionTokens {
   accessToken: string;
@@ -34,14 +33,9 @@ export interface SessionTokens {
   expiresInMs: number;
 }
 
-/** The single librespot capability this module depends on. */
+/** Anything that can produce a pair of tokens for a request. */
 export interface PathfinderSession {
   getTokens(): Promise<SessionTokens>;
-}
-
-/** True when this librespot session can mint tokens (newer native module). */
-export function supportsPathfinder(session: unknown): session is PathfinderSession {
-  return typeof (session as { getTokens?: unknown })?.getTokens === 'function';
 }
 
 // Accept-Language for pathfinder requests, so Spotify localizes content names

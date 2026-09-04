@@ -51,6 +51,16 @@ export type SoloistStateEvent = {
    * only thing that tells them apart.
    */
   is_active?: boolean;
+  /**
+   * What Spotify will accept right now, keyed by command name.
+   *
+   * Worth reading for one of them. A track that has only just started reports
+   * `add_to_queue, pause, set_repeat, shuffle` and refuses a seek with `seek_to_restricted`;
+   * `seek` joins the list about three hundred milliseconds later (measured on 1.3.8.12: t+416 ms
+   * without, t+730 ms with). So a position asked for at the moment playback begins has to wait for
+   * this rather than be retried blindly.
+   */
+  available_actions?: Record<string, unknown>;
 };
 
 /** Soloist refuses anything outside 0-100, and a zone's level can arrive as a fraction. */

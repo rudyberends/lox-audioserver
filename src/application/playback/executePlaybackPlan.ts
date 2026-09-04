@@ -30,7 +30,7 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
     if (!source) {
       return undefined;
     }
-    // For pipe sources (e.g. Spotify librespot), the ffmpeg seek is embedded in the stream via
+    // For pipe sources (e.g. a Spotify run), the ffmpeg seek is embedded in the stream via
     // startPositionMs and audioManager ignores startAtSec for pipes. However, startAt is still
     // needed so that zonePlayer initialises the ticker at the correct seek position instead of 0.
     return normalizedStartAt;
@@ -105,7 +105,6 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
       log.warn('spotify input not ready; blocking playback to avoid skips', { zoneId: ctx.id });
       return null;
     }
-    const playbackIsPipe = playbackSource.kind === 'pipe';
     const queueUris = ctx.queue.items.map((q) => q.audiopath);
     const queueIndex = ctx.queueController.currentIndex();
     const meta = {
@@ -114,12 +113,7 @@ export async function executePlaybackPlan(args: ExecutePlaybackPlanArgs): Promis
       queueIndex,
     } as PlaybackMetadata;
     const startAt = resolveStartAt(playbackSource);
-    const session = ctx.player.playExternal('spotify', playbackSource, meta, startAt);
-    if (playbackIsPipe) {
-      // Preserve queue/trackId context for spotify session tracking.
-      inputs.markSessionActive(ctx.id, meta);
-    }
-    return session;
+    return ctx.player.playExternal('spotify', playbackSource, meta, startAt);
   }
 
   return ctx.player.playUri(plan.audiopath, plan.metadata, normalizedStartAt);

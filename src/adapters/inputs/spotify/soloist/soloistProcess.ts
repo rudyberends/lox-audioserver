@@ -32,13 +32,150 @@ export function soloistBinaryPath(): string {
   return resolveDataDir('soloist', 'soloist');
 }
 
-/** One paired Spotify session per zone. A data dir holds a `.lock`, so it cannot be shared. */
-export function soloistDataDir(zoneId: number): string {
-  return resolveDataDir('soloist', `zone-${zoneId}`, 'data');
+/**
+ * Where one Soloist keeps its identity, its session and its cache.
+ *
+ * A data directory holds a lock, so it is what makes two Soloists two: one instance per store, and
+ * a second on the same store refuses to start. That is why there are two kinds of store rather
+ * than one per room.
+ */
+export type SoloistStore = { data: string; cache: string };
+
+/**
+ * The store behind a room's Connect device.
+ *
+ * Nothing here is ever signed in by this server. The daemon advertises itself and waits, and
+ * whoever picks the room in their own Spotify app is the one who signs it in — so a room is
+ * everybody's, and the account that owns it is simply whoever took it last. It keeps whatever
+ * session that leaves behind, which is why it is a store and not a scratch directory.
+ */
+export function zoneStore(zoneId: number): SoloistStore {
+  return {
+    data: resolveDataDir('soloist', `zone-${zoneId}`, 'data'),
+    cache: resolveDataDir('soloist', `zone-${zoneId}`, 'cache'),
+  };
 }
 
-export function soloistCacheDir(zoneId: number): string {
-  return resolveDataDir('soloist', `zone-${zoneId}`, 'cache');
+/**
+ * The store behind one Spotify account, for playback this server drives.
+ *
+ * Per account rather than per room, because a `--single-track` run does not advertise itself:
+ * there is nobody to pick it, so its credentials have to be there already. One store per account
+ * is also exactly enough — the lock allows one run at a time, which is the same one stream at a
+ * time that Spotify allows an account anyway.
+ */
+export function accountStore(accountId: string): SoloistStore {
+  const safe = accountId.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 64) || 'default';
+  return {
+    data: resolveDataDir('soloist', `account-${safe}`, 'data'),
+    cache: resolveDataDir('soloist', `account-${safe}`, 'cache'),
+  };
+}
+
+/**
+ * The refresh token a session is actually restored from.
+ *
+ * Under the data directory rather than the cache directory it is named after, whatever `-C` says —
+ * measured, and the engine names this path itself when the file is empty: "Refresh token storage
+ * error: … Token storage file has no contents".
+ */
+const TOKEN_STORE = ['cache', 'dbrts'];
+
+/**
+ * Where a pairing is signed in, before it is allowed anywhere near the store that plays.
+ *
+ * Separate because `--pair` starts by throwing away whatever session the store it is pointed at
+ * already holds — it says so itself: "cleared existing session before pairing". Pointed at the
+ * playing store, a re-pairing that nobody completes would therefore sign the account out, and the
+ * room would stop playing because somebody pressed a button and then changed their mind.
+ */
+export function accountPairingStore(accountId: string): SoloistStore {
+  const canonical = accountStore(accountId);
+  return {
+    data: path.join(path.dirname(canonical.data), 'pairing', 'data'),
+    cache: path.join(path.dirname(canonical.data), 'pairing', 'cache'),
+  };
+}
+
+/**
+ * Move a completed pairing into place, and only then.
+ *
+ * Staged first, swapped after: the store that plays is replaced by one that is already known to
+ * hold a session, so an interrupted copy cannot leave a room with half a login. The old one is
+ * kept aside until the new one is in place, and only then dropped.
+ */
+export async function promotePairedStore(accountId: string): Promise<void> {
+  const staged = accountPairingStore(accountId);
+  const canonical = accountStore(accountId);
+  const previous = `${canonical.data}.previous`;
+  await fsp.rm(previous, { recursive: true, force: true });
+  await fsp.mkdir(path.dirname(canonical.data), { recursive: true });
+  if (await exists(canonical.data)) {
+    await fsp.rename(canonical.data, previous);
+  }
+  try {
+    await fsp.rename(staged.data, canonical.data);
+  } catch (error) {
+    // Put back what was working rather than leave the account with nothing.
+    if (await exists(previous)) {
+      await fsp.rename(previous, canonical.data);
+    }
+    throw error;
+  }
+  await fsp.rm(previous, { recursive: true, force: true });
+  // The cache is rebuilt on demand and holds nothing worth carrying over, but it must not be the
+  // old account's: it is where the engine keeps its own copy of the token store.
+  await fsp.rm(canonical.cache, { recursive: true, force: true });
+  await fsp.rm(path.dirname(staged.data), { recursive: true, force: true });
+}
+
+async function exists(target: string): Promise<boolean> {
+  try {
+    await fsp.stat(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a store holds a session that can be restored without anyone picking anything.
+ *
+ * `settings/Users/<account>` is what a completed login leaves behind — `settings` alone appears
+ * earlier, so the users directory is the honest first test. But the thing a run actually restores
+ * from is the refresh token, and the two can come apart: a cleared cache leaves the user directory
+ * standing, and the run then refuses with "requires stored credentials" for a store that looks
+ * signed in. So an empty token store counts as not signed in, while a token store that is missing
+ * entirely is left to the users directory — a layout that moves in some later build should not
+ * refuse playback that would have worked.
+ *
+ * Worth being sure of, because the alternative way to find out is bad: a room's daemon does not
+ * fail on a store with no session, it advertises itself and waits for somebody who is never coming.
+ */
+export async function hasStoredSession(store: SoloistStore): Promise<boolean> {
+  try {
+    const users = await fsp.readdir(path.join(store.data, 'settings', 'Users'));
+    if (users.length === 0) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  try {
+    const token = await fsp.stat(path.join(store.data, ...TOKEN_STORE));
+    return token.size > 0;
+  } catch {
+    return true;
+  }
+}
+
+/** Which account a store is signed in as, as Spotify spells it. Empty when nobody is. */
+export async function storedAccounts(store: SoloistStore): Promise<string[]> {
+  try {
+    return await fsp.readdir(path.join(store.data, 'settings', 'Users'));
+  } catch {
+    return [];
+  }
 }
 
 export type SoloistBinaryStatus = {
@@ -56,18 +193,34 @@ export type SoloistBinaryStatus = {
 export const SOLOIST_BUILD_LIFETIME_DAYS = 90;
 
 /**
- * The streaming quality this zone asks Spotify for.
+ * The engine's audio behaviour, and the only way in.
  *
- * Set per Connect device, not per account, and it defaults to Spotify's "Automatic" — so without
- * this every room would have to be found in the Spotify app and switched to lossless by hand,
- * in a screen most people never open. Soloist keeps it in the same plain `key=value` file the app
- * writes, and does not overwrite it on login, so setting it here holds.
+ * There is no flag and no command for any of this: Soloist reads the classic desktop client's
+ * plain `key=value` prefs stores, and only at startup, so they are rewritten before every spawn.
  *
- * Only two states are worth offering: lossless, or leave Spotify to decide. The intermediate
- * tiers are bitrate ceilings for metered connections, which is not what a wired room needs.
+ * Two stores, not one. A per-user file overrides the global file key by key, and a per-user file
+ * only exists once an account has actually signed in — so the global one is what covers a store's
+ * first session, and the per-user ones are what stop a stale value from a previous session
+ * winning afterwards.
  */
-const QUALITY_PREF = 'audio.play_bitrate_non_metered_enumeration';
+const PREF_QUALITY_METERED = 'audio.play_bitrate_enumeration';
+const PREF_QUALITY = 'audio.play_bitrate_non_metered_enumeration';
+/**
+ * The marker that makes the non-metered tier count.
+ *
+ * Without it the engine derives the non-metered value from the metered one once and ignores what
+ * we wrote, which is silent: nothing reports the tier, so the room simply plays at Spotify's
+ * default while the screen says lossless. Both keys and this marker, or none of it means anything.
+ */
+const PREF_QUALITY_MIGRATED = 'audio.play_bitrate_non_metered_migrated';
+/** 5 is the ceiling: lossless FLAC. Outside 1-5 the engine falls back to about 160 kbps. */
 const QUALITY_LOSSLESS = '5';
+/** Spotify's own "Automatic", which is what it does when nothing says otherwise. */
+const QUALITY_AUTOMATIC = '4';
+const PREF_NORMALIZE = 'audio.normalize_v2';
+const PREF_CROSSFADE = 'audio.crossfade_v2';
+/** Milliseconds. Anything under a second silently disables crossfade rather than shortening it. */
+const PREF_CROSSFADE_TIME = 'audio.crossfade.time_v2';
 
 /**
  * Autoplay, asked to be off — and it is not.
@@ -77,59 +230,83 @@ const QUALITY_LOSSLESS = '5';
  * Soloist writes its own booleans, in the file it keeps them in. Measured: it carries on anyway.
  *
  * So the preference stays — it costs nothing and states the intent, and a later build may honour
- * it — but nothing depends on it. What actually keeps a room quiet is that this server silences
- * the player itself the moment it moves past a track nobody here asked for.
+ * it — but nothing depends on it. What actually keeps a room quiet is that a `--single-track` run
+ * ends with the track: whatever the engine wanders into afterwards, the process is already going.
  */
 const AUTOPLAY_PREF = 'player.autoplay';
 
-export async function applyPreferences(zoneId: number, lossless: boolean): Promise<void> {
-  const usersDir = path.join(soloistDataDir(zoneId), 'settings', 'Users');
-  let accounts: string[];
-  try {
-    accounts = await fsp.readdir(usersDir);
-  } catch {
-    // No account has signed in yet; the next start after pairing writes it.
-    return;
-  }
-  for (const account of accounts) {
-    const prefsPath = path.join(usersDir, account, 'prefs');
-    let lines: string[];
-    try {
-      lines = (await fsp.readFile(prefsPath, 'utf8')).split('\n');
-    } catch {
-      continue;
-    }
-    const kept = lines.filter(
-      (line) =>
-        line.trim() && !line.startsWith(`${QUALITY_PREF}=`) && !line.startsWith(`${AUTOPLAY_PREF}=`),
-    );
-    if (lossless) {
-      kept.push(`${QUALITY_PREF}=${QUALITY_LOSSLESS}`);
-    }
-    kept.push(`${AUTOPLAY_PREF}=false`);
-    const next = `${kept.join('\n')}\n`;
-    await fsp.writeFile(prefsPath, next, 'utf8').catch(() => undefined);
-  }
-  log.debug('soloist preferences applied', { zoneId, lossless, autoplay: false });
-}
+const MANAGED_PREFS = [
+  PREF_QUALITY_METERED,
+  PREF_QUALITY,
+  PREF_QUALITY_MIGRATED,
+  PREF_NORMALIZE,
+  PREF_CROSSFADE,
+  PREF_CROSSFADE_TIME,
+  AUTOPLAY_PREF,
+];
 
-/** Whether this zone has been through a handshake in the Spotify app. */
-export async function isZonePaired(zoneId: number): Promise<boolean> {
+/**
+ * State the engine's audio behaviour, in every store that can decide it.
+ *
+ * Crossfade is off on purpose rather than by default: this server mixes its own, so a track has to
+ * arrive whole and start on its first sample — anything the engine faded would be faded twice and
+ * would no longer line up with what the room was told is playing.
+ */
+export async function applyPreferences(
+  store: SoloistStore,
+  options: { lossless: boolean; normalize: boolean },
+): Promise<void> {
+  const quality = options.lossless ? QUALITY_LOSSLESS : QUALITY_AUTOMATIC;
+  const managed = [
+    `${PREF_QUALITY_METERED}=${quality}`,
+    `${PREF_QUALITY}=${quality}`,
+    `${PREF_QUALITY_MIGRATED}=true`,
+    `${PREF_NORMALIZE}=${options.normalize ? 'true' : 'false'}`,
+    `${PREF_CROSSFADE}=false`,
+    `${AUTOPLAY_PREF}=false`,
+  ];
+  const settingsDir = path.join(store.data, 'settings');
+  const files = [path.join(settingsDir, 'prefs')];
   try {
-    const entries = await fsp.readdir(soloistDataDir(zoneId));
-    // Pairing leaves a full client profile behind, not a portable blob; `settings` is the part
-    // that only exists once a login has actually happened.
-    return entries.includes('settings');
+    const usersDir = path.join(settingsDir, 'Users');
+    for (const account of await fsp.readdir(usersDir)) {
+      files.push(path.join(usersDir, account, 'prefs'));
+    }
   } catch {
-    return false;
+    // No account has signed in yet, so the global store is the only one there is — and the only
+    // one that can decide the first session.
   }
+  for (const file of files) {
+    let kept: string[] = [];
+    try {
+      kept = (await fsp.readFile(file, 'utf8'))
+        .split('\n')
+        .filter((line) => line.trim() && !MANAGED_PREFS.some((key) => line.startsWith(`${key}=`)));
+    } catch {
+      // A store that has never been written yet; the engine's own keys arrive when it starts.
+    }
+    try {
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      // Replace rather than truncate: the store also holds keys that belong to the engine, and a
+      // half-written file loses those as well as ours.
+      const tmp = `${file}.tmp`;
+      await fsp.writeFile(tmp, `${[...kept, ...managed].join('\n')}\n`, 'utf8');
+      await fsp.rename(tmp, file);
+    } catch (error) {
+      log.warn('could not state soloist audio settings', {
+        file,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  log.debug('soloist preferences applied', { store: store.data, quality, normalize: options.normalize });
 }
 
 /**
  * Soloist buffers stdout when it is not attached to a terminal, so its own log file is the only
  * place its lines reliably appear. Everything here reads that file rather than the pipe.
  */
-function logPathFor(zoneId: number | 'probe'): string {
+function logPathFor(zoneId: number | 'probe' | 'pair'): string {
   return resolveDataDir('soloist', `soloist-${zoneId}.log`);
 }
 
@@ -208,22 +385,44 @@ async function runToCompletion(
   });
 }
 
+/**
+ * Why a run ended, in the engine's own words.
+ *
+ * Two of these are the only report Soloist gives of the thing that happened, and both look like an
+ * ordinary startup failure from outside: a store whose lock another process holds, and a store
+ * with no session left to restore — which does not fail at all, it advertises itself and waits.
+ */
+export type SoloistRunFault = 'store_busy' | 'unpaired' | 'expired';
+
+/** The engine allows one instance per data directory and says so before exiting with a plain 1. */
+const STORE_BUSY_MARKER = /another session is running|cannot lock data directory/i;
+/**
+ * A store with no session left, in the engine's own words.
+ *
+ * Two forms, because the two shapes fail differently. A `--single-track` run says so outright and
+ * exits at once — measured on 1.3.8.12: `--single-track requires stored credentials — run with
+ * --pair first`. A room's daemon does not fail at all: it falls back to advertising itself and
+ * waits, which from outside is indistinguishable from a slow start until the budget runs out.
+ */
+const UNPAIRED_MARKER = /waiting for login|requires stored credentials/i;
+
 export type SoloistRunHandle = {
   /** Resolves with the exit code once the track is done and the process has gone. */
   done: Promise<number | null>;
   stop: () => void;
   /** Days left, once the startup line has been seen. */
   expiresInDays: Promise<number | undefined>;
+  /** What the engine's own output said was wrong, as soon as it said it. */
+  fault: () => SoloistRunFault | null;
 };
 
 /**
- * Run one zone's Soloist for as long as the zone exists.
+ * Run a room's Connect device, for as long as the room exists.
  *
- * Persistent rather than per track, because the data directory holds a lock: a zone gets one
- * instance and no more. Wanting the zone to appear in the Spotify app at all means that instance
- * has to stay up, which leaves nothing for a per-track process to run in — and makes the question
- * moot, since driving the running one over its WebSocket does the same job without paying a fresh
- * login on every track.
+ * Never signed in from here. It advertises itself and waits, and whoever picks the room in their
+ * Spotify app is the one who signs it in — which is why this takes no account and no session: a
+ * room belongs to whoever took it last, and the next person takes it from them the same way. It
+ * never plays this server's queue; that is what {@link startSingleTrack} is for.
  */
 export function startPersistent(params: {
   zoneId: number;
@@ -234,11 +433,12 @@ export function startPersistent(params: {
   onLine?: (line: string) => void;
 }): SoloistRunHandle {
   const { zoneId, apiKey, deviceName, wsPort, env, onLine } = params;
+  const store = zoneStore(zoneId);
   const args = [
     '-n', deviceName,
     '-k', apiKey,
-    '-D', soloistDataDir(zoneId),
-    '-C', soloistCacheDir(zoneId),
+    '-D', store.data,
+    '-C', store.cache,
     // A port of our own choosing rather than 0. Asking Soloist to pick one is what its help
     // suggests, and on 1.3.7.276 it then listens on the port it picked but publishes only
     // `ws.addr` — the address without the number — so nothing can find it: `soloist ctl status`
@@ -250,16 +450,78 @@ export function startPersistent(params: {
     // ends the bit-exactness this backend exists for.
     '-i', '100',
   ];
-  return runTracked(zoneId, args, env, 'persistent', onLine);
+  return runTracked(zoneId, args, env, 'connect', onLine);
+}
+
+/**
+ * Play exactly one track from one account's store, and be gone.
+ *
+ * The whole reason this shape exists: the run ends when the track ends, so the end of a track is a
+ * process exiting rather than something to be inferred from events that mean two things. It
+ * advertises nothing, starts with shuffle and repeat off, and cannot be taken over — and because
+ * the account is a directory rather than a session to be switched, playing from a different
+ * account is nothing more than starting from a different one.
+ */
+export function startSingleTrack(params: {
+  /** For the log file only; a run belongs to the room it is sounding in. */
+  zoneId: number;
+  store: SoloistStore;
+  uri: string;
+  apiKey: string;
+  deviceName: string;
+  wsPort: number;
+  env: Record<string, string>;
+  onLine?: (line: string) => void;
+}): SoloistRunHandle {
+  const { zoneId, store, uri, apiKey, deviceName, wsPort, env, onLine } = params;
+  const args = [
+    '-s', uri,
+    // Required even here, where nothing is ever advertised under it.
+    '-n', deviceName,
+    '-k', apiKey,
+    '-D', store.data,
+    '-C', store.cache,
+    // Bounded rather than the default of no limit: this store is written to on every track.
+    '-z', '512',
+    '-w', `127.0.0.1:${wsPort}`,
+    '-i', '100',
+  ];
+  return runTracked(zoneId, args, env, 'track', onLine);
+}
+
+/**
+ * Sign an account's store in, once.
+ *
+ * `--pair` is Soloist advertising itself under a name, waiting for someone to pick it in their
+ * Spotify app, storing what that hands it, and exiting. The same handshake a room goes through,
+ * except that here it is done deliberately and the credentials it leaves behind are the whole
+ * point — a `--single-track` run advertises nothing, so there is nobody to ask at play time.
+ */
+export function startPairing(params: {
+  store: SoloistStore;
+  apiKey: string;
+  deviceName: string;
+  onLine?: (line: string) => void;
+}): SoloistRunHandle {
+  const { store, apiKey, deviceName, onLine } = params;
+  const args = [
+    '-p',
+    '-n', deviceName,
+    '-k', apiKey,
+    '-D', store.data,
+    '-C', store.cache,
+  ];
+  return runTracked('pair', args, {}, 'pair', onLine);
 }
 
 function runTracked(
-  zoneId: number,
+  zoneId: number | 'pair',
   args: string[],
   env: Record<string, string>,
   what: string,
   onLine?: (line: string) => void,
 ): SoloistRunHandle {
+  let fault: SoloistRunFault | null = null;
   const binary = soloistBinaryPath();
   let resolveExpiry: (value: number | undefined) => void = () => undefined;
   const expiresInDays = new Promise<number | undefined>((resolve) => {
@@ -290,6 +552,14 @@ function runTracked(
       if (expiry?.[1]) {
         resolveExpiry(Number(expiry[1]));
       }
+      // Read from the output because there is nowhere else to read it: both of these end the run
+      // with a plain exit code that says nothing, and one of them does not end it at all.
+      if (!fault && STORE_BUSY_MARKER.test(text)) {
+        fault = 'store_busy';
+      }
+      if (!fault && UNPAIRED_MARKER.test(text)) {
+        fault = 'unpaired';
+      }
       for (const line of text.split('\n')) {
         const trimmed = line.trim();
         if (trimmed) {
@@ -309,7 +579,10 @@ function runTracked(
     child.on('exit', (code) => {
       resolveExpiry(undefined);
       if (code === SOLOIST_EXIT_EXPIRED) {
-        log.error('this Soloist build has expired; download a newer one', { zoneId });
+        fault = 'expired';
+        log.error('this Soloist build has expired; a newer one is fetched before the next track', {
+          zoneId,
+        });
       }
       // Keep the tail on disk: without a terminal Soloist buffers, so this is the only record of
       // what it said when something goes wrong.
@@ -324,6 +597,7 @@ function runTracked(
   return {
     done,
     expiresInDays,
+    fault: () => fault,
     stop: () => {
       if (child && child.exitCode === null) {
         child.kill();

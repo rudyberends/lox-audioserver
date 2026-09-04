@@ -287,10 +287,6 @@ export interface SpotifyContentConfig {
    * writes it anymore.
    */
   bridges?: StreamingServiceConfig[];
-  /** Cache decoded audio files to disk. Defaults to true. */
-  cacheEnabled?: boolean;
-  /** Maximum size of the audio cache in megabytes. Defaults to 1024. */
-  cacheSizeMb?: number;
   /** Opt-in second playback backend; see {@link SoloistConfig}. */
   soloist?: SoloistConfig;
 }
@@ -378,10 +374,6 @@ export interface SpotifyAccountConfig {
   name?: string;
   displayName?: string;
   refreshToken?: string;
-  /** Optional librespot credentials blob (base64 encoded credentials.json). */
-  credentialsBlob?: string;
-  /** Raw contents of a librespot credentials.json blob for this account. */
-  librespotCredentials?: any;
   /** Optional default device id to advertise for this account. */
   deviceId?: string;
 }
@@ -736,26 +728,22 @@ export interface GlobalSpotifyConfig {
 }
 
 /**
- * Spotify Soloist: Spotify's own headless client, run as a per-zone child process.
+ * Spotify Soloist: Spotify's own headless client, and the only way this server plays Spotify.
  *
- * Opt-in and experimental. It exists next to librespot rather than replacing it because the two
- * fail in opposite places — librespot cannot get audio keys for accounts created after Nov 2025,
- * and Soloist costs a per-user API key, a binary the user installs themselves, and a build that
- * expires every 90 days.
+ * It replaced librespot, which stopped being able to get audio keys for accounts created after
+ * Nov 2025 and so could no longer play at all for a growing share of users. What it costs instead
+ * is a per-user API key, a binary the user installs themselves, and a build that expires every
+ * 90 days — which is why none of it can be defaulted or shipped.
  */
 export interface SoloistConfig {
   /**
-   * Which client plays Spotify, for the whole server. Off means the built-in one, so an existing
-   * installation keeps behaving exactly as it did.
+   * Developer API key, and with it the only switch there is.
    *
-   * Deliberately not per zone. The two clients differ in what they need installed and how they log
-   * in, not in how a room sounds, so there is nothing a room-by-room choice would buy that is worth
-   * the setup it would ask of everyone.
-   */
-  enabled?: boolean;
-  /**
-   * Developer API key. Personal to whoever generated it and Premium-only, so it is never shipped
-   * and never defaulted — a zone on the soloist backend cannot start without one.
+   * Personal to whoever generated it and Premium-only, so it can never be shipped or defaulted —
+   * which makes its presence the honest answer to "does this server play Spotify". There used to be
+   * an `enabled` flag beside it, from when there were two clients to choose between; with one
+   * client left it could only ever be on, and a switch whose only correct position is on is a
+   * question nobody should be asked.
    */
   apiKey?: string;
   /**
@@ -799,12 +787,6 @@ export interface ZoneSpotifyConfig {
   accountId?: string;
   /** This zone's own Connect device id, as advertised by our Connect host. */
   deviceId?: string;
-  /** Optional librespot username to force login (disables discovery when set with password). */
-  username?: string;
-  /** Optional librespot password to force login (disables discovery when set). */
-  password?: string;
-  /** Explicitly disable discovery; useful when forcing credentials. */
-  disableDiscovery?: boolean;
 }
 
 export interface ZoneMusicAssistantConfig {

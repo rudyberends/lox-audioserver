@@ -654,7 +654,7 @@ export class AudioManager {
     if (!session || (session.duration ?? 0) > 0) {
       return;
     }
-    // Radio has no length by definition, and a pipe's producer (librespot, Soloist, line-in) reports
+    // Radio has no length by definition, and a pipe's producer (a Spotify run, line-in, Bluetooth) reports
     // position and length itself — neither has anything to learn here.
     const kind = session.playbackSource?.kind;
     if (session.metadata?.isRadio || (kind !== 'file' && kind !== 'url')) {

@@ -13,7 +13,6 @@ import { createLogger, type ComponentLogger } from '@/shared/logging/logger';
 import { safeReadText } from '@/shared/bestEffort';
 import { resolveSpotifyClientId } from '@/adapters/content/providers/spotify/utils';
 import {
-  supportsPathfinder,
   fetchBrowseCategories as pfBrowseCategories,
   fetchCategoryEntries as pfCategoryEntries,
   fetchPlaylistTracks as pfPlaylistTracks,
@@ -26,7 +25,6 @@ import {
   type MediaEntry,
 } from '@/adapters/content/providers/spotify/spotifyPathfinder';
 import { webPathfinderSession } from '@/adapters/content/providers/spotify/spotifyWebTokens';
-import type { LibrespotSession } from '@sonn-audio/node-librespot';
 
 /** Short, non-reversible fingerprint of a refresh token, for tracking its
  *  identity across refresh/rotation/restart in logs without leaking the token. */
@@ -85,22 +83,6 @@ const SPOTIFY_ROOT_FOLDERS: ReadonlyArray<{
   { type: 'podcasts', name: 'Podcasts' },
 ];
 
-/**
- * Whether librespot may mint the pathfinder tokens.
- *
- * Off, because the call does not fail — it kills the process. `getTokens()` on a session whose
- * login actually works takes the server down from inside the native addon, and a standalone
- * reproducer gave SIGSEGV, SIGBUS and SIGABRT across three runs of the same call. The account
- * whose stored credentials have gone stale is refused before it gets that far, which is why one
- * of two accounts could browse all day and the other took the server with it.
- *
- * What that costs is the personalised hub described at getPathfinderSession: both accounts now
- * browse on the scraped web tokens, which is what the account with stale credentials was already
- * doing. Set `SONN_LIBRESPOT_PATHFINDER_TOKENS=1` to ask librespot again — the way to check
- * whether a new build of the addon has fixed it.
- */
-const LIBRESPOT_PATHFINDER_TOKENS = process.env.SONN_LIBRESPOT_PATHFINDER_TOKENS === '1';
-
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
 const SPOTIFY_HTTP_TIMEOUT_MS = 10_000;
 /** Spotify's stable "Music" browse hub: the source for "Popular Playlists" (the
@@ -157,7 +139,6 @@ export interface SpotifyAccountProviderOptions {
   account: SpotifyAccountState;
   clientId?: string;
   persistAccount: PersistAccountCallback;
-  persistLibrespotCredentials?: CredentialLoginCallback;
   /**
    * Service-native audiopath prefix for the items this provider emits, e.g.
    * `applemusic:p0gngd` or (single-account) `applemusic`. Bridge providers set
@@ -191,10 +172,6 @@ export class SpotifyAccountProvider implements ContentProvider {
   private tokenExpiresAt = 0;
   private authError = false;
   private refreshPromise: Promise<string | null> | null = null;
-  // Lazily-created librespot session for protocol browsing (playlists/tracks that
-  // the Feb-2026 Web API restricts). One per account, reused; closed on dispose.
-  private librespotSession: LibrespotSession | null = null;
-  private librespotSessionPromise: Promise<LibrespotSession | null> | null = null;
   // Stable identity for the pathfinder token cache; see getPathfinderSession.
   private pathfinderSession: PathfinderSession | null = null;
 
@@ -385,8 +362,8 @@ export class SpotifyAccountProvider implements ContentProvider {
         }
         // Web API fallback. Unlike the rest of `/browse` — featured-playlists and the
         // per-category playlist listings both answer 404 — new-releases is alive and
-        // localises to the account's country, so this section does not have to depend on a
-        // librespot session the account may not be able to open.
+        // localises to the account's country, so this section does not have to depend on the
+        // scraped tokens holding up.
         return this.buildFolder(
           folderId,
           'New Releases',
@@ -452,12 +429,12 @@ export class SpotifyAccountProvider implements ContentProvider {
    *
    * It used to publish all eight unconditionally, which is how a working account ended up
    * with five tiles that opened onto nothing: everything editorial (Popular Playlists,
-   * Genres & Moods and the drill-in under it) is reachable only over pathfinder, and
-   * pathfinder needs a librespot session token that stale credentials cannot mint. Podcasts
+   * Genres & Moods and the drill-in under it) is reachable only over pathfinder, and back then
+   * pathfinder needed a librespot session token that stale credentials could not mint. Podcasts
    * is the same shape of problem for a different reason — most accounts simply have none.
    *
    * A tile that opens empty costs the user a tap and tells them nothing, so the root asks
-   * first. The sections come back on their own once the account can open a session again.
+   * first. The sections come back on their own once tokens can be had again.
    */
   private async buildRootFolder(offset: number): Promise<ContentFolder> {
     const hasToken = Boolean(this.account.refreshToken?.trim());
@@ -969,8 +946,7 @@ export class SpotifyAccountProvider implements ContentProvider {
     const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
 
     // Primary path: real editorial Genres & Moods via pathfinder (browsePage).
-    // The Web API browse routes are dead since Feb 2026; pathfinder needs the
-    // librespot session token, available only when the native module exposes it.
+    // The Web API browse routes are dead since Feb 2026.
     const session = await this.getPathfinderSession();
     const categories = await pfBrowseCategories(session);
     if (categories.length) {
@@ -1025,10 +1001,10 @@ export class SpotifyAccountProvider implements ContentProvider {
   /**
    * An artist's page: their popular tracks, then their records.
    *
-   * Pathfinder answers this in one call and is preferred, but it needs a librespot session
-   * token — and when the stored credentials stop being accepted, that call is the only thing
-   * standing between a followed artist and an empty folder. Since `Artists` lists exactly the
-   * artists the user follows, that empty folder is a dead end on a tile they chose themselves,
+   * Pathfinder answers this in one call and is preferred, but it depends on tokens scraped from
+   * the web player — and when that scrape stops working, that call is the only thing standing
+   * between a followed artist and an empty folder. Since `Artists` lists exactly the artists the
+   * user follows, that empty folder is a dead end on a tile they chose themselves,
    * so the ordinary Web API endpoints back it up: `top-tracks` and `albums` both still answer
    * with the account's refresh token, unlike the browse routes.
    *
@@ -1689,96 +1665,33 @@ export class SpotifyAccountProvider implements ContentProvider {
   }
 
   /**
-   * Lazily create (and cache) a librespot session from the account's stored
-   * credentials, used for protocol-level browsing that the Web API now restricts.
-   * Returns null when credentials/native module are unavailable (caller falls
-   * back to the Web API).
-   */
-  /**
-   * The session pathfinder queries run on — librespot's when it has one, the scraped web tokens
-   * otherwise.
+   * The session pathfinder queries run on.
    *
-   * Two sources rather than one because they are not equivalent: librespot's token is *this
-   * account*, so the Music hub comes back with its own algorithmic shelves (Discover Weekly,
-   * Release Radar, Daily Mix), while the scraped token is anonymous and returns the generic
-   * editorial hub. Preferring librespot keeps the personalised view; falling back to the scrape
-   * means a session that cannot be opened — or credentials that have gone stale — costs those
-   * few shelves instead of every editorial folder in the tree.
+   * Scraped web tokens, which is all there is: the other source was a librespot session, whose
+   * token was *this account* and so returned its own algorithmic shelves (Discover Weekly, Release
+   * Radar, Daily Mix) where the scrape is anonymous and returns the generic editorial hub. Asking
+   * librespot for it had already been switched off — the call took the whole process down from
+   * inside the native addon — so the shelves were long gone before librespot itself was.
    *
-   * One object per provider, held for its lifetime: the pathfinder layer caches minted tokens in
-   * a `WeakMap` keyed on identity, so a new object per call would re-mint on every query. The
-   * closure reads `getLibrespotSession()` afresh each time, so a session that appears (or is
-   * rebuilt after a re-pairing) is picked up without replacing this object.
+   * One object per provider rather than the shared scraper itself: the pathfinder layer caches
+   * minted tokens in a `WeakMap` keyed on identity, so handing every provider the same object would
+   * make them share one cache entry, and a new object per call would re-mint on every query.
    */
   private async getPathfinderSession(): Promise<PathfinderSession> {
-    if (!this.pathfinderSession) {
-      this.pathfinderSession = {
-        getTokens: async () => {
-          const librespot = LIBRESPOT_PATHFINDER_TOKENS
-            ? await this.getLibrespotSession().catch(() => null)
-            : null;
-          if (librespot && supportsPathfinder(librespot)) {
-            try {
-              return await librespot.getTokens();
-            } catch (error) {
-              // Not a warning: the web tokens below cover this, and the reason is already
-              // logged by librespot itself.
-              this.log.debug('librespot tokens unavailable; using scraped web tokens', {
-                message: error instanceof Error ? error.message : String(error),
-              });
-            }
-          }
-          return webPathfinderSession.getTokens();
-        },
-      };
-    }
+    this.pathfinderSession ??= {
+      getTokens: async () => {
+        // Pathfinder answers in the account's own language and market. This used to sit behind
+        // opening a librespot session, which had been switched off — so the locale was in practice
+        // never set at all and every account browsed in the default one.
+        setPathfinderLocale(localeForCountry(this.account.country));
+        return webPathfinderSession.getTokens();
+      },
+    };
     return this.pathfinderSession;
   }
 
-  private async getLibrespotSession(): Promise<LibrespotSession | null> {
-    if (this.librespotSession) {
-      return this.librespotSession;
-    }
-    if (this.librespotSessionPromise) {
-      return this.librespotSessionPromise;
-    }
-    const creds = (this.account as { librespotCredentials?: unknown }).librespotCredentials;
-    if (!creds) {
-      return null;
-    }
-    // Localize pathfinder content (e.g. "Top 50 - Nederland") to the account market.
-    setPathfinderLocale(localeForCountry(this.account.country));
-    this.librespotSessionPromise = (async () => {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const addon = require('@sonn-audio/node-librespot');
-        const credsJson = typeof creds === 'string' ? creds : JSON.stringify(creds);
-        const session: LibrespotSession | null = await addon.createSessionWithCredentials(
-          credsJson,
-          `lox-content-${this.account.id}`,
-          null,
-          null,
-        );
-        this.librespotSession = session;
-        return session;
-      } catch (error) {
-        this.log.warn('librespot content session unavailable', {
-          message: error instanceof Error ? error.message : String(error),
-        });
-        return null;
-      } finally {
-        this.librespotSessionPromise = null;
-      }
-    })();
-    return this.librespotSessionPromise;
-  }
-
-  /** Close the librespot browsing session, if any. Called on reload/dispose. */
+  /** Nothing to close any more; kept so callers need not care whether a provider holds anything. */
   public dispose(): void {
-    const session = this.librespotSession;
-    this.librespotSession = null;
-    if (session) {
-      void session.close().catch(() => { /* ignore */ });
-    }
+    this.pathfinderSession = null;
   }
 }

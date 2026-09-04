@@ -30,9 +30,7 @@ import { ConnectionRegistry } from '../src/adapters/loxone/ws/connectionRegistry
 import { LoxoneWsNotifier } from '../src/adapters/loxone/ws/notifier';
 import { CustomRadioStore } from '../src/adapters/content/providers/customRadioStore';
 import { SpotifyServiceManagerProvider } from '../src/adapters/content/providers/spotifyServiceManager';
-import { SpotifyDeviceRegistry } from '../src/adapters/outputs/spotify/deviceRegistry';
 import type { MdnsPort } from '../src/ports/MdnsPort';
-import { SpotifyStreamProxyService } from '../src/adapters/inputs/spotify/spotifyStreamProxyService';
 import { SonnCorePeerRegistry } from '../src/adapters/discovery/sonnCorePeerRegistry';
 import { SonnClientApiHandler } from '../src/adapters/http/sonnClientApi/sonnClientApiHandler';
 import type { BeoremoteApiHandler } from '../src/adapters/http/beoremote/beoremoteApiHandler';
@@ -134,19 +132,8 @@ function createHandler(): AdminApiHandler {
     },
   };
   const spotifyManagerProvider = new SpotifyServiceManagerProvider(noopConfigPort);
-  const spotifyDeviceRegistry = new SpotifyDeviceRegistry();
   const musicAssistantStreamService = new MusicAssistantStreamService(outputHandlers, noopConfigPort);
-  const spotifyInputService = new SpotifyInputService(
-    outputHandlers.onOutputError,
-    noopConfigPort,
-    spotifyManagerProvider,
-    spotifyDeviceRegistry,
-    () => {
-      throw new Error('airplay session stopper not configured');
-    },
-    { getPlayer: () => null },
-    new SpotifyStreamProxyService(),
-  );
+  const spotifyInputService = new SpotifyInputService(noopConfigPort);
   const snapcastCore = new SnapcastCore(audioManager);
   const zoneManager = {} as ZoneManagerFacade;
   snapcastCore.initOnce({ zoneManager });

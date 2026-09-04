@@ -3,7 +3,7 @@
  *   - file: a local file path (ffmpeg `-i path`)
  *   - url:  an HTTP/HTTPS stream (ffmpeg `-i url`, supports reconnect/TLS/headers)
  *   - pipe: an inbound raw-PCM pipe (filesystem path, or an in-process Readable
- *           via `stream`; used by librespot, Spotify direct-passthrough, etc.)
+ *           via `stream`; used by a Spotify run, line-in, Bluetooth, etc.)
  */
 export type PlaybackSource =
   | {

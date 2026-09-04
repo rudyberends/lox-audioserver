@@ -15,7 +15,7 @@ export type FadeInSource =
 /**
  * Orchestrates inline PCM crossfade for the three live pipeline topologies:
  *   1. Two-stage decoder (file/URL): swap decoderProc, replace pcmPipe, encoder stays.
- *   2. Pipe-with-ffmpeg (librespot through encoder): swap upstream pipe source,
+ *   2. Pipe-with-ffmpeg (a live producer through the encoder): swap upstream pipe source,
  *      replace pcmPipe, encoder stays.
  *   3. Direct passthrough (Spotify pcm, no encoder): blend straight to subscribers,
  *      then wire a pseudo-two-stage pipeline so the next crossfade has somewhere to go.
@@ -170,7 +170,7 @@ export class Crossfader {
     s.pipeline.pcmPipe.resume();
 
     // Old PCM arrives on pcmPipe but the end-signal must come from the upstream
-    // pipe source (librespot's stream); pcmPipe itself uses { end: false } piping.
+    // pipe source (the producer's stream); pcmPipe itself uses { end: false } piping.
     const oldSource = streamChunkSource(oldPipeStream);
     const newSource = streamChunkSource(newSourceStream);
 

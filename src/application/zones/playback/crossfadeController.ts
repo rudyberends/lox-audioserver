@@ -26,7 +26,6 @@ interface CrossfadeEntry {
   triggered: boolean;
   triggeredAt: number;
   /** True when the fade-in source is a Spotify stream (started at trigger time via inputsPort). */
-  isSpotifyFadeIn?: boolean;
 }
 
 export interface CrossfadeControllerDeps {
@@ -149,8 +148,10 @@ export class CrossfadeController {
     if (!nextItem) return;
     if (this.deps.audioHelpers.isRadioAudiopath(nextItem.audiopath, nextItem.audiotype)) return;
     if (this.deps.audioHelpers.isMusicAssistantAudiopath(nextItem.audiopath)) return;
-
-    const isSpotifyNext = this.deps.audioHelpers.isSpotifyAudiopath(nextItem.audiopath);
+    // Spotify cannot be crossfaded, and it is not a limitation of ours: a blend needs both tracks
+    // sounding at once, and an account plays in exactly one place at a time. The engine that used
+    // to manage it did so by opening a second session, which Spotify no longer allows anybody.
+    if (this.deps.audioHelpers.isSpotifyAudiopath(nextItem.audiopath)) return;
 
     this.state.set(zoneId, {
       resolving: true,
@@ -160,7 +161,6 @@ export class CrossfadeController {
       nextQueueIndex: nextIndex,
       triggered: false,
       triggeredAt: 0,
-      isSpotifyFadeIn: isSpotifyNext,
     });
 
     try {
@@ -177,28 +177,22 @@ export class CrossfadeController {
 
       let resolvedSource: PlaybackSource | null = null;
 
-      if (isSpotifyNext) {
-        // For Spotify fade-in the stream is started at trigger time, not pre-resolve.
-        // Use a sentinel pipe source so `resolvedSource` is truthy and the trigger fires.
-        resolvedSource = { kind: 'pipe', path: 'spotify-xf-pending' };
-      } else {
-        // YouTube is absent here as it was before; see ParentContextPolicy on these sets.
-        const owner = this.deps.audioHelpers.providerForAudiopath(nextItem.audiopath);
+      // YouTube is absent here as it was before; see ParentContextPolicy on these sets.
+      const owner = this.deps.audioHelpers.providerForAudiopath(nextItem.audiopath);
 
-        if (owner && owner !== 'youtube') {
-          const resolution = await this.deps.contentPort
-            .resolvePlaybackSource({ audiopath: nextItem.audiopath, requester: { kind: 'zone', zoneId } })
-            .catch(() => null);
-          resolvedSource = resolution?.playbackSource ?? null;
-        } else {
-          resolvedSource = resolvePlaybackSource(nextItem.audiopath);
-        }
+      if (owner && owner !== 'youtube') {
+        const resolution = await this.deps.contentPort
+          .resolvePlaybackSource({ audiopath: nextItem.audiopath, requester: { kind: 'zone', zoneId } })
+          .catch(() => null);
+        resolvedSource = resolution?.playbackSource ?? null;
+      } else {
+        resolvedSource = resolvePlaybackSource(nextItem.audiopath);
       }
 
       const current = this.state.get(zoneId);
       if (!current || current.nextAudiopath !== nextItem.audiopath) return;
 
-      if (!resolvedSource || (!isSpotifyNext && resolvedSource.kind === 'pipe')) {
+      if (!resolvedSource || resolvedSource.kind === 'pipe') {
         this.state.delete(zoneId);
         return;
       }
@@ -235,9 +229,6 @@ export class CrossfadeController {
     state.triggeredAt = Date.now();
 
     // Use squeezelite-native client-side crossfade when ALL outputs support it.
-    // Spotify (isSpotifyFadeIn) is now included: triggerNativeCrossfade calls
-    // startCrossfadeStream / releaseCrossfadeStream so Connect-host ownership is
-    // transferred correctly before the old engine stops.
     const allNativeCrossfade =
       ctx.outputs.length > 0 &&
       ctx.outputs.every((o) => typeof o.supportsCrossfade === 'function' && o.supportsCrossfade());
@@ -255,32 +246,9 @@ export class CrossfadeController {
       | { kind: 'pipe'; stream: NodeJS.ReadableStream; sampleRate: number; channels: number };
 
     let fadeIn: FadeIn;
-    let nextPlaybackSource: PlaybackSource = newSource;
+    const nextPlaybackSource: PlaybackSource = newSource;
 
-    if (state.isSpotifyFadeIn) {
-      // Start the next Spotify track on the crossfade session now (at blend start time).
-      const xfStream = await this.deps.inputsPort.startCrossfadeStream(zoneId, state.nextAudiopath);
-      if (!xfStream) {
-        state.triggered = false;
-        this.state.delete(zoneId);
-        return;
-      }
-      fadeIn = {
-        kind: 'pipe',
-        stream: xfStream.stream,
-        sampleRate: xfStream.sampleRate,
-        channels: xfStream.channels,
-      };
-      nextPlaybackSource = {
-        kind: 'pipe',
-        path: `librespot-native-${zoneId}`,
-        format: 's16le',
-        sampleRate: xfStream.sampleRate,
-        channels: xfStream.channels,
-        realTime: false,
-        stream: xfStream.stream,
-      };
-    } else if (newSource.kind === 'file') {
+    if (newSource.kind === 'file') {
       fadeIn = { kind: 'file', path: newSource.path };
     } else if (newSource.kind === 'url') {
       fadeIn = {
@@ -305,16 +273,6 @@ export class CrossfadeController {
       nextPlaybackSource,
       state.resolvedMetadata ?? undefined,
     );
-
-    // Hand audio-session ownership to the crossfade target IMMEDIATELY (before the
-    // 10 s blend) so the spotify input service starts ignoring Connect-host events
-    // for the OLD track right away. Otherwise periodic Connect events fired during
-    // the blend would call applyMetadataUpdate() and revert session.metadata back
-    // to the old title/duration — corrupting the URL handover that runs after the
-    // blend, and skewing the next-crossfade trigger time.
-    if (state.isSpotifyFadeIn) {
-      this.deps.inputsPort.releaseCrossfadeStream(zoneId, state.resolvedMetadata ?? undefined);
-    }
 
     // The session has already been mutated synchronously above. Read it now so we
     // can flip the visible player state to the NEW track at fade-in start (instead
@@ -392,32 +350,6 @@ export class CrossfadeController {
     state: CrossfadeEntry,
   ): Promise<void> {
     const zoneId = ctx.id;
-
-    // For Spotify: start the next track's librespot stream now so the pipe is
-    // ready when the new session starts, then release Connect-host ownership so
-    // the Spotify input service stops reacting to events for the old track.
-    // This mirrors what the server-side blend did but without waiting for the blend.
-    if (state.isSpotifyFadeIn) {
-      const xfStream = await this.deps.inputsPort.startCrossfadeStream(zoneId, state.nextAudiopath);
-      if (!xfStream) {
-        state.triggered = false;
-        this.state.delete(zoneId);
-        return;
-      }
-      // Override the resolved source with the live librespot pipe.
-      state.resolvedSource = {
-        kind: 'pipe',
-        path: `librespot-native-${zoneId}`,
-        format: 's16le',
-        sampleRate: xfStream.sampleRate,
-        channels: xfStream.channels,
-        realTime: false,
-        stream: xfStream.stream,
-      };
-      // Transfer Connect ownership to the new track immediately so periodic
-      // Connect events don't revert metadata back to the old track.
-      this.deps.inputsPort.releaseCrossfadeStream(zoneId, state.resolvedMetadata ?? undefined);
-    }
 
     // Signal all outputs to use native crossfade on the next play() call.
     for (const output of ctx.outputs) {
@@ -558,7 +490,7 @@ export class CrossfadeController {
     // ~3.5× that threshold to pre-buffer the new URL while still keeping the OLD URL
     // alive briefly enough to minimise the perceptible stutter at handover. Earlier
     // 1500 ms was safe but produced an audible 1–3 s buffering window when the OLD
-    // librespot stalled at the same time as the rotation.
+    // the producer stalled at the same time as the rotation.
     setTimeout(() => {
       try {
         this.deps.audioManager.closeSubscribersForStreamId(ctx.id, rotation.oldId);

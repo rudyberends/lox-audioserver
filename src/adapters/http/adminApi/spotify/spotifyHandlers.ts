@@ -11,13 +11,11 @@ import type { StreamingServiceConfig } from '@/domain/config/types';
 import {
   buildSpotifyAuthLink,
   deleteSpotifyAccount,
-  handleSpotifyLibrespotExport,
-  handleSpotifyLibrespotOAuth,
-  handleSpotifyLibrespotZeroconf,
   handleSpotifyOAuthCallback,
 } from '@/adapters/content/providers/spotify/serviceAuth';
 import {
   handleSoloistBinaryUpload,
+  handleSoloistPairing,
   handleSoloistSettings,
   handleSoloistStatus,
 } from '@/adapters/http/adminApi/spotify/soloistHandlers';
@@ -61,57 +59,7 @@ export function buildSpotifyRoutes(deps: SpotifyHandlerDeps): Route[] {
           deps.spotifyInputService,
         ),
     },
-    {
-      method: 'POST',
-      pattern: /^\/spotify\/librespot\/oauth$/,
-      handler: async (req, res) =>
-        handleSpotifyLibrespotOAuth(
-          req,
-          res,
-          deps.configPort,
-          deps.spotifyInputService,
-          deps.spotifyManagerProvider,
-        ),
-    },
-    {
-      // Start a pairing handshake — the only login Spotify still accepts (#333). Returns at once;
-      // the GET below reports whether the user has picked the device yet.
-      method: 'POST',
-      pattern: /^\/spotify\/librespot\/zeroconf$/,
-      handler: async (req, res) =>
-        handleSpotifyLibrespotZeroconf(
-          req,
-          res,
-          deps.configPort,
-          deps.spotifyInputService,
-          deps.contentManager,
-        ),
-    },
-    {
-      method: 'GET',
-      pattern: /^\/spotify\/librespot\/zeroconf$/,
-      handler: async (req, res) =>
-        handleSpotifyLibrespotZeroconf(
-          req,
-          res,
-          deps.configPort,
-          deps.spotifyInputService,
-          deps.contentManager,
-        ),
-    },
-    {
-      // Anchored and GET-only: the pattern used to be an unanchored prefix with no
-      // method, so it also claimed anything beginning with this path.
-      method: 'GET',
-      pattern: /^\/spotify\/librespot\/credentials$/,
-      handler: async (req, res) => handleSpotifyLibrespotExport(req, res, deps.configPort),
-    },
-    {
-      method: 'GET',
-      pattern: /^\/spotify\/librespot\/status$/,
-      handler: async (_req, res) => handleSpotifyLibrespotStatus(res, deps),
-    },
-    // Soloist: the opt-in second backend. Everything here is inert until a zone asks for it.
+    // Soloist: the only Spotify playback client. Inert until it is given a key.
     {
       method: 'GET',
       pattern: /^\/spotify\/soloist\/status$/,
@@ -122,7 +70,7 @@ export function buildSpotifyRoutes(deps: SpotifyHandlerDeps): Route[] {
       pattern: /^\/spotify\/soloist\/settings$/,
       handler: async (req, res) => {
         const body = (await deps.readJsonBody(req, res)) as
-          | { enabled?: boolean; apiKey?: string; lossless?: boolean }
+          | { apiKey?: string; lossless?: boolean }
           | null;
         if (res.writableEnded) return;
         await handleSoloistSettings(res, deps, body);
@@ -132,6 +80,18 @@ export function buildSpotifyRoutes(deps: SpotifyHandlerDeps): Route[] {
       method: 'POST',
       pattern: /^\/spotify\/soloist\/binary$/,
       handler: async (req, res) => handleSoloistBinaryUpload(req, res, deps),
+    },
+    // Signing an account in, once. Returns at once; the GET reports whether anyone has picked the
+    // device in their Spotify app yet.
+    {
+      method: 'POST',
+      pattern: /^\/spotify\/soloist\/pair$/,
+      handler: async (req, res) => handleSoloistPairing(req, res, deps),
+    },
+    {
+      method: 'GET',
+      pattern: /^\/spotify\/soloist\/pair$/,
+      handler: async (req, res) => handleSoloistPairing(req, res, deps),
     },
     {
       method: 'DELETE',
@@ -222,19 +182,6 @@ async function handleSpotifyAccountLink(
   } catch (err) {
     deps.log.warn('spotify account link build failed', { err });
     deps.sendJson(res, 500, { error: 'spotify-account-link-failed' });
-  }
-}
-
-async function handleSpotifyLibrespotStatus(
-  res: ServerResponse,
-  deps: SpotifyHandlerDeps,
-): Promise<void> {
-  try {
-    const zones = deps.spotifyInputService.listCredentialStates();
-    deps.sendJson(res, 200, { zones });
-  } catch (err) {
-    deps.log.warn('spotify librespot status failed', { err });
-    deps.sendJson(res, 500, { error: 'spotify-librespot-status-failed' });
   }
 }
 

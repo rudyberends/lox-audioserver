@@ -71,15 +71,12 @@ import './ytmusicNative.mock.test';
 import './spotifyAccountProvider.playlists.test';
 import './spotifyAccountProvider.artist.test';
 import './spotifyWebTokens.test';
-import './spotifyRecoveryPolicy.test';
 import './soloistBackend.test';
-import './soloistBackendSwitch.test';
 import './soloistArchive.test';
 import './soloistStores.test';
 import './pulseSoundCard.test';
 import './pulseSoundCardWire.test';
 import './soloistTransport.test';
-import './spotifyFileFormat.test';
 import './deezerRetryStream.test';
 import './subsonicIds.test';
 import './subsonicResponse.test';
@@ -318,23 +315,8 @@ async function createZoneHarness(): Promise<ZoneHarness> {
     const spotifyInputServiceModule = require('../src/adapters/inputs/spotify/spotifyInputService') as typeof import('../src/adapters/inputs/spotify/spotifyInputService');
     const airplayInputServiceModule = require('../src/adapters/inputs/airplay/airplayInputService') as typeof import('../src/adapters/inputs/airplay/airplayInputService');
     let airplayInputService: import('../src/adapters/inputs/airplay/airplayInputService').AirplayInputService | null = null;
-    const stopAirplaySession = (zoneId: number, reason?: string) => {
-      if (!airplayInputService) {
-        throw new Error('airplay input service not initialized');
-      }
-      airplayInputService.stopActiveSession(zoneId, reason);
-    };
     const noopPlayerRegistry = { getPlayer: () => null };
-    const spotifyStreamProxyModule = require('../src/adapters/inputs/spotify/spotifyStreamProxyService') as typeof import('../src/adapters/inputs/spotify/spotifyStreamProxyService');
-    const spotifyInputService = new spotifyInputServiceModule.SpotifyInputService(
-      outputHandlersProxy.onOutputError,
-      configPort,
-      spotifyManagerProvider,
-      spotifyDeviceRegistry,
-      stopAirplaySession,
-      noopPlayerRegistry,
-      new spotifyStreamProxyModule.SpotifyStreamProxyService(),
-    );
+    const spotifyInputService = new spotifyInputServiceModule.SpotifyInputService(configPort);
     // No responder in tests: nothing here starts a receiver, so publishing is a no-op.
     const noopMdns = {
       publish: () => ({ stop: () => {} }),

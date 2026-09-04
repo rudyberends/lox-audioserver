@@ -317,7 +317,7 @@ export class SessionStarter {
     decoder.stdout.pipe(dsp);
 
     if (sourceStream) {
-      // A live producer (librespot, line-in) feeds the decoder's stdin. Its end must close that stdin so
+      // A live producer (a Spotify run, line-in) feeds the decoder's stdin. Its end must close that stdin so
       // ffmpeg flushes, and its errors must not be raised on a pipe nobody is reading.
       s.pipeSource.adopt(sourceStream);
       s.pipeTarget = decoder.stdin;
