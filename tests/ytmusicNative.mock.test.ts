@@ -5,6 +5,11 @@ import type { StreamingServiceConfig } from '../src/domain/config/types';
 import { YtMusicProvider } from '../src/adapters/content/providers/ytmusic/ytmusicProvider';
 import { YtMusicStreamService } from '../src/adapters/content/providers/ytmusic/ytmusicStreamService';
 import { toProviderNode } from '../src/adapters/loxone/commands/utils/loxoneServiceFolders';
+import {
+  YtMusicCookieExpiredError,
+  isSignedOutResponse,
+} from '../src/adapters/content/providers/ytmusic/ytmusicInnertube';
+import { getYtMusicAuthStatus } from '../src/adapters/content/providers/ytmusic/ytmusicAuthState';
 
 // Ensure offline tests always use the repo-local yt-dlp mock (instead of the system yt-dlp).
 // Named outright rather than left to PATH order: a real yt-dlp downloaded through the
@@ -109,4 +114,100 @@ test('ytmusic native: stream service resolves a direct url via yt-dlp', async ()
   assert.ok(res.playbackSource);
   assert.equal(res.playbackSource?.kind, 'url');
   assert.ok(typeof (res.playbackSource as any).url === 'string');
+});
+
+// --- cookie expiry (issue #364) -------------------------------------------------
+//
+// YouTube does not fail a request made with a dead cookie: it answers 200 with a
+// body that has a "Sign in" prompt where the library should be. That made an
+// expired cookie indistinguishable from an empty library, which is why it went
+// unreported for as long as it did. These pin the signal down.
+
+test('ytmusic native: a sign-in prompt in a browse response reads as an expired cookie', () => {
+  // Shape taken from a real response to an expired cookie: 200, no
+  // mainAppWebResponseContext, and a signInEndpoint behind a "Sign in" button.
+  const signedOut = {
+    responseContext: { visitorData: 'abc', responseId: 'xyz' },
+    contents: {
+      messageRenderer: {
+        text: { runs: [{ text: 'Sign in' }] },
+        navigationEndpoint: { signInEndpoint: { hack: true } },
+      },
+    },
+  };
+  assert.equal(isSignedOutResponse(signedOut), true);
+});
+
+test('ytmusic native: a signed-in browse response is never called expired', () => {
+  const signedIn = {
+    responseContext: { mainAppWebResponseContext: { loggedOut: false } },
+    contents: { musicShelfRenderer: { contents: [{ musicTwoRowItemRenderer: {} }] } },
+  };
+  assert.equal(isSignedOutResponse(signedIn), false);
+
+  // `loggedOut: false` wins even if a sign-in endpoint turns up somewhere in the
+  // payload: the response positively states who it belongs to.
+  const signedInWithPrompt = {
+    responseContext: { mainAppWebResponseContext: { loggedOut: false } },
+    contents: { footer: { navigationEndpoint: { signInEndpoint: {} } } },
+  };
+  assert.equal(isSignedOutResponse(signedInWithPrompt), false);
+
+  // And an ordinary empty library stays empty rather than becoming "expired".
+  assert.equal(isSignedOutResponse({ responseContext: {}, contents: {} }), false);
+});
+
+test('ytmusic native: an expired cookie is recorded, not just logged', async () => {
+  const bridge = { ...makeBridge('bridge-ytmusic-expired'), ytmusicCookie: 'SID=dead' };
+  const provider = new YtMusicProvider({
+    providerId: `spotify@${bridge.id}`,
+    bridge,
+    browse: async () => {
+      throw new YtMusicCookieExpiredError();
+    },
+  });
+
+  assert.equal(getYtMusicAuthStatus(bridge.id).state, 'unknown');
+  const folder = await provider.getFolder('albums', 0, 50);
+  // The section still fails softly — an empty list is right for a section that
+  // could not load — but the reason is now recoverable.
+  assert.equal(folder?.items?.length ?? 0, 0);
+  assert.equal(getYtMusicAuthStatus(bridge.id).state, 'expired');
+});
+
+test('ytmusic native: a cookie that works marks the account healthy', async () => {
+  const bridge = { ...makeBridge('bridge-ytmusic-healthy'), ytmusicCookie: 'SID=mock' };
+  const provider = new YtMusicProvider({
+    providerId: `spotify@${bridge.id}`,
+    bridge,
+    browse: async () => ({
+      responseContext: { mainAppWebResponseContext: { loggedOut: false } },
+      contents: {},
+    }),
+  });
+
+  await provider.getFolder('albums', 0, 50);
+  assert.equal(getYtMusicAuthStatus(bridge.id).state, 'ok');
+});
+
+test('ytmusic native: a dead PO Token server must not take playback down', async () => {
+  // The PO Token path is an upgrade, never a dependency: a url left configured
+  // after the helper service stopped has to fall back, not fail.
+  const bridge = {
+    ...makeBridge('bridge-ytmusic-potdown'),
+    ytmusicCookie: 'SID=mock',
+    ytmusicPoTokenUrl: 'http://127.0.0.1:1',
+  };
+  const providerId = `spotify@${bridge.id}`;
+  const configPort = { getConfig: () => ({ content: { streamingServices: [bridge] } }) } as any;
+
+  let lastError: string | undefined;
+  const streamService = new YtMusicStreamService((_zoneId, reason) => {
+    lastError = reason;
+  }, configPort);
+  streamService.configureFromConfig();
+
+  const res = await streamService.startStreamForAudiopath(1, `${providerId}:track:dQw4w9WgXcQ`);
+  assert.equal(lastError, undefined);
+  assert.equal(res.playbackSource?.kind, 'url');
 });

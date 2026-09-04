@@ -5,7 +5,12 @@ import { createLogger } from '@/shared/logging/logger';
 import { DEFAULT_MIN_SEARCH_LIMIT } from '@/adapters/content/utils/searchLimits';
 import { stripAccountSlug } from '@/adapters/content/utils/folderIdPrefix';
 import { convertCookieToNetscape } from '@/adapters/content/providers/ytmusic/ytmusicCookie';
-import { ytmBrowse, type YtMusicInnertubeClientOptions } from '@/adapters/content/providers/ytmusic/ytmusicInnertube';
+import {
+  YtMusicCookieExpiredError,
+  ytmBrowse,
+  type YtMusicInnertubeClientOptions,
+} from '@/adapters/content/providers/ytmusic/ytmusicInnertube';
+import { recordYtMusicAuth } from '@/adapters/content/providers/ytmusic/ytmusicAuthState';
 import {
   buildYtMusicBrowseUrl,
   buildYtMusicPlaylistUrl,
@@ -713,7 +718,29 @@ export class YtMusicProvider implements ContentProvider {
     return typeof this.bridge?.ytmusicCookie === 'string' && this.bridge.ytmusicCookie.trim().length > 0;
   }
 
+  /**
+   * Every browse that spends the cookie, with the verdict on that cookie recorded.
+   *
+   * The library fetchers each swallow their failure and return an empty list, which
+   * is right for a section that could not load but wrong as the *only* trace of an
+   * expired cookie — an empty library is what the user sees either way. Recording it
+   * in one place here is what lets the setup screen say which of the two it is.
+   */
+  private async browseAuthed(browseId: string, options: YtMusicInnertubeClientOptions): Promise<any> {
+    try {
+      const json = await this.browse(browseId, options);
+      recordYtMusicAuth(this.bridge.id, 'ok');
+      return json;
+    } catch (err) {
+      if (err instanceof YtMusicCookieExpiredError) {
+        recordYtMusicAuth(this.bridge.id, 'expired');
+      }
+      throw err;
+    }
+  }
+
   private warnMissingCookieOnce(): void {
+    recordYtMusicAuth(this.bridge.id, 'missing');
     if (this.missingCookieWarned) return;
     this.missingCookieWarned = true;
     this.log.warn('ytmusic not configured; missing cookie', { providerId: this.providerId });
@@ -729,7 +756,7 @@ export class YtMusicProvider implements ContentProvider {
       return cached.items;
     }
     try {
-      const json = await this.browse('FEmusic_liked_albums', { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
+      const json = await this.browseAuthed('FEmusic_liked_albums', { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
       const rows = extractTwoRowItems(json);
       const items = rows
         .map((r) => {
@@ -771,7 +798,7 @@ export class YtMusicProvider implements ContentProvider {
       return cached.items;
     }
     try {
-      const json = await this.browse('FEmusic_liked_playlists', { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
+      const json = await this.browseAuthed('FEmusic_liked_playlists', { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
       const rows = extractTwoRowItems(json);
       const items: ContentFolderItem[] = [];
       for (const r of rows) {
@@ -813,7 +840,7 @@ export class YtMusicProvider implements ContentProvider {
       return cached.items;
     }
     try {
-      const json = await this.browse('FEmusic_library_corpus_track_artists', { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
+      const json = await this.browseAuthed('FEmusic_library_corpus_track_artists', { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
       const listItems = extractResponsiveListItems(json);
       const out: ContentFolderItem[] = [];
       for (const it of listItems) {
@@ -855,7 +882,7 @@ export class YtMusicProvider implements ContentProvider {
       return cached.items.slice(offset, offset + limit);
     }
     try {
-      const json = await this.browse(albumBrowseId, { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
+      const json = await this.browseAuthed(albumBrowseId, { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
       const listItems = extractResponsiveListItems(json);
       const tracks = listItems
         .map((it) => mapResponsiveToTrack(this.audiopathPrefix, it))
@@ -878,7 +905,7 @@ export class YtMusicProvider implements ContentProvider {
       return cached.items.slice(offset, offset + limit);
     }
     try {
-      const json = await this.browse(artistBrowseId, { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
+      const json = await this.browseAuthed(artistBrowseId, { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
       const listItems = extractResponsiveListItems(json);
       const tracks = listItems
         .map((it) => mapResponsiveToTrack(this.audiopathPrefix, it))

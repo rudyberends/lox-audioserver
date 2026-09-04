@@ -397,6 +397,14 @@ export interface StreamingServiceConfig {
   apiKey?: string;
   /** Optional YouTube Music cookie header string when provider === 'ytmusic' (e.g. "SID=...; HSID=..."). */
   ytmusicCookie?: string;
+  /**
+   * Optional PO Token server for provider === 'ytmusic' (e.g. "http://127.0.0.1:4416").
+   *
+   * YouTube's `web_music` client hands out no formats at all without a proof-of-origin
+   * token, and that token has to come from a BotGuard runner outside yt-dlp. Set this
+   * to unlock that client, which is what a Premium account needs to stream at 256k.
+   */
+  ytmusicPoTokenUrl?: string;
   /** Optional YouTube Data API v3 key when provider === 'youtube'. Enables better search and trending. */
   youtubeApiKey?: string;
   /** Optional Apple Music tokens if provider === 'applemusic' */

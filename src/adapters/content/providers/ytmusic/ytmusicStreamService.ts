@@ -9,6 +9,12 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { convertCookieToNetscape } from '@/adapters/content/providers/ytmusic/ytmusicCookie';
 import { buildProxyUrl } from '@/shared/urlProxy';
+import { potPluginArgs } from '@/adapters/content/providers/ytmusic/ytdlpPotProvider';
+import {
+  normalizePotServerUrl,
+  pingPotServer,
+  potExtractorArgs,
+} from '@/adapters/content/providers/ytmusic/ytmusicPoToken';
 import {
   buildYtMusicWatchUrl,
   extractVideoId,
@@ -45,6 +51,8 @@ export class YtMusicStreamService {
   >();
 
   private readonly warmupVideoId = 'dQw4w9WgXcQ';
+  /** Last reason the PO Token path was skipped, per bridge, so it is logged on change only. */
+  private readonly potUnusableWarned = new Map<string, string>();
 
   constructor(private readonly notifyOutputError: OutputErrorHandler, configPort: ConfigPort) {
     this.configPort = configPort;
@@ -108,7 +116,7 @@ export class YtMusicStreamService {
         hasCookie: Boolean(cookieFile),
       });
       const watchUrl = buildYtMusicWatchUrl(request.videoId);
-      const buildArgs = (withCookies: boolean): string[] => [
+      const buildArgs = (withCookies: boolean, extra: string[] = []): string[] => [
         '-g',
         '--js-runtimes',
         'node',
@@ -117,48 +125,68 @@ export class YtMusicStreamService {
         '--skip-download',
         '-f',
         'bestaudio/best',
+        ...extra,
         ...(withCookies ? this.buildCookieArgs(cookieFile) : []),
         watchUrl,
       ];
-      // Resolve anonymously FIRST; the signed-in attempt is the fallback, not the
-      // preference. Measured against a real account: a cookied extraction yields a
-      // TVHTML5 url that googlevideo answers 403 to for its first ~45 seconds (6 of 6
-      // immediate tries, on two separate tracks), while the anonymous one is served
-      // straight away (6 of 6) — so asking with cookies handed ffmpeg a url that was
-      // dead on arrival, and the track died on opening.
+
+      // Ordered attempts, best first, each a complete way to get a url.
       //
-      // This used to fall back only when yt-dlp said "Requested format is not
-      // available", which held together for the wrong reason: the pinned yt-dlp
-      // *failed* the cookied attempt, so the fallback carried every playback. On a
-      // newer yt-dlp the cookied attempt succeeds and returns one of those 403 urls,
-      // and the fallback — keyed on an error that no longer happens — never fires.
+      // The `web_music` client leads when it can work at all, because it is the only
+      // one that serves a Premium account its 256k stream (itag 141) and the only one
+      // that sees account-only content — but it hands out no formats whatsoever
+      // without a proof-of-origin token, so it is offered only once the PO Token
+      // server has actually answered.
       //
-      // Cookies still earn their keep for anything not reachable anonymously, so the
-      // signed-in attempt stays, now on any failure rather than on one error string.
-      let url = '';
-      try {
-        const { stdout } = await runYtDlp(buildArgs(false), this.execOptions());
-        url = pickLastNonEmptyLine(stdout);
-      } catch (err) {
-        if (!cookieFile) {
-          throw err;
-        }
-        this.log.debug('ytmusic stream retrying with cookies', {
-          zoneId,
-          providerId: request.providerId,
-        });
-        const { stdout } = await runYtDlp(buildArgs(true), this.execOptions());
-        url = pickLastNonEmptyLine(stdout);
+      // Anonymous comes next, and stays ahead of the plain signed-in attempt.
+      // Measured against a real account: a cookied extraction yields a TVHTML5 url
+      // that googlevideo answers 403 to for its first ~45 seconds (6 of 6 immediate
+      // tries, on two separate tracks), while the anonymous one is served straight
+      // away (6 of 6) — so asking with cookies handed ffmpeg a url that was dead on
+      // arrival, and the track died on opening. Cookies still earn their keep for
+      // anything not reachable anonymously, so that attempt stays, last.
+      const attempts: Array<{ label: string; args: string[] }> = [];
+      const potArgs = await this.potAttemptArgs(request.bridge, cookieFile);
+      if (potArgs) {
+        attempts.push({ label: 'web_music+po-token', args: buildArgs(true, potArgs) });
       }
-      if (!url && cookieFile) {
-        // Anonymous run exited cleanly but produced nothing (private or otherwise
-        // account-only content); the signed-in attempt is what that case needs.
-        this.log.debug('ytmusic stream empty anonymously; retrying with cookies', {
+      attempts.push({ label: 'anonymous', args: buildArgs(false) });
+      if (cookieFile) {
+        attempts.push({ label: 'signed-in', args: buildArgs(true) });
+      }
+
+      // One loop covers both ways an attempt comes up short: a yt-dlp that fails
+      // outright, and one that exits cleanly having printed nothing (private or
+      // otherwise account-only content). Both used to need their own fallback block,
+      // and the second was easy to forget — it is the same "try the next way" either.
+      let url = '';
+      let lastError: unknown = null;
+      for (const [index, attempt] of attempts.entries()) {
+        try {
+          const { stdout } = await runYtDlp(attempt.args, this.execOptions());
+          url = pickLastNonEmptyLine(stdout);
+        } catch (err) {
+          lastError = err;
+          url = '';
+        }
+        if (url) {
+          if (index > 0) {
+            this.log.debug('ytmusic stream resolved on fallback', {
+              zoneId,
+              providerId: request.providerId,
+              attempt: attempt.label,
+            });
+          }
+          break;
+        }
+        this.log.debug('ytmusic stream attempt came up empty', {
           zoneId,
           providerId: request.providerId,
+          attempt: attempt.label,
         });
-        const { stdout } = await runYtDlp(buildArgs(true), this.execOptions());
-        url = pickLastNonEmptyLine(stdout);
+      }
+      if (!url && lastError) {
+        throw lastError;
       }
       if (!url) {
         this.reportPlaybackError(zoneId, 'ytmusic stream url unavailable', suppressErrors);
@@ -247,6 +275,47 @@ export class YtMusicStreamService {
 
   private execOptions(): YtDlpExecOptions {
     return { timeoutMs: 20_000 };
+  }
+
+  /**
+   * The extra yt-dlp args for the PO Token attempt, or null when it cannot work.
+   *
+   * Both halves have to be in place, and neither announces itself when missing: with
+   * no plugin installed yt-dlp ignores the `youtubepot-bgutilhttp` args silently, and
+   * with no server answering the plugin has nothing to ask. Either way `web_music`
+   * comes back with no formats — so this refuses to queue an attempt that is already
+   * known to be pointless, rather than spending a 20 second yt-dlp run discovering it
+   * again before every track.
+   */
+  private async potAttemptArgs(
+    bridge: StreamingServiceConfig,
+    cookieFile: string | null,
+  ): Promise<string[] | null> {
+    const url = normalizePotServerUrl(bridge.ytmusicPoTokenUrl);
+    if (!url) return null;
+    // Without a cookie there is nothing to gain: `web_music` anonymously resolves to
+    // a plain 128k AAC stream, where the default clients already give opus at a
+    // higher bitrate. The upgrade this path buys belongs to a signed-in account.
+    if (!cookieFile) return null;
+
+    const pluginArgs = await potPluginArgs();
+    if (pluginArgs.length === 0) {
+      this.warnPotUnusableOnce(bridge.id, 'the PO Token provider plugin for yt-dlp is not installed');
+      return null;
+    }
+    const ping = await pingPotServer(url);
+    if (!ping.ok) {
+      this.warnPotUnusableOnce(bridge.id, `PO Token server not reachable at ${url} (${ping.error ?? 'no answer'})`);
+      return null;
+    }
+    this.potUnusableWarned.delete(bridge.id);
+    return [...pluginArgs, ...potExtractorArgs(url)];
+  }
+
+  private warnPotUnusableOnce(bridgeId: string, reason: string): void {
+    if (this.potUnusableWarned.get(bridgeId) === reason) return;
+    this.potUnusableWarned.set(bridgeId, reason);
+    this.log.warn('ytmusic PO Token path unavailable; falling back', { bridgeId, reason });
   }
 
   private scheduleWarmup(bridge: StreamingServiceConfig): void {

@@ -23,6 +23,8 @@ import {
 } from '@/adapters/http/adminApi/spotify/soloistHandlers';
 import type { Route } from '@/adapters/http/adminApi/routeTypes';
 import { defaultConfig } from '@/adapters/http/adminApi/config/configHandlers';
+import { verifyYtMusicCookie } from '@/adapters/content/providers/ytmusic/ytmusicAuthState';
+import { normalizePotServerUrl } from '@/adapters/content/providers/ytmusic/ytmusicPoToken';
 import type { MusicAssistantConnectionResult } from '@/adapters/http/adminApi/musicassistant/musicAssistantHelpers';
 import {
   isValidMusicAssistantHost,
@@ -304,6 +306,27 @@ async function handleStreamingServiceCreate(
     musicAssistantConnection = testResult;
   }
 
+  if (provider === 'ytmusic') {
+    const pasted = typeof body?.ytmusicCookie === 'string' ? body.ytmusicCookie.trim() : '';
+    if (pasted) {
+      // Checked here because a YouTube Music cookie can be dead on arrival: YouTube
+      // rotates account cookies on open tabs, so one copied out of a live session is
+      // often already worthless by the time it is pasted — and it fails silently, as
+      // an empty library rather than an error. Saying so now beats letting someone
+      // conclude the service is broken.
+      const verdict = await verifyYtMusicCookie(pasted);
+      if (verdict.state === 'expired' || verdict.state === 'invalid') {
+        deps.sendJson(res, 400, {
+          error: verdict.state === 'invalid' ? 'ytmusic-cookie-invalid' : 'ytmusic-cookie-expired',
+          message:
+            verdict.message ??
+            'This cookie is not signed in any more. YouTube rotates cookies on open tabs, so copy it from a private/incognito window and close that window without signing out.',
+        });
+        return;
+      }
+    }
+  }
+
   const generatedId = `bridge-${provider}-${Math.random().toString(36).slice(2, 8)}`;
   const id = typeof body?.id === 'string' && body.id.trim() ? body.id.trim() : generatedId;
   const defaultLabel =
@@ -358,6 +381,7 @@ async function handleStreamingServiceCreate(
       typeof body?.ytmusicCookie === 'string' && body.ytmusicCookie.trim()
         ? body.ytmusicCookie.trim()
         : undefined,
+    ytmusicPoTokenUrl: normalizePotServerUrl(body?.ytmusicPoTokenUrl) || undefined,
     youtubeApiKey:
       typeof body?.youtubeApiKey === 'string' && body.youtubeApiKey.trim()
         ? body.youtubeApiKey.trim()

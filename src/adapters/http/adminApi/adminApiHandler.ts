@@ -81,6 +81,7 @@ import {
 } from '@/adapters/http/adminApi/zones/zonesHandlers';
 import { buildSpotifyRoutes } from '@/adapters/http/adminApi/spotify/spotifyHandlers';
 import { buildYtDlpRoutes } from '@/adapters/http/adminApi/ytdlp/ytdlpHandlers';
+import { buildYtMusicRoutes } from '@/adapters/http/adminApi/ytmusic/ytmusicHandlers';
 import { buildMiscRoutes } from '@/adapters/http/adminApi/misc/miscHandlers';
 import { buildConfigRoutes } from '@/adapters/http/adminApi/config/configHandlers';
 import { buildSonnClientRoutes } from '@/adapters/http/adminApi/sonnclients/sonnClientAdminHandlers';
@@ -255,6 +256,12 @@ export class AdminApiHandler {
       }),
       ...buildYtDlpRoutes({
         log: this.log,
+        sendJson: (res, status, payload) => sendJson(res, status, payload),
+      }),
+      ...buildYtMusicRoutes({
+        log: this.log,
+        configPort: this.configPort,
+        readJsonBody: (req, res) => readJsonBody(req, res),
         sendJson: (res, status, payload) => sendJson(res, status, payload),
       }),
       ...buildSpotifyRoutes({

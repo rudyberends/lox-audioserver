@@ -22,6 +22,53 @@ export class YtMusicInnertubeError extends Error {
   }
 }
 
+/**
+ * The cookie no longer identifies anyone.
+ *
+ * Its own error type because an expired cookie is the one YouTube Music failure a
+ * user has to act on, and it is also the one that hides best: see
+ * `isSignedOutResponse` for why nothing else in the response gives it away.
+ */
+export class YtMusicCookieExpiredError extends Error {
+  constructor(message = 'ytmusic cookie is no longer signed in') {
+    super(message);
+  }
+}
+
+/**
+ * Whether a browse response came back signed out.
+ *
+ * A dead cookie does not fail: YouTube answers **200** with a well-formed body that
+ * simply has a "Sign in" prompt where the library should be. Measured against an
+ * expired cookie, a liked-albums browse returned 200 with a `signInEndpoint` and
+ * zero items — indistinguishable, to every check we had, from an empty library. So
+ * that prompt is the signal, and the whole reason this exists.
+ *
+ * `loggedOut === false` can only veto: the prompt is the part actually observed, and
+ * a response that positively states it is signed in should never be called expired.
+ */
+export function isSignedOutResponse(json: unknown): boolean {
+  const loggedOut = (json as { responseContext?: { mainAppWebResponseContext?: { loggedOut?: unknown } } })
+    ?.responseContext?.mainAppWebResponseContext?.loggedOut;
+  if (loggedOut === false) return false;
+  return hasKeyDeep(json, 'signInEndpoint');
+}
+
+function hasKeyDeep(value: unknown, key: string, depth = 0): boolean {
+  // Innertube payloads nest deeply but not unboundedly; the cap keeps a hostile or
+  // cyclic body from turning a health check into a hang.
+  if (depth > 30 || value === null || typeof value !== 'object') return false;
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasKeyDeep(entry, key, depth + 1));
+  }
+  const record = value as Record<string, unknown>;
+  if (Object.hasOwn(record, key)) return true;
+  for (const nested of Object.values(record)) {
+    if (hasKeyDeep(nested, key, depth + 1)) return true;
+  }
+  return false;
+}
+
 export function getCookieValue(cookieHeader: string, name: string): string | null {
   const raw = String(cookieHeader || '');
   if (!raw) return null;
@@ -93,13 +140,18 @@ export async function ytmBrowse(
       bodySnippet: text.slice(0, 4000),
     });
   }
+  let parsed: unknown;
   try {
-    return JSON.parse(text);
+    parsed = JSON.parse(text);
   } catch {
     throw new YtMusicInnertubeError('ytmusic innertube browse returned non-json', {
       status: res.status,
       bodySnippet: text.slice(0, 4000),
     });
   }
+  if (isSignedOutResponse(parsed)) {
+    throw new YtMusicCookieExpiredError();
+  }
+  return parsed;
 }
 
