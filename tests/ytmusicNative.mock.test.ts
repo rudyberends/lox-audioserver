@@ -227,6 +227,7 @@ test('ytmusic native: registering an account settles its cookie verdict', async 
     serviceNativePrefix: 'ytmusic',
     label: 'YouTube Music',
     bridge,
+    coverHost: 'http://127.0.0.1:7090',
   });
 
   // No cookie configured: answered locally as "not set up", never as a request to
