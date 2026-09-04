@@ -8,6 +8,7 @@ import { convertCookieToNetscape } from '@/adapters/content/providers/ytmusic/yt
 import {
   YtMusicCookieExpiredError,
   ytmBrowse,
+  type YtMusicContinuation,
   type YtMusicInnertubeClientOptions,
 } from '@/adapters/content/providers/ytmusic/ytmusicInnertube';
 import { recordYtMusicAuth } from '@/adapters/content/providers/ytmusic/ytmusicAuthState';
@@ -40,7 +41,11 @@ interface YtMusicProviderOptions {
   serviceNativePrefix?: string;
   label?: string;
   bridge: StreamingServiceConfig;
-  browse?: (browseId: string, options: YtMusicInnertubeClientOptions) => Promise<any>;
+  browse?: (
+    browseId: string,
+    options: YtMusicInnertubeClientOptions,
+    continuation?: YtMusicContinuation | null,
+  ) => Promise<any>;
 }
 
 type FolderKind =
@@ -65,7 +70,12 @@ export class YtMusicProvider implements ContentProvider {
   private readonly log = createLogger('Content', 'YTMusic');
   private readonly label: string;
   private bridge: StreamingServiceConfig;
-  private readonly browse: (browseId: string, options: YtMusicInnertubeClientOptions) => Promise<any>;
+  private readonly browse: (
+    browseId: string,
+    options: YtMusicInnertubeClientOptions,
+    continuation?: YtMusicContinuation | null,
+  ) => Promise<any>;
+
   private cookieFile: { cookie: string; path: string } | null = null;
   private missingCookieWarned = false;
   private readonly libraryCacheTtlMs = 60_000;
@@ -726,9 +736,13 @@ export class YtMusicProvider implements ContentProvider {
    * expired cookie — an empty library is what the user sees either way. Recording it
    * in one place here is what lets the setup screen say which of the two it is.
    */
-  private async browseAuthed(browseId: string, options: YtMusicInnertubeClientOptions): Promise<any> {
+  private async browseAuthed(
+    browseId: string,
+    options: YtMusicInnertubeClientOptions,
+    continuation?: YtMusicContinuation | null,
+  ): Promise<any> {
     try {
-      const json = await this.browse(browseId, options);
+      const json = await this.browse(browseId, options, continuation);
       recordYtMusicAuth(this.bridge.id, 'ok');
       return json;
     } catch (err) {
@@ -746,6 +760,56 @@ export class YtMusicProvider implements ContentProvider {
     this.log.warn('ytmusic not configured; missing cookie', { providerId: this.providerId });
   }
 
+  /**
+   * Every page of a browse result, not just the first.
+   *
+   * YouTube Music answers a library section with 25 items and a token for the rest,
+   * which was the whole of issue #369: one browse looked like a complete library, and
+   * reporting its length as the total told every client it had seen everything.
+   *
+   * The token hangs off the shelf that holds the items, never off the items, so it has
+   * to be read from the enclosing renderer — and it is matched to `itemKey` because a
+   * page can carry several shelves. An album page has a "more from this artist"
+   * carousel with a token of its own, and following that one would append unrelated
+   * rows to a track list.
+   */
+  private async browseAllRows(
+    browseId: string,
+    itemKey: 'musicTwoRowItemRenderer' | 'musicResponsiveListItemRenderer',
+  ): Promise<any[]> {
+    const options: YtMusicInnertubeClientOptions = { cookie: this.bridge.ytmusicCookie!, hl: 'en' };
+    const first = await this.browseAuthed(browseId, options);
+    const rows = extractRenderers(first, itemKey);
+    let continuation = findShelfContinuation(first, itemKey);
+    const spent = new Set<string>();
+    let pages = 0;
+
+    while (continuation) {
+      if (pages >= CONTINUATION_PAGE_CAP) {
+        this.log.warn('ytmusic paging hit the page cap; some items are not listed', {
+          providerId: this.providerId,
+          browseId,
+          rows: rows.length,
+        });
+        break;
+      }
+      // A token handed back unchanged would page forever.
+      if (spent.has(continuation.token)) break;
+      spent.add(continuation.token);
+      pages += 1;
+
+      const response = await this.browseAuthed(browseId, options, continuation);
+      const page = continuationPayload(response);
+      if (!page) break;
+      const next = extractRenderers(page, itemKey);
+      if (!next.length) break;
+      rows.push(...next);
+      continuation = findShelfContinuation(page, itemKey);
+    }
+
+    return rows;
+  }
+
   private async fetchLibraryAlbums(): Promise<ContentFolderItem[]> {
     if (!this.hasCookie()) {
       this.warnMissingCookieOnce();
@@ -756,8 +820,7 @@ export class YtMusicProvider implements ContentProvider {
       return cached.items;
     }
     try {
-      const json = await this.browseAuthed('FEmusic_liked_albums', { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
-      const rows = extractTwoRowItems(json);
+      const rows = await this.browseAllRows('FEmusic_liked_albums', 'musicTwoRowItemRenderer');
       const items = rows
         .map((r) => {
           const browseId = r?.navigationEndpoint?.browseEndpoint?.browseId;
@@ -779,8 +842,9 @@ export class YtMusicProvider implements ContentProvider {
           } satisfies ContentFolderItem;
         })
         .filter(Boolean) as ContentFolderItem[];
-      this.libraryCache.albums = { items, fetchedAt: Date.now() };
-      return items;
+      const deduped = dedupeById(items);
+      this.libraryCache.albums = { items: deduped, fetchedAt: Date.now() };
+      return deduped;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn('ytmusic library albums fetch failed', { providerId: this.providerId, message: msg });
@@ -798,8 +862,7 @@ export class YtMusicProvider implements ContentProvider {
       return cached.items;
     }
     try {
-      const json = await this.browseAuthed('FEmusic_liked_playlists', { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
-      const rows = extractTwoRowItems(json);
+      const rows = await this.browseAllRows('FEmusic_liked_playlists', 'musicTwoRowItemRenderer');
       const items: ContentFolderItem[] = [];
       for (const r of rows) {
         const browseId = r?.navigationEndpoint?.browseEndpoint?.browseId;
@@ -821,8 +884,9 @@ export class YtMusicProvider implements ContentProvider {
           hasCover: !!thumb,
         });
       }
-      this.libraryCache.playlists = { items, fetchedAt: Date.now() };
-      return items;
+      const deduped = dedupeById(items);
+      this.libraryCache.playlists = { items: deduped, fetchedAt: Date.now() };
+      return deduped;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn('ytmusic library playlists fetch failed', { providerId: this.providerId, message: msg });
@@ -840,8 +904,10 @@ export class YtMusicProvider implements ContentProvider {
       return cached.items;
     }
     try {
-      const json = await this.browseAuthed('FEmusic_library_corpus_track_artists', { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
-      const listItems = extractResponsiveListItems(json);
+      const listItems = await this.browseAllRows(
+        'FEmusic_library_corpus_track_artists',
+        'musicResponsiveListItemRenderer',
+      );
       const out: ContentFolderItem[] = [];
       for (const it of listItems) {
         const browseId = it?.navigationEndpoint?.browseEndpoint?.browseId;
@@ -864,8 +930,9 @@ export class YtMusicProvider implements ContentProvider {
           hasCover: !!thumb,
         });
       }
-      this.libraryCache.artists = { items: out, fetchedAt: Date.now() };
-      return out;
+      const deduped = dedupeById(out);
+      this.libraryCache.artists = { items: deduped, fetchedAt: Date.now() };
+      return deduped;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn('ytmusic library artists fetch failed', { providerId: this.providerId, message: msg });
@@ -882,8 +949,7 @@ export class YtMusicProvider implements ContentProvider {
       return cached.items.slice(offset, offset + limit);
     }
     try {
-      const json = await this.browseAuthed(albumBrowseId, { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
-      const listItems = extractResponsiveListItems(json);
+      const listItems = await this.browseAllRows(albumBrowseId, 'musicResponsiveListItemRenderer');
       const tracks = listItems
         .map((it) => mapResponsiveToTrack(this.audiopathPrefix, it))
         .filter(Boolean) as ContentFolderItem[];
@@ -905,6 +971,9 @@ export class YtMusicProvider implements ContentProvider {
       return cached.items.slice(offset, offset + limit);
     }
     try {
+      // Deliberately a single page, unlike the library listings and album tracks. An
+      // artist page is not a list that continues; it is a set of shelves, and the songs
+      // shelf is a top-5 whose "more" is a separate playlist rather than a next page.
       const json = await this.browseAuthed(artistBrowseId, { cookie: this.bridge.ytmusicCookie!, hl: 'en' });
       const listItems = extractResponsiveListItems(json);
       const tracks = listItems
@@ -942,7 +1011,16 @@ function pickThumbFromResponsive(renderer: any): string {
   return typeof last?.url === 'string' ? last.url : '';
 }
 
-function extractTwoRowItems(json: any): any[] {
+/**
+ * How many extra pages a single listing may walk.
+ *
+ * At 25 items a page this is a library of a thousand, which is far past anything
+ * seen in practice and still a bound: a token that keeps renewing must not turn one
+ * folder request into an unbounded run of calls to YouTube.
+ */
+const CONTINUATION_PAGE_CAP = 40;
+
+function extractRenderers(json: any, key: string): any[] {
   const out: any[] = [];
   const walk = (v: any) => {
     if (!v) return;
@@ -951,7 +1029,7 @@ function extractTwoRowItems(json: any): any[] {
       return;
     }
     if (typeof v !== 'object') return;
-    if (v.musicTwoRowItemRenderer) out.push(v.musicTwoRowItemRenderer);
+    if (v[key]) out.push(v[key]);
     for (const k of Object.keys(v)) walk(v[k]);
   };
   walk(json);
@@ -959,19 +1037,84 @@ function extractTwoRowItems(json: any): any[] {
 }
 
 function extractResponsiveListItems(json: any): any[] {
-  const out: any[] = [];
+  return extractRenderers(json, 'musicResponsiveListItemRenderer');
+}
+
+/** The rows a shelf renderer holds, under whichever of the two names it uses. */
+function shelfRows(v: any): any[] | null {
+  if (Array.isArray(v?.contents)) return v.contents;
+  if (Array.isArray(v?.items)) return v.items;
+  return null;
+}
+
+function tokenFromShelf(shelf: any, rows: any[]): YtMusicContinuation | null {
+  const legacy = shelf?.continuations?.[0]?.nextContinuationData?.continuation;
+  if (typeof legacy === 'string' && legacy) return { token: legacy, style: 'query' };
+  for (const row of rows) {
+    const token = row?.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token;
+    if (typeof token === 'string' && token) return { token, style: 'body' };
+  }
+  return null;
+}
+
+/**
+ * The token for the next page of the shelf that holds `itemKey` rows.
+ *
+ * Scoped to that shelf rather than to the whole response because a browse can answer
+ * with several, each with its own token; taking the first token found would page a
+ * carousel into a track list.
+ */
+function findShelfContinuation(json: any, itemKey: string): YtMusicContinuation | null {
+  let found: YtMusicContinuation | null = null;
   const walk = (v: any) => {
-    if (!v) return;
+    if (found || !v) return;
     if (Array.isArray(v)) {
       for (const x of v) walk(x);
       return;
     }
     if (typeof v !== 'object') return;
-    if (v.musicResponsiveListItemRenderer) out.push(v.musicResponsiveListItemRenderer);
+    const rows = shelfRows(v);
+    if (rows && rows.some((r) => r && typeof r === 'object' && r[itemKey])) {
+      const token = tokenFromShelf(v, rows);
+      if (token) {
+        found = token;
+        return;
+      }
+    }
     for (const k of Object.keys(v)) walk(v[k]);
   };
   walk(json);
-  return out;
+  return found;
+}
+
+/** The part of a continuation response that carries the next page's rows. */
+function continuationPayload(response: any): any | null {
+  const contents = response?.continuationContents;
+  if (contents && typeof contents === 'object') {
+    // A single key, named after the shelf it continues: gridContinuation for the
+    // album and playlist grids, musicShelfContinuation for the artist list.
+    const shelf = Object.values(contents).find((v) => v && typeof v === 'object');
+    if (shelf) return shelf;
+  }
+  const appended = response?.onResponseReceivedActions?.[0]?.appendContinuationItemsAction?.continuationItems;
+  if (Array.isArray(appended)) return { contents: appended };
+  return null;
+}
+
+/**
+ * Drop repeats, keeping the first.
+ *
+ * Paging makes this worth doing: an item that sits on a page boundary while the
+ * library is being reordered can arrive twice, and a duplicate folder entry is more
+ * confusing than a missing one.
+ */
+function dedupeById(items: ContentFolderItem[]): ContentFolderItem[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
 }
 
 function mapResponsiveToTrack(providerId: string, item: any): ContentFolderItem | null {

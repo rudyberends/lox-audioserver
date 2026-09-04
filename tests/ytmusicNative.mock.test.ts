@@ -234,3 +234,134 @@ test('ytmusic native: registering an account settles its cookie verdict', async 
   // YouTube — which is also what keeps this suite offline.
   assert.equal(getYtMusicAuthStatus(bridge.id).state, 'missing');
 });
+
+/**
+ * Issue #369: a library longer than one page was reported as complete.
+ *
+ * YouTube Music answers a library section with 25 items and a token for the rest.
+ * We asked once and called that the whole library, then reported its length as the
+ * total — so every client was correctly told it had already seen everything. These
+ * cover both the walking and the two shapes the token arrives in.
+ */
+function gridPage(titles: string[], continuation?: string): any {
+  const items = titles.map((title) => ({
+    musicTwoRowItemRenderer: {
+      title: { runs: [{ text: title }] },
+      navigationEndpoint: { browseEndpoint: { browseId: `MPREb_${title}` } },
+    },
+  }));
+  return {
+    contents: {
+      singleColumnBrowseResultsRenderer: {
+        tabs: [{ tabRenderer: { content: { sectionListRenderer: { contents: [{ gridRenderer: {
+          items,
+          ...(continuation
+            ? { continuations: [{ nextContinuationData: { continuation } }] }
+            : {}),
+        } }] } } } }],
+      },
+    },
+  };
+}
+
+test('ytmusic native: a library longer than one page is walked to the end', async () => {
+  const bridge = { ...makeBridge('bridge-ytmusic-paged'), ytmusicCookie: 'SID=mock' };
+  const calls: (string | undefined)[] = [];
+  const provider = new YtMusicProvider({
+    providerId: `spotify@${bridge.id}`,
+    bridge,
+    browse: async (_browseId, _options, continuation) => {
+      calls.push(continuation?.token);
+      if (!continuation) return gridPage(['a1', 'a2'], 'TOKEN-2');
+      if (continuation.token === 'TOKEN-2') {
+        return {
+          continuationContents: {
+            gridContinuation: {
+              items: gridPage(['a3', 'a4'], 'TOKEN-3').contents.singleColumnBrowseResultsRenderer
+                .tabs[0].tabRenderer.content.sectionListRenderer.contents[0].gridRenderer.items,
+              continuations: [{ nextContinuationData: { continuation: 'TOKEN-3' } }],
+            },
+          },
+        };
+      }
+      return {
+        continuationContents: {
+          gridContinuation: {
+            items: gridPage(['a5']).contents.singleColumnBrowseResultsRenderer
+              .tabs[0].tabRenderer.content.sectionListRenderer.contents[0].gridRenderer.items,
+          },
+        },
+      };
+    },
+  });
+
+  const folder = await provider.getFolder('albums', 0, 50);
+  assert.deepEqual(calls, [undefined, 'TOKEN-2', 'TOKEN-3']);
+  assert.equal(folder?.items?.length, 5);
+  // The total is what makes a client stop asking, so it has to count every page.
+  assert.equal(folder?.totalitems, 5);
+});
+
+test('ytmusic native: a token that repeats does not page forever', async () => {
+  const bridge = { ...makeBridge('bridge-ytmusic-loop'), ytmusicCookie: 'SID=mock' };
+  let calls = 0;
+  const provider = new YtMusicProvider({
+    providerId: `spotify@${bridge.id}`,
+    bridge,
+    browse: async (_browseId, _options, continuation) => {
+      calls += 1;
+      // Always the same token back — the shape that would otherwise never terminate.
+      if (!continuation) return gridPage(['a1'], 'SAME');
+      return {
+        continuationContents: {
+          gridContinuation: {
+            items: gridPage(['a2']).contents.singleColumnBrowseResultsRenderer
+              .tabs[0].tabRenderer.content.sectionListRenderer.contents[0].gridRenderer.items,
+            continuations: [{ nextContinuationData: { continuation: 'SAME' } }],
+          },
+        },
+      };
+    },
+  });
+
+  const folder = await provider.getFolder('albums', 0, 50);
+  assert.equal(calls, 2);
+  assert.equal(folder?.items?.length, 2);
+});
+
+test('ytmusic native: the newer continuation dialect is followed too', async () => {
+  const bridge = { ...makeBridge('bridge-ytmusic-newdialect'), ytmusicCookie: 'SID=mock' };
+  const styles: (string | undefined)[] = [];
+  const provider = new YtMusicProvider({
+    providerId: `spotify@${bridge.id}`,
+    bridge,
+    browse: async (_browseId, _options, continuation) => {
+      styles.push(continuation?.style);
+      if (!continuation) {
+        const page = gridPage(['a1']);
+        // The 2025 shape: the token rides along as a row of the shelf itself.
+        page.contents.singleColumnBrowseResultsRenderer.tabs[0].tabRenderer.content
+          .sectionListRenderer.contents[0].gridRenderer.items.push({
+            continuationItemRenderer: {
+              continuationEndpoint: { continuationCommand: { token: 'NEW-TOKEN' } },
+            },
+          });
+        return page;
+      }
+      return {
+        onResponseReceivedActions: [
+          {
+            appendContinuationItemsAction: {
+              continuationItems: gridPage(['a2']).contents.singleColumnBrowseResultsRenderer
+                .tabs[0].tabRenderer.content.sectionListRenderer.contents[0].gridRenderer.items,
+            },
+          },
+        ],
+      };
+    },
+  });
+
+  const folder = await provider.getFolder('albums', 0, 50);
+  assert.deepEqual(styles, [undefined, 'body']);
+  assert.equal(folder?.items?.length, 2);
+});

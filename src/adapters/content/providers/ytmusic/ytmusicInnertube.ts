@@ -91,9 +91,26 @@ export function buildSapisidHashAuthorization(cookieHeader: string, origin = YTM
   return `SAPISIDHASH ${ts}_${sha1}`;
 }
 
+/**
+ * A pointer to the next page of a browse result.
+ *
+ * YouTube Music serves a library section 25 items at a time and hands back a token
+ * for the rest. It is mid-migration between two dialects for spending that token, and
+ * `style` says which one this token came from: `query` puts it in the URL and keeps
+ * the original `browseId` in the body, `body` replaces the body with the token alone.
+ * Measured against a live account, the library sections still answer in the `query`
+ * dialect; `body` is carried because that is the one they are moving to, and a token
+ * sent in the wrong envelope is ignored rather than refused.
+ */
+export type YtMusicContinuation = {
+  token: string;
+  style: 'query' | 'body';
+};
+
 export async function ytmBrowse(
   browseId: string,
   options: YtMusicInnertubeClientOptions,
+  continuation?: YtMusicContinuation | null,
 ): Promise<any> {
   const cookie = String(options.cookie || '').trim();
   if (!cookie) {
@@ -104,9 +121,16 @@ export async function ytmBrowse(
     throw new YtMusicInnertubeError('ytmusic cookie missing __Secure-3PAPISID/SAPISID');
   }
 
-  const endpoint = `https://music.youtube.com/youtubei/v1/browse?alt=json&key=${encodeURIComponent(YTM_API_KEY)}`;
+  let endpoint = `https://music.youtube.com/youtubei/v1/browse?alt=json&key=${encodeURIComponent(YTM_API_KEY)}`;
+  if (continuation?.style === 'query') {
+    // Both spellings, because both are what the web client puts on the wire.
+    const token = encodeURIComponent(continuation.token);
+    endpoint += `&ctoken=${token}&continuation=${token}`;
+  }
   const body = {
-    browseId,
+    // The newer dialect addresses a page by token alone; the older one repeats the
+    // browseId and carries its token in the query string instead.
+    ...(continuation?.style === 'body' ? { continuation: continuation.token } : { browseId }),
     context: {
       client: {
         clientName: options.clientName ?? 'WEB_REMIX',
