@@ -53,6 +53,12 @@ export const SQUEEZELITE_OUTPUT_DEFINITION: OutputConfigDefinition = {
 
 export class SqueezeliteOutput implements ZoneOutput {
   public readonly type = 'squeezelite';
+
+  /** Grouped zones stay in step here: members follow the leader's stream and unpause on its clock. */
+  public supportsNativeGrouping(): boolean {
+    return true;
+  }
+
   private readonly log = createLogger('Output', 'Squeezelite');
   private readonly normalizedPlayerId: string;
   private readonly normalizedPlayerName: string;
@@ -251,9 +257,13 @@ export class SqueezeliteOutput implements ZoneOutput {
   public async pause(_session: PlaybackSession | null): Promise<void> {
     this.clearPendingAutostart();
     const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
-    if (group && group.members.length >= 2) {
-      await this.ports.squeezeliteGroup.orchestrateGroupPause(group.leader);
-      return;
+    // Only a slimproto sync-group is paused as a whole. In a mixed group this zone
+    // plays its own stream, so it pauses itself — and when the orchestration finds
+    // too few connected players to coordinate, pausing itself is still the job.
+    if (group && this.ports.squeezeliteGroup.isSyncGroup(this.zoneId)) {
+      if (await this.ports.squeezeliteGroup.orchestrateGroupPause(group.leader)) {
+        return;
+      }
     }
     const player = this.resolvePlayer();
     if (!player) return;
@@ -262,7 +272,7 @@ export class SqueezeliteOutput implements ZoneOutput {
 
   public async resume(session: PlaybackSession | null): Promise<void> {
     const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
-    if (group && group.members.length >= 2) {
+    if (group && this.ports.squeezeliteGroup.isSyncGroup(this.zoneId)) {
       const ownPlayer = this.resolvePlayer();
       if (ownPlayer?.state === PlayerState.STOPPED) {
         // Player was stopped (e.g. by a local TTS override on this zone). A bare
@@ -278,8 +288,9 @@ export class SqueezeliteOutput implements ZoneOutput {
         }
         return;
       }
-      await this.ports.squeezeliteGroup.orchestrateGroupResume(group.leader);
-      return;
+      if (await this.ports.squeezeliteGroup.orchestrateGroupResume(group.leader)) {
+        return;
+      }
     }
     const player = this.resolvePlayer();
     if (player) {
@@ -294,7 +305,7 @@ export class SqueezeliteOutput implements ZoneOutput {
   public async stop(_session: PlaybackSession | null): Promise<void> {
     this.clearPendingAutostart();
     const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
-    if (group && group.members.length >= 2) {
+    if (group && this.ports.squeezeliteGroup.isSyncGroup(this.zoneId)) {
       if (this.zoneId === group.leader) {
         // Leader stops the whole group.
         await this.ports.squeezeliteGroup.orchestrateGroupStop(group.leader);
@@ -470,7 +481,7 @@ export class SqueezeliteOutput implements ZoneOutput {
 
   private async maybeResyncGroup(source: 'group_change'): Promise<void> {
     const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
-    if (!group || group.members.length < 2) {
+    if (!group || !this.ports.squeezeliteGroup.isSyncGroup(this.zoneId)) {
       return;
     }
     const leaderZoneId = group.leader;
@@ -555,7 +566,11 @@ export class SqueezeliteOutput implements ZoneOutput {
     // Grouped members are `maybeJoinLeader`'s job: they must rejoin the leader's byte
     // stream rather than start their own, so doing both would fight.
     const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
-    if (group && group.leader !== this.zoneId && group.members.length > 1) {
+    if (
+      group &&
+      group.leader !== this.zoneId &&
+      this.ports.squeezeliteGroup.isSyncGroup(this.zoneId)
+    ) {
       return;
     }
     const session = this.ports.audioManager.getSession(this.zoneId);
@@ -592,7 +607,11 @@ export class SqueezeliteOutput implements ZoneOutput {
 
   private async maybeJoinLeader(source: 'group_change' | 'player_connected'): Promise<void> {
     const group = this.ports.groupTracker.getGroupByZone(this.zoneId);
-    if (!group || group.leader === this.zoneId || group.members.length < 2) {
+    if (
+      !group ||
+      group.leader === this.zoneId ||
+      !this.ports.squeezeliteGroup.isSyncGroup(this.zoneId)
+    ) {
       return;
     }
     const leaderZoneId = group.leader;

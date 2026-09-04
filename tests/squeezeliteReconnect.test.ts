@@ -98,6 +98,8 @@ function harness(
     squeezeliteGroup: {
       register: () => undefined,
       unregister: () => undefined,
+      // Every group in these cases is a plain squeezelite one.
+      isSyncGroup: () => Boolean(group),
       preparePlayback: () => ({ grouped: false, expectedCount: 1, leaderZoneId: ZONE }),
       notifyPlaybackTick: () => undefined,
       orchestrateGroupPlayback: async () => true,

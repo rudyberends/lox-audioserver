@@ -12,6 +12,12 @@ export type SqueezeliteGroupParticipant = {
 export type SqueezeliteGroupCoordinator = {
   register: (participant: SqueezeliteGroupParticipant) => void;
   unregister: (zoneId: number) => void;
+  /**
+   * Whether this zone's group is one slimproto can actually synchronise. Everything
+   * below is leader-centric: members follow the leader's stream URL and are unpaused
+   * against its clock, which only works when the leader runs squeezelite itself.
+   */
+  isSyncGroup: (zoneId: number) => boolean;
   preparePlayback: (zoneId: number) => {
     grouped: boolean;
     leaderZoneId: number;
@@ -102,11 +108,31 @@ class SqueezeliteGroupController {
     this.participants.delete(zoneId);
   }
 
+  /**
+   * A group only syncs over slimproto when the leader runs squeezelite and at least
+   * one other member does too. A group led by another protocol — a mixed group — is
+   * fed per zone by the mixed group controller, so none of the leader-centric
+   * orchestration here applies to it and its members must play on their own.
+   */
+  public isSyncGroup(zoneId: number): boolean {
+    const group = getGroupByZone(zoneId);
+    if (!group || !this.participants.has(group.leader)) {
+      return false;
+    }
+    let count = 0;
+    for (const memberId of new Set<number>([group.leader, ...group.members])) {
+      if (!this.participants.has(memberId)) continue;
+      count += 1;
+      if (count >= 2) return true;
+    }
+    return false;
+  }
+
   public preparePlayback(
     zoneId: number,
   ): { grouped: boolean; leaderZoneId: number; expectedCount: number } {
     const group = getGroupByZone(zoneId);
-    if (!group || group.members.length === 0) {
+    if (!group || group.members.length === 0 || !this.isSyncGroup(zoneId)) {
       return { grouped: false, leaderZoneId: zoneId, expectedCount: 1 };
     }
     const leaderZoneId = group.leader;
@@ -225,7 +251,7 @@ class SqueezeliteGroupController {
 
   private getActiveGroupPlayersFor(zoneId: number): Array<{ zoneId: number; player: SlimClient }> {
     const group = getGroupByZone(zoneId);
-    if (!group || group.members.length < 2) {
+    if (!group || group.members.length < 2 || !this.isSyncGroup(zoneId)) {
       return [];
     }
     const expectedZones = new Set<number>([group.leader, ...group.members]);
