@@ -37,6 +37,12 @@ export const SNAPCAST_CAST_OUTPUT_DEFINITION: OutputConfigDefinition = {
 
 export class SnapcastCastOutput implements ZoneOutput {
   public readonly type = 'snapcast-cast';
+
+  /** Grouped zones stay in step here: all member clients are mapped onto one stream. */
+  public supportsNativeGrouping(): boolean {
+    return true;
+  }
+
   private readonly log = createLogger('Output', 'SnapcastCast');
   private currentStream: NodeJS.ReadableStream | null = null;
   private readonly streamId: string;

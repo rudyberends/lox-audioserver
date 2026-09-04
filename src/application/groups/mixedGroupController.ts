@@ -61,7 +61,7 @@ class MixedGroupController implements MixedGroupCoordinator {
     patch: Partial<ZoneState>,
     nextState: ZoneState,
   ): void {
-    if (!this.zoneManager || !this.isEnabled()) {
+    if (!this.zoneManager) {
       return;
     }
     const hasMetadataPatch =
@@ -100,7 +100,7 @@ class MixedGroupController implements MixedGroupCoordinator {
     leader: number,
     record?: GroupRecord,
   ): void {
-    if (!this.zoneManager || !this.isEnabled() || !record) {
+    if (!this.zoneManager || !record) {
       return;
     }
     if (event === 'remove') {
@@ -142,21 +142,44 @@ class MixedGroupController implements MixedGroupCoordinator {
     return snapshot.activeOutput ?? fallback ?? 'unknown';
   }
 
-  private isMixedGroup(group: GroupRecord): boolean {
-    const leaderProtocol = this.resolveOutputProtocol(group.leader);
-    if (leaderProtocol === 'unknown') {
+  /**
+   * Whether this member has to be fed the leader's audio from here.
+   *
+   * Two reasons it might. The member runs another protocol than the leader, so no
+   * coordinator spans them — that is the mixed group the setup toggle is about, and it
+   * stays opt-in. Or leader and member share a protocol that cannot group at all (DLNA,
+   * Cast, Music Assistant): there is no coordinator to defer to, so without this the
+   * member would simply stay silent. That second case is not a choice, so it is not
+   * behind the toggle.
+   */
+  private memberNeedsFanout(leaderId: number, memberId: number): boolean {
+    const leaderProtocol = this.resolveOutputProtocol(leaderId);
+    const memberProtocol = this.resolveOutputProtocol(memberId);
+    if (leaderProtocol === 'unknown' || memberProtocol === 'unknown') {
       return false;
     }
+    if (leaderProtocol !== memberProtocol) {
+      return this.isEnabled();
+    }
+    return !this.zones.supportsNativeGrouping(leaderId);
+  }
+
+  /** The members of this group that nothing else will feed. */
+  private fanoutMembers(group: GroupRecord): Set<number> {
+    const members = new Set<number>();
     for (const memberId of group.members) {
       if (memberId === group.leader) {
         continue;
       }
-      const protocol = this.resolveOutputProtocol(memberId);
-      if (protocol !== 'unknown' && protocol !== leaderProtocol) {
-        return true;
+      if (this.memberNeedsFanout(group.leader, memberId)) {
+        members.add(memberId);
       }
     }
-    return false;
+    return members;
+  }
+
+  private isMixedGroup(group: GroupRecord): boolean {
+    return this.fanoutMembers(group).size > 0;
   }
 
   private isUnsupportedAudiopath(audiopath: string): boolean {
@@ -404,8 +427,7 @@ class MixedGroupController implements MixedGroupCoordinator {
     this.lastSignature.set(group.leader, signature);
     this.lastSyncAt.set(group.leader, now);
 
-    const members = new Set<number>(group.members);
-    members.delete(group.leader);
+    const members = this.fanoutMembers(group);
     if (!members.size) {
       return;
     }
@@ -508,8 +530,7 @@ class MixedGroupController implements MixedGroupCoordinator {
     metadata: PlaybackMetadata,
   ): void {
     const fanout = this.ensureFanout(group.leader, leaderPcm.stream);
-    const members = new Set<number>(group.members);
-    members.delete(group.leader);
+    const members = this.fanoutMembers(group);
     fanout.pruneToMembers(members);
 
     for (const memberId of members) {
@@ -559,8 +580,7 @@ class MixedGroupController implements MixedGroupCoordinator {
       return;
     }
     const fanout = this.ensureFanout(group.leader, playbackSource.stream);
-    const members = new Set<number>(group.members);
-    members.delete(group.leader);
+    const members = this.fanoutMembers(group);
     fanout.pruneToMembers(members);
 
     for (const memberId of members) {
@@ -596,8 +616,7 @@ class MixedGroupController implements MixedGroupCoordinator {
     if (!this.pipeFanouts.has(group.leader)) {
       return;
     }
-    const members = new Set<number>(group.members);
-    members.delete(group.leader);
+    const members = this.fanoutMembers(group);
     if (!members.size) {
       return;
     }

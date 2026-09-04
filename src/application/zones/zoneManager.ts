@@ -881,6 +881,21 @@ export class ZoneManager {
   }
 
   /**
+   * Whether this zone's active output can hold a group together by itself.
+   *
+   * False for a protocol that just hands bytes to one renderer — DLNA, Cast, Music
+   * Assistant. Grouping such a zone needs the mixed group controller to feed each member,
+   * which is why this is asked per zone rather than assumed from the protocol name.
+   */
+  public supportsNativeGrouping(zoneId: number): boolean {
+    const ctx = this.zoneRepo.get(zoneId);
+    if (!ctx) return false;
+    const output =
+      ctx.outputs.find((candidate) => candidate.type === ctx.activeOutput) ?? ctx.outputs[0];
+    return output?.supportsNativeGrouping?.() === true;
+  }
+
+  /**
    * How the active output is timed against its device, or null when the protocol cannot say.
    *
    * The active output rather than all of them: a zone plays through one, and reporting a list

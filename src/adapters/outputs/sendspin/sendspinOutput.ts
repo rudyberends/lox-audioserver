@@ -192,6 +192,12 @@ export const SENDSPIN_OUTPUT_DEFINITION: OutputConfigDefinition = {
 /** Sendspin ZoneOutput implementation: streams audio/state to a Sendspin client. */
 export class SendspinOutput implements ZoneOutput {
   public readonly type = 'sendspin';
+
+  /** Grouped zones stay in step here: the leader mirrors its frames to each member's client. */
+  public supportsNativeGrouping(): boolean {
+    return true;
+  }
+
   private readonly log = createLogger('Output', 'Sendspin');
   /**
    * The configured Sendspin client, driven through a dedicated sender. The accessors below

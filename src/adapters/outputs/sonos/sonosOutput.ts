@@ -130,6 +130,12 @@ const SONOS_CONTAINER_SERVICE_NAME = 'Sonn';
 
 export class SonosOutput implements ZoneOutput {
   public readonly type = 'sonos';
+
+  /** Grouped zones stay in step here: members join the leader's Sonos group on the device itself. */
+  public supportsNativeGrouping(): boolean {
+    return true;
+  }
+
   private readonly log = createLogger('Output', 'Sonos');
   private readonly streamFormat: StreamFormatPreference;
   private readonly controllers = new Set<AbortController>();

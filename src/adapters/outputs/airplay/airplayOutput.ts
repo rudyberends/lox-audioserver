@@ -91,6 +91,12 @@ export const AIRPLAY_OUTPUT_DEFINITION: OutputConfigDefinition = {
  */
 export class AirPlayOutput implements ZoneOutput {
   public readonly type = 'airplay';
+
+  /** Grouped zones stay in step here: every device is its own sender, started against one shared anchor. */
+  public supportsNativeGrouping(): boolean {
+    return true;
+  }
+
   private readonly log = createLogger('Output', 'AirPlay');
   private readonly sender: AirplaySender;
   private readonly streamSession: AirplayStreamSession;

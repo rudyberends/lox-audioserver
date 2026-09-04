@@ -24,6 +24,7 @@ export type ZoneManagerFacade = Pick<
   | 'getTechnicalSnapshot'
   | 'getOutputCapabilities'
   | 'getOutputSyncStatus'
+  | 'supportsNativeGrouping'
   | 'getGroupMembership'
   | 'getZoneVolumes'
   | 'getOutputHandlers'

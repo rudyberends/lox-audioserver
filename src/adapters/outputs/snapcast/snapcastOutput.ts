@@ -39,6 +39,12 @@ export const SNAPCAST_OUTPUT_DEFINITION: OutputConfigDefinition = {
 
 export class SnapcastOutput implements ZoneOutput {
   public readonly type = 'snapcast';
+
+  /** Grouped zones stay in step here: all member clients are mapped onto one stream. */
+  public supportsNativeGrouping(): boolean {
+    return true;
+  }
+
   private readonly log = createLogger('Output', 'Snapcast');
   private currentStream: NodeJS.ReadableStream | null = null;
   private activeOutputSettings = audioOutputSettings;

@@ -168,6 +168,7 @@ import './browserZoneNaming.test';
 import './mqttCommands.test';
 import './squeezeliteReconnect.test';
 import './squeezeliteMixedGroup.test';
+import './mixedGroupFanout.test';
 import './loxoneZoneProjection.test';
 import './adminZoneStates.test';
 import './adminInfo.test';

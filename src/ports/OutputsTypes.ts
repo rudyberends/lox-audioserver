@@ -164,6 +164,15 @@ export interface ZoneOutput {
   /** Optional hot-update for output latency (e.g. snapcast/squeezelite/sendspin). */
   setLatencyMs?(ms: number): Promise<void> | void;
   /**
+   * Whether this protocol can play a group of zones in step by itself, through a
+   * coordinator of its own (Sonos groups, slimproto sync, a shared snapcast stream).
+   *
+   * An output that says nothing here plays alone: when such a zone joins a group, the
+   * mixed group controller has to feed every member the leader's audio instead, because
+   * there is no protocol underneath to hold them together.
+   */
+  supportsNativeGrouping?(): boolean;
+  /**
    * Optional timing relationship with the device, for outputs that have one to report.
    *
    * Only protocols that schedule audio against a shared clock can answer this — Sendspin
