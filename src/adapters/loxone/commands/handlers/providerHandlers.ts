@@ -20,6 +20,37 @@ import { createLogger } from '@/shared/logging/logger';
 
 const log = createLogger('Loxone', 'ProviderHandlers');
 
+/**
+ * How many rows one media-folder answer carries, however few the app asked for.
+ *
+ * The app turns every answer into a chunk of its own, and when chunks arrive faster
+ * than it can draw them it parks them in a queue it drains with `pop()` — newest
+ * first. So a backlog is rendered out of order, and the chunk holding the end of the
+ * list latches `isFinished`, after which the browser drops every chunk still waiting:
+ * `if (contentTypeItems[type].isFinished) return` in its own data-chunk handler.
+ *
+ * Answering 50 rows at a time out of a library of thousands guarantees that backlog,
+ * because a page comes off SQLite in a few milliseconds and a table of hundreds of
+ * rows does not draw that fast. The size of the loss then rides on how quickly the
+ * device draws, which is exactly what the reporter measured: three clients, one
+ * server, three different cut-offs, each a whole number of pages (#347).
+ *
+ * One answer per folder means there is never a backlog to reorder. The app is happy
+ * to be handed more than it asked for — it takes the next start from what it holds,
+ * so a single answer that covers the folder simply ends the loop — as long as the
+ * rows never outrun `totalitems`, which they cannot: the count and the rows come
+ * from the same query.
+ *
+ * The price is paid in one block instead of spread over a hundred, so it was measured
+ * on a library the size of the reported one. Albums and artists are free: 450 rows is
+ * 0.14 MB and under 15 ms. The flat track list is what costs — 6293 rows is 3.9 MB and
+ * about 90 ms to build, once per folder per cache lifetime. That is a fair trade
+ * against a library the app cannot show, but it is the number to revisit if this ever
+ * has to grow: it rises with the row count, and every output here buffers far longer
+ * than 90 ms.
+ */
+const MEDIA_FOLDER_ROWS_PER_ANSWER = 10_000;
+
 function normalizeItemId(raw: string | undefined): string {
   const decoded = decodeSegment(raw ?? '').trim();
   return decoded.replace(/\]+$/, '');
@@ -40,7 +71,9 @@ export function createProviderHandlers(contentManager: ContentManager, notifier:
       const parts = rawParts[0] === '' ? rawParts.slice(1) : rawParts;
       const folderId = decodeSegment(parts[3] || 'root');
       const start = parseNumberPart(parts[4], 0);
-      const limit = parseNumberPart(parts[5], 50);
+      const requested = parseNumberPart(parts[5], 50);
+      // The 50 the app asks for is a floor, not a ceiling — see the constant.
+      const limit = Math.max(requested, MEDIA_FOLDER_ROWS_PER_ANSWER);
       const folder = await contentManager.getMediaFolder(folderId, start, limit);
       return buildResponse(command, 'getmediafolder', folder ? [forLoxoneFolder(folder)] : []);
     },

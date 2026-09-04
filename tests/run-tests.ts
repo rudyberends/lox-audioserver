@@ -13,6 +13,7 @@ import './buildChannel.test';
 import './startWithTimeout.test';
 import './loxoneServiceFolders.test';
 import './loxoneScanStatus.test';
+import './loxoneMediaFolder.test';
 import './serviceNativeIdentity.test';
 import './trackIdentity.test';
 import './appleMusicNewReleases.test';
